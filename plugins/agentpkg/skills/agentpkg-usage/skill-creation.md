@@ -1,26 +1,22 @@
 # Skill Creation Guide
 
-Complete guide for creating effective skills that extend AI agent capabilities.
-
-Skills follow Anthropic's Skills Specification v1.0 and work with:
-- **Claude Code** - Native support
-- **OpenCode** - Via `opencode-skills` plugin
+Complete guide for creating effective skills that extend agent capabilities.
 
 ## What Skills Provide
 
 1. **Specialized workflows** - Multi-step procedures for specific domains
 2. **Tool integrations** - Instructions for file formats or APIs
 3. **Domain expertise** - Company knowledge, schemas, business logic
-4. **Bundled resources** - References and assets for complex tasks
+4. **Bundled resources** - Supporting docs and assets for complex tasks
 
 ## Core Principles
 
 ### 1. Concise is Key
 
-The context window is shared. Only add what Claude doesn't already know.
+The context window is shared. Only add what the agent doesn't already know.
 
 **Challenge each piece:**
-- "Does Claude really need this?"
+- "Does the agent really need this?"
 - "Does this justify its token cost?"
 
 Prefer concise examples over verbose explanations.
@@ -45,14 +41,14 @@ Three-level loading system:
 2. **SKILL.md body** - When skill triggers (<5k words)
 3. **Bundled resources** - As needed (unlimited)
 
-**Keep SKILL.md under 500 lines.** Split into reference files when approaching this limit.
+**Keep SKILL.md under 500 lines.** Split into sibling `.md` files when approaching this limit.
 
 ## Skill Anatomy
 
 ```
 skill-name/
 ├── SKILL.md              # Required
-├── references/           # Optional: contextual docs
+├── *.md                  # Optional: supporting docs (flat structure)
 └── assets/               # Optional: output files
 ```
 
@@ -77,59 +73,59 @@ Instructions...
 
 | Type | Purpose | Example | How Used |
 |------|---------|---------|----------|
-| `references/` | Documentation | `schema.md`, `api.md` | Read into context when needed |
+| `*.md` | Supporting documentation | `schema.md`, `api.md` | Read into context when needed |
 | `assets/` | Files for output | `template.pptx`, `logo.png` | Used directly, not read |
 
 ### What NOT to Include
 
-- README.md
-- INSTALLATION_GUIDE.md
-- CHANGELOG.md
-- Any user-facing documentation
+**Avoid:**
+- General programming knowledge the agent already has
+- Installation instructions (dependency management)
+- User documentation (READMEs, guides)
+- Changelog, license, or contributor info
 
-Only include what an AI agent needs to do the job.
+Only include what the agent needs to do the job.
 
 ## Progressive Disclosure Patterns
 
-### Pattern 1: High-level guide with references
+### Pattern 1: High-level guide with supporting files
 
 ```markdown
 ## Quick Start
 [Essential workflow]
 
 ## Advanced
-- **Forms**: See [references/forms.md](references/forms.md)
-- **API**: See [references/api.md](references/api.md)
+- **Forms**: See [forms.md](forms.md) for complete guide
+- **API**: See [api.md](api.md) for all methods
 ```
 
 ### Pattern 2: Domain-specific organization
 
-For multi-domain skills:
+For multi-domain skills, use sibling files:
 
 ```
 skill/
-├── SKILL.md (overview + navigation)
-└── references/
-    ├── finance.md
-    ├── sales.md
-    └── product.md
+├── SKILL.md       # Overview + navigation
+├── finance.md     # Revenue, billing metrics
+├── sales.md       # Opportunities, pipeline
+└── product.md     # API usage, features
 ```
 
-When user asks about sales, Claude only reads `sales.md`.
+When user asks about sales, the agent only reads `sales.md`.
 
 ### Pattern 3: Conditional details
 
 ```markdown
 ## Creating Documents
-Use docx-js. See [references/docx-js.md](references/docx-js.md).
+Use docx-js. See [docx-js.md](docx-js.md).
 
 ## Editing Documents
 For simple edits, modify XML.
-**For tracked changes**: See [references/redlining.md](references/redlining.md)
+**For tracked changes**: See [redlining.md](redlining.md)
 ```
 
 **Guidelines:**
-- Keep references one level deep from SKILL.md
+- Keep supporting files as siblings to SKILL.md (flat structure)
 - For files >100 lines, include table of contents
 
 ## Creation Process
@@ -144,16 +140,16 @@ Ask clarifying questions:
 ### Step 2: Plan Reusable Contents
 
 For each example, analyze:
-- What docs are needed repeatedly? → `references/`
+- What docs are needed repeatedly? → sibling `.md` files
 - What templates/files used in output? → `assets/`
 
 **Example analysis:**
 
 | Skill | Query | Resources |
 |-------|-------|-----------|
-| `pdf-editor` | "Fill this form" | `references/forms.md`, `references/field-types.md` |
-| `brand-guidelines` | "Create branded presentation" | `assets/logo.png`, `assets/template.pptx`, `references/colors.md` |
-| `bigquery` | "How many users today?" | `references/schema.md`, `references/common-queries.md` |
+| `pdf-editor` | "Fill this form" | `forms.md`, `field-types.md` |
+| `brand-guidelines` | "Create branded presentation" | `assets/logo.png`, `assets/template.pptx`, `colors.md` |
+| `bigquery` | "How many users today?" | `schema.md`, `common-queries.md` |
 
 ### Step 3: Initialize
 
@@ -164,7 +160,7 @@ agentpkg init my-plugin --with-skill
 Or manually:
 
 ```bash
-mkdir -p skills/my-skill/{references,assets}
+mkdir -p skills/my-skill/assets
 touch skills/my-skill/SKILL.md
 ```
 
@@ -239,13 +235,13 @@ feat(auth): implement authentication
 Add login endpoint
 ```
 
-Examples help Claude understand style better than descriptions.
+Examples help agents understand style better than descriptions.
 
 ## Validation Checklist
 
 - [ ] SKILL.md exists with YAML frontmatter
-- [ ] `name`: hyphen-case, ≤64 chars, matches directory name
-- [ ] `description`: includes WHAT and WHEN, ≥20 chars, ≤1024 chars, no `<>`
+- [ ] `name`: hyphen-case, ≤64 chars
+- [ ] `description`: includes WHAT and WHEN, ≤1024 chars, no `<>`
 - [ ] Body under 500 lines
 - [ ] Resources properly referenced with triggers
 - [ ] No unnecessary documentation files
@@ -254,31 +250,7 @@ Examples help Claude understand style better than descriptions.
 ## Common Mistakes
 
 1. **Description missing "when to use"** - Skill won't trigger properly
-2. **Too much in SKILL.md** - Use references for large docs
-3. **No examples** - Agent learns better from examples than explanations
+2. **Too much in SKILL.md** - Use sibling files for large docs
+3. **No examples** - Agents learn better from examples than explanations
 4. **Including user docs** - README, CHANGELOG waste context
-5. **Deeply nested references** - Keep one level deep from SKILL.md
-6. **Name doesn't match directory** - Must be identical (e.g., `api-dev/` → `name: api-dev`)
-
-## Installation Paths
-
-| Agent | Global Path | Project Path |
-|-------|-------------|--------------|
-| Claude Code | `~/.claude/skills/` | `.claude/skills/` |
-| OpenCode | `~/.config/opencode/skills/` | `.opencode/skills/` |
-
-## OpenCode Setup
-
-To enable skills in OpenCode, add the `opencode-skills` plugin:
-
-```json
-// ~/.config/opencode/opencode.json
-{
-  "plugin": ["opencode-skills"]
-}
-```
-
-Skills will then be auto-discovered from:
-1. `~/.config/opencode/skills/` (XDG config)
-2. `~/.opencode/skills/` (legacy global)
-3. `.opencode/skills/` (project-local, highest priority)
+5. **Nested subdirectories** - Keep supporting files flat alongside SKILL.md

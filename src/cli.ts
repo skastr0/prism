@@ -232,63 +232,35 @@ You have READ-ONLY access. Do not modify files directly.
         created.push("agents/reviewer.md");
       }
 
-      // Create example skill if requested (Claude Code specific)
+      // Create example skill if requested
       if (options.withSkill) {
-        await ensureDir(join(targetDir, "skills", "debugging"));
+        await ensureDir(join(targetDir, "skills", "example-skill"));
         
         const skillMd = `---
-description: Advanced debugging techniques and tools
-targets: [claude-code]
+name: example-skill
+description: Example skill demonstrating basic structure and pattern usage
 ---
 
-# Debugging Skill
+# Example Skill
 
-You have expertise in debugging complex issues. Use these techniques:
+This is an example skill showing the recommended structure.
 
-## Systematic Approach
-1. Reproduce the issue consistently
-2. Isolate the problem area
-3. Form hypotheses
-4. Test each hypothesis
-5. Document findings
+## Core Instructions
 
-## Tools to Use
-- Add strategic console.log/print statements
-- Use debugger breakpoints
-- Check error stack traces
-- Review recent changes (git diff)
+Keep your main instructions concise and focused. Only include what the agent doesn't already know.
 
-## Common Patterns
-- Check for null/undefined values
-- Verify async/await handling
-- Look for race conditions
-- Validate input data types
+## When to Use
+
+This skill triggers when users need help with [specific task].
+
+## Progressive Disclosure
+
+For larger documentation, split into sibling files:
+- See [advanced.md](advanced.md) for advanced features
+- See [examples.md](examples.md) for detailed examples
 `;
-        await writeFile(join(targetDir, "skills", "debugging", "SKILL.md"), skillMd);
-        created.push("skills/debugging/SKILL.md");
-
-        // Add helper files for the skill
-        const debugChecklist = `# Debug Checklist
-
-## Before Starting
-- [ ] Can you reproduce the issue?
-- [ ] Do you have the error message/stack trace?
-- [ ] What changed recently?
-
-## Investigation
-- [ ] Check input values
-- [ ] Verify function arguments
-- [ ] Review async operations
-- [ ] Check external dependencies
-
-## Resolution
-- [ ] Root cause identified
-- [ ] Fix implemented
-- [ ] Tests added/updated
-- [ ] Edge cases handled
-`;
-        await writeFile(join(targetDir, "skills", "debugging", "checklist.md"), debugChecklist);
-        created.push("skills/debugging/checklist.md");
+        await writeFile(join(targetDir, "skills", "example-skill", "SKILL.md"), skillMd);
+        created.push("skills/example-skill/SKILL.md");
       }
 
       // Create README

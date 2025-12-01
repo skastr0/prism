@@ -11,7 +11,6 @@ import {
   exists,
   expandPath,
   listDirRecursive,
-  readFile,
   writeFile,
 } from "./fs.js";
 import {
@@ -25,12 +24,9 @@ import {
 } from "./manifest.js";
 import type {
   AgentConfig,
-  AgentId,
   FileOperation,
-  InstallError,
   InstallOptions,
   InstallResult,
-  PluginManifest,
 } from "./types.js";
 
 /**

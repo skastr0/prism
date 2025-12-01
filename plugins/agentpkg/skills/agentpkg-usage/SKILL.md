@@ -83,15 +83,14 @@ Content...
 
 ## Creating Skills
 
-Skills follow Anthropic's Skills Specification v1.0 and work with both Claude Code and OpenCode.
+See [skill-creation.md](skill-creation.md) for the complete guide.
 
-### Skill Structure
+### Quick Skill Setup
 
 ```
 skills/my-skill/
-├── SKILL.md              # Required: main skill definition
-├── references/           # Optional: docs loaded as needed
-├── scripts/              # Optional: executable code
+├── SKILL.md              # Required
+├── *.md                  # Optional: supporting docs (flat structure)
 └── assets/               # Optional: templates, images
 ```
 
@@ -99,8 +98,8 @@ skills/my-skill/
 
 ```yaml
 ---
-name: my-skill            # Must match directory name
-description: What it does AND when to trigger it (min 20 chars)
+name: my-skill
+description: What it does AND when to trigger it
 ---
 
 # My Skill
@@ -110,31 +109,11 @@ Instructions for the agent...
 
 **Key insight**: The `description` field triggers the skill. Include both WHAT it does and WHEN to use it.
 
-### Installation Paths
-
-| Agent | Global Skills Path |
-|-------|-------------------|
-| Claude Code | `~/.claude/skills/` |
-| OpenCode | `~/.config/opencode/skills/` |
-
 ### Core Skill Principles
 
 1. **Concise is Key** - Only add what the agent doesn't know
 2. **Appropriate Freedom** - Match specificity to task fragility
-3. **Progressive Disclosure** - Keep SKILL.md <500 lines, split to references
-
-### OpenCode Skills Setup
-
-To enable skills in OpenCode, install the `opencode-skills` plugin:
-
-```json
-// ~/.config/opencode/opencode.json
-{
-  "plugin": ["opencode-skills"]
-}
-```
-
-Then skills in `~/.config/opencode/skills/` will be auto-discovered.
+3. **Progressive Disclosure** - Keep SKILL.md <500 lines, split to sibling files
 
 ## Best Practices
 

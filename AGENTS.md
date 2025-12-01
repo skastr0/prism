@@ -224,18 +224,16 @@ agentpkg install ./test-plugin --all
 
 ## Creating Skills
 
-Skills follow Anthropic's Skills Specification v1.0 and extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents into specialized assistants with procedural knowledge.
+Skills extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents from general-purpose into specialized assistants with procedural knowledge.
 
-**Supported by:**
-- **Claude Code** - Native support
-- **OpenCode** - Via `opencode-skills` plugin
+**Supported by:** Claude Code (native), OpenCode (via `opencode-skills` plugin)
 
 ### Skill Structure
 
 ```
 skill-name/
 ├── SKILL.md              # Required: YAML frontmatter + instructions
-├── references/           # Optional: docs loaded into context as needed
+├── *.md                  # Optional: supporting docs loaded as needed
 └── assets/               # Optional: templates, images, fonts for output
 ```
 
@@ -263,19 +261,19 @@ Instructions...
    - Medium: Preferred pattern exists → parameterized examples
    - Low: Fragile operations → exact templates
 
-3. **Progressive Disclosure** - Keep SKILL.md under 500 lines. Split into reference files loaded on demand.
+3. **Progressive Disclosure** - Keep SKILL.md under 500 lines. Split into sibling `.md` files loaded on demand.
 
 ### Resource Types
 
-| Directory | Purpose | When to Include |
-|-----------|---------|-----------------|
-| `references/` | Documentation | Large docs needed contextually |
+| Type | Purpose | When to Include |
+|------|---------|-----------------|
+| `*.md` | Supporting documentation | Large docs needed contextually |
 | `assets/` | Output files | Templates, images, fonts |
 
 ### Creation Process
 
 1. **Understand** - Get concrete usage examples
-2. **Plan** - Identify reusable references and assets
+2. **Plan** - Identify reusable supporting files and assets
 3. **Initialize** - `agentpkg init my-plugin --with-skill`
 4. **Write** - Complete SKILL.md and resources
 5. **Validate** - `agentpkg validate ./my-plugin`

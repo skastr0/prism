@@ -1,0 +1,22 @@
+{
+  "name": "agentpkg",
+  "version": "0.1.0",
+  "description": "Unified plugin distribution system for AI coding agents",
+  "type": "module",
+  "bin": {
+    "agentpkg": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "bun build ./src/cli.ts --outdir ./dist --target node",
+    "dev": "bun run ./src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.14",
+    "typescript": "^5.8.3"
+  }
+}

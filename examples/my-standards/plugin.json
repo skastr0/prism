@@ -1,0 +1,6 @@
+{
+  "name": "my-standards",
+  "version": "0.1.0",
+  "description": "my-standards plugin for AI coding agents",
+  "targets": "all"
+}

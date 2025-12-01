@@ -1,44 +1,26 @@
 ---
-description: Knowledge about agentpkg - the unified plugin distribution system for AI coding agents
-targets: [claude-code]
+name: agentpkg-usage
+description: Guide for using agentpkg to create, manage, and install plugins across AI coding agents. Use when working with agentpkg commands, creating plugins, creating skills, or distributing configurations to Claude Code, OpenCode, Cursor, Codex CLI, Gemini CLI, or Amp Code.
 ---
 
-# agentpkg Skill
+# agentpkg Usage Guide
 
-You have expertise in using `agentpkg`, the unified plugin distribution system for AI coding agents.
+agentpkg is a unified plugin distribution system for AI coding agents.
 
-## What is agentpkg?
+## Quick Reference
 
-agentpkg allows you to create plugins once and distribute them to multiple AI coding agents (Claude Code, OpenCode, Codex CLI, Gemini CLI, Amp Code, Cursor). Instead of manually configuring each agent separately, you define artifacts in a unified format and agentpkg handles the distribution.
-
-## CLI Commands
-
-### Create a Plugin
 ```bash
-agentpkg init <name> [options]
-```
-Options:
-- `--dir <path>` - Directory to create plugin in (default: .)
-- `--with-agent` - Include example agent definition
-- `--with-skill` - Include example skill (Claude Code only)
-- `--minimal` - Create minimal plugin (manifest only)
+# Create a new plugin
+agentpkg init <name> [--with-agent] [--with-skill] [--minimal]
 
-### Install a Plugin
-```bash
-agentpkg install <plugin-path> [options]
-```
-Options:
-- `--agent <ids>` - Comma-separated agent IDs (e.g., `claude-code,opencode`)
-- `--all` - Install to all supported agents
-- `--project <path>` - Project path for project-specific rules
-- `--overwrite` - Overwrite existing files (default: false)
-- `--no-backup` - Skip creating backups
-- `--dry-run` - Preview operations without executing
+# Install a plugin
+agentpkg install <path> [--agent <ids>] [--all] [--dry-run]
 
-### Other Commands
-```bash
-agentpkg validate <plugin-path>  # Validate plugin structure
-agentpkg agents                   # List supported agents
+# Validate plugin structure
+agentpkg validate <path>
+
+# List supported agents
+agentpkg agents
 ```
 
 ## Plugin Structure
@@ -47,19 +29,28 @@ agentpkg agents                   # List supported agents
 my-plugin/
 ├── plugin.json         # Required: manifest
 ├── rules/
-│   ├── global/         # Appended to agent's global rules
-│   │   └── *.md
-│   └── project/        # For project-specific rules
-│       └── *.md
-├── commands/           # Slash commands
-│   └── *.md
+│   ├── global/         # Appended to agent's rules file
+│   └── project/        # Copied to project root
+├── commands/           # Slash commands (.md files)
 ├── agents/             # Custom agent definitions
-│   └── *.md
-└── skills/             # Skills (Claude Code only)
+└── skills/             # Skills (Claude Code, OpenCode)
     └── <skill-name>/
         ├── SKILL.md
-        └── *.md
+        └── [resources]
 ```
+
+## Supported Agents
+
+| Agent | Rules | Commands | Agents | Skills |
+|-------|-------|----------|--------|--------|
+| Claude Code | Yes | Yes | Yes | Yes |
+| OpenCode | Yes | Yes | Yes | Yes* |
+| Codex CLI | Yes | Yes | - | - |
+| Gemini CLI | Yes | Yes (TOML) | - | - |
+| Amp Code | Yes | Yes | - | - |
+| Cursor | Yes | - | - | - |
+
+*OpenCode requires the `opencode-skills` plugin for skills support.
 
 ## plugin.json Format
 
@@ -72,53 +63,86 @@ my-plugin/
 }
 ```
 
-The `targets` field can be:
-- `"all"` - Install to all agents
-- `["claude-code", "opencode"]` - Array of specific agent IDs
-
-## Supported Agent IDs
-
-- `claude-code` - Anthropic's Claude Code CLI
-- `opencode` - SST's OpenCode CLI
-- `codex-cli` - OpenAI's Codex CLI
-- `gemini-cli` - Google's Gemini CLI
-- `amp-code` - Sourcegraph's Amp Code
-- `cursor` - Cursor IDE/CLI
+`targets`: `"all"` or `["claude-code", "opencode"]`
 
 ## Frontmatter Format
-
-All markdown artifacts support frontmatter for metadata and agent targeting:
 
 ```yaml
 ---
 description: What this artifact does
-targets: [claude-code, opencode]  # Optional: limits to specific agents
+targets: [claude-code, opencode]
 
-# Agent-specific overrides
 claude-code:
   allowed-tools: [Bash, Read]
-  model: sonnet
 opencode:
   agent: build
-  temperature: 0.1
 ---
 
-Content goes here...
+Content...
 ```
+
+## Creating Skills
+
+Skills follow Anthropic's Skills Specification v1.0 and work with both Claude Code and OpenCode.
+
+### Skill Structure
+
+```
+skills/my-skill/
+├── SKILL.md              # Required: main skill definition
+├── references/           # Optional: docs loaded as needed
+├── scripts/              # Optional: executable code
+└── assets/               # Optional: templates, images
+```
+
+### SKILL.md Format
+
+```yaml
+---
+name: my-skill            # Must match directory name
+description: What it does AND when to trigger it (min 20 chars)
+---
+
+# My Skill
+
+Instructions for the agent...
+```
+
+**Key insight**: The `description` field triggers the skill. Include both WHAT it does and WHEN to use it.
+
+### Installation Paths
+
+| Agent | Global Skills Path |
+|-------|-------------------|
+| Claude Code | `~/.claude/skills/` |
+| OpenCode | `~/.config/opencode/skills/` |
+
+### Core Skill Principles
+
+1. **Concise is Key** - Only add what the agent doesn't know
+2. **Appropriate Freedom** - Match specificity to task fragility
+3. **Progressive Disclosure** - Keep SKILL.md <500 lines, split to references
+
+### OpenCode Skills Setup
+
+To enable skills in OpenCode, install the `opencode-skills` plugin:
+
+```json
+// ~/.config/opencode/opencode.json
+{
+  "plugin": ["opencode-skills"]
+}
+```
+
+Then skills in `~/.config/opencode/skills/` will be auto-discovered.
 
 ## Best Practices
 
-1. **Always dry-run first**: Use `--dry-run` to preview changes before installing
-2. **Use targets wisely**: Only target agents that support the artifact type
+1. **Always dry-run first**: `--dry-run` previews changes
+2. **Use targets wisely**: Only target agents supporting the artifact
 3. **Keep plugins focused**: One plugin = one purpose
-4. **Version your plugins**: Increment version in plugin.json when making changes
-5. **Test with validate**: Run `agentpkg validate` before distributing
+4. **Validate before distributing**: `agentpkg validate`
 
-## Agent Feature Support
+## Examples
 
-| Feature | claude-code | opencode | codex-cli | gemini-cli | amp-code | cursor |
-|---------|-------------|----------|-----------|------------|----------|--------|
-| Rules | Yes | Yes | Yes | Yes | Yes | Yes |
-| Commands | Yes | Yes | Yes | Yes (TOML) | Yes | No |
-| Agents | Yes | Yes | No | No | No | No |
-| Skills | Yes | No | No | No | No | No |
+See `plugin-examples.md` in this skill's directory for complete plugin examples.

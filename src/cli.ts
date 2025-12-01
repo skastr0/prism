@@ -6,7 +6,7 @@
 import { Command } from "commander";
 import { getAllAgentIds, isValidAgentId } from "./agents.js";
 import { install, planInstallation } from "./installer.js";
-import { readManifest } from "./manifest.js";
+import { readManifest, validatePluginSkills } from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
 import type { AgentId, FileOperation } from "./types.js";
 import { join } from "node:path";
@@ -376,14 +376,61 @@ program
 program
   .command("validate <plugin-path>")
   .description("Validate a plugin structure")
-  .action(async (pluginPath: string) => {
+  .option("-v, --verbose", "Show detailed validation output")
+  .action(async (pluginPath: string, options: { verbose?: boolean }) => {
     try {
+      let hasErrors = false;
+      let hasWarnings = false;
+
+      // Validate manifest
       const manifest = await readManifest(pluginPath);
-      console.log(`\n✅ Plugin is valid: ${manifest.name} v${manifest.version}`);
+      console.log(`\n📦 Plugin: ${manifest.name} v${manifest.version}`);
       console.log(`   Description: ${manifest.description || "(none)"}`);
       console.log(
         `   Targets: ${manifest.targets === "all" ? "all agents" : manifest.targets.join(", ")}`
       );
+
+      // Validate skills (if any)
+      const skillResults = await validatePluginSkills(pluginPath);
+
+      if (skillResults.length > 0) {
+        console.log(`\n🎯 Skills validation:`);
+
+        for (const result of skillResults) {
+          const skillName = result.skillName || "(unknown)";
+
+          if (result.valid) {
+            console.log(`   ✅ ${skillName}`);
+            if (options.verbose && result.warnings.length > 0) {
+              for (const warning of result.warnings) {
+                console.log(`      ⚠️  ${warning}`);
+              }
+              hasWarnings = true;
+            }
+          } else {
+            console.log(`   ❌ ${skillName}`);
+            for (const error of result.errors) {
+              console.log(`      • ${error}`);
+            }
+            hasErrors = true;
+          }
+
+          if (result.warnings.length > 0 && !options.verbose) {
+            hasWarnings = true;
+          }
+        }
+      }
+
+      // Summary
+      console.log();
+      if (hasErrors) {
+        console.log("❌ Validation failed with errors");
+        process.exit(1);
+      } else if (hasWarnings && !options.verbose) {
+        console.log("✅ Plugin is valid (run with --verbose to see warnings)");
+      } else {
+        console.log("✅ Plugin is valid");
+      }
     } catch (error) {
       console.error(
         `\n❌ Invalid plugin: ${error instanceof Error ? error.message : error}`

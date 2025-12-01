@@ -113,3 +113,40 @@ export interface UnifiedFrontmatter {
   "amp-code"?: Record<string, unknown>;
   cursor?: Record<string, unknown>;
 }
+
+// Skill-specific frontmatter (stricter than unified)
+export interface SkillFrontmatter {
+  name: string;
+  description: string;
+  license?: string;
+  "allowed-tools"?: string[];
+  metadata?: Record<string, string>;
+}
+
+// Skill validation constants
+export const SKILL_VALIDATION = {
+  NAME_MAX_LENGTH: 64,
+  NAME_PATTERN: /^[a-z0-9]+(-[a-z0-9]+)*$/,
+  DESCRIPTION_MAX_LENGTH: 1024,
+  RECOMMENDED_BODY_MAX_LINES: 500,
+  ALLOWED_FRONTMATTER_KEYS: new Set([
+    "name",
+    "description",
+    "license",
+    "allowed-tools",
+    "metadata",
+  ]),
+} as const;
+
+// Validation result type
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+// Skill validation result with additional context
+export interface SkillValidationResult extends ValidationResult {
+  skillName?: string;
+  skillPath: string;
+}

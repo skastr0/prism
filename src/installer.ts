@@ -21,6 +21,7 @@ import {
   parseMarkdownFile,
   readManifest,
   reconstructMarkdown,
+  validateSkill,
 } from "./manifest.js";
 import type {
   AgentConfig,
@@ -303,7 +304,8 @@ async function planAgentsInstallation(
 }
 
 /**
- * Plan skills installation (Claude Code only for now)
+ * Plan skills installation (Claude Code native, OpenCode via opencode-skills plugin)
+ * Includes validation of skill structure and frontmatter
  */
 async function planSkillsInstallation(
   pluginPath: string,
@@ -316,6 +318,40 @@ async function planSkillsInstallation(
     return operations;
   }
 
+  // Get skill directories first to validate each skill
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(skillsDir, { withFileTypes: true });
+  const skillDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+
+  // Track validated skills to skip invalid ones entirely
+  const validatedSkills = new Map<string, boolean>();
+
+  // Validate each skill directory
+  for (const skillDirName of skillDirs) {
+    const skillPath = join(skillsDir, skillDirName);
+    const validation = await validateSkill(skillPath, skillDirName);
+
+    if (!validation.valid) {
+      // Add skip operation with validation errors
+      const targetDir = join(
+        expandPath(agent.globalConfigPath),
+        agent.skillsDir!
+      );
+      operations.push({
+        type: "skip",
+        source: skillPath,
+        target: join(targetDir, skillDirName),
+        agent: agent.id,
+        artifact: "skill",
+        reason: `Validation failed: ${validation.errors.join("; ")}`,
+      });
+      validatedSkills.set(skillDirName, false);
+      continue;
+    }
+
+    validatedSkills.set(skillDirName, true);
+  }
+
   // Skills are directories containing a SKILL.md and supporting files
   const files = await listDirRecursive(skillsDir);
 
@@ -326,6 +362,14 @@ async function planSkillsInstallation(
       agent.skillsDir!
     );
     const targetPath = join(targetDir, file);
+
+    // Get the skill directory name from the file path
+    const skillDirName = file.split("/")[0];
+
+    // Skip files from invalid skills
+    if (skillDirName && validatedSkills.get(skillDirName) === false) {
+      continue; // Already added skip operation for the skill
+    }
 
     // For SKILL.md files, check if they target this agent
     if (file.endsWith("SKILL.md")) {

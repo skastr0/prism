@@ -12,13 +12,16 @@ This plugin teaches AI coding agents how to:
 
 ## What's Included
 
-### Skill: agentpkg-usage (Claude Code)
+### Skill: agentpkg-usage (Claude Code, OpenCode)
 Comprehensive knowledge about agentpkg including:
 - CLI commands and options
 - Plugin structure and format
 - Frontmatter syntax
+- Skill creation guide
 - Agent feature support matrix
 - Best practices
+
+**Note:** OpenCode requires the `opencode-skills` plugin for skill support.
 
 ### Commands
 
@@ -45,8 +48,9 @@ agentpkg/
 │   └── install-plugin.md   # Help install plugins
 └── skills/
     └── agentpkg-usage/
-        ├── SKILL.md        # Core agentpkg knowledge
-        └── plugin-examples.md  # Example plugin structures
+        ├── SKILL.md            # Core agentpkg knowledge
+        ├── plugin-examples.md  # Example plugin structures
+        └── skill-creation.md   # Skill creation guide
 ```
 
 ## Keeping Updated
@@ -65,8 +69,10 @@ This plugin serves as living documentation. When agentpkg is updated:
 | Agent | Commands | Skills |
 |-------|----------|--------|
 | Claude Code | /create-plugin, /install-plugin | agentpkg-usage |
-| OpenCode | /create-plugin, /install-plugin | - |
+| OpenCode | /create-plugin, /install-plugin | agentpkg-usage* |
 | Codex CLI | /create-plugin, /install-plugin | - |
 | Gemini CLI | /create-plugin, /install-plugin (TOML) | - |
 | Amp Code | /create-plugin, /install-plugin | - |
 | Cursor | - | - |
+
+*Requires `opencode-skills` plugin

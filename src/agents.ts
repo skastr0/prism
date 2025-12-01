@@ -36,13 +36,13 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     commandsDir: "command/",
     agentsDir: "agent/",
     toolsDir: null, // Uses plugins
-    skillsDir: null,
+    skillsDir: "skills/", // Via opencode-skills plugin (Anthropic spec v1.0)
     configFile: "opencode.json",
     configFormat: "json",
     supportsTools: true,
     supportsCommands: true,
     supportsAgents: true,
-    supportsSkills: false,
+    supportsSkills: true, // Requires opencode-skills plugin
     supportsMCP: true,
     alternativeRulesFiles: ["CLAUDE.md"],
   },

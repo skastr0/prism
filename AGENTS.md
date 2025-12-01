@@ -19,11 +19,18 @@ A unified plugin distribution system for AI coding agents.
 | Agent | Rules | Commands | Agents | Skills |
 |-------|-------|----------|--------|--------|
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
-| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/command/` | `~/.config/opencode/agent/` | - |
+| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/command/` | `~/.config/opencode/agent/` | `~/.config/opencode/skills/`* |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | - | - |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` (TOML) | - | - |
 | Amp Code | `~/.config/amp/AGENTS.md` | `~/.config/amp/commands/` | - | - |
 | Cursor | `~/.cursor/.cursorrules` | - | - | - |
+
+*OpenCode skills require the `opencode-skills` plugin. Add to `~/.config/opencode/opencode.json`:
+```json
+{
+  "plugin": ["opencode-skills"]
+}
+```
 
 ## Tech Stack
 
@@ -67,7 +74,7 @@ agentpkg <command>
 agentpkg init <name> [options]
   --dir <path>      Directory to create plugin in (default: .)
   --with-agent      Include example agent definition
-  --with-skill      Include example skill (Claude Code)
+  --with-skill      Include example skill (Claude Code, OpenCode)
   --minimal         Create minimal plugin (manifest only)
 
 # Install a plugin
@@ -119,7 +126,7 @@ my-plugin/
 │   └── *.md
 ├── agents/             # Custom agent definitions
 │   └── *.md
-└── skills/             # Skills (Claude Code only)
+└── skills/             # Skills (Claude Code, OpenCode)
     └── <skill-name>/
         ├── SKILL.md    # Skill definition
         └── *.md        # Supporting files
@@ -214,3 +221,70 @@ agentpkg install ./test-plugin --all --dry-run
 # Install for real (with backup)
 agentpkg install ./test-plugin --all
 ```
+
+## Creating Skills
+
+Skills follow Anthropic's Skills Specification v1.0 and extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents into specialized assistants with procedural knowledge.
+
+**Supported by:**
+- **Claude Code** - Native support
+- **OpenCode** - Via `opencode-skills` plugin
+
+### Skill Structure
+
+```
+skill-name/
+├── SKILL.md              # Required: YAML frontmatter + instructions
+├── references/           # Optional: docs loaded into context as needed
+└── assets/               # Optional: templates, images, fonts for output
+```
+
+### SKILL.md Format
+
+```yaml
+---
+name: hyphen-case-name
+description: What it does AND when to use it (this triggers the skill)
+---
+
+# Skill Title
+
+Instructions...
+```
+
+**Critical**: The `description` field is the primary trigger. Include both WHAT and WHEN.
+
+### Core Principles
+
+1. **Concise is Key** - Only add context Claude doesn't have. Challenge each piece: "Does this justify its token cost?"
+
+2. **Appropriate Freedom** - Match specificity to task fragility:
+   - High: Multiple valid approaches → text instructions
+   - Medium: Preferred pattern exists → parameterized examples
+   - Low: Fragile operations → exact templates
+
+3. **Progressive Disclosure** - Keep SKILL.md under 500 lines. Split into reference files loaded on demand.
+
+### Resource Types
+
+| Directory | Purpose | When to Include |
+|-----------|---------|-----------------|
+| `references/` | Documentation | Large docs needed contextually |
+| `assets/` | Output files | Templates, images, fonts |
+
+### Creation Process
+
+1. **Understand** - Get concrete usage examples
+2. **Plan** - Identify reusable references and assets
+3. **Initialize** - `agentpkg init my-plugin --with-skill`
+4. **Write** - Complete SKILL.md and resources
+5. **Validate** - `agentpkg validate ./my-plugin`
+6. **Iterate** - Test and improve based on real usage
+
+### Validation Rules
+
+- `name`: hyphen-case, lowercase + digits + hyphens, max 64 chars
+- `description`: max 1024 chars, no angle brackets `< >`
+- SKILL.md body: recommended max 500 lines
+
+See `plugins/skill-creator/` for the complete skill creation guide with design patterns.

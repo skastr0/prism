@@ -104,9 +104,9 @@ You are a security auditor. Your role is to:
 You have READ-ONLY access. Report findings without modifying code.
 ```
 
-## Example 4: Skill Plugin (Claude Code)
+## Example 4: Skill Plugin (Claude Code + OpenCode)
 
-A plugin that adds a specialized skill:
+A plugin that adds a specialized skill (works with both Claude Code and OpenCode with opencode-skills plugin):
 
 ```
 debugging-skill/
@@ -120,8 +120,8 @@ debugging-skill/
 **skills/advanced-debugging/SKILL.md:**
 ```markdown
 ---
-description: Advanced debugging techniques
-targets: [claude-code]
+name: advanced-debugging
+description: Advanced debugging techniques for complex issues. Use when debugging errors, tracing bugs, or investigating unexpected behavior.
 ---
 
 # Advanced Debugging Skill
@@ -135,6 +135,8 @@ You have expertise in debugging complex issues.
 4. Test systematically
 5. Document findings
 ```
+
+**Note:** The `name` field must match the directory name (`advanced-debugging`). The `description` must be at least 20 characters and explain both what the skill does AND when to use it.
 
 ## Example 5: Agent-Specific Plugin
 

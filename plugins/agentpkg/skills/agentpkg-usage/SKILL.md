@@ -75,11 +75,13 @@ targets: [claude-code, opencode]
 claude-code:
   allowed-tools: [Bash, Read]
 opencode:
-  agent: build
+  mode: subagent
 ---
 
 Content...
 ```
+
+**Important**: For complete type-safe settings reference for all agents, see [agent-settings.md](agent-settings.md).
 
 ## Creating Skills
 
@@ -114,6 +116,23 @@ Instructions for the agent...
 1. **Concise is Key** - Only add what the agent doesn't know
 2. **Appropriate Freedom** - Match specificity to task fragility
 3. **Progressive Disclosure** - Keep SKILL.md <500 lines, split to sibling files
+
+## OpenCode Agent Settings (Quick Reference)
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `description` | string | - | When to use this agent |
+| `mode` | `"subagent"` \| `"primary"` \| `"all"` | `"all"` | Visibility mode |
+| `model` | string | inherited | e.g., `anthropic/claude-sonnet-4-20250514` |
+| `temperature` | number | model default | 0.0 - 2.0 |
+| `top_p` | number | - | Top-p sampling |
+| `tools` | `Record<string, boolean>` | inherited | Enable/disable tools |
+| `color` | string | - | Hex color (`#FF5733`) |
+| `maxSteps` | number | - | Max iterations |
+| `disable` | boolean | `false` | Disable agent |
+| `permission` | object | inherited | Permission overrides |
+
+**Note**: The `agent` property is NOT valid for OpenCode. Use `mode` instead.
 
 ## Best Practices
 

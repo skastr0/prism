@@ -100,18 +100,73 @@ export interface InstallError {
   message: string;
 }
 
+// Permission type for OpenCode agents
+export type OpenCodePermission = "allow" | "ask" | "deny";
+
+// OpenCode agent-specific frontmatter settings
+export interface OpenCodeAgentFrontmatter {
+  // Agent description (triggers agent selection)
+  description?: string;
+
+  // Visibility mode
+  // - subagent: Only available as Task subagent (not in picker)
+  // - primary: Available in agent picker for direct use
+  // - all: Available both as subagent and in picker (default)
+  mode?: "subagent" | "primary" | "all";
+
+  // Model configuration
+  model?: string; // e.g., "anthropic/claude-sonnet-4-20250514"
+  temperature?: number; // 0.0 - 2.0
+  top_p?: number; // Top-p sampling parameter
+
+  // Tool access - enable/disable specific tools
+  tools?: Record<string, boolean>;
+
+  // UI customization
+  color?: string; // Hex color (e.g., "#FF5733")
+
+  // Behavior limits
+  maxSteps?: number; // Max agentic iterations (positive integer)
+
+  // Agent state
+  disable?: boolean; // Disable the agent entirely
+
+  // Permission overrides
+  permission?: {
+    edit?: OpenCodePermission;
+    bash?: OpenCodePermission | Record<string, OpenCodePermission>;
+    webfetch?: OpenCodePermission;
+    doom_loop?: OpenCodePermission;
+    external_directory?: OpenCodePermission;
+  };
+}
+
+// Claude Code agent-specific frontmatter settings
+export interface ClaudeCodeFrontmatter {
+  description?: string;
+  "allowed-tools"?: string[];
+  model?: "sonnet" | "opus" | "haiku" | string;
+}
+
+// Cursor-specific frontmatter settings
+export interface CursorFrontmatter {
+  description?: string;
+  globs?: string[];
+  alwaysApply?: boolean;
+}
+
 // Command/Agent frontmatter for unified format
 export interface UnifiedFrontmatter {
   description?: string;
   targets?: AgentId[];
 
-  // Agent-specific overrides
-  "claude-code"?: Record<string, unknown>;
-  opencode?: Record<string, unknown>;
+  // Agent-specific overrides (typed where known)
+  "claude-code"?: ClaudeCodeFrontmatter;
+  opencode?: OpenCodeAgentFrontmatter;
   "codex-cli"?: Record<string, unknown>;
   "gemini-cli"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
-  cursor?: Record<string, unknown>;
+  cursor?: CursorFrontmatter;
 }
 
 // Skill-specific frontmatter (stricter than unified)

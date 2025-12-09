@@ -56,7 +56,7 @@ targets: [claude-code, opencode]
 claude-code:
   allowed-tools: [Read, Grep, Glob]
 opencode:
-  agent: plan
+  mode: subagent
 ---
 
 Review the current code changes for:

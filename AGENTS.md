@@ -146,12 +146,59 @@ claude-code:
   allowed-tools: [Bash, Read]
   model: sonnet
 opencode:
-  agent: build
+  mode: subagent
   temperature: 0.1
 ---
 
 Artifact content goes here...
 ```
+
+## OpenCode Agent Frontmatter Reference
+
+When defining custom agents for OpenCode, use these valid frontmatter properties:
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `description` | `string` | - | When to use this agent (triggers selection) |
+| `mode` | `"subagent" \| "primary" \| "all"` | `"all"` | Agent visibility mode |
+| `model` | `string` | inherited | Model ID (e.g., `anthropic/claude-sonnet-4-20250514`) |
+| `temperature` | `number` | model default | Temperature for generation |
+| `top_p` | `number` | - | Top-p sampling parameter |
+| `tools` | `Record<string, boolean>` | inherited | Enable/disable specific tools |
+| `color` | `string` | - | Hex color code (e.g., `#FF5733`) |
+| `maxSteps` | `number` | - | Max agentic iterations |
+| `disable` | `boolean` | `false` | Disable the agent |
+| `permission` | `object` | inherited | Permission overrides |
+
+### Mode Values
+
+- `subagent`: Only available as a Task subagent (not in agent picker)
+- `primary`: Available in agent picker for direct use
+- `all`: Available both as subagent and in agent picker
+
+### Example Agent Definition
+
+```yaml
+---
+description: Code reviewer that focuses on best practices
+targets: [claude-code, opencode]
+
+claude-code:
+  model: sonnet
+
+opencode:
+  mode: subagent
+  model: anthropic/claude-sonnet-4-20250514
+  temperature: 0.1
+  tools:
+    write: false
+    edit: false
+---
+
+You are a code review specialist...
+```
+
+**Note:** The `agent` property is NOT valid for OpenCode. Use `mode` to control agent behavior.
 
 ## Code Patterns and Guidelines
 

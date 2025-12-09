@@ -6,7 +6,7 @@ description: Run tests with coverage
 # claude-code:
 #   allowed-tools: [Bash]
 # opencode:
-#   agent: build
+#   mode: subagent
 ---
 
 Run the test suite with coverage reporting.

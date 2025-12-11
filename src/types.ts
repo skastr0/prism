@@ -205,3 +205,14 @@ export interface SkillValidationResult extends ValidationResult {
   skillName?: string;
   skillPath: string;
 }
+
+// Agent validation result with additional context
+export interface AgentValidationResult extends ValidationResult {
+  agentName?: string;
+  agentPath: string;
+}
+
+// Agent validation constants
+export const AGENT_VALIDATION = {
+  DESCRIPTION_MAX_LENGTH: 1024,
+} as const;

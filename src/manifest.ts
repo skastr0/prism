@@ -7,12 +7,13 @@ import matter from "gray-matter";
 import { exists, expandPath, readFile, readJson } from "./fs.js";
 import type {
   AgentId,
+  AgentValidationResult,
   PluginManifest,
   SkillFrontmatter,
   SkillValidationResult,
   UnifiedFrontmatter,
 } from "./types.js";
-import { SKILL_VALIDATION } from "./types.js";
+import { SKILL_VALIDATION, AGENT_VALIDATION } from "./types.js";
 import { isValidAgentId } from "./agents.js";
 
 const MANIFEST_FILE = "plugin.json";
@@ -513,6 +514,150 @@ export async function validatePluginSkills(
     if (entry.isDirectory()) {
       const skillPath = join(skillsDir, entry.name);
       const result = await validateSkill(skillPath, entry.name);
+      results.push(result);
+    }
+  }
+
+  return results;
+}
+
+// =============================================================================
+// Agent Validation Functions
+// =============================================================================
+
+/**
+ * Validate an agent description
+ */
+export function validateAgentDescription(description: unknown): {
+  valid: boolean;
+  error?: string;
+} {
+  if (typeof description !== "string") {
+    return {
+      valid: false,
+      error: `Description must be a string, got ${typeof description}`,
+    };
+  }
+
+  const trimmed = description.trim();
+
+  if (!trimmed) {
+    return { valid: false, error: "Description cannot be empty" };
+  }
+
+  if (trimmed.length > AGENT_VALIDATION.DESCRIPTION_MAX_LENGTH) {
+    return {
+      valid: false,
+      error: `Description is too long (${trimmed.length} characters). Maximum is ${AGENT_VALIDATION.DESCRIPTION_MAX_LENGTH} characters.`,
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Validate an agent definition file
+ */
+export async function validateAgent(
+  agentPath: string
+): Promise<AgentValidationResult> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const expandedPath = expandPath(agentPath);
+  const agentName = agentPath.split("/").pop()?.replace(/\.md$/, "");
+
+  // Check file exists
+  if (!(await exists(expandedPath))) {
+    return {
+      valid: false,
+      errors: ["Agent file not found"],
+      warnings: [],
+      agentPath: expandedPath,
+    };
+  }
+
+  // Parse the file
+  let frontmatter: Record<string, unknown>;
+
+  try {
+    const raw = await readFile(expandedPath);
+
+    // Check frontmatter format
+    if (!raw.startsWith("---")) {
+      return {
+        valid: false,
+        errors: ["No YAML frontmatter found (file must start with ---)"],
+        warnings: [],
+        agentPath: expandedPath,
+        agentName,
+      };
+    }
+
+    const { data } = matter(raw);
+
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      return {
+        valid: false,
+        errors: ["Frontmatter must be a YAML dictionary"],
+        warnings: [],
+        agentPath: expandedPath,
+        agentName,
+      };
+    }
+
+    frontmatter = data as Record<string, unknown>;
+  } catch (error) {
+    return {
+      valid: false,
+      errors: [
+        `Invalid YAML in frontmatter: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+      warnings: [],
+      agentPath: expandedPath,
+      agentName,
+    };
+  }
+
+  // Validate required field: description
+  if (!("description" in frontmatter)) {
+    errors.push("Missing 'description' in frontmatter");
+  } else {
+    const descResult = validateAgentDescription(frontmatter.description);
+    if (!descResult.valid && descResult.error) {
+      errors.push(descResult.error);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    agentName,
+    agentPath: expandedPath,
+  };
+}
+
+/**
+ * Validate all agents in a plugin
+ */
+export async function validatePluginAgents(
+  pluginPath: string
+): Promise<AgentValidationResult[]> {
+  const results: AgentValidationResult[] = [];
+  const agentsDir = join(expandPath(pluginPath), "agents");
+
+  if (!(await exists(agentsDir))) {
+    return results;
+  }
+
+  // Get all .md files in agents/
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(agentsDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      const agentPath = join(agentsDir, entry.name);
+      const result = await validateAgent(agentPath);
       results.push(result);
     }
   }

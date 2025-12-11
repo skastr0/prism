@@ -6,7 +6,7 @@
 import { Command } from "commander";
 import { getAllAgentIds, isValidAgentId } from "./agents.js";
 import { install, planInstallation } from "./installer.js";
-import { readManifest, validatePluginSkills } from "./manifest.js";
+import { readManifest, validatePluginSkills, validatePluginAgents } from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
 import type { AgentId, FileOperation } from "./types.js";
 import { join } from "node:path";
@@ -27,6 +27,7 @@ program
   .option("-p, --project <path>", "Project path for project-specific rules")
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-backup", "Skip creating backups")
+  .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (pluginPath: string, options) => {
     try {
@@ -55,6 +56,45 @@ program
 
       if (options.project) {
         console.log(`   Project: ${options.project}`);
+      }
+
+      // Validate plugin before installation (unless --no-validate)
+      if (options.validate !== false) {
+        const skillResults = await validatePluginSkills(pluginPath);
+        const agentResults = await validatePluginAgents(pluginPath);
+        const hasSkillErrors = skillResults.some((r) => !r.valid);
+        const hasAgentErrors = agentResults.some((r) => !r.valid);
+
+        if (hasSkillErrors || hasAgentErrors) {
+          console.log("\n❌ Plugin validation failed:\n");
+          
+          if (hasSkillErrors) {
+            console.log("   Skills:");
+            for (const result of skillResults) {
+              if (!result.valid) {
+                console.log(`      ${result.skillName || "(unknown skill)"}:`);
+                for (const error of result.errors) {
+                  console.log(`         • ${error}`);
+                }
+              }
+            }
+          }
+          
+          if (hasAgentErrors) {
+            console.log("   Agents:");
+            for (const result of agentResults) {
+              if (!result.valid) {
+                console.log(`      ${result.agentName || "(unknown agent)"}:`);
+                for (const error of result.errors) {
+                  console.log(`         • ${error}`);
+                }
+              }
+            }
+          }
+          
+          console.log("\nUse --no-validate to skip validation.");
+          process.exit(1);
+        }
       }
 
       // Plan installation
@@ -168,7 +208,7 @@ description: Example coding guidelines
         await writeFile(join(targetDir, "rules", "global", "example.md"), exampleRule);
         created.push("rules/global/example.md");
 
-        // Create example command
+        // Create example command with proper argument usage
         const exampleCommand = `---
 description: Run tests with coverage
 # targets: [claude-code, opencode]  # Uncomment to limit to specific agents
@@ -180,13 +220,33 @@ description: Run tests with coverage
 #   mode: subagent
 ---
 
-Run the test suite with coverage reporting.
-Use $ARGUMENTS for any additional flags.
+# Run Tests
 
-Focus on:
-1. Running all tests
-2. Generating coverage report
-3. Highlighting any failures
+**Test pattern:** $1
+**Additional flags:** $2
+
+Run the test suite with coverage reporting.
+
+## Arguments
+
+- \`$1\` - Test file or pattern (optional, runs all if empty)
+- \`$2\` - Additional flags like --watch, --verbose
+- \`$ARGUMENTS\` - Use this instead for free-form input
+
+## Usage Examples
+
+\`\`\`bash
+/test                           # Run all tests
+/test src/utils                 # Run tests matching pattern
+/test "auth tests" --watch      # Quoted pattern with flag
+\`\`\`
+
+## Instructions
+
+1. Run tests matching $1 (or all tests if not provided)
+2. Apply any additional flags from $2
+3. Generate coverage report
+4. Highlight failures with clear explanations
 `;
         await writeFile(join(targetDir, "commands", "test.md"), exampleCommand);
         created.push("commands/test.md");
@@ -381,6 +441,37 @@ program
             }
           } else {
             console.log(`   ❌ ${skillName}`);
+            for (const error of result.errors) {
+              console.log(`      • ${error}`);
+            }
+            hasErrors = true;
+          }
+
+          if (result.warnings.length > 0 && !options.verbose) {
+            hasWarnings = true;
+          }
+        }
+      }
+
+      // Validate agents (if any)
+      const agentResults = await validatePluginAgents(pluginPath);
+
+      if (agentResults.length > 0) {
+        console.log(`\n🤖 Agents validation:`);
+
+        for (const result of agentResults) {
+          const agentName = result.agentName || "(unknown)";
+
+          if (result.valid) {
+            console.log(`   ✅ ${agentName}`);
+            if (options.verbose && result.warnings.length > 0) {
+              for (const warning of result.warnings) {
+                console.log(`      ⚠️  ${warning}`);
+              }
+              hasWarnings = true;
+            }
+          } else {
+            console.log(`   ❌ ${agentName}`);
             for (const error of result.errors) {
               console.log(`      • ${error}`);
             }

@@ -11,6 +11,7 @@ import {
   exists,
   expandPath,
   listDirRecursive,
+  readFile,
   writeFile,
 } from "./fs.js";
 import {
@@ -24,6 +25,7 @@ import {
 } from "./manifest.js";
 import type {
   AgentConfig,
+  AgentId,
   FileOperation,
   InstallOptions,
   InstallResult,
@@ -77,6 +79,64 @@ export async function planInstallation(
 }
 
 /**
+ * Check if an append operation would result in duplicate content
+ * Returns: "new" if section doesn't exist, "identical" if any existing section matches, "changed" if sections exist but none match
+ * Note: Handles multiple sections with the same marker (checks all of them)
+ */
+async function checkAppendStatus(
+  sourcePath: string,
+  targetPath: string,
+  agentId: AgentId
+): Promise<"new" | "identical" | "changed"> {
+  if (!(await exists(targetPath))) {
+    return "new";
+  }
+
+  const { frontmatter, content } = await parseMarkdownFile(sourcePath);
+  const agentFrontmatter = getAgentFrontmatter(frontmatter, agentId);
+  const finalContent = reconstructMarkdown(agentFrontmatter, content);
+  const newContentTrimmed = finalContent.trim();
+
+  const sourceName = basename(sourcePath, ".md");
+  const beginMarker = `<!-- BEGIN: ${sourceName} -->`;
+  const endMarker = `<!-- END: ${sourceName} -->`;
+
+  const existingContent = await readFile(targetPath);
+
+  if (!existingContent.includes(beginMarker)) {
+    return "new";
+  }
+
+  // Find all sections with this marker and check if any match
+  let searchStart = 0;
+  let foundAnySection = false;
+
+  while (true) {
+    const beginIndex = existingContent.indexOf(beginMarker, searchStart);
+    if (beginIndex === -1) break;
+
+    const endIndex = existingContent.indexOf(endMarker, beginIndex);
+    if (endIndex === -1) break;
+
+    foundAnySection = true;
+
+    const existingSection = existingContent.slice(
+      beginIndex + beginMarker.length,
+      endIndex
+    );
+
+    if (existingSection.trim() === newContentTrimmed) {
+      return "identical";
+    }
+
+    // Move past this section for next iteration
+    searchStart = endIndex + endMarker.length;
+  }
+
+  return foundAnySection ? "changed" : "new";
+}
+
+/**
  * Plan rules file installation
  */
 async function planRulesInstallation(
@@ -114,12 +174,27 @@ async function planRulesInstallation(
         continue;
       }
 
+      // Check if content already exists in target
+      const appendStatus = await checkAppendStatus(sourcePath, targetPath, agent.id);
+      if (appendStatus === "identical") {
+        operations.push({
+          type: "skip",
+          source: sourcePath,
+          target: targetPath,
+          agent: agent.id,
+          artifact: "rules",
+          reason: "Content already exists and is identical",
+        });
+        continue;
+      }
+
       operations.push({
         type: "append",
         source: sourcePath,
         target: targetPath,
         agent: agent.id,
         artifact: "rules",
+        reason: appendStatus === "changed" ? "Updating existing section" : undefined,
       });
     }
   }
@@ -175,12 +250,27 @@ async function planRulesInstallation(
           artifact: "rules",
         });
       } else {
+        // Check if content already exists in target
+        const appendStatus = await checkAppendStatus(sourcePath, targetPath, agent.id);
+        if (appendStatus === "identical") {
+          operations.push({
+            type: "skip",
+            source: sourcePath,
+            target: targetPath,
+            agent: agent.id,
+            artifact: "rules",
+            reason: "Content already exists and is identical",
+          });
+          continue;
+        }
+
         operations.push({
           type: "append",
           source: sourcePath,
           target: targetPath,
           agent: agent.id,
           artifact: "rules",
+          reason: appendStatus === "changed" ? "Updating existing section" : undefined,
         });
       }
     }
@@ -501,17 +591,40 @@ async function executeCopyOperation(op: FileOperation): Promise<void> {
 
 /**
  * Execute an append operation
+ * Appends content with BEGIN/END markers, or updates existing section if markers exist
  */
 async function executeAppendOperation(op: FileOperation): Promise<void> {
   const { frontmatter, content } = await parseMarkdownFile(op.source);
   const agentFrontmatter = getAgentFrontmatter(frontmatter, op.agent);
 
-  // Add a section header for the appended content
   const sourceName = basename(op.source, ".md");
-  const header = `\n\n<!-- BEGIN: ${sourceName} -->\n`;
-  const footer = `\n<!-- END: ${sourceName} -->\n`;
+  const beginMarker = `<!-- BEGIN: ${sourceName} -->`;
+  const endMarker = `<!-- END: ${sourceName} -->`;
 
   const finalContent = reconstructMarkdown(agentFrontmatter, content);
+
+  // Check if we need to update an existing section
+  if (await exists(op.target)) {
+    const existingContent = await readFile(op.target);
+
+    if (existingContent.includes(beginMarker)) {
+      const beginIndex = existingContent.indexOf(beginMarker);
+      const endIndex = existingContent.indexOf(endMarker);
+
+      if (endIndex > beginIndex) {
+        // Replace existing section
+        const before = existingContent.slice(0, beginIndex);
+        const after = existingContent.slice(endIndex + endMarker.length);
+        const newSection = `${beginMarker}\n${finalContent}\n${endMarker}`;
+        await writeFile(op.target, before + newSection + after);
+        return;
+      }
+    }
+  }
+
+  // Append new section
+  const header = `\n\n${beginMarker}\n`;
+  const footer = `\n${endMarker}\n`;
   await appendFile(op.target, header + finalContent + footer);
 }
 

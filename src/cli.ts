@@ -151,6 +151,232 @@ program
     }
   });
 
+// Install-all command - discover and install all plugins in a directory
+program
+  .command("install-all <directory>")
+  .description("Discover and install all plugins found in a directory (shallow scan)")
+  .option("-a, --agent <agents>", "Comma-separated list of agent IDs")
+  .option("--all", "Install to all supported agents")
+  .option("-p, --project <path>", "Project path for project-specific rules")
+  .option("--overwrite", "Overwrite existing files", false)
+  .option("--no-backup", "Skip creating backups")
+  .option("--no-validate", "Skip plugin validation before install")
+  .option("--dry-run", "Preview operations without executing", false)
+  .action(async (directory: string, options) => {
+    try {
+      // Determine target agents
+      let agents: AgentId[];
+      if (options.all) {
+        agents = getAllAgentIds();
+      } else if (options.agent) {
+        agents = options.agent.split(",").map((a: string) => a.trim());
+        for (const agent of agents) {
+          if (!isValidAgentId(agent)) {
+            console.error(`Unknown agent: ${agent}`);
+            console.error(`Valid agents: ${getAllAgentIds().join(", ")}`);
+            process.exit(1);
+          }
+        }
+      } else {
+        console.error("Please specify --agent <agents> or --all");
+        process.exit(1);
+      }
+
+      const expandedDir = expandPath(directory);
+
+      // Check directory exists
+      if (!(await exists(expandedDir))) {
+        console.error(`Directory not found: ${expandedDir}`);
+        process.exit(1);
+      }
+
+      // Discover plugins (shallow scan - only first level directories)
+      const { readdir } = await import("node:fs/promises");
+      const entries = await readdir(expandedDir, { withFileTypes: true });
+      const pluginPaths: string[] = [];
+
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const potentialPluginPath = join(expandedDir, entry.name);
+          const manifestPath = join(potentialPluginPath, "plugin.json");
+          if (await exists(manifestPath)) {
+            pluginPaths.push(potentialPluginPath);
+          }
+        }
+      }
+
+      if (pluginPaths.length === 0) {
+        console.log(`\n📂 No plugins found in ${expandedDir}`);
+        console.log("   (Looking for directories containing plugin.json)");
+        return;
+      }
+
+      console.log(`\n📂 Found ${pluginPaths.length} plugin(s) in ${expandedDir}:`);
+      for (const p of pluginPaths) {
+        const manifest = await readManifest(p);
+        console.log(`   • ${manifest.name} v${manifest.version}`);
+      }
+      console.log();
+
+      // Track results across all plugins
+      const results: {
+        pluginPath: string;
+        name: string;
+        success: boolean;
+        operations: FileOperation[];
+        errors: string[];
+        backups: string[];
+      }[] = [];
+
+      // Process each plugin
+      for (const pluginPath of pluginPaths) {
+        const manifest = await readManifest(pluginPath);
+        console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
+        console.log(`   Targets: ${agents.join(", ")}`);
+
+        if (options.project) {
+          console.log(`   Project: ${options.project}`);
+        }
+
+        // Validate plugin before installation (unless --no-validate)
+        if (options.validate !== false) {
+          const skillResults = await validatePluginSkills(pluginPath);
+          const agentResults = await validatePluginAgents(pluginPath);
+          const hasSkillErrors = skillResults.some((r) => !r.valid);
+          const hasAgentErrors = agentResults.some((r) => !r.valid);
+
+          if (hasSkillErrors || hasAgentErrors) {
+            console.log("\n   ❌ Validation failed:\n");
+            
+            if (hasSkillErrors) {
+              console.log("      Skills:");
+              for (const result of skillResults) {
+                if (!result.valid) {
+                  console.log(`         ${result.skillName || "(unknown skill)"}:`);
+                  for (const error of result.errors) {
+                    console.log(`            • ${error}`);
+                  }
+                }
+              }
+            }
+            
+            if (hasAgentErrors) {
+              console.log("      Agents:");
+              for (const result of agentResults) {
+                if (!result.valid) {
+                  console.log(`         ${result.agentName || "(unknown agent)"}:`);
+                  for (const error of result.errors) {
+                    console.log(`            • ${error}`);
+                  }
+                }
+              }
+            }
+            
+            results.push({
+              pluginPath,
+              name: manifest.name,
+              success: false,
+              operations: [],
+              errors: ["Validation failed"],
+              backups: [],
+            });
+            continue;
+          }
+        }
+
+        // Plan installation
+        const operations = await planInstallation({
+          pluginPath,
+          agents: agents as AgentId[],
+          projectPath: options.project,
+          overwrite: options.overwrite,
+          backup: options.backup !== false,
+          dryRun: options.dryRun,
+        });
+
+        if (options.dryRun) {
+          console.log("\n   🔍 Operations that would be performed:\n");
+          printOperations(operations, "      ");
+          results.push({
+            pluginPath,
+            name: manifest.name,
+            success: true,
+            operations,
+            errors: [],
+            backups: [],
+          });
+          continue;
+        }
+
+        // Execute installation
+        const result = await install({
+          pluginPath,
+          agents: agents as AgentId[],
+          projectPath: options.project,
+          overwrite: options.overwrite,
+          backup: options.backup !== false,
+          dryRun: false,
+        });
+
+        results.push({
+          pluginPath,
+          name: manifest.name,
+          success: result.success,
+          operations: result.operations,
+          errors: result.errors.map((e) => `${e.operation.target}: ${e.message}`),
+          backups: result.backups,
+        });
+
+        // Print results for this plugin
+        if (result.operations.length > 0) {
+          console.log("\n   📋 Installation results:\n");
+          printOperations(result.operations, "      ");
+        }
+
+        if (result.backups.length > 0) {
+          console.log("\n   💾 Backups created:");
+          for (const backup of result.backups) {
+            console.log(`      ${backup}`);
+          }
+        }
+
+        if (result.errors.length > 0) {
+          console.log("\n   ❌ Errors:");
+          for (const error of result.errors) {
+            console.log(`      ${error.operation.target}: ${error.message}`);
+          }
+        }
+      }
+
+      // Print summary
+      const successCount = results.filter((r) => r.success).length;
+      const failCount = results.filter((r) => !r.success).length;
+
+      console.log("\n" + "─".repeat(60));
+      console.log("\n📊 Summary:");
+      console.log(`   Total plugins: ${results.length}`);
+      console.log(`   Successful: ${successCount}`);
+      if (failCount > 0) {
+        console.log(`   Failed: ${failCount}`);
+        for (const r of results.filter((r) => !r.success)) {
+          console.log(`      • ${r.name}: ${r.errors.join(", ")}`);
+        }
+      }
+
+      if (failCount > 0) {
+        console.log("\n⚠️  Some plugins failed to install");
+        process.exit(1);
+      } else {
+        console.log("\n✅ All plugins installed successfully!");
+      }
+    } catch (error) {
+      console.error(
+        `\n❌ Error: ${error instanceof Error ? error.message : error}`
+      );
+      process.exit(1);
+    }
+  });
+
 // Init command - create a new plugin
 program
   .command("init <name>")
@@ -505,7 +731,7 @@ program
 /**
  * Print operations in a readable format
  */
-function printOperations(operations: FileOperation[]): void {
+function printOperations(operations: FileOperation[], indent = ""): void {
   const byAgent = new Map<AgentId, FileOperation[]>();
 
   for (const op of operations) {
@@ -515,18 +741,21 @@ function printOperations(operations: FileOperation[]): void {
   }
 
   for (const [agent, ops] of byAgent) {
-    console.log(`   ${agent}:`);
+    console.log(`${indent}   ${agent}:`);
     for (const op of ops) {
+      // Determine if this is an "update" (append with "Updating existing section" reason)
+      const isUpdate = op.type === "append" && op.reason === "Updating existing section";
       const icon =
         op.type === "copy"
           ? "📄"
           : op.type === "append"
-            ? "📝"
+            ? isUpdate ? "🔄" : "📝"
             : op.type === "skip"
               ? "⏭️"
               : "🔀";
-      const status = op.type === "skip" ? ` (${op.reason})` : "";
-      console.log(`      ${icon} ${op.type.padEnd(6)} ${op.artifact}: ${op.target}${status}`);
+      const displayType = isUpdate ? "update" : op.type;
+      const status = op.type === "skip" || isUpdate ? ` (${op.reason})` : "";
+      console.log(`${indent}      ${icon} ${displayType.padEnd(6)} ${op.artifact}: ${op.target}${status}`);
     }
     console.log();
   }

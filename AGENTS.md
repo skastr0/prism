@@ -53,8 +53,7 @@ bun run typecheck
 bun run build
 
 # Install globally (to ~/.local/bin)
-cp dist/cli.js ~/.local/bin/agentpkg
-chmod +x ~/.local/bin/agentpkg
+bun run install:local
 ```
 
 ## Running
@@ -317,7 +316,7 @@ You are a code review specialist...
 2. Run `bun run typecheck` to verify types
 3. Test with `bun run dev -- <command>`
 4. Build with `bun run build`
-5. Reinstall with `cp dist/cli.js ~/.local/bin/agentpkg`
+5. Reinstall with `bun run install:local`
 
 ## Testing Changes
 

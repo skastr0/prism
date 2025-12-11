@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "description": "Unified plugin distribution system for AI coding agents",
   "type": "module",
+  "private": true,
+  "packageManager": "bun@latest",
   "bin": {
     "agentpkg": "./dist/cli.js"
   },
   "scripts": {
-    "build": "bun build ./src/cli.ts --outdir ./dist --target node",
     "dev": "bun run ./src/cli.ts",
+    "build": "bun scripts/build.ts",
+    "install:local": "bash scripts/install.sh",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

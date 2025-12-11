@@ -59,13 +59,49 @@ opencode:
   mode: subagent
 ---
 
-Review the current code changes for:
+# Code Review
+
+**Files to review:** $1
+**Focus area:** $2
+
+Review the code for:
 1. Potential bugs
 2. Security issues
 3. Performance concerns
 4. Code style violations
 
-Use $ARGUMENTS for specific files or patterns to focus on.
+## Usage
+
+- `/review` - Review all staged changes
+- `/review src/auth.ts` - Review specific file
+- `/review src/api "security"` - Review with focus area
+- `/review . "performance and memory"` - Review all with quoted focus
+```
+
+**commands/deploy.md:**
+```markdown
+---
+description: Deploy to an environment
+targets: [claude-code, opencode]
+---
+
+# Deploy
+
+**Environment:** $1
+**Message:** $2
+
+Deploy the application to $1 environment.
+
+## Arguments
+
+- `$1` - Target environment (required): production, staging, dev
+- `$2` - Deploy message (optional): Captures all remaining text
+
+## Usage
+
+- `/deploy staging` - Deploy to staging
+- `/deploy production "v2.0 release"` - Deploy with message
+- `/deploy dev quick fix for login` - Message captures "quick fix for login"
 ```
 
 ## Example 3: Custom Agent Plugin

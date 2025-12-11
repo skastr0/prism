@@ -9,11 +9,28 @@ opencode:
 
 # Install agentpkg Plugin
 
+**Plugin Path:** $1
+**Options:** $2
+
 Help the user install an agentpkg plugin to their AI coding agents.
 
-## Your Task
+## Arguments
 
-1. **Locate the plugin**: Find the plugin path from `$ARGUMENTS` or ask the user
+- `$1` - Plugin path (required, or ask user)
+- `$2` - Additional options like agent targets (optional)
+
+## Usage Examples
+
+```bash
+/install-plugin ./my-plugin                    # Install, will prompt for targets
+/install-plugin ./my-plugin --all              # Install to all agents
+/install-plugin ./my-plugin "claude-code,opencode"  # Specific agents
+/install-plugin                                # Interactive - ask for path
+```
+
+## Installation Steps
+
+1. **Locate the plugin**: Use $1 or ask the user for the path
 
 2. **Validate first**:
    ```bash
@@ -29,18 +46,12 @@ Help the user install an agentpkg plugin to their AI coding agents.
    agentpkg install <plugin-path> --agent claude-code,opencode --dry-run
    ```
 
-4. **Confirm with user**: Show them what will be installed and ask for confirmation
+4. **Confirm with user**: Show what will be installed and ask for confirmation
 
 5. **Execute installation**:
    ```bash
    agentpkg install <plugin-path> --all
    ```
-
-## Arguments
-
-`$ARGUMENTS` should contain:
-- Plugin path (required)
-- Target agents (optional, defaults to --all)
 
 ## Installation Options
 
@@ -60,25 +71,8 @@ Help the user install an agentpkg plugin to their AI coding agents.
 - `amp-code` - ~/.config/amp/
 - `cursor` - ~/.cursor/
 
-## Example Commands
-
-```bash
-# Install to all agents
-agentpkg install ./my-plugin --all
-
-# Install to specific agents only
-agentpkg install ./my-plugin --agent claude-code,opencode
-
-# Install with project-specific rules
-agentpkg install ./my-plugin --all --project ~/code/my-project
-
-# Force overwrite existing files
-agentpkg install ./my-plugin --all --overwrite
-```
-
 ## Safety Notes
 
 - Always run `--dry-run` first to preview changes
 - Backups are created by default (use `--no-backup` to skip)
 - Existing files are NOT overwritten unless `--overwrite` is specified
-- The tool will show skipped files and reasons

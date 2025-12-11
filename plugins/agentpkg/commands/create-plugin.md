@@ -9,28 +9,32 @@ opencode:
 
 # Create agentpkg Plugin
 
-Help the user create a new agentpkg plugin based on their requirements.
+**User Request:** $ARGUMENTS
 
-## Your Task
+Help the user create a new agentpkg plugin based on their requirements above.
 
-1. **Understand the requirements**: Ask the user what kind of plugin they want:
-   - What should this plugin do?
-   - Which agents should it target? (claude-code, opencode, codex-cli, gemini-cli, amp-code, cursor)
-   - What artifacts are needed? (rules, commands, agents, skills)
+## If No Request Provided
 
-2. **Create the plugin structure**:
+Ask the user:
+- What should this plugin do?
+- Which agents should it target? (claude-code, opencode, codex-cli, gemini-cli, amp-code, cursor)
+- What artifacts are needed? (rules, commands, agents, skills)
+
+## Creation Steps
+
+1. **Create the plugin structure**:
    ```bash
    agentpkg init <name> --dir <path> [--with-agent] [--with-skill]
    ```
 
-3. **Customize the artifacts**:
+2. **Customize the artifacts**:
    - Edit `plugin.json` with proper name, version, description, and targets
    - Create/edit rules in `rules/global/` or `rules/project/`
    - Create/edit commands in `commands/`
    - Create/edit agents in `agents/` (if targeting claude-code or opencode)
-   - Create/edit skills in `skills/<name>/SKILL.md` (if targeting claude-code)
+   - Create/edit skills in `skills/<name>/SKILL.md` (if targeting claude-code or opencode)
 
-4. **Use proper frontmatter** in all markdown files:
+3. **Use proper frontmatter** in all markdown files:
    ```yaml
    ---
    description: What this artifact does
@@ -44,33 +48,22 @@ Help the user create a new agentpkg plugin based on their requirements.
    ---
    ```
 
+4. **For commands that accept arguments**, use placeholders:
+   - `$ARGUMENTS` - entire raw argument string
+   - `$1`, `$2`, etc. - positional arguments (quotes are stripped)
+
 5. **Validate and test**:
    ```bash
    agentpkg validate <plugin-path>
    agentpkg install <plugin-path> --all --dry-run
    ```
 
-## Arguments
-
-Use `$ARGUMENTS` for any specifications the user provides, such as:
-- Plugin name
-- Target agents
-- Plugin purpose/description
-
-## Example Workflow
+## Usage Examples
 
 ```bash
-# Create plugin skeleton
-agentpkg init my-plugin --with-agent --with-skill
-
-# Validate structure
-agentpkg validate ./my-plugin
-
-# Preview installation
-agentpkg install ./my-plugin --all --dry-run
-
-# Install when ready
-agentpkg install ./my-plugin --all
+/create-plugin                              # Interactive mode
+/create-plugin "code review plugin for Go"  # With description
+/create-plugin my-linter --with-skill       # With name and options
 ```
 
 ## Agent Feature Reference
@@ -80,4 +73,6 @@ agentpkg install ./my-plugin --all
 | Rules | global + project | global + project | global | global + project | global + project | global + project |
 | Commands | commands/*.md | command/*.md | prompts/*.md | commands/*.toml | commands/*.md | - |
 | Agents | agents/*.md | agent/*.md | - | - | - | - |
-| Skills | skills/*/SKILL.md | - | - | - | - | - |
+| Skills | skills/*/SKILL.md | skills/*/SKILL.md* | - | - | - | - |
+
+*OpenCode requires the `opencode-skills` plugin for skills support.

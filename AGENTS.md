@@ -132,6 +132,72 @@ my-plugin/
         └── *.md        # Supporting files
 ```
 
+## Command Arguments
+
+Custom commands support argument placeholders to accept user input:
+
+### Placeholder Syntax
+
+| Placeholder | Description |
+|-------------|-------------|
+| `$ARGUMENTS` | The entire raw argument string |
+| `$1`, `$2`, `$3`... | Positional arguments (1-indexed) |
+
+### Argument Parsing Rules
+
+- Unquoted words are split by whitespace
+- Quoted strings (`"..."` or `'...'`) count as a single argument
+- Quotes are stripped from the final value
+- The **last positional placeholder** captures all remaining arguments
+
+### Examples
+
+**Command template:**
+```markdown
+Review the code in $1 focusing on $2
+```
+
+**Usage:**
+```
+/review src/main.ts "security and performance"
+```
+
+**Result:**
+```
+Review the code in src/main.ts focusing on security and performance
+```
+
+**Using $ARGUMENTS for free-form input:**
+```markdown
+---
+description: Create a new feature based on user description
+---
+
+Create a feature with the following requirements:
+
+$ARGUMENTS
+```
+
+**Usage:**
+```
+/create-feature Add user authentication with OAuth support and session management
+```
+
+**Positional with quoted strings:**
+```
+/deploy production "Hotfix for login bug"
+```
+- `$1` = `production`
+- `$2` = `Hotfix for login bug` (quotes stripped)
+
+### Shell Command Injection
+
+Templates also support inline shell execution with backticks:
+```markdown
+Current branch: `git branch --show-current`
+Working directory: `pwd`
+```
+
 ## Unified Frontmatter Format
 
 All markdown artifacts support a common frontmatter format:

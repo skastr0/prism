@@ -59,14 +59,18 @@ skill-name/
 
 ```yaml
 ---
-name: skill-name
-description: What it does AND when to use it (this triggers the skill)
+name: skill-name           # REQUIRED: hyphen-case identifier
+description: What it does AND when to use it (this triggers the skill)  # REQUIRED
 ---
 
 # Skill Title
 
 Instructions for using the skill...
 ```
+
+**Required frontmatter fields:**
+- `name` - Hyphen-case identifier (lowercase, digits, hyphens only). Max 64 chars.
+- `description` - What the skill does AND when to use it. Max 1024 chars, no angle brackets.
 
 **Critical**: The `description` field is the primary trigger mechanism. Include BOTH:
 - What the skill does

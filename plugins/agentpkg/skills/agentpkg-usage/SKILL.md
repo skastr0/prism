@@ -83,6 +83,36 @@ Content...
 
 **Important**: For complete type-safe settings reference for all agents, see [agent-settings.md](agent-settings.md).
 
+## Command Arguments
+
+Commands support argument placeholders:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `$ARGUMENTS` | Entire raw argument string |
+| `$1`, `$2`... | Positional arguments (1-indexed) |
+
+### Parsing Rules
+
+- Unquoted words split by whitespace
+- Quoted strings (`"..."` or `'...'`) count as one argument
+- Quotes stripped from final value
+- Last positional placeholder captures remaining arguments
+
+### Example
+
+```markdown
+---
+description: Deploy to environment
+---
+
+Deploy to $1 with message: $2
+
+# Usage: /deploy production "v1.2.0 release"
+# $1 = production
+# $2 = v1.2.0 release
+```
+
 ## Creating Skills
 
 See [skill-creation.md](skill-creation.md) for the complete guide.
@@ -100,14 +130,18 @@ skills/my-skill/
 
 ```yaml
 ---
-name: my-skill
-description: What it does AND when to trigger it
+name: my-skill              # REQUIRED: hyphen-case identifier
+description: What it does AND when to trigger it  # REQUIRED
 ---
 
 # My Skill
 
 Instructions for the agent...
 ```
+
+**Required frontmatter fields:**
+- `name` - Hyphen-case identifier (lowercase, digits, hyphens only). Max 64 chars.
+- `description` - What the skill does AND when to use it. Max 1024 chars, no angle brackets.
 
 **Key insight**: The `description` field triggers the skill. Include both WHAT it does and WHEN to use it.
 

@@ -56,14 +56,18 @@ skill-name/
 
 ```yaml
 ---
-name: skill-name
-description: What it does AND when to use it
+name: skill-name           # REQUIRED: hyphen-case identifier
+description: What it does AND when to use it  # REQUIRED
 ---
 
 # Skill Title
 
 Instructions...
 ```
+
+**Required frontmatter fields:**
+- `name` - Hyphen-case identifier (lowercase, digits, hyphens only). Max 64 chars.
+- `description` - What the skill does AND when to use it. Max 1024 chars, no angle brackets.
 
 **Critical**: The `description` is the primary trigger. Include:
 - What the skill does
@@ -239,9 +243,9 @@ Examples help agents understand style better than descriptions.
 
 ## Validation Checklist
 
-- [ ] SKILL.md exists with YAML frontmatter
-- [ ] `name`: hyphen-case, ≤64 chars
-- [ ] `description`: includes WHAT and WHEN, ≤1024 chars, no `<>`
+- [ ] SKILL.md exists with YAML frontmatter starting with `---`
+- [ ] `name` field present (REQUIRED): hyphen-case, ≤64 chars
+- [ ] `description` field present (REQUIRED): includes WHAT and WHEN, ≤1024 chars, no `<>`
 - [ ] Body under 500 lines
 - [ ] Resources properly referenced with triggers
 - [ ] No unnecessary documentation files
@@ -249,8 +253,9 @@ Examples help agents understand style better than descriptions.
 
 ## Common Mistakes
 
-1. **Description missing "when to use"** - Skill won't trigger properly
-2. **Too much in SKILL.md** - Use sibling files for large docs
-3. **No examples** - Agents learn better from examples than explanations
-4. **Including user docs** - README, CHANGELOG waste context
-5. **Nested subdirectories** - Keep supporting files flat alongside SKILL.md
+1. **Missing `name` or `description`** - These are REQUIRED fields; validation will fail without them
+2. **Description missing "when to use"** - Skill won't trigger properly
+3. **Too much in SKILL.md** - Use sibling files for large docs
+4. **No examples** - Agents learn better from examples than explanations
+5. **Including user docs** - README, CHANGELOG waste context
+6. **Nested subdirectories** - Keep supporting files flat alongside SKILL.md

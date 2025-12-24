@@ -19,18 +19,11 @@ A unified plugin distribution system for AI coding agents.
 | Agent | Rules | Commands | Agents | Skills |
 |-------|-------|----------|--------|--------|
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
-| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/command/` | `~/.config/opencode/agent/` | `~/.config/opencode/skills/`* |
+| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/command/` | `~/.config/opencode/agent/` | `~/.config/opencode/skill/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | - | - |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` (TOML) | - | - |
 | Amp Code | `~/.config/amp/AGENTS.md` | `~/.config/amp/commands/` | - | - |
 | Cursor | `~/.cursor/.cursorrules` | - | - | - |
-
-*OpenCode skills require the `opencode-skills` plugin. Add to `~/.config/opencode/opencode.json`:
-```json
-{
-  "plugin": ["opencode-skills"]
-}
-```
 
 ## Tech Stack
 
@@ -338,7 +331,7 @@ agentpkg install ./test-plugin --all
 
 Skills extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents from general-purpose into specialized assistants with procedural knowledge.
 
-**Supported by:** Claude Code (native), OpenCode (via `opencode-skills` plugin)
+**Supported by:** Claude Code (native), OpenCode (native)
 
 ### Skill Structure
 

@@ -9,7 +9,8 @@ export type AgentId =
   | "codex-cli"
   | "gemini-cli"
   | "amp-code"
-  | "cursor";
+  | "cursor"
+  | "factory-droid";
 
 // Agent configuration - describes where each agent stores its artifacts
 export interface AgentConfig {
@@ -155,6 +156,17 @@ export interface CursorFrontmatter {
   alwaysApply?: boolean;
 }
 
+// Factory Droid frontmatter settings
+export interface FactoryDroidFrontmatter {
+  description?: string;
+  model?: string | "inherit";
+  reasoningEffort?: "low" | "medium" | "high";
+  tools?: string | string[];
+  "user-invocable"?: boolean;
+  "disable-model-invocation"?: boolean;
+  "argument-hint"?: string;
+}
+
 // Command/Agent frontmatter for unified format
 export interface UnifiedFrontmatter {
   description?: string;
@@ -167,6 +179,7 @@ export interface UnifiedFrontmatter {
   "gemini-cli"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
+  "factory-droid"?: FactoryDroidFrontmatter;
 }
 
 // Skill-specific frontmatter (stricter than unified)

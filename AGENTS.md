@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding agents.
 
 ## What is this?
 
-`agentpkg` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, Cursor, Codex CLI, Gemini CLI, and Amp Code, you define your artifacts once in a unified format and distribute them to all agents automatically.
+`agentpkg` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all agents automatically.
 
 ## What it does
 
@@ -19,11 +19,12 @@ A unified plugin distribution system for AI coding agents.
 | Agent | Rules | Commands | Agents | Skills |
 |-------|-------|----------|--------|--------|
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
-| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/command/` | `~/.config/opencode/agent/` | `~/.config/opencode/skill/` |
-| Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | - | - |
-| Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` (TOML) | - | - |
-| Amp Code | `~/.config/amp/AGENTS.md` | `~/.config/amp/commands/` | - | - |
-| Cursor | `~/.cursor/.cursorrules` | - | - | - |
+| OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/commands/` | `~/.config/opencode/agents/` | `~/.config/opencode/skills/` |
+| Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | - | `~/.codex/skills/` |
+| Gemini CLI | `~/.gemini/GEMINI.md` | - | `~/.gemini/agents/` | `~/.gemini/skills/` |
+| Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
+| Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
+| Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | `~/.factory/droids/` | `~/.factory/skills/` |
 
 ## Tech Stack
 

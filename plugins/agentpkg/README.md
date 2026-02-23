@@ -70,9 +70,10 @@ This plugin serves as living documentation. When agentpkg is updated:
 |-------|----------|--------|
 | Claude Code | /create-plugin, /install-plugin | agentpkg-usage |
 | OpenCode | /create-plugin, /install-plugin | agentpkg-usage* |
-| Codex CLI | /create-plugin, /install-plugin | - |
-| Gemini CLI | /create-plugin, /install-plugin (TOML) | - |
-| Amp Code | /create-plugin, /install-plugin | - |
-| Cursor | - | - |
+| Codex CLI | /create-plugin, /install-plugin | agentpkg-usage |
+| Gemini CLI | - | agentpkg-usage |
+| Amp Code | - | agentpkg-usage |
+| Cursor | /create-plugin, /install-plugin | agentpkg-usage |
+| Factory Droid | /create-plugin, /install-plugin | agentpkg-usage |
 
 *Requires `opencode-skills` plugin

@@ -44,13 +44,14 @@ my-plugin/
 | Agent | Rules | Commands | Agents | Skills |
 |-------|-------|----------|--------|--------|
 | Claude Code | Yes | Yes | Yes | Yes |
-| OpenCode | Yes | Yes | Yes | Yes* |
-| Codex CLI | Yes | Yes | - | - |
-| Gemini CLI | Yes | Yes (TOML) | - | - |
-| Amp Code | Yes | Yes | - | - |
-| Cursor | Yes | - | - | - |
+| OpenCode | Yes | Yes | Yes | Yes |
+| Codex CLI | Yes | Yes | - | Yes |
+| Gemini CLI | Yes | - | Yes | Yes |
+| Amp Code | Yes | - | - | Yes |
+| Cursor | Yes | Yes | - | Yes |
+| Factory Droid| Yes | Yes | Yes | Yes |
 
-*OpenCode requires the `opencode-skills` plugin for skills support.
+*OpenCode natively supports skills via the skill tool.
 
 ## plugin.json Format
 

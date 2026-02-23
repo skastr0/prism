@@ -13,7 +13,8 @@ type AgentId =
   | "codex-cli"
   | "gemini-cli"
   | "amp-code"
-  | "cursor";
+  | "cursor"
+  | "factory-droid";
 ```
 
 ### PluginManifest (plugin.json)
@@ -45,6 +46,7 @@ interface UnifiedFrontmatter {
   "gemini-cli"?: GeminiCliFrontmatter;
   "amp-code"?: AmpCodeFrontmatter;
   cursor?: CursorFrontmatter;
+  "factory-droid"?: FactoryDroidFrontmatter;
 }
 ```
 
@@ -264,22 +266,40 @@ interface CursorFrontmatter {
 }
 ```
 
-**Note**: Cursor only supports rules (no commands, agents, or skills). Rules are converted to MDC format.
+**Note**: Cursor supports rules, commands, and skills. Rules are converted to MDC format.
+
+---
+
+## Factory Droid Settings
+
+### FactoryDroidFrontmatter
+
+```typescript
+interface FactoryDroidFrontmatter {
+  description?: string;
+  model?: string | "inherit";
+  reasoningEffort?: "low" | "medium" | "high";
+  tools?: string | string[];
+  "user-invocable"?: boolean;
+  "disable-model-invocation"?: boolean;
+  "argument-hint"?: string;
+}
+```
 
 ---
 
 ## Agent Capabilities Matrix
 
-| Feature | Claude Code | OpenCode | Codex CLI | Gemini CLI | Amp Code | Cursor |
-|---------|-------------|----------|-----------|------------|----------|--------|
-| Global Rules | Yes | Yes | Yes | Yes | Yes | Yes |
-| Project Rules | Yes | Yes | - | Yes | Yes | Yes |
-| Commands | Yes | Yes | Yes | Yes (TOML) | Yes | - |
-| Custom Agents | Yes | Yes | - | - | - | - |
-| Skills | Yes | Yes* | - | - | - | - |
-| MCP Support | Yes | Yes | Yes | Yes | Yes | Yes |
+| Feature | Claude Code | OpenCode | Codex CLI | Gemini CLI | Amp Code | Cursor | Factory Droid |
+|---------|-------------|----------|-----------|------------|----------|--------|---------------|
+| Global Rules | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Project Rules | Yes | Yes | - | Yes | Yes | Yes | Yes |
+| Commands | Yes | Yes | Yes | - | - | Yes | Yes |
+| Custom Agents | Yes | Yes | - | Yes | - | - | Yes |
+| Skills | Yes | Yes* | Yes | Yes | Yes | Yes | Yes |
+| MCP Support | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-*OpenCode requires `opencode-skills` plugin.
+*OpenCode supports skills natively.
 
 ---
 
@@ -299,32 +319,45 @@ const AGENT_PATHS = {
     global: "~/.config/opencode/",
     project: ".opencode/",
     rules: "AGENTS.md",
-    commands: "command/",
-    agents: "agent/",
+    commands: "commands/",
+    agents: "agents/",
     skills: "skills/",
   },
   "codex-cli": {
     global: "~/.codex/",
     rules: "AGENTS.md",
     commands: "prompts/",
+    skills: "skills/",
   },
   "gemini-cli": {
     global: "~/.gemini/",
     project: ".gemini/",
     rules: "GEMINI.md",
-    commands: "commands/",
+    skills: "skills/",
+    agents: "agents/",
   },
   "amp-code": {
     global: "~/.config/amp/",
     project: ".agents/",
     rules: "AGENTS.md",
-    commands: "commands/",
+    skills: "skills/",
   },
   cursor: {
     global: "~/.cursor/",
     project: ".cursor/",
     rules: ".cursorrules",
     rulesDir: "rules/",
+    commands: "commands/",
+    skills: "skills/",
+  },
+  "factory-droid": {
+    global: "~/.factory/",
+    project: ".factory/",
+    rules: "AGENTS.md",
+    rulesDir: "rules/",
+    commands: "commands/",
+    agents: "droids/",
+    skills: "skills/",
   },
 };
 ```

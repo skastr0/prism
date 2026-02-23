@@ -48,9 +48,8 @@ Ask the user:
    ---
    ```
 
-4. **For commands that accept arguments**, use placeholders:
+4. **For commands that accept arguments**, use the recommended placeholder:
    - `$ARGUMENTS` - entire raw argument string
-   - `$1`, `$2`, etc. - positional arguments (quotes are stripped)
 
 5. **Validate and test**:
    ```bash

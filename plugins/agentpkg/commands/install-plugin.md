@@ -9,28 +9,26 @@ opencode:
 
 # Install agentpkg Plugin
 
-**Plugin Path:** $1
-**Options:** $2
+**Plugin Installation Request:** $ARGUMENTS
 
 Help the user install an agentpkg plugin to their AI coding agents.
 
 ## Arguments
 
-- `$1` - Plugin path (required, or ask user)
-- `$2` - Additional options like agent targets (optional)
+- `$ARGUMENTS` - Plugin path and any additional options (like `--all` or `--agent`)
 
 ## Usage Examples
 
 ```bash
 /install-plugin ./my-plugin                    # Install, will prompt for targets
 /install-plugin ./my-plugin --all              # Install to all agents
-/install-plugin ./my-plugin "claude-code,opencode"  # Specific agents
+/install-plugin ./my-plugin --agent claude-code # Specific agents
 /install-plugin                                # Interactive - ask for path
 ```
 
 ## Installation Steps
 
-1. **Locate the plugin**: Use $1 or ask the user for the path
+1. **Locate the plugin**: Use $ARGUMENTS to find the path or ask the user for the path
 
 2. **Validate first**:
    ```bash

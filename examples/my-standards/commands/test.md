@@ -13,8 +13,7 @@ Run the test suite with coverage reporting.
 
 ## Arguments
 
-- **Test pattern or file**: $1 (optional - runs all tests if not provided)
-- **Additional flags**: $ARGUMENTS (for free-form flags like --watch --verbose)
+- **Test pattern or flags**: $ARGUMENTS (optional - runs all tests if not provided)
 
 ## Examples
 
@@ -26,7 +25,7 @@ Run the test suite with coverage reporting.
 
 ## Instructions
 
-1. Run tests matching $1 (or all tests if empty)
+1. Run tests matching $ARGUMENTS (or all tests if empty)
 2. Generate coverage report
 3. Highlight any failures with clear explanations
 4. Summarize results at the end

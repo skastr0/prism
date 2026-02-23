@@ -21,7 +21,7 @@ A unified plugin distribution system for AI coding agents.
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
 | OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/commands/` | `~/.config/opencode/agents/` | `~/.config/opencode/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | - | `~/.codex/skills/` |
-| Gemini CLI | `~/.gemini/GEMINI.md` | - | `~/.gemini/agents/` | `~/.gemini/skills/` |
+| Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` | `~/.gemini/agents/` | `~/.gemini/skills/` |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | `~/.factory/droids/` | `~/.factory/skills/` |
@@ -134,30 +134,24 @@ Custom commands support argument placeholders to accept user input:
 | Placeholder | Description |
 |-------------|-------------|
 | `$ARGUMENTS` | The entire raw argument string |
-| `$1`, `$2`, `$3`... | Positional arguments (1-indexed) |
 
-### Argument Parsing Rules
-
-- Unquoted words are split by whitespace
-- Quoted strings (`"..."` or `'...'`) count as a single argument
-- Quotes are stripped from the final value
-- The **last positional placeholder** captures all remaining arguments
+**Note:** For maximum cross-agent compatibility (especially with agents like Gemini CLI), it is highly recommended to design commands to take a single argument string using `$ARGUMENTS`.
 
 ### Examples
 
 **Command template:**
 ```markdown
-Review the code in $1 focusing on $2
+Review the following code or topic: $ARGUMENTS
 ```
 
 **Usage:**
 ```
-/review src/main.ts "security and performance"
+/review src/main.ts "focusing on security and performance"
 ```
 
 **Result:**
 ```
-Review the code in src/main.ts focusing on security and performance
+Review the following code or topic: src/main.ts "focusing on security and performance"
 ```
 
 **Using $ARGUMENTS for free-form input:**
@@ -175,13 +169,6 @@ $ARGUMENTS
 ```
 /create-feature Add user authentication with OAuth support and session management
 ```
-
-**Positional with quoted strings:**
-```
-/deploy production "Hotfix for login bug"
-```
-- `$1` = `production`
-- `$2` = `Hotfix for login bug` (quotes stripped)
 
 ### Shell Command Injection
 

@@ -46,7 +46,7 @@ my-plugin/
 | Claude Code | Yes | Yes | Yes | Yes |
 | OpenCode | Yes | Yes | Yes | Yes |
 | Codex CLI | Yes | Yes | - | Yes |
-| Gemini CLI | Yes | - | Yes | Yes |
+| Gemini CLI | Yes | Yes | Yes | Yes |
 | Amp Code | Yes | - | - | Yes |
 | Cursor | Yes | Yes | - | Yes |
 | Factory Droid| Yes | Yes | Yes | Yes |
@@ -86,19 +86,15 @@ Content...
 
 ## Command Arguments
 
-Commands support argument placeholders:
+Commands support argument placeholders. For maximum compatibility across agents, design commands to accept a single argument string:
 
 | Placeholder | Description |
 |-------------|-------------|
 | `$ARGUMENTS` | Entire raw argument string |
-| `$1`, `$2`... | Positional arguments (1-indexed) |
 
 ### Parsing Rules
 
-- Unquoted words split by whitespace
-- Quoted strings (`"..."` or `'...'`) count as one argument
-- Quotes stripped from final value
-- Last positional placeholder captures remaining arguments
+- `$ARGUMENTS` captures the entire unparsed string provided after the command.
 
 ### Example
 
@@ -107,11 +103,10 @@ Commands support argument placeholders:
 description: Deploy to environment
 ---
 
-Deploy to $1 with message: $2
+Deploy to the specified target: $ARGUMENTS
 
-# Usage: /deploy production "v1.2.0 release"
-# $1 = production
-# $2 = v1.2.0 release
+# Usage: /deploy production --message "v1.2.0 release"
+# $ARGUMENTS = production --message "v1.2.0 release"
 ```
 
 ## Creating Skills

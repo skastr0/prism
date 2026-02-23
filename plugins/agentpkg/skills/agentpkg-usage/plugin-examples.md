@@ -61,8 +61,7 @@ opencode:
 
 # Code Review
 
-**Files to review:** $1
-**Focus area:** $2
+**Review Request:** $ARGUMENTS
 
 Review the code for:
 1. Potential bugs
@@ -74,8 +73,7 @@ Review the code for:
 
 - `/review` - Review all staged changes
 - `/review src/auth.ts` - Review specific file
-- `/review src/api "security"` - Review with focus area
-- `/review . "performance and memory"` - Review all with quoted focus
+- `/review src/api focusing on security` - Review with focus area
 ```
 
 **commands/deploy.md:**
@@ -87,21 +85,18 @@ targets: [claude-code, opencode]
 
 # Deploy
 
-**Environment:** $1
-**Message:** $2
+**Deploy Configuration:** $ARGUMENTS
 
-Deploy the application to $1 environment.
+Deploy the application based on the configuration above.
 
 ## Arguments
 
-- `$1` - Target environment (required): production, staging, dev
-- `$2` - Deploy message (optional): Captures all remaining text
+- `$ARGUMENTS` - Target environment and message
 
 ## Usage
 
 - `/deploy staging` - Deploy to staging
-- `/deploy production "v2.0 release"` - Deploy with message
-- `/deploy dev quick fix for login` - Message captures "quick fix for login"
+- `/deploy production --message "v2.0 release"` - Deploy with message
 ```
 
 ## Example 3: Custom Agent Plugin

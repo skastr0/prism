@@ -294,7 +294,7 @@ interface FactoryDroidFrontmatter {
 |---------|-------------|----------|-----------|------------|----------|--------|---------------|
 | Global Rules | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Project Rules | Yes | Yes | - | Yes | Yes | Yes | Yes |
-| Commands | Yes | Yes | Yes | - | - | Yes | Yes |
+| Commands | Yes | Yes | Yes | Yes | - | Yes | Yes |
 | Custom Agents | Yes | Yes | - | Yes | - | - | Yes |
 | Skills | Yes | Yes* | Yes | Yes | Yes | Yes | Yes |
 | MCP Support | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -333,6 +333,7 @@ const AGENT_PATHS = {
     global: "~/.gemini/",
     project: ".gemini/",
     rules: "GEMINI.md",
+    commands: "commands/",
     skills: "skills/",
     agents: "agents/",
   },

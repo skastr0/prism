@@ -1,10 +1,10 @@
 # Skill Creator Plugin
 
-A guide for creating effective skills that extend Claude's capabilities.
+A guide for creating effective skills that extend AI agent capabilities.
 
 ## What are Skills?
 
-Skills are modular, self-contained packages that extend Claude's capabilities by providing specialized knowledge, workflows, and tools. They transform Claude from a general-purpose agent into a specialized agent equipped with procedural knowledge.
+Skills are modular, self-contained packages that extend an agent's capabilities by providing specialized knowledge, workflows, and tools. They transform agents from general-purpose assistants into specialized agents equipped with procedural knowledge.
 
 ## Plugin Contents
 
@@ -13,7 +13,7 @@ Skills are modular, self-contained packages that extend Claude's capabilities by
 
 ## Usage
 
-After installing this plugin, mention skill creation to Claude:
+After installing this plugin, mention skill creation to the agent:
 
 - "Help me create a new skill for PDF processing"
 - "I want to build a skill for our company's API"
@@ -22,7 +22,7 @@ After installing this plugin, mention skill creation to Claude:
 ## Installation
 
 ```bash
-agentpkg install ./plugins/skill-creator --agent claude-code
+agentpkg install ./plugins/skill-creator --all
 ```
 
 ## Note on Scripts

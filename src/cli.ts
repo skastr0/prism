@@ -6,7 +6,7 @@
 import { Command } from "commander";
 import { getAllAgentIds, isValidAgentId } from "./agents.js";
 import { install, planInstallation } from "./installer.js";
-import { readManifest, validatePluginSkills, validatePluginAgents } from "./manifest.js";
+import { readManifest, validatePluginSkills, validatePluginAgents, manifestTargetsAgent } from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
 import type { AgentId, FileOperation } from "./types.js";
 import { join } from "node:path";
@@ -51,8 +51,12 @@ program
 
       // Read manifest to show info
       const manifest = await readManifest(pluginPath);
+      
+      // Filter agents to only those supported by the plugin
+      const supportedAgents = agents.filter(a => manifestTargetsAgent(manifest, a as AgentId));
+      
       console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-      console.log(`   Targets: ${agents.join(", ")}`);
+      console.log(`   Targets: ${supportedAgents.length > 0 ? supportedAgents.join(", ") : "None (check plugin.json)"}`);
 
       if (options.project) {
         console.log(`   Project: ${options.project}`);
@@ -231,8 +235,12 @@ program
       // Process each plugin
       for (const pluginPath of pluginPaths) {
         const manifest = await readManifest(pluginPath);
+        
+        // Filter agents to only those supported by the plugin
+        const supportedAgents = agents.filter(a => manifestTargetsAgent(manifest, a as AgentId));
+        
         console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-        console.log(`   Targets: ${agents.join(", ")}`);
+        console.log(`   Targets: ${supportedAgents.length > 0 ? supportedAgents.join(", ") : "None (check plugin.json)"}\n`);
 
         if (options.project) {
           console.log(`   Project: ${options.project}`);

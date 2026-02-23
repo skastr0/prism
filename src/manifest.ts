@@ -107,6 +107,7 @@ export function getAgentFrontmatter(
     "gemini-cli",
     "amp-code",
     "cursor",
+    "factory-droid",
   ];
 
   const cleanBase: Record<string, unknown> = {};

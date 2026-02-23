@@ -55,14 +55,14 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     rulesFile: "AGENTS.md",
     rulesDir: null,
     commandsDir: "prompts/", // Custom prompts become /prompts:<name>
-    agentsDir: null,
+    agentsDir: "agents/", // Agent role configs (TOML)
     toolsDir: null, // Uses MCP
     skillsDir: "skills/",
     configFile: "config.toml",
     configFormat: "toml",
     supportsTools: true,
     supportsCommands: true,
-    supportsAgents: false,
+    supportsAgents: true, // Multi-agent support via [agents.*] in config.toml
     supportsSkills: true,
     supportsMCP: true,
     alternativeRulesFiles: ["CLAUDE.md"],

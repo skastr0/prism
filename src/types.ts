@@ -167,6 +167,14 @@ export interface FactoryDroidFrontmatter {
   "argument-hint"?: string;
 }
 
+// Codex CLI agent-specific frontmatter settings
+export interface CodexCliFrontmatter {
+  description?: string;
+  model?: string;
+  model_reasoning_effort?: "low" | "medium" | "high" | "xhigh";
+  sandbox_mode?: "read-only" | "full" | "danger-full-access";
+}
+
 // Command/Agent frontmatter for unified format
 export interface UnifiedFrontmatter {
   description?: string;
@@ -175,7 +183,7 @@ export interface UnifiedFrontmatter {
   // Agent-specific overrides (typed where known)
   "claude-code"?: ClaudeCodeFrontmatter;
   opencode?: OpenCodeAgentFrontmatter;
-  "codex-cli"?: Record<string, unknown>;
+  "codex-cli"?: CodexCliFrontmatter;
   "gemini-cli"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;

@@ -13,6 +13,7 @@ import {
   listDirRecursive,
   readFile,
   writeFile,
+  ensureDir,
 } from "./fs.js";
 import {
   frontmatterTargetsAgent,
@@ -361,7 +362,12 @@ async function planAgentsInstallation(
       expandPath(agent.globalConfigPath),
       agent.agentsDir!
     );
-    const targetPath = join(targetDir, file);
+
+    // Codex CLI uses TOML config files for agents
+    const targetFile = agent.id === "codex-cli"
+      ? file.replace(".md", ".toml")
+      : file;
+    const targetPath = join(targetDir, targetFile);
 
     // Check if agent definition targets this agent
     const { frontmatter } = await parseMarkdownFile(sourcePath);
@@ -569,12 +575,24 @@ async function executeCopyOperation(op: FileOperation): Promise<void> {
     const { frontmatter, content } = await parseMarkdownFile(op.source);
     const agentFrontmatter = getAgentFrontmatter(frontmatter, op.agent);
 
+    // Ensure name is set for agent definitions (derived from filename)
+    if (op.artifact === "agent" && !agentFrontmatter.name) {
+      agentFrontmatter.name = basename(op.source, ".md");
+    }
+
     // Handle special transformations per agent
     let finalContent: string;
 
     if (agent.id === "gemini-cli" && op.artifact === "command") {
       // Convert to TOML format for Gemini
       finalContent = convertCommandToToml(agentFrontmatter, content);
+    } else if (agent.id === "codex-cli" && op.artifact === "agent") {
+      // Convert to TOML config file for Codex agent role
+      finalContent = convertAgentToCodexToml(agentFrontmatter, content);
+      await writeFile(op.target, finalContent);
+      // Also register this agent role in config.toml
+      await mergeCodexAgentConfig(agent, agentFrontmatter);
+      return;
     } else if (agent.id === "cursor" && op.artifact === "rules") {
       // Convert to MDC format for Cursor
       finalContent = convertToMdc(agentFrontmatter, content);
@@ -677,6 +695,100 @@ function convertToMdc(
   }
 
   return reconstructMarkdown(mdcFrontmatter, content);
+}
+
+/**
+ * Convert agent markdown to TOML config file (for Codex CLI agent roles)
+ * Produces a file like ~/.codex/agents/<name>.toml
+ */
+function convertAgentToCodexToml(
+  frontmatter: Record<string, unknown>,
+  content: string
+): string {
+  const lines: string[] = [];
+
+  if (frontmatter.model && typeof frontmatter.model === "string") {
+    lines.push(`model = "${frontmatter.model}"`);
+  }
+
+  if (frontmatter.model_reasoning_effort && typeof frontmatter.model_reasoning_effort === "string") {
+    lines.push(`model_reasoning_effort = "${frontmatter.model_reasoning_effort}"`);
+  }
+
+  if (frontmatter.sandbox_mode && typeof frontmatter.sandbox_mode === "string") {
+    lines.push(`sandbox_mode = "${frontmatter.sandbox_mode}"`);
+  }
+
+  // The markdown body becomes developer_instructions
+  if (content.trim()) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`developer_instructions = """\n${content.trim()}\n"""`);
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * Merge agent role registration into Codex config.toml
+ * Uses # BEGIN/END markers for idempotent updates (same pattern as rules)
+ */
+async function mergeCodexAgentConfig(
+  agent: AgentConfig,
+  frontmatter: Record<string, unknown>
+): Promise<void> {
+  const agentName = typeof frontmatter.name === "string"
+    ? frontmatter.name
+    : "unknown";
+
+  const configPath = join(expandPath(agent.globalConfigPath), agent.configFile!);
+  const beginMarker = `# BEGIN: agentpkg:${agentName}`;
+  const endMarker = `# END: agentpkg:${agentName}`;
+
+  const description = typeof frontmatter.description === "string"
+    ? frontmatter.description.replace(/"/g, '\\"')
+    : "";
+
+  const newSection = [
+    beginMarker,
+    `[agents.${agentName}]`,
+    `description = "${description}"`,
+    `config_file = "agents/${agentName}.toml"`,
+    endMarker,
+  ].join("\n");
+
+  if (await exists(configPath)) {
+    const existingContent = await readFile(configPath);
+
+    if (existingContent.includes(beginMarker)) {
+      const beginIndex = existingContent.indexOf(beginMarker);
+      const endIndex = existingContent.indexOf(endMarker);
+
+      if (endIndex > beginIndex) {
+        const existingSection = existingContent.slice(
+          beginIndex,
+          endIndex + endMarker.length
+        );
+
+        if (existingSection === newSection) {
+          return; // Already identical, skip
+        }
+
+        // Replace existing section in-place
+        const before = existingContent.slice(0, beginIndex);
+        const after = existingContent.slice(endIndex + endMarker.length);
+        await writeFile(configPath, before + newSection + after);
+        return;
+      }
+    }
+
+    // Append new section
+    const separator = existingContent.endsWith("\n") ? "\n" : "\n\n";
+    await writeFile(configPath, existingContent + separator + newSection + "\n");
+  } else {
+    // Create config file (unlikely since codex config usually exists)
+    await ensureDir(expandPath(agent.globalConfigPath));
+    await writeFile(configPath, newSection + "\n");
+  }
 }
 
 /**

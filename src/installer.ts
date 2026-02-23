@@ -667,9 +667,12 @@ function convertCommandToToml(
     lines.push(`description = "${frontmatter.description}"`);
   }
 
+  // Replace agentpkg argument placeholders with Gemini CLI format
+  const promptContent = content.replace(/\$ARGUMENTS/g, "{{args}}");
+
   // The content becomes the prompt
   lines.push("");
-  lines.push(`prompt = """${content}"""`);
+  lines.push(`prompt = """${promptContent}"""`);
 
   return lines.join("\n");
 }

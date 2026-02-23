@@ -456,29 +456,26 @@ description: Run tests with coverage
 
 # Run Tests
 
-**Test pattern:** $1
-**Additional flags:** $2
+**Test configuration:** $ARGUMENTS
 
 Run the test suite with coverage reporting.
 
 ## Arguments
 
-- \`$1\` - Test file or pattern (optional, runs all if empty)
-- \`$2\` - Additional flags like --watch, --verbose
-- \`$ARGUMENTS\` - Use this instead for free-form input
+- \`$ARGUMENTS\` - The full test configuration or filter string provided by the user
 
 ## Usage Examples
 
 \`\`\`bash
 /test                           # Run all tests
 /test src/utils                 # Run tests matching pattern
-/test "auth tests" --watch      # Quoted pattern with flag
+/test src/utils --watch         # Pattern with flag
 \`\`\`
 
 ## Instructions
 
-1. Run tests matching $1 (or all tests if not provided)
-2. Apply any additional flags from $2
+1. Run tests using the provided configuration: $ARGUMENTS
+2. If the configuration is empty, run all tests
 3. Generate coverage report
 4. Highlight failures with clear explanations
 `;

@@ -1,23 +1,14 @@
 # Skill Creator Plugin
 
-A guide for creating effective skills that extend AI agent capabilities.
+This plugin vendors Anthropic's official `skill-creator` skill and its supporting eval tooling so any installed agent can learn the current skill-authoring workflow.
 
-## What are Skills?
+## What it includes
 
-Skills are modular, self-contained packages that extend an agent's capabilities by providing specialized knowledge, workflows, and tools. They transform agents from general-purpose assistants into specialized agents equipped with procedural knowledge.
-
-## Plugin Contents
-
-- **skills/skill-creator/** - Core skill with creation guidance and best practices
-- **references/** - Design patterns for workflows and output formats
-
-## Usage
-
-After installing this plugin, mention skill creation to the agent:
-
-- "Help me create a new skill for PDF processing"
-- "I want to build a skill for our company's API"
-- "Create a skill that helps with data analysis"
+- `skills/skill-creator/SKILL.md` - the main skill authoring, eval, and iteration workflow
+- `skills/skill-creator/scripts/` - benchmark, grading, packaging, and description optimization helpers
+- `skills/skill-creator/agents/` - grader, comparator, and analyzer prompts used during eval loops
+- `skills/skill-creator/eval-viewer/` - HTML review viewer generation
+- `skills/skill-creator/references/` - JSON schemas and related reference material
 
 ## Installation
 
@@ -25,20 +16,21 @@ After installing this plugin, mention skill creation to the agent:
 agentpkg install ./plugins/skill-creator --all
 ```
 
-## Note on Scripts
+## Runtime expectations
 
-Unlike Anthropic's original skill-creator which includes Python scripts for initialization, validation, and packaging, this plugin relies on agentpkg's built-in commands:
+The authoring guidance is useful from any agent. The advanced eval workflow follows Anthropic's current setup and uses the local `claude` CLI as the evaluation oracle.
 
-```bash
-# Initialize a new skill
-agentpkg init my-plugin --with-skill
+For the full eval, benchmark, and description optimization loop, expect to have:
 
-# Validate skill structure
-agentpkg validate ./my-plugin
-```
+- authenticated `claude` CLI access
+- Python 3 available locally
+- browser or static HTML access for review artifacts
 
-The skill content (what to write, how to structure) is defined in this plugin. The mechanics (file creation, validation) are handled by agentpkg itself.
+## Notes
+
+- `agentpkg init --with-skill` and `agentpkg validate` remain useful for creating and checking plugin structure.
+- The bundled `skill-creator` goes further than structure alone: it now includes test prompts, benchmark aggregation, blind comparisons, and description optimization workflows.
 
 ## Credits
 
-Based on Anthropic's official skill-creator skill from [anthropics/skills](https://github.com/anthropics/skills).
+Based on Anthropic's official skill from `anthropics/skills`.

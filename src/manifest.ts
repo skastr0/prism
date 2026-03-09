@@ -217,7 +217,7 @@ export function validateSkillName(name: unknown): {
   if (!SKILL_VALIDATION.NAME_PATTERN.test(trimmed)) {
     return {
       valid: false,
-      error: `Name '${trimmed}' should be hyphen-case (lowercase letters, digits, and hyphens only)`,
+      error: `Name '${trimmed}' should be kebab-case (lowercase letters, digits, and hyphens only)`,
     };
   }
 
@@ -303,13 +303,28 @@ export function validateSkillFrontmatterKeys(
 }
 
 /**
- * Validate optional skill fields (allowed-tools, metadata, license)
+ * Validate optional skill fields (allowed-tools, metadata, license, compatibility)
  */
 export function validateSkillOptionalFields(
   frontmatter: Record<string, unknown>
 ): { valid: boolean; errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
+
+  if (frontmatter.compatibility !== undefined) {
+    const compatibility = frontmatter.compatibility;
+    if (typeof compatibility !== "string") {
+      errors.push(
+        `'compatibility' must be a string, got ${typeof compatibility}`
+      );
+    } else if (
+      compatibility.trim().length > SKILL_VALIDATION.COMPATIBILITY_MAX_LENGTH
+    ) {
+      errors.push(
+        `Compatibility is too long (${compatibility.trim().length} characters). Maximum is ${SKILL_VALIDATION.COMPATIBILITY_MAX_LENGTH} characters.`
+      );
+    }
+  }
 
   // Validate allowed-tools if present
   if (frontmatter["allowed-tools"] !== undefined) {

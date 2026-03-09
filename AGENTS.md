@@ -339,7 +339,8 @@ Skills extend agent capabilities with specialized knowledge, workflows, and tool
 ```
 skill-name/
 ├── SKILL.md              # Required: YAML frontmatter + instructions
-├── *.md                  # Optional: supporting docs loaded as needed
+├── references/           # Optional: docs loaded as needed
+├── scripts/              # Optional: deterministic helpers
 └── assets/               # Optional: templates, images, fonts for output
 ```
 
@@ -347,8 +348,9 @@ skill-name/
 
 ```yaml
 ---
-name: hyphen-case-name
+name: kebab-case-name
 description: What it does AND when to use it (this triggers the skill)
+# compatibility: Optional prerequisites or environment notes
 ---
 
 # Skill Title
@@ -373,7 +375,8 @@ Instructions...
 
 | Type | Purpose | When to Include |
 |------|---------|-----------------|
-| `*.md` | Supporting documentation | Large docs needed contextually |
+| `references/` | Supporting documentation | Large docs needed contextually |
+| `scripts/` | Deterministic helpers | Reliable transforms, validation, or packaging steps |
 | `assets/` | Output files | Templates, images, fonts |
 
 ### Creation Process
@@ -387,8 +390,9 @@ Instructions...
 
 ### Validation Rules
 
-- `name`: hyphen-case, lowercase + digits + hyphens, max 64 chars
+- `name`: kebab-case, lowercase + digits + hyphens, max 64 chars
 - `description`: max 1024 chars, no angle brackets `< >`
+- `compatibility`: optional string, max 500 chars
 - SKILL.md body: recommended max 500 lines
 
 See `plugins/skill-creator/` for the complete skill creation guide with design patterns.

@@ -528,33 +528,58 @@ You have READ-ONLY access. Do not modify files directly.
 
       // Create example skill if requested
       if (options.withSkill) {
-        await ensureDir(join(targetDir, "skills", "example-skill"));
-        
+        await ensureDir(join(targetDir, "skills", "example-skill", "references"));
+        await ensureDir(join(targetDir, "skills", "example-skill", "scripts"));
+        await ensureDir(join(targetDir, "skills", "example-skill", "assets"));
+
         const skillMd = `---
 name: example-skill
-description: Example skill demonstrating basic structure and pattern usage
+description: Use this skill when users need help with [specific task or workflow]. Be explicit about when it should and should not trigger.
+# compatibility: Requires Python 3.11+ for optional helper scripts
 ---
 
 # Example Skill
 
-This is an example skill showing the recommended structure.
+A minimal skill scaffold showing progressive disclosure and eval-friendly instructions.
 
-## Core Instructions
+## Use This Skill For
 
-Keep your main instructions concise and focused. Only include what the agent doesn't already know.
+- [Primary task the skill should handle]
+- [Closely related task that should still trigger the skill]
 
-## When to Use
+## Do Not Use This Skill For
 
-This skill triggers when users need help with [specific task].
+- [Nearby task that looks similar but needs a different skill]
+- [Simple one-off request that does not need the full workflow]
 
-## Progressive Disclosure
+## Workflow
 
-For larger documentation, split into sibling files:
-- See [advanced.md](advanced.md) for advanced features
-- See [examples.md](examples.md) for detailed examples
+1. Inspect the input and confirm the requested outcome.
+2. Follow the documented process for the task.
+3. Verify the final output before returning it.
+
+## Resources
+
+- Read \`references/domain-guide.md\` when you need domain-specific rules, examples, or edge cases.
+- Add deterministic helpers to \`scripts/\` when instructions alone are not enough.
+- Put reusable templates, sample inputs, or brand assets in \`assets/\`.
 `;
         await writeFile(join(targetDir, "skills", "example-skill", "SKILL.md"), skillMd);
+        await writeFile(
+          join(targetDir, "skills", "example-skill", "references", "domain-guide.md"),
+          `# Domain Guide
+
+Use this file for detailed rules, examples, and edge cases that should not live in \`SKILL.md\`.
+
+## Example Sections
+
+- Input formats the skill supports
+- Output conventions the skill must follow
+- Common failure modes and how to recover
+`
+        );
         created.push("skills/example-skill/SKILL.md");
+        created.push("skills/example-skill/references/domain-guide.md");
       }
 
       // Create README
@@ -572,7 +597,12 @@ ${name}/
 │   └── project/         # Rules for specific projects
 ├── commands/            # Custom slash commands
 ├── agents/              # Custom agent definitions
-└── skills/              # Skills (Claude Code)
+└── skills/
+    └── example-skill/
+        ├── SKILL.md     # Main instructions + frontmatter
+        ├── references/  # Additional docs loaded as needed
+        ├── scripts/     # Optional deterministic helpers
+        └── assets/      # Templates, sample inputs, brand files
 \`\`\`
 
 ## Installation
@@ -591,14 +621,14 @@ agentpkg install ./${name} --all --project ~/code/my-project
 agentpkg install ./${name} --all --dry-run
 \`\`\`
 
-## Supported Agents
+## Validation
 
-- claude-code (commands, agents, skills)
-- opencode (commands, agents)
-- codex-cli (prompts/commands)
-- gemini-cli (commands)
-- amp-code (commands)
-- cursor (rules only)
+\`\`\`bash
+# Validate plugin structure and skill frontmatter
+agentpkg validate ./${name}
+\`\`\`
+
+See \`agentpkg agents\` for the current support matrix.
 `;
       await writeFile(join(targetDir, "README.md"), readme);
       created.push("README.md");

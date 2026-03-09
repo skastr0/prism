@@ -77,9 +77,17 @@ export async function copyFile(
   source: string,
   target: string
 ): Promise<void> {
+  const fs = await import("node:fs/promises");
+
   await ensureDir(dirname(target));
-  const content = await Bun.file(source).arrayBuffer();
-  await Bun.write(target, content);
+  await fs.copyFile(source, target);
+
+  try {
+    const stat = await fs.stat(source);
+    await fs.chmod(target, stat.mode);
+  } catch {
+    // Ignore permission propagation failures on platforms that do not support chmod.
+  }
 }
 
 /**

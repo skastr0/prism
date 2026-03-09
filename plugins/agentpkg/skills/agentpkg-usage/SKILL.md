@@ -131,7 +131,7 @@ skills/my-skill/
 
 ```yaml
 ---
-name: my-skill              # REQUIRED: hyphen-case identifier
+name: my-skill              # REQUIRED: kebab-case identifier
 description: What it does AND when to trigger it  # REQUIRED
 ---
 

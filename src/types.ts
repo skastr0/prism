@@ -194,6 +194,7 @@ export interface UnifiedFrontmatter {
 export interface SkillFrontmatter {
   name: string;
   description: string;
+  compatibility?: string;
   license?: string;
   "allowed-tools"?: string[];
   metadata?: Record<string, string>;
@@ -204,10 +205,12 @@ export const SKILL_VALIDATION = {
   NAME_MAX_LENGTH: 64,
   NAME_PATTERN: /^[a-z0-9]+(-[a-z0-9]+)*$/,
   DESCRIPTION_MAX_LENGTH: 1024,
+  COMPATIBILITY_MAX_LENGTH: 500,
   RECOMMENDED_BODY_MAX_LINES: 500,
   ALLOWED_FRONTMATTER_KEYS: new Set([
     "name",
     "description",
+    "compatibility",
     "license",
     "allowed-tools",
     "metadata",

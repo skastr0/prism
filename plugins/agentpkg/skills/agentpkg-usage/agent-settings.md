@@ -54,7 +54,7 @@ interface UnifiedFrontmatter {
 
 ```typescript
 interface SkillFrontmatter {
-  name: string;                      // Required: hyphen-case, max 64 chars
+  name: string;                      // Required: kebab-case, max 64 chars
   description: string;               // Required: max 1024 chars, no < >
   license?: string;                  // Optional: license identifier
   "allowed-tools"?: string[];        // Optional: restrict available tools

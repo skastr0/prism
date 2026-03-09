@@ -48,7 +48,8 @@ Three-level loading system:
 ```
 skill-name/
 ├── SKILL.md              # Required
-├── *.md                  # Optional: supporting docs (flat structure)
+├── references/           # Optional: supporting docs loaded as needed
+├── scripts/              # Optional: deterministic helpers
 └── assets/               # Optional: output files
 ```
 
@@ -56,8 +57,9 @@ skill-name/
 
 ```yaml
 ---
-name: skill-name           # REQUIRED: hyphen-case identifier
+name: skill-name           # REQUIRED: kebab-case identifier
 description: What it does AND when to use it  # REQUIRED
+# compatibility: Optional prerequisites or environment notes
 ---
 
 # Skill Title
@@ -66,8 +68,9 @@ Instructions...
 ```
 
 **Required frontmatter fields:**
-- `name` - Hyphen-case identifier (lowercase, digits, hyphens only). Max 64 chars.
+- `name` - Kebab-case identifier (lowercase, digits, hyphens only). Max 64 chars.
 - `description` - What the skill does AND when to use it. Max 1024 chars, no angle brackets.
+- `compatibility` - Optional prerequisites or environment notes. Max 500 chars.
 
 **Critical**: The `description` is the primary trigger. Include:
 - What the skill does
@@ -77,7 +80,8 @@ Instructions...
 
 | Type | Purpose | Example | How Used |
 |------|---------|---------|----------|
-| `*.md` | Supporting documentation | `schema.md`, `api.md` | Read into context when needed |
+| `references/` | Supporting documentation | `references/schema.md`, `references/api.md` | Read into context when needed |
+| `scripts/` | Deterministic helpers | `scripts/verify_output.py` | Executed when the workflow needs reliable checks or transforms |
 | `assets/` | Files for output | `template.pptx`, `logo.png` | Used directly, not read |
 
 ### What NOT to Include
@@ -129,7 +133,7 @@ For simple edits, modify XML.
 ```
 
 **Guidelines:**
-- Keep supporting files as siblings to SKILL.md (flat structure)
+- Keep small supporting docs close to SKILL.md; use `references/` and `scripts/` when the skill grows.
 - For files >100 lines, include table of contents
 
 ## Creation Process
@@ -144,7 +148,8 @@ Ask clarifying questions:
 ### Step 2: Plan Reusable Contents
 
 For each example, analyze:
-- What docs are needed repeatedly? → sibling `.md` files
+- What docs are needed repeatedly? → `references/` or sibling `.md` files
+- What deterministic helpers are worth reusing? → `scripts/`
 - What templates/files used in output? → `assets/`
 
 **Example analysis:**
@@ -171,8 +176,9 @@ touch skills/my-skill/SKILL.md
 ### Step 4: Write SKILL.md
 
 **Frontmatter:**
-- `name`: hyphen-case (e.g., `data-analyzer`), max 64 chars
+- `name`: kebab-case (e.g., `data-analyzer`), max 64 chars
 - `description`: WHAT + WHEN, max 1024 chars, no angle brackets
+- `compatibility`: optional string, max 500 chars
 
 **Body:**
 - Use imperative form
@@ -189,7 +195,7 @@ agentpkg validate ./my-plugin
 Checks:
 - YAML frontmatter format
 - Required fields present
-- Name format (hyphen-case, ≤64 chars)
+- Name format (kebab-case, ≤64 chars)
 - Description constraints (≤1024 chars, no `<` `>`)
 
 ### Step 6: Iterate
@@ -244,7 +250,7 @@ Examples help agents understand style better than descriptions.
 ## Validation Checklist
 
 - [ ] SKILL.md exists with YAML frontmatter starting with `---`
-- [ ] `name` field present (REQUIRED): hyphen-case, ≤64 chars
+- [ ] `name` field present (REQUIRED): kebab-case, ≤64 chars
 - [ ] `description` field present (REQUIRED): includes WHAT and WHEN, ≤1024 chars, no `<>`
 - [ ] Body under 500 lines
 - [ ] Resources properly referenced with triggers

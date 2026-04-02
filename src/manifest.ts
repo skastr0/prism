@@ -4,19 +4,315 @@
 
 import { join } from "node:path";
 import matter from "gray-matter";
-import { exists, expandPath, readFile, readJson } from "./fs.js";
+import { exists, expandPath, listDirRecursive, readFile, readJson } from "./fs.js";
 import type {
-  AgentId,
+  HarnessId,
   AgentValidationResult,
+  PluginArtifactType,
   PluginManifest,
+  PluginTargetId,
   SkillFrontmatter,
   SkillValidationResult,
+  TargetPresetId,
   UnifiedFrontmatter,
 } from "./types.js";
-import { SKILL_VALIDATION, AGENT_VALIDATION } from "./types.js";
-import { isValidAgentId } from "./agents.js";
+import {
+  AGENT_VALIDATION,
+  PLUGIN_ARTIFACT_TYPES,
+  SKILL_VALIDATION,
+  TARGET_PRESET_IDS,
+} from "./types.js";
+import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
 
 const MANIFEST_FILE = "plugin.json";
+const HARNESS_ROOT = "harness";
+
+const TARGET_PRESETS = {
+  "coding-harness": [
+    "claude-code",
+    "opencode",
+    "codex-cli",
+    "gemini-cli",
+    "amp-code",
+    "cursor",
+    "factory-droid",
+  ],
+  "claw-harness": ["openclaw"],
+} as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
+
+function isTargetPresetId(value: string): value is TargetPresetId {
+  return TARGET_PRESET_IDS.includes(value as TargetPresetId);
+}
+
+function isPluginTargetId(value: unknown): value is PluginTargetId {
+  return typeof value === "string" && (isValidHarnessId(value) || isTargetPresetId(value));
+}
+
+function formatManifestErrors(errors: string[]): string {
+  return errors.map((error) => `- ${error}`).join("\n");
+}
+
+function isPluginArtifactType(value: string): value is PluginArtifactType {
+  return PLUGIN_ARTIFACT_TYPES.includes(value as PluginArtifactType);
+}
+
+function getHarnessOverlayPath(
+  pluginPath: string,
+  harnessId: HarnessId,
+  artifact: PluginArtifactType
+): string {
+  return join(pluginPath, HARNESS_ROOT, harnessId, artifact);
+}
+
+export interface ArtifactSourceFile {
+  relativePath: string;
+  sourcePath: string;
+  scope: "shared" | "harness";
+}
+
+export async function collectArtifactSourceFiles(
+  pluginPath: string,
+  artifact: PluginArtifactType,
+  harnessId?: HarnessId
+): Promise<ArtifactSourceFile[]> {
+  const selectedFiles = new Map<string, ArtifactSourceFile>();
+  const layers = [
+    {
+      rootPath: join(pluginPath, artifact),
+      scope: "shared" as const,
+    },
+    ...(harnessId
+      ? [{
+          rootPath: getHarnessOverlayPath(pluginPath, harnessId, artifact),
+          scope: "harness" as const,
+        }]
+      : []),
+  ];
+
+  for (const layer of layers) {
+    const files = (await listDirRecursive(layer.rootPath)).sort((a, b) =>
+      a.localeCompare(b)
+    );
+
+    for (const relativePath of files) {
+      selectedFiles.set(relativePath, {
+        relativePath,
+        sourcePath: join(layer.rootPath, relativePath),
+        scope: layer.scope,
+      });
+    }
+  }
+
+  return [...selectedFiles.values()].sort((a, b) =>
+    a.relativePath.localeCompare(b.relativePath)
+  );
+}
+
+async function validateHarnessOverlays(
+  pluginPath: string,
+  manifest: PluginManifest
+): Promise<string[]> {
+  const harnessRoot = join(pluginPath, HARNESS_ROOT);
+
+  if (!(await exists(harnessRoot))) {
+    return [];
+  }
+
+  const { readdir } = await import("node:fs/promises");
+  const errors: string[] = [];
+  const harnessEntries = await readdir(harnessRoot, { withFileTypes: true });
+
+  for (const harnessEntry of harnessEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!harnessEntry.isDirectory()) {
+      errors.push(
+        `Harness overlay root must contain directories named after supported harness IDs: ${HARNESS_ROOT}/${harnessEntry.name}`
+      );
+      continue;
+    }
+
+    const harnessId = harnessEntry.name;
+    const harnessPath = join(harnessRoot, harnessId);
+    const artifactEntries = await readdir(harnessPath, { withFileTypes: true });
+
+    for (const artifactEntry of artifactEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const overlayPath = `${HARNESS_ROOT}/${harnessId}/${artifactEntry.name}`;
+
+      if (!artifactEntry.isDirectory()) {
+        errors.push(
+          `Harness overlay '${overlayPath}' must be a directory for one of: ${PLUGIN_ARTIFACT_TYPES.join(", ")}`
+        );
+        continue;
+      }
+
+      if (!isValidHarnessId(harnessId)) {
+        errors.push(
+          `Unknown harness overlay id '${harnessId}' in ${overlayPath}. Expected one of: ${getAllHarnessIds().join(", ")}`
+        );
+        continue;
+      }
+
+      if (!isPluginArtifactType(artifactEntry.name)) {
+        errors.push(
+          `Unknown harness overlay artifact '${artifactEntry.name}' in ${overlayPath}. Expected one of: ${PLUGIN_ARTIFACT_TYPES.join(", ")}`
+        );
+        continue;
+      }
+
+      if (!harnessSupportsArtifact(harnessId, artifactEntry.name)) {
+        errors.push(
+          `Harness '${harnessId}' does not support ${artifactEntry.name} overlays (found ${overlayPath})`
+        );
+        continue;
+      }
+
+      const declaredTargets = manifest.targets[artifactEntry.name];
+      if (
+        declaredTargets &&
+        declaredTargets.length > 0 &&
+        !manifestTargetsArtifact(manifest, artifactEntry.name, harnessId)
+      ) {
+        errors.push(
+          `Harness overlay '${overlayPath}' contradicts plugin.json targets.${artifactEntry.name}; include '${harnessId}' directly or via a preset`
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+async function pluginHasArtifactFiles(
+  pluginPath: string,
+  artifact: PluginArtifactType
+): Promise<boolean> {
+  if ((await listDirRecursive(join(pluginPath, artifact))).length > 0) {
+    return true;
+  }
+
+  const harnessRoot = join(pluginPath, HARNESS_ROOT);
+  if (!(await exists(harnessRoot))) {
+    return false;
+  }
+
+  const { readdir } = await import("node:fs/promises");
+  const harnessEntries = await readdir(harnessRoot, { withFileTypes: true });
+
+  for (const harnessEntry of harnessEntries) {
+    if (!harnessEntry.isDirectory()) {
+      continue;
+    }
+
+    if ((await listDirRecursive(join(harnessRoot, harnessEntry.name, artifact))).length > 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function validateNoFileLevelInstallTargets(pluginPath: string): Promise<string[]> {
+  const errors: string[] = [];
+
+  const checkMarkdownFrontmatter = async (
+    filePath: string,
+    artifact: PluginArtifactType,
+    displayPath: string
+  ): Promise<void> => {
+    const raw = await readFile(filePath);
+    if (!raw.startsWith("---")) {
+      return;
+    }
+
+    const { data } = matter(raw);
+    if (data && typeof data === "object" && !Array.isArray(data) && "targets" in data) {
+      errors.push(
+        `File-level install targets are not supported in ${displayPath}. Move install scope to plugin.json targets.${artifact}`
+      );
+    }
+  };
+
+  for (const artifact of ["rules", "commands", "agents"] as const) {
+    const artifactRoot = join(pluginPath, artifact);
+    const files = await listDirRecursive(artifactRoot);
+    for (const relativePath of files) {
+      if (!relativePath.endsWith(".md")) {
+        continue;
+      }
+
+      await checkMarkdownFrontmatter(
+        join(artifactRoot, relativePath),
+        artifact,
+        `${artifact}/${relativePath}`
+      );
+    }
+  }
+
+  const skillsRoot = join(pluginPath, "skills");
+  const skillFiles = await listDirRecursive(skillsRoot);
+  for (const relativePath of skillFiles) {
+    if (!relativePath.endsWith("SKILL.md")) {
+      continue;
+    }
+
+    await checkMarkdownFrontmatter(
+      join(skillsRoot, relativePath),
+      "skills",
+      `skills/${relativePath}`
+    );
+  }
+
+  const harnessRoot = join(pluginPath, HARNESS_ROOT);
+  const harnessFiles = await listDirRecursive(harnessRoot);
+  for (const relativePath of harnessFiles) {
+    const [harnessId, artifact, ...rest] = relativePath.split("/");
+    if (!harnessId || !artifact || rest.length === 0 || !isPluginArtifactType(artifact)) {
+      continue;
+    }
+
+    const isMarkdownArtifact =
+      (artifact === "rules" || artifact === "commands" || artifact === "agents") &&
+      relativePath.endsWith(".md");
+    const isSkillEntryPoint = artifact === "skills" && relativePath.endsWith("SKILL.md");
+    if (!isMarkdownArtifact && !isSkillEntryPoint) {
+      continue;
+    }
+
+    await checkMarkdownFrontmatter(
+      join(harnessRoot, relativePath),
+      artifact,
+      `${HARNESS_ROOT}/${relativePath}`
+    );
+  }
+
+  return errors;
+}
+
+async function getPresentArtifacts(pluginPath: string): Promise<PluginArtifactType[]> {
+  const presentArtifacts: PluginArtifactType[] = [];
+
+  for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+    if (await pluginHasArtifactFiles(pluginPath, artifact)) {
+      presentArtifacts.push(artifact);
+    }
+  }
+
+  return presentArtifacts;
+}
+
+function harnessSupportsArtifact(harnessId: HarnessId, artifact: PluginArtifactType): boolean {
+  const harness = getHarness(harnessId);
+
+  switch (artifact) {
+    case "rules":
+      return harness.rulesFile !== null;
+    case "commands":
+      return harness.supportsCommands && harness.commandsDir !== null;
+    case "agents":
+      return harness.supportsAgents && harness.agentsDir !== null;
+    case "skills":
+      return harness.supportsSkills && harness.skillsDir !== null;
+  }
+}
 
 /**
  * Read and validate plugin manifest
@@ -29,51 +325,178 @@ export async function readManifest(pluginPath: string): Promise<PluginManifest> 
   }
 
   const manifest = await readJson<PluginManifest>(manifestPath);
-  validateManifest(manifest);
+  await validateManifest(manifest, expandPath(pluginPath));
   return manifest;
 }
 
 /**
  * Validate manifest structure
  */
-function validateManifest(manifest: unknown): asserts manifest is PluginManifest {
-  if (!manifest || typeof manifest !== "object") {
+async function validateManifest(manifest: unknown, pluginPath: string): Promise<void> {
+  const errors: string[] = [];
+
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("Invalid manifest: must be an object");
   }
 
   const m = manifest as Record<string, unknown>;
 
   if (typeof m.name !== "string" || m.name.length === 0) {
-    throw new Error("Invalid manifest: 'name' is required");
+    errors.push(`'name' is required`);
   }
 
   if (typeof m.version !== "string" || m.version.length === 0) {
-    throw new Error("Invalid manifest: 'version' is required");
+    errors.push(`'version' is required`);
   }
 
-  if (m.targets !== "all") {
-    if (!Array.isArray(m.targets)) {
-      throw new Error("Invalid manifest: 'targets' must be 'all' or an array of agent IDs");
+  if (!("targets" in m)) {
+    errors.push(
+      `'targets' is required and must be an object keyed by artifact type (rules, commands, agents, skills)`
+    );
+  } else if (!m.targets || typeof m.targets !== "object" || Array.isArray(m.targets)) {
+    const legacyHint = m.targets === "all"
+      ? " The legacy string form is no longer supported."
+      : "";
+    errors.push(
+      `'targets' must be an object keyed by artifact type (rules, commands, agents, skills).${legacyHint}`
+    );
+  } else {
+    const targets = m.targets as Record<string, unknown>;
+
+    for (const key of Object.keys(targets)) {
+      if (!PLUGIN_ARTIFACT_TYPES.includes(key as PluginArtifactType)) {
+        errors.push(
+          `Unknown targets key '${key}'. Expected one of: ${PLUGIN_ARTIFACT_TYPES.join(", ")}`
+        );
+      }
     }
-    for (const target of m.targets) {
-      if (!isValidAgentId(target)) {
-        throw new Error(`Invalid manifest: unknown agent ID '${target}'`);
+
+    for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+      const declaredTargets = targets[artifact];
+
+      if (declaredTargets === undefined) {
+        continue;
+      }
+
+      if (!Array.isArray(declaredTargets)) {
+        errors.push(`targets.${artifact} must be an array of harness IDs and/or preset IDs`);
+        continue;
+      }
+
+      if (declaredTargets.length === 0) {
+        errors.push(`targets.${artifact} must not be empty`);
+        continue;
+      }
+
+      for (const target of declaredTargets) {
+        if (!isPluginTargetId(target)) {
+          errors.push(
+            `targets.${artifact} contains unknown target '${String(target)}'`
+          );
+        }
       }
     }
   }
+
+  if (errors.length > 0) {
+    throw new Error(`Manifest validation failed:\n${formatManifestErrors(errors)}`);
+  }
+
+  const typedManifest = manifest as PluginManifest;
+  const presentArtifacts = await getPresentArtifacts(pluginPath);
+  errors.push(...await validateNoFileLevelInstallTargets(pluginPath));
+  errors.push(...await validateHarnessOverlays(pluginPath, typedManifest));
+
+  for (const artifact of presentArtifacts) {
+    const declaredTargets = typedManifest.targets[artifact];
+    if (!declaredTargets || declaredTargets.length === 0) {
+      errors.push(
+        `Plugin contains ${artifact} artifacts, but plugin.json targets.${artifact} is missing or empty`
+      );
+    }
+  }
+
+  for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+    const declaredTargets = typedManifest.targets[artifact];
+    if (!declaredTargets || declaredTargets.length === 0) {
+      continue;
+    }
+
+    const unsupportedAgents = resolveManifestTargets(declaredTargets).filter(
+      (harnessId) => !harnessSupportsArtifact(harnessId, artifact)
+    );
+
+    if (unsupportedAgents.length > 0) {
+      const unsupportedList = unsupportedAgents
+        .map((harnessId) => `${harnessId} (${getHarness(harnessId).name})`)
+        .join(", ");
+      errors.push(
+        `targets.${artifact} resolves to unsupported harnesses for ${artifact}: ${unsupportedList}`
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Manifest validation failed:\n${formatManifestErrors(errors)}`);
+  }
+}
+
+export function resolveManifestTargets(targets: readonly PluginTargetId[]): HarnessId[] {
+  const resolvedTargets = new Set<HarnessId>();
+
+  for (const target of targets) {
+    if (isTargetPresetId(target)) {
+        for (const harnessId of TARGET_PRESETS[target]) {
+          resolvedTargets.add(harnessId);
+        }
+        continue;
+    }
+
+    resolvedTargets.add(target);
+  }
+
+  return [...resolvedTargets];
+}
+
+export function getManifestArtifactTargets(
+  manifest: PluginManifest,
+  artifact: PluginArtifactType
+): HarnessId[] {
+  return resolveManifestTargets(manifest.targets[artifact] ?? []);
 }
 
 /**
- * Check if manifest targets a specific agent
+ * Check if manifest targets a specific harness for any artifact
  */
-export function manifestTargetsAgent(
+export function manifestTargetsHarness(
   manifest: PluginManifest,
-  agentId: AgentId
+  harnessId: HarnessId
 ): boolean {
-  if (manifest.targets === "all") {
-    return true;
-  }
-  return manifest.targets.includes(agentId);
+  return PLUGIN_ARTIFACT_TYPES.some((artifact) =>
+    getManifestArtifactTargets(manifest, artifact).includes(harnessId)
+  );
+}
+
+/**
+ * Check if manifest targets a specific harness for one artifact type
+ */
+export function manifestTargetsArtifact(
+  manifest: PluginManifest,
+  artifact: PluginArtifactType,
+  harnessId: HarnessId
+): boolean {
+  return getManifestArtifactTargets(manifest, artifact).includes(harnessId);
+}
+
+export function formatManifestTargets(manifest: PluginManifest): string {
+  const targetSummary = PLUGIN_ARTIFACT_TYPES.flatMap((artifact) => {
+    const targets = manifest.targets[artifact];
+    return targets && targets.length > 0
+      ? [`${artifact}=[${targets.join(", ")}]`]
+      : [];
+  });
+
+  return targetSummary.length > 0 ? targetSummary.join("; ") : "(no artifact targets)";
 }
 
 /**
@@ -91,18 +514,19 @@ export async function parseMarkdownFile(
 }
 
 /**
- * Extract agent-specific frontmatter, merging with base frontmatter
+ * Extract harness-specific frontmatter, merging with base frontmatter
  */
-export function getAgentFrontmatter(
+export function getHarnessFrontmatter(
   frontmatter: UnifiedFrontmatter,
-  agentId: AgentId
+  harnessId: HarnessId
 ): Record<string, unknown> {
-  const { targets, ...base } = frontmatter;
+  const base = frontmatter as Record<string, unknown>;
 
-  // Remove all agent-specific keys from base
-  const agentKeys: AgentId[] = [
+  // Remove all harness-specific keys from base
+  const harnessKeys: HarnessId[] = [
     "claude-code",
     "opencode",
+    "openclaw",
     "codex-cli",
     "gemini-cli",
     "amp-code",
@@ -112,27 +536,14 @@ export function getAgentFrontmatter(
 
   const cleanBase: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(base)) {
-    if (!agentKeys.includes(key as AgentId)) {
+    if (!harnessKeys.includes(key as HarnessId)) {
       cleanBase[key] = value;
     }
   }
 
-  // Merge with agent-specific overrides
-  const agentSpecific = frontmatter[agentId] ?? {};
-  return { ...cleanBase, ...agentSpecific };
-}
-
-/**
- * Check if frontmatter targets a specific agent
- */
-export function frontmatterTargetsAgent(
-  frontmatter: UnifiedFrontmatter,
-  agentId: AgentId
-): boolean {
-  if (!frontmatter.targets) {
-    return true; // No targets = all agents
-  }
-  return frontmatter.targets.includes(agentId);
+  // Merge with harness-specific overrides
+  const harnessSpecific = frontmatter[harnessId] ?? {};
+  return { ...cleanBase, ...harnessSpecific };
 }
 
 /**
@@ -642,6 +1053,12 @@ export async function validateAgent(
     if (!descResult.valid && descResult.error) {
       errors.push(descResult.error);
     }
+  }
+
+  if ("targets" in frontmatter) {
+    errors.push(
+      "File-level install targets are not supported in agent frontmatter. Move install scope to plugin.json targets.agents"
+    );
   }
 
   return {

@@ -1,0 +1,15 @@
+{
+  "name": "invalid-harness-overlay-id",
+  "version": "0.1.0",
+  "description": "Invalid fixture that uses an unknown harness overlay id",
+  "targets": {
+    "commands": [
+      "claude-code",
+      "opencode",
+      "codex-cli",
+      "gemini-cli",
+      "cursor",
+      "factory-droid"
+    ]
+  }
+}

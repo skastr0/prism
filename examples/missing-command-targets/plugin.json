@@ -1,0 +1,6 @@
+{
+  "name": "missing-command-targets",
+  "version": "0.1.0",
+  "description": "Invalid fixture that omits targets for commands artifacts",
+  "targets": {}
+}

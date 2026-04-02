@@ -1,6 +1,16 @@
 {
   "name": "agentpkg",
   "version": "0.1.0",
-  "description": "Living documentation for agentpkg - teaches agents how to create, format, and install plugins",
-  "targets": "all"
+  "description": "Living documentation for agentpkg - teaches users how to create, format, and install plugins across harnesses",
+  "targets": {
+    "commands": [
+      "claude-code",
+      "opencode",
+      "codex-cli",
+      "gemini-cli",
+      "cursor",
+      "factory-droid"
+    ],
+    "skills": ["coding-harness", "claw-harness"]
+  }
 }

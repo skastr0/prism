@@ -1,6 +1,6 @@
 ---
 description: Example coding guidelines
-# targets: [claude-code, opencode]  # Uncomment to limit to specific agents
+# No file-level targets. Install targeting lives in plugin.json -> targets.rules
 ---
 
 # Coding Guidelines

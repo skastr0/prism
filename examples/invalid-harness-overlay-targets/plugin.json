@@ -1,0 +1,8 @@
+{
+  "name": "invalid-harness-overlay-targets",
+  "version": "0.1.0",
+  "description": "Invalid fixture that contradicts plugin.json artifact targets",
+  "targets": {
+    "commands": ["claude-code"]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "invalid-command-targets",
+  "version": "0.1.0",
+  "description": "Invalid fixture that targets OpenClaw for commands",
+  "targets": {
+    "commands": ["claw-harness"]
+  }
+}

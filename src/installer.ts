@@ -3,30 +3,29 @@
  */
 
 import { basename, join } from "node:path";
-import { getAgent } from "./agents.js";
+import { getHarness } from "./harnesses.js";
 import {
   appendFile,
   backupFile,
   copyFile,
   exists,
   expandPath,
-  listDirRecursive,
   readFile,
   writeFile,
   ensureDir,
 } from "./fs.js";
 import {
-  frontmatterTargetsAgent,
-  getAgentFrontmatter,
-  manifestTargetsAgent,
+  collectArtifactSourceFiles,
+  getHarnessFrontmatter,
+  manifestTargetsArtifact,
   parseMarkdownFile,
   readManifest,
   reconstructMarkdown,
   validateSkill,
 } from "./manifest.js";
 import type {
-  AgentConfig,
-  AgentId,
+  HarnessConfig,
+  HarnessId,
   FileOperation,
   InstallOptions,
   InstallResult,
@@ -42,36 +41,46 @@ export async function planInstallation(
   const manifest = await readManifest(pluginPath);
   const operations: FileOperation[] = [];
 
-  for (const agentId of options.agents) {
-    if (!manifestTargetsAgent(manifest, agentId)) {
-      continue;
+  for (const harnessId of options.harnesses) {
+    const harness = getHarness(harnessId);
+
+    // Plan rules installation when the harness has a managed rules surface
+    if (harness.rulesFile && manifestTargetsArtifact(manifest, "rules", harnessId)) {
+      const rulesOps = await planRulesInstallation(
+        pluginPath,
+        harness,
+        options.projectPath
+      );
+      operations.push(...rulesOps);
     }
 
-    const agent = getAgent(agentId);
-
-    // Plan rules installation
-    const rulesOps = await planRulesInstallation(
-      pluginPath,
-      agent,
-      options.projectPath
-    );
-    operations.push(...rulesOps);
-
     // Plan commands installation
-    if (agent.supportsCommands && agent.commandsDir) {
-      const commandOps = await planCommandsInstallation(pluginPath, agent);
+    if (
+      harness.supportsCommands &&
+      harness.commandsDir &&
+      manifestTargetsArtifact(manifest, "commands", harnessId)
+    ) {
+      const commandOps = await planCommandsInstallation(pluginPath, harness);
       operations.push(...commandOps);
     }
 
     // Plan agents installation
-    if (agent.supportsAgents && agent.agentsDir) {
-      const agentOps = await planAgentsInstallation(pluginPath, agent);
+    if (
+      harness.supportsAgents &&
+      harness.agentsDir &&
+      manifestTargetsArtifact(manifest, "agents", harnessId)
+    ) {
+      const agentOps = await planAgentsInstallation(pluginPath, harness);
       operations.push(...agentOps);
     }
 
     // Plan skills installation
-    if (agent.supportsSkills && agent.skillsDir) {
-      const skillOps = await planSkillsInstallation(pluginPath, agent);
+    if (
+      harness.supportsSkills &&
+      harness.skillsDir &&
+      manifestTargetsArtifact(manifest, "skills", harnessId)
+    ) {
+      const skillOps = await planSkillsInstallation(pluginPath, harness);
       operations.push(...skillOps);
     }
   }
@@ -87,15 +96,15 @@ export async function planInstallation(
 async function checkAppendStatus(
   sourcePath: string,
   targetPath: string,
-  agentId: AgentId
+  harnessId: HarnessId
 ): Promise<"new" | "identical" | "changed"> {
   if (!(await exists(targetPath))) {
     return "new";
   }
 
   const { frontmatter, content } = await parseMarkdownFile(sourcePath);
-  const agentFrontmatter = getAgentFrontmatter(frontmatter, agentId);
-  const finalContent = reconstructMarkdown(agentFrontmatter, content);
+  const harnessFrontmatter = getHarnessFrontmatter(frontmatter, harnessId);
+  const finalContent = reconstructMarkdown(harnessFrontmatter, content);
   const newContentTrimmed = finalContent.trim();
 
   const sourceName = basename(sourcePath, ".md");
@@ -137,128 +146,195 @@ async function checkAppendStatus(
   return foundAnySection ? "changed" : "new";
 }
 
+async function getSharedSkillValidation(
+  pluginPath: string
+): Promise<Map<string, { valid: boolean; reason?: string }>> {
+  const sharedSkillsDir = join(pluginPath, "skills");
+  const validations = new Map<string, { valid: boolean; reason?: string }>();
+
+  if (!(await exists(sharedSkillsDir))) {
+    return validations;
+  }
+
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(sharedSkillsDir, { withFileTypes: true });
+
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const validation = await validateSkill(join(sharedSkillsDir, entry.name), entry.name);
+    validations.set(
+      entry.name,
+      validation.valid
+        ? { valid: true }
+        : {
+            valid: false,
+            reason: `Validation failed: ${validation.errors.join("; ")}`,
+          }
+    );
+  }
+
+  return validations;
+}
+
+async function getSelectedSkillValidation(
+  pluginPath: string,
+  harnessId: HarnessId,
+  selectedFiles: Awaited<ReturnType<typeof collectArtifactSourceFiles>>
+): Promise<Map<string, { valid: boolean; reason?: string }>> {
+  const sharedValidation = await getSharedSkillValidation(pluginPath);
+  const groupedFiles = new Map<string, Awaited<ReturnType<typeof collectArtifactSourceFiles>>>();
+
+  for (const file of selectedFiles) {
+    const [skillDirName, nestedPath] = file.relativePath.split("/", 2);
+    if (!skillDirName || !nestedPath) {
+      continue;
+    }
+
+    const group = groupedFiles.get(skillDirName) ?? [];
+    group.push(file);
+    groupedFiles.set(skillDirName, group);
+  }
+
+  const validations = new Map<string, { valid: boolean; reason?: string }>();
+
+  for (const [skillDirName, files] of [...groupedFiles.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0])
+  )) {
+    const selectedSkillMd = files.find(
+      (file) => file.relativePath === `${skillDirName}/SKILL.md`
+    );
+
+    if (!selectedSkillMd) {
+      validations.set(skillDirName, {
+        valid: false,
+        reason: "Validation failed: SKILL.md not found",
+      });
+      continue;
+    }
+
+    if (selectedSkillMd.scope === "shared") {
+      validations.set(
+        skillDirName,
+        sharedValidation.get(skillDirName) ?? {
+          valid: false,
+          reason: "Validation failed: SKILL.md not found",
+        }
+      );
+      continue;
+    }
+
+    const overlaySkillPath = join(
+      pluginPath,
+      "harness",
+      harnessId,
+      "skills",
+      skillDirName
+    );
+    const validation = await validateSkill(overlaySkillPath, skillDirName);
+    validations.set(
+      skillDirName,
+      validation.valid
+        ? { valid: true }
+        : {
+            valid: false,
+            reason: `Validation failed: ${validation.errors.join("; ")}`,
+          }
+    );
+  }
+
+  return validations;
+}
+
 /**
  * Plan rules file installation
  */
 async function planRulesInstallation(
   pluginPath: string,
-  agent: AgentConfig,
+  harness: HarnessConfig,
   projectPath?: string
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
-  const globalRulesDir = join(pluginPath, "rules", "global");
-  const projectRulesDir = join(pluginPath, "rules", "project");
 
-  // Global rules - append to agent's global rules file
-  if (await exists(globalRulesDir)) {
-    const files = await listDirRecursive(globalRulesDir);
-    const mdFiles = files.filter((f) => f.endsWith(".md"));
-
-    for (const file of mdFiles) {
-      const sourcePath = join(globalRulesDir, file);
-      const targetPath = join(
-        expandPath(agent.globalConfigPath),
-        agent.rulesFile
-      );
-
-      // Check if file targets this agent
-      const { frontmatter } = await parseMarkdownFile(sourcePath);
-      if (!frontmatterTargetsAgent(frontmatter, agent.id)) {
-        operations.push({
-          type: "skip",
-          source: sourcePath,
-          target: targetPath,
-          agent: agent.id,
-          artifact: "rules",
-          reason: `File does not target ${agent.name}`,
-        });
-        continue;
-      }
-
-      // Check if content already exists in target
-      const appendStatus = await checkAppendStatus(sourcePath, targetPath, agent.id);
-      if (appendStatus === "identical") {
-        operations.push({
-          type: "skip",
-          source: sourcePath,
-          target: targetPath,
-          agent: agent.id,
-          artifact: "rules",
-          reason: "Content already exists and is identical",
-        });
-        continue;
-      }
-
-      operations.push({
-        type: "append",
-        source: sourcePath,
-        target: targetPath,
-        agent: agent.id,
-        artifact: "rules",
-        reason: appendStatus === "changed" ? "Updating existing section" : undefined,
-      });
-    }
+  if (!harness.rulesFile) {
+    return operations;
   }
 
-  // Project rules - copy to project directory (if projectPath provided)
-  if (projectPath && (await exists(projectRulesDir))) {
+  const files = await collectArtifactSourceFiles(pluginPath, "rules", harness.id);
+  const globalFiles = files.filter((file) =>
+    file.relativePath.startsWith("global/") && file.relativePath.endsWith(".md")
+  );
+  const projectFiles = files.filter((file) =>
+    file.relativePath.startsWith("project/") && file.relativePath.endsWith(".md")
+  );
+
+  for (const file of globalFiles) {
+    const targetPath = join(expandPath(harness.globalConfigPath), harness.rulesFile);
+
+    const appendStatus = await checkAppendStatus(file.sourcePath, targetPath, harness.id);
+    if (appendStatus === "identical") {
+      operations.push({
+        type: "skip",
+        source: file.sourcePath,
+        target: targetPath,
+        harness: harness.id,
+        artifact: "rules",
+        reason: "Content already exists and is identical",
+      });
+      continue;
+    }
+
+    operations.push({
+      type: "append",
+      source: file.sourcePath,
+      target: targetPath,
+      harness: harness.id,
+      artifact: "rules",
+      reason: appendStatus === "changed" ? "Updating existing section" : undefined,
+    });
+  }
+
+  if (projectPath) {
     const expandedProjectPath = expandPath(projectPath);
-    const files = await listDirRecursive(projectRulesDir);
-    const mdFiles = files.filter((f) => f.endsWith(".md"));
 
-    for (const file of mdFiles) {
-      const sourcePath = join(projectRulesDir, file);
+    for (const file of projectFiles) {
+      const relativeFile = file.relativePath.slice("project/".length);
 
-      // Determine target based on agent configuration
       let targetPath: string;
-      if (agent.rulesDir && agent.projectConfigPath) {
-        // Agents with rules directories (like Cursor)
+      if (harness.rulesDir && harness.projectConfigPath) {
         targetPath = join(
           expandedProjectPath,
-          agent.projectConfigPath,
-          agent.rulesDir,
-          file.replace(".md", agent.configFormat === "mdc" ? ".mdc" : ".md")
+          harness.projectConfigPath,
+          harness.rulesDir,
+          relativeFile.replace(
+            ".md",
+            harness.configFormat === "mdc" ? ".mdc" : ".md"
+          )
         );
-      } else if (agent.projectConfigPath) {
-        // Agents with project config path
-        targetPath = join(expandedProjectPath, agent.rulesFile);
+      } else if (harness.projectConfigPath) {
+        targetPath = join(expandedProjectPath, harness.rulesFile);
       } else {
-        // Agents without project config - use global
-        targetPath = join(expandPath(agent.globalConfigPath), agent.rulesFile);
+        targetPath = join(expandPath(harness.globalConfigPath), harness.rulesFile);
       }
 
-      // Check if file targets this agent
-      const { frontmatter } = await parseMarkdownFile(sourcePath);
-      if (!frontmatterTargetsAgent(frontmatter, agent.id)) {
-        operations.push({
-          type: "skip",
-          source: sourcePath,
-          target: targetPath,
-          agent: agent.id,
-          artifact: "rules",
-          reason: `File does not target ${agent.name}`,
-        });
-        continue;
-      }
-
-      // For single-file agents, append; for directory-based, copy
-      if (agent.rulesDir) {
+      if (harness.rulesDir) {
         operations.push({
           type: "copy",
-          source: sourcePath,
+          source: file.sourcePath,
           target: targetPath,
-          agent: agent.id,
+          harness: harness.id,
           artifact: "rules",
         });
       } else {
-        // Check if content already exists in target
-        const appendStatus = await checkAppendStatus(sourcePath, targetPath, agent.id);
+        const appendStatus = await checkAppendStatus(file.sourcePath, targetPath, harness.id);
         if (appendStatus === "identical") {
           operations.push({
             type: "skip",
-            source: sourcePath,
+            source: file.sourcePath,
             target: targetPath,
-            agent: agent.id,
+            harness: harness.id,
             artifact: "rules",
             reason: "Content already exists and is identical",
           });
@@ -267,9 +343,9 @@ async function planRulesInstallation(
 
         operations.push({
           type: "append",
-          source: sourcePath,
+          source: file.sourcePath,
           target: targetPath,
-          agent: agent.id,
+          harness: harness.id,
           artifact: "rules",
           reason: appendStatus === "changed" ? "Updating existing section" : undefined,
         });
@@ -285,53 +361,27 @@ async function planRulesInstallation(
  */
 async function planCommandsInstallation(
   pluginPath: string,
-  agent: AgentConfig
+  harness: HarnessConfig
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
-  const commandsDir = join(pluginPath, "commands");
-
-  if (!(await exists(commandsDir))) {
-    return operations;
-  }
-
-  const files = await listDirRecursive(commandsDir);
-  const mdFiles = files.filter((f) => f.endsWith(".md"));
+  const files = await collectArtifactSourceFiles(pluginPath, "commands", harness.id);
+  const mdFiles = files.filter((file) => file.relativePath.endsWith(".md"));
 
   for (const file of mdFiles) {
-    const sourcePath = join(commandsDir, file);
-    const targetDir = join(
-      expandPath(agent.globalConfigPath),
-      agent.commandsDir!
-    );
+    const targetDir = join(expandPath(harness.globalConfigPath), harness.commandsDir!);
 
-    // Determine target extension based on agent
-    let targetFile = file;
-    if (agent.id === "gemini-cli") {
-      // Gemini uses TOML for commands
-      targetFile = file.replace(".md", ".toml");
+    let targetFile = file.relativePath;
+    if (harness.id === "gemini-cli") {
+      targetFile = file.relativePath.replace(".md", ".toml");
     }
 
     const targetPath = join(targetDir, targetFile);
 
-    // Check if command targets this agent
-    const { frontmatter } = await parseMarkdownFile(sourcePath);
-    if (!frontmatterTargetsAgent(frontmatter, agent.id)) {
-      operations.push({
-        type: "skip",
-        source: sourcePath,
-        target: targetPath,
-        agent: agent.id,
-        artifact: "command",
-        reason: `Command does not target ${agent.name}`,
-      });
-      continue;
-    }
-
     operations.push({
       type: "copy",
-      source: sourcePath,
+      source: file.sourcePath,
       target: targetPath,
-      agent: agent.id,
+      harness: harness.id,
       artifact: "command",
     });
   }
@@ -344,50 +394,24 @@ async function planCommandsInstallation(
  */
 async function planAgentsInstallation(
   pluginPath: string,
-  agent: AgentConfig
+  harness: HarnessConfig
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
-  const agentsDir = join(pluginPath, "agents");
-
-  if (!(await exists(agentsDir))) {
-    return operations;
-  }
-
-  const files = await listDirRecursive(agentsDir);
-  const mdFiles = files.filter((f) => f.endsWith(".md"));
+  const files = await collectArtifactSourceFiles(pluginPath, "agents", harness.id);
+  const mdFiles = files.filter((file) => file.relativePath.endsWith(".md"));
 
   for (const file of mdFiles) {
-    const sourcePath = join(agentsDir, file);
-    const targetDir = join(
-      expandPath(agent.globalConfigPath),
-      agent.agentsDir!
-    );
-
-    // Codex CLI uses TOML config files for agents
-    const targetFile = agent.id === "codex-cli"
-      ? file.replace(".md", ".toml")
-      : file;
+    const targetDir = join(expandPath(harness.globalConfigPath), harness.agentsDir!);
+    const targetFile = harness.id === "codex-cli"
+      ? file.relativePath.replace(".md", ".toml")
+      : file.relativePath;
     const targetPath = join(targetDir, targetFile);
-
-    // Check if agent definition targets this agent
-    const { frontmatter } = await parseMarkdownFile(sourcePath);
-    if (!frontmatterTargetsAgent(frontmatter, agent.id)) {
-      operations.push({
-        type: "skip",
-        source: sourcePath,
-        target: targetPath,
-        agent: agent.id,
-        artifact: "agent",
-        reason: `Agent definition does not target ${agent.name}`,
-      });
-      continue;
-    }
 
     operations.push({
       type: "copy",
-      source: sourcePath,
+      source: file.sourcePath,
       target: targetPath,
-      agent: agent.id,
+      harness: harness.id,
       artifact: "agent",
     });
   }
@@ -396,95 +420,49 @@ async function planAgentsInstallation(
 }
 
 /**
- * Plan skills installation (Claude Code native, OpenCode via opencode-skills plugin)
- * Includes validation of skill structure and frontmatter
+ * Plan skills installation
+ * Includes validation of skill structure
  */
 async function planSkillsInstallation(
   pluginPath: string,
-  agent: AgentConfig
+  harness: HarnessConfig
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
-  const skillsDir = join(pluginPath, "skills");
+  const selectedFiles = await collectArtifactSourceFiles(pluginPath, "skills", harness.id);
 
-  if (!(await exists(skillsDir))) {
+  if (selectedFiles.length === 0) {
     return operations;
   }
 
-  // Get skill directories first to validate each skill
-  const { readdir } = await import("node:fs/promises");
-  const entries = await readdir(skillsDir, { withFileTypes: true });
-  const skillDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  const validatedSkills = await getSelectedSkillValidation(pluginPath, harness.id, selectedFiles);
+  const targetDir = join(expandPath(harness.globalConfigPath), harness.skillsDir!);
 
-  // Track validated skills to skip invalid ones entirely
-  const validatedSkills = new Map<string, boolean>();
-
-  // Validate each skill directory
-  for (const skillDirName of skillDirs) {
-    const skillPath = join(skillsDir, skillDirName);
-    const validation = await validateSkill(skillPath, skillDirName);
-
+  for (const [skillDirName, validation] of [...validatedSkills.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0])
+  )) {
     if (!validation.valid) {
-      // Add skip operation with validation errors
-      const targetDir = join(
-        expandPath(agent.globalConfigPath),
-        agent.skillsDir!
-      );
       operations.push({
         type: "skip",
-        source: skillPath,
+        source: join(targetDir, skillDirName),
         target: join(targetDir, skillDirName),
-        agent: agent.id,
+        harness: harness.id,
         artifact: "skill",
-        reason: `Validation failed: ${validation.errors.join("; ")}`,
+        reason: validation.reason,
       });
-      validatedSkills.set(skillDirName, false);
-      continue;
     }
-
-    validatedSkills.set(skillDirName, true);
   }
 
-  // Skills are directories containing a SKILL.md and supporting files
-  const files = await listDirRecursive(skillsDir);
-
-  for (const file of files) {
-    const sourcePath = join(skillsDir, file);
-    const targetDir = join(
-      expandPath(agent.globalConfigPath),
-      agent.skillsDir!
-    );
-    const targetPath = join(targetDir, file);
-
-    // Get the skill directory name from the file path
-    const skillDirName = file.split("/")[0];
-
-    // Skip files from invalid skills
-    if (skillDirName && validatedSkills.get(skillDirName) === false) {
-      continue; // Already added skip operation for the skill
-    }
-
-    // For SKILL.md files, check if they target this agent
-    if (file.endsWith("SKILL.md")) {
-      const { frontmatter } = await parseMarkdownFile(sourcePath);
-      if (!frontmatterTargetsAgent(frontmatter, agent.id)) {
-        // Skip the entire skill directory
-        operations.push({
-          type: "skip",
-          source: sourcePath,
-          target: targetPath,
-          agent: agent.id,
-          artifact: "skill",
-          reason: `Skill does not target ${agent.name}`,
-        });
-        continue;
-      }
+  for (const file of selectedFiles) {
+    const [skillDirName, nestedPath] = file.relativePath.split("/", 2);
+    if (skillDirName && nestedPath && validatedSkills.get(skillDirName)?.valid === false) {
+      continue;
     }
 
     operations.push({
       type: "copy",
-      source: sourcePath,
-      target: targetPath,
-      agent: agent.id,
+      source: file.sourcePath,
+      target: join(targetDir, file.relativePath),
+      harness: harness.id,
       artifact: "skill",
     });
   }
@@ -568,36 +546,36 @@ export async function executeInstallation(
  * Execute a copy operation with content transformation
  */
 async function executeCopyOperation(op: FileOperation): Promise<void> {
-  const agent = getAgent(op.agent);
+  const harness = getHarness(op.harness);
 
   if (op.source.endsWith(".md")) {
     // Transform markdown with frontmatter
     const { frontmatter, content } = await parseMarkdownFile(op.source);
-    const agentFrontmatter = getAgentFrontmatter(frontmatter, op.agent);
+    const harnessFrontmatter = getHarnessFrontmatter(frontmatter, op.harness);
 
     // Ensure name is set for agent definitions (derived from filename)
-    if (op.artifact === "agent" && !agentFrontmatter.name) {
-      agentFrontmatter.name = basename(op.source, ".md");
+    if (op.artifact === "agent" && !harnessFrontmatter.name) {
+      harnessFrontmatter.name = basename(op.source, ".md");
     }
 
-    // Handle special transformations per agent
+    // Handle special transformations per harness
     let finalContent: string;
 
-    if (agent.id === "gemini-cli" && op.artifact === "command") {
+    if (harness.id === "gemini-cli" && op.artifact === "command") {
       // Convert to TOML format for Gemini
-      finalContent = convertCommandToToml(agentFrontmatter, content);
-    } else if (agent.id === "codex-cli" && op.artifact === "agent") {
+      finalContent = convertCommandToToml(harnessFrontmatter, content);
+    } else if (harness.id === "codex-cli" && op.artifact === "agent") {
       // Convert to TOML config file for Codex agent role
-      finalContent = convertAgentToCodexToml(agentFrontmatter, content);
+      finalContent = convertAgentToCodexToml(harnessFrontmatter, content);
       await writeFile(op.target, finalContent);
       // Also register this agent role in config.toml
-      await mergeCodexAgentConfig(agent, agentFrontmatter);
+      await mergeCodexAgentConfig(harness, harnessFrontmatter);
       return;
-    } else if (agent.id === "cursor" && op.artifact === "rules") {
+    } else if (harness.id === "cursor" && op.artifact === "rules") {
       // Convert to MDC format for Cursor
-      finalContent = convertToMdc(agentFrontmatter, content);
+      finalContent = convertToMdc(harnessFrontmatter, content);
     } else {
-      finalContent = reconstructMarkdown(agentFrontmatter, content);
+      finalContent = reconstructMarkdown(harnessFrontmatter, content);
     }
 
     await writeFile(op.target, finalContent);
@@ -613,13 +591,13 @@ async function executeCopyOperation(op: FileOperation): Promise<void> {
  */
 async function executeAppendOperation(op: FileOperation): Promise<void> {
   const { frontmatter, content } = await parseMarkdownFile(op.source);
-  const agentFrontmatter = getAgentFrontmatter(frontmatter, op.agent);
+  const harnessFrontmatter = getHarnessFrontmatter(frontmatter, op.harness);
 
   const sourceName = basename(op.source, ".md");
   const beginMarker = `<!-- BEGIN: ${sourceName} -->`;
   const endMarker = `<!-- END: ${sourceName} -->`;
 
-  const finalContent = reconstructMarkdown(agentFrontmatter, content);
+  const finalContent = reconstructMarkdown(harnessFrontmatter, content);
 
   // Check if we need to update an existing section
   if (await exists(op.target)) {
@@ -736,14 +714,14 @@ function convertAgentToCodexToml(
  * Uses # BEGIN/END markers for idempotent updates (same pattern as rules)
  */
 async function mergeCodexAgentConfig(
-  agent: AgentConfig,
+  harness: HarnessConfig,
   frontmatter: Record<string, unknown>
 ): Promise<void> {
   const agentName = typeof frontmatter.name === "string"
     ? frontmatter.name
     : "unknown";
 
-  const configPath = join(expandPath(agent.globalConfigPath), agent.configFile!);
+  const configPath = join(expandPath(harness.globalConfigPath), harness.configFile!);
   const beginMarker = `# BEGIN: agentpkg:${agentName}`;
   const endMarker = `# END: agentpkg:${agentName}`;
 
@@ -789,7 +767,7 @@ async function mergeCodexAgentConfig(
     await writeFile(configPath, existingContent + separator + newSection + "\n");
   } else {
     // Create config file (unlikely since codex config usually exists)
-    await ensureDir(expandPath(agent.globalConfigPath));
+    await ensureDir(expandPath(harness.globalConfigPath));
     await writeFile(configPath, newSection + "\n");
   }
 }

@@ -1,29 +1,35 @@
 #!/usr/bin/env bun
 /**
- * agentpkg CLI - Unified plugin distribution for AI coding agents
+ * agentpkg CLI - Unified plugin distribution for AI coding harnesses
  */
 
 import { Command } from "commander";
-import { getAllAgentIds, isValidAgentId } from "./agents.js";
+import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
 import { install, planInstallation } from "./installer.js";
-import { readManifest, validatePluginSkills, validatePluginAgents, manifestTargetsAgent } from "./manifest.js";
+import {
+  formatManifestTargets,
+  readManifest,
+  validatePluginSkills,
+  validatePluginAgents,
+  manifestTargetsHarness,
+} from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
-import type { AgentId, FileOperation } from "./types.js";
+import type { FileOperation, HarnessId, PluginManifestTargets } from "./types.js";
 import { join } from "node:path";
 
 const program = new Command();
 
 program
   .name("agentpkg")
-  .description("Unified plugin distribution for AI coding agents")
+  .description("Unified plugin distribution for AI coding harnesses")
   .version("0.1.0");
 
 // Install command
 program
   .command("install <plugin-path>")
-  .description("Install a plugin to one or more agents")
-  .option("-a, --agent <agents>", "Comma-separated list of agent IDs")
-  .option("--all", "Install to all supported agents")
+  .description("Install a plugin to one or more harnesses")
+  .option("--harness <harnesses>", "Comma-separated list of harness IDs")
+  .option("--all", "Install to all supported harnesses")
   .option("-p, --project <path>", "Project path for project-specific rules")
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-backup", "Skip creating backups")
@@ -31,32 +37,35 @@ program
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (pluginPath: string, options) => {
     try {
-      // Determine target agents
-      let agents: AgentId[];
+      // Determine requested harness IDs
+      let harnesses: HarnessId[];
       if (options.all) {
-        agents = getAllAgentIds();
-      } else if (options.agent) {
-        agents = options.agent.split(",").map((a: string) => a.trim());
-        for (const agent of agents) {
-          if (!isValidAgentId(agent)) {
-            console.error(`Unknown agent: ${agent}`);
-            console.error(`Valid agents: ${getAllAgentIds().join(", ")}`);
+        harnesses = getAllHarnessIds();
+      } else if (options.harness) {
+        harnesses = options.harness.split(",").map((value: string) => value.trim());
+        for (const harness of harnesses) {
+          if (!isValidHarnessId(harness)) {
+            console.error(`Unknown harness ID: ${harness}`);
+            console.error(`Valid harness IDs: ${getAllHarnessIds().join(", ")}`);
             process.exit(1);
           }
         }
       } else {
-        console.error("Please specify --agent <agents> or --all");
+        console.error("Please specify --harness <ids> or --all");
         process.exit(1);
       }
 
       // Read manifest to show info
       const manifest = await readManifest(pluginPath);
       
-      // Filter agents to only those supported by the plugin
-      const supportedAgents = agents.filter(a => manifestTargetsAgent(manifest, a as AgentId));
+      // Filter requested harnesses to only those supported by the plugin
+      const matchingHarnesses = harnesses.filter((id) =>
+        manifestTargetsHarness(manifest, id as HarnessId)
+      );
       
       console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-      console.log(`   Targets: ${supportedAgents.length > 0 ? supportedAgents.join(", ") : "None (check plugin.json)"}`);
+      console.log(`   Manifest targets: ${formatManifestTargets(manifest)}`);
+      console.log(`   Matching requested harnesses: ${matchingHarnesses.length > 0 ? matchingHarnesses.join(", ") : "None (check plugin.json)"}`);
 
       if (options.project) {
         console.log(`   Project: ${options.project}`);
@@ -104,7 +113,7 @@ program
       // Plan installation
       const operations = await planInstallation({
         pluginPath,
-        agents: agents as AgentId[],
+        harnesses: harnesses as HarnessId[],
         projectPath: options.project,
         overwrite: options.overwrite,
         backup: options.backup !== false,
@@ -120,7 +129,7 @@ program
       // Execute installation
       const result = await install({
         pluginPath,
-        agents: agents as AgentId[],
+        harnesses: harnesses as HarnessId[],
         projectPath: options.project,
         overwrite: options.overwrite,
         backup: options.backup !== false,
@@ -159,8 +168,8 @@ program
 program
   .command("install-all <directory>")
   .description("Discover and install all plugins found in a directory (shallow scan)")
-  .option("-a, --agent <agents>", "Comma-separated list of agent IDs")
-  .option("--all", "Install to all supported agents")
+  .option("--harness <harnesses>", "Comma-separated list of harness IDs")
+  .option("--all", "Install to all supported harnesses")
   .option("-p, --project <path>", "Project path for project-specific rules")
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-backup", "Skip creating backups")
@@ -168,21 +177,21 @@ program
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (directory: string, options) => {
     try {
-      // Determine target agents
-      let agents: AgentId[];
+      // Determine requested harness IDs
+      let harnesses: HarnessId[];
       if (options.all) {
-        agents = getAllAgentIds();
-      } else if (options.agent) {
-        agents = options.agent.split(",").map((a: string) => a.trim());
-        for (const agent of agents) {
-          if (!isValidAgentId(agent)) {
-            console.error(`Unknown agent: ${agent}`);
-            console.error(`Valid agents: ${getAllAgentIds().join(", ")}`);
+        harnesses = getAllHarnessIds();
+      } else if (options.harness) {
+        harnesses = options.harness.split(",").map((value: string) => value.trim());
+        for (const harness of harnesses) {
+          if (!isValidHarnessId(harness)) {
+            console.error(`Unknown harness ID: ${harness}`);
+            console.error(`Valid harness IDs: ${getAllHarnessIds().join(", ")}`);
             process.exit(1);
           }
         }
       } else {
-        console.error("Please specify --agent <agents> or --all");
+        console.error("Please specify --harness <ids> or --all");
         process.exit(1);
       }
 
@@ -236,11 +245,14 @@ program
       for (const pluginPath of pluginPaths) {
         const manifest = await readManifest(pluginPath);
         
-        // Filter agents to only those supported by the plugin
-        const supportedAgents = agents.filter(a => manifestTargetsAgent(manifest, a as AgentId));
+        // Filter requested harnesses to only those supported by the plugin
+        const matchingHarnesses = harnesses.filter((id) =>
+          manifestTargetsHarness(manifest, id as HarnessId)
+        );
         
         console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-        console.log(`   Targets: ${supportedAgents.length > 0 ? supportedAgents.join(", ") : "None (check plugin.json)"}\n`);
+        console.log(`   Manifest targets: ${formatManifestTargets(manifest)}`);
+        console.log(`   Matching requested harnesses: ${matchingHarnesses.length > 0 ? matchingHarnesses.join(", ") : "None (check plugin.json)"}\n`);
 
         if (options.project) {
           console.log(`   Project: ${options.project}`);
@@ -295,7 +307,7 @@ program
         // Plan installation
         const operations = await planInstallation({
           pluginPath,
-          agents: agents as AgentId[],
+          harnesses: harnesses as HarnessId[],
           projectPath: options.project,
           overwrite: options.overwrite,
           backup: options.backup !== false,
@@ -319,7 +331,7 @@ program
         // Execute installation
         const result = await install({
           pluginPath,
-          agents: agents as AgentId[],
+          harnesses: harnesses as HarnessId[],
           projectPath: options.project,
           overwrite: options.overwrite,
           backup: options.backup !== false,
@@ -388,10 +400,10 @@ program
 // Init command - create a new plugin
 program
   .command("init <name>")
-  .description("Create a new plugin from template")
+  .description("Create a new harness-aware plugin from template")
   .option("-d, --dir <path>", "Directory to create plugin in", ".")
   .option("--with-agent", "Include example agent definition")
-  .option("--with-skill", "Include example skill (Claude Code)")
+  .option("--with-skill", "Include example skill scaffold (preset targets for coding + claw harnesses)")
   .option("--minimal", "Create minimal plugin (manifest only)")
   .action(async (name: string, options) => {
     try {
@@ -413,11 +425,30 @@ program
       await ensureDir(join(targetDir, "agents"));
 
       // Create plugin.json
+      const manifestTargets: PluginManifestTargets = {};
+      if (!options.minimal) {
+        manifestTargets.rules = ["coding-harness"];
+        manifestTargets.commands = [
+          "claude-code",
+          "opencode",
+          "codex-cli",
+          "gemini-cli",
+          "cursor",
+          "factory-droid",
+        ];
+      }
+      if (options.withAgent) {
+        manifestTargets.agents = ["claude-code", "opencode"];
+      }
+      if (options.withSkill) {
+        manifestTargets.skills = ["coding-harness", "claw-harness"];
+      }
+
       const manifest = {
         name,
         version: "0.1.0",
-        description: `${name} plugin for AI coding agents`,
-        targets: "all",
+        description: `${name} plugin for AI coding harnesses`,
+        targets: manifestTargets,
       };
       await writeFile(
         join(targetDir, "plugin.json"),
@@ -430,7 +461,7 @@ program
         // Create example global rule
         const exampleRule = `---
 description: Example coding guidelines
-# targets: [claude-code, opencode]  # Uncomment to limit to specific agents
+# No file-level targets. Install targeting lives in plugin.json -> targets.rules
 ---
 
 # Coding Guidelines
@@ -445,7 +476,7 @@ description: Example coding guidelines
         // Create example command with proper argument usage
         const exampleCommand = `---
 description: Run tests with coverage
-# targets: [claude-code, opencode]  # Uncomment to limit to specific agents
+# No file-level targets. Install targeting lives in plugin.json -> targets.commands
 
 # Agent-specific overrides:
 # claude-code:
@@ -487,7 +518,7 @@ Run the test suite with coverage reporting.
       if (options.withAgent) {
         const exampleAgent = `---
 description: Code reviewer that focuses on best practices
-targets: [claude-code, opencode]
+# No file-level targets. Install targeting lives in plugin.json -> targets.agents
 
 # Claude Code specific
 claude-code:
@@ -582,34 +613,67 @@ Use this file for detailed rules, examples, and edge cases that should not live 
       // Create README
       const readme = `# ${name}
 
-A plugin for AI coding agents.
+A harness-aware plugin for AI coding harnesses.
+
+Use \`plugin.json\` to declare per-artifact harness targets. Do not add file-level install targets to individual markdown files.
 
 ## Structure
 
 \`\`\`
 ${name}/
-├── plugin.json          # Plugin manifest
+├── plugin.json          # Manifest with per-artifact harness targets
 ├── rules/
-│   ├── global/          # Rules applied globally
-│   └── project/         # Rules for specific projects
-├── commands/            # Custom slash commands
-├── agents/              # Custom agent definitions
-└── skills/
-    └── example-skill/
-        ├── SKILL.md     # Main instructions + frontmatter
-        ├── references/  # Additional docs loaded as needed
-        ├── scripts/     # Optional deterministic helpers
-        └── assets/      # Templates, sample inputs, brand files
+│   ├── global/          # Shared rules appended to targeted global rules files
+│   └── project/         # Shared project rules copied when --project is set
+├── commands/            # Shared slash commands
+├── agents/              # Shared custom agent definitions
+├── skills/
+│   └── example-skill/
+│       ├── SKILL.md     # Main instructions + frontmatter
+│       ├── references/  # Additional docs loaded as needed
+│       ├── scripts/     # Optional deterministic helpers
+│       └── assets/      # Templates, sample inputs, brand files
+└── harness/             # Optional harness-specific overlays
+    └── <id>/            # e.g. opencode, openclaw
 \`\`\`
+
+## Targeting model
+
+Install targeting lives only in \`plugin.json\`.
+
+\`\`\`json
+${JSON.stringify(manifest, null, 2)}
+\`\`\`
+
+- Use per-artifact \`targets\` entries to decide which harnesses receive rules, commands, agents, and skills.
+- Use presets like \`coding-harness\` and \`claw-harness\` when they match the supported surface for that artifact.
+- Do not add file-level \`targets:\` blocks to individual markdown files; frontmatter is for descriptions and harness-specific settings.
+
+## Harness overlays
+
+Use \`harness/<id>/...\` when one harness needs a different file than the shared default.
+
+\`\`\`text
+harness/
+├── opencode/
+│   └── commands/
+│       └── test.md
+└── openclaw/
+    └── skills/
+        └── example-skill/
+            └── SKILL.md
+\`\`\`
+
+Matching overlay files replace shared files for that harness. Non-overridden files still come from the shared artifact directories.
 
 ## Installation
 
 \`\`\`bash
-# Install to all agents
+# Install to all harnesses
 agentpkg install ./${name} --all
 
-# Install to specific agents
-agentpkg install ./${name} --agent claude-code,opencode
+# Install to specific harness IDs
+agentpkg install ./${name} --harness claude-code,opencode,openclaw
 
 # Install with project context
 agentpkg install ./${name} --all --project ~/code/my-project
@@ -625,7 +689,11 @@ agentpkg install ./${name} --all --dry-run
 agentpkg validate ./${name}
 \`\`\`
 
-See \`agentpkg agents\` for the current support matrix.
+## Harness notes
+
+- See \`agentpkg harnesses\` for the current harness support matrix.
+- OpenClaw v1 installs shared skill files plus matching \`harness/openclaw/skills/...\` overlays into \`~/.openclaw/skills/\`.
+- OpenClaw v1 does not install rules, commands, or custom agents.
 `;
       await writeFile(join(targetDir, "README.md"), readme);
       created.push("README.md");
@@ -646,20 +714,19 @@ See \`agentpkg agents\` for the current support matrix.
     }
   });
 
-// List command - show supported agents
+// List command - show supported harness IDs
 program
-  .command("agents")
-  .description("List all supported agents")
+  .command("harnesses")
+  .description("List all supported harness IDs")
   .action(() => {
-    console.log("\n📋 Supported agents:\n");
-    const agents = getAllAgentIds();
-    for (const id of agents) {
-      const { getAgent } = require("./agents.js");
-      const agent = getAgent(id);
-      console.log(`   ${id.padEnd(12)} - ${agent.name}`);
-      console.log(`                  Global: ${agent.globalConfigPath}`);
-      if (agent.projectConfigPath) {
-        console.log(`                  Project: ${agent.projectConfigPath}`);
+    console.log("\n📋 Supported harness IDs:\n");
+    const harnesses = getAllHarnessIds();
+    for (const id of harnesses) {
+      const harness = getHarness(id);
+      console.log(`   ${id.padEnd(12)} - ${harness.name}`);
+      console.log(`                  Global: ${harness.globalConfigPath}`);
+      if (harness.projectConfigPath) {
+        console.log(`                  Project: ${harness.projectConfigPath}`);
       }
       console.log();
     }
@@ -679,9 +746,7 @@ program
       const manifest = await readManifest(pluginPath);
       console.log(`\n📦 Plugin: ${manifest.name} v${manifest.version}`);
       console.log(`   Description: ${manifest.description || "(none)"}`);
-      console.log(
-        `   Targets: ${manifest.targets === "all" ? "all agents" : manifest.targets.join(", ")}`
-      );
+      console.log(`   Targets: ${formatManifestTargets(manifest)}`);
 
       // Validate skills (if any)
       const skillResults = await validatePluginSkills(pluginPath);
@@ -767,16 +832,16 @@ program
  * Print operations in a readable format
  */
 function printOperations(operations: FileOperation[], indent = ""): void {
-  const byAgent = new Map<AgentId, FileOperation[]>();
+  const byHarness = new Map<HarnessId, FileOperation[]>();
 
   for (const op of operations) {
-    const list = byAgent.get(op.agent) || [];
+    const list = byHarness.get(op.harness) || [];
     list.push(op);
-    byAgent.set(op.agent, list);
+    byHarness.set(op.harness, list);
   }
 
-  for (const [agent, ops] of byAgent) {
-    console.log(`${indent}   ${agent}:`);
+  for (const [harness, ops] of byHarness) {
+    console.log(`${indent}   ${harness}:`);
     for (const op of ops) {
       // Determine if this is an "update" (append with "Updating existing section" reason)
       const isUpdate = op.type === "append" && op.reason === "Updating existing section";

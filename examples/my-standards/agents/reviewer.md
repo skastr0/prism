@@ -1,6 +1,6 @@
 ---
 description: Code reviewer that focuses on best practices
-targets: [claude-code, opencode]
+# No file-level targets. Install targeting lives in plugin.json -> targets.agents
 
 # Claude Code specific
 claude-code:

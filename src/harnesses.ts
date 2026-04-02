@@ -1,10 +1,10 @@
 /**
- * Agent registry - configurations for all supported AI coding agents
+ * Harness registry - configurations for all supported AI coding harnesses
  */
 
-import type { AgentConfig, AgentId } from "./types.js";
+import type { HarnessConfig, HarnessId } from "./types.js";
 
-export const AGENTS: Record<AgentId, AgentConfig> = {
+export const HARNESSES: Record<HarnessId, HarnessConfig> = {
   "claude-code": {
     id: "claude-code",
     name: "Claude Code",
@@ -14,7 +14,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     rulesDir: null,
     commandsDir: "commands/",
     agentsDir: "agents/",
-    toolsDir: null, // Uses MCP servers
+    toolsDir: null,
     skillsDir: "skills/",
     configFile: "settings.json",
     configFormat: "json",
@@ -35,34 +35,54 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     rulesDir: null,
     commandsDir: "commands/",
     agentsDir: "agents/",
-    toolsDir: null, // Uses plugins
-    skillsDir: "skills/", // Native support (similar to Claude Code)
+    toolsDir: null,
+    skillsDir: "skills/",
     configFile: "opencode.json",
     configFormat: "json",
     supportsTools: true,
     supportsCommands: true,
     supportsAgents: true,
-    supportsSkills: true, // Native support
+    supportsSkills: true,
     supportsMCP: true,
     alternativeRulesFiles: ["CLAUDE.md"],
+  },
+
+  openclaw: {
+    id: "openclaw",
+    name: "OpenClaw",
+    globalConfigPath: "~/.openclaw/",
+    projectConfigPath: null,
+    rulesFile: null,
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: "skills/",
+    configFile: null,
+    configFormat: "json",
+    supportsTools: false,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: true,
+    supportsMCP: false,
   },
 
   "codex-cli": {
     id: "codex-cli",
     name: "Codex CLI",
     globalConfigPath: "~/.codex/",
-    projectConfigPath: null, // No project-level config folder
+    projectConfigPath: null,
     rulesFile: "AGENTS.md",
     rulesDir: null,
-    commandsDir: "prompts/", // Custom prompts become /prompts:<name>
-    agentsDir: "agents/", // Agent role configs (TOML)
-    toolsDir: null, // Uses MCP
+    commandsDir: "prompts/",
+    agentsDir: "agents/",
+    toolsDir: null,
     skillsDir: "skills/",
     configFile: "config.toml",
     configFormat: "toml",
     supportsTools: true,
     supportsCommands: true,
-    supportsAgents: true, // Multi-agent support via [agents.*] in config.toml
+    supportsAgents: true,
     supportsSkills: true,
     supportsMCP: true,
     alternativeRulesFiles: ["CLAUDE.md"],
@@ -77,7 +97,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     rulesDir: null,
     commandsDir: "commands/",
     agentsDir: "agents/",
-    toolsDir: null, // Uses MCP
+    toolsDir: null,
     skillsDir: "skills/",
     configFile: "settings.json",
     configFormat: "json",
@@ -98,7 +118,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     rulesDir: null,
     commandsDir: null,
     agentsDir: null,
-    toolsDir: null, // Uses Toolboxes via $AMP_TOOLBOX
+    toolsDir: null,
     skillsDir: "skills/",
     configFile: "settings.json",
     configFormat: "json",
@@ -115,11 +135,11 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     name: "Cursor",
     globalConfigPath: "~/.cursor/",
     projectConfigPath: ".cursor/",
-    rulesFile: ".cursorrules", // Legacy, but still supported
-    rulesDir: "rules/", // MDC files
+    rulesFile: ".cursorrules",
+    rulesDir: "rules/",
     commandsDir: "commands/",
     agentsDir: null,
-    toolsDir: null, // Uses MCP
+    toolsDir: null,
     skillsDir: "skills/",
     configFile: "mcp.json",
     configFormat: "mdc",
@@ -140,7 +160,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     rulesDir: "rules/",
     commandsDir: "commands/",
     agentsDir: "droids/",
-    toolsDir: null, // Uses MCP
+    toolsDir: null,
     skillsDir: "skills/",
     configFile: "settings.json",
     configFormat: "json",
@@ -153,14 +173,14 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   },
 };
 
-export function getAgent(id: AgentId): AgentConfig {
-  return AGENTS[id];
+export function getHarness(id: HarnessId): HarnessConfig {
+  return HARNESSES[id];
 }
 
-export function getAllAgentIds(): AgentId[] {
-  return Object.keys(AGENTS) as AgentId[];
+export function getAllHarnessIds(): HarnessId[] {
+  return Object.keys(HARNESSES) as HarnessId[];
 }
 
-export function isValidAgentId(id: string): id is AgentId {
-  return id in AGENTS;
+export function isValidHarnessId(id: string): id is HarnessId {
+  return id in HARNESSES;
 }

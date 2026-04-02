@@ -1,6 +1,6 @@
 ---
 description: Run tests with coverage
-# targets: [claude-code, opencode]  # Uncomment to limit to specific agents
+# No file-level targets. Install targeting lives in plugin.json -> targets.commands
 
 # Agent-specific overrides:
 # claude-code:

@@ -2,27 +2,28 @@
  * Core types for agentpkg - the unified plugin distribution system
  */
 
-// Supported agent identifiers
-export type AgentId =
+// Supported harness identifiers
+export type HarnessId =
   | "claude-code"
   | "opencode"
+  | "openclaw"
   | "codex-cli"
   | "gemini-cli"
   | "amp-code"
   | "cursor"
   | "factory-droid";
 
-// Agent configuration - describes where each agent stores its artifacts
-export interface AgentConfig {
-  id: AgentId;
+// Harness configuration - describes where each harness stores its artifacts
+export interface HarnessConfig {
+  id: HarnessId;
   name: string;
 
   // Path configurations (~ will be expanded)
   globalConfigPath: string;
   projectConfigPath: string | null;
 
-  // Rules configuration
-  rulesFile: string;
+  // Rules configuration (null means agentpkg does not manage a rules surface)
+  rulesFile: string | null;
   rulesDir: string | null;
 
   // Artifact directories (relative to config paths)
@@ -42,9 +43,20 @@ export interface AgentConfig {
   supportsSkills: boolean;
   supportsMCP: boolean;
 
-  // Alternative rules filenames this agent recognizes
+  // Alternative rules filenames this harness recognizes
   alternativeRulesFiles?: string[];
 }
+
+export const PLUGIN_ARTIFACT_TYPES = ["rules", "commands", "agents", "skills"] as const;
+export type PluginArtifactType = (typeof PLUGIN_ARTIFACT_TYPES)[number];
+
+export const TARGET_PRESET_IDS = ["coding-harness", "claw-harness"] as const;
+export type TargetPresetId = (typeof TARGET_PRESET_IDS)[number];
+
+export type PluginTargetId = HarnessId | TargetPresetId;
+export type PluginManifestTargets = Partial<
+  Record<PluginArtifactType, PluginTargetId[]>
+>;
 
 // Plugin manifest (plugin.json)
 export interface PluginManifest {
@@ -52,8 +64,8 @@ export interface PluginManifest {
   version: string;
   description?: string;
 
-  // Which agents this plugin targets ("all" or specific list)
-  targets: AgentId[] | "all";
+  // Per-artifact install targeting declared in plugin.json
+  targets: PluginManifestTargets;
 
   // Project patterns for project-specific rules
   projects?: Record<string, ProjectConfig>;
@@ -69,7 +81,7 @@ export interface ProjectConfig {
 // Installation options
 export interface InstallOptions {
   pluginPath: string;
-  agents: AgentId[];
+  harnesses: HarnessId[];
   projectPath?: string;
   overwrite: boolean;
   backup: boolean;
@@ -83,7 +95,7 @@ export interface FileOperation {
   type: FileOperationType;
   source: string;
   target: string;
-  agent: AgentId;
+  harness: HarnessId;
   artifact: "rules" | "command" | "agent" | "tool" | "skill" | "config";
   reason?: string; // For skips or special handling
 }
@@ -104,7 +116,7 @@ export interface InstallError {
 // Permission type for OpenCode agents
 export type OpenCodePermission = "allow" | "ask" | "deny";
 
-// OpenCode agent-specific frontmatter settings
+// OpenCode typed frontmatter block used where agentpkg models OpenCode-specific settings
 export interface OpenCodeAgentFrontmatter {
   // Agent description (triggers agent selection)
   description?: string;
@@ -142,21 +154,21 @@ export interface OpenCodeAgentFrontmatter {
   };
 }
 
-// Claude Code agent-specific frontmatter settings
+// Claude Code typed frontmatter block
 export interface ClaudeCodeFrontmatter {
   description?: string;
   "allowed-tools"?: string[];
   model?: "sonnet" | "opus" | "haiku" | string;
 }
 
-// Cursor-specific frontmatter settings
+// Cursor typed frontmatter block
 export interface CursorFrontmatter {
   description?: string;
   globs?: string[];
   alwaysApply?: boolean;
 }
 
-// Factory Droid frontmatter settings
+// Factory Droid typed frontmatter block
 export interface FactoryDroidFrontmatter {
   description?: string;
   model?: string | "inherit";
@@ -167,7 +179,7 @@ export interface FactoryDroidFrontmatter {
   "argument-hint"?: string;
 }
 
-// Codex CLI agent-specific frontmatter settings
+// Codex CLI typed frontmatter block
 export interface CodexCliFrontmatter {
   description?: string;
   model?: string;
@@ -178,11 +190,11 @@ export interface CodexCliFrontmatter {
 // Command/Agent frontmatter for unified format
 export interface UnifiedFrontmatter {
   description?: string;
-  targets?: AgentId[];
 
-  // Agent-specific overrides (typed where known)
+  // Harness-specific overrides (typed where known)
   "claude-code"?: ClaudeCodeFrontmatter;
   opencode?: OpenCodeAgentFrontmatter;
+  openclaw?: Record<string, unknown>;
   "codex-cli"?: CodexCliFrontmatter;
   "gemini-cli"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;

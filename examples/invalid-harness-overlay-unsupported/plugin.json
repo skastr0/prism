@@ -1,0 +1,15 @@
+{
+  "name": "invalid-harness-overlay-unsupported",
+  "version": "0.1.0",
+  "description": "Invalid fixture that uses an unsupported artifact overlay for a harness",
+  "targets": {
+    "commands": [
+      "claude-code",
+      "opencode",
+      "codex-cli",
+      "gemini-cli",
+      "cursor",
+      "factory-droid"
+    ]
+  }
+}

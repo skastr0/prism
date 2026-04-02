@@ -8,14 +8,15 @@ import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
 import { install, planInstallation } from "./installer.js";
 import {
   formatManifestTargets,
+  PluginManifestError,
   readManifest,
   validatePluginSkills,
   validatePluginAgents,
   manifestTargetsHarness,
 } from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
-import type { FileOperation, HarnessId, PluginManifestTargets } from "./types.js";
-import { join } from "node:path";
+import type { FileOperation, HarnessId, PluginManifest, PluginManifestTargets } from "./types.js";
+import { basename, join } from "node:path";
 
 const program = new Command();
 
@@ -157,9 +158,7 @@ program
 
       console.log("\n✅ Done!");
     } catch (error) {
-      console.error(
-        `\n❌ Error: ${error instanceof Error ? error.message : error}`
-      );
+      printCliError(error, "Error");
       process.exit(1);
     }
   });
@@ -225,10 +224,34 @@ program
       }
 
       console.log(`\n📂 Found ${pluginPaths.length} plugin(s) in ${expandedDir}:`);
-      for (const p of pluginPaths) {
-        const manifest = await readManifest(p);
-        console.log(`   • ${manifest.name} v${manifest.version}`);
+
+      const validPlugins: { pluginPath: string; manifest: PluginManifest }[] = [];
+      const invalidPlugins: { pluginPath: string; error: unknown }[] = [];
+
+      for (const pluginPath of pluginPaths) {
+        try {
+          const manifest = await readManifest(pluginPath);
+          validPlugins.push({ pluginPath, manifest });
+        } catch (error) {
+          invalidPlugins.push({ pluginPath, error });
+        }
       }
+
+      if (validPlugins.length > 0) {
+        console.log("\n✅ Valid plugin manifests:");
+        for (const { manifest } of validPlugins) {
+          console.log(`   • ${manifest.name} v${manifest.version}`);
+        }
+      }
+
+      if (invalidPlugins.length > 0) {
+        console.log("\n❌ Invalid plugin manifests:\n");
+        for (const { pluginPath, error } of invalidPlugins) {
+          console.log(indentBlock(formatManifestLoadError(pluginPath, error, { bullet: true }), "   "));
+          console.log();
+        }
+      }
+
       console.log();
 
       // Track results across all plugins
@@ -242,9 +265,7 @@ program
       }[] = [];
 
       // Process each plugin
-      for (const pluginPath of pluginPaths) {
-        const manifest = await readManifest(pluginPath);
-        
+      for (const { pluginPath, manifest } of validPlugins) {
         // Filter requested harnesses to only those supported by the plugin
         const matchingHarnesses = harnesses.filter((id) =>
           manifestTargetsHarness(manifest, id as HarnessId)
@@ -374,25 +395,34 @@ program
 
       console.log("\n" + "─".repeat(60));
       console.log("\n📊 Summary:");
-      console.log(`   Total plugins: ${results.length}`);
-      console.log(`   Successful: ${successCount}`);
+      console.log(`   Total discovered plugins: ${pluginPaths.length}`);
+      console.log(`   Valid manifests: ${validPlugins.length}`);
+      if (invalidPlugins.length > 0) {
+        console.log(`   Invalid manifests: ${invalidPlugins.length}`);
+      }
+      console.log(`   Successful installs: ${successCount}`);
       if (failCount > 0) {
-        console.log(`   Failed: ${failCount}`);
+        console.log(`   Failed installs: ${failCount}`);
         for (const r of results.filter((r) => !r.success)) {
           console.log(`      • ${r.name}: ${r.errors.join(", ")}`);
         }
       }
 
-      if (failCount > 0) {
-        console.log("\n⚠️  Some plugins failed to install");
+      if (invalidPlugins.length > 0) {
+        console.log("   Invalid plugin manifests:");
+        for (const { pluginPath, error } of invalidPlugins) {
+          console.log(`      • ${getManifestErrorLabel(pluginPath, error)}`);
+        }
+      }
+
+      if (failCount > 0 || invalidPlugins.length > 0) {
+        console.log("\n⚠️  Some plugins failed validation or install");
         process.exit(1);
       } else {
         console.log("\n✅ All plugins installed successfully!");
       }
     } catch (error) {
-      console.error(
-        `\n❌ Error: ${error instanceof Error ? error.message : error}`
-      );
+      printCliError(error, "Error");
       process.exit(1);
     }
   });
@@ -707,9 +737,7 @@ agentpkg validate ./${name}
       console.log(`   cd ${name}`);
       console.log(`   agentpkg install . --all --dry-run`);
     } catch (error) {
-      console.error(
-        `\n❌ Error: ${error instanceof Error ? error.message : error}`
-      );
+      printCliError(error, "Error");
       process.exit(1);
     }
   });
@@ -821,9 +849,7 @@ program
         console.log("✅ Plugin is valid");
       }
     } catch (error) {
-      console.error(
-        `\n❌ Invalid plugin: ${error instanceof Error ? error.message : error}`
-      );
+      printCliError(error, "Invalid plugin");
       process.exit(1);
     }
   });
@@ -857,8 +883,57 @@ function printOperations(operations: FileOperation[], indent = ""): void {
       const status = op.type === "skip" || isUpdate ? ` (${op.reason})` : "";
       console.log(`${indent}      ${icon} ${displayType.padEnd(6)} ${op.artifact}: ${op.target}${status}`);
     }
-    console.log();
   }
+}
+
+function getManifestErrorLabel(pluginPath: string, error: unknown): string {
+  if (error instanceof PluginManifestError) {
+    return error.pluginLabel;
+  }
+
+  return basename(expandPath(pluginPath));
+}
+
+function formatManifestLoadError(
+  pluginPath: string,
+  error: unknown,
+  options: { bullet?: boolean } = {}
+): string {
+  const label = getManifestErrorLabel(pluginPath, error);
+  const manifestPath = error instanceof PluginManifestError
+    ? error.manifestPath
+    : join(expandPath(pluginPath), "plugin.json");
+  const lines = options.bullet ? [`• ${label}`] : [`Plugin: ${label}`];
+
+  lines.push(`${options.bullet ? "  " : ""}Path: ${manifestPath}`);
+
+  if (error instanceof PluginManifestError) {
+    lines.push(`${options.bullet ? "  " : ""}${error.summary}`);
+    for (const detail of error.details) {
+      lines.push(`${options.bullet ? "    " : ""}- ${detail}`);
+    }
+    return lines.join("\n");
+  }
+
+  lines.push(`${options.bullet ? "  " : ""}${error instanceof Error ? error.message : String(error)}`);
+  return lines.join("\n");
+}
+
+function indentBlock(text: string, indent: string): string {
+  return text
+    .split("\n")
+    .map((line) => `${indent}${line}`)
+    .join("\n");
+}
+
+function printCliError(error: unknown, fallbackLabel: string): void {
+  if (error instanceof PluginManifestError) {
+    console.error(`\n❌ ${fallbackLabel}:\n`);
+    console.error(indentBlock(formatManifestLoadError(error.pluginPath, error), "   "));
+    return;
+  }
+
+  console.error(`\n❌ ${fallbackLabel}: ${error instanceof Error ? error.message : error}`);
 }
 
 program.parse();

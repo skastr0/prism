@@ -1,30 +1,33 @@
 # agentpkg
 
-A unified plugin distribution system for AI coding agents.
+A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`agentpkg` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all agents automatically.
+`agentpkg` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
-1. **Formalizes agent configurations** - Knows where each agent stores its config files, rules, commands, and custom agents
+1. **Formalizes harness configurations** - Knows where each supported harness stores its config files, rules, commands, custom agents, and skills
 2. **Unified artifact format** - Write commands, rules, agents, and skills once using a common markdown format with frontmatter
-3. **Smart distribution** - Automatically transforms and copies artifacts to each agent's expected location
+3. **Smart distribution** - Automatically transforms and copies artifacts to each harness's expected location
 4. **Safe operations** - No overwrites by default, automatic backups, dry-run mode for previewing changes
-5. **Agent targeting** - Use `targets: [agent1, agent2]` in frontmatter to limit artifacts to specific agents
+5. **Harness-aware targeting** - Declare install targets per artifact in `plugin.json`, use presets like `coding-harness`, and add `harness/<id>/...` overlays when one harness needs a different file
 
-## Supported Agents
+## Supported Harnesses
 
-| Agent | Rules | Commands | Agents | Skills |
-|-------|-------|----------|--------|--------|
+| Harness | Rules | Commands | Agents | Skills |
+|---------|-------|----------|--------|--------|
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
 | OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/commands/` | `~/.config/opencode/agents/` | `~/.config/opencode/skills/` |
-| Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | - | `~/.codex/skills/` |
+| OpenClaw | - | - | - | `~/.openclaw/skills/` |
+| Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` | `~/.gemini/agents/` | `~/.gemini/skills/` |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | `~/.factory/droids/` | `~/.factory/skills/` |
+
+OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
 ## Tech Stack
 
@@ -67,13 +70,13 @@ agentpkg <command>
 agentpkg init <name> [options]
   --dir <path>      Directory to create plugin in (default: .)
   --with-agent      Include example agent definition
-  --with-skill      Include example skill (Claude Code, OpenCode)
+  --with-skill      Include example skill scaffold (preset targets for coding + claw harnesses)
   --minimal         Create minimal plugin (manifest only)
 
 # Install a plugin
 agentpkg install <plugin-path> [options]
-  --agent <ids>     Comma-separated agent IDs
-  --all             Install to all supported agents
+  --harness <ids>   Comma-separated harness IDs
+  --all             Install to all supported harnesses
   --project <path>  Project path for project-specific rules
   --overwrite       Overwrite existing files
   --no-backup       Skip creating backups
@@ -82,8 +85,8 @@ agentpkg install <plugin-path> [options]
 # Validate plugin structure
 agentpkg validate <plugin-path>
 
-# List supported agents
-agentpkg agents
+# List supported harness IDs
+agentpkg harnesses
 ```
 
 ## Project Structure
@@ -93,7 +96,7 @@ agentpkg/
 ├── src/
 │   ├── cli.ts          # CLI entry point and commands
 │   ├── types.ts        # TypeScript types and interfaces
-│   ├── agents.ts       # Agent registry (paths, formats, capabilities)
+│   ├── harnesses.ts    # Harness registry (paths, formats, capabilities)
 │   ├── fs.ts           # Filesystem utilities (Bun APIs)
 │   ├── manifest.ts     # Plugin manifest and frontmatter parsing
 │   └── installer.ts    # Core installation logic
@@ -109,21 +112,77 @@ agentpkg/
 
 ```
 my-plugin/
-├── plugin.json         # Manifest (name, version, targets)
+├── plugin.json         # Manifest (name, version, per-artifact targets)
 ├── rules/
-│   ├── global/         # Appended to agent's global rules file
+│   ├── global/         # Appended to each targeted harness's global rules file
 │   │   └── *.md
-│   └── project/        # Copied to project (when --project specified)
+│   └── project/        # Copied to project-aware harnesses when --project is set
 │       └── *.md
-├── commands/           # Slash commands
+├── commands/           # Shared slash commands
 │   └── *.md
-├── agents/             # Custom agent definitions
+├── agents/             # Shared custom agent definitions
 │   └── *.md
-└── skills/             # Skills (Claude Code, OpenCode)
-    └── <skill-name>/
-        ├── SKILL.md    # Skill definition
-        └── *.md        # Supporting files
+├── skills/             # Shared skills (including OpenClaw shared skill files)
+│   └── <skill-name>/
+│       ├── SKILL.md    # Skill definition
+│       └── *.md        # Supporting files
+└── harness/            # Optional harness-specific overlays
+    └── <id>/           # e.g. opencode, openclaw
+        ├── commands/
+        │   └── *.md    # Replaces matching shared command files for that harness
+        └── skills/
+            └── <skill-name>/
+                └── *.md # Replaces matching shared skill files for that harness
 ```
+
+## Harness-Aware Targeting Model
+
+Install targeting lives in `plugin.json` and nowhere else.
+
+```json
+{
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "description": "Shared standards plus harness-specific overlays",
+  "targets": {
+    "rules": ["coding-harness"],
+    "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"],
+    "agents": ["claude-code", "opencode"],
+    "skills": ["coding-harness", "claw-harness"]
+  }
+}
+```
+
+### Preset groups
+
+- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `gemini-cli`, `amp-code`, `cursor`, `factory-droid`
+- `claw-harness` → `openclaw`
+
+### Rules to remember
+
+- `plugin.json` is the only targeting source for install planning.
+- There are no file-level targets for rules, commands, agents, or skills.
+- Use explicit harness IDs when a preset would expand to an unsupported surface (for example, `commands` cannot target `amp-code` or `openclaw`).
+- If a plugin contains an artifact type, `targets.<artifact>` must declare where that artifact installs.
+
+## Harness Overlays
+
+Use `harness/<id>/...` when one harness needs a different version of a shared artifact.
+
+```text
+harness/
+├── opencode/
+│   └── commands/
+│       └── review.md
+└── openclaw/
+    └── skills/
+        └── debugging/
+            └── SKILL.md
+```
+
+Overlay paths mirror the shared artifact paths. If both a shared file and a harness overlay exist at the same relative path, the harness overlay wins for that harness. Non-overridden files still come from the shared directories.
+
+For OpenClaw, both the shared skill tree and any matching `harness/openclaw/skills/...` replacements are materialized into the same `~/.openclaw/skills/` destination.
 
 ## Command Arguments
 
@@ -180,17 +239,15 @@ Working directory: `pwd`
 
 ## Unified Frontmatter Format
 
-All markdown artifacts support a common frontmatter format:
+All markdown artifacts support a common frontmatter format for metadata and harness-specific settings.
 
 ```yaml
 ---
 description: What this artifact does
-targets: [claude-code, opencode]  # Optional: limits to specific agents
 
-# Agent-specific overrides
+# Harness-specific overrides
 claude-code:
   allowed-tools: [Bash, Read]
-  model: sonnet
 opencode:
   mode: subagent
   temperature: 0.1
@@ -199,7 +256,9 @@ opencode:
 Artifact content goes here...
 ```
 
-## OpenCode Agent Frontmatter Reference
+**Important:** Do not use frontmatter `targets` for install planning. Put install targets in `plugin.json` and use `harness/<id>/...` overlays when a harness needs a different file.
+
+## OpenCode Custom Agent Frontmatter Reference
 
 When defining custom agents for OpenCode, use these valid frontmatter properties:
 
@@ -227,7 +286,7 @@ When defining custom agents for OpenCode, use these valid frontmatter properties
 ```yaml
 ---
 description: Code reviewer that focuses on best practices
-targets: [claude-code, opencode]
+# Install targeting comes from plugin.json -> targets.agents
 
 claude-code:
   model: sonnet
@@ -244,7 +303,7 @@ opencode:
 You are a code review specialist...
 ```
 
-**Note:** The `agent` property is NOT valid for OpenCode. Use `mode` to control agent behavior.
+**Note:** For OpenCode custom agent definitions, use `mode` to control visibility. Command-specific routing keys are separate harness behavior and are not part of this custom-agent frontmatter reference.
 
 ## Code Patterns and Guidelines
 
@@ -275,18 +334,18 @@ You are a code review specialist...
 - Return structured results (`InstallResult`)
 - Support dry-run mode at all stages
 
-### Adding New Agents
+### Adding New Harnesses
 
-1. Add agent ID to `AgentId` type in `types.ts`
-2. Add agent config to `AGENTS` registry in `agents.ts`
-3. Add agent-specific transformations in `installer.ts` if needed
+1. Add the harness ID to `HarnessId` in `types.ts`
+2. Add the harness config to the `HARNESSES` registry in `harnesses.ts`
+3. Add harness-specific transformations in `installer.ts` if needed
 4. Update frontmatter type in `types.ts`
 
 ### Adding New Artifact Types
 
 1. Add to `artifact` union type in `FileOperation`
-2. Add support flag to `AgentConfig` (e.g., `supportsX`)
-3. Add directory field to `AgentConfig` (e.g., `xDir`)
+2. Add support flag to `HarnessConfig` (e.g., `supportsX`)
+3. Add directory field to `HarnessConfig` (e.g., `xDir`)
 4. Create `planXInstallation()` function in `installer.ts`
 5. Call it from `planInstallation()` main function
 6. Update `init` command to generate examples
@@ -319,7 +378,7 @@ agentpkg install ./test-plugin --all
 
 Skills extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents from general-purpose into specialized assistants with procedural knowledge.
 
-**Supported by:** Claude Code (native), OpenCode (native)
+**Supported by:** Claude Code (native), OpenCode (native), OpenClaw (skills root with shared files plus matching `harness/openclaw` overlays)
 
 ### Skill Structure
 

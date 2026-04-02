@@ -1,7 +1,7 @@
 {
   "name": "agentpkg",
   "version": "0.1.0",
-  "description": "Unified plugin distribution system for AI coding agents",
+  "description": "Unified plugin distribution system for AI coding harnesses",
   "type": "module",
   "private": true,
   "packageManager": "bun@latest",

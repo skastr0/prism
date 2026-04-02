@@ -1,10 +1,10 @@
 # agentpkg Plugin Examples
 
-## Example 1: Simple Rules Plugin
+## Example 1: Shared Rules Plugin
 
-A plugin that adds coding guidelines to all agents:
+A plugin that adds coding guidelines to every rules-capable harness in the coding preset:
 
-```
+```text
 coding-standards/
 ├── plugin.json
 └── rules/
@@ -18,7 +18,9 @@ coding-standards/
   "name": "coding-standards",
   "version": "1.0.0",
   "description": "Company coding standards",
-  "targets": "all"
+  "targets": {
+    "rules": ["coding-harness"]
+  }
 }
 ```
 
@@ -35,11 +37,11 @@ description: Company coding standards
 - Document public APIs
 ```
 
-## Example 2: Command Plugin
+## Example 2: Shared Command Plugin
 
-A plugin that adds useful slash commands:
+A plugin that adds useful slash commands to command-capable harnesses:
 
-```
+```text
 dev-commands/
 ├── plugin.json
 └── commands/
@@ -47,11 +49,22 @@ dev-commands/
     └── deploy.md
 ```
 
+**plugin.json:**
+```json
+{
+  "name": "dev-commands",
+  "version": "1.0.0",
+  "description": "Shared developer commands",
+  "targets": {
+    "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"]
+  }
+}
+```
+
 **commands/review.md:**
 ```markdown
 ---
 description: Review code changes
-targets: [claude-code, opencode]
 
 claude-code:
   allowed-tools: [Read, Grep, Glob]
@@ -68,19 +81,12 @@ Review the code for:
 2. Security issues
 3. Performance concerns
 4. Code style violations
-
-## Usage
-
-- `/review` - Review all staged changes
-- `/review src/auth.ts` - Review specific file
-- `/review src/api focusing on security` - Review with focus area
 ```
 
 **commands/deploy.md:**
 ```markdown
 ---
 description: Deploy to an environment
-targets: [claude-code, opencode]
 ---
 
 # Deploy
@@ -88,33 +94,35 @@ targets: [claude-code, opencode]
 **Deploy Configuration:** $ARGUMENTS
 
 Deploy the application based on the configuration above.
-
-## Arguments
-
-- `$ARGUMENTS` - Target environment and message
-
-## Usage
-
-- `/deploy staging` - Deploy to staging
-- `/deploy production --message "v2.0 release"` - Deploy with message
 ```
 
 ## Example 3: Custom Agent Plugin
 
-A plugin that adds specialized agents:
+A plugin that adds specialized agents where agent installs are supported:
 
-```
+```text
 specialized-agents/
 ├── plugin.json
 └── agents/
     └── security-auditor.md
 ```
 
+**plugin.json:**
+```json
+{
+  "name": "specialized-agents",
+  "version": "1.0.0",
+  "description": "Security-focused custom agents",
+  "targets": {
+    "agents": ["claude-code", "opencode"]
+  }
+}
+```
+
 **agents/security-auditor.md:**
 ```markdown
 ---
 description: Security-focused code auditor
-targets: [claude-code, opencode]
 
 claude-code:
   model: sonnet
@@ -131,21 +139,31 @@ You are a security auditor. Your role is to:
 2. Check for common attack vectors (XSS, SQL injection, etc.)
 3. Verify authentication and authorization logic
 4. Review sensitive data handling
-
-You have READ-ONLY access. Report findings without modifying code.
 ```
 
-## Example 4: Skill Plugin (Claude Code + OpenCode)
+## Example 4: Skill Plugin Using Presets
 
-A plugin that adds a specialized skill (works with both Claude Code and OpenCode with opencode-skills plugin):
+A plugin that shares one skill across the coding harnesses plus OpenClaw:
 
-```
+```text
 debugging-skill/
 ├── plugin.json
 └── skills/
     └── advanced-debugging/
         ├── SKILL.md
         └── techniques.md
+```
+
+**plugin.json:**
+```json
+{
+  "name": "debugging-skill",
+  "version": "1.0.0",
+  "description": "Advanced debugging guidance",
+  "targets": {
+    "skills": ["coding-harness", "claw-harness"]
+  }
+}
 ```
 
 **skills/advanced-debugging/SKILL.md:**
@@ -158,53 +176,68 @@ description: Advanced debugging techniques for complex issues. Use when debuggin
 # Advanced Debugging Skill
 
 You have expertise in debugging complex issues.
-
-## Approach
-1. Reproduce consistently
-2. Isolate the problem
-3. Form hypotheses
-4. Test systematically
-5. Document findings
 ```
 
-**Note:** The `name` field must match the directory name (`advanced-debugging`). The `description` must be at least 20 characters and explain both what the skill does AND when to use it.
+**Note:** The `name` field must match the directory name (`advanced-debugging`). The `description` must explain both what the skill does and when to use it. If OpenClaw needs a different `SKILL.md` or companion file, add the matching replacement under `harness/openclaw/skills/advanced-debugging/`.
 
-## Example 5: Agent-Specific Plugin
+## Example 5: Harness Overlay Plugin
 
-A plugin that only targets specific agents:
+A plugin that keeps shared defaults but replaces one file for OpenCode and one file for OpenClaw:
 
-```
-claude-only/
+```text
+harness-aware-plugin/
 ├── plugin.json
 ├── commands/
-│   └── think.md
-└── skills/
-    └── reasoning/
-        └── SKILL.md
+│   └── test.md
+├── skills/
+│   └── example-skill/
+│       ├── SKILL.md
+│       └── checklist.md
+└── harness/
+    ├── opencode/
+    │   └── commands/
+    │       └── test.md
+    └── openclaw/
+        └── skills/
+            └── example-skill/
+                └── SKILL.md
 ```
 
 **plugin.json:**
 ```json
 {
-  "name": "claude-only",
+  "name": "harness-aware-plugin",
   "version": "1.0.0",
-  "description": "Claude Code specific enhancements",
-  "targets": ["claude-code"]
+  "description": "Shared defaults with harness-specific replacements",
+  "targets": {
+    "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"],
+    "skills": ["coding-harness", "claw-harness"]
+  }
 }
 ```
+
+**Overlay behavior:**
+- `commands/test.md` is the shared default command.
+- `harness/opencode/commands/test.md` replaces that command only for OpenCode.
+- `skills/example-skill/SKILL.md` is the shared default skill entry point.
+- `harness/openclaw/skills/example-skill/SKILL.md` replaces only the `SKILL.md` file for OpenClaw.
+- `skills/example-skill/checklist.md` stays shared for every targeted harness because there is no matching overlay file.
+- For OpenClaw, both the shared files and any matching overlay replacements end up under the same `~/.openclaw/skills/example-skill/` destination tree.
 
 ## Installation Examples
 
 ```bash
-# Install to all agents
+# Install to all targeted harnesses
 agentpkg install ./coding-standards --all
 
-# Install to specific agents
-agentpkg install ./dev-commands --agent claude-code,opencode
+# Install to specific harness IDs
+agentpkg install ./dev-commands --harness claude-code,opencode
 
 # Preview changes first
 agentpkg install ./specialized-agents --all --dry-run
 
-# Install and overwrite existing
-agentpkg install ./debugging-skill --all --overwrite
+# Validate overlay behavior
+agentpkg validate ./harness-aware-plugin
+agentpkg install ./harness-aware-plugin --harness opencode --dry-run
+agentpkg install ./harness-aware-plugin --harness openclaw --dry-run
 ```

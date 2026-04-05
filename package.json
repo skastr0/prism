@@ -5,13 +5,10 @@
   "type": "module",
   "private": true,
   "packageManager": "bun@latest",
-  "bin": {
-    "agentpkg": "./dist/cli.js"
-  },
   "scripts": {
     "dev": "bun run ./src/cli.ts",
     "build": "bun scripts/build.ts",
-    "install:local": "bash scripts/install.sh",
+    "install:local": "bun scripts/install.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

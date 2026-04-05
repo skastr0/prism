@@ -1,44 +1,63 @@
 #!/usr/bin/env bun
 
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 
+const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+const version = packageJson.version;
 const distDir = "dist";
+const binaryName = "agentpkg";
+
+const targets = [
+  { platform: "darwin", arch: "x64" },
+  { platform: "darwin", arch: "arm64" },
+  { platform: "linux", arch: "x64" },
+  { platform: "linux", arch: "arm64" },
+];
 
 console.log("Cleaning dist directory...");
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 
-console.log("Building with Bun bundler...");
+console.log(`\nBuilding ${binaryName} v${version}...\n`);
 
-const buildResult = spawnSync(
-  "bun",
-  [
-    "build",
-    "--target=node",
-    "--outdir=dist",
-    "--sourcemap",
-    "src/cli.ts",
-  ],
-  { stdio: "inherit" },
-);
+for (const { platform, arch } of targets) {
+  const outfile = join(distDir, `${binaryName}-${platform}-${arch}`);
 
-if (buildResult.status !== 0) {
-  console.error("Build failed");
-  process.exit(1);
-}
+  console.log(`Building ${platform}-${arch}...`);
 
-// Add shebang to the CLI output
-const cliPath = join(distDir, "cli.js");
-const cliContent = readFileSync(cliPath, "utf8");
-if (!cliContent.startsWith("#!")) {
-  writeFileSync(cliPath, `#!/usr/bin/env node\n${cliContent}`);
+  try {
+    const buildResult = await Bun.build({
+      target: "bun",
+      compile: {
+        target: `bun-${platform}-${arch}`,
+        outfile,
+      },
+      entrypoints: ["src/cli.ts"],
+      define: {
+        APP_VERSION: `'${version}'`,
+      },
+      minify: true,
+    });
+
+    if (!buildResult.success) {
+      console.error(`  ✗ Failed to build ${platform}-${arch}`);
+      for (const log of buildResult.logs) {
+        console.error(log);
+      }
+      continue;
+    }
+
+    await Bun.$`chmod +x ${outfile}`;
+    console.log(`  ✓ ${outfile}`);
+  } catch (error) {
+    console.error(`  ✗ Error building ${platform}-${arch}:`, error);
+  }
 }
 
 console.log(`
-Build complete!
+Build complete! Binaries in ${distDir}/
 
-Output: ${distDir}/cli.js
-To install locally: bun run install:local
+To install locally:
+  bun run install:local
 `);

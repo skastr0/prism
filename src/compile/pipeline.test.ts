@@ -1,0 +1,246 @@
+import { afterEach, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Cause, Effect, Option } from "effect";
+import type { CompileError } from "./errors.js";
+import { compilePluginForTarget } from "./pipeline.js";
+import { createCanonicalCompileFixture } from "./test-fixtures.js";
+import { readManifest } from "../manifest.js";
+
+const tempRoots: string[] = [];
+
+const createTempRoot = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), "agentpkg-compile-"));
+  tempRoots.push(root);
+  return root;
+};
+
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await readFile(path, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const getFailure = (
+  exit: Awaited<ReturnType<typeof Effect.runPromiseExit>>,
+): CompileError => {
+  if (exit._tag !== "Failure") {
+    throw new Error("Expected compile to fail");
+  }
+
+  const failure = Cause.failureOption(exit.cause);
+  if (Option.isNone(failure)) {
+    throw new Error("Expected typed compile error");
+  }
+
+  return failure.value as CompileError;
+};
+
+const createCanonicalLanguageFixture = async (options?: { invalidLifecycle?: boolean }) => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  return createCanonicalCompileFixture({
+    pluginRoot,
+    projectRoot,
+    invalidLifecycle: options?.invalidLifecycle,
+  });
+};
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
+
+test("readManifest accepts canonical compile target keys", async () => {
+  const { pluginRoot } = await createCanonicalLanguageFixture();
+
+  const manifest = await readManifest(pluginRoot);
+
+  expect(manifest.name).toBe("canonical-compile-fixture");
+  expect(manifest.targets).toEqual({
+    agents: ["opencode", "claude-code"],
+    lifecycles: ["opencode", "claude-code"],
+    tools: ["opencode", "claude-code"],
+    toolspaces: ["opencode", "claude-code"],
+    modelspaces: ["opencode", "claude-code"],
+  });
+});
+
+test("canonical TS-authored agents resolve shared toolspace and modelspace bindings", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const builder = result.composed.find((agent) => agent.name === "builder");
+  const reviewer = result.composed.find((agent) => agent.name === "reviewer");
+  const securityReviewer = result.composed.find(
+    (agent) => agent.name === "security-reviewer",
+  );
+
+  expect(builder).toBeDefined();
+  expect(reviewer).toBeDefined();
+  expect(securityReviewer).toBeDefined();
+  expect(builder?.skills).toEqual(["testing"]);
+  expect(reviewer?.skills).toEqual(["testing"]);
+  expect(securityReviewer?.skills).toEqual(["testing"]);
+  expect(builder?.allowedTools).toEqual(["bash", "grep", "read"]);
+  expect(reviewer?.allowedTools).toEqual(["grep", "read"]);
+  expect(securityReviewer?.allowedTools).toEqual(["grep", "read"]);
+  expect(builder?.toolBindings.map((binding) => binding.logicalName)).toEqual([
+    "commit_work",
+    "submit_work",
+  ]);
+  expect(reviewer?.toolBindings.map((binding) => binding.logicalName)).toEqual([
+    "submit_review",
+    "submit_work",
+  ]);
+  expect(securityReviewer?.toolBindings.map((binding) => binding.logicalName)).toEqual([
+    "submit_review",
+    "submit_work",
+  ]);
+  expect(reviewer?.toolBindings[0]?.contract.name).not.toBe(
+    securityReviewer?.toolBindings[0]?.contract.name,
+  );
+});
+
+test("lifecycle phase validation succeeds when assigned agents satisfy requirements", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+  expect(skill).toContain("### 1. Implement change — agent `builder`");
+  expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
+  expect(skill).not.toContain("reviewable");
+  expect(skill).not.toContain("self-assessing");
+});
+
+test("lifecycle validation fails when assigned agents do not satisfy requirements", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
+    invalidLifecycle: true,
+  });
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("LifecycleValidationError");
+  if (failure._tag === "LifecycleValidationError") {
+    expect(failure.field).toBe("phases[1].requires[0]");
+    expect(failure.message).toContain("reviewable");
+    expect(failure.message).toContain("only 0 match");
+  }
+});
+
+test("compilePluginForTarget lowers canonical agent sources for opencode and claude-code", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  const opencode = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const claude = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(opencode.composed).toHaveLength(3);
+  expect(claude.composed).toHaveLength(3);
+
+  const opencodeAgent = await readFile(
+    join(projectRoot, ".opencode", "agents", "builder.md"),
+    "utf8",
+  );
+  expect(opencodeAgent).toContain("name: builder");
+  expect(opencodeAgent).toContain(
+    "description: Builder agent for canonical compile integration tests",
+  );
+  expect(opencodeAgent).toContain("read: true");
+  expect(opencodeAgent).toContain("grep: true");
+  expect(opencodeAgent).toContain("bash: true");
+
+  const opencodeConfig = JSON.parse(
+    await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
+  ) as {
+    agent: Record<string, Record<string, unknown>>;
+  };
+  expect(opencodeConfig.agent.builder?.model).toBe("openai/gpt-5.4");
+  expect(opencodeConfig.agent.builder?.variant).toBe("xhigh");
+  expect(opencodeConfig.agent.builder?.temperature).toBe(0.2);
+  expect(opencodeConfig.agent.builder?.mode).toBe("subagent");
+  expect(opencodeConfig.agent.builder?.maxSteps).toBe(12);
+  expect(
+    await pathExists(
+      join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    ),
+  ).toBe(true);
+
+  const claudeAgent = await readFile(
+    join(projectRoot, ".claude", "agents", "builder.md"),
+    "utf8",
+  );
+  expect(claudeAgent).toContain(
+    'description: "Builder agent for canonical compile integration tests"',
+  );
+  expect(claudeAgent).toContain('model: "sonnet"');
+  expect(claudeAgent).toContain("temperature: 0.1");
+  expect(claudeAgent).toContain("top_p: 0.7");
+  expect(claudeAgent).toContain("allowed-tools:");
+  expect(claudeAgent).toContain('- "Read"');
+  expect(claudeAgent).toContain('- "Grep"');
+  expect(claudeAgent).toContain('- "Bash"');
+  expect(
+    await pathExists(
+      join(projectRoot, ".claude", "skills", "delivery-contract", "SKILL.md"),
+    ),
+  ).toBe(true);
+  expect(await pathExists(join(projectRoot, ".claude", "settings.json"))).toBe(false);
+});

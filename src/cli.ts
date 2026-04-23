@@ -3,11 +3,13 @@
  * agentpkg CLI - Unified plugin distribution for AI coding harnesses
  */
 
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
+import { Effect } from "effect";
 import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
 import { install, planInstallation } from "./installer.js";
 import {
   formatManifestTargets,
+  manifestHasCompileTargets,
   PluginManifestError,
   readManifest,
   validatePluginSkills,
@@ -15,8 +17,21 @@ import {
   manifestTargetsHarness,
 } from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
-import type { FileOperation, HarnessId, PluginManifest, PluginManifestTargets } from "./types.js";
+import { HARNESS_SCOPES } from "./types.js";
+import type {
+  FileOperation,
+  HarnessId,
+  HarnessScope,
+  PluginManifest,
+  PluginManifestTargets,
+} from "./types.js";
 import { basename, join } from "node:path";
+import {
+  compilePluginForTarget,
+  formatOperations,
+} from "./compile/pipeline.js";
+import { formatCompileError, type CompileError } from "./compile/errors.js";
+import { cleanCache, getCacheDir } from "./compile/cache.js";
 
 const program = new Command();
 
@@ -32,45 +47,31 @@ program
   .option("--harness <harnesses>", "Comma-separated list of harness IDs")
   .option("--all", "Install to all supported harnesses")
   .option("-p, --project <path>", "Project path for project-specific rules")
+  .option(
+    "--scope <scope>",
+    `Compile output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-backup", "Skip creating backups")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (pluginPath: string, options) => {
     try {
-      // Determine requested harness IDs
-      let harnesses: HarnessId[];
-      if (options.all) {
-        harnesses = getAllHarnessIds();
-      } else if (options.harness) {
-        harnesses = options.harness.split(",").map((value: string) => value.trim());
-        for (const harness of harnesses) {
-          if (!isValidHarnessId(harness)) {
-            console.error(`Unknown harness ID: ${harness}`);
-            console.error(`Valid harness IDs: ${getAllHarnessIds().join(", ")}`);
-            process.exit(1);
-          }
-        }
-      } else {
-        console.error("Please specify --harness <ids> or --all");
-        process.exit(1);
-      }
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const harnesses = resolveRequestedHarnesses(options);
 
       // Read manifest to show info
       const manifest = await readManifest(pluginPath);
-      
-      // Filter requested harnesses to only those supported by the plugin
-      const matchingHarnesses = harnesses.filter((id) =>
-        manifestTargetsHarness(manifest, id as HarnessId)
-      );
-      
-      console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-      console.log(`   Manifest targets: ${formatManifestTargets(manifest)}`);
-      console.log(`   Matching requested harnesses: ${matchingHarnesses.length > 0 ? matchingHarnesses.join(", ") : "None (check plugin.json)"}`);
 
-      if (options.project) {
-        console.log(`   Project: ${options.project}`);
-      }
+      console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
+      printPluginRefreshContext({
+        manifest,
+        harnesses,
+        scope: options.scope,
+        projectPath: options.project,
+      });
 
       // Validate plugin before installation (unless --no-validate)
       if (options.validate !== false) {
@@ -81,7 +82,7 @@ program
 
         if (hasSkillErrors || hasAgentErrors) {
           console.log("\n❌ Plugin validation failed:\n");
-          
+
           if (hasSkillErrors) {
             console.log("   Skills:");
             for (const result of skillResults) {
@@ -93,7 +94,7 @@ program
               }
             }
           }
-          
+
           if (hasAgentErrors) {
             console.log("   Agents:");
             for (const result of agentResults) {
@@ -105,11 +106,25 @@ program
               }
             }
           }
-          
+
           console.log("\nUse --no-validate to skip validation.");
           process.exit(1);
         }
       }
+
+      const compilePhase = await runCompilePhaseForPlugin({
+        pluginPath,
+        manifest,
+        harnesses,
+        scope: options.scope,
+        projectPath: options.project,
+        dryRun: options.dryRun,
+        backup: options.backup !== false,
+      });
+      if (!compilePhase.success) {
+        process.exit(1);
+      }
+      const compileBackups = compilePhase.backups;
 
       // Plan installation
       const operations = await planInstallation({
@@ -138,12 +153,15 @@ program
       });
 
       // Print results
-      console.log("\n📋 Installation complete:\n");
-      printOperations(result.operations);
+      if (result.operations.length > 0) {
+        console.log("\n📋 Install:\n");
+        printOperations(result.operations);
+      }
 
-      if (result.backups.length > 0) {
+      const allBackups = [...compileBackups, ...result.backups];
+      if (allBackups.length > 0) {
         console.log("\n💾 Backups created:");
-        for (const backup of result.backups) {
+        for (const backup of allBackups) {
           console.log(`   ${backup}`);
         }
       }
@@ -166,33 +184,24 @@ program
 // Install-all command - discover and install all plugins in a directory
 program
   .command("install-all <directory>")
-  .description("Discover and install all plugins found in a directory (shallow scan)")
+  .description("Discover and refresh all plugins found in a directory (shallow scan)")
   .option("--harness <harnesses>", "Comma-separated list of harness IDs")
   .option("--all", "Install to all supported harnesses")
   .option("-p, --project <path>", "Project path for project-specific rules")
+  .option(
+    "--scope <scope>",
+    `Compile output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
   .option("--overwrite", "Overwrite existing files", false)
   .option("--no-backup", "Skip creating backups")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (directory: string, options) => {
     try {
-      // Determine requested harness IDs
-      let harnesses: HarnessId[];
-      if (options.all) {
-        harnesses = getAllHarnessIds();
-      } else if (options.harness) {
-        harnesses = options.harness.split(",").map((value: string) => value.trim());
-        for (const harness of harnesses) {
-          if (!isValidHarnessId(harness)) {
-            console.error(`Unknown harness ID: ${harness}`);
-            console.error(`Valid harness IDs: ${getAllHarnessIds().join(", ")}`);
-            process.exit(1);
-          }
-        }
-      } else {
-        console.error("Please specify --harness <ids> or --all");
-        process.exit(1);
-      }
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const harnesses = resolveRequestedHarnesses(options);
 
       const expandedDir = expandPath(directory);
 
@@ -266,18 +275,14 @@ program
 
       // Process each plugin
       for (const { pluginPath, manifest } of validPlugins) {
-        // Filter requested harnesses to only those supported by the plugin
-        const matchingHarnesses = harnesses.filter((id) =>
-          manifestTargetsHarness(manifest, id as HarnessId)
-        );
-        
         console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-        console.log(`   Manifest targets: ${formatManifestTargets(manifest)}`);
-        console.log(`   Matching requested harnesses: ${matchingHarnesses.length > 0 ? matchingHarnesses.join(", ") : "None (check plugin.json)"}\n`);
-
-        if (options.project) {
-          console.log(`   Project: ${options.project}`);
-        }
+        printPluginRefreshContext({
+          manifest,
+          harnesses,
+          scope: options.scope,
+          projectPath: options.project,
+          indent: "   ",
+        });
 
         // Validate plugin before installation (unless --no-validate)
         if (options.validate !== false) {
@@ -288,7 +293,7 @@ program
 
           if (hasSkillErrors || hasAgentErrors) {
             console.log("\n   ❌ Validation failed:\n");
-            
+
             if (hasSkillErrors) {
               console.log("      Skills:");
               for (const result of skillResults) {
@@ -300,7 +305,7 @@ program
                 }
               }
             }
-            
+
             if (hasAgentErrors) {
               console.log("      Agents:");
               for (const result of agentResults) {
@@ -312,7 +317,7 @@ program
                 }
               }
             }
-            
+
             results.push({
               pluginPath,
               name: manifest.name,
@@ -324,6 +329,30 @@ program
             continue;
           }
         }
+
+        const compilePhase = await runCompilePhaseForPlugin({
+          pluginPath,
+          manifest,
+          harnesses,
+          scope: options.scope,
+          projectPath: options.project,
+          dryRun: options.dryRun,
+          backup: options.backup !== false,
+        });
+
+        if (!compilePhase.success) {
+          results.push({
+            pluginPath,
+            name: manifest.name,
+            success: false,
+            operations: [],
+            errors: [compilePhase.error],
+            backups: compilePhase.backups,
+          });
+          continue;
+        }
+
+        const compileBackups = compilePhase.backups;
 
         // Plan installation
         const operations = await planInstallation({
@@ -344,7 +373,7 @@ program
             success: true,
             operations,
             errors: [],
-            backups: [],
+            backups: compileBackups,
           });
           continue;
         }
@@ -365,7 +394,7 @@ program
           success: result.success,
           operations: result.operations,
           errors: result.errors.map((e) => `${e.operation.target}: ${e.message}`),
-          backups: result.backups,
+          backups: [...compileBackups, ...result.backups],
         });
 
         // Print results for this plugin
@@ -374,9 +403,9 @@ program
           printOperations(result.operations, "      ");
         }
 
-        if (result.backups.length > 0) {
+        if (compileBackups.length + result.backups.length > 0) {
           console.log("\n   💾 Backups created:");
-          for (const backup of result.backups) {
+          for (const backup of [...compileBackups, ...result.backups]) {
             console.log(`      ${backup}`);
           }
         }
@@ -400,9 +429,9 @@ program
       if (invalidPlugins.length > 0) {
         console.log(`   Invalid manifests: ${invalidPlugins.length}`);
       }
-      console.log(`   Successful installs: ${successCount}`);
+      console.log(`   Successful refreshes: ${successCount}`);
       if (failCount > 0) {
-        console.log(`   Failed installs: ${failCount}`);
+        console.log(`   Failed refreshes: ${failCount}`);
         for (const r of results.filter((r) => !r.success)) {
           console.log(`      • ${r.name}: ${r.errors.join(", ")}`);
         }
@@ -416,10 +445,10 @@ program
       }
 
       if (failCount > 0 || invalidPlugins.length > 0) {
-        console.log("\n⚠️  Some plugins failed validation or install");
+        console.log("\n⚠️  Some plugins failed validation, compile, or install");
         process.exit(1);
       } else {
-        console.log("\n✅ All plugins installed successfully!");
+        console.log("\n✅ All plugin refreshes completed successfully!");
       }
     } catch (error) {
       printCliError(error, "Error");
@@ -708,9 +737,14 @@ agentpkg install ./${name} --harness claude-code,opencode,openclaw
 # Install with project context
 agentpkg install ./${name} --all --project ~/code/my-project
 
+# Compile OpenCode agents/lifecycles into a project-local harness root
+agentpkg install ./${name} --harness opencode --scope project --project ~/code/my-project
+
 # Preview without installing
 agentpkg install ./${name} --all --dry-run
 \`\`\`
+
+When \`--scope project\` is set, compile-phase OpenCode outputs land in \`<project>/.opencode/\` instead of \`~/.config/opencode/\`. Regular install-phase artifacts keep their existing routing; project rules still use \`--project\`.
 
 ## Validation
 
@@ -738,6 +772,90 @@ agentpkg validate ./${name}
       console.log(`   agentpkg install . --all --dry-run`);
     } catch (error) {
       printCliError(error, "Error");
+      process.exit(1);
+    }
+  });
+
+// Compile command - run the agent language compiler for a plugin
+program
+  .command("compile <plugin-path>")
+  .description("Compile agent language sources into per-harness artifacts")
+  .option(
+    "--harness <id>",
+    "Target harness ID ('opencode' or 'claude-code')",
+    "opencode"
+  )
+  .option(
+    "--scope <scope>",
+    `Output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
+  .option("-p, --project <path>", "Project root when compiling with --scope project")
+  .option("--dry-run", "Preview operations without writing", false)
+  .option("--clean", "Clear compile cache before compiling", false)
+  .option("--no-backup", "Skip creating backups")
+  .action(async (pluginPath: string, options) => {
+    try {
+      const expanded = expandPath(pluginPath);
+      assertProjectPathForProjectScope(options.scope, options.project);
+
+      if (options.clean) {
+        const cacheDir = getCacheDir(expanded);
+        if (options.dryRun) {
+          console.log(`\n🧹 Dry run — would clear compile cache: ${cacheDir}`);
+        } else {
+          await cleanCache(cacheDir);
+          console.log(`\n🧹 Cleared compile cache: ${cacheDir}`);
+        }
+      }
+
+      const program = compilePluginForTarget({
+        pluginPath: expanded,
+        target: options.harness,
+        scope: options.scope,
+        projectPath: options.project,
+        dryRun: options.dryRun,
+        backup: options.backup !== false,
+      });
+
+      const exit = await Effect.runPromiseExit(program);
+
+      if (exit._tag === "Failure") {
+        console.error(`\n❌ Compile failed:`);
+        console.error(`   ${renderCompileError(exit.cause)}`);
+        process.exit(1);
+      }
+
+      const result = exit.value;
+      console.log(`\n🛠  Compiled ${result.composed.length} agent(s) for '${result.target}' (${result.scope}):`);
+      console.log(`   Output root: ${result.outputRoot}`);
+      console.log(`   Cache dir: ${result.cacheDir}`);
+      console.log(`   Built: ${result.built.length > 0 ? result.built.join(", ") : "(none)"}`);
+      console.log(
+        `   From cache: ${result.fromCache.length > 0 ? result.fromCache.join(", ") : "(none)"}`
+      );
+      if (result.lockfilePath) {
+        console.log(`   Lockfile: ${result.lockfilePath}`);
+      }
+      for (const agent of result.composed) {
+        console.log(`   - ${agent.name}`);
+      }
+      console.log(`\n📋 Operations:\n`);
+      console.log(formatOperations(result.operations));
+      if (result.backups.length > 0) {
+        console.log(`\n💾 Backups:`);
+        for (const b of result.backups) {
+          console.log(`   ${b}`);
+        }
+      }
+      if (options.dryRun) {
+        console.log(`\n🔍 Dry run — no writes performed.`);
+      } else {
+        console.log(`\n✅ Done.`);
+      }
+    } catch (error) {
+      printCliError(error, "Compile error");
       process.exit(1);
     }
   });
@@ -886,6 +1004,161 @@ function printOperations(operations: FileOperation[], indent = ""): void {
   }
 }
 
+function resolveRequestedHarnesses(options: {
+  all?: boolean;
+  harness?: string;
+}): HarnessId[] {
+  if (options.all) {
+    return getAllHarnessIds();
+  }
+
+  if (options.harness) {
+    const harnesses = options.harness
+      .split(",")
+      .map((value: string) => value.trim())
+      .filter((value) => value.length > 0);
+
+    for (const harness of harnesses) {
+      if (!isValidHarnessId(harness)) {
+        console.error(`Unknown harness ID: ${harness}`);
+        console.error(`Valid harness IDs: ${getAllHarnessIds().join(", ")}`);
+        process.exit(1);
+      }
+    }
+
+    return harnesses as HarnessId[];
+  }
+
+  console.error("Please specify --harness <ids> or --all");
+  process.exit(1);
+}
+
+function printPluginRefreshContext(options: {
+  manifest: PluginManifest;
+  harnesses: HarnessId[];
+  scope: HarnessScope;
+  projectPath?: string;
+  indent?: string;
+}): void {
+  const indent = options.indent ?? "   ";
+  const matchingHarnesses = options.harnesses.filter((id) =>
+    manifestTargetsHarness(options.manifest, id)
+  );
+
+  console.log(`${indent}Manifest targets: ${formatManifestTargets(options.manifest)}`);
+  console.log(
+    `${indent}Matching requested harnesses: ${
+      matchingHarnesses.length > 0 ? matchingHarnesses.join(", ") : "None (check plugin.json)"
+    }`
+  );
+  console.log(`${indent}Compile output scope: ${options.scope}`);
+
+  if (options.projectPath) {
+    console.log(`${indent}Project: ${options.projectPath}`);
+  }
+
+  const compileHarnesses = options.harnesses.filter((id) =>
+    manifestHasCompileTargets(options.manifest, id)
+  );
+  if (
+    options.projectPath &&
+    options.scope === "global" &&
+    compileHarnesses.length > 0
+  ) {
+    console.log(
+      `${indent}Note: compile outputs stay in the global harness root unless --scope project is requested.`
+    );
+  }
+
+  console.log();
+}
+
+async function runCompilePhaseForPlugin(options: {
+  pluginPath: string;
+  manifest: PluginManifest;
+  harnesses: HarnessId[];
+  scope: HarnessScope;
+  projectPath?: string;
+  dryRun: boolean;
+  backup: boolean;
+  indent?: string;
+}): Promise<
+  | { success: true; backups: string[] }
+  | { success: false; backups: string[]; error: string }
+> {
+  const indent = options.indent ?? "";
+  const compileBackups: string[] = [];
+
+  for (const harnessId of options.harnesses) {
+    if (!manifestHasCompileTargets(options.manifest, harnessId)) continue;
+
+    const compileExit = await Effect.runPromiseExit(
+      compilePluginForTarget({
+        pluginPath: expandPath(options.pluginPath),
+        target: harnessId,
+        scope: options.scope,
+        projectPath: options.projectPath,
+        dryRun: options.dryRun,
+        backup: options.backup,
+      })
+    );
+
+    if (compileExit._tag === "Failure") {
+      const error = `Compile failed for ${harnessId}: ${renderCompileError(compileExit.cause)}`;
+      console.log(`\n${indent}❌ ${error}`);
+      return {
+        success: false,
+        backups: compileBackups,
+        error,
+      };
+    }
+
+    console.log(`\n${indent}🛠  Compile (${harnessId}, ${compileExit.value.scope}):`);
+    console.log(`${indent}   Root: ${compileExit.value.outputRoot}`);
+    console.log(
+      `${indent}   Built: ${
+        compileExit.value.built.length > 0 ? compileExit.value.built.join(", ") : "(none)"
+      }`
+    );
+    console.log(
+      `${indent}   From cache: ${
+        compileExit.value.fromCache.length > 0
+          ? compileExit.value.fromCache.join(", ")
+          : "(none)"
+      }`
+    );
+    if (compileExit.value.lockfilePath) {
+      console.log(`${indent}   Lockfile: ${compileExit.value.lockfilePath}`);
+    }
+    const operationText = formatOperations(compileExit.value.operations);
+    if (operationText.trim().length > 0) {
+      console.log(indentBlock(operationText, indent.length > 0 ? `${indent}   ` : ""));
+    }
+    compileBackups.push(...compileExit.value.backups);
+  }
+
+  return { success: true, backups: compileBackups };
+}
+
+function parseHarnessScope(value: string): HarnessScope {
+  if ((HARNESS_SCOPES as readonly string[]).includes(value)) {
+    return value as HarnessScope;
+  }
+
+  throw new InvalidArgumentError(
+    `Invalid scope '${value}'. Expected one of: ${HARNESS_SCOPES.join(", ")}`
+  );
+}
+
+function assertProjectPathForProjectScope(
+  scope: HarnessScope,
+  projectPath?: string
+): void {
+  if (scope === "project" && !projectPath) {
+    throw new Error("Project-local scope requires --project <path>");
+  }
+}
+
 function getManifestErrorLabel(pluginPath: string, error: unknown): string {
   if (error instanceof PluginManifestError) {
     return error.pluginLabel;
@@ -924,6 +1197,37 @@ function indentBlock(text: string, indent: string): string {
     .split("\n")
     .map((line) => `${indent}${line}`)
     .join("\n");
+}
+
+const COMPILE_ERROR_TAGS = new Set([
+  "SourceParseError",
+  "UnknownReferenceError",
+  "UnknownTargetError",
+  "InvalidTargetScopeError",
+  "DuplicateNameError",
+  "BundleNameMismatchError",
+  "MissingTargetResolutionError",
+  "UnknownDependencyError",
+  "DependencyCycleError",
+  "PluginManifestError",
+]);
+
+function renderCompileError(cause: unknown): string {
+  let rendered: string | undefined;
+  const walk = (node: unknown): void => {
+    if (rendered) return;
+    if (!node || typeof node !== "object") return;
+    const n = node as Record<string, unknown>;
+    if (typeof n._tag === "string" && COMPILE_ERROR_TAGS.has(n._tag)) {
+      rendered = formatCompileError(n as unknown as CompileError);
+      return;
+    }
+    for (const value of Object.values(n)) {
+      walk(value);
+    }
+  };
+  walk(cause);
+  return rendered ?? (cause instanceof Error ? cause.message : JSON.stringify(cause, null, 2));
 }
 
 function printCliError(error: unknown, fallbackLabel: string): void {

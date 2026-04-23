@@ -13,6 +13,9 @@ export type HarnessId =
   | "cursor"
   | "factory-droid";
 
+export const HARNESS_SCOPES = ["global", "project"] as const;
+export type HarnessScope = (typeof HARNESS_SCOPES)[number];
+
 // Harness configuration - describes where each harness stores its artifacts
 export interface HarnessConfig {
   id: HarnessId;
@@ -50,12 +53,25 @@ export interface HarnessConfig {
 export const PLUGIN_ARTIFACT_TYPES = ["rules", "commands", "agents", "skills"] as const;
 export type PluginArtifactType = (typeof PLUGIN_ARTIFACT_TYPES)[number];
 
+// Compile-phase artifact families that do not overlap with install-phase
+// directories. `targets.agents` is also compile-relevant for structured
+// `agents/*.agent.ts` sources, but remains shared with install-phase markdown
+// agents and is handled separately in manifest compile detection.
+export const COMPILE_ARTIFACT_TYPES = [
+  "lifecycles",
+  "tools",
+  "toolspaces",
+  "modelspaces",
+] as const;
+export type CompileArtifactType = (typeof COMPILE_ARTIFACT_TYPES)[number];
+
 export const TARGET_PRESET_IDS = ["coding-harness", "claw-harness"] as const;
 export type TargetPresetId = (typeof TARGET_PRESET_IDS)[number];
 
 export type PluginTargetId = HarnessId | TargetPresetId;
+export type AnyArtifactType = PluginArtifactType | CompileArtifactType;
 export type PluginManifestTargets = Partial<
-  Record<PluginArtifactType, PluginTargetId[]>
+  Record<AnyArtifactType, PluginTargetId[]>
 >;
 
 // Plugin manifest (plugin.json)
@@ -66,6 +82,9 @@ export interface PluginManifest {
 
   // Per-artifact install targeting declared in plugin.json
   targets: PluginManifestTargets;
+
+  // Cross-plugin deps (localPath only in v1)
+  deps?: Record<string, string>;
 
   // Project patterns for project-specific rules
   projects?: Record<string, ProjectConfig>;
@@ -159,6 +178,8 @@ export interface ClaudeCodeFrontmatter {
   description?: string;
   "allowed-tools"?: string[];
   model?: "sonnet" | "opus" | "haiku" | string;
+  temperature?: number;
+  top_p?: number;
 }
 
 // Cursor typed frontmatter block

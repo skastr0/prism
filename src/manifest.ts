@@ -18,10 +18,12 @@ import type {
 } from "./types.js";
 import {
   AGENT_VALIDATION,
+  COMPILE_ARTIFACT_TYPES,
   PLUGIN_ARTIFACT_TYPES,
   SKILL_VALIDATION,
   TARGET_PRESET_IDS,
 } from "./types.js";
+import type { CompileArtifactType } from "./types.js";
 import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
 
 const MANIFEST_FILE = "plugin.json";
@@ -39,6 +41,8 @@ const TARGET_PRESETS = {
   ],
   "claw-harness": ["openclaw"],
 } as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
+
+const COMPILE_SUPPORTED_HARNESSES = ["opencode", "claude-code"] as const satisfies ReadonlyArray<HarnessId>;
 
 function isTargetPresetId(value: string): value is TargetPresetId {
   return TARGET_PRESET_IDS.includes(value as TargetPresetId);
@@ -395,6 +399,8 @@ async function validateManifest(
   pluginName?: string
 ): Promise<void> {
   const errors: string[] = [];
+  const validTargetKeys = [...PLUGIN_ARTIFACT_TYPES, ...COMPILE_ARTIFACT_TYPES];
+  const targetKeyList = validTargetKeys.join(", ");
 
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new PluginManifestError(pluginPath, "Invalid manifest: must be an object", [], {
@@ -414,22 +420,19 @@ async function validateManifest(
 
   if (!("targets" in m)) {
     errors.push(
-      `'targets' is required and must be an object keyed by artifact type (rules, commands, agents, skills)`
+      `'targets' is required and must be an object keyed by artifact type (${targetKeyList})`
     );
   } else if (!m.targets || typeof m.targets !== "object" || Array.isArray(m.targets)) {
-    const legacyHint = m.targets === "all"
-      ? " The legacy string form is no longer supported."
-      : "";
     errors.push(
-      `'targets' must be an object keyed by artifact type (rules, commands, agents, skills).${legacyHint}`
+      `'targets' must be an object keyed by artifact type (${targetKeyList})`
     );
   } else {
     const targets = m.targets as Record<string, unknown>;
 
     for (const key of Object.keys(targets)) {
-      if (!PLUGIN_ARTIFACT_TYPES.includes(key as PluginArtifactType)) {
+      if (!validTargetKeys.includes(key as typeof validTargetKeys[number])) {
         errors.push(
-          `Unknown targets key '${key}'. Expected one of: ${PLUGIN_ARTIFACT_TYPES.join(", ")}`
+          `Unknown targets key '${key}'. Expected one of: ${targetKeyList}`
         );
       }
     }
@@ -457,6 +460,43 @@ async function validateManifest(
             `targets.${artifact} contains unknown target '${String(target)}'`
           );
         }
+      }
+    }
+
+    for (const artifact of COMPILE_ARTIFACT_TYPES) {
+      const declaredTargets = targets[artifact];
+
+      if (declaredTargets === undefined) {
+        continue;
+      }
+
+      if (!Array.isArray(declaredTargets)) {
+        errors.push(`targets.${artifact} must be an array of harness IDs and/or preset IDs`);
+        continue;
+      }
+
+      if (declaredTargets.length === 0) {
+        errors.push(`targets.${artifact} must not be empty`);
+        continue;
+      }
+
+      for (const target of declaredTargets) {
+        if (!isPluginTargetId(target)) {
+          errors.push(`targets.${artifact} contains unknown target '${String(target)}'`);
+        }
+      }
+
+      const unsupportedCompileTargets = resolveManifestTargets(
+        declaredTargets as PluginTargetId[]
+      ).filter(
+        (harnessId) =>
+          !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId),
+      );
+
+      if (unsupportedCompileTargets.length > 0) {
+        errors.push(
+          `targets.${artifact} resolves to unsupported compile harnesses: ${unsupportedCompileTargets.join(", ")}`
+        );
       }
     }
   }
@@ -539,8 +579,10 @@ export function manifestTargetsHarness(
   manifest: PluginManifest,
   harnessId: HarnessId
 ): boolean {
-  return PLUGIN_ARTIFACT_TYPES.some((artifact) =>
-    getManifestArtifactTargets(manifest, artifact).includes(harnessId)
+  return (
+    PLUGIN_ARTIFACT_TYPES.some((artifact) =>
+      getManifestArtifactTargets(manifest, artifact).includes(harnessId)
+    ) || manifestHasCompileTargets(manifest, harnessId)
   );
 }
 
@@ -555,13 +597,37 @@ export function manifestTargetsArtifact(
   return getManifestArtifactTargets(manifest, artifact).includes(harnessId);
 }
 
+export function manifestHasCompileTargets(
+  manifest: PluginManifest,
+  harnessId?: HarnessId
+): boolean {
+  if (
+    harnessId &&
+    !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId)
+  ) {
+    return false;
+  }
+
+  const compileKeys = ["agents", ...COMPILE_ARTIFACT_TYPES] as const;
+  for (const key of compileKeys) {
+    const targets = (manifest.targets as Record<string, unknown>)[key];
+    if (!Array.isArray(targets) || targets.length === 0) continue;
+    if (!harnessId) return true;
+    const resolved = resolveManifestTargets(targets as PluginTargetId[]);
+    if (resolved.includes(harnessId)) return true;
+  }
+  return false;
+}
+
 export function formatManifestTargets(manifest: PluginManifest): string {
-  const targetSummary = PLUGIN_ARTIFACT_TYPES.flatMap((artifact) => {
-    const targets = manifest.targets[artifact];
-    return targets && targets.length > 0
-      ? [`${artifact}=[${targets.join(", ")}]`]
-      : [];
-  });
+  const targetSummary = [...PLUGIN_ARTIFACT_TYPES, ...COMPILE_ARTIFACT_TYPES].flatMap(
+    (artifact) => {
+      const targets = manifest.targets[artifact];
+      return targets && targets.length > 0
+        ? [`${artifact}=[${targets.join(", ")}]`]
+        : [];
+    }
+  );
 
   return targetSummary.length > 0 ? targetSummary.join("; ") : "(no artifact targets)";
 }

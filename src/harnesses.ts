@@ -2,7 +2,9 @@
  * Harness registry - configurations for all supported AI coding harnesses
  */
 
-import type { HarnessConfig, HarnessId } from "./types.js";
+import { join } from "node:path";
+import { expandPath } from "./fs.js";
+import type { HarnessConfig, HarnessId, HarnessScope } from "./types.js";
 
 export const HARNESSES: Record<HarnessId, HarnessConfig> = {
   "claude-code": {
@@ -183,4 +185,24 @@ export function getAllHarnessIds(): HarnessId[] {
 
 export function isValidHarnessId(id: string): id is HarnessId {
   return id in HARNESSES;
+}
+
+export function resolveHarnessRoot(
+  harness: HarnessConfig,
+  scope: HarnessScope,
+  projectPath?: string
+): string | null {
+  if (scope === "global") {
+    return expandPath(harness.globalConfigPath);
+  }
+
+  if (!harness.projectConfigPath || !projectPath) {
+    return null;
+  }
+
+  return join(expandPath(projectPath), harness.projectConfigPath);
+}
+
+export function harnessSupportsProjectScope(harness: HarnessConfig): boolean {
+  return harness.projectConfigPath !== null;
 }

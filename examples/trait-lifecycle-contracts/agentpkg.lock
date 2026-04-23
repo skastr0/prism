@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "root": "trait-lifecycle-contracts",
+  "rootVersion": "0.1.0",
+  "entries": [
+    {
+      "name": "trait-lifecycle-contracts",
+      "version": "0.1.0",
+      "sourcePath": ".",
+      "contentHash": "2aee0a85f7ba26b59ace2a903ac269660c9852eaf17efd08b93edb82f40c84a1",
+      "dependencies": {
+        "agent-core": "deps/agent-core"
+      },
+      "sources": [
+        {
+          "path": "agents/builder.agent.ts",
+          "contentHash": "a6e088c2cbac5126fe5414d2334b5f4f077b13909ffb2e932ad01e649a857fd1"
+        },
+        {
+          "path": "agents/reviewer.agent.ts",
+          "contentHash": "c0f677939216df7833290bd54273258aed71c9abf6082c0b75d921503dc19b68"
+        },
+        {
+          "path": "agents/security-reviewer.agent.ts",
+          "contentHash": "e0a1c004584742dbda25baf99a8e4fd1951da662bc61d7400d9645c9f6eb33b0"
+        },
+        {
+          "path": "identities/builder.identity.md",
+          "contentHash": "e4509979047461255d98eab1183568bf4a0a5c06795753a6da4341470e14eb69"
+        },
+        {
+          "path": "identities/reviewer.identity.md",
+          "contentHash": "a247a7b506f9d9417a17ad5990997dbc45728cd08b256f0b2faf0e0230ef503f"
+        },
+        {
+          "path": "lifecycles/delivery-contract.lifecycle.ts",
+          "contentHash": "0f074c56c0bb269f5103b17f7484e9143d7017f496549aca7b7d2da306ef1417"
+        },
+        {
+          "path": "traits/committable.trait.ts",
+          "contentHash": "4658c03c01ff18a47c8c77a49d6d8724c859b03e95c93e0323238963ff00b7a4"
+        },
+        {
+          "path": "traits/reviewable.trait.ts",
+          "contentHash": "794dad6896797055e2be5b68f677a99fcbdff6c52ed1871c66c65c0f9e946bb8"
+        },
+        {
+          "path": "traits/self-assessing.trait.ts",
+          "contentHash": "82755d54ca7ac5c8bf2e48a8c64a5c03f789b5ed6786f49ef32114364c79693a"
+        },
+        {
+          "path": "traits/submittable.trait.ts",
+          "contentHash": "b41eaf82d65f523f3fde9134fe256c1ec58e1919c14ce6bcbb55d7253070b011"
+        }
+      ]
+    },
+    {
+      "name": "agent-core",
+      "version": "0.1.0",
+      "sourcePath": "deps/agent-core",
+      "contentHash": "7b393898767242f7e93ab29907815a0b50de261c094692f334055b124bf516c2",
+      "dependencies": {},
+      "sources": [
+        {
+          "path": "deps/agent-core/modelspaces/default-models.modelspace.ts",
+          "contentHash": "b71c442e4b29c10816f0d284b6e792924483740c3e18279621f613387759531b"
+        },
+        {
+          "path": "deps/agent-core/toolspaces/workspace-tools.toolspace.ts",
+          "contentHash": "fcd6298e1101389e9cde2d8cb4624b99f5bee9839dd5c52c6c3d3c8e3b769bca"
+        }
+      ]
+    }
+  ],
+  "generatedAt": "2026-04-21T09:47:23.395Z"
+}

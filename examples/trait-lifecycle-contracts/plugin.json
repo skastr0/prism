@@ -1,0 +1,14 @@
+{
+  "name": "trait-lifecycle-contracts",
+  "version": "0.1.0",
+  "deps": {
+    "agent-core": "./deps/agent-core"
+  },
+  "targets": {
+    "agents": ["opencode", "claude-code"],
+    "lifecycles": ["opencode", "claude-code"],
+    "toolspaces": ["opencode", "claude-code"],
+    "modelspaces": ["opencode", "claude-code"],
+    "tools": ["opencode", "claude-code"]
+  }
+}

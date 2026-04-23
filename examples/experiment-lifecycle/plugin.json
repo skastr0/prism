@@ -1,0 +1,8 @@
+{
+  "name": "experiment-lifecycle",
+  "version": "0.1.0",
+  "description": "Example compile-phase plugin showing parameterized lifecycle templates and concrete bindings.",
+  "targets": {
+    "lifecycles": ["opencode"]
+  }
+}

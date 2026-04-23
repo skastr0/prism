@@ -89,6 +89,20 @@ Where:
 
 Existing examples include shapes like `AP-039b`. The canonical parser should fail closed against this shape unless a work item explicitly records a stronger reason to support legacy ids during migration.
 
+Canonical lifecycle work-item tools mutate by id, not by caller-authored path. Creation generates the markdown filename as:
+
+```text
+<CODE>-<NNN>[subtask]-<title-slug>.md
+```
+
+For example:
+
+```text
+AP-039b-complete-lifecycle-message-synthetic-tool-plumbing.md
+```
+
+The id remains the stable dedupe and lookup key. The filename embeds the id for directory readability, but agents should not be responsible for constructing or supplying filenames.
+
 ## Synthetic Tool Model
 
 Synthetic tools are not separate business logic. They are generated harness surfaces produced from:

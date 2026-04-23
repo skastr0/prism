@@ -24,6 +24,7 @@ export const createCanonicalCompileFixture = async (options: {
 }): Promise<{ pluginRoot: string; projectRoot: string }> => {
   const { pluginRoot, projectRoot } = options;
   const coreRoot = join(pluginRoot, "deps", "agent-core");
+  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
   await mkdir(projectRoot, { recursive: true });
 
   await writeText(
@@ -34,6 +35,7 @@ export const createCanonicalCompileFixture = async (options: {
         version: "0.1.0",
         deps: {
           "agent-core": "./deps/agent-core",
+          "protocol-core": "./deps/protocol-core",
         },
         targets: {
           agents: ["opencode", "claude-code"],
@@ -57,6 +59,21 @@ export const createCanonicalCompileFixture = async (options: {
         targets: {
           toolspaces: ["opencode", "claude-code"],
           modelspaces: ["opencode", "claude-code"],
+        },
+      },
+      null,
+      2
+    )}\n`
+  );
+
+  await writeText(
+    join(protocolRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "protocol-core",
+        version: "0.1.0",
+        targets: {
+          tools: ["opencode", "claude-code"],
         },
       },
       null,
@@ -194,6 +211,27 @@ export default defineTool({
   );
 
   await writeText(
+    join(protocolRoot, "tools", "external-submit.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "external-submit",
+  description: "Submit completed work through an external protocol plugin",
+  input: Schema.Struct({
+    summary: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true };
+  },
+});
+`
+  );
+
+  await writeText(
     join(pluginRoot, "tools", "commit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
@@ -244,7 +282,7 @@ export default defineTrait({
   description: "Can submit completed work",
   tools: {
     submit_work: {
-      ref: "submit-work",
+      ref: "protocol-core:external-submit",
     },
   },
   require: {

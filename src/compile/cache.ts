@@ -25,6 +25,8 @@ interface CacheContext {
   readonly scope: string;
 }
 
+const CACHE_FORMAT_VERSION = 2;
+
 type SourceLike =
   | Identity
   | Personality
@@ -136,6 +138,7 @@ const compareInputFiles = (left: CacheInputFile, right: CacheInputFile): number 
 };
 
 const getContextShape = (options: CacheContext) => ({
+  cacheFormatVersion: CACHE_FORMAT_VERSION,
   target: options.target,
   scope: options.scope,
 });

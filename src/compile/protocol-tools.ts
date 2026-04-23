@@ -24,6 +24,7 @@ export interface MaterializedTraitTool {
   readonly contract: Contract;
   readonly canonicalToolPlugin: string;
   readonly canonicalToolName: string;
+  readonly canonicalToolSourcePath: string;
 }
 
 export type TraitBindingValidationResult =
@@ -488,6 +489,7 @@ export const materializeTraitTools = (options: {
       }),
       canonicalToolPlugin: resolved.pluginName,
       canonicalToolName: toolFileStem,
+      canonicalToolSourcePath: resolved.tool.sourcePath,
     });
   }
 

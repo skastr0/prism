@@ -38,6 +38,7 @@ export interface ResolvedContractBinding {
   readonly contract: Contract;
   readonly canonicalToolPlugin: string;
   readonly canonicalToolName: string;
+  readonly canonicalToolSourcePath: string;
 }
 
 export interface ResolvedToolReference {
@@ -45,6 +46,7 @@ export interface ResolvedToolReference {
   readonly contract: Contract;
   readonly canonicalToolPlugin: string;
   readonly canonicalToolName: string;
+  readonly canonicalToolSourcePath: string;
 }
 
 export interface ResolvedTrait {
@@ -261,7 +263,7 @@ export const resolveAgentCapabilities = (
       resolvedTraits.push(resolvedTrait);
     }
 
-    const finalToolRefs = new Map<string, { contract: Contract; traitId: string; canonicalToolPlugin: string; canonicalToolName: string }>();
+    const finalToolRefs = new Map<string, { contract: Contract; traitId: string; canonicalToolPlugin: string; canonicalToolName: string; canonicalToolSourcePath: string }>();
     const injectedSkills: string[] = [];
     const availableSkillNames = new Set(agent.skills);
 
@@ -301,7 +303,13 @@ export const resolveAgentCapabilities = (
         );
       }
 
-      for (const { logicalName, contract, canonicalToolPlugin, canonicalToolName } of materializedTraitTools) {
+      for (const {
+        logicalName,
+        contract,
+        canonicalToolPlugin,
+        canonicalToolName,
+        canonicalToolSourcePath,
+      } of materializedTraitTools) {
         const existing = finalToolRefs.get(logicalName);
         if (!existing) {
           finalToolRefs.set(logicalName, {
@@ -309,6 +317,7 @@ export const resolveAgentCapabilities = (
             traitId: resolvedTrait.canonicalId,
             canonicalToolPlugin,
             canonicalToolName,
+            canonicalToolSourcePath,
           });
           continue;
         }
@@ -367,6 +376,7 @@ export const resolveAgentCapabilities = (
           contract: resolved.contract,
           canonicalToolPlugin: resolved.canonicalToolPlugin,
           canonicalToolName: resolved.canonicalToolName,
+          canonicalToolSourcePath: resolved.canonicalToolSourcePath,
         })),
       access: {
         tools: [...accessTools].sort((left, right) => left.localeCompare(right)),
@@ -861,11 +871,12 @@ export const resolveAgent = (
     const capabilities = yield* resolveAgentCapabilities(agent, registry);
 
     const toolBindings: ResolvedContractBinding[] = capabilities.toolRefs.map(
-      ({ logicalName, contract, canonicalToolPlugin, canonicalToolName }) => ({
+      ({ logicalName, contract, canonicalToolPlugin, canonicalToolName, canonicalToolSourcePath }) => ({
         logicalName,
         contract,
         canonicalToolPlugin,
         canonicalToolName,
+        canonicalToolSourcePath,
       }),
     );
 

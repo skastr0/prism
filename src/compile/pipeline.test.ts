@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Cause, Effect, Option } from "effect";
 import type { CompileError } from "./errors.js";
 import { compilePluginForTarget } from "./pipeline.js";
@@ -206,6 +207,86 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
   expect(opencodeAgent).toContain("read: true");
   expect(opencodeAgent).toContain("grep: true");
   expect(opencodeAgent).toContain("bash: true");
+  expect(opencodeAgent).toContain("canonical_compile_fixture_builder_submit_work: true");
+  expect(opencodeAgent).toContain("canonical_compile_fixture_reviewer_submit_review: false");
+  expect(opencodeAgent).toContain(
+    "canonical_compile_fixture_security_reviewer_submit_review: false",
+  );
+
+  const reviewerAgent = await readFile(
+    join(projectRoot, ".opencode", "agents", "reviewer.md"),
+    "utf8",
+  );
+  expect(reviewerAgent).toContain("canonical_compile_fixture_builder_submit_work: false");
+  expect(reviewerAgent).toContain("canonical_compile_fixture_reviewer_submit_review: true");
+
+  const generatedRoot = join(
+    projectRoot,
+    ".opencode",
+    "plugins",
+    "agentpkg-generated-canonical-compile-fixture",
+  );
+  const adapterDir = join(generatedRoot, "src", "adapters", "canonical-compile-fixture");
+  const adapterFiles = await readdir(adapterDir);
+  expect(adapterFiles.length).toBeGreaterThan(0);
+
+  const adapter = await readFile(join(adapterDir, adapterFiles[0]!), "utf8");
+  expect(adapter).toContain("await contract.handle(input, runtimeContext)");
+  expect(adapter).not.toContain("canonical.handle");
+  expect(
+    await pathExists(
+      join(
+        generatedRoot,
+        "src",
+        "plugins",
+        "protocol-core",
+        "tools",
+        "external-submit.tool.ts",
+      ),
+    ),
+  ).toBe(true);
+
+  const opencodePluginStub = join(
+    generatedRoot,
+    "node_modules",
+    "@opencode-ai",
+    "plugin",
+  );
+  await mkdir(opencodePluginStub, { recursive: true });
+  await writeFile(
+    join(opencodePluginStub, "package.json"),
+    JSON.stringify({ type: "module", main: "./index.js" }),
+  );
+  await writeFile(
+    join(opencodePluginStub, "index.js"),
+    `const node = () => ({ describe: () => node(), optional: () => node() });
+const schema = {
+  string: node,
+  number: node,
+  boolean: node,
+  literal: node,
+  enum: node,
+  array: node,
+  object: node,
+};
+export const tool = Object.assign((definition) => definition, { schema });
+`,
+  );
+  const effectStub = join(generatedRoot, "node_modules", "effect");
+  await mkdir(effectStub, { recursive: true });
+  await writeFile(
+    join(effectStub, "package.json"),
+    JSON.stringify({ type: "module", main: "./index.js" }),
+  );
+  await writeFile(
+    join(effectStub, "index.js"),
+    `export * from ${JSON.stringify(import.meta.resolve("effect"))};\n`,
+  );
+
+  const generatedServer = await import(
+    pathToFileURL(join(generatedRoot, "src", "server.ts")).href
+  );
+  expect(generatedServer.default.id).toBe("agentpkg-generated-canonical-compile-fixture");
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),

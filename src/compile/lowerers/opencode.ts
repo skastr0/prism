@@ -448,8 +448,6 @@ interface AdapterSpec {
    * src/plugins/<pluginName>/ mirror — i.e. always starts with "contracts/".
    */
   readonly contractRelativePath: string;
-  readonly canonicalToolPlugin?: string;
-  readonly canonicalToolName?: string;
 }
 
 const RUNTIME_MANAGED_PLUGIN_DIRS = new Set(["node_modules"]);
@@ -604,11 +602,12 @@ const planLifecycleSkillPruning = async (
 };
 
 const planPluginMirrors = async (
-  contracts: ReadonlyArray<Contract>,
+  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
 ): Promise<PluginMirror[]> => {
   const byPlugin = new Map<string, { pluginRoot: string }>();
   const generatedFiles = new Map<string, Map<string, string>>();
 
+  const contracts = bindings.map((binding) => binding.contract);
   for (const contract of contracts) {
     if (contract.generatedFiles && contract.generatedFiles.length > 0) {
       const pluginFiles = generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
@@ -626,6 +625,13 @@ const planPluginMirrors = async (
       const pluginRoot = dirname(contractsDir);
       byPlugin.set(contract.pluginName, { pluginRoot });
     }
+  }
+
+  for (const binding of bindings) {
+    if (byPlugin.has(binding.canonicalToolPlugin)) continue;
+    const toolsDir = dirname(binding.canonicalToolSourcePath);
+    const pluginRoot = dirname(toolsDir);
+    byPlugin.set(binding.canonicalToolPlugin, { pluginRoot });
   }
 
   const mirrors: PluginMirror[] = [];
@@ -680,12 +686,23 @@ const planAdapters = (
         pluginName: binding.contract.pluginName,
         contractName: binding.contract.name,
         contractRelativePath: `contracts/${binding.contract.name}.contract`,
-        canonicalToolPlugin: binding.canonicalToolPlugin,
-        canonicalToolName: binding.canonicalToolName,
       });
     }
   }
   return specs;
+};
+
+const normalizeMirroredPluginSource = (
+  relativePath: string,
+  source: string,
+): string => {
+  if (!relativePath.endsWith(".tool.ts")) {
+    return source;
+  }
+
+  return source
+    .replace(/^\s*import\s+\{\s*defineTool\s*\}\s+from\s+["']agentpkg["'];\s*\n/m, "")
+    .replace(/\bdefineTool\s*\(/g, "(");
 };
 
 const renderAdapter = (spec: AdapterSpec): string => {
@@ -703,13 +720,6 @@ const renderAdapter = (spec: AdapterSpec): string => {
   lines.push(
     `import { toolArgsFromSchema, decodeInput, type ToolRuntimeContext } from "${bridgeImport}";`,
   );
-  if (spec.canonicalToolPlugin && spec.canonicalToolName) {
-    const toolImport =
-      spec.canonicalToolPlugin === spec.pluginName
-        ? `../tools/${spec.canonicalToolName}.tool`
-        : `../../${spec.canonicalToolPlugin}/tools/${spec.canonicalToolName}.tool`;
-    lines.push(`import { default as canonical } from "${toolImport}";`);
-  }
   lines.push("");
   lines.push(`type SyntheticToolExecuteContext = ToolContext & {`);
   lines.push(`  sessionTitle?: ToolRuntimeContext["sessionTitle"];`);
@@ -737,11 +747,7 @@ const renderAdapter = (spec: AdapterSpec): string => {
   lines.push(`      workingDirectory: toolContext.workingDirectory ?? context.directory,`);
   lines.push(`      repoRoot: toolContext.repoRoot ?? context.worktree,`);
   lines.push(`    };`);
-  if (spec.canonicalToolPlugin && spec.canonicalToolName) {
-    lines.push(`    const output = await canonical.handle(input, runtimeContext);`);
-  } else {
-    lines.push(`    const output = { acknowledged: true };`);
-  }
+  lines.push(`    const output = await contract.handle(input, runtimeContext);`);
   lines.push(`    return JSON.stringify(output, null, 2);`);
   lines.push(`  },`);
   lines.push(`});`);
@@ -969,8 +975,8 @@ export const planLowering = async (
     });
 
     // Mirror every source plugin's contracts/ and schemas/ under src/plugins/<name>/
-    const referencedContracts = input.agents.flatMap((a) => a.toolBindings.map((b) => b.contract));
-    const mirrors = await planPluginMirrors(referencedContracts);
+    const referencedBindings = input.agents.flatMap((a) => a.toolBindings);
+    const mirrors = await planPluginMirrors(referencedBindings);
     for (const mirror of mirrors) {
       for (const file of mirror.files) {
         const relativeTarget = `src/plugins/${mirror.pluginName}/${file.relativePath}`;
@@ -982,7 +988,8 @@ export const planLowering = async (
           mirror.pluginName,
           file.relativePath,
         );
-        const desired = file.content ?? (await readFile(file.sourcePath!));
+        const raw = file.content ?? (await readFile(file.sourcePath!));
+        const desired = normalizeMirroredPluginSource(file.relativePath, raw);
         let reason: "new" | "changed" | "unchanged";
         if (await fileExists(target)) {
           const current = await readFile(target);

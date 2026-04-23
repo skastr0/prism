@@ -78,6 +78,17 @@ agentpkg install <plugin-path> [options]
   --harness <ids>   Comma-separated harness IDs
   --all             Install to all supported harnesses
   --project <path>  Project path for project-specific rules
+  --scope <scope>   Compile output scope: global or project
+  --overwrite       Overwrite existing files
+  --no-backup       Skip creating backups
+  --dry-run         Preview operations without executing
+
+# Install every child plugin in a directory
+agentpkg install-all <directory> [options]
+  --harness <ids>   Comma-separated harness IDs
+  --all             Install to all supported harnesses
+  --project <path>  Project path for project-specific rules
+  --scope <scope>   Compile output scope: global or project
   --overwrite       Overwrite existing files
   --no-backup       Skip creating backups
   --dry-run         Preview operations without executing
@@ -99,7 +110,21 @@ agentpkg/
 │   ├── harnesses.ts    # Harness registry (paths, formats, capabilities)
 │   ├── fs.ts           # Filesystem utilities (Bun APIs)
 │   ├── manifest.ts     # Plugin manifest and frontmatter parsing
-│   └── installer.ts    # Core installation logic
+│   ├── installer.ts    # Core installation logic (file-router phase)
+│   └── compile/        # Agent-language compiler (OpenCode v0.1)
+│       ├── sources.ts           # Effect Schema source models
+│       ├── registry.ts          # Per-plugin indexes
+│       ├── context.ts           # CompileContext Effect service
+│       ├── errors.ts            # Tagged compile errors
+│       ├── load.ts              # Filesystem discovery + Bun module loading
+│       ├── validate-contract.ts # Contract export + schema-bridge compatibility checks
+│       ├── resolve.ts           # Bundle → ResolvedBundle (reference resolution)
+│       ├── compose.ts           # ResolvedBundle → ComposedAgent (target-agnostic)
+│       ├── runtime/
+│       │   └── schema-bridge.ts # Effect Schema → OpenCode tool.schema bridge
+│       ├── pipeline.ts          # Orchestrator (load → resolve → compose → lower → emit)
+│       └── lowerers/
+│           └── opencode.ts      # OpenCode target: markdown + config patch + generated plugin sync
 ├── dist/               # Built CLI output
 ├── examples/           # Example plugins
 ├── plugins/            # Living documentation plugins
@@ -107,6 +132,436 @@ agentpkg/
 ├── tsconfig.json
 └── AGENTS.md           # This file
 ```
+
+## Compile pipeline (v0.1)
+
+agentpkg has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, traits, agents, and lifecycles, and agentpkg lowers them into per-harness artifacts.
+
+In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description or refining schemas via slots. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool surfaces; target lowerers do not need to understand trait or tool internals.
+
+### Canonical source types
+
+Canonical structured source artifacts are TypeScript-authored:
+
+| Type | Where | What |
+|------|-------|------|
+| `identity` | `identities/<name>.identity.md` | Prose identity for a stable agent role |
+| `personality` | `personalities/<name>.personality.md` | Reusable personality policy (temperament, virtues, communication) |
+| `toolspace` | `toolspaces/<name>.toolspace.ts` | Logical tool vocabulary plus per-target concrete tool-name bindings |
+| `modelspace` | `modelspaces/<name>.modelspace.ts` | Logical model profiles plus per-target concrete model config blocks |
+| `tool` | `tools/<name>.tool.ts` | Canonical tool definition: strict input/output contract + portable handle implementation |
+| `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, injected skills, and logical access intent |
+| `agent` | `agents/<name>.agent.ts` | Canonical compiled agent definition |
+| `lifecycle` | `lifecycles/<name>.lifecycle.ts` | Higher-order recipe composing agents / other lifecycles with compile-time validation |
+
+Prose-heavy artifacts remain markdown-only by design: identities and personalities.
+
+### Typed refs and dep-alias indirection
+
+The canonical source model uses typed helper constructors rather than raw target strings as the only authoring surface.
+
+Helpers exported from `agentpkg` include:
+
+```ts
+import {
+  bindTrait,
+  defineAgent,
+  defineLifecycle,
+  defineTool,
+  defineToolspace,
+  defineModelspace,
+  defineTrait,
+  agentRef,
+  lifecycleRef,
+  traitRef,
+  toolRef,
+  toolGroupRef,
+  modelProfileRef,
+  schemaSlot,
+  slotRef,
+  valueSlot,
+} from "agentpkg";
+```
+
+Example:
+
+```ts
+export default defineAgent({
+  name: "builder",
+  identity: "builder",
+  model: modelProfileRef("agent-core", "default-models", "builder"),
+  traits: [bindTrait("submittable"), bindTrait("self-assessing")],
+  access: {
+    toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
+    tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
+  },
+});
+```
+
+Dep-alias rebinding remains the cross-plugin indirection mechanism. Bare refs resolve locally; prefixed refs resolve through `plugin.json -> deps`.
+
+### Traits and agent capability conformance
+
+Traits are **internal compile-time source artifacts**. They do not lower into target harness artifacts, they are not installable skill-like outputs, and they are not a standalone `plugin.json` target family.
+
+Agents declare capability conformance with `traits: []`, and the canonical current shape is to use `bindTrait(...)` when the agent must provide slot/config values.
+
+Each trait may:
+
+- `slots` — declare the binding contract for agent-provided schema/config values
+- `tools` — attach canonical tools by `ref`, optionally overriding description or refining input/output schemas (business-logic override is not allowed)
+- `inject.skills` — add default skills when the agent does not already include them
+- `require.tools` / `require.skills` — assert that the final combined synthetic surface contains those logical names
+- `access` — declare logical tool / tool-group intent that resolves through toolspaces for the selected harness target
+
+Canonical tools are the semantic surface. The compiler resolves canonical tool refs, merges trait attachments with the canonical base, validates agent-provided slot bindings fail-closed, materializes ordinary resolved synthetic tool modules, and hands those to lowerers just like any other resolved tool surface.
+
+The compiler resolves traits and their attached canonical tools through the same cross-plugin reference model as agents, toolspaces, and modelspaces. It combines explicit agent access intent with trait access intent, and validates the final surface fail-closed.
+
+### Toolspaces and modelspaces
+
+Toolspaces and modelspaces move target-bound tool/model strings out of semantic agent definitions.
+
+#### Toolspace
+
+Toolspaces define:
+
+- logical tools
+- logical groups
+- per-target concrete tool names
+
+Traits and agents reference logical tool refs / tool-group refs. Resolution is target-aware and fail-closed if a required mapping is missing.
+
+#### Modelspace
+
+Modelspaces define:
+
+- logical model profiles
+- per-target concrete model config blocks
+
+Agents reference model profiles through `modelProfileRef(...)`. Resolution is target-aware and fail-closed if the selected target has no binding.
+
+### Parameterized lifecycle templates
+
+Lifecycle files can be either:
+
+- **templates** — declare `parameters:` and stay source-only until another lifecycle binds them
+- **instances** — omit `parameters:` and compile directly into concrete target skills
+
+Template binding is explicit at the phase site via `lifecycle_binding`:
+
+```ts
+export default defineLifecycle({
+  name: "experiment",
+  description: "Reusable experiment lifecycle for ${H}",
+  parameters: [
+    { name: "H", description: "Hypothesis being tested" },
+    { name: "App", description: "Application context" },
+  ],
+  phases: [
+    {
+      name: "Run experiment for ${App}",
+      signal_in: "Hypothesis ${H}",
+      termination: "Decision recorded for ${App}",
+    },
+  ],
+});
+```
+
+```ts
+export default defineLifecycle({
+  name: "sdlc-experiment",
+  description: "Concrete SDLC experiment",
+  phases: [
+    {
+      name: "Experiment",
+      lifecycle_binding: {
+        lifecycle: lifecycleRef("experiment"),
+        bindings: {
+          H: "Async commits reduce latency",
+          App: "sdlc-core",
+        },
+      },
+    },
+  ],
+});
+```
+
+Compile-time rules:
+
+- template placeholders use `${Name}` and must match declared `parameters`
+- direct `phase.lifecycle` references may only target non-parameterized lifecycles
+- parameterized lifecycle references must use `lifecycle_binding`
+- required parameters must be bound, unknown bindings fail the compile
+- agent assignment refs and trait requirement refs may not contain template placeholders
+- lowering emits only concrete skills with substituted values; templates themselves do not become target-side runtime artifacts
+
+### Lifecycle phase assignment and capability requirements
+
+Lifecycle phases act as compile-time orchestration contracts over assigned agents.
+
+Each phase may declare:
+
+- `agents: []` — one or more concrete agent refs assigned to the phase
+- `requires:` — one or more requirement blocks using:
+  - `all: []` — trait refs every matching assigned agent must contain
+  - `min:` — minimum number of assigned agents that must satisfy `all` (defaults to `1`)
+
+Example:
+
+```ts
+export default defineLifecycle({
+  name: "delivery-contract",
+  description: "Compile-time orchestration contract",
+  phases: [
+    {
+      name: "Implement change",
+      agents: [agentRef("builder")],
+      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
+    },
+    {
+      name: "Hand off work",
+      agents: [agentRef("builder"), agentRef("reviewer")],
+      requires: [{ all: [traitRef("submittable")], min: 2 }],
+    },
+  ],
+});
+```
+
+Validation rules:
+
+- every assigned agent ref must resolve
+- every required trait ref must resolve
+- for each requirement, the compiler counts assigned agents whose canonical trait set includes **all** required traits
+- compile fails if that count is less than `min`
+
+Lowered lifecycle skills reflect the assigned agents (`agent \`builder\``, `agents \`builder\`, \`reviewer\``) but do **not** expose internal trait requirement machinery to the target harness.
+
+### Canonical tools and trait attachments
+
+Canonical tools are first-class source artifacts in `tools/`. Each canonical tool owns a strict input/output contract and a portable handle implementation:
+
+```ts
+import { Schema } from "effect";
+import { defineTool } from "agentpkg";
+
+export default defineTool({
+  name: "submit_review",
+  description: "Submit review findings for a work item.",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input, context) {
+    return { acknowledged: true };
+  },
+});
+```
+
+Traits attach canonical tools by `ref` and can refine description or input/output schemas via slots. The canonical handle is always reused; traits cannot override business logic:
+
+```ts
+import { Schema } from "effect";
+import { bindTrait, defineAgent, defineTrait, schemaSlot, slotRef, valueSlot } from "agentpkg";
+
+export default defineTrait({
+  name: "reviewable",
+  slots: {
+    review_input: schemaSlot(),
+    review_lane: valueSlot(Schema.String),
+  },
+  tools: {
+    submit_review: {
+      ref: "submit_review",
+      description: "Submit review findings to ${review_lane}",
+      input: slotRef("review_input"),
+    },
+  },
+});
+
+defineAgent({
+  name: "security-reviewer",
+  description: "Security reviewer variant",
+  identity: "reviewer",
+  traits: [
+    bindTrait("reviewable", {
+      slots: {
+        review_lane: "security-review",
+        review_input: Schema.Struct({
+          summary: Schema.String,
+          severity: Schema.Literal("low", "medium", "high"),
+        }),
+      },
+    }),
+  ],
+});
+```
+
+During compile, agentpkg resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
+
+### Canonical tools vs harness-native plugins
+
+The canonical `tools/` family is for **portable pure-TypeScript tool logic**.
+
+Use canonical tools when the capability can be expressed without importing a harness SDK directly. Business logic belongs here; lowerers then decide how to expose it in each target.
+
+Do **not** force harness-specific runtime behavior into canonical tools. If the capability needs session transport, hook callbacks, TUI routes/dialogs, provider/auth integration, or other harness-native APIs directly, that capability belongs in a standalone harness-native plugin project rather than in the canonical compile-time source model.
+
+Current design examples:
+
+- `lifecycle-core` in `ai-plugins` = canonical lifecycle-domain protocol tools
+- `session-inbox` as a standalone OpenCode project = session transport / sendoff UX
+
+Runtime-context guarantees for generated OpenCode adapters remain:
+
+- always present: `sessionID`, `agent`, `timestamp`
+- normalized workspace fields: `workingDirectory`, `repoRoot`
+- optional when the harness/runtime surfaces them: `sessionTitle`, `durationMs`, `cost`
+
+Agents can still layer inline access/permission overrides on top of trait-owned access intent, but those overrides do not silently remove mandatory trait-owned tool or access requirements.
+
+### Generated OpenCode plugin layout
+
+On compile, agentpkg emits one compiler-owned OpenCode plugin **per compiled source plugin** under the selected OpenCode root:
+
+- global (default): `~/.config/opencode/plugins/agentpkg-generated-<source-plugin>/`
+- project-local (`--scope project --project <path>`): `<path>/.opencode/plugins/agentpkg-generated-<source-plugin>/`
+
+The generated layout is:
+
+```text
+agentpkg-generated-<source-plugin>/
+├── package.json
+└── src/
+    ├── server.ts
+    ├── runtime/
+    │   └── schema-bridge.ts
+    ├── adapters/
+    │   └── <source-plugin>/<name>.adapter.ts
+    └── plugins/
+        └── <source-plugin>/
+            ├── contracts/*.contract.ts
+            ├── schemas/*.ts
+            └── tools/*.tool.ts
+```
+
+Synthetic tool names are scoped by source plugin + agent: `<source-plugin>_<agent-name>_<logical-tool-name>`.
+
+### Cross-plugin references
+
+Agents, traits, toolspaces, modelspaces, and lifecycle phases can reference parts from other plugins:
+
+```json
+{
+  "deps": {
+    "agent-core": "../agent-core"
+  },
+  "targets": {
+    "agents": ["opencode", "claude-code"],
+    "lifecycles": ["opencode", "claude-code"],
+    "tools": ["opencode", "claude-code"],
+    "toolspaces": ["opencode", "claude-code"],
+    "modelspaces": ["opencode", "claude-code"]
+  }
+}
+```
+
+Reference form stays dep-alias based: `<dep-name>:<name>` for direct refs, with typed helper constructors carrying the same dep alias when you need structured refs.
+
+v1 supports **local filesystem paths only**. Git / HTTP URL deps are reserved for future.
+
+### Plugin manifest and compile targets
+
+Compile-phase targets live in `plugin.json` just like install-phase targets.
+
+Canonical example:
+
+```json
+{
+  "name": "my-agents",
+  "version": "0.1.0",
+  "deps": {
+    "agent-core": "../agent-core"
+  },
+  "targets": {
+    "agents": ["opencode", "claude-code"],
+    "lifecycles": ["opencode", "claude-code"],
+    "toolspaces": ["opencode", "claude-code"],
+    "modelspaces": ["opencode", "claude-code"]
+  }
+}
+```
+
+Notes:
+
+- compile-phase targets are `agents`, `lifecycles`, `tools`, `toolspaces`, and `modelspaces`
+- `lifecycles`, `tools`, `toolspaces`, and `modelspaces` name source-language artifact families, not fake harness directories
+
+### CLI
+
+```bash
+# Compile a plugin's source artifacts to OpenCode outputs
+agentpkg compile ./my-plugin --harness opencode
+
+# Compile a plugin's source artifacts to Claude Code outputs
+agentpkg compile ./my-plugin --harness claude-code
+
+# Compile into a project-local OpenCode root for a business/app repo
+agentpkg compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
+
+# Dry run
+agentpkg compile ./my-plugin --harness claude-code --dry-run
+```
+
+### Lowered outputs
+
+#### OpenCode
+
+- Writes `<opencode-root>/agents/<name>.md` for each compiled agent with composed body
+- Writes `<opencode-root>/skills/<lifecycle-name>/SKILL.md` for each concrete lifecycle instance
+- Patches `agent.<name>` in `<opencode-root>/opencode.json` with compiler-owned model/behavior keys
+- Syncs `<opencode-root>/plugins/agentpkg-generated-<source-plugin>/` for synthetic tool plumbing when any compiled agent binds typed tool surfaces
+
+#### Claude Code
+
+- Writes `<claude-root>/agents/<name>.md` for each compiled agent with Claude-style YAML frontmatter
+- Supports `description`, `model`, `temperature`, `top_p`, and `allowed-tools` from compile output
+- Writes `<claude-root>/skills/<lifecycle-name>/SKILL.md` for each concrete lifecycle instance
+- Does **not** emit generated plugins or synthetic contract tools
+
+Compile is **idempotent**: re-running with unchanged sources produces no writes.
+
+### Compile cache and lockfile
+
+- Successful non-dry-run compiles write a plugin-local cache under `<plugin>/dist/.agentpkg-cache/`
+- Each compiled agent cache entry is keyed by `sha256(source-fingerprint + target + scope)`
+- The source fingerprint includes the agent source plus the referenced identity, personality, trait bindings, and toolspace/modelspace sources that affect composition for that agent
+- Cache hits skip agent resolution/composition and reuse the serialized `ComposedAgent`; cache misses rebuild only that agent
+- Successful non-dry-run compiles also write `<plugin>/agentpkg.lock`
+
+### Adding a new target
+
+1. Add a lowerer module under `src/compile/lowerers/`
+2. Wire it into `src/compile/pipeline.ts`
+3. Update `SUPPORTED_TARGETS` in pipeline.ts
+4. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
+
+### Install + compile unified
+
+`agentpkg install <plugin>` runs compile first (if the plugin has compile-phase targets for that harness) and then install.
+
+`agentpkg install-all <directory>` applies the same compile-first behavior to each discovered child plugin and honors the same `--scope` / `--project` compile options.
+
+For project-local OpenCode compilation via the unified command:
+
+```bash
+agentpkg install ./my-plugin --harness opencode --scope project --project ~/code/my-app
+agentpkg install-all ./plugins --harness opencode,claude-code --scope project --project ~/code/my-app
+```
+
+Reserved for future:
+
+- Git / HTTP URL deps (currently local paths only)
+- richer permission/access ownership after the next work item
+- lifecycle runtime orchestration (heartbeat manager stays runtime state in opencode-config)
 
 ## Plugin Structure
 

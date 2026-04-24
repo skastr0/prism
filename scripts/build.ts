@@ -36,6 +36,9 @@ for (const { platform, arch } of targets) {
       entrypoints: ["src/cli.ts"],
       define: {
         APP_VERSION: `'${version}'`,
+        SCHEMA_BRIDGE_SOURCE: JSON.stringify(
+          readFileSync("src/compile/runtime/schema-bridge.ts", "utf8")
+        ),
       },
       minify: true,
     });

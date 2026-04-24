@@ -5,8 +5,11 @@
  * Canonical structured artifacts are TypeScript-authored.
  */
 
+import * as EffectModule from "effect";
 import { Effect, Schema } from "effect";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { basename, join, relative, resolve as resolvePath } from "node:path";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import matter from "gray-matter";
 import {
   Agent,
@@ -81,23 +84,295 @@ const readText = (
       }),
   });
 
+const globalWithCompileRuntime = globalThis as typeof globalThis & {
+  __agentpkg_effect?: typeof EffectModule;
+};
+globalWithCompileRuntime.__agentpkg_effect = EffectModule;
+
 const importTsModule = <T>(
   sourcePath: string,
   kind: SourceParseKind,
 ): Effect.Effect<T, SourceParseError> =>
   Effect.tryPromise({
     try: async () => {
-      const mod = await import(sourcePath);
-      return mod.default as T;
+      const wrapper = await prepareImportWrapper(sourcePath);
+      try {
+        const mod = await import(wrapper.specifier);
+        return mod.default as T;
+      } finally {
+        await wrapper.cleanup();
+      }
     },
     catch: (cause) =>
       new SourceParseError({
         sourcePath,
         kind,
-        message:
-          cause instanceof Error ? cause.message : "failed to import TS module",
+        message: formatImportError(cause),
       }),
   });
+
+const AUTHORING_RUNTIME_JS = `
+const withNamedRef = (kind, first, second) =>
+  second === undefined ? { kind, name: first } : { kind, plugin: first, name: second };
+
+export const traitRef = (first, second) => withNamedRef("trait-ref", first, second);
+export const agentRef = (first, second) => withNamedRef("agent-ref", first, second);
+export const lifecycleRef = (first, second) => withNamedRef("lifecycle-ref", first, second);
+
+export const toolRef = (first, second, third) =>
+  third === undefined
+    ? { kind: "tool-ref", toolspace: first, name: second }
+    : { kind: "tool-ref", plugin: first, toolspace: second, name: third };
+
+export const toolGroupRef = (first, second, third) =>
+  third === undefined
+    ? { kind: "tool-group-ref", toolspace: first, name: second }
+    : { kind: "tool-group-ref", plugin: first, toolspace: second, name: third };
+
+export const modelProfileRef = (first, second, third) =>
+  third === undefined
+    ? { kind: "model-profile-ref", modelspace: first, name: second }
+    : { kind: "model-profile-ref", plugin: first, modelspace: second, name: third };
+
+export const slotRef = (slot) => ({ kind: "trait-slot-ref", slot });
+export const schemaSlot = (options = {}) => ({ kind: "schema", ...options });
+export const valueSlot = (schema, options = {}) => ({ kind: "value", schema, ...options });
+export const bindTrait = (trait, options = {}) => ({
+  kind: "trait-binding",
+  trait,
+  ...(options.slots ? { slots: options.slots } : {}),
+});
+
+export const defineAgent = (agent) => agent;
+export const defineTrait = (trait) => trait;
+export const defineLifecycle = (lifecycle) => lifecycle;
+export const defineTool = (tool) => tool;
+export const defineToolspace = (toolspace) => toolspace;
+export const defineModelspace = (modelspace) => modelspace;
+`;
+
+const makeEffectRuntimeJs = (): string => {
+  const namedExports = Object.keys(EffectModule)
+    .filter((key) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && key !== "default")
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => `export const ${key} = effect[${JSON.stringify(key)}];`)
+    .join("\n");
+
+  return `
+const effect = globalThis.__agentpkg_effect;
+if (!effect) {
+  throw new Error("agentpkg Effect runtime bridge was not initialized");
+}
+
+${namedExports}
+
+export default effect;
+`;
+};
+
+let importRuntimePaths: Promise<{
+  readonly authoring: string;
+  readonly effect: string;
+}> | undefined;
+
+const getImportRuntimePaths = async (): Promise<{
+  readonly authoring: string;
+  readonly effect: string;
+}> => {
+  importRuntimePaths ??= (async () => {
+    const fs = await import("node:fs/promises");
+    const dir = await fs.mkdtemp(join(tmpdir(), "agentpkg-authoring-"));
+    const authoringPath = join(dir, "agentpkg-authoring-runtime.mjs");
+    const effectPath = join(dir, "effect-runtime.mjs");
+    await fs.writeFile(authoringPath, AUTHORING_RUNTIME_JS, "utf8");
+    await fs.writeFile(effectPath, makeEffectRuntimeJs(), "utf8");
+    return { authoring: authoringPath, effect: effectPath };
+  })();
+
+  return importRuntimePaths;
+};
+
+const toFileSpecifier = (path: string): string => pathToFileURL(path).href;
+
+const rewriteImportSpecifiers = (
+  source: string,
+  authoringRuntimeSpecifier: string,
+  effectRuntimeSpecifier: string,
+): string => {
+  return source
+    .replace(
+      /(\bfrom\s*)(["'])agentpkg\2/g,
+      (_match, prefix) => `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}`,
+    )
+    .replace(
+      /(\bimport\s*\(\s*)(["'])agentpkg\2(\s*\))/g,
+      (_match, prefix, _quote, suffix) =>
+        `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}${suffix}`,
+    )
+    .replace(
+      /(\bfrom\s*)(["'])effect\2/g,
+      (_match, prefix) => `${prefix}${JSON.stringify(effectRuntimeSpecifier)}`,
+    )
+    .replace(
+      /(\bimport\s*\(\s*)(["'])effect\2(\s*\))/g,
+      (_match, prefix, _quote, suffix) =>
+        `${prefix}${JSON.stringify(effectRuntimeSpecifier)}${suffix}`,
+    );
+};
+
+const transformedPluginRoots = new Map<string, Promise<string>>();
+
+const findPluginRoot = async (sourcePath: string): Promise<string> => {
+  const fs = await import("node:fs/promises");
+  let current = resolvePath(sourcePath, "..");
+
+  while (true) {
+    try {
+      await fs.access(join(current, "plugin.json"));
+      return current;
+    } catch {
+      const parent = resolvePath(current, "..");
+      if (parent === current) {
+        return resolvePath(sourcePath, "..");
+      }
+      current = parent;
+    }
+  }
+};
+
+const listTransformableTsFiles = async (
+  root: string,
+  base: string = root,
+): Promise<string[]> => {
+  const fs = await import("node:fs/promises");
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return [];
+  }
+
+  const ignoredDirs = new Set([".agents", ".git", "dist", "node_modules"]);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (ignoredDirs.has(entry.name)) continue;
+      files.push(...await listTransformableTsFiles(entryPath, base));
+      continue;
+    }
+
+    if (entry.isFile() && entry.name.endsWith(".ts")) {
+      files.push(relative(base, entryPath));
+    }
+  }
+
+  return files;
+};
+
+const getTransformedPluginRoot = async (pluginRoot: string): Promise<string> => {
+  const existing = transformedPluginRoots.get(pluginRoot);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    const fs = await import("node:fs/promises");
+    const runtimePaths = await getImportRuntimePaths();
+    const authoringRuntimeSpecifier = toFileSpecifier(runtimePaths.authoring);
+    const effectRuntimeSpecifier = toFileSpecifier(runtimePaths.effect);
+    const outputParent = await fs.mkdtemp(join(tmpdir(), "agentpkg-sources-"));
+    await copyTransformedPluginTree({
+      pluginRoot,
+      outputParent,
+      authoringRuntimeSpecifier,
+      effectRuntimeSpecifier,
+      visited: new Set<string>(),
+    });
+
+    return join(outputParent, basename(pluginRoot));
+  })();
+
+  transformedPluginRoots.set(pluginRoot, pending);
+  return pending;
+};
+
+const copyTransformedPluginTree = async (options: {
+  readonly pluginRoot: string;
+  readonly outputParent: string;
+  readonly authoringRuntimeSpecifier: string;
+  readonly effectRuntimeSpecifier: string;
+  readonly visited: Set<string>;
+}): Promise<void> => {
+  const fs = await import("node:fs/promises");
+  const pluginRoot = resolvePath(options.pluginRoot);
+  if (options.visited.has(pluginRoot)) return;
+  options.visited.add(pluginRoot);
+
+  const outputRoot = join(options.outputParent, basename(pluginRoot));
+  const files = await listTransformableTsFiles(pluginRoot);
+
+  await Promise.all(files.map(async (file) => {
+    const sourcePath = join(pluginRoot, file);
+    const targetPath = join(outputRoot, file);
+    const source = await Bun.file(sourcePath).text();
+    const rewritten = rewriteImportSpecifiers(
+      source,
+      options.authoringRuntimeSpecifier,
+      options.effectRuntimeSpecifier,
+    );
+    await fs.mkdir(resolvePath(targetPath, ".."), { recursive: true });
+    await fs.writeFile(targetPath, rewritten, "utf8");
+  }));
+
+  const manifestPath = join(pluginRoot, "plugin.json");
+  try {
+    const manifest = await Bun.file(manifestPath).json() as {
+      readonly deps?: Record<string, string>;
+    };
+    const depPaths = Object.values(manifest.deps ?? {});
+    await Promise.all(depPaths.map((depPath) =>
+      copyTransformedPluginTree({
+        ...options,
+        pluginRoot: resolvePath(pluginRoot, depPath),
+      })
+    ));
+  } catch {
+    // Source imports can still be standalone TS files in tests; no manifest is required.
+  }
+};
+
+const prepareImportWrapper = async (
+  sourcePath: string,
+): Promise<{ readonly specifier: string; readonly cleanup: () => Promise<void> }> => {
+  const pluginRoot = await findPluginRoot(sourcePath);
+  const transformedRoot = await getTransformedPluginRoot(pluginRoot);
+  const transformedPath = join(transformedRoot, relative(pluginRoot, sourcePath));
+
+  return {
+    specifier: `${toFileSpecifier(transformedPath)}?t=${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    cleanup: async () => {},
+  };
+};
+
+const formatImportError = (cause: unknown): string => {
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+
+  if (typeof cause === "string" && cause.length > 0) {
+    return cause;
+  }
+
+  try {
+    const rendered = JSON.stringify(cause);
+    if (rendered && rendered !== "{}") {
+      return rendered;
+    }
+  } catch {
+    // Fall through to the generic message.
+  }
+
+  return "failed to import TS module";
+};
 
 const IDENTITY_SUFFIX = ".identity.md";
 const PERSONALITY_SUFFIX = ".personality.md";

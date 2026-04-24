@@ -829,14 +829,16 @@ const GENERATED_PACKAGE_JSON = (pluginId: string): string =>
     2,
   ) + "\n";
 
-/**
- * Absolute path to the schema-bridge source we ship into the generated plugin.
- * Emitted verbatim at src/runtime/schema-bridge.ts.
- */
-const SCHEMA_BRIDGE_SOURCE_PATH = new URL(
-  "../runtime/schema-bridge.ts",
-  import.meta.url,
-).pathname;
+declare const SCHEMA_BRIDGE_SOURCE: string | undefined;
+
+const getSchemaBridgeSource = async (): Promise<string> => {
+  if (typeof SCHEMA_BRIDGE_SOURCE === "string") {
+    return SCHEMA_BRIDGE_SOURCE;
+  }
+
+  const sourcePath = new URL("../runtime/schema-bridge.ts", import.meta.url).pathname;
+  return readFile(sourcePath);
+};
 
 // ---------------------------------------------------------------------------
 // Planning
@@ -959,7 +961,7 @@ export const planLowering = async (
     // schema-bridge.ts (shipped verbatim from agentpkg)
     desiredPluginFiles.add("src/runtime/schema-bridge.ts");
     const bridgeTarget = join(root, "src", "runtime", "schema-bridge.ts");
-    const desiredBridge = await readFile(SCHEMA_BRIDGE_SOURCE_PATH);
+    const desiredBridge = await getSchemaBridgeSource();
     let bridgeReason: "new" | "changed" | "unchanged";
     if (await fileExists(bridgeTarget)) {
       const current = await readFile(bridgeTarget);

@@ -27,6 +27,8 @@ export interface MaterializedTraitTool {
   readonly canonicalToolSourcePath: string;
 }
 
+export type MaterializedLifecycleToolGrant = MaterializedTraitTool;
+
 export type TraitBindingValidationResult =
   | { readonly ok: true; readonly slots: Readonly<Record<string, unknown>> }
   | { readonly ok: false; readonly error: ProtocolSurfaceError };
@@ -290,6 +292,29 @@ const renderContractSource = (options: {
   return lines.join("\n");
 };
 
+const renderLifecycleGrantContractSource = (options: {
+  readonly description: string;
+  readonly lifecycleRoot: string;
+  readonly canonicalToolImportPath: string;
+}): string => {
+  const lines: string[] = [];
+  lines.push('import { Schema } from "effect";');
+  lines.push(`import { default as canonical } from "${options.canonicalToolImportPath}";`);
+  lines.push("");
+  lines.push(`export const description = ${JSON.stringify(options.description)};`);
+  lines.push(
+    'export const Input = (canonical.input as Schema.Schema.AnyNoContext).pipe(Schema.omit("lifecycle"));',
+  );
+  lines.push("export const Output = canonical.output as Schema.Schema.AnyNoContext;");
+  lines.push("");
+  lines.push("export const handle = (input: unknown, context: unknown) =>");
+  lines.push(
+    `  canonical.handle({ ...(input as Record<string, unknown>), lifecycle: ${JSON.stringify(options.lifecycleRoot)} }, context as never);`,
+  );
+  lines.push("");
+  return lines.join("\n");
+};
+
 export const validateTraitBindingSlots = (
   trait: Trait,
   binding: NormalizedTraitBinding,
@@ -494,4 +519,75 @@ export const materializeTraitTools = (options: {
   }
 
   return materialized;
+};
+
+export const materializeLifecycleToolGrant = (options: {
+  readonly ownerPluginName: string;
+  readonly lifecycleName: string;
+  readonly lifecycleSourcePath: string;
+  readonly agentName: string;
+  readonly lifecycleRoot: string;
+  readonly logicalName: string;
+  readonly canonicalToolRef: string;
+  readonly description?: string;
+  readonly registry: PluginRegistry;
+}): MaterializedLifecycleToolGrant | ProtocolSurfaceError => {
+  const resolved = resolveCanonicalToolRef(options.canonicalToolRef, options.registry);
+  if (!resolved) {
+    return protocolError(
+      "tool_grants.tools.ref",
+      `references unknown canonical tool '${options.canonicalToolRef}'`,
+    );
+  }
+
+  const canonical = resolved.tool;
+  const description =
+    options.description ??
+    `${canonical.description} This lifecycle-bound surface targets .agents/${options.lifecycleRoot}.`;
+
+  const toolFileStem = basename(canonical.sourcePath, ".tool.ts");
+  const importPath = canonicalToolImportPath(
+    options.ownerPluginName,
+    resolved.pluginName,
+    toolFileStem,
+  );
+
+  const contractSource = renderLifecycleGrantContractSource({
+    description,
+    lifecycleRoot: options.lifecycleRoot,
+    canonicalToolImportPath: importPath,
+  });
+
+  const suffix = createHash("sha256")
+    .update(
+      stableStringify({
+        lifecycle: options.lifecycleName,
+        lifecycleRoot: options.lifecycleRoot,
+        agentName: options.agentName,
+        logicalName: options.logicalName,
+        canonicalToolRef: options.canonicalToolRef,
+        description,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 12);
+  const contractName = `${options.lifecycleName}__${options.agentName}__${options.logicalName}__${suffix}`;
+
+  return {
+    logicalName: options.logicalName,
+    contract: new Contract({
+      name: contractName,
+      sourcePath: `${options.lifecycleSourcePath}#tool_grants:${options.agentName}:${options.logicalName}`,
+      pluginName: options.ownerPluginName,
+      generatedFiles: [
+        {
+          relativePath: `contracts/${contractName}.contract.ts`,
+          content: contractSource,
+        },
+      ],
+    }),
+    canonicalToolPlugin: resolved.pluginName,
+    canonicalToolName: toolFileStem,
+    canonicalToolSourcePath: resolved.tool.sourcePath,
+  };
 };

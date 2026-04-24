@@ -10,7 +10,12 @@ import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import type { HarnessId, HarnessScope } from "../types.js";
 import { loadPlugin } from "./load.js";
-import { instantiateLifecycle, resolveAgent, validateLifecycle } from "./resolve.js";
+import {
+  instantiateLifecycle,
+  resolveAgent,
+  resolveLifecycleToolGrants,
+  validateLifecycle,
+} from "./resolve.js";
 import { composeAgent, type ComposedAgent } from "./compose.js";
 import {
   describeOperation,
@@ -126,6 +131,32 @@ const collectCacheOutputs = (
   return outputs;
 };
 
+const applyLifecycleToolGrants = (
+  agents: ReadonlyArray<ComposedAgent>,
+  grants: ReadonlyMap<string, ReadonlyArray<ComposedAgent["toolBindings"][number]>>,
+): ComposedAgent[] =>
+  agents.map((agent) => {
+    const granted = grants.get(agent.name) ?? [];
+    if (granted.length === 0) return agent;
+
+    const existing = new Set(agent.toolBindings.map((binding) => binding.logicalName));
+    const merged = [...agent.toolBindings];
+    for (const binding of granted) {
+      if (existing.has(binding.logicalName)) {
+        continue;
+      }
+      merged.push(binding);
+      existing.add(binding.logicalName);
+    }
+
+    return {
+      ...agent,
+      toolBindings: merged.sort((left, right) =>
+        left.logicalName.localeCompare(right.logicalName),
+      ),
+    };
+  });
+
 export const compilePluginForTarget = (
   options: CompileOptions
 ): Effect.Effect<CompileResult, CompileError> =>
@@ -224,9 +255,12 @@ export const compilePluginForTarget = (
       lifecycles.push(yield* instantiateLifecycle(lifecycle));
     }
 
+    const lifecycleToolGrants = yield* resolveLifecycleToolGrants(lifecycles, registry);
+    const composedForLowering = applyLifecycleToolGrants(composed, lifecycleToolGrants);
+
     const allOps = yield* Effect.promise(() =>
       lowerer.planLowering({
-        agents: composed,
+        agents: composedForLowering,
         lifecycles,
         target: {
           scope: options.scope,
@@ -276,7 +310,7 @@ export const compilePluginForTarget = (
       outputRoot,
       cacheDir,
       lockfilePath,
-      composed,
+      composed: composedForLowering,
       lifecycles,
       operations: allOps,
       backups,

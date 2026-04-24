@@ -41,7 +41,11 @@ const getFailure = (
   return failure.value as CompileError;
 };
 
-const createCanonicalLanguageFixture = async (options?: { invalidLifecycle?: boolean }) => {
+const createCanonicalLanguageFixture = async (options?: {
+  invalidLifecycle?: boolean;
+  invalidLifecycleGrantAgent?: boolean;
+  invalidLifecycleGrantRoot?: boolean;
+}) => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
   const projectRoot = join(root, "project");
@@ -49,6 +53,8 @@ const createCanonicalLanguageFixture = async (options?: { invalidLifecycle?: boo
     pluginRoot,
     projectRoot,
     invalidLifecycle: options?.invalidLifecycle,
+    invalidLifecycleGrantAgent: options?.invalidLifecycleGrantAgent,
+    invalidLifecycleGrantRoot: options?.invalidLifecycleGrantRoot,
   });
 };
 
@@ -104,6 +110,7 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(securityReviewer?.allowedTools).toEqual(["grep", "read"]);
   expect(builder?.toolBindings.map((binding) => binding.logicalName)).toEqual([
     "commit_work",
+    "create_item",
     "submit_work",
   ]);
   expect(reviewer?.toolBindings.map((binding) => binding.logicalName)).toEqual([
@@ -168,6 +175,54 @@ test("lifecycle validation fails when assigned agents do not satisfy requirement
   }
 });
 
+test("lifecycle tool grants fail when targeting an unassigned agent", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
+    invalidLifecycleGrantAgent: true,
+  });
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("LifecycleValidationError");
+  if (failure._tag === "LifecycleValidationError") {
+    expect(failure.field).toBe("tool_grants[0].agents[0]");
+    expect(failure.message).toContain("not assigned");
+  }
+});
+
+test("lifecycle tool grants fail closed on unsupported lifecycle roots", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
+    invalidLifecycleGrantRoot: true,
+  });
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("SourceParseError");
+  if (failure._tag === "SourceParseError") {
+    expect(failure.kind).toBe("lifecycle");
+    expect(failure.message).toContain("lifecycle_root");
+  }
+});
+
 test("compilePluginForTarget lowers canonical agent sources for opencode and claude-code", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
@@ -207,6 +262,7 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
   expect(opencodeAgent).toContain("read: true");
   expect(opencodeAgent).toContain("grep: true");
   expect(opencodeAgent).toContain("bash: true");
+  expect(opencodeAgent).toContain("canonical_compile_fixture_builder_create_item: true");
   expect(opencodeAgent).toContain("canonical_compile_fixture_builder_submit_work: true");
   expect(opencodeAgent).toContain("canonical_compile_fixture_reviewer_submit_review: false");
   expect(opencodeAgent).toContain(
@@ -218,6 +274,7 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
     "utf8",
   );
   expect(reviewerAgent).toContain("canonical_compile_fixture_builder_submit_work: false");
+  expect(reviewerAgent).toContain("canonical_compile_fixture_builder_create_item: false");
   expect(reviewerAgent).toContain("canonical_compile_fixture_reviewer_submit_review: true");
 
   const generatedRoot = join(
@@ -241,10 +298,43 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
         "plugins",
         "protocol-core",
         "tools",
+        "create_item.tool.ts",
+      ),
+    ),
+  ).toBe(true);
+  expect(
+    await pathExists(
+      join(
+        generatedRoot,
+        "src",
+        "plugins",
+        "protocol-core",
+        "tools",
         "external-submit.tool.ts",
       ),
     ),
   ).toBe(true);
+
+  const grantContractFiles = await readdir(
+    join(generatedRoot, "src", "plugins", "canonical-compile-fixture", "contracts"),
+  );
+  const grantContractName = grantContractFiles.find((file) =>
+    file.includes("delivery-contract__builder__create_item"),
+  );
+  expect(grantContractName).toBeDefined();
+  const grantContract = await readFile(
+    join(
+      generatedRoot,
+      "src",
+      "plugins",
+      "canonical-compile-fixture",
+      "contracts",
+      grantContractName!,
+    ),
+    "utf8",
+  );
+  expect(grantContract).toContain('Schema.omit("lifecycle")');
+  expect(grantContract).toContain('lifecycle: "sdlc"');
 
   const opencodePluginStub = join(
     generatedRoot,

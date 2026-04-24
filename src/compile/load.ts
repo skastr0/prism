@@ -34,8 +34,10 @@ import {
   normalizeTraitRefInput,
   type Access,
   type LifecycleDefinition,
+  type LifecycleToolGrantTool,
   type NormalizedAccess,
   type NormalizedLifecyclePhase,
+  type NormalizedLifecycleToolGrant,
   type NormalizedTraitBinding,
   type NormalizedTraitToolSchemaValue,
   type TraitSlot,
@@ -918,6 +920,103 @@ const normalizeLifecyclePhase = (
   };
 };
 
+const parseCanonicalToolName = (ref: string): string => {
+  const colon = ref.indexOf(":");
+  return colon === -1 ? ref : ref.slice(colon + 1);
+};
+
+const normalizeLifecycleGrantTool = (
+  sourcePath: string,
+  tool: LifecycleToolGrantTool,
+  grantIndex: number,
+  toolIndex: number,
+): NormalizedLifecycleToolGrant["tools"][number] | SourceParseError => {
+  const rawRef = typeof tool === "string" ? tool : tool.ref;
+  const ref = rawRef.trim();
+  if (!ref) {
+    return new SourceParseError({
+      sourcePath,
+      kind: "lifecycle",
+      message: `tool_grants[${grantIndex}].tools[${toolIndex}].ref: must be a non-empty canonical tool reference`,
+    });
+  }
+
+  const rawLogicalName =
+    typeof tool === "string" ? parseCanonicalToolName(ref) : tool.as ?? parseCanonicalToolName(ref);
+  const logicalName = rawLogicalName.trim();
+  if (!logicalName) {
+    return new SourceParseError({
+      sourcePath,
+      kind: "lifecycle",
+      message: `tool_grants[${grantIndex}].tools[${toolIndex}].as: must be non-empty when provided`,
+    });
+  }
+
+  return {
+    ref,
+    logicalName,
+    ...(typeof tool !== "string" && tool.description !== undefined
+      ? { description: tool.description }
+      : {}),
+  };
+};
+
+const normalizeLifecycleToolGrants = (
+  sourcePath: string,
+  grants: LifecycleDefinition["tool_grants"],
+): NormalizedLifecycleToolGrant[] | SourceParseError => {
+  const normalized: NormalizedLifecycleToolGrant[] = [];
+
+  for (const [grantIndex, grant] of (grants ?? []).entries()) {
+    const agents: string[] = [];
+    for (const [agentIndex, agent] of grant.agents.entries()) {
+      const normalizedAgent = normalizeAgentRefInput(
+        `tool_grants[${grantIndex}].agents[${agentIndex}]`,
+        agent,
+      );
+      if (typeof normalizedAgent !== "string") {
+        return new SourceParseError({
+          sourcePath,
+          kind: "lifecycle",
+          message: `${normalizedAgent.field}: ${normalizedAgent.message}`,
+        });
+      }
+      agents.push(normalizedAgent);
+    }
+
+    const tools: Array<NormalizedLifecycleToolGrant["tools"][number]> = [];
+    const logicalNames = new Set<string>();
+    for (const [toolIndex, tool] of grant.tools.entries()) {
+      const normalizedTool = normalizeLifecycleGrantTool(
+        sourcePath,
+        tool,
+        grantIndex,
+        toolIndex,
+      );
+      if (normalizedTool instanceof SourceParseError) {
+        return normalizedTool;
+      }
+      if (logicalNames.has(normalizedTool.logicalName)) {
+        return new SourceParseError({
+          sourcePath,
+          kind: "lifecycle",
+          message: `tool_grants[${grantIndex}].tools[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
+        });
+      }
+      logicalNames.add(normalizedTool.logicalName);
+      tools.push(normalizedTool);
+    }
+
+    normalized.push({
+      lifecycle_root: grant.lifecycle_root,
+      agents,
+      tools,
+    });
+  }
+
+  return normalized;
+};
+
 const parseLifecycleDefinition = (
   sourcePath: string,
   raw: unknown,
@@ -957,6 +1056,11 @@ const parseLifecycleDefinition = (
       phases.push(normalized);
     }
 
+    const toolGrants = normalizeLifecycleToolGrants(sourcePath, parsed.tool_grants);
+    if (toolGrants instanceof SourceParseError) {
+      return yield* Effect.fail(toolGrants);
+    }
+
     return new Lifecycle({
       name: parsed.name,
       sourcePath,
@@ -967,6 +1071,7 @@ const parseLifecycleDefinition = (
         required: parameter.required ?? true,
       })),
       phases,
+      tool_grants: toolGrants,
       taste_checkpoints: parsed.taste_checkpoints ?? [],
       evolution: parsed.evolution,
       body: body.trim(),

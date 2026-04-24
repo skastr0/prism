@@ -21,6 +21,8 @@ export const createCanonicalCompileFixture = async (options: {
   pluginRoot: string;
   projectRoot: string;
   invalidLifecycle?: boolean;
+  invalidLifecycleGrantAgent?: boolean;
+  invalidLifecycleGrantRoot?: boolean;
 }): Promise<{ pluginRoot: string; projectRoot: string }> => {
   const { pluginRoot, projectRoot } = options;
   const coreRoot = join(pluginRoot, "deps", "agent-core");
@@ -226,6 +228,31 @@ export default defineTool({
   }),
   async handle(input, context) {
     return { acknowledged: true };
+  },
+});
+`
+  );
+
+  await writeText(
+    join(protocolRoot, "tools", "create_item.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "create_item",
+  description: "Create a lifecycle work item",
+  input: Schema.Struct({
+    lifecycle: Schema.Literal("sdlc", "rlc", "mlc", "wlc"),
+    id: Schema.String,
+    title: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+    lifecycle: Schema.Literal("sdlc", "rlc", "mlc", "wlc"),
+    id: Schema.String,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true, lifecycle: input.lifecycle, id: input.id };
   },
 });
 `
@@ -466,6 +493,10 @@ export default defineAgent({
   );
 
   const reviewAgents = options.invalidLifecycle ? ["builder"] : ["reviewer"];
+  const grantAgents = options.invalidLifecycleGrantAgent
+    ? ["security-reviewer"]
+    : ["builder"];
+  const grantRoot = options.invalidLifecycleGrantRoot ? "research" : "sdlc";
 
   await writeText(
     join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
@@ -508,6 +539,18 @@ export default defineLifecycle({
       ],
       signal_in: "Build and review are complete",
       termination: "Work has been handed off cleanly",
+    },
+  ],
+  tool_grants: [
+    {
+      lifecycle_root: ${JSON.stringify(grantRoot)},
+      agents: [${grantAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
+      tools: [
+        {
+          ref: "protocol-core:create_item",
+          as: "create_item",
+        },
+      ],
     },
   ],
   body: "Use this lifecycle when you want the compile-time graph to prove that each phase has the right agents assigned.",

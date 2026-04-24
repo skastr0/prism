@@ -28,6 +28,7 @@ import {
   type CompileError,
 } from "./errors.js";
 import {
+  materializeLifecycleToolGrant,
   materializeTraitTools,
   validateTraitBindingSlots,
 } from "./protocol-tools.js";
@@ -803,6 +804,17 @@ const instantiateLifecyclePhase = (
   };
 };
 
+const cloneLifecycleToolGrants = (lifecycle: Lifecycle): Lifecycle["tool_grants"] =>
+  lifecycle.tool_grants.map((grant) => ({
+    lifecycle_root: grant.lifecycle_root,
+    agents: [...grant.agents],
+    tools: grant.tools.map((tool) => ({
+      ref: tool.ref,
+      logicalName: tool.logicalName,
+      ...(tool.description !== undefined ? { description: tool.description } : {}),
+    })),
+  }));
+
 const instantiateLifecycleCheckpoint = (
   lifecycle: Lifecycle,
   checkpoint: LifecycleTasteCheckpoint,
@@ -990,6 +1002,7 @@ export const instantiateLifecycle = (
       produces,
       parameters: [],
       phases,
+      tool_grants: cloneLifecycleToolGrants(lifecycle),
       taste_checkpoints: tasteCheckpoints,
       evolution,
       body,
@@ -1037,6 +1050,124 @@ const resolveLifecycleAssignedAgent = (
     }
 
     return yield* resolveAgentCapabilities(agent, reg);
+  });
+
+const assignedLocalAgentsForLifecycle = (
+  lifecycle: Lifecycle,
+  registry: PluginRegistry,
+): Set<string> => {
+  const assigned = new Set<string>();
+  for (const phase of lifecycle.phases) {
+    for (const agentRef of phase.agents) {
+      const parsed = parseNamedRef(agentRef);
+      if (parsed.pluginPrefix) continue;
+      if (!registry.agents.has(parsed.name)) continue;
+      assigned.add(parsed.name);
+    }
+  }
+  return assigned;
+};
+
+export const resolveLifecycleToolGrants = (
+  lifecycles: ReadonlyArray<Lifecycle>,
+  registry: PluginRegistry,
+): Effect.Effect<ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>>, CompileError> =>
+  Effect.gen(function* () {
+    const byAgent = new Map<string, ResolvedContractBinding[]>();
+
+    for (const lifecycle of lifecycles) {
+      const assignedLocalAgents = assignedLocalAgentsForLifecycle(lifecycle, registry);
+
+      for (const [grantIndex, grant] of lifecycle.tool_grants.entries()) {
+        for (const [agentIndex, agentRef] of grant.agents.entries()) {
+          const parsed = parseNamedRef(agentRef);
+          if (parsed.pluginPrefix) {
+            return yield* Effect.fail(
+              lifecycleError(
+                lifecycle,
+                `tool_grants[${grantIndex}].agents[${agentIndex}]`,
+                `lifecycle tool grants can only target local agents compiled by '${registry.pluginName}', got '${agentRef}'`,
+              ),
+            );
+          }
+
+          const agent = registry.agents.get(parsed.name);
+          if (!agent) {
+            return yield* Effect.fail(
+              lifecycleError(
+                lifecycle,
+                `tool_grants[${grantIndex}].agents[${agentIndex}]`,
+                `references unknown agent '${agentRef}'`,
+              ),
+            );
+          }
+
+          if (!assignedLocalAgents.has(parsed.name)) {
+            return yield* Effect.fail(
+              lifecycleError(
+                lifecycle,
+                `tool_grants[${grantIndex}].agents[${agentIndex}]`,
+                `agent '${agentRef}' is not assigned to any phase in lifecycle '${lifecycle.name}'`,
+              ),
+            );
+          }
+
+          const agentBindings = byAgent.get(agent.name) ?? [];
+          const existingLogicalNames = new Set(agentBindings.map((binding) => binding.logicalName));
+
+          for (const [toolIndex, tool] of grant.tools.entries()) {
+            if (existingLogicalNames.has(tool.logicalName)) {
+              return yield* Effect.fail(
+                lifecycleError(
+                  lifecycle,
+                  `tool_grants[${grantIndex}].tools[${toolIndex}]`,
+                  `duplicate lifecycle-granted tool '${tool.logicalName}' for agent '${agent.name}'`,
+                ),
+              );
+            }
+
+            const materialized = materializeLifecycleToolGrant({
+              ownerPluginName: registry.pluginName,
+              lifecycleName: lifecycle.name,
+              lifecycleSourcePath: lifecycle.sourcePath,
+              agentName: agent.name,
+              lifecycleRoot: grant.lifecycle_root,
+              logicalName: tool.logicalName,
+              canonicalToolRef: tool.ref,
+              description: tool.description,
+              registry,
+            });
+            if (!(materialized instanceof Object) || "message" in materialized) {
+              return yield* Effect.fail(
+                lifecycleError(
+                  lifecycle,
+                  `tool_grants[${grantIndex}].tools[${toolIndex}]`,
+                  materialized.message,
+                ),
+              );
+            }
+
+            agentBindings.push({
+              logicalName: materialized.logicalName,
+              contract: materialized.contract,
+              canonicalToolPlugin: materialized.canonicalToolPlugin,
+              canonicalToolName: materialized.canonicalToolName,
+              canonicalToolSourcePath: materialized.canonicalToolSourcePath,
+            });
+            existingLogicalNames.add(tool.logicalName);
+          }
+
+          byAgent.set(agent.name, agentBindings);
+        }
+      }
+    }
+
+    return new Map(
+      [...byAgent.entries()].map(([agentName, bindings]) => [
+        agentName,
+        bindings.sort((left, right) => left.logicalName.localeCompare(right.logicalName)),
+      ]),
+    );
   });
 
 export const validateLifecycle = (

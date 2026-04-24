@@ -147,6 +147,22 @@ export interface LifecycleTraitRequirementDefinition {
   readonly min?: number;
 }
 
+export type LifecycleRootDefinition = "sdlc" | "rlc" | "mlc" | "wlc";
+
+export type LifecycleToolGrantToolDefinition =
+  | string
+  | {
+      readonly ref: string;
+      readonly as?: string;
+      readonly description?: string;
+    };
+
+export interface LifecycleToolGrantDefinition {
+  readonly lifecycle_root: LifecycleRootDefinition;
+  readonly agents: ReadonlyArray<AgentRefInput>;
+  readonly tools: ReadonlyArray<LifecycleToolGrantToolDefinition>;
+}
+
 export interface LifecyclePhaseDefinition {
   readonly name: string;
   readonly lifecycle?: LifecycleRefInput;
@@ -171,6 +187,7 @@ export interface LifecycleDefinition {
   readonly produces?: string;
   readonly parameters?: ReadonlyArray<LifecycleParameterDefinition>;
   readonly phases: ReadonlyArray<LifecyclePhaseDefinition>;
+  readonly tool_grants?: ReadonlyArray<LifecycleToolGrantDefinition>;
   readonly taste_checkpoints?: ReadonlyArray<LifecycleTasteCheckpointDefinition>;
   readonly evolution?: string;
   readonly body?: string;

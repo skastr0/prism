@@ -598,6 +598,26 @@ export const LifecyclePhaseTraitRequirementSchema = Schema.Struct({
 export type LifecyclePhaseTraitRequirement =
   typeof LifecyclePhaseTraitRequirementSchema.Type;
 
+export const LifecycleRootSchema = Schema.Literal("sdlc", "rlc", "mlc", "wlc");
+export type LifecycleRoot = typeof LifecycleRootSchema.Type;
+
+export const LifecycleToolGrantToolSchema = Schema.Union(
+  Schema.String,
+  Schema.Struct({
+    ref: Schema.String,
+    as: Schema.optional(Schema.String),
+    description: Schema.optional(Schema.String),
+  }),
+);
+export type LifecycleToolGrantTool = typeof LifecycleToolGrantToolSchema.Type;
+
+export const LifecycleToolGrantSchema = Schema.Struct({
+  lifecycle_root: LifecycleRootSchema,
+  agents: Schema.Array(AgentRefInputSchema),
+  tools: Schema.Array(LifecycleToolGrantToolSchema),
+});
+export type LifecycleToolGrant = typeof LifecycleToolGrantSchema.Type;
+
 export const LifecyclePhaseSchema = Schema.Struct({
   name: Schema.String,
   lifecycle: Schema.optional(LifecycleRefInputSchema),
@@ -638,6 +658,22 @@ export const NormalizedLifecyclePhaseSchema = Schema.Struct({
 });
 export type NormalizedLifecyclePhase = typeof NormalizedLifecyclePhaseSchema.Type;
 
+export const NormalizedLifecycleToolGrantToolSchema = Schema.Struct({
+  ref: Schema.String,
+  logicalName: Schema.String,
+  description: Schema.optional(Schema.String),
+});
+export type NormalizedLifecycleToolGrantTool =
+  typeof NormalizedLifecycleToolGrantToolSchema.Type;
+
+export const NormalizedLifecycleToolGrantSchema = Schema.Struct({
+  lifecycle_root: LifecycleRootSchema,
+  agents: Schema.Array(Schema.String),
+  tools: Schema.Array(NormalizedLifecycleToolGrantToolSchema),
+});
+export type NormalizedLifecycleToolGrant =
+  typeof NormalizedLifecycleToolGrantSchema.Type;
+
 export const LifecycleTasteCheckpointSchema = Schema.Struct({
   after: Schema.optional(Schema.String),
   before: Schema.optional(Schema.String),
@@ -651,6 +687,7 @@ export const LifecycleDefinitionSchema = Schema.Struct({
   produces: Schema.optional(Schema.String),
   parameters: Schema.optional(Schema.Array(LifecycleParameterSchema)),
   phases: Schema.Array(LifecyclePhaseSchema),
+  tool_grants: Schema.optional(Schema.Array(LifecycleToolGrantSchema)),
   taste_checkpoints: Schema.optional(Schema.Array(LifecycleTasteCheckpointSchema)),
   evolution: Schema.optional(Schema.String),
   body: Schema.optional(Schema.String),
@@ -664,6 +701,7 @@ export class Lifecycle extends Schema.Class<Lifecycle>("Lifecycle")({
   produces: Schema.optional(Schema.String),
   parameters: Schema.Array(LifecycleParameterSchema),
   phases: Schema.Array(NormalizedLifecyclePhaseSchema),
+  tool_grants: Schema.Array(NormalizedLifecycleToolGrantSchema),
   taste_checkpoints: Schema.Array(LifecycleTasteCheckpointSchema),
   evolution: Schema.optional(Schema.String),
   body: Schema.String,

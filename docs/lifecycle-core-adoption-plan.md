@@ -61,9 +61,9 @@ The canonical work-item tool implementations now exist:
 - `promote_item`
 - `get_board`
 
-The remaining gap is exposure. Generated OpenCode plugins currently mirror these canonical sources, but only trait-attached tools become registered synthetic tools in `server.ts`.
+Generated OpenCode plugins expose these through lifecycle-level `tool_grants` on concrete lifecycle source files.
 
-Do not solve this by making traits lifecycle-owned. Traits remain agent capability declarations; lifecycle files relate agents to each other. The clean next step is a lifecycle-level tool grant or equivalent compiler surface that says:
+Do not solve this by making traits lifecycle-owned. Traits remain agent capability declarations; lifecycle files relate agents to each other. A lifecycle-level tool grant says:
 
 - this lifecycle root is `sdlc`, `rlc`, `mlc`, or `wlc`
 - these assigned agents may call the lifecycle work-item tools for that root
@@ -74,7 +74,7 @@ This preserves the non-circular model:
 
 ```text
 canonical lifecycle-core tool
-+ lifecycle assignment/root binding
++ lifecycle `tool_grants` root binding
 + agent assignment
 + lowerer
 = agent-visible synthetic lifecycle work-item tool
@@ -82,8 +82,7 @@ canonical lifecycle-core tool
 
 ## Migration Sequence
 
-1. Add the compiler/lifecycle authoring surface for lifecycle-owned work-item tool grants, or an equivalent non-trait binding that keeps lifecycle ownership out of traits.
-2. Bind SDLC agents to work-item tools through that surface and prove generated OpenCode tools can create/read/transition an item under `.agents/sdlc/`.
+1. Bind SDLC agents to work-item tools through `tool_grants` and prove generated OpenCode tools can create/read/transition an item under `.agents/sdlc/`.
 3. Migrate `research-core` to depend on `lifecycle-core`, adopt `.agents/rlc/`, and refresh RLC docs/commands/identities that still say `.agents/research/`.
 4. Migrate `marketing-core` to depend on `lifecycle-core`, adopt `.agents/mlc/`, and refresh MLC docs/commands/identities that still say `.agents/marketing/`.
 5. Rename/converge publishing's lifecycle method from PLC to WLC, adopt `.agents/wlc/`, and refresh writing docs/commands/identities that still say `.agents/writing/` as lifecycle state.

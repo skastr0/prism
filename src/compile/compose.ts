@@ -55,6 +55,25 @@ const renderSkillsSection = (resolved: ResolvedAgent): string | undefined => {
   return lines.join("\n");
 };
 
+const renderTraitInstructionsSection = (resolved: ResolvedAgent): string | undefined => {
+  const instructionBlocks = resolved.traits
+    .map((trait) => ({
+      name: trait.trait.name,
+      instructions: trait.trait.instructions,
+    }))
+    .filter((trait) => trait.instructions.length > 0);
+
+  if (instructionBlocks.length === 0) return undefined;
+
+  const lines: string[] = ["## Trait Instructions"];
+  for (const trait of instructionBlocks) {
+    lines.push("", `### ${trait.name}`, "");
+    lines.push(...trait.instructions);
+  }
+
+  return lines.join("\n");
+};
+
 const splitTitleAndBody = (body: string): { title: string; rest: string } => {
   const lines = body.split("\n");
   if (lines.length === 0 || !lines[0]!.startsWith("# ")) {
@@ -80,6 +99,9 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
 
   const skills = renderSkillsSection(resolved);
   if (skills) sections.push(skills);
+
+  const traitInstructions = renderTraitInstructionsSection(resolved);
+  if (traitInstructions) sections.push(traitInstructions);
 
   const body = sections.filter((section) => section.length > 0).join("\n\n");
 

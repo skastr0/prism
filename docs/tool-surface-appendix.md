@@ -68,7 +68,7 @@ Most tools across the system share semantics, but the canonical answer is now:
 
 - one logical tool
 - one authored implementation in `tools/`
-- traits attach/refine it
+- traits attach/refine it and carry ordered usage instructions when needed
 - lowerers generate the target-native wrapper surface
 
 This lets the system share real business logic without duplicating per-agent contracts.

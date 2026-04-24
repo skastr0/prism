@@ -375,9 +375,16 @@ export const TraitRequireSchema = Schema.Struct({
 });
 export type TraitRequire = typeof TraitRequireSchema.Type;
 
+export const TraitInstructionsInputSchema = Schema.Union(
+  Schema.String,
+  Schema.Array(Schema.String),
+);
+export type TraitInstructionsInput = typeof TraitInstructionsInputSchema.Type;
+
 export const TraitSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
+  instructions: Schema.optional(TraitInstructionsInputSchema),
   access: Schema.optional(AccessSchema),
   slots: Schema.optional(Schema.Record({ key: Schema.String, value: TraitSlotSchema })),
   tools: Schema.optional(Schema.Record({ key: Schema.String, value: TraitToolAttachmentSchema })),
@@ -404,6 +411,7 @@ export class Trait extends Schema.Class<Trait>("Trait")({
   name: Schema.String,
   sourcePath: Schema.String,
   description: Schema.optional(Schema.String),
+  instructions: Schema.Array(Schema.String),
   access: NormalizedAccessSchema,
   slots: Schema.Record({ key: Schema.String, value: TraitSlotSchema }),
   tools: Schema.Record({ key: Schema.String, value: NormalizedTraitToolAttachmentSchema }),

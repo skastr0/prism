@@ -254,6 +254,16 @@ const normalizeTraitSlots = (
   return normalized;
 };
 
+const normalizeTraitInstructions = (
+  instructions: string | ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> => {
+  if (instructions === undefined) return [];
+  const values = typeof instructions === "string" ? [instructions] : instructions;
+  return values
+    .map((instruction) => instruction.trim())
+    .filter((instruction) => instruction.length > 0);
+};
+
 const parseIdentity = (sourcePath: string): Effect.Effect<Identity, CompileError> =>
   Effect.gen(function* () {
     const raw = yield* readText(sourcePath, "identity");
@@ -476,6 +486,7 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       name: result.right.name,
       sourcePath,
       description: result.right.description,
+      instructions: normalizeTraitInstructions(result.right.instructions),
       access,
       slots,
       tools,

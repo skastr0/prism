@@ -307,6 +307,7 @@ export default defineTool({
 export default defineTrait({
   name: "submittable",
   description: "Can submit completed work",
+  instructions: "Submit completed work through the typed submission surface before handing off.",
   tools: {
     submit_work: {
       ref: "protocol-core:external-submit",
@@ -326,6 +327,7 @@ export default defineTrait({
 export default defineTrait({
   name: "committable",
   description: "Can create implementation commits",
+  instructions: "Commit owned implementation changes only after the submitted work is complete.",
   tools: {
     commit_work: {
       ref: "commit-work",
@@ -378,6 +380,7 @@ export default defineTrait({
 export default defineTrait({
   name: "self-assessing",
   description: "Runs validation before handing work off",
+  instructions: "Run the relevant validation before final response or handoff.",
   access: {
     toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
   },

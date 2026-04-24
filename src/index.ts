@@ -91,6 +91,7 @@ export interface CanonicalToolDefinition {
 export interface TraitDefinition {
   readonly name: string;
   readonly description?: string;
+  readonly instructions?: string | ReadonlyArray<string>;
   readonly access?: AccessDefinition;
   readonly slots?: Readonly<Record<string, TraitSlotDefinition>>;
   readonly tools?: Readonly<Record<string, TraitToolAttachmentDefinition>>;

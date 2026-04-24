@@ -268,6 +268,18 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
   expect(opencodeAgent).toContain(
     "canonical_compile_fixture_security_reviewer_submit_review: false",
   );
+  const submittableInstructionIndex = opencodeAgent.indexOf(
+    "Submit completed work through the typed submission surface before handing off.",
+  );
+  const committableInstructionIndex = opencodeAgent.indexOf(
+    "Commit owned implementation changes only after the submitted work is complete.",
+  );
+  const selfAssessingInstructionIndex = opencodeAgent.indexOf(
+    "Run the relevant validation before final response or handoff.",
+  );
+  expect(submittableInstructionIndex).toBeGreaterThan(-1);
+  expect(committableInstructionIndex).toBeGreaterThan(submittableInstructionIndex);
+  expect(selfAssessingInstructionIndex).toBeGreaterThan(committableInstructionIndex);
 
   const reviewerAgent = await readFile(
     join(projectRoot, ".opencode", "agents", "reviewer.md"),
@@ -408,6 +420,10 @@ export const tool = Object.assign((definition) => definition, { schema });
   expect(claudeAgent).toContain('- "Read"');
   expect(claudeAgent).toContain('- "Grep"');
   expect(claudeAgent).toContain('- "Bash"');
+  expect(claudeAgent).toContain("## Trait Instructions");
+  expect(claudeAgent).toContain(
+    "Commit owned implementation changes only after the submitted work is complete.",
+  );
   expect(
     await pathExists(
       join(projectRoot, ".claude", "skills", "delivery-contract", "SKILL.md"),

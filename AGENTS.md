@@ -137,7 +137,7 @@ agentpkg/
 
 agentpkg has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, traits, agents, and lifecycles, and agentpkg lowers them into per-harness artifacts.
 
-In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description or refining schemas via slots. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool surfaces; target lowerers do not need to understand trait or tool internals.
+In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description, refining schemas via slots, and adding capability-specific instructions. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool surfaces plus ordered trait instructions; target lowerers do not need to understand trait or tool internals.
 
 ### Canonical source types
 
@@ -150,7 +150,7 @@ Canonical structured source artifacts are TypeScript-authored:
 | `toolspace` | `toolspaces/<name>.toolspace.ts` | Logical tool vocabulary plus per-target concrete tool-name bindings |
 | `modelspace` | `modelspaces/<name>.modelspace.ts` | Logical model profiles plus per-target concrete model config blocks |
 | `tool` | `tools/<name>.tool.ts` | Canonical tool definition: strict input/output contract + portable handle implementation |
-| `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, injected skills, and logical access intent |
+| `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, ordered instructions, injected skills, and logical access intent |
 | `agent` | `agents/<name>.agent.ts` | Canonical compiled agent definition |
 | `lifecycle` | `lifecycles/<name>.lifecycle.ts` | Higher-order recipe composing agents / other lifecycles with compile-time validation |
 
@@ -210,6 +210,7 @@ Each trait may:
 
 - `slots` — declare the binding contract for agent-provided schema/config values
 - `tools` — attach canonical tools by `ref`, optionally overriding description or refining input/output schemas (business-logic override is not allowed)
+- `instructions` — add capability-specific guidance to the generated agent in the same order the agent binds traits
 - `inject.skills` — add default skills when the agent does not already include them
 - `require.tools` / `require.skills` — assert that the final combined synthetic surface contains those logical names
 - `access` — declare logical tool / tool-group intent that resolves through toolspaces for the selected harness target

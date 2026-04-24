@@ -84,6 +84,15 @@ By contrast, harness-session transport and sendoff behavior belong in harness-na
 
 That split is more important than any generic factory abstraction. It keeps portable domain protocols separate from harness-native transport.
 
+The authored model for filesystem-backed protocol families is documented in `docs/protocol-family-authoring.md`. The current decision is conservative: protocol families do **not** need a new first-class compiler primitive yet. They are authored as schemas, shared TypeScript persistence modules, canonical tools, trait attachments or lifecycle tool grants, and tests.
+
+The immediate lifecycle families are intentionally different:
+
+- lifecycle message packets are contract-heavy JSON audit artifacts under `.agents/messages/`
+- lifecycle work items are markdown state artifacts under `.agents/{sdlc,rlc,mlc,wlc}/`
+
+Both families require tool-owned filename policy. Neither should let agents supply final filenames or raw mutation paths.
+
 ---
 
 ## 4. Project-specific specialization
@@ -227,7 +236,7 @@ The cleanest framing: *a tool surface is the compiled expression of a project's 
 ## 11. Open questions
 
 - **Tool description generation.** The natural-language description of a tool that the agent sees can itself be generated from the shape plus a short prose template. How much of the description should be generated vs. hand-written? Generated descriptions stay in sync with the shape but can read mechanically; hand-written ones are richer but drift-prone. Likely answer: shape-derived skeleton with hand-written prose layered on top, both versioned alongside the tool.
-- **Protocol-family authoring model.** The system now clearly wants reusable protocol families for lifecycle packets, work items, and future signals. What is the best canonical authored shape for these families above raw individual tools?
+- **First-class protocol-family primitive.** Filesystem-backed protocol families now have an authored model using schemas, shared writers, canonical tools, and tests. A future compiler primitive may be warranted if multiple families need common discovery, migration, or generated documentation beyond what ordinary modules provide.
 - **Cross-project tool promotion.** When two projects converge on a genuinely identical tool implementation, should it be promoted to a cross-project shared tool? The encoding-frontier principle from the main spec suggests: yes, once the pattern is observed repeatedly, but not before. Premature sharing is premature abstraction.
 - **Versioning and tool-surface migration.** When a factory's underlying template changes, every tool synthesized from it changes. How is this propagated safely across projects mid-work? Probably: rebuilds are per-project and scheduled at evolve-phase boundaries, but the mechanics of coordinating a breaking factory change across projects remains unresolved.
 - **Bespoke-tool audit cadence.** Bespoke tools accumulate. At what interval is the bespoke set reviewed for extractable shared shape? Probably per-project evolve phase at minimum, with a cross-project review at a longer cadence.

@@ -95,6 +95,17 @@ Some outputs are world-facing (code shipped, posts published, creatives placed).
 
 **RLC and ILC are distinct even though both turn signal into insight.** RLC is episodic, convergent, terminal: a question is asked, the lifecycle runs until answered, the artifact informs a bounded decision and mostly retires. ILC is standing, divergent, maintenance-mode: it keeps a current model of a domain's semantic state available for consultation by many downstream lifecycles across long time horizons. The failure modes differ fundamentally — RLC fails at a wrong answer on a bounded decision; ILC fails as a degraded sensory organ silently corrupting many downstream decisions over weeks. Different safeguards, different review cadences. See the ILC appendix §1 for the full distinction.
 
+**Execution lifecycle state uses lifecycle roots.** Filesystem-backed lifecycle work items live under method roots, not broad domain folders:
+
+```text
+.agents/sdlc/
+.agents/rlc/
+.agents/mlc/
+.agents/wlc/
+```
+
+`research`, `marketing`, and `writing` remain broad domain capabilities. `RLC`, `MLC`, and `WLC` are lifecycle methods. The protocol-family authoring model in `docs/protocol-family-authoring.md` owns the filesystem details: id shape, filename generation, folders, and mutation tools.
+
 ---
 
 ## 5. Higher-order lifecycles

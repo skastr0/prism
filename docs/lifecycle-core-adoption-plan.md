@@ -19,9 +19,9 @@ It is not the owner of broad domain knowledge, session transport, or harness-nat
 | Surface | Current State | Adoption Direction |
 |---------|---------------|--------------------|
 | `sdlc-core` | Already depends on `lifecycle-core` for message packet tools and generated OpenCode synthetic submission tools. Work-item helpers now exist in `lifecycle-core`, but are not yet exposed as generated agent tools. | Keep as first consumer. Add lifecycle-owned work-item tool exposure before proof/cleanup. |
-| `research-core` / RLC | Has `rlc.lifecycle.ts` and RLC agents, but no `lifecycle-core` dependency. Docs and command text still point work items at `.agents/research/`. | Adopt `.agents/rlc/` for lifecycle work items. Keep `research` as the broad domain skill/surface. |
-| `marketing-core` / MLC | Has `mlc.lifecycle.ts` and MLC agents, but no `lifecycle-core` dependency. Docs and command text still point work items at `.agents/marketing/`. | Adopt `.agents/mlc/` for lifecycle work items. Keep `marketing` as the broad domain skill/surface. |
-| `publishing-automation` / Writing | Has a `plc.lifecycle.ts` and `plc` skill surface, while the canonical lifecycle primitive names this execution lifecycle `WLC`. Docs and command text point work items at `.agents/writing/`. | Rename/converge the lifecycle method to WLC and adopt `.agents/wlc/`. Keep `writing`, voice, and platform skills as broad domain capabilities. |
+| `rlc` / RLC | Depends on `lifecycle-core`, owns `rlc.lifecycle.ts`, and grants lifecycle work-item tools through the RLC orchestrator. | Keep `.agents/rlc/` as the lifecycle work-item root. Keep `research` as the broad domain skill/surface. |
+| `mlc` / MLC | Depends on `lifecycle-core`, owns `mlc.lifecycle.ts`, and grants lifecycle work-item tools through the MLC orchestrator. | Keep `.agents/mlc/` as the lifecycle work-item root. Keep `marketing` as the broad domain skill/surface. |
+| `wlc` / Writing | Depends on `lifecycle-core`, owns `wlc.lifecycle.ts`, and grants lifecycle work-item tools through the WLC orchestrator. | Keep `.agents/wlc/` as the lifecycle work-item root. Keep `writing`, voice, and platform skills as broad domain capabilities. |
 | `iap-protocol` and `work-tracking` docs | Still describe plugin-owned work items with broad folders such as `.agents/research`, `.agents/marketing`, and `.agents/writing`. | Update after lifecycle-root migration so global guidance distinguishes lifecycle roots from broad domain state. |
 
 ## Ownership Rules
@@ -83,9 +83,9 @@ canonical lifecycle-core tool
 ## Migration Sequence
 
 1. Bind SDLC agents to work-item tools through `tool_grants` and prove generated OpenCode tools can create/read/transition an item under `.agents/sdlc/`.
-3. Migrate `research-core` to depend on `lifecycle-core`, adopt `.agents/rlc/`, and refresh RLC docs/commands/identities that still say `.agents/research/`.
-4. Migrate `marketing-core` to depend on `lifecycle-core`, adopt `.agents/mlc/`, and refresh MLC docs/commands/identities that still say `.agents/marketing/`.
-5. Rename/converge publishing's lifecycle method from PLC to WLC, adopt `.agents/wlc/`, and refresh writing docs/commands/identities that still say `.agents/writing/` as lifecycle state.
+3. Keep `rlc`, `mlc`, and `wlc` as the canonical domain lifecycle plugin identities, with broad domain skills remaining under their owning lifecycle plugins where useful.
+4. Refresh generated OpenCode outputs after lifecycle tool-surface changes so stale generated plugin roots do not coexist with canonical ones.
+5. Audit global guidance for any remaining broad-domain folder references and distinguish them from lifecycle state roots.
 6. Update global `iap-protocol` and `work-tracking` guidance after the lifecycle roots are migrated, preserving any broad-domain state guidance only where it is intentionally not lifecycle state.
 7. Run the generated lifecycle proof item. Only after generated message tools and generated work-item tools are live should old OpenCode-local `iap-sdlc*` residue be deleted.
 

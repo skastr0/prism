@@ -135,3 +135,31 @@ test("install-all compiles discovered child plugins with project scope", async (
   ).toBe(false);
   expect(await pathExists(join(homeRoot, ".claude", "agents", "builder.md"))).toBe(false);
 });
+
+test("install-all skips skill validation when skills are not targeted", async () => {
+  const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
+
+  await mkdir(
+    join(monorepoRoot, "trait-lifecycle-contracts", "skills", "leaf-agent-protocol"),
+    { recursive: true }
+  );
+
+  const result = await runCli(
+    [
+      "install-all",
+      monorepoRoot,
+      "--harness",
+      "opencode",
+      "--scope",
+      "project",
+      "--project",
+      projectRoot,
+      "--no-backup",
+    ],
+    { HOME: homeRoot }
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).not.toContain("Validation failed");
+  expect(result.stdout).toContain("All plugin refreshes completed successfully");
+});

@@ -15,6 +15,7 @@ import {
   validatePluginSkills,
   validatePluginAgents,
   manifestTargetsHarness,
+  manifestTargetsArtifact,
 } from "./manifest.js";
 import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
 import { HARNESS_SCOPES } from "./types.js";
@@ -75,8 +76,18 @@ program
 
       // Validate plugin before installation (unless --no-validate)
       if (options.validate !== false) {
-        const skillResults = await validatePluginSkills(pluginPath);
-        const agentResults = await validatePluginAgents(pluginPath);
+        const shouldValidateSkills = harnesses.some((harnessId) =>
+          manifestTargetsArtifact(manifest, "skills", harnessId)
+        );
+        const shouldValidateAgents = harnesses.some((harnessId) =>
+          manifestTargetsArtifact(manifest, "agents", harnessId)
+        );
+        const skillResults = shouldValidateSkills
+          ? await validatePluginSkills(pluginPath)
+          : [];
+        const agentResults = shouldValidateAgents
+          ? await validatePluginAgents(pluginPath)
+          : [];
         const hasSkillErrors = skillResults.some((r) => !r.valid);
         const hasAgentErrors = agentResults.some((r) => !r.valid);
 
@@ -286,8 +297,18 @@ program
 
         // Validate plugin before installation (unless --no-validate)
         if (options.validate !== false) {
-          const skillResults = await validatePluginSkills(pluginPath);
-          const agentResults = await validatePluginAgents(pluginPath);
+          const shouldValidateSkills = harnesses.some((harnessId) =>
+            manifestTargetsArtifact(manifest, "skills", harnessId)
+          );
+          const shouldValidateAgents = harnesses.some((harnessId) =>
+            manifestTargetsArtifact(manifest, "agents", harnessId)
+          );
+          const skillResults = shouldValidateSkills
+            ? await validatePluginSkills(pluginPath)
+            : [];
+          const agentResults = shouldValidateAgents
+            ? await validatePluginAgents(pluginPath)
+            : [];
           const hasSkillErrors = skillResults.some((r) => !r.valid);
           const hasAgentErrors = agentResults.some((r) => !r.valid);
 

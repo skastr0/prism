@@ -1,6 +1,6 @@
 # Appendix: The Tool Surface
 
-Companion to the Lifecycle Primitive. A specification for how agent outputs are constrained by tool signatures rather than described by prose schemas, and how this reshapes phase composition, encoded taste, and the agent layer itself.
+Companion to the compile pipeline. A specification for how agent outputs are constrained by tool signatures rather than described by prose schemas, and how this reshapes phase composition, encoded taste, and the agent layer itself.
 
 ---
 
@@ -10,7 +10,7 @@ The main spec treats tools as part of an agent's character ("narrow tools encode
 
 The core move: agent outputs are constrained by tool signatures rather than described by prose schemas. A tool's type is the contract. The agent cannot emit an output that violates it. Business logic lives in the tool body, not in prose the agent is hoped to follow. This collapses a class of drift failures that prose-level schema descriptions cannot mechanically prevent.
 
-Positioning: lateral to all execution lifecycles. Every phase compiles against a tool surface; the surface is as much a parameter of the phase as prose identity and signal state are.
+Positioning: lateral to all compiled lifecycles. Every phase compiles against a tool surface; the surface is as much a parameter of the phase as prose identity and capability requirements are.
 
 ---
 
@@ -18,7 +18,7 @@ Positioning: lateral to all execution lifecycles. Every phase compiles against a
 
 Prose-level schemas describe shapes the agent is hoped to produce. Enforcement is interpretation — the agent reads the schema carefully enough to match it. Failure is silent: the agent emits something *almost* right, downstream consumers accept it, the schema and output drift, invariants erode, nothing flags the violation.
 
-Tools collapse this. When the only way for an agent to produce a `ReviewDeliverable` is to call `submit_review(...)`, the schema is the function signature. The inference layer rejects malformed arguments before they become outputs. Business logic — validation, provenance tagging, downstream signal emission, audit logging — runs in normal code on normal infrastructure with normal testing. There is no second copy of the schema to disagree with.
+Tools collapse this. When the only way for an agent to produce a `ReviewDeliverable` is to call `submit_review(...)`, the schema is the function signature. The inference layer rejects malformed arguments before they become outputs. Business logic — validation, provenance tagging, downstream artifact emission, audit logging — runs in normal code on normal infrastructure with normal testing. There is no second copy of the schema to disagree with.
 
 The distinction is not cosmetic. Prose schemas fight drift with reading comprehension; tool schemas fight drift with type systems. The architecture uses the stronger mechanism wherever it applies.
 
@@ -36,12 +36,12 @@ ToolSurface<Phase, Project>:
 
   Structure:
     ToolDefinitions     : canonical authored tools in `tools/`
-    SyntheticWrappers   : per-agent/per-target generated wrappers where needed
+    SyntheticWrappers   : per-agent/per-target generated wrappers where the target supports them
     Descriptions        : natural-language explanations injected alongside
 
   Runtime:
     BuildTime           : compiler resolves canonical tools + refinements and emits artifacts
-    LoadTime            : harness loads the concrete surface for this target
+    LoadTime            : supported harnesses load the concrete surface for this target
     ExecutionTime       : surface is fixed; wrappers delegate to canonical implementations
 
   Termination:
@@ -52,7 +52,7 @@ ToolSurface<Phase, Project>:
 
 **Immutability during phase execution.** A phase's tool surface is fixed at instantiation. Tools do not appear, disappear, or change shape mid-run. This preserves the ephemeral-agent property that a phase's capabilities are a function of its instantiation, not its trajectory.
 
-**Mutation through evolution only.** Tool surface changes occur in the evolve phase of the lifecycle above, where a new build is produced for the next turn. Mid-run tool mutation re-introduces the instability ephemeral fanout was designed to eliminate.
+**Mutation through recompilation only.** Tool surface changes occur at an explicit compile boundary, where a new build is produced for the next run. Mid-run tool mutation re-introduces the instability ephemeral fanout was designed to eliminate.
 
 **Build-time synthesis, dynamic load.** The compiler emits each phase's tool definitions as real artifacts on disk at build time. The runtime loads them dynamically at phase instantiation. This closes the free-audit loop: every phase's exact tool surface is a diffable artifact alongside its prose and transcripts.
 
@@ -73,6 +73,8 @@ Most tools across the system share semantics, but the canonical answer is now:
 
 This lets the system share real business logic without duplicating per-agent contracts.
 
+Executable generated wrappers are a target capability, not an assumption. OpenCode currently has a generated plugin path that exposes canonical tools as real runtime tools. Claude Code currently receives native tool allowances such as `allowed-tools`, but agentpkg does not generate executable canonical-tool adapters for it; compiling canonical tool bindings to that target fails closed until an explicit adapter exists.
+
 Some tool families are domain protocol families rather than ad hoc helpers. For example, lifecycle-domain packet tools now belong in a reusable canonical plugin (`lifecycle-core`) that owns:
 
 - packet/work-item schemas
@@ -86,10 +88,11 @@ That split is more important than any generic factory abstraction. It keeps port
 
 The authored model for filesystem-backed protocol families is documented in `docs/protocol-family-authoring.md`. The current decision is conservative: protocol families do **not** need a new first-class compiler primitive yet. They are authored as schemas, shared TypeScript persistence modules, canonical tools, trait attachments or lifecycle tool grants, and tests.
 
-The immediate lifecycle families are intentionally different:
+Protocol families may differ substantially:
 
-- lifecycle message packets are contract-heavy JSON audit artifacts under `.agents/messages/`
-- lifecycle work items are markdown state artifacts under `.agents/{sdlc,rlc,mlc,wlc}/`
+- message packets may be contract-heavy JSON audit artifacts
+- work items may be markdown state artifacts
+- queues, approval ledgers, or agent-to-agent transports may use entirely different roots and mutation rules
 
 Both families require tool-owned filename policy. Neither should let agents supply final filenames or raw mutation paths.
 
@@ -104,7 +107,7 @@ A project's tool surface encodes that project's definition of its key operations
   ───────────────────────        ─────────────────────          ────────────────────────────
   enforces UX taste              enforces contributor-          enforces voice and pricing
   references design system       friendly review heuristics     taste, funnel position
-  emits ripple.qa signal         emits oss.maintainer signal    emits info.editorial signal
+  writes Ripple QA artifact      updates maintainer queue       records editorial decision
 ```
 
 All three satisfy the phase's contract that the agent produces a review. None are interchangeable unless they truly share one canonical implementation. The project's taste is encoded directly in the canonical tool body and/or in the safe refinements applied above it.
@@ -139,13 +142,13 @@ The structural consequence worth keeping in view: per-project tool implementatio
 
 ## 6. Agent collapse
 
-When identity, prose, tools, signals, and taste artifacts are independent axes that the compiler composes, the named-agent count falls.
+When identity, prose, tools, protocol state, and taste artifacts are independent axes that the compiler composes, the named-agent count falls.
 
 Sprawling agent lists are usually the symptom of missing decomposition. Each "agent" ends up encoding some combination of prose identity, tool assumptions, project context, and phase-specific logic, and because the combination is not separable, every new combination demands a new named agent. The combinatorial explosion is `|phases| × |projects| × |tool configurations|`.
 
 Once the axes decouple:
 
-- **Phases** are a small closed set across the four execution lifecycles plus higher-order lifecycles.
+- **Phases** are authored by plugins and composed through lifecycle definitions.
 - **Projects** supply tool-surface specializations.
 - **Tool surfaces** are composed at compile time from manifests and factories.
 - **Prose identity** is parameterized by phase and project but is mostly stable.
@@ -162,16 +165,16 @@ Most of what currently looks like a separate agent probably fails the first test
 
 ## 7. Integration with the compiler
 
-The main spec's compiler resolves `(interface + lane_impl + runtime_state) → concrete brief`. With the tool surface formalized, compilation expands:
+The compiler resolves source artifacts into concrete harness-native surfaces. With the tool surface formalized, compilation expands:
 
 ```
-(phase_type + project + signal_state + tool_manifest)
+(phase_type + project + protocol_bindings + tool_manifest)
   → context_window + tool_surface
 ```
 
 Both outputs are real artifacts:
 
-- **Context window**: assembled from prose identity, task framing, taste artifacts, and live signals, as before.
+- **Context window**: assembled from prose identity, task framing, taste artifacts, and protocol-owned context.
 - **Tool surface**: synthesized from the manifest, factories, and project specializations, emitted as concrete tool definitions on disk.
 
 The agent runtime receives both as inputs to phase instantiation. Neither mutates during execution. Both are diffable and archivable. The compiler's job is assembly of both; the division between prose-side assembly and tool-side synthesis is internal to the compiler and invisible to everything below it.
@@ -193,7 +196,7 @@ The primitive is portable in principle. The current implementation is coupled to
 | Implementation | Canonical tool code plus any shared TypeScript modules it uses |
 | Compiler       | Canonical tools + refinements → concrete build-time surfaces |
 | Agent runtime  | Loads or registers the pre-built tool surface at phase instantiation |
-| Signal layer   | Receives structured tool-call outputs and any downstream protocol artifacts |
+| Protocol layer | Receives structured tool-call outputs and any downstream protocol artifacts |
 
 ---
 
@@ -205,7 +208,7 @@ The primitive is portable in principle. The current implementation is coupled to
 
 **Tool surface drift from prose.** Prose identity refers to tools by name or assumes capabilities the current surface does not have. This is the drift class the appendix exists to eliminate, but it can re-enter through prose assumptions about tools. Mitigation: prose identity never hard-codes tool field names; references are to tool *names*, and the tool's own description carries shape information into the assembled context.
 
-**Mid-run mutation creeping in.** A well-intentioned pattern that lets an agent "install" a new tool during execution based on observed need. This is the instability case laws 1 and 2 exist to prevent. Mitigation: hard refusal at the runtime layer; tool-need observations are emitted as signals for the parent's next compilation, not satisfied inline.
+**Mid-run mutation creeping in.** A well-intentioned pattern that lets an agent "install" a new tool during execution based on observed need. This is the instability case laws 1 and 2 exist to prevent. Mitigation: hard refusal at the runtime layer; tool-need observations are recorded as protocol artifacts for a later compilation, not satisfied inline.
 
 **Project specialization as dumping ground.** Every project-specific quirk becomes a tool override, even where a shared tool with configuration would be cleaner. Mitigation: prefer manifest-level configuration over implementation-level override; reach for an override only when the invariant is genuinely project-local.
 
@@ -214,7 +217,7 @@ The primitive is portable in principle. The current implementation is coupled to
 ## 10. Relation to the broader architecture
 
 ```
-Signal layer          → live signals, linear, consumed
+Protocol state layer  → plugin-owned boards, queues, transports, or ledgers
 Taste artifact layer  → persistent, referenced
   ├── Human-authored  (batch sessions)
   ├── Semi-derived    (ILC output, batch-approved)
@@ -222,12 +225,12 @@ Taste artifact layer  → persistent, referenced
         ├── Declarative rules        (ambient, data-like)
         └── Tool implementations     (active, code-like)    ← formalized here
 Tool surface layer    → compiled from canonical tools + trait refinements + lowerers
-Execution lifecycles  → SDLC, RLC, WLC, MLC
-Higher-order          → ProductIdeation, Business, ...
+Lifecycle layer       → plugin-authored phase composition
+Higher-order          → product, business, release, or other local compositions
 Human                 → taste horizon
 ```
 
-The tool surface sits between the taste artifact layer and the execution lifecycles. It is composed from canonical tool definitions, project/domain refinements, and lowering strategy, then feeds directly into the phase's concrete capabilities. It is not itself a lifecycle, does not produce world-facing artifacts directly, and does not terminate.
+The tool surface sits between taste artifacts and lifecycle composition. It is composed from canonical tool definitions, project/domain refinements, and lowering strategy, then feeds directly into the phase's concrete capabilities. It is not itself a lifecycle, does not produce world-facing artifacts directly, and does not terminate.
 
 The cleanest framing: *a tool surface is the compiled expression of a project's encoded taste in the form of an agent-callable interface.*
 
@@ -251,5 +254,5 @@ The cleanest framing: *a tool surface is the compiled expression of a project's 
 - Factory for the 80% that is semantically shared; bespoke for the 20% that is not.
 - Project specialization is load-bearing. Same tool name across projects, different invariants.
 - Encoded taste has two surfaces: declarative rules and tool implementations. Both autonomous.
-- Agent count collapses once identity, prose, tools, signals, and taste artifacts decouple.
+- Agent count collapses once identity, prose, tools, protocol state, and taste artifacts decouple.
 - Compiler output expands to `(context_window, tool_surface)`. Both are real artifacts.

@@ -215,11 +215,11 @@ const renderClaudeSkillMarkdown = (
     for (const detail of reference.detailLines) {
       lines.push(detail);
     }
-    if (phase.signal_in) lines.push(`- **Signal in**: ${phase.signal_in}`);
-    if (phase.termination) {
-      lines.push(`- **Termination**: ${phase.termination}`);
+    if (phase.notes) {
+      for (const [name, value] of Object.entries(phase.notes)) {
+        lines.push(`- **${name}**: ${value}`);
+      }
     }
-    if (phase.skip_if) lines.push(`- **Skip if**: ${phase.skip_if}`);
     lines.push("");
     index++;
   }

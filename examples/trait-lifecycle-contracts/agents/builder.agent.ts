@@ -1,4 +1,4 @@
-import { bindTrait, defineAgent, modelProfileRef, toolRef } from "../../../src/index.ts";
+import { bindTrait, defineAgent, modelProfileRef, toolRef } from "agentpkg";
 
 export default defineAgent({
   name: "builder",

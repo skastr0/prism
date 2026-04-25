@@ -1,4 +1,4 @@
-import { defineTrait } from "../../../src/index.ts";
+import { defineTrait } from "agentpkg";
 
 export default defineTrait({
   name: "committable",

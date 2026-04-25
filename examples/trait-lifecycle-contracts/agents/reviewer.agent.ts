@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { bindTrait, defineAgent, modelProfileRef } from "../../../src/index.ts";
+import { bindTrait, defineAgent, modelProfileRef } from "agentpkg";
 
 export default defineAgent({
   name: "reviewer",

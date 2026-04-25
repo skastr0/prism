@@ -12,7 +12,7 @@ Do not migrate these agents by copying their markdown into `ai-plugins`. Redesig
 ## Sequencing
 
 1. Finish plugin destination work first.
-   - Use `docs/opencode-local-plugin-evacuation-plan.md` as the dependency map.
+   - Use `docs/opinionated-framework/opencode-local-plugin-evacuation-plan.md` as the dependency map.
    - Do not redesign an agent around a tool family whose destination is still unknown.
 
 2. Move pure worker/personality agents first.

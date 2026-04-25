@@ -1,4 +1,4 @@
-import { defineToolspace, toolRef } from "../../../../../src/index.ts";
+import { defineToolspace, toolRef } from "agentpkg";
 
 export default defineToolspace({
   name: "workspace-tools",

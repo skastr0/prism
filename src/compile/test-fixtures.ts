@@ -22,9 +22,11 @@ export const createCanonicalCompileFixture = async (options: {
   projectRoot: string;
   invalidLifecycle?: boolean;
   invalidLifecycleGrantAgent?: boolean;
-  invalidLifecycleGrantRoot?: boolean;
+  invalidLifecycleGrantBinding?: boolean;
+  withCanonicalToolBindings?: boolean;
 }): Promise<{ pluginRoot: string; projectRoot: string }> => {
   const { pluginRoot, projectRoot } = options;
+  const withCanonicalToolBindings = options.withCanonicalToolBindings ?? true;
   const coreRoot = join(pluginRoot, "deps", "agent-core");
   const protocolRoot = join(pluginRoot, "deps", "protocol-core");
   await mkdir(projectRoot, { recursive: true });
@@ -240,19 +242,19 @@ import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
 
 export default defineTool({
   name: "create_item",
-  description: "Create a lifecycle work item",
+  description: "Create a protocol-owned work item",
   input: Schema.Struct({
-    lifecycle: Schema.Literal("sdlc", "rlc", "mlc", "wlc"),
+    board: Schema.Literal("project-alpha", "project-beta"),
     id: Schema.String,
     title: Schema.String,
   }),
   output: Schema.Struct({
     acknowledged: Schema.Boolean,
-    lifecycle: Schema.Literal("sdlc", "rlc", "mlc", "wlc"),
+    board: Schema.Literal("project-alpha", "project-beta"),
     id: Schema.String,
   }),
   async handle(input, context) {
-    return { acknowledged: true, lifecycle: input.lifecycle, id: input.id };
+    return { acknowledged: true, board: input.board, id: input.id };
   },
 });
 `
@@ -307,7 +309,7 @@ export default defineTool({
 export default defineTrait({
   name: "submittable",
   description: "Can submit completed work",
-  instructions: "Submit completed work through the typed submission surface before handing off.",
+  instructions: "Submit completed work through the typed submission surface before handing off."${withCanonicalToolBindings ? `,
   tools: {
     submit_work: {
       ref: "protocol-core:external-submit",
@@ -315,7 +317,7 @@ export default defineTrait({
   },
   require: {
     tools: ["submit_work"],
-  },
+  }` : ""},
 });
 `
   );
@@ -327,7 +329,7 @@ export default defineTrait({
 export default defineTrait({
   name: "committable",
   description: "Can create implementation commits",
-  instructions: "Commit owned implementation changes only after the submitted work is complete.",
+  instructions: "Commit owned implementation changes only after the submitted work is complete."${withCanonicalToolBindings ? `,
   tools: {
     commit_work: {
       ref: "commit-work",
@@ -335,7 +337,7 @@ export default defineTrait({
   },
   require: {
     tools: ["commit_work"],
-  },
+  }` : ""},
 });
 `
   );
@@ -358,7 +360,7 @@ export default defineTrait({
     review_lane: valueSlot(Schema.String, {
       description: "Lane for routed review findings",
     }),
-  },
+  }${withCanonicalToolBindings ? `,
   tools: {
     submit_review: {
       ref: "submit-review",
@@ -368,7 +370,7 @@ export default defineTrait({
   },
   require: {
     tools: ["submit_review"],
-  },
+  }` : ""},
 });
 `
   );
@@ -499,7 +501,25 @@ export default defineAgent({
   const grantAgents = options.invalidLifecycleGrantAgent
     ? ["security-reviewer"]
     : ["builder"];
-  const grantRoot = options.invalidLifecycleGrantRoot ? "research" : "sdlc";
+  const grantBind = options.invalidLifecycleGrantBinding
+    ? "{ board: undefined }"
+    : JSON.stringify({ board: "project-alpha" });
+
+  const lifecycleToolGrants = withCanonicalToolBindings
+    ? `,
+  tool_grants: [
+    {
+      agents: [${grantAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
+      tools: [
+        {
+          ref: "protocol-core:create_item",
+          as: "create_item",
+          bind: ${grantBind},
+        },
+      ],
+    },
+  ]`
+    : "";
 
   await writeText(
     join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
@@ -517,8 +537,10 @@ export default defineLifecycle({
           all: [traitRef("committable"), traitRef("self-assessing")],
         },
       ],
-      signal_in: "Work item is ready to build",
-      termination: "Implementation is ready for review",
+      notes: {
+        "Input": "Work item is ready to build",
+        "Done": "Implementation is ready for review",
+      },
     },
     {
       name: "Review change",
@@ -528,8 +550,10 @@ export default defineLifecycle({
           all: [traitRef("reviewable"), traitRef("self-assessing")],
         },
       ],
-      signal_in: "Implementation is ready for review",
-      termination: "Review findings are recorded",
+      notes: {
+        "Input": "Implementation is ready for review",
+        "Done": "Review findings are recorded",
+      },
     },
     {
       name: "Hand off work",
@@ -540,22 +564,12 @@ export default defineLifecycle({
           min: 2,
         },
       ],
-      signal_in: "Build and review are complete",
-      termination: "Work has been handed off cleanly",
+      notes: {
+        "Input": "Build and review are complete",
+        "Done": "Work has been handed off cleanly",
+      },
     },
-  ],
-  tool_grants: [
-    {
-      lifecycle_root: ${JSON.stringify(grantRoot)},
-      agents: [${grantAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
-      tools: [
-        {
-          ref: "protocol-core:create_item",
-          as: "create_item",
-        },
-      ],
-    },
-  ],
+  ]${lifecycleToolGrants},
   body: "Use this lifecycle when you want the compile-time graph to prove that each phase has the right agents assigned.",
 });
 `

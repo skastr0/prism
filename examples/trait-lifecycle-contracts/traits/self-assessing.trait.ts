@@ -1,4 +1,4 @@
-import { defineTrait, toolGroupRef } from "../../../src/index.ts";
+import { defineTrait, toolGroupRef } from "agentpkg";
 
 export default defineTrait({
   name: "self-assessing",

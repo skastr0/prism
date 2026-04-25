@@ -1,4 +1,4 @@
-import { defineModelspace } from "../../../../../src/index.ts";
+import { defineModelspace } from "agentpkg";
 
 export default defineModelspace({
   name: "default-models",

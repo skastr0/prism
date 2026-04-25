@@ -12,7 +12,7 @@
  *   2. Idempotent patches to <opencode-root>/opencode.json:
  *        - agent.<name> block (compiler-owned keys only; hand-authored keys preserved)
  *        - plugin array entry for the source-plugin-owned generated plugin
- *          (for example `agentpkg-generated-sdlc-core`) when any agent has
+ *          (for example `agentpkg-generated-review-core`) when any agent has
  *          tool bindings
  *
  *   3. Per-lifecycle skills at <opencode-root>/skills/<name>/SKILL.md.
@@ -377,9 +377,11 @@ const renderLifecycleSkill = (
     for (const detail of reference.detailLines) {
       lines.push(detail);
     }
-    if (phase.signal_in) lines.push(`- **Signal in**: ${phase.signal_in}`);
-    if (phase.termination) lines.push(`- **Termination**: ${phase.termination}`);
-    if (phase.skip_if) lines.push(`- **Skip if**: ${phase.skip_if}`);
+    if (phase.notes) {
+      for (const [name, value] of Object.entries(phase.notes)) {
+        lines.push(`- **${name}**: ${value}`);
+      }
+    }
     lines.push("");
     i++;
   }

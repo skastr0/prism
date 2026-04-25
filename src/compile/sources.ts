@@ -606,21 +606,18 @@ export const LifecyclePhaseTraitRequirementSchema = Schema.Struct({
 export type LifecyclePhaseTraitRequirement =
   typeof LifecyclePhaseTraitRequirementSchema.Type;
 
-export const LifecycleRootSchema = Schema.Literal("sdlc", "rlc", "mlc", "wlc");
-export type LifecycleRoot = typeof LifecycleRootSchema.Type;
-
 export const LifecycleToolGrantToolSchema = Schema.Union(
   Schema.String,
   Schema.Struct({
     ref: Schema.String,
     as: Schema.optional(Schema.String),
     description: Schema.optional(Schema.String),
+    bind: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
   }),
 );
 export type LifecycleToolGrantTool = typeof LifecycleToolGrantToolSchema.Type;
 
 export const LifecycleToolGrantSchema = Schema.Struct({
-  lifecycle_root: LifecycleRootSchema,
   agents: Schema.Array(AgentRefInputSchema),
   tools: Schema.Array(LifecycleToolGrantToolSchema),
 });
@@ -633,9 +630,7 @@ export const LifecyclePhaseSchema = Schema.Struct({
   agents: Schema.optional(Schema.Array(AgentRefInputSchema)),
   agent: Schema.optional(AgentRefInputSchema),
   requires: Schema.optional(Schema.Array(LifecyclePhaseTraitRequirementSchema)),
-  skip_if: Schema.optional(Schema.String),
-  signal_in: Schema.optional(Schema.String),
-  termination: Schema.optional(Schema.String),
+  notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
 });
 export type LifecyclePhase = typeof LifecyclePhaseSchema.Type;
 
@@ -660,9 +655,7 @@ export const NormalizedLifecyclePhaseSchema = Schema.Struct({
   agent: Schema.optional(Schema.String),
   agents: Schema.Array(Schema.String),
   requires: Schema.Array(NormalizedLifecyclePhaseTraitRequirementSchema),
-  skip_if: Schema.optional(Schema.String),
-  signal_in: Schema.optional(Schema.String),
-  termination: Schema.optional(Schema.String),
+  notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
 });
 export type NormalizedLifecyclePhase = typeof NormalizedLifecyclePhaseSchema.Type;
 
@@ -670,12 +663,12 @@ export const NormalizedLifecycleToolGrantToolSchema = Schema.Struct({
   ref: Schema.String,
   logicalName: Schema.String,
   description: Schema.optional(Schema.String),
+  bind: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
 });
 export type NormalizedLifecycleToolGrantTool =
   typeof NormalizedLifecycleToolGrantToolSchema.Type;
 
 export const NormalizedLifecycleToolGrantSchema = Schema.Struct({
-  lifecycle_root: LifecycleRootSchema,
   agents: Schema.Array(Schema.String),
   tools: Schema.Array(NormalizedLifecycleToolGrantToolSchema),
 });

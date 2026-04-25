@@ -5,7 +5,7 @@ import {
   slotRef,
   toolGroupRef,
   valueSlot,
-} from "../../../src/index.ts";
+} from "agentpkg";
 
 export default defineTrait({
   name: "reviewable",

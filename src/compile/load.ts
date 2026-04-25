@@ -1200,9 +1200,7 @@ const normalizeLifecyclePhase = (
     ...(normalizedSingularAgent ? { agent: normalizedSingularAgent } : {}),
     agents,
     requires,
-    skip_if: phase.skip_if,
-    signal_in: phase.signal_in,
-    termination: phase.termination,
+    notes: phase.notes,
   };
 };
 
@@ -1244,6 +1242,7 @@ const normalizeLifecycleGrantTool = (
     ...(typeof tool !== "string" && tool.description !== undefined
       ? { description: tool.description }
       : {}),
+    bind: typeof tool !== "string" ? (tool.bind ?? {}) : {},
   };
 };
 
@@ -1294,7 +1293,6 @@ const normalizeLifecycleToolGrants = (
     }
 
     normalized.push({
-      lifecycle_root: grant.lifecycle_root,
       agents,
       tools,
     });

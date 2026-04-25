@@ -59,6 +59,17 @@ const stableValue = (value: unknown): unknown => {
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
 
+const containsUndefined = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  if (Array.isArray(value)) return value.some((item) => containsUndefined(item));
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((item) =>
+      containsUndefined(item),
+    );
+  }
+  return false;
+};
+
 const propertyPath = (field: string, name: PropertyKey): string =>
   field.length > 0 ? `${field}.${String(name)}` : String(name);
 
@@ -154,6 +165,9 @@ const schemaToSource = (
 const valueLiteralSource = (value: unknown, field: string): string | ProtocolSurfaceError => {
   if (value === undefined) {
     return protocolError(field, "must not be undefined");
+  }
+  if (containsUndefined(value)) {
+    return protocolError(field, "must not contain undefined values");
   }
 
   const serialized = stableStringify(value);
@@ -292,24 +306,34 @@ const renderContractSource = (options: {
   return lines.join("\n");
 };
 
-const renderLifecycleGrantContractSource = (options: {
+const renderBoundToolGrantContractSource = (options: {
   readonly description: string;
-  readonly lifecycleRoot: string;
+  readonly bind: Readonly<Record<string, unknown>>;
   readonly canonicalToolImportPath: string;
-}): string => {
+}): string | ProtocolSurfaceError => {
+  const bindKeys = Object.keys(options.bind).sort();
+  const bindSource = valueLiteralSource(options.bind, "tool_grants.tools.bind");
+  if (typeof bindSource !== "string") return bindSource;
+
   const lines: string[] = [];
   lines.push('import { Schema } from "effect";');
   lines.push(`import { default as canonical } from "${options.canonicalToolImportPath}";`);
   lines.push("");
   lines.push(`export const description = ${JSON.stringify(options.description)};`);
-  lines.push(
-    'export const Input = (canonical.input as Schema.Schema.AnyNoContext).pipe(Schema.omit("lifecycle"));',
-  );
+  if (bindKeys.length > 0) {
+    lines.push(
+      `export const Input = (canonical.input as Schema.Schema.AnyNoContext).pipe(Schema.omit(${bindKeys.map((key) => JSON.stringify(key)).join(", ")}));`,
+    );
+  } else {
+    lines.push("export const Input = canonical.input as Schema.Schema.AnyNoContext;");
+  }
   lines.push("export const Output = canonical.output as Schema.Schema.AnyNoContext;");
+  lines.push("");
+  lines.push(`const boundInput = ${bindSource};`);
   lines.push("");
   lines.push("export const handle = (input: unknown, context: unknown) =>");
   lines.push(
-    `  canonical.handle({ ...(input as Record<string, unknown>), lifecycle: ${JSON.stringify(options.lifecycleRoot)} }, context as never);`,
+    "  canonical.handle({ ...(input as Record<string, unknown>), ...boundInput }, context as never);",
   );
   lines.push("");
   return lines.join("\n");
@@ -526,10 +550,10 @@ export const materializeLifecycleToolGrant = (options: {
   readonly lifecycleName: string;
   readonly lifecycleSourcePath: string;
   readonly agentName: string;
-  readonly lifecycleRoot: string;
   readonly logicalName: string;
   readonly canonicalToolRef: string;
   readonly description?: string;
+  readonly bind: Readonly<Record<string, unknown>>;
   readonly registry: PluginRegistry;
 }): MaterializedLifecycleToolGrant | ProtocolSurfaceError => {
   const resolved = resolveCanonicalToolRef(options.canonicalToolRef, options.registry);
@@ -543,7 +567,7 @@ export const materializeLifecycleToolGrant = (options: {
   const canonical = resolved.tool;
   const description =
     options.description ??
-    `${canonical.description} This lifecycle-bound surface targets .agents/${options.lifecycleRoot}.`;
+    canonical.description;
 
   const toolFileStem = basename(canonical.sourcePath, ".tool.ts");
   const importPath = canonicalToolImportPath(
@@ -552,21 +576,22 @@ export const materializeLifecycleToolGrant = (options: {
     toolFileStem,
   );
 
-  const contractSource = renderLifecycleGrantContractSource({
+  const contractSource = renderBoundToolGrantContractSource({
     description,
-    lifecycleRoot: options.lifecycleRoot,
+    bind: options.bind,
     canonicalToolImportPath: importPath,
   });
+  if (typeof contractSource !== "string") return contractSource;
 
   const suffix = createHash("sha256")
     .update(
       stableStringify({
         lifecycle: options.lifecycleName,
-        lifecycleRoot: options.lifecycleRoot,
         agentName: options.agentName,
         logicalName: options.logicalName,
         canonicalToolRef: options.canonicalToolRef,
         description,
+        bind: options.bind,
       }),
     )
     .digest("hex")

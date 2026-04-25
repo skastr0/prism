@@ -1,4 +1,4 @@
-import { defineLifecycle } from "../../../src/index.ts";
+import { defineLifecycle } from "agentpkg";
 
 export default defineLifecycle({
   name: "experiment",
@@ -17,18 +17,24 @@ export default defineLifecycle({
   phases: [
     {
       name: "Frame the hypothesis for ${App}",
-      signal_in: "Hypothesis ${H}",
-      termination: "A falsifiable experiment brief exists for ${App}",
+      notes: {
+        Input: "Hypothesis ${H}",
+        Done: "A falsifiable experiment brief exists for ${App}",
+      },
     },
     {
       name: "Run the experiment in ${App}",
-      signal_in: "Approved brief for ${H}",
-      termination: "Concrete evidence exists for ${H} in ${App}",
+      notes: {
+        Input: "Approved brief for ${H}",
+        Done: "Concrete evidence exists for ${H} in ${App}",
+      },
     },
     {
       name: "Evaluate the result for ${App}",
-      signal_in: "Evidence packet for ${H}",
-      termination: "A decision is recorded for ${App}",
+      notes: {
+        Input: "Evidence packet for ${H}",
+        Done: "A decision is recorded for ${App}",
+      },
     },
   ],
   taste_checkpoints: [

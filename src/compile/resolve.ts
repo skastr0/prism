@@ -635,9 +635,6 @@ const visitLifecycleStrings = (
         phase.lifecycle_binding?.lifecycle,
       ],
       [`phases[${index}].agent`, phase.agent],
-      [`phases[${index}].skip_if`, phase.skip_if],
-      [`phases[${index}].signal_in`, phase.signal_in],
-      [`phases[${index}].termination`, phase.termination],
     ];
 
     for (const [field, value] of phaseFields) {
@@ -654,6 +651,13 @@ const visitLifecycleStrings = (
           `phases[${index}].lifecycle_binding.bindings.${bindingName}`,
           bindingValue,
         );
+        if (error) return error;
+      }
+    }
+
+    if (phase.notes) {
+      for (const [noteName, noteValue] of Object.entries(phase.notes)) {
+        const error = visit(`phases[${index}].notes.${noteName}`, noteValue);
         if (error) return error;
       }
     }
@@ -779,14 +783,16 @@ const instantiateLifecyclePhase = (
     };
   }
 
-  const nextSkipIf = instantiate(`phases[${index}].skip_if`, phase.skip_if);
-  if (nextSkipIf instanceof LifecycleValidationError) return nextSkipIf;
-
-  const nextSignalIn = instantiate(`phases[${index}].signal_in`, phase.signal_in);
-  if (nextSignalIn instanceof LifecycleValidationError) return nextSignalIn;
-
-  const nextTermination = instantiate(`phases[${index}].termination`, phase.termination);
-  if (nextTermination instanceof LifecycleValidationError) return nextTermination;
+  const nextNotes: Record<string, string> = {};
+  if (phase.notes) {
+    for (const [noteName, noteValue] of Object.entries(phase.notes)) {
+      const nextValue = instantiate(`phases[${index}].notes.${noteName}`, noteValue);
+      if (nextValue instanceof LifecycleValidationError) return nextValue;
+      if (nextValue !== undefined) {
+        nextNotes[noteName] = nextValue;
+      }
+    }
+  }
 
   return {
     name: nextName!,
@@ -798,20 +804,18 @@ const instantiateLifecyclePhase = (
       all: [...requirement.all],
       ...(requirement.min !== undefined ? { min: requirement.min } : {}),
     })),
-    ...(nextSkipIf ? { skip_if: nextSkipIf } : {}),
-    ...(nextSignalIn ? { signal_in: nextSignalIn } : {}),
-    ...(nextTermination ? { termination: nextTermination } : {}),
+    ...(Object.keys(nextNotes).length > 0 ? { notes: nextNotes } : {}),
   };
 };
 
 const cloneLifecycleToolGrants = (lifecycle: Lifecycle): Lifecycle["tool_grants"] =>
   lifecycle.tool_grants.map((grant) => ({
-    lifecycle_root: grant.lifecycle_root,
     agents: [...grant.agents],
     tools: grant.tools.map((tool) => ({
       ref: tool.ref,
       logicalName: tool.logicalName,
       ...(tool.description !== undefined ? { description: tool.description } : {}),
+      bind: { ...tool.bind },
     })),
   }));
 
@@ -1131,10 +1135,10 @@ export const resolveLifecycleToolGrants = (
               lifecycleName: lifecycle.name,
               lifecycleSourcePath: lifecycle.sourcePath,
               agentName: agent.name,
-              lifecycleRoot: grant.lifecycle_root,
               logicalName: tool.logicalName,
               canonicalToolRef: tool.ref,
               description: tool.description,
+              bind: tool.bind,
               registry,
             });
             if (!(materialized instanceof Object) || "message" in materialized) {

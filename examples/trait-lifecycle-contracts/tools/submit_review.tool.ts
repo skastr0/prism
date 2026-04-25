@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { defineTool } from "../../../src/index.ts";
+import { defineTool } from "agentpkg";
 
 export default defineTool({
   name: "submit_review",

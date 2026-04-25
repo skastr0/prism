@@ -44,7 +44,8 @@ const getFailure = (
 const createCanonicalLanguageFixture = async (options?: {
   invalidLifecycle?: boolean;
   invalidLifecycleGrantAgent?: boolean;
-  invalidLifecycleGrantRoot?: boolean;
+  invalidLifecycleGrantBinding?: boolean;
+  withCanonicalToolBindings?: boolean;
 }) => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
@@ -54,7 +55,8 @@ const createCanonicalLanguageFixture = async (options?: {
     projectRoot,
     invalidLifecycle: options?.invalidLifecycle,
     invalidLifecycleGrantAgent: options?.invalidLifecycleGrantAgent,
-    invalidLifecycleGrantRoot: options?.invalidLifecycleGrantRoot,
+    invalidLifecycleGrantBinding: options?.invalidLifecycleGrantBinding,
+    withCanonicalToolBindings: options?.withCanonicalToolBindings,
   });
 };
 
@@ -148,6 +150,11 @@ test("lifecycle phase validation succeeds when assigned agents satisfy requireme
   expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
   expect(skill).not.toContain("reviewable");
   expect(skill).not.toContain("self-assessing");
+  expect(
+    await pathExists(
+      join(projectRoot, ".opencode", "lifecycles", "delivery-contract.md"),
+    ),
+  ).toBe(false);
 });
 
 test("lifecycle validation fails when assigned agents do not satisfy requirements", async () => {
@@ -199,9 +206,9 @@ test("lifecycle tool grants fail when targeting an unassigned agent", async () =
   }
 });
 
-test("lifecycle tool grants fail closed on unsupported lifecycle roots", async () => {
+test("lifecycle tool grants fail closed on non-serializable bound inputs", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    invalidLifecycleGrantRoot: true,
+    invalidLifecycleGrantBinding: true,
   });
 
   const exit = await Effect.runPromiseExit(
@@ -216,10 +223,10 @@ test("lifecycle tool grants fail closed on unsupported lifecycle roots", async (
   );
 
   const failure = getFailure(exit);
-  expect(failure._tag).toBe("SourceParseError");
-  if (failure._tag === "SourceParseError") {
-    expect(failure.kind).toBe("lifecycle");
-    expect(failure.message).toContain("lifecycle_root");
+  expect(failure._tag).toBe("LifecycleValidationError");
+  if (failure._tag === "LifecycleValidationError") {
+    expect(failure.field).toBe("tool_grants[0].tools[0]");
+    expect(failure.message).toContain("must not contain undefined values");
   }
 });
 
@@ -345,8 +352,8 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
     ),
     "utf8",
   );
-  expect(grantContract).toContain('Schema.omit("lifecycle")');
-  expect(grantContract).toContain('lifecycle: "sdlc"');
+  expect(grantContract).toContain('Schema.omit("board")');
+  expect(grantContract).toContain('"board":"project-alpha"');
 
   const opencodePluginStub = join(
     generatedRoot,
@@ -429,5 +436,10 @@ export const tool = Object.assign((definition) => definition, { schema });
       join(projectRoot, ".claude", "skills", "delivery-contract", "SKILL.md"),
     ),
   ).toBe(true);
+  expect(
+    await pathExists(
+      join(projectRoot, ".claude", "lifecycles", "delivery-contract.md"),
+    ),
+  ).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "settings.json"))).toBe(false);
 });

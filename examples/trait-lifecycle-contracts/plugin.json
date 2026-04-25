@@ -5,10 +5,10 @@
     "agent-core": "./deps/agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code"],
-    "lifecycles": ["opencode", "claude-code"],
+    "agents": ["opencode"],
+    "lifecycles": ["opencode"],
     "toolspaces": ["opencode", "claude-code"],
     "modelspaces": ["opencode", "claude-code"],
-    "tools": ["opencode", "claude-code"]
+    "tools": ["opencode"]
   }
 }

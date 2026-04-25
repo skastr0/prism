@@ -84,6 +84,15 @@ export class InvalidTargetScopeError extends Schema.TaggedError<InvalidTargetSco
   },
 ) {}
 
+export class UnsupportedTargetCapabilityError extends Schema.TaggedError<UnsupportedTargetCapabilityError>()(
+  "UnsupportedTargetCapabilityError",
+  {
+    target: Schema.String,
+    capability: Schema.Literal("generated-canonical-tools"),
+    message: Schema.String,
+  },
+) {}
+
 export class LifecycleValidationError extends Schema.TaggedError<LifecycleValidationError>()(
   "LifecycleValidationError",
   {
@@ -153,6 +162,7 @@ export type CompileError =
   | AgentValidationError
   | UnknownTargetError
   | InvalidTargetScopeError
+  | UnsupportedTargetCapabilityError
   | DuplicateNameError
   | AgentNameMismatchError
   | MissingTargetResolutionError
@@ -174,6 +184,8 @@ export const formatCompileError = (error: CompileError): string => {
       return `unknown target '${error.target}'. Supported: ${error.supportedTargets.join(", ")}`;
     case "InvalidTargetScopeError":
       return `target '${error.target}' cannot use scope '${error.scope}': ${error.message}`;
+    case "UnsupportedTargetCapabilityError":
+      return `target '${error.target}' does not support ${error.capability}: ${error.message}`;
     case "DuplicateNameError":
       return `duplicate ${error.kind} '${error.name}': declared at ${error.firstPath} and ${error.secondPath}`;
     case "AgentNameMismatchError":

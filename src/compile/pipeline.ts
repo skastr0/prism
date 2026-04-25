@@ -29,10 +29,12 @@ import {
 } from "./lowerers/claude-code.js";
 import {
   InvalidTargetScopeError,
+  UnsupportedTargetCapabilityError,
   UnknownTargetError,
   type CompileError,
 } from "./errors.js";
 import type { Lifecycle } from "./sources.js";
+import { getCompileTargetCapabilities } from "./target-capabilities.js";
 import {
   computeAgentCacheDescriptor,
   computeContentHash,
@@ -157,6 +159,35 @@ const applyLifecycleToolGrants = (
     };
   });
 
+const assertTargetSupportsGeneratedCanonicalTools = (
+  target: string,
+  agents: ReadonlyArray<ComposedAgent>,
+): Effect.Effect<void, CompileError> => {
+  const capabilities = getCompileTargetCapabilities(target);
+  if (capabilities.generatedCanonicalTools === "executable") {
+    return Effect.void;
+  }
+
+  const agentsWithBindings = agents
+    .filter((agent) => agent.toolBindings.length > 0)
+    .map((agent) => `${agent.name} (${agent.toolBindings.length})`);
+
+  if (agentsWithBindings.length === 0) {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new UnsupportedTargetCapabilityError({
+      target,
+      capability: "generated-canonical-tools",
+      message:
+        `canonical tool bindings require an executable generated-tool runtime; ` +
+        `${target} currently lowers native tool allowances and skills only. ` +
+        `Agents with canonical tool bindings: ${agentsWithBindings.join(", ")}`,
+    }),
+  );
+};
+
 export const compilePluginForTarget = (
   options: CompileOptions
 ): Effect.Effect<CompileResult, CompileError> =>
@@ -257,6 +288,10 @@ export const compilePluginForTarget = (
 
     const lifecycleToolGrants = yield* resolveLifecycleToolGrants(lifecycles, registry);
     const composedForLowering = applyLifecycleToolGrants(composed, lifecycleToolGrants);
+    yield* assertTargetSupportsGeneratedCanonicalTools(
+      options.target,
+      composedForLowering,
+    );
 
     const allOps = yield* Effect.promise(() =>
       lowerer.planLowering({

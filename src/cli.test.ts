@@ -67,6 +67,7 @@ const createInstallAllFixture = async (): Promise<{
   await createCanonicalCompileFixture({
     pluginRoot: compilePluginRoot,
     projectRoot,
+    withCanonicalToolBindings: false,
   });
 
   return { monorepoRoot, projectRoot, homeRoot };

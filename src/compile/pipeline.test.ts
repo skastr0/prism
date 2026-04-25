@@ -230,7 +230,7 @@ test("lifecycle tool grants fail closed on non-serializable bound inputs", async
   }
 });
 
-test("compilePluginForTarget lowers canonical agent sources for opencode and claude-code", async () => {
+test("compilePluginForTarget lowers executable canonical tool surfaces for opencode", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   const opencode = await Effect.runPromise(
@@ -244,19 +244,7 @@ test("compilePluginForTarget lowers canonical agent sources for opencode and cla
     }),
   );
 
-  const claude = await Effect.runPromise(
-    compilePluginForTarget({
-      pluginPath: pluginRoot,
-      target: "claude-code",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-      backup: false,
-    }),
-  );
-
   expect(opencode.composed).toHaveLength(3);
-  expect(claude.composed).toHaveLength(3);
 
   const opencodeAgent = await readFile(
     join(projectRoot, ".opencode", "agents", "builder.md"),
@@ -412,6 +400,53 @@ export const tool = Object.assign((definition) => definition, { schema });
       join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
     ),
   ).toBe(true);
+  expect(
+    await pathExists(
+      join(projectRoot, ".opencode", "lifecycles", "delivery-contract.md"),
+    ),
+  ).toBe(false);
+});
+
+test("compilePluginForTarget fails closed when target cannot execute canonical tool bindings", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
+  if (failure._tag === "UnsupportedTargetCapabilityError") {
+    expect(failure.target).toBe("claude-code");
+    expect(failure.capability).toBe("generated-canonical-tools");
+    expect(failure.message).toContain("builder");
+  }
+});
+
+test("compilePluginForTarget lowers native Claude surfaces when no canonical tool runtime is required", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
+    withCanonicalToolBindings: false,
+  });
+
+  const claude = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(claude.composed).toHaveLength(3);
 
   const claudeAgent = await readFile(
     join(projectRoot, ".claude", "agents", "builder.md"),

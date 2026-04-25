@@ -262,8 +262,10 @@ export default defineLifecycle({
   phases: [
     {
       name: "Run experiment for ${App}",
-      signal_in: "Hypothesis ${H}",
-      termination: "Decision recorded for ${App}",
+      notes: {
+        Input: "Hypothesis ${H}",
+        Done: "Decision recorded for ${App}",
+      },
     },
   ],
 });
@@ -271,8 +273,8 @@ export default defineLifecycle({
 
 ```ts
 export default defineLifecycle({
-  name: "sdlc-experiment",
-  description: "Concrete SDLC experiment",
+  name: "release-experiment",
+  description: "Concrete release experiment",
   phases: [
     {
       name: "Experiment",
@@ -280,7 +282,7 @@ export default defineLifecycle({
         lifecycle: lifecycleRef("experiment"),
         bindings: {
           H: "Async commits reduce latency",
-          App: "sdlc-core",
+          App: "release pipeline",
         },
       },
     },
@@ -335,6 +337,34 @@ Validation rules:
 - every required trait ref must resolve
 - for each requirement, the compiler counts assigned agents whose canonical trait set includes **all** required traits
 - compile fails if that count is less than `min`
+
+### Lifecycle tool grants
+
+Lifecycle files may grant canonical tools to agents assigned in that lifecycle. Grants are protocol-agnostic: the compiler does not know whether the tool backs a work-item board, a queue, Matrix transport, an approval ledger, or something else.
+
+Use `bind` when the lifecycle wants a generated wrapper to pre-fill canonical-tool input fields:
+
+```ts
+export default defineLifecycle({
+  name: "delivery-contract",
+  description: "Compile-time orchestration contract",
+  phases: [{ name: "Implement change", agents: [agentRef("builder")] }],
+  tool_grants: [
+    {
+      agents: [agentRef("builder")],
+      tools: [
+        {
+          ref: "protocol-core:create_item",
+          as: "create_item",
+          bind: { board: "project-alpha" },
+        },
+      ],
+    },
+  ],
+});
+```
+
+The generated wrapper omits bound fields from the agent-facing input schema and injects them when it calls the canonical tool handle. Bound values must be JSON-serializable. Protocol-specific names such as board ids, queue names, rooms, or channels belong in plugin-owned tools and bindings, not in the compiler.
 
 Lowered lifecycle skills reflect the assigned agents (`agent \`builder\``, `agents \`builder\`, \`reviewer\``) but do **not** expose internal trait requirement machinery to the target harness.
 
@@ -398,6 +428,8 @@ defineAgent({
 
 During compile, agentpkg resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
+Generated canonical tool execution is target-capability-gated. OpenCode currently supports executable generated canonical tools through compiler-owned generated plugins. Claude Code currently does not have an equivalent generated-tool runtime in agentpkg: it can receive native `allowed-tools` frontmatter from toolspaces, but compiling an agent that binds canonical synthetic tools to Claude Code fails closed instead of emitting non-executable prose.
+
 ### Canonical tools vs harness-native plugins
 
 The canonical `tools/` family is for **portable pure-TypeScript tool logic**.
@@ -456,9 +488,9 @@ Agents, traits, toolspaces, modelspaces, and lifecycle phases can reference part
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code"],
-    "lifecycles": ["opencode", "claude-code"],
-    "tools": ["opencode", "claude-code"],
+    "agents": ["opencode"],
+    "lifecycles": ["opencode"],
+    "tools": ["opencode"],
     "toolspaces": ["opencode", "claude-code"],
     "modelspaces": ["opencode", "claude-code"]
   }
@@ -495,6 +527,7 @@ Notes:
 
 - compile-phase targets are `agents`, `lifecycles`, `tools`, `toolspaces`, and `modelspaces`
 - `lifecycles`, `tools`, `toolspaces`, and `modelspaces` name source-language artifact families, not fake harness directories
+- agents that bind canonical tools should target only harnesses with executable generated-tool support, currently OpenCode, unless a future explicit adapter exists
 
 ### CLI
 
@@ -527,8 +560,11 @@ agentpkg compile ./my-plugin --harness claude-code --dry-run
 - Supports `description`, `model`, `temperature`, `top_p`, and `allowed-tools` from compile output
 - Writes `<claude-root>/skills/<lifecycle-name>/SKILL.md` for each concrete lifecycle instance
 - Does **not** emit generated plugins or synthetic contract tools
+- Fails closed when the composed agent surface contains canonical tool bindings, because those bindings require an executable generated-tool runtime
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
+
+Lifecycle source artifacts are source-language constructs. For the current supported targets, concrete lifecycle instances lower into harness-intelligible skills at `skills/<lifecycle-name>/SKILL.md`; agentpkg does not emit generic target-side `lifecycles/` folders. A future harness may add a native lifecycle surface, but that would be a target-specific capability rather than the default output shape.
 
 ### Compile cache and lockfile
 
@@ -543,7 +579,8 @@ Compile is **idempotent**: re-running with unchanged sources produces no writes.
 1. Add a lowerer module under `src/compile/lowerers/`
 2. Wire it into `src/compile/pipeline.ts`
 3. Update `SUPPORTED_TARGETS` in pipeline.ts
-4. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
+4. Declare compile target capabilities in `src/compile/target-capabilities.ts`, especially whether generated canonical tools are executable
+5. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
 
 ### Install + compile unified
 

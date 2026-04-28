@@ -1682,6 +1682,180 @@ test("trait-lifecycle example lowers lifecycle skill traits into opencode permis
   });
 });
 
+test("domain skill permission traits compile one opencode agent per family", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  const agentCoreRoot = join(
+    process.cwd(),
+    "examples",
+    "trait-lifecycle-contracts",
+    "deps",
+    "agent-core",
+  );
+  const traitFamilies = [
+    {
+      agent: "engineer",
+      trait: "core-engineering",
+      expected: [
+        "ast-grep",
+        "build",
+        "code-reviewer",
+        "contracts",
+        "harness-programming",
+        "repo-research",
+        "security-reviewer",
+        "semgrep-usage",
+        "testing",
+        "unslop",
+      ],
+    },
+    {
+      agent: "functional-programmer",
+      trait: "functional-thinking",
+      expected: ["contracts", "ddd", "effect", "testing", "type-level"],
+    },
+    {
+      agent: "marketer",
+      trait: "core-marketing",
+      expected: [
+        "brand-positioning",
+        "copy-engineering",
+        "marketing",
+        "offer-architecture",
+        "persuasion-architecture",
+        "subscription-wedge",
+      ],
+    },
+    {
+      agent: "writer",
+      trait: "writing-and-publishing",
+      expected: [
+        "content-mining",
+        "copy-engineering",
+        "platform-twitter",
+        "typefully-cli",
+        "voice-profile",
+        "wlc",
+      ],
+    },
+    {
+      agent: "researcher",
+      trait: "research-practice",
+      expected: [
+        "model-intelligence",
+        "repo-research",
+        "research",
+        "video-research",
+        "web-research",
+      ],
+    },
+    {
+      agent: "frontend-builder",
+      trait: "frontend-implementation",
+      expected: [
+        "build",
+        "frontend-design",
+        "legend-state",
+        "testing",
+        "vercel-react-native-skills",
+      ],
+    },
+    {
+      agent: "media-producer",
+      trait: "media-generation-practice",
+      expected: [
+        "fal-models",
+        "media-generation",
+        "mg-3d-workflow-authoring",
+        "mg-schema",
+        "mg-workflow-authoring",
+        "suno-music-prompting",
+        "video-research",
+      ],
+    },
+  ] as const;
+
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "domain-skill-trait-consumer",
+        version: "0.1.0",
+        deps: {
+          "agent-core": agentCoreRoot,
+        },
+        targets: {
+          agents: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Domain worker identity
+---
+
+# Worker
+`,
+  );
+
+  for (const family of traitFamilies) {
+    await writeText(
+      join(pluginRoot, "agents", `${family.agent}.agent.ts`),
+      `import { bindTrait, defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: ${JSON.stringify(family.agent)},
+  description: ${JSON.stringify(`Uses ${family.trait} skill permissions`)},
+  identity: "worker",
+  traits: [bindTrait(${JSON.stringify(`agent-core:${family.trait}`)})],
+});
+`,
+    );
+  }
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  for (const family of traitFamilies) {
+    const agent = result.composed.find((candidate) => candidate.name === family.agent);
+    expect(agent?.skills).toEqual([]);
+    expect(agent?.allowedSkills).toEqual(family.expected);
+
+    const markdown = result.operations.find(
+      (operation) =>
+        operation.kind === "write-md" &&
+        operation.target.endsWith(`agents/${family.agent}.md`),
+    );
+    if (!markdown || markdown.kind !== "write-md") {
+      throw new Error(`expected ${family.agent} markdown operation`);
+    }
+
+    const frontmatter = matter(markdown.content).data as {
+      permission?: { skill?: Record<string, string> };
+    };
+    expect(markdown.content).not.toContain("## Recommended Skills");
+    expect(frontmatter.permission?.skill?.["*"]).toBe("deny");
+    expect(Object.keys(frontmatter.permission?.skill ?? {}).sort()).toEqual([
+      "*",
+      ...family.expected,
+    ].sort());
+  }
+});
+
 test("external permission-only consumers do not emit empty generated plugin shells", async () => {
   const { pluginRoot, projectRoot } = await createExternalPermissionOnlyFixture();
 

@@ -33,6 +33,13 @@ import {
 } from "./compile/pipeline.js";
 import { formatCompileError, type CompileError } from "./compile/errors.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
+import {
+  agentpkgOxlintPluginJs,
+  createTypescriptPackageJson,
+  oxlintConfigJson,
+  oxfmtConfigJson,
+  typescriptTsconfigJson,
+} from "./init-templates.js";
 
 const program = new Command();
 
@@ -484,6 +491,7 @@ program
   .option("-d, --dir <path>", "Directory to create plugin in", ".")
   .option("--with-agent", "Include example agent definition")
   .option("--with-skill", "Include example skill scaffold (preset targets for coding + claw harnesses)")
+  .option("--typescript", "Include TypeScript authoring guardrails with Oxlint and Oxfmt")
   .option("--minimal", "Create minimal plugin (manifest only)")
   .action(async (name: string, options) => {
     try {
@@ -536,6 +544,21 @@ program
       );
 
       const created: string[] = ["plugin.json"];
+
+      if (!options.minimal && options.typescript) {
+        await writeFile(join(targetDir, "package.json"), createTypescriptPackageJson(name));
+        await writeFile(join(targetDir, "tsconfig.json"), typescriptTsconfigJson);
+        await writeFile(join(targetDir, ".oxlintrc.json"), oxlintConfigJson);
+        await writeFile(join(targetDir, ".oxfmtrc.json"), oxfmtConfigJson);
+        await writeFile(join(targetDir, "agentpkg-oxlint-plugin.js"), agentpkgOxlintPluginJs);
+        created.push(
+          "package.json",
+          "tsconfig.json",
+          ".oxlintrc.json",
+          ".oxfmtrc.json",
+          "agentpkg-oxlint-plugin.js"
+        );
+      }
 
       if (!options.minimal) {
         // Create example global rule
@@ -691,6 +714,41 @@ Use this file for detailed rules, examples, and edge cases that should not live 
       }
 
       // Create README
+      const typescriptStructure =
+        options.typescript && !options.minimal
+          ? `├── package.json         # TypeScript authoring scripts for lint/format/typecheck
+├── tsconfig.json        # Strict TypeScript checks for plugin DSL/runtime files
+├── .oxlintrc.json       # Oxlint config with local agentpkg DSL guardrails
+├── .oxfmtrc.json        # Oxfmt config
+├── agentpkg-oxlint-plugin.js # Local Oxlint JS plugin for agentpkg DSL rules
+`
+          : "";
+      const typescriptValidation =
+        options.typescript && !options.minimal
+          ? `
+# Validate TypeScript plugin authoring guardrails
+npm install
+npm run lint
+npm run format:check
+npm run typecheck
+`
+          : "";
+      const typescriptGuardrails =
+        options.typescript && !options.minimal
+          ? `## TypeScript authoring guardrails
+
+The generated Oxlint config uses OXC's documented project config and \`jsPlugins\` fields to load \`./agentpkg-oxlint-plugin.js\`.
+
+The local \`agentpkg\` rules keep compiler DSL files declarative:
+
+- Tool slot fills in \`bindTrait(..., { tools: ... })\` must use imported runtime schema identifiers from \`schemas/\` or \`slots/\`.
+- Traits must not define root-level \`slots\`.
+- Traits must not replace a tool's \`input\` or \`output\`; define slots on the runtime tool and fill them from agent bindings.
+
+OXC JS plugins are alpha, so this local plugin is intentionally small and easy to replace. Compiler validation remains the fail-closed source of truth.
+
+`
+          : "";
       const readme = `# ${name}
 
 A harness-aware plugin for AI coding harnesses.
@@ -702,7 +760,7 @@ Use \`plugin.json\` to declare per-artifact harness targets. Do not add file-lev
 \`\`\`
 ${name}/
 ├── plugin.json          # Manifest with per-artifact harness targets
-├── rules/
+${typescriptStructure}├── rules/
 │   ├── global/          # Shared rules appended to targeted global rules files
 │   └── project/         # Shared project rules copied when --project is set
 ├── commands/            # Shared slash commands
@@ -772,8 +830,10 @@ When \`--scope project\` is set, compile-phase OpenCode outputs land in \`<proje
 \`\`\`bash
 # Validate plugin structure and skill frontmatter
 agentpkg validate ./${name}
+${typescriptValidation}
 \`\`\`
 
+${typescriptGuardrails}
 ## Harness notes
 
 - See \`agentpkg harnesses\` for the current harness support matrix.

@@ -6,6 +6,7 @@ export default defineAgent({
   identity: "builder",
   model: modelProfileRef("agent-core", "default-models", "builder"),
   traits: [
+    bindTrait("agent-core:sdlc-practitioner"),
     bindTrait("submittable"),
     bindTrait("committable"),
     bindTrait("self-assessing"),

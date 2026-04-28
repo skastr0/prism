@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { defineTool } from "agentpkg";
+import { defineTool, schemaSlot } from "agentpkg";
 
 export default defineTool({
   name: "submit_review",
@@ -10,5 +10,10 @@ export default defineTool({
   output: Schema.Struct({
     acknowledged: Schema.Boolean,
   }),
+  slots: {
+    verdict: schemaSlot({
+      description: "Agent-specific review verdict fields",
+    }),
+  },
   handle: async (input, context) => ({ acknowledged: true }),
 });

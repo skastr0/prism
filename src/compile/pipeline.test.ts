@@ -1629,6 +1629,59 @@ export default defineAgent({
   }
 });
 
+test("trait-lifecycle example lowers lifecycle skill traits into opencode permissions", async () => {
+  const projectRoot = await createTempRoot();
+  const pluginRoot = join(process.cwd(), "examples", "trait-lifecycle-contracts");
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const builder = result.composed.find((agent) => agent.name === "builder");
+  expect(builder?.skills).toEqual([]);
+  expect(builder?.allowedSkills).toEqual([
+    "backpressure",
+    "build",
+    "commit",
+    "evolve",
+    "requirements",
+    "review",
+    "sdlc",
+    "testing",
+  ]);
+
+  const builderMarkdown = result.operations.find(
+    (operation) =>
+      operation.kind === "write-md" && operation.target.endsWith("agents/builder.md"),
+  );
+  if (!builderMarkdown || builderMarkdown.kind !== "write-md") {
+    throw new Error("expected builder markdown operation");
+  }
+  const frontmatter = matter(builderMarkdown.content).data as {
+    permission?: { skill?: Record<string, string> };
+  };
+
+  expect(builderMarkdown.content).not.toContain("## Recommended Skills");
+  expect(frontmatter.permission?.skill).toEqual({
+    "*": "deny",
+    backpressure: "allow",
+    build: "allow",
+    commit: "allow",
+    evolve: "allow",
+    requirements: "allow",
+    review: "allow",
+    sdlc: "allow",
+    testing: "allow",
+  });
+});
+
 test("external permission-only consumers do not emit empty generated plugin shells", async () => {
   const { pluginRoot, projectRoot } = await createExternalPermissionOnlyFixture();
 

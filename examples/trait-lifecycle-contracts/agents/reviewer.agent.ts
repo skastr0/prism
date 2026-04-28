@@ -1,5 +1,5 @@
-import { Schema } from "effect";
 import { bindTrait, defineAgent, modelProfileRef } from "agentpkg";
+import { ReviewFindingsSlot } from "../schemas/review-slots.ts";
 
 export default defineAgent({
   name: "reviewer",
@@ -7,14 +7,11 @@ export default defineAgent({
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
   traits: [
+    bindTrait("agent-core:sdlc-practitioner"),
     bindTrait("submittable"),
     bindTrait("reviewable", {
       slots: {
-        review_lane: "review-findings",
-        review_input: Schema.Struct({
-          summary: Schema.String,
-          verdict: Schema.Literal("approve", "request_changes"),
-        }),
+        verdict: ReviewFindingsSlot,
       },
     }),
     bindTrait("self-assessing"),

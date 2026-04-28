@@ -26,6 +26,11 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
+const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
+  pathToFileURL(
+    join(projectRoot, ".opencode", "plugins", pluginId, "src", "server.ts"),
+  ).href;
+
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content);
@@ -71,6 +76,7 @@ const createCanonicalLanguageFixture = async (options?: {
 
 const createExternalPermissionOnlyFixture = async (): Promise<{
   pluginRoot: string;
+  protocolRoot: string;
   projectRoot: string;
 }> => {
   const root = await createTempRoot();
@@ -202,6 +208,11 @@ export default defineTool({
         plugin: [
           "agentpkg-generated-permission-only-consumer",
           "agentpkg-generated-stale-dep",
+          generatedPluginEntry(
+            projectRoot,
+            "agentpkg-generated-permission-only-consumer",
+          ),
+          generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
         ],
       },
       null,
@@ -209,7 +220,7 @@ export default defineTool({
     )}\n`,
   );
 
-  return { pluginRoot, projectRoot };
+  return { pluginRoot, protocolRoot, projectRoot };
 };
 
 const createExternalSyntheticOnlyFixture = async (): Promise<{
@@ -849,8 +860,15 @@ export const tool = Object.assign((definition) => definition, { schema });
     agent: Record<string, Record<string, unknown>>;
     plugin: string[];
   };
-  expect(opencodeConfig.plugin).toContain("agentpkg-generated-canonical-compile-fixture");
-  expect(opencodeConfig.plugin).toContain("agentpkg-generated-protocol-core");
+  expect(opencodeConfig.plugin).toContain(
+    generatedPluginEntry(
+      projectRoot,
+      "agentpkg-generated-canonical-compile-fixture",
+    ),
+  );
+  expect(opencodeConfig.plugin).toContain(
+    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+  );
   expect(opencodeConfig.agent.builder?.model).toBe("openai/gpt-5.4");
   expect(opencodeConfig.agent.builder?.variant).toBe("xhigh");
   expect(opencodeConfig.agent.builder?.temperature).toBe(0.2);
@@ -932,18 +950,94 @@ test("external permission-only consumers do not emit empty generated plugin shel
         "unreferenced.tool.ts",
       ),
     ),
-  ).toBe(false);
+  ).toBe(true);
 
   const opencodeAgent = await readFile(
     join(projectRoot, ".opencode", "agents", "worker.md"),
     "utf8",
   );
   expect(opencodeAgent).toContain("protocol_core_external_submit: true");
+  expect(opencodeAgent).toContain("protocol_core_unreferenced: false");
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
   ) as { plugin?: string[] };
-  expect(opencodeConfig.plugin).toEqual(["agentpkg-generated-protocol-core"]);
+  expect(opencodeConfig.plugin).toEqual([
+    "agentpkg-generated-stale-dep",
+    generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
+    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+  ]);
+  expect(opencodeConfig.plugin).not.toContain(
+    "agentpkg-generated-permission-only-consumer",
+  );
+  expect(opencodeConfig.plugin).not.toContain(
+    generatedPluginEntry(
+      projectRoot,
+      "agentpkg-generated-permission-only-consumer",
+    ),
+  );
+});
+
+test("tools-only plugins emit the complete owner runtime plugin", async () => {
+  const { protocolRoot, projectRoot } = await createExternalPermissionOnlyFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: protocolRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const protocolGeneratedRoot = join(
+    projectRoot,
+    ".opencode",
+    "plugins",
+    "agentpkg-generated-protocol-core",
+  );
+
+  expect(
+    await pathExists(
+      join(
+        protocolGeneratedRoot,
+        "src",
+        "plugins",
+        "protocol-core",
+        "tools",
+        "external-submit.tool.ts",
+      ),
+    ),
+  ).toBe(true);
+  expect(
+    await pathExists(
+      join(
+        protocolGeneratedRoot,
+        "src",
+        "plugins",
+        "protocol-core",
+        "tools",
+        "unreferenced.tool.ts",
+      ),
+    ),
+  ).toBe(true);
+
+  const server = await readFile(
+    join(protocolGeneratedRoot, "src", "server.ts"),
+    "utf8",
+  );
+  expect(server).toContain("protocol_core_external_submit");
+  expect(server).toContain("protocol_core_unreferenced");
+
+  const opencodeConfig = JSON.parse(
+    await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
+  ) as { plugin?: string[] };
+  expect(opencodeConfig.plugin).toContain(
+    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+  );
+  expect(opencodeConfig.plugin).not.toContain("agentpkg-generated-protocol-core");
 });
 
 test("external synthetic wrappers keep the owner runtime dependency without exposing the base tool", async () => {
@@ -1003,7 +1097,16 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   const consumerServer = await readFile(join(consumerGeneratedRoot, "src", "server.ts"), "utf8");
   expect(consumerServer).toMatch(/external_synthetic_consumer_submittable__submit_work__[a-f0-9]+/);
   const protocolServer = await readFile(join(protocolGeneratedRoot, "src", "server.ts"), "utf8");
-  expect(protocolServer).not.toContain("protocol_core_external_submit");
+  expect(protocolServer).toContain("protocol_core_external_submit");
+
+  const opencodeAgent = await readFile(
+    join(projectRoot, ".opencode", "agents", "worker.md"),
+    "utf8",
+  );
+  expect(opencodeAgent).toMatch(
+    /external_synthetic_consumer_submittable__submit_work__[a-f0-9]+: true/,
+  );
+  expect(opencodeAgent).toContain("protocol_core_external_submit: false");
 
   const contractFiles = await readdir(
     join(
@@ -1035,8 +1138,11 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
   ) as { plugin?: string[] };
   expect(opencodeConfig.plugin).toEqual([
-    "agentpkg-generated-external-synthetic-consumer",
-    "agentpkg-generated-protocol-core",
+    generatedPluginEntry(
+      projectRoot,
+      "agentpkg-generated-external-synthetic-consumer",
+    ),
+    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
   ]);
 });
 

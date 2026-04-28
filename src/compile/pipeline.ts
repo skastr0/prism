@@ -33,7 +33,7 @@ import {
   UnknownTargetError,
   type CompileError,
 } from "./errors.js";
-import type { Lifecycle } from "./sources.js";
+import type { CanonicalTool, Lifecycle } from "./sources.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
 import {
   computeAgentCacheDescriptor,
@@ -50,6 +50,7 @@ interface LowererModule {
   readonly planLowering: (input: {
     readonly agents: ReadonlyArray<ComposedAgent>;
     readonly lifecycles: ReadonlyArray<Lifecycle>;
+    readonly tools: ReadonlyArray<CanonicalTool>;
     readonly target: {
       readonly scope: HarnessScope;
       readonly root: string;
@@ -297,6 +298,9 @@ export const compilePluginForTarget = (
       lowerer.planLowering({
         agents: composedForLowering,
         lifecycles,
+        tools: [...registry.tools.values()].sort((left, right) =>
+          left.name.localeCompare(right.name),
+        ),
         target: {
           scope: options.scope,
           root: outputRoot,

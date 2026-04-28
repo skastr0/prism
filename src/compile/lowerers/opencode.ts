@@ -31,12 +31,13 @@
  * entries like node_modules/ and lockfiles, which are preserved across syncs.
  */
 
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   composeLifecyclePhaseReference,
   type ComposedAgent,
 } from "../compose.js";
-import type { Contract, Lifecycle } from "../sources.js";
+import type { CanonicalTool, Contract, Lifecycle } from "../sources.js";
 import type { HarnessScope } from "../../types.js";
 import {
   backupFile,
@@ -148,6 +149,17 @@ const generatedPluginRootForName = (
   pluginName: string,
 ): string => join(target.root, "plugins", generatedPluginIdForName(pluginName));
 
+const generatedPluginEntryForName = (
+  target: OpenCodeLowerTarget,
+  pluginName: string,
+): string =>
+  pathToFileURL(
+    join(generatedPluginRootForName(target, pluginName), "src", "server.ts")
+  ).href;
+
+const generatedPluginEntry = (target: OpenCodeLowerTarget): string =>
+  generatedPluginEntryForName(target, target.sourcePluginName);
+
 // ---------------------------------------------------------------------------
 // Operation shape
 // ---------------------------------------------------------------------------
@@ -175,7 +187,7 @@ export type LowerOperation =
   | {
       readonly kind: "patch-opencode-plugins";
       readonly target: string;
-      readonly pluginId: string;
+      readonly pluginEntry: string;
       readonly desiredPresent: boolean;
       readonly reason: "new" | "changed" | "unchanged";
     }
@@ -208,20 +220,27 @@ interface SyntheticToolInventory {
  */
 const buildInventory = (
   sourcePluginName: string,
-  agents: ReadonlyArray<ComposedAgent>
+  agents: ReadonlyArray<ComposedAgent>,
+  extraToolNames: ReadonlyArray<string> = [],
 ): SyntheticToolInventory => {
   const byAgent = new Map<string, string[]>();
-  const all: string[] = [];
+  const all = new Set<string>(extraToolNames);
   for (const agent of agents) {
     const own: string[] = [];
     for (const binding of agent.toolBindings) {
       const toolName = runtimeToolName(sourcePluginName, binding);
       own.push(toolName);
-      all.push(toolName);
+      all.add(toolName);
+      if (binding.kind === "synthetic") {
+        all.add(ownerToolName(binding.toolPluginName, binding.toolName));
+      }
     }
     byAgent.set(agent.name, own);
   }
-  return { allToolNames: all, byAgent };
+  return {
+    allToolNames: [...all].sort((left, right) => left.localeCompare(right)),
+    byAgent,
+  };
 };
 
 const serializeFrontmatter = (
@@ -557,6 +576,18 @@ const planPluginPruning = async (
   root: string,
   desiredFiles: ReadonlySet<string>
 ): Promise<LowerOperation[]> => {
+  if (desiredFiles.size === 0) {
+    if (!(await fileExists(root))) return [];
+    return [
+      {
+        kind: "prune-plugin-path",
+        target: root,
+        targetType: "dir",
+        reason: "stale",
+      },
+    ];
+  }
+
   const existing = await collectPluginTree(root);
   const desiredDirs = collectDesiredPluginDirs(desiredFiles);
   const operations: LowerOperation[] = [];
@@ -814,37 +845,35 @@ const planPluginMirrors = async (
   return mirrors;
 };
 
-const planAdapters = (
+const planAdaptersForBindings = (
   sourcePluginName: string,
-  agents: ReadonlyArray<ComposedAgent>,
+  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
 ): AdapterSpec[] => {
   const seen = new Set<string>();
   const specs: AdapterSpec[] = [];
-  for (const agent of agents) {
-    for (const binding of agent.toolBindings) {
-      if (binding.kind === "permission" && binding.toolPluginName !== sourcePluginName) {
-        continue;
-      }
-      const key = binding.kind === "permission"
-        ? `tool/${binding.toolPluginName}/${binding.toolName}`
-        : `synthetic/${binding.contract!.pluginName}/${binding.contract!.name}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (binding.kind === "permission") {
-        specs.push({
-          kind: "tool",
-          pluginName: binding.toolPluginName,
-          toolName: binding.toolName,
-          sourcePath: binding.toolSourcePath,
-        });
-      } else {
-        specs.push({
-          kind: "synthetic",
-          pluginName: binding.contract!.pluginName,
-          contractName: binding.contract!.name,
-          contractRelativePath: `contracts/${binding.contract!.name}.contract`,
-        });
-      }
+  for (const binding of bindings) {
+    if (binding.kind === "permission" && binding.toolPluginName !== sourcePluginName) {
+      continue;
+    }
+    const key = binding.kind === "permission"
+      ? `tool/${binding.toolPluginName}/${binding.toolName}`
+      : `synthetic/${binding.contract!.pluginName}/${binding.contract!.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (binding.kind === "permission") {
+      specs.push({
+        kind: "tool",
+        pluginName: binding.toolPluginName,
+        toolName: binding.toolName,
+        sourcePath: binding.toolSourcePath,
+      });
+    } else {
+      specs.push({
+        kind: "synthetic",
+        pluginName: binding.contract!.pluginName,
+        contractName: binding.contract!.name,
+        contractRelativePath: `contracts/${binding.contract!.name}.contract`,
+      });
     }
   }
   return specs;
@@ -1124,6 +1153,40 @@ const getSchemaBridgeSource = async (): Promise<string> => {
 const pluginRootFromToolSource = (toolSourcePath: string): string =>
   dirname(dirname(toolSourcePath));
 
+const bindingFromToolSource = (
+  pluginName: string,
+  sourcePath: string,
+): ComposedAgent["toolBindings"][number] => {
+  const toolName = basename(sourcePath, ".tool.ts");
+  return {
+    kind: "permission",
+    logicalName: toolName,
+    toolPluginName: pluginName,
+    toolName,
+    toolSourcePath: sourcePath,
+  };
+};
+
+const bindingsFromCanonicalTools = (
+  pluginName: string,
+  tools: ReadonlyArray<CanonicalTool>,
+): ReadonlyArray<ComposedAgent["toolBindings"][number]> =>
+  tools
+    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
+    .sort((left, right) => left.toolName.localeCompare(right.toolName));
+
+const bindingsFromPluginToolFiles = async (
+  pluginName: string,
+  pluginRoot: string,
+): Promise<ReadonlyArray<ComposedAgent["toolBindings"][number]>> => {
+  const toolsRoot = join(pluginRoot, "tools");
+  const entries = await listDirRecursive(toolsRoot);
+  return entries
+    .filter((entry) => !entry.includes("/") && entry.endsWith(".tool.ts"))
+    .map((entry) => bindingFromToolSource(pluginName, join(toolsRoot, entry)))
+    .sort((left, right) => left.toolName.localeCompare(right.toolName));
+};
+
 const planRuntimePluginMirrors = async (
   pluginName: string,
   pluginRoot: string,
@@ -1141,6 +1204,40 @@ const planRuntimePluginMirrors = async (
     pluginRoot,
     files: await collectMirrorRuntimeClosure(pluginRoot, entries),
   };
+};
+
+const mergePluginMirrors = (
+  mirrors: ReadonlyArray<PluginMirror>,
+): PluginMirror[] => {
+  const byPlugin = new Map<
+    string,
+    {
+      pluginRoot?: string;
+      files: Map<string, MirrorFile>;
+    }
+  >();
+
+  for (const mirror of mirrors) {
+    const current = byPlugin.get(mirror.pluginName) ?? {
+      pluginRoot: mirror.pluginRoot,
+      files: new Map<string, MirrorFile>(),
+    };
+    current.pluginRoot ??= mirror.pluginRoot;
+    for (const file of mirror.files) {
+      current.files.set(file.relativePath, file);
+    }
+    byPlugin.set(mirror.pluginName, current);
+  }
+
+  return [...byPlugin.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([pluginName, mirror]) => ({
+      pluginName,
+      pluginRoot: mirror.pluginRoot,
+      files: [...mirror.files.values()].sort((left, right) =>
+        left.relativePath.localeCompare(right.relativePath),
+      ),
+    }));
 };
 
 const planGeneratedPluginFiles = async (options: {
@@ -1285,6 +1382,7 @@ const planGeneratedPluginFiles = async (options: {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly lifecycles: ReadonlyArray<Lifecycle>;
+  readonly tools: ReadonlyArray<CanonicalTool>;
   readonly target: OpenCodeLowerTarget;
 }
 
@@ -1292,11 +1390,53 @@ export const planLowering = async (
   input: LowerInput
 ): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
-  const inventory = buildInventory(input.target.sourcePluginName, input.agents);
-  const hasAnyTool = inventory.allToolNames.length > 0;
   const referencedBindings = input.agents.flatMap((a) => a.toolBindings);
+  const hasAnyTool = referencedBindings.length > 0;
+  const sourceCanonicalToolBindings = bindingsFromCanonicalTools(
+    input.target.sourcePluginName,
+    input.tools,
+  );
+  const ownerPluginRoots = new Map<string, string>();
+  for (const binding of referencedBindings) {
+    if (binding.toolPluginName === input.target.sourcePluginName) continue;
+    ownerPluginRoots.set(
+      binding.toolPluginName,
+      pluginRootFromToolSource(binding.toolSourcePath),
+    );
+  }
+  const ownerPlugins = new Map<
+    string,
+    {
+      pluginRoot: string;
+      bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+    }
+  >();
+  for (const [pluginName, pluginRoot] of [...ownerPluginRoots.entries()].sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    ownerPlugins.set(pluginName, {
+      pluginRoot,
+      bindings: await bindingsFromPluginToolFiles(pluginName, pluginRoot),
+    });
+  }
+  const generatedOwnerToolNames = [
+    ...sourceCanonicalToolBindings.map((binding) =>
+      ownerToolName(binding.toolPluginName, binding.toolName),
+    ),
+    ...[...ownerPlugins.values()].flatMap((owner) =>
+      owner.bindings.map((binding) =>
+        ownerToolName(binding.toolPluginName, binding.toolName),
+      ),
+    ),
+  ];
+  const inventory = buildInventory(
+    input.target.sourcePluginName,
+    input.agents,
+    generatedOwnerToolNames,
+  );
   const desiredLifecycleSkillFiles = new Set<string>();
   const ownedGeneratedPluginId = generatedPluginId(input.target);
+  const ownedGeneratedPluginEntry = generatedPluginEntry(input.target);
 
   // ---- Per-agent markdown
   for (const agent of input.agents) {
@@ -1374,44 +1514,48 @@ export const planLowering = async (
     )),
   );
 
-  // ---- Generated plugin emission (only if any agent has tool bindings)
-  const desiredGeneratedPluginIds = new Set<string>();
-  if (hasAnyTool) {
+  // ---- Generated plugin emission
+  const desiredGeneratedPluginEntries = new Set<string>();
+  const legacyGeneratedPluginEntriesToPrune = new Set<string>([
+    ownedGeneratedPluginId,
+  ]);
+  const rememberDesiredGeneratedPlugin = (pluginName: string): void => {
+    const pluginEntry = generatedPluginEntryForName(input.target, pluginName);
+    desiredGeneratedPluginEntries.add(pluginEntry);
+    legacyGeneratedPluginEntriesToPrune.add(
+      generatedPluginIdForName(pluginName)
+    );
+  };
+
+  if (hasAnyTool || sourceCanonicalToolBindings.length > 0) {
     const mirrors = await planPluginMirrors(
       input.target.sourcePluginName,
       referencedBindings,
     );
-    const adapters = planAdapters(input.target.sourcePluginName, input.agents);
     const ownedRuntimeBindings = referencedBindings.filter(
       (binding) =>
         binding.kind === "synthetic" ||
         binding.toolPluginName === input.target.sourcePluginName,
     );
-    const ownerPlugins = new Map<
-      string,
-      {
-        pluginRoot: string;
-        runtimeBindings: ComposedAgent["toolBindings"][number][];
-        permissionBindings: ComposedAgent["toolBindings"][number][];
-      }
-    >();
-
-    for (const binding of referencedBindings) {
-      if (binding.toolPluginName === input.target.sourcePluginName) continue;
-      const current = ownerPlugins.get(binding.toolPluginName) ?? {
-        pluginRoot: pluginRootFromToolSource(binding.toolSourcePath),
-        runtimeBindings: [],
-        permissionBindings: [],
-      };
-      current.runtimeBindings.push(binding);
-      if (binding.kind === "permission") {
-        current.permissionBindings.push(binding);
-      }
-      ownerPlugins.set(binding.toolPluginName, current);
-    }
+    const sourceRuntimeBindings = [
+      ...sourceCanonicalToolBindings,
+      ...ownedRuntimeBindings,
+    ];
+    const sourceCanonicalMirror =
+      sourceCanonicalToolBindings.length > 0
+        ? await planRuntimePluginMirrors(
+            input.target.sourcePluginName,
+            pluginRootFromToolSource(
+              sourceCanonicalToolBindings[0]!.toolSourcePath,
+            ),
+            sourceCanonicalToolBindings,
+          )
+        : undefined;
 
     const importPluginRoots = new Map<string, string>();
-    for (const mirror of mirrors) {
+    for (const mirror of sourceCanonicalMirror
+      ? mergePluginMirrors([...mirrors, sourceCanonicalMirror])
+      : mirrors) {
       if (mirror.pluginRoot) {
         importPluginRoots.set(mirror.pluginName, mirror.pluginRoot);
       }
@@ -1420,17 +1564,22 @@ export const planLowering = async (
       importPluginRoots.set(pluginName, owner.pluginRoot);
     }
 
-    if (ownedRuntimeBindings.length > 0) {
-      desiredGeneratedPluginIds.add(ownedGeneratedPluginId);
+    if (sourceRuntimeBindings.length > 0) {
+      rememberDesiredGeneratedPlugin(input.target.sourcePluginName);
       operations.push(
         ...(await planGeneratedPluginFiles({
           root: generatedPluginRoot(input.target),
           pluginId: ownedGeneratedPluginId,
           runtimeToolNamespace: input.target.sourcePluginName,
-          mirrors,
+          mirrors: sourceCanonicalMirror
+            ? mergePluginMirrors([...mirrors, sourceCanonicalMirror])
+            : mirrors,
           importPluginRoots,
-          adapters,
-          serverBindings: ownedRuntimeBindings,
+          adapters: planAdaptersForBindings(
+            input.target.sourcePluginName,
+            sourceRuntimeBindings,
+          ),
+          serverBindings: sourceRuntimeBindings,
         })),
       );
     } else {
@@ -1444,25 +1593,12 @@ export const planLowering = async (
 
     for (const [pluginName, owner] of ownerPlugins) {
       const pluginId = generatedPluginIdForName(pluginName);
-      desiredGeneratedPluginIds.add(pluginId);
+      rememberDesiredGeneratedPlugin(pluginName);
       const ownerMirror = await planRuntimePluginMirrors(
         pluginName,
         owner.pluginRoot,
-        owner.runtimeBindings,
+        owner.bindings,
       );
-      const ownerAdapters = planAdapters(pluginName, [
-        {
-          name: `${pluginName}-owner`,
-          description: `${pluginName} owner tool surface`,
-          body: "",
-          color: undefined,
-          model: undefined,
-          targetOverride: {},
-          skills: [],
-          toolBindings: owner.permissionBindings,
-          allowedTools: [],
-        },
-      ]);
       operations.push(
         ...(await planGeneratedPluginFiles({
           root: generatedPluginRootForName(input.target, pluginName),
@@ -1470,8 +1606,8 @@ export const planLowering = async (
           runtimeToolNamespace: pluginName,
           mirrors: [ownerMirror],
           importPluginRoots,
-          adapters: ownerAdapters,
-          serverBindings: owner.permissionBindings,
+          adapters: planAdaptersForBindings(pluginName, owner.bindings),
+          serverBindings: owner.bindings,
         })),
       );
     }
@@ -1481,18 +1617,14 @@ export const planLowering = async (
   const plugins = (config.plugin as unknown) instanceof Array
     ? (config.plugin as unknown[])
     : [];
-  const existingGeneratedPluginIds = plugins.filter(
-    (pluginId): pluginId is string =>
-      typeof pluginId === "string" &&
-      pluginId.startsWith(`${GENERATED_PLUGIN_PREFIX}-`),
-  );
-  for (const pluginId of new Set([
+  for (const pluginEntry of new Set([
     ownedGeneratedPluginId,
-    ...desiredGeneratedPluginIds,
-    ...existingGeneratedPluginIds,
+    ownedGeneratedPluginEntry,
+    ...desiredGeneratedPluginEntries,
+    ...legacyGeneratedPluginEntriesToPrune,
   ])) {
-    const desiredPresent = desiredGeneratedPluginIds.has(pluginId);
-    const already = plugins.includes(pluginId);
+    const desiredPresent = desiredGeneratedPluginEntries.has(pluginEntry);
+    const already = plugins.includes(pluginEntry);
     const pluginReason: "new" | "changed" | "unchanged" = desiredPresent
       ? already
         ? "unchanged"
@@ -1503,7 +1635,7 @@ export const planLowering = async (
     operations.push({
       kind: "patch-opencode-plugins",
       target: jsonTarget,
-      pluginId,
+      pluginEntry,
       desiredPresent,
       reason: pluginReason,
     });
@@ -1580,11 +1712,13 @@ export const executeLowering = async (
           : [];
 
         if (op.desiredPresent) {
-          if (!plugins.includes(op.pluginId)) {
-            plugins.push(op.pluginId);
+          if (!plugins.includes(op.pluginEntry)) {
+            plugins.push(op.pluginEntry);
           }
         } else {
-          const nextPlugins = plugins.filter((pluginId) => pluginId !== op.pluginId);
+          const nextPlugins = plugins.filter(
+            (pluginEntry) => pluginEntry !== op.pluginEntry
+          );
           plugins.length = 0;
           plugins.push(...nextPlugins);
         }
@@ -1614,7 +1748,7 @@ export const describeOperation = (op: LowerOperation): string => {
     case "write-plugin-file":
       return `${op.reason.padEnd(9)} plugin ${op.target}`;
     case "patch-opencode-plugins":
-      return `${op.reason.padEnd(9)} json   ${op.target} [plugin ${op.desiredPresent ? "+=" : "-="} ${op.pluginId}]`;
+      return `${op.reason.padEnd(9)} json   ${op.target} [plugin ${op.desiredPresent ? "+=" : "-="} ${op.pluginEntry}]`;
     case "prune-plugin-path":
       return `${op.reason.padEnd(9)} prune  ${op.target}${op.targetType === "dir" ? " [dir]" : ""}`;
   }

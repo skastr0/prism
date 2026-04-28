@@ -182,8 +182,6 @@ import {
   skillRef,
   skillspaceRef,
   schemaSlot,
-  slotRef,
-  valueSlot,
 } from "agentpkg";
 ```
 
@@ -408,20 +406,25 @@ Traits attach canonical tools by `ref` and can refine description or input/outpu
 
 ```ts
 import { Schema } from "effect";
-import { bindTrait, defineAgent, defineTrait, schemaSlot, slotRef, valueSlot } from "agentpkg";
+import { bindTrait, defineAgent, defineTool, defineTrait, schemaSlot } from "agentpkg";
 
-export default defineTrait({
-  name: "reviewable",
+export default defineTool({
+  name: "submit_review",
+  description: "Submit review findings.",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
   slots: {
-    review_input: schemaSlot(),
-    review_lane: valueSlot(Schema.String),
+    verdict: schemaSlot({ description: "Agent-specific review verdict fields" }),
   },
+  async handle(input, context) {
+    return { acknowledged: true };
+  },
+});
+
+export const reviewable = defineTrait({
+  name: "reviewable",
   tools: {
-    submit_review: {
-      ref: "submit_review",
-      description: "Submit review findings to ${review_lane}",
-      input: slotRef("review_input"),
-    },
+    submit_review: { ref: "submit_review" },
   },
 });
 
@@ -432,8 +435,7 @@ defineAgent({
   traits: [
     bindTrait("reviewable", {
       slots: {
-        review_lane: "security-review",
-        review_input: Schema.Struct({
+        verdict: Schema.Struct({
           summary: Schema.String,
           severity: Schema.Literal("low", "medium", "high"),
         }),

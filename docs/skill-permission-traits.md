@@ -22,3 +22,5 @@ Initial domain trait families:
 These are capability traits, not folders of random skills. Overlap is allowed only where the same method is genuinely shared. For example, `testing` appears in engineering and functional-thinking because both families use it as a validation method; `copy-engineering` appears in marketing and writing because it is relevant to both persuasion and publication.
 
 Traits use `skillspaceRef("agent-core", "global-skills", "<skill>")` for global harness-native skills. Direct `skills: [skillRef(...)]` remains reserved for agent-level dependencies that should appear in the generated agent body.
+
+See `docs/agent-skill-integration-tests.md` for the fast OpenCode audit lane that verifies generated skill permissions and prompt-visible dependencies.

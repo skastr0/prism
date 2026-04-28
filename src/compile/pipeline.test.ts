@@ -57,6 +57,26 @@ const getFailure = (
   return failure.value as CompileError;
 };
 
+const parseOpencodeSkillPermissions = (markdown: string): Record<string, string> => {
+  const frontmatter = matter(markdown).data as {
+    permission?: { skill?: Record<string, string> };
+  };
+  return frontmatter.permission?.skill ?? {};
+};
+
+const skillPermissionAction = (
+  permission: Record<string, string>,
+  skill: string,
+): string => permission[skill] ?? permission["*"] ?? "ask";
+
+const visibleSkillsForPermission = (
+  skills: ReadonlyArray<string>,
+  permission: Record<string, string>,
+): string[] =>
+  skills
+    .filter((skill) => skillPermissionAction(permission, skill) !== "deny")
+    .sort((left, right) => left.localeCompare(right));
+
 const createCanonicalLanguageFixture = async (options?: {
   invalidLifecycle?: boolean;
   invalidLifecyclePermissionAgent?: boolean;
@@ -1910,6 +1930,214 @@ export default defineAgent({
       "*",
       ...family.expected,
     ].sort());
+  }
+});
+
+test("opencode skill audit harness verifies visibility, direct deps, and missing refs", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "skill-audit-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          skills: ["opencode"],
+          skillspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "testing-enabled.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "agentpkg";
+
+export default defineTrait({
+  name: "testing-enabled",
+  description: "Can use test methodology",
+  access: {
+    skills: [skillspaceRef("external-skills", "testing")],
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "external-skills",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "contracts", "SKILL.md"),
+    `---
+name: contracts
+description: Contract guidance
+---
+
+# Contracts
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, skillRef } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker with direct and permission-only skills",
+  identity: "worker",
+  traits: ["testing-enabled"],
+  skills: [skillRef("contracts")],
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+  const worker = result.composed.find((agent) => agent.name === "worker");
+  expect(worker?.skills).toEqual(["contracts"]);
+  expect(worker?.allowedSkills).toEqual(["contracts", "testing"]);
+
+  const markdown = result.operations.find(
+    (operation) =>
+      operation.kind === "write-md" && operation.target.endsWith("agents/worker.md"),
+  );
+  if (!markdown || markdown.kind !== "write-md") {
+    throw new Error("expected worker markdown operation");
+  }
+
+  const permissions = parseOpencodeSkillPermissions(markdown.content);
+  expect(permissions).toEqual({
+    "*": "deny",
+    contracts: "allow",
+    testing: "allow",
+  });
+  expect(
+    visibleSkillsForPermission(["contracts", "marketing", "testing"], permissions),
+  ).toEqual(["contracts", "testing"]);
+  expect(markdown.content).toContain("## Recommended Skills");
+  expect(markdown.content).toContain("- `contracts`");
+  expect(markdown.content).not.toContain("- `testing`");
+
+  const missingRoot = await createTempRoot();
+  const missingPluginRoot = join(missingRoot, "plugin");
+  const missingProjectRoot = join(missingRoot, "project");
+  await mkdir(missingProjectRoot, { recursive: true });
+  await writeText(
+    join(missingPluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "missing-skill-audit-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          skillspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(missingPluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(missingPluginRoot, "traits", "testing-enabled.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "agentpkg";
+
+export default defineTrait({
+  name: "testing-enabled",
+  description: "References a missing method skill",
+  access: {
+    skills: [skillspaceRef("external-skills", "missing-method")],
+  },
+});
+`,
+  );
+  await writeText(
+    join(missingPluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "external-skills",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(missingPluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker with a missing skill permission",
+  identity: "worker",
+  traits: ["testing-enabled"],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: missingPluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: missingProjectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("UnknownReferenceError");
+  if (failure._tag === "UnknownReferenceError") {
+    expect(failure.field).toBe("skill");
+    expect(failure.referenceName).toBe("external-skills/missing-method");
   }
 });
 

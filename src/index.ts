@@ -49,11 +49,6 @@ export interface ModelProfileRefDefinition {
   readonly name: string;
 }
 
-export interface TraitSlotRefDefinition {
-  readonly kind: "trait-slot-ref";
-  readonly slot: string;
-}
-
 export type TraitRefInput = string | TraitRefDefinition;
 export type AgentRefInput = string | AgentRefDefinition;
 export type LifecycleRefInput = string | LifecycleRefDefinition;
@@ -85,6 +80,7 @@ export interface CanonicalToolDefinition {
   readonly description: string;
   readonly input: EffectSchemaValue;
   readonly output: EffectSchemaValue;
+  readonly slots?: Readonly<Record<string, ToolSlotDefinition>>;
   readonly handle: (input: unknown, context: import("./compile/runtime/schema-bridge").ToolRuntimeContext) => Promise<unknown>;
 }
 
@@ -93,7 +89,6 @@ export interface TraitDefinition {
   readonly description?: string;
   readonly instructions?: string | ReadonlyArray<string>;
   readonly access?: AccessDefinition;
-  readonly slots?: Readonly<Record<string, TraitSlotDefinition>>;
   readonly tools?: Readonly<Record<string, TraitToolAttachmentDefinition>>;
   readonly inject?: {
     readonly skills?: ReadonlyArray<string>;
@@ -107,29 +102,22 @@ export interface TraitDefinition {
 export interface TraitBindingDefinition {
   readonly kind: "trait-binding";
   readonly trait: TraitRefInput;
-  readonly slots?: Readonly<Record<string, unknown>>;
+  readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>>;
 }
 
-export interface TraitSchemaSlotDefinition {
+export interface ToolSchemaSlotDefinition {
   readonly kind: "schema";
   readonly description?: string;
-  readonly required?: boolean;
 }
 
-export interface TraitValueSlotDefinition {
-  readonly kind: "value";
-  readonly description?: string;
-  readonly required?: boolean;
-  readonly schema: EffectSchemaValue;
-}
+export type ToolSlotDefinition = ToolSchemaSlotDefinition;
 
-export type TraitSlotDefinition = TraitSchemaSlotDefinition | TraitValueSlotDefinition;
+export interface TraitBindingToolDefinition {
+  readonly slots?: Readonly<Record<string, EffectSchemaValue>>;
+}
 
 export interface TraitToolAttachmentDefinition {
   readonly ref: string;
-  readonly description?: string;
-  readonly input?: EffectSchemaValue | TraitSlotRefDefinition;
-  readonly output?: EffectSchemaValue | TraitSlotRefDefinition;
 }
 
 export interface LifecycleParameterDefinition {
@@ -153,8 +141,6 @@ export type LifecycleToolGrantToolDefinition =
   | {
       readonly ref: string;
       readonly as?: string;
-      readonly description?: string;
-      readonly bind?: Readonly<Record<string, unknown>>;
     };
 
 export interface LifecycleToolGrantDefinition {
@@ -308,34 +294,20 @@ export function modelProfileRef(
       };
 }
 
-export const slotRef = (slot: string): TraitSlotRefDefinition => ({
-  kind: "trait-slot-ref",
-  slot,
-});
-
 export const schemaSlot = (
-  options: Omit<TraitSchemaSlotDefinition, "kind"> = {},
-): TraitSchemaSlotDefinition => ({
+  options: Omit<ToolSchemaSlotDefinition, "kind"> = {},
+): ToolSchemaSlotDefinition => ({
   kind: "schema",
-  ...options,
-});
-
-export const valueSlot = (
-  schema: EffectSchemaValue,
-  options: Omit<TraitValueSlotDefinition, "kind" | "schema"> = {},
-): TraitValueSlotDefinition => ({
-  kind: "value",
-  schema,
   ...options,
 });
 
 export const bindTrait = (
   trait: TraitRefInput,
-  options: { readonly slots?: Readonly<Record<string, unknown>> } = {},
+  options: { readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>> } = {},
 ): TraitBindingDefinition => ({
   kind: "trait-binding",
   trait,
-  ...(options.slots ? { slots: options.slots } : {}),
+  ...(options.tools ? { tools: options.tools } : {}),
 });
 
 export const defineAgent = <T extends AgentDefinition>(agent: T): T => agent;

@@ -31,23 +31,26 @@ import {
   materializeLifecycleToolGrant,
   materializeTraitTools,
   validateTraitBindingSlots,
+  type MaterializedTraitTool,
 } from "./protocol-tools.js";
 import type { PluginRegistry } from "./registry.js";
 
 export interface ResolvedContractBinding {
+  readonly kind: "permission" | "synthetic";
   readonly logicalName: string;
-  readonly contract: Contract;
-  readonly canonicalToolPlugin: string;
-  readonly canonicalToolName: string;
-  readonly canonicalToolSourcePath: string;
+  readonly contract?: Contract;
+  readonly toolPluginName: string;
+  readonly toolName: string;
+  readonly toolSourcePath: string;
 }
 
 export interface ResolvedToolReference {
+  readonly kind: "permission" | "synthetic";
   readonly logicalName: string;
-  readonly contract: Contract;
-  readonly canonicalToolPlugin: string;
-  readonly canonicalToolName: string;
-  readonly canonicalToolSourcePath: string;
+  readonly contract?: Contract;
+  readonly toolPluginName: string;
+  readonly toolName: string;
+  readonly toolSourcePath: string;
 }
 
 export interface ResolvedTrait {
@@ -56,7 +59,6 @@ export interface ResolvedTrait {
   readonly trait: Trait;
   readonly owner: PluginRegistry;
   readonly binding: NormalizedTraitBinding;
-  readonly slots: Readonly<Record<string, unknown>>;
 }
 
 export interface ResolvedAgentCapabilities {
@@ -237,7 +239,6 @@ const resolveTraitReference = (
       trait,
       owner: reg,
       binding,
-      slots: slotValidation.slots,
     };
   });
 
@@ -264,7 +265,7 @@ export const resolveAgentCapabilities = (
       resolvedTraits.push(resolvedTrait);
     }
 
-    const finalToolRefs = new Map<string, { contract: Contract; traitId: string; canonicalToolPlugin: string; canonicalToolName: string; canonicalToolSourcePath: string }>();
+    const finalToolRefs = new Map<string, MaterializedTraitTool & { traitId: string }>();
     const injectedSkills: string[] = [];
     const availableSkillNames = new Set(agent.skills);
 
@@ -291,7 +292,6 @@ export const resolveAgentCapabilities = (
         canonicalTraitId: resolvedTrait.canonicalId,
         trait: resolvedTrait.trait,
         binding: resolvedTrait.binding,
-        boundSlots: resolvedTrait.slots,
         registry,
       });
       if (!(materializedTraitTools instanceof Array)) {
@@ -304,28 +304,29 @@ export const resolveAgentCapabilities = (
         );
       }
 
-      for (const {
-        logicalName,
-        contract,
-        canonicalToolPlugin,
-        canonicalToolName,
-        canonicalToolSourcePath,
-      } of materializedTraitTools) {
+      for (const materialized of materializedTraitTools) {
+        const {
+          logicalName,
+          kind,
+          contract,
+          toolPluginName,
+          toolName,
+        } = materialized;
         const existing = finalToolRefs.get(logicalName);
         if (!existing) {
           finalToolRefs.set(logicalName, {
-            contract,
+            ...materialized,
             traitId: resolvedTrait.canonicalId,
-            canonicalToolPlugin,
-            canonicalToolName,
-            canonicalToolSourcePath,
           });
           continue;
         }
 
         if (
-          existing.contract.pluginName !== contract.pluginName ||
-          existing.contract.name !== contract.name
+          existing.kind !== kind ||
+          existing.toolPluginName !== toolPluginName ||
+          existing.toolName !== toolName ||
+          existing.contract?.pluginName !== contract?.pluginName ||
+          existing.contract?.name !== contract?.name
         ) {
           return yield* Effect.fail(
             agentError(
@@ -374,10 +375,11 @@ export const resolveAgentCapabilities = (
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([logicalName, resolved]) => ({
           logicalName,
+          kind: resolved.kind,
           contract: resolved.contract,
-          canonicalToolPlugin: resolved.canonicalToolPlugin,
-          canonicalToolName: resolved.canonicalToolName,
-          canonicalToolSourcePath: resolved.canonicalToolSourcePath,
+          toolPluginName: resolved.toolPluginName,
+          toolName: resolved.toolName,
+          toolSourcePath: resolved.toolSourcePath,
         })),
       access: {
         tools: [...accessTools].sort((left, right) => left.localeCompare(right)),
@@ -814,8 +816,6 @@ const cloneLifecycleToolGrants = (lifecycle: Lifecycle): Lifecycle["tool_grants"
     tools: grant.tools.map((tool) => ({
       ref: tool.ref,
       logicalName: tool.logicalName,
-      ...(tool.description !== undefined ? { description: tool.description } : {}),
-      bind: { ...tool.bind },
     })),
   }));
 
@@ -887,12 +887,13 @@ export const resolveAgent = (
     const capabilities = yield* resolveAgentCapabilities(agent, registry);
 
     const toolBindings: ResolvedContractBinding[] = capabilities.toolRefs.map(
-      ({ logicalName, contract, canonicalToolPlugin, canonicalToolName, canonicalToolSourcePath }) => ({
+      ({ kind, logicalName, contract, toolPluginName, toolName, toolSourcePath }) => ({
+        kind,
         logicalName,
         contract,
-        canonicalToolPlugin,
-        canonicalToolName,
-        canonicalToolSourcePath,
+        toolPluginName,
+        toolName,
+        toolSourcePath,
       }),
     );
 
@@ -1131,14 +1132,8 @@ export const resolveLifecycleToolGrants = (
             }
 
             const materialized = materializeLifecycleToolGrant({
-              ownerPluginName: registry.pluginName,
-              lifecycleName: lifecycle.name,
-              lifecycleSourcePath: lifecycle.sourcePath,
-              agentName: agent.name,
               logicalName: tool.logicalName,
-              canonicalToolRef: tool.ref,
-              description: tool.description,
-              bind: tool.bind,
+              toolRef: tool.ref,
               registry,
             });
             if (!(materialized instanceof Object) || "message" in materialized) {
@@ -1152,11 +1147,12 @@ export const resolveLifecycleToolGrants = (
             }
 
             agentBindings.push({
+              kind: materialized.kind,
               logicalName: materialized.logicalName,
               contract: materialized.contract,
-              canonicalToolPlugin: materialized.canonicalToolPlugin,
-              canonicalToolName: materialized.canonicalToolName,
-              canonicalToolSourcePath: materialized.canonicalToolSourcePath,
+              toolPluginName: materialized.toolPluginName,
+              toolName: materialized.toolName,
+              toolSourcePath: materialized.toolSourcePath,
             });
             existingLogicalNames.add(tool.logicalName);
           }

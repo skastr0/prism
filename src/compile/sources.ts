@@ -322,17 +322,11 @@ export const NormalizedAccessSchema = Schema.Struct({
 });
 export type NormalizedAccess = typeof NormalizedAccessSchema.Type;
 
-export const TraitSlotRefSchema = Schema.Struct({
-  kind: Schema.Literal("trait-slot-ref"),
-  slot: Schema.String,
+export const SchemaSourceRefSchema = Schema.Struct({
+  sourcePath: Schema.String,
+  exportName: Schema.String,
 });
-export type TraitSlotRef = typeof TraitSlotRefSchema.Type;
-
-export const InlineSchemaValueSchema = Schema.Struct({
-  kind: Schema.Literal("inline-schema"),
-  schema: Schema.Unknown,
-});
-export type InlineSchemaValue = typeof InlineSchemaValueSchema.Type;
+export type SchemaSourceRef = typeof SchemaSourceRefSchema.Type;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -343,29 +337,17 @@ export const TraitInjectSchema = Schema.Struct({
 });
 export type TraitInject = typeof TraitInjectSchema.Type;
 
-export const TraitSchemaSlotSchema = Schema.Struct({
+export const ToolSchemaSlotSchema = Schema.Struct({
   kind: Schema.Literal("schema"),
   description: Schema.optional(Schema.String),
-  required: Schema.optional(Schema.Boolean),
 });
-export type TraitSchemaSlot = typeof TraitSchemaSlotSchema.Type;
+export type ToolSchemaSlot = typeof ToolSchemaSlotSchema.Type;
 
-export const TraitValueSlotSchema = Schema.Struct({
-  kind: Schema.Literal("value"),
-  description: Schema.optional(Schema.String),
-  required: Schema.optional(Schema.Boolean),
-  schema: Schema.Unknown,
-});
-export type TraitValueSlot = typeof TraitValueSlotSchema.Type;
-
-export const TraitSlotSchema = Schema.Union(TraitSchemaSlotSchema, TraitValueSlotSchema);
-export type TraitSlot = typeof TraitSlotSchema.Type;
+export const ToolSlotSchema = ToolSchemaSlotSchema;
+export type ToolSlot = typeof ToolSlotSchema.Type;
 
 export const TraitToolAttachmentSchema = Schema.Struct({
   ref: Schema.String,
-  description: Schema.optional(Schema.String),
-  input: Schema.optional(Schema.Unknown),
-  output: Schema.optional(Schema.Unknown),
 });
 export type TraitToolAttachment = typeof TraitToolAttachmentSchema.Type;
 
@@ -386,24 +368,13 @@ export const TraitSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
   instructions: Schema.optional(TraitInstructionsInputSchema),
   access: Schema.optional(AccessSchema),
-  slots: Schema.optional(Schema.Record({ key: Schema.String, value: TraitSlotSchema })),
   tools: Schema.optional(Schema.Record({ key: Schema.String, value: TraitToolAttachmentSchema })),
   inject: Schema.optional(TraitInjectSchema),
   require: Schema.optional(TraitRequireSchema),
 });
 
-export const NormalizedTraitToolSchemaValueSchema = Schema.Union(
-  TraitSlotRefSchema,
-  InlineSchemaValueSchema,
-);
-export type NormalizedTraitToolSchemaValue =
-  typeof NormalizedTraitToolSchemaValueSchema.Type;
-
 export const NormalizedTraitToolAttachmentSchema = Schema.Struct({
   ref: Schema.String,
-  description: Schema.optional(Schema.String),
-  input: Schema.optional(NormalizedTraitToolSchemaValueSchema),
-  output: Schema.optional(NormalizedTraitToolSchemaValueSchema),
 });
 export type NormalizedTraitToolAttachment = typeof NormalizedTraitToolAttachmentSchema.Type;
 
@@ -413,7 +384,6 @@ export class Trait extends Schema.Class<Trait>("Trait")({
   description: Schema.optional(Schema.String),
   instructions: Schema.Array(Schema.String),
   access: NormalizedAccessSchema,
-  slots: Schema.Record({ key: Schema.String, value: TraitSlotSchema }),
   tools: Schema.Record({ key: Schema.String, value: NormalizedTraitToolAttachmentSchema }),
   inject: Schema.Struct({
     skills: Schema.Array(Schema.String),
@@ -433,6 +403,7 @@ export const CanonicalToolSchema = Schema.Struct({
   description: Schema.String,
   input: Schema.Unknown,
   output: Schema.Unknown,
+  slots: Schema.optional(Schema.Record({ key: Schema.String, value: ToolSlotSchema })),
   handle: Schema.Any,
 });
 export type CanonicalToolInput = typeof CanonicalToolSchema.Type;
@@ -443,6 +414,7 @@ export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")(
   description: Schema.String,
   input: Schema.Unknown,
   output: Schema.Unknown,
+  slots: Schema.Record({ key: Schema.String, value: ToolSlotSchema }),
   handle: Schema.Any,
 }) {}
 
@@ -453,13 +425,30 @@ export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")(
 export const TraitBindingInputSchema = Schema.Struct({
   kind: Schema.Literal("trait-binding"),
   trait: TraitRefInputSchema,
-  slots: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+  tools: Schema.optional(Schema.Record({
+    key: Schema.String,
+    value: Schema.Struct({
+      slots: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+    }),
+  })),
 });
 export type TraitBindingInput = typeof TraitBindingInputSchema.Type;
 
+export const NormalizedTraitBindingToolSlotSchema = Schema.Struct({
+  schema: Schema.Unknown,
+  source: SchemaSourceRefSchema,
+});
+export type NormalizedTraitBindingToolSlot =
+  typeof NormalizedTraitBindingToolSlotSchema.Type;
+
+export const NormalizedTraitBindingToolSchema = Schema.Struct({
+  slots: Schema.Record({ key: Schema.String, value: NormalizedTraitBindingToolSlotSchema }),
+});
+export type NormalizedTraitBindingTool = typeof NormalizedTraitBindingToolSchema.Type;
+
 export const NormalizedTraitBindingSchema = Schema.Struct({
   ref: Schema.String,
-  slots: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  tools: Schema.Record({ key: Schema.String, value: NormalizedTraitBindingToolSchema }),
 });
 export type NormalizedTraitBinding = typeof NormalizedTraitBindingSchema.Type;
 
@@ -611,8 +600,6 @@ export const LifecycleToolGrantToolSchema = Schema.Union(
   Schema.Struct({
     ref: Schema.String,
     as: Schema.optional(Schema.String),
-    description: Schema.optional(Schema.String),
-    bind: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
   }),
 );
 export type LifecycleToolGrantTool = typeof LifecycleToolGrantToolSchema.Type;
@@ -662,8 +649,6 @@ export type NormalizedLifecyclePhase = typeof NormalizedLifecyclePhaseSchema.Typ
 export const NormalizedLifecycleToolGrantToolSchema = Schema.Struct({
   ref: Schema.String,
   logicalName: Schema.String,
-  description: Schema.optional(Schema.String),
-  bind: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
 });
 export type NormalizedLifecycleToolGrantTool =
   typeof NormalizedLifecycleToolGrantToolSchema.Type;

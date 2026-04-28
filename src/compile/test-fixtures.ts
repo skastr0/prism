@@ -22,7 +22,9 @@ export const createCanonicalCompileFixture = async (options: {
   projectRoot: string;
   invalidLifecycle?: boolean;
   invalidLifecycleGrantAgent?: boolean;
-  invalidLifecycleGrantBinding?: boolean;
+  inlineSlotSchema?: boolean;
+  undeclaredSlot?: boolean;
+  mixedTraitRefsBeforeSlotBinding?: boolean;
   withCanonicalToolBindings?: boolean;
 }): Promise<{ pluginRoot: string; projectRoot: string }> => {
   const { pluginRoot, projectRoot } = options;
@@ -194,6 +196,16 @@ You assess completed work and report whether it is ready to ship.
   );
 
   await writeText(
+    join(protocolRoot, "schemas", "review-evidence.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export const ProtocolReviewEvidence = Schema.Struct({
+  source: Schema.String,
+});
+`
+  );
+
+  await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
@@ -284,7 +296,7 @@ export default defineTool({
   await writeText(
     join(pluginRoot, "tools", "submit-review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool, schemaSlot } from ${JSON.stringify(agentpkgImportPath)};
 
 export default defineTool({
   name: "submit-review",
@@ -295,6 +307,11 @@ export default defineTool({
   output: Schema.Struct({
     acknowledged: Schema.Boolean,
   }),
+  slots: {
+    verdict: schemaSlot({
+      description: "Agent-specific review fields",
+    }),
+  },
   async handle(input, context) {
     return { acknowledged: true };
   },
@@ -343,29 +360,35 @@ export default defineTrait({
   );
 
   await writeText(
-    join(pluginRoot, "traits", "reviewable.trait.ts"),
+    join(pluginRoot, "schemas", "review-slots.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTrait, schemaSlot, slotRef, toolGroupRef, valueSlot } from ${JSON.stringify(agentpkgImportPath)};
+import { ProtocolReviewEvidence } from "../deps/protocol-core/schemas/review-evidence.ts";
+
+export const ReviewFindingsSlot = Schema.Struct({
+  verdict: Schema.Literal("approve", "request_changes"),
+  evidence: Schema.optional(ProtocolReviewEvidence),
+});
+
+export const SecurityReviewSlot = Schema.Struct({
+  severity: Schema.Literal("low", "medium", "high"),
+  findings: Schema.Array(Schema.String),
+});
+`
+  );
+
+  await writeText(
+    join(pluginRoot, "traits", "reviewable.trait.ts"),
+    `import { defineTrait, toolGroupRef } from ${JSON.stringify(agentpkgImportPath)};
 
 export default defineTrait({
   name: "reviewable",
   description: "Can submit review findings",
   access: {
     toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
-  },
-  slots: {
-    review_input: schemaSlot({
-      description: "Agent-specific review packet schema",
-    }),
-    review_lane: valueSlot(Schema.String, {
-      description: "Lane for routed review findings",
-    }),
   }${withCanonicalToolBindings ? `,
   tools: {
     submit_review: {
       ref: "submit-review",
-      description: "Submit review findings to \${review_lane}",
-      input: slotRef("review_input"),
     },
   },
   require: {
@@ -426,10 +449,25 @@ export default defineAgent({
 `
   );
 
+  const reviewerSlotReference = options.inlineSlotSchema
+    ? `Schema.Struct({
+              verdict: Schema.Literal("approve", "request_changes"),
+            })`
+    : "ReviewFindingsSlot";
+  const reviewerSlotName = options.undeclaredSlot ? "unknown_verdict" : "verdict";
+  const reviewerTraitsHead = options.mixedTraitRefsBeforeSlotBinding
+    ? `"submittable",`
+    : `bindTrait("submittable"),`;
+  const reviewerSchemaImport =
+    withCanonicalToolBindings && !options.inlineSlotSchema
+      ? `import { ReviewFindingsSlot } from "../schemas/review-slots.ts";`
+      : "";
+
   await writeText(
     join(pluginRoot, "agents", "reviewer.agent.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { bindTrait, defineAgent, modelProfileRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef } from ${JSON.stringify(agentpkgImportPath)};
+${options.inlineSlotSchema ? `import { Schema } from ${JSON.stringify(effectImportPath)};` : ""}
+${reviewerSchemaImport}
 
 export default defineAgent({
   name: "reviewer",
@@ -437,16 +475,16 @@ export default defineAgent({
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
   traits: [
-    bindTrait("submittable"),
-    bindTrait("reviewable", {
-      slots: {
-        review_lane: "review-findings",
-        review_input: Schema.Struct({
-          summary: Schema.String,
-          verdict: Schema.Literal("approve", "request_changes"),
-        }),
+    ${reviewerTraitsHead}
+    ${withCanonicalToolBindings ? `bindTrait("reviewable", {
+      tools: {
+        submit_review: {
+          slots: {
+            ${reviewerSlotName}: ${reviewerSlotReference},
+          },
+        },
       },
-    }),
+    })` : `bindTrait("reviewable")`},
     bindTrait("self-assessing"),
   ],
   targets: {
@@ -463,8 +501,8 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "agents", "security-reviewer.agent.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { bindTrait, defineAgent, modelProfileRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef } from ${JSON.stringify(agentpkgImportPath)};
+${withCanonicalToolBindings ? `import { SecurityReviewSlot } from "../schemas/review-slots.ts";` : ""}
 
 export default defineAgent({
   name: "security-reviewer",
@@ -473,16 +511,15 @@ export default defineAgent({
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
   traits: [
     bindTrait("submittable"),
-    bindTrait("reviewable", {
-      slots: {
-        review_lane: "security-review",
-        review_input: Schema.Struct({
-          summary: Schema.String,
-          severity: Schema.Literal("low", "medium", "high"),
-          findings: Schema.Array(Schema.String),
-        }),
+    ${withCanonicalToolBindings ? `bindTrait("reviewable", {
+      tools: {
+        submit_review: {
+          slots: {
+            verdict: SecurityReviewSlot,
+          },
+        },
       },
-    }),
+    })` : `bindTrait("reviewable")`},
     bindTrait("self-assessing"),
   ],
   targets: {
@@ -501,9 +538,6 @@ export default defineAgent({
   const grantAgents = options.invalidLifecycleGrantAgent
     ? ["security-reviewer"]
     : ["builder"];
-  const grantBind = options.invalidLifecycleGrantBinding
-    ? "{ board: undefined }"
-    : JSON.stringify({ board: "project-alpha" });
 
   const lifecycleToolGrants = withCanonicalToolBindings
     ? `,
@@ -514,7 +548,6 @@ export default defineAgent({
         {
           ref: "protocol-core:create_item",
           as: "create_item",
-          bind: ${grantBind},
         },
       ],
     },

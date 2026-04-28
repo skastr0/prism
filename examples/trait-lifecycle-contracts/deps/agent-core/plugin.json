@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "targets": {
     "toolspaces": ["opencode", "claude-code"],
-    "modelspaces": ["opencode", "claude-code"]
+    "modelspaces": ["opencode", "claude-code"],
+    "skillspaces": ["opencode", "claude-code"]
   }
 }

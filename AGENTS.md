@@ -257,6 +257,8 @@ Skillspaces define:
 
 Agents and traits reference skill permissions through `skillRef(...)` or `skillspaceRef(...)`. Resolution is target-aware and fail-closed if a managed skill is not targeted to the compile harness or if a skillspace mapping is missing.
 
+See `docs/skillspaces.md` for the current global OpenCode / Claude Code / Codex skill inventory and the `skillRef(...)` versus `skillspaceRef(...)` authoring rule.
+
 ### Parameterized lifecycle templates
 
 Lifecycle files can be either:

@@ -1960,6 +1960,8 @@ test("compilePluginForTarget lowers native Claude surfaces when no canonical too
   expect(claudeAgent).toContain('- "Read"');
   expect(claudeAgent).toContain('- "Grep"');
   expect(claudeAgent).toContain('- "Bash"');
+  expect(claudeAgent).toContain("## Recommended Skills");
+  expect(claudeAgent).toContain("- `testing`");
   expect(claudeAgent).toContain("## Trait Instructions");
   expect(claudeAgent).toContain(
     "Commit owned implementation changes only after the submitted work is complete.",

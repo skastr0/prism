@@ -1467,6 +1467,87 @@ export default defineAgent({
   }
 });
 
+test("toolspace refs require a target mapping for the compile harness", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "toolspace-target-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["claude-code"],
+          toolspaces: ["claude-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
+    `import { defineToolspace } from "agentpkg";
+
+export default defineToolspace({
+  name: "workspace",
+  tools: {
+    read: {
+      targets: {
+        opencode: { name: "read" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, toolRef } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  access: {
+    tools: [toolRef("workspace", "read")],
+  },
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("MissingTargetResolutionError");
+  if (failure._tag === "MissingTargetResolutionError") {
+    expect(failure.referenceKind).toBe("tool");
+    expect(failure.referenceName).toBe("workspace/read");
+    expect(failure.target).toBe("claude-code");
+  }
+});
+
 test("opencode skillspace target names must be valid permission keys", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");

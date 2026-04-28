@@ -25,6 +25,9 @@ import {
   ModelspaceSchema,
   Personality,
   PersonalityFrontmatter,
+  Skill,
+  Skillspace,
+  SkillspaceSchema,
   Toolspace,
   ToolspaceSchema,
   Trait,
@@ -32,6 +35,7 @@ import {
   normalizeAgentRefInput,
   normalizeLifecycleRefInput,
   normalizeModelProfileRefInput,
+  normalizeSkillRefInput,
   normalizeToolGroupRefInput,
   normalizeToolRefInput,
   normalizeTraitRefInput,
@@ -43,6 +47,7 @@ import {
   type NormalizedLifecycleToolPermission,
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
+  type SkillRefInput,
 } from "./sources.js";
 import {
   AgentNameMismatchError,
@@ -53,6 +58,7 @@ import {
   type CompileError,
 } from "./errors.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
+import type { PluginManifestTargets } from "../types.js";
 
 const listDir = (path: string): Effect.Effect<string[]> =>
   Effect.tryPromise({
@@ -66,6 +72,12 @@ const listDir = (path: string): Effect.Effect<string[]> =>
     },
     catch: () => null,
   }).pipe(Effect.orElseSucceed(() => [] as string[]));
+
+const fileExists = (path: string): Effect.Effect<boolean> =>
+  Effect.tryPromise({
+    try: () => Bun.file(path).exists(),
+    catch: () => false,
+  }).pipe(Effect.orElseSucceed(() => false));
 
 type SourceParseKind = SourceParseError["kind"];
 
@@ -133,6 +145,13 @@ export const modelProfileRef = (first, second, third) =>
     ? { kind: "model-profile-ref", modelspace: first, name: second }
     : { kind: "model-profile-ref", plugin: first, modelspace: second, name: third };
 
+export const skillRef = (first, second) => withNamedRef("skill-ref", first, second);
+
+export const skillspaceRef = (first, second, third) =>
+  third === undefined
+    ? { kind: "skillspace-ref", skillspace: first, name: second }
+    : { kind: "skillspace-ref", plugin: first, skillspace: second, name: third };
+
 export const schemaSlot = (options = {}) => ({ kind: "schema", ...options });
 export const bindTrait = (trait, options = {}) => ({
   kind: "trait-binding",
@@ -146,6 +165,7 @@ export const defineLifecycle = (lifecycle) => lifecycle;
 export const defineTool = (tool) => tool;
 export const defineToolspace = (toolspace) => toolspace;
 export const defineModelspace = (modelspace) => modelspace;
+export const defineSkillspace = (skillspace) => skillspace;
 `;
 
 const makeEffectRuntimeJs = (): string => {
@@ -468,6 +488,7 @@ const TRAIT_SUFFIX_TS = ".trait.ts";
 const AGENT_SUFFIX_TS = ".agent.ts";
 const TOOLSPACE_SUFFIX_TS = ".toolspace.ts";
 const MODELSPACE_SUFFIX_TS = ".modelspace.ts";
+const SKILLSPACE_SUFFIX_TS = ".skillspace.ts";
 const LIFECYCLE_SUFFIX_TS = ".lifecycle.ts";
 const TOOL_SUFFIX_TS = ".tool.ts";
 
@@ -536,7 +557,41 @@ const normalizeAccess = (
     toolGroups.push(normalized);
   }
 
-  return { tools, toolGroups };
+  const skills: string[] = [];
+  for (const [index, skill] of (access?.skills ?? []).entries()) {
+    const normalized = normalizeSkillRefInput(`${field}.skills[${index}]`, skill);
+    if (typeof normalized !== "string") {
+      return new SourceParseError({
+        sourcePath,
+        kind,
+        message: `${normalized.field}: ${normalized.message}`,
+      });
+    }
+    skills.push(normalized);
+  }
+
+  return { tools, toolGroups, skills };
+};
+
+const normalizeSkillRefs = (
+  sourcePath: string,
+  kind: SourceParseKind,
+  field: string,
+  skills: readonly SkillRefInput[] | undefined,
+): string[] | SourceParseError => {
+  const normalizedSkills: string[] = [];
+  for (const [index, skill] of (skills ?? []).entries()) {
+    const normalized = normalizeSkillRefInput(`${field}[${index}]`, skill);
+    if (typeof normalized !== "string") {
+      return new SourceParseError({
+        sourcePath,
+        kind,
+        message: `${normalized.field}: ${normalized.message}`,
+      });
+    }
+    normalizedSkills.push(normalized);
+  }
+  return normalizedSkills;
 };
 
 const isEffectSchema = (value: unknown): value is Schema.Schema.AnyNoContext =>
@@ -869,6 +924,26 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       tools[toolName] = attachment as Trait["tools"][string];
     }
 
+    const injectedSkills = normalizeSkillRefs(
+      sourcePath,
+      "trait",
+      "inject.skills",
+      result.right.inject?.skills,
+    );
+    if (injectedSkills instanceof SourceParseError) {
+      return yield* Effect.fail(injectedSkills);
+    }
+
+    const requiredSkills = normalizeSkillRefs(
+      sourcePath,
+      "trait",
+      "require.skills",
+      result.right.require?.skills,
+    );
+    if (requiredSkills instanceof SourceParseError) {
+      return yield* Effect.fail(requiredSkills);
+    }
+
     return new Trait({
       name: result.right.name,
       sourcePath,
@@ -877,11 +952,11 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       access,
       tools,
       inject: {
-        skills: result.right.inject?.skills ?? [],
+        skills: injectedSkills,
       },
       require: {
         tools: result.right.require?.tools ?? [],
-        skills: result.right.require?.skills ?? [],
+        skills: requiredSkills,
       },
     });
   });
@@ -1030,6 +1105,11 @@ const parseAgentModule = (
       return yield* Effect.fail(access);
     }
 
+    const skills = normalizeSkillRefs(sourcePath, "agent", "skills", parsed.skills);
+    if (skills instanceof SourceParseError) {
+      return yield* Effect.fail(skills);
+    }
+
     return new Agent({
       name: parsed.name,
       sourcePath,
@@ -1039,7 +1119,7 @@ const parseAgentModule = (
       ...(model ? { model } : {}),
       traits,
       access,
-      skills: parsed.skills ?? [],
+      skills,
       color: parsed.color,
       targets: parsed.targets ?? {},
     });
@@ -1225,6 +1305,75 @@ const loadModelspaces = (
         );
       }
       map.set(modelspace.name, modelspace);
+    }
+
+    return map;
+  });
+
+const parseSkillspace = (
+  sourcePath: string,
+): Effect.Effect<Skillspace, CompileError> =>
+  Effect.gen(function* () {
+    const raw = yield* importTsModule<unknown>(sourcePath, "skillspace");
+    const result = Schema.decodeUnknownEither(SkillspaceSchema)(raw);
+    if (result._tag === "Left") {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "skillspace",
+          message: result.left.message,
+        }),
+      );
+    }
+
+    return new Skillspace({
+      name: result.right.name,
+      sourcePath,
+      description: result.right.description,
+      skills: result.right.skills,
+    });
+  });
+
+const loadSkillspaces = (
+  pluginPath: string,
+): Effect.Effect<Map<string, Skillspace>, CompileError> =>
+  Effect.gen(function* () {
+    const dir = join(pluginPath, "skillspaces");
+    const entries = yield* listDir(dir);
+    const map = new Map<string, Skillspace>();
+
+    for (const entry of entries.sort()) {
+      if (!entry.endsWith(SKILLSPACE_SUFFIX_TS)) continue;
+      const skillspace = yield* parseSkillspace(join(dir, entry));
+      const existing = map.get(skillspace.name);
+      if (existing) {
+        return yield* Effect.fail(
+          new DuplicateNameError({
+            kind: "skillspace",
+            name: skillspace.name,
+            firstPath: existing.sourcePath,
+            secondPath: skillspace.sourcePath,
+          }),
+        );
+      }
+      map.set(skillspace.name, skillspace);
+    }
+
+    return map;
+  });
+
+const loadSkills = (
+  pluginPath: string,
+): Effect.Effect<Map<string, Skill>, CompileError> =>
+  Effect.gen(function* () {
+    const dir = join(pluginPath, "skills");
+    const entries = yield* listDir(dir);
+    const map = new Map<string, Skill>();
+
+    for (const entry of entries.sort()) {
+      const sourcePath = join(dir, entry, "SKILL.md");
+      if (!(yield* fileExists(sourcePath))) continue;
+      map.set(entry, new Skill({ name: entry, sourcePath }));
     }
 
     return map;
@@ -1546,6 +1695,7 @@ interface PluginManifest {
   name: string;
   version: string;
   deps: Record<string, string>;
+  targets: PluginManifestTargets;
 }
 
 const readPluginManifest = (
@@ -1611,7 +1761,13 @@ const readPluginManifest = (
       }
     }
 
-    return { name, version, deps };
+    const rawTargets = data.targets;
+    const targets =
+      rawTargets && typeof rawTargets === "object" && !Array.isArray(rawTargets)
+        ? (rawTargets as PluginManifestTargets)
+        : {};
+
+    return { name, version, deps, targets };
   });
 
 const parseCanonicalTool = (sourcePath: string): Effect.Effect<CanonicalTool, CompileError> =>
@@ -1694,13 +1850,22 @@ const loadPluginArtifacts = (
   pluginName: string,
   pluginVersion: string,
   dependencyPaths: Record<string, string>,
+  targets: PluginManifestTargets,
 ): Effect.Effect<PluginRegistry, CompileError> =>
   Effect.gen(function* () {
-    const registry = emptyRegistry(pluginPath, pluginName, pluginVersion, dependencyPaths);
+    const registry = emptyRegistry(
+      pluginPath,
+      pluginName,
+      pluginVersion,
+      dependencyPaths,
+      targets,
+    );
     registry.identities = yield* loadIdentities(pluginPath);
     registry.personalities = yield* loadPersonalities(pluginPath);
     registry.toolspaces = yield* loadToolspaces(pluginPath);
     registry.modelspaces = yield* loadModelspaces(pluginPath);
+    registry.skillspaces = yield* loadSkillspaces(pluginPath);
+    registry.skills = yield* loadSkills(pluginPath);
     registry.traits = yield* loadTraits(pluginPath);
     registry.tools = yield* loadCanonicalTools(pluginPath);
     registry.lifecycles = yield* loadLifecycles(pluginPath);
@@ -1745,6 +1910,7 @@ const loadPluginWithDeps = (
       manifest.name,
       manifest.version,
       resolvedDeps,
+      manifest.targets,
     );
 
     const nextStack = [...stack, canonical];

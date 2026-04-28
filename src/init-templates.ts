@@ -38,6 +38,7 @@ export const typescriptTsconfigJson = `${JSON.stringify(
       "lifecycles/**/*.ts",
       "modelspaces/**/*.ts",
       "schemas/**/*.ts",
+      "skillspaces/**/*.ts",
       "slots/**/*.ts",
       "tools/**/*.ts",
       "toolspaces/**/*.ts",
@@ -86,7 +87,7 @@ export const oxfmtConfigJson = `${JSON.stringify(
   2
 )}\n`;
 
-export const agentpkgOxlintPluginJs = `const DSL_PATH_PATTERN = /(^|\\/)(agents|lifecycles|modelspaces|toolspaces|traits)(\\/|$)|\\.(agent|lifecycle|modelspace|toolspace|trait)\\.ts$/;
+export const agentpkgOxlintPluginJs = `const DSL_PATH_PATTERN = /(^|\\/)(agents|lifecycles|modelspaces|skillspaces|toolspaces|traits)(\\/|$)|\\.(agent|lifecycle|modelspace|skillspace|toolspace|trait)\\.ts$/;
 
 const getPropertyName = (property) => {
   if (!property || property.type !== "Property") {

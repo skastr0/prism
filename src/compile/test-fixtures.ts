@@ -65,6 +65,7 @@ export const createCanonicalCompileFixture = async (options: {
         targets: {
           toolspaces: ["opencode", "claude-code"],
           modelspaces: ["opencode", "claude-code"],
+          skillspaces: ["opencode", "claude-code"],
         },
       },
       null,
@@ -409,11 +410,24 @@ export default defineTrait({
   access: {
     toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
   },
-  inject: {
-    skills: ["testing"],
-  },
-  require: {
-    skills: ["testing"],
+});
+`
+  );
+
+  await writeText(
+    join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
+    `import { defineSkillspace } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineSkillspace({
+  name: "core-skills",
+  description: "Harness-native core skill names",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+        "claude-code": { name: "testing" },
+      },
+    },
   },
 });
 `
@@ -421,7 +435,7 @@ export default defineTrait({
 
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef, toolRef } from ${JSON.stringify(agentpkgImportPath)};
 
 export default defineAgent({
   name: "builder",
@@ -436,6 +450,7 @@ export default defineAgent({
   access: {
     tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
   },
+  skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
     opencode: {
       mode: "subagent",
@@ -465,7 +480,7 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "agents", "reviewer.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(agentpkgImportPath)};
 ${options.inlineSlotSchema ? `import { Schema } from ${JSON.stringify(effectImportPath)};` : ""}
 ${reviewerSchemaImport}
 
@@ -487,6 +502,7 @@ export default defineAgent({
     })` : `bindTrait("reviewable")`},
     bindTrait("self-assessing"),
   ],
+  skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
     opencode: {
       mode: "subagent",
@@ -501,7 +517,7 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "agents", "security-reviewer.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(agentpkgImportPath)};
 ${withCanonicalToolBindings ? `import { SecurityReviewSlot } from "../schemas/review-slots.ts";` : ""}
 
 export default defineAgent({
@@ -522,6 +538,7 @@ export default defineAgent({
     })` : `bindTrait("reviewable")`},
     bindTrait("self-assessing"),
   ],
+  skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
     opencode: {
       mode: "subagent",

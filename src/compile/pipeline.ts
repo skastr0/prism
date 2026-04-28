@@ -189,6 +189,45 @@ const assertTargetSupportsGeneratedCanonicalTools = (
   );
 };
 
+const assertTargetSupportsSkillPermissions = (
+  target: string,
+  agents: ReadonlyArray<ComposedAgent>,
+): Effect.Effect<void, CompileError> => {
+  const capabilities = getCompileTargetCapabilities(target);
+  if (capabilities.skillPermissions === "supported") {
+    return Effect.void;
+  }
+
+  const agentsWithPermissionOnlySkills = agents
+    .map((agent) => {
+      const dependencySkills = new Set(agent.skills);
+      const permissionOnlySkills = agent.allowedSkills.filter(
+        (skill) => !dependencySkills.has(skill),
+      );
+      return { agent, permissionOnlySkills };
+    })
+    .filter(({ permissionOnlySkills }) => permissionOnlySkills.length > 0)
+    .map(({ agent, permissionOnlySkills }) =>
+      `${agent.name} (${permissionOnlySkills.join(", ")})`,
+    );
+
+  if (agentsWithPermissionOnlySkills.length === 0) {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new UnsupportedTargetCapabilityError({
+      target,
+      capability: "skill-permissions",
+      message:
+        `${target} does not support per-agent skill permission visibility. ` +
+        `Use direct agent skill dependencies for this target or compile a target ` +
+        `with skill permission support. Agents with permission-only skills: ` +
+        agentsWithPermissionOnlySkills.join(", "),
+    }),
+  );
+};
+
 export const compilePluginForTarget = (
   options: CompileOptions
 ): Effect.Effect<CompileResult, CompileError> =>
@@ -290,6 +329,10 @@ export const compilePluginForTarget = (
     const lifecycleToolPermissions = yield* resolveLifecycleToolPermissions(lifecycles, registry);
     const composedForLowering = applyLifecycleToolPermissions(composed, lifecycleToolPermissions);
     yield* assertTargetSupportsGeneratedCanonicalTools(
+      options.target,
+      composedForLowering,
+    );
+    yield* assertTargetSupportsSkillPermissions(
       options.target,
       composedForLowering,
     );

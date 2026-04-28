@@ -4,10 +4,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Cause, Effect, Option } from "effect";
+import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
+import { readLockfile } from "./lockfile.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { createCanonicalCompileFixture } from "./test-fixtures.js";
-import { readManifest } from "../manifest.js";
+import {
+  formatManifestTargets,
+  manifestHasCompileTargets,
+  readManifest,
+} from "../manifest.js";
 
 const tempRoots: string[] = [];
 
@@ -96,6 +102,8 @@ const createExternalPermissionOnlyFixture = async (): Promise<{
         },
         targets: {
           agents: ["opencode"],
+          skills: ["opencode"],
+          skillspaces: ["opencode"],
         },
       },
       null,
@@ -381,6 +389,47 @@ test("readManifest accepts canonical compile target keys", async () => {
     toolspaces: ["opencode", "claude-code"],
     modelspaces: ["opencode", "claude-code"],
   });
+});
+
+test("readManifest treats skillspaces as compile artifacts", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "skillspace-manifest-demo",
+        version: "0.1.0",
+        targets: {
+          skillspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "core.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "core",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+      },
+    },
+  },
+});
+`,
+  );
+
+  const manifest = await readManifest(pluginRoot);
+
+  expect(manifest.targets.skillspaces).toEqual(["opencode"]);
+  expect(manifestHasCompileTargets(manifest, "opencode")).toBe(true);
+  expect(formatManifestTargets(manifest)).toBe("skillspaces=[opencode]");
 });
 
 test("canonical TS-authored agents resolve shared toolspace and modelspace bindings", async () => {
@@ -893,6 +942,693 @@ export const tool = Object.assign((definition) => definition, { schema });
   ).toBe(false);
 });
 
+test("opencode trait skill access lowers to permission without becoming a dependency", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "skill-access-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          skills: ["opencode"],
+          skillspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+
+Use only the skills that fit the work.
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "marketing-enabled.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "agentpkg";
+
+export default defineTrait({
+  name: "marketing-enabled",
+  description: "Can use marketing skills",
+  access: {
+    skills: [
+      skillspaceRef("external-skills", "copy-engineering"),
+      skillspaceRef("external-skills", "marketing"),
+    ],
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "external-skills",
+  description: "Harness-native skills this plugin does not own",
+  skills: {
+    "copy-engineering": {
+      targets: {
+        opencode: { name: "copy-engineering-opencode" },
+      },
+    },
+    marketing: {
+      targets: {
+        opencode: { name: "marketing-opencode" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "contracts", "SKILL.md"),
+    `---
+name: contracts
+description: Contract guidance
+---
+
+# Contracts
+
+Lock down interfaces before implementation.
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, skillRef } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker with skill permissions",
+  identity: "worker",
+  traits: ["marketing-enabled"],
+  skills: [skillRef("contracts")],
+});
+`,
+  );
+
+  const firstCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(firstCompile.built).toEqual(["worker"]);
+  expect(firstCompile.fromCache).toEqual([]);
+
+  const opencodeAgent = await readFile(
+    join(projectRoot, ".opencode", "agents", "worker.md"),
+    "utf8",
+  );
+  const frontmatter = matter(opencodeAgent).data as {
+    permission?: { skill?: Record<string, string> };
+  };
+
+  expect(opencodeAgent).toContain("## Recommended Skills");
+  expect(opencodeAgent).toContain("- `contracts`");
+  expect(opencodeAgent).not.toContain("- `copy-engineering-opencode`");
+  expect(opencodeAgent).not.toContain("- `marketing-opencode`");
+  expect(frontmatter.permission?.skill).toEqual({
+    "*": "deny",
+    "contracts": "allow",
+    "copy-engineering-opencode": "allow",
+    "marketing-opencode": "allow",
+  });
+
+  const lockfile = await readLockfile(pluginRoot);
+  expect(lockfile?.entries[0]?.sources.map((source) => source.path).sort()).toContain(
+    "skills/contracts/SKILL.md",
+  );
+  expect(lockfile?.entries[0]?.sources.map((source) => source.path).sort()).toContain(
+    "skillspaces/external-skills.skillspace.ts",
+  );
+
+  const warmCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+  expect(warmCompile.built).toEqual([]);
+  expect(warmCompile.fromCache).toEqual(["worker"]);
+
+  await writeText(
+    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "external-skills",
+  description: "Harness-native skills this plugin does not own",
+  skills: {
+    "copy-engineering": {
+      targets: {
+        opencode: { name: "copywriting-opencode" },
+      },
+    },
+    marketing: {
+      targets: {
+        opencode: { name: "marketing-opencode" },
+      },
+    },
+  },
+});
+`,
+  );
+
+  const skillspaceChangedCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+  expect(skillspaceChangedCompile.built).toEqual(["worker"]);
+  expect(skillspaceChangedCompile.fromCache).toEqual([]);
+});
+
+test("trait skill requirements compare resolved concrete skills", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "skill-requirement-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          skills: ["opencode"],
+          skillspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "needs-testing.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "agentpkg";
+
+export default defineTrait({
+  name: "needs-testing",
+  description: "Requires testing skill permission",
+  require: {
+    skills: [skillspaceRef("core-skills", "testing")],
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "core-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "core-skills",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, skillRef } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker with concrete skill dependency",
+  identity: "worker",
+  traits: ["needs-testing"],
+  skills: [skillRef("testing")],
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(result.composed[0]?.skills).toEqual(["testing"]);
+  expect(result.composed[0]?.allowedSkills).toEqual(["testing"]);
+});
+
+test("plain skill strings fail closed in agent and trait source fields", async () => {
+  const cases: ReadonlyArray<{
+    label: string;
+    expectedKind: "agent" | "trait";
+    agentSource?: string;
+    traitSource?: string;
+  }> = [
+    {
+      label: "agent.skills",
+      expectedKind: "agent",
+      agentSource: `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  skills: ["testing"],
+});
+`,
+    },
+    {
+      label: "agent.access.skills",
+      expectedKind: "agent",
+      agentSource: `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  access: {
+    skills: ["testing"],
+  },
+});
+`,
+    },
+    {
+      label: "trait.access.skills",
+      expectedKind: "trait",
+      traitSource: `import { defineTrait } from "agentpkg";
+
+export default defineTrait({
+  name: "skillful",
+  description: "Skill access",
+  access: {
+    skills: ["testing"],
+  },
+});
+`,
+    },
+    {
+      label: "trait.inject.skills",
+      expectedKind: "trait",
+      traitSource: `import { defineTrait } from "agentpkg";
+
+export default defineTrait({
+  name: "skillful",
+  description: "Skill injection",
+  inject: {
+    skills: ["testing"],
+  },
+});
+`,
+    },
+    {
+      label: "trait.require.skills",
+      expectedKind: "trait",
+      traitSource: `import { defineTrait } from "agentpkg";
+
+export default defineTrait({
+  name: "skillful",
+  description: "Skill requirement",
+  require: {
+    skills: ["testing"],
+  },
+});
+`,
+    },
+  ];
+
+  for (const item of cases) {
+    const root = await createTempRoot();
+    const pluginRoot = join(root, item.label.replaceAll(".", "-"));
+    const projectRoot = join(root, "project");
+    await mkdir(projectRoot, { recursive: true });
+
+    await writeText(
+      join(pluginRoot, "plugin.json"),
+      `${JSON.stringify(
+        {
+          name: `plain-${item.label.replaceAll(".", "-")}`,
+          version: "0.1.0",
+          targets: {
+            agents: ["opencode"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeText(
+      join(pluginRoot, "identities", "worker.identity.md"),
+      `---
+description: Worker identity
+---
+
+# Worker
+`,
+    );
+    if (item.traitSource) {
+      await writeText(join(pluginRoot, "traits", "skillful.trait.ts"), item.traitSource);
+    }
+    await writeText(
+      join(pluginRoot, "agents", "worker.agent.ts"),
+      item.agentSource ??
+        `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: ["skillful"],
+});
+`,
+    );
+
+    const exit = await Effect.runPromiseExit(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "opencode",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+        backup: false,
+      }),
+    );
+
+    const failure = getFailure(exit);
+    expect(failure._tag).toBe("SourceParseError");
+    if (failure._tag === "SourceParseError") {
+      expect(failure.kind).toBe(item.expectedKind);
+      expect(failure.message).toContain("plain skill strings are not allowed");
+    }
+  }
+});
+
+test("managed skill refs require the source plugin to target the compile harness", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "managed-skill-target-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          skills: ["claude-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "contracts", "SKILL.md"),
+    `---
+name: contracts
+description: Contract guidance
+---
+
+# Contracts
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, skillRef } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  skills: [skillRef("contracts")],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("MissingTargetResolutionError");
+  if (failure._tag === "MissingTargetResolutionError") {
+    expect(failure.referenceKind).toBe("skill");
+    expect(failure.referenceName).toBe("contracts");
+    expect(failure.target).toBe("opencode");
+  }
+});
+
+test("opencode skillspace target names must be valid permission keys", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "invalid-opencode-skill-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          skillspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "external.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "agentpkg";
+
+export default defineTrait({
+  name: "external",
+  description: "Uses an external skill",
+  access: {
+    skills: [skillspaceRef("external-skills", "copy-engineering")],
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "external-skills",
+  skills: {
+    "copy-engineering": {
+      targets: {
+        opencode: { name: "Copy_Engineering" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: ["external"],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("AgentValidationError");
+  if (failure._tag === "AgentValidationError") {
+    expect(failure.field).toBe("skill");
+    expect(failure.message).toContain("invalid OpenCode skill name");
+  }
+});
+
+test("permission-only skill access fails on targets without skill permission support", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "unsupported-skill-permission-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["claude-code"],
+          skillspaces: ["claude-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "external.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "agentpkg";
+
+export default defineTrait({
+  name: "external",
+  description: "Uses an external skill",
+  access: {
+    skills: [skillspaceRef("external-skills", "testing")],
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "agentpkg";
+
+export default defineSkillspace({
+  name: "external-skills",
+  skills: {
+    testing: {
+      targets: {
+        "claude-code": { name: "testing" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: ["external"],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
+  if (failure._tag === "UnsupportedTargetCapabilityError") {
+    expect(failure.capability).toBe("skill-permissions");
+    expect(failure.message).toContain("worker (testing)");
+  }
+});
+
 test("external permission-only consumers do not emit empty generated plugin shells", async () => {
   const { pluginRoot, projectRoot } = await createExternalPermissionOnlyFixture();
 
@@ -964,6 +1700,8 @@ test("external permission-only consumers do not emit empty generated plugin shel
     "utf8",
   );
   expect(opencodeAgent).toContain("permission:");
+  expect(opencodeAgent).toContain("  skill:");
+  expect(opencodeAgent).toContain('    "*": deny');
   expect(opencodeAgent).toContain("protocol_core_external_submit: allow");
   expect(opencodeAgent).toContain("protocol_core_unreferenced: deny");
 

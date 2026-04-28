@@ -74,6 +74,8 @@ const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => 
     ...registry.personalities.values(),
     ...registry.toolspaces.values(),
     ...registry.modelspaces.values(),
+    ...registry.skillspaces.values(),
+    ...registry.skills.values(),
     ...registry.traits.values(),
     ...registry.lifecycles.values(),
     ...registry.agents.values(),

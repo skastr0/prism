@@ -14,6 +14,7 @@ export interface ComposedAgent {
   readonly model: Record<string, unknown> | undefined;
   readonly targetOverride: Record<string, unknown>;
   readonly skills: ReadonlyArray<string>;
+  readonly allowedSkills: ReadonlyArray<string>;
   readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
   readonly allowedTools: ReadonlyArray<string>;
 }
@@ -113,6 +114,7 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
     model: resolved.resolvedModel,
     targetOverride: (resolved.agent.targets as Record<string, unknown>) || {},
     skills: resolved.skills,
+    allowedSkills: resolved.allowedSkills,
     toolBindings: resolved.toolBindings,
     allowedTools: resolved.allowedTools,
   };

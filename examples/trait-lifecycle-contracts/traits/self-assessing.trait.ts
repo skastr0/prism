@@ -6,10 +6,4 @@ export default defineTrait({
   access: {
     toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
   },
-  inject: {
-    skills: ["testing"],
-  },
-  require: {
-    skills: ["testing"],
-  },
 });

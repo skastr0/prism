@@ -7,6 +7,7 @@
  * - Lifecycle     : lifecycles/*.lifecycle.ts
  * - Toolspace     : toolspaces/*.toolspace.ts
  * - Modelspace    : modelspaces/*.modelspace.ts
+ * - Skillspace    : skillspaces/*.skillspace.ts
  *
  * Prose artifacts remain markdown-authored:
  * - Identity      : identities/*.identity.md
@@ -89,6 +90,22 @@ export const ModelProfileRefInputSchema = Schema.Union(
   }),
 );
 export type ModelProfileRefInput = typeof ModelProfileRefInputSchema.Type;
+
+export const SkillRefInputSchema = Schema.Union(
+  Schema.String,
+  Schema.Struct({
+    kind: Schema.Literal("skill-ref"),
+    plugin: Schema.optional(Schema.String),
+    name: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("skillspace-ref"),
+    plugin: Schema.optional(Schema.String),
+    skillspace: Schema.String,
+    name: Schema.String,
+  }),
+);
+export type SkillRefInput = typeof SkillRefInputSchema.Type;
 
 export interface RefNormalizationError {
   readonly field: string;
@@ -244,6 +261,54 @@ export const normalizeModelProfileRefInput = (
   return `${head}/${value.name}`;
 };
 
+export const normalizeSkillRefInput = (
+  field: string,
+  value: SkillRefInput,
+): string | RefNormalizationError => {
+  if (typeof value === "string") {
+    return invalidRef(
+      field,
+      "plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
+    );
+  }
+
+  if (value.kind === "skill-ref") {
+    if (!isNonEmpty(value.name)) {
+      return invalidRef(field, "skill ref object must include a non-empty 'name'");
+    }
+
+    if (value.plugin !== undefined && !isNonEmpty(value.plugin)) {
+      return invalidRef(field, "skill ref object 'plugin' must be non-empty when provided");
+    }
+
+    return value.plugin ? `${value.plugin}:${value.name}` : value.name;
+  }
+
+  if (!isNonEmpty(value.skillspace)) {
+    return invalidRef(
+      field,
+      "skillspace ref object must include a non-empty 'skillspace'",
+    );
+  }
+
+  if (!isNonEmpty(value.name)) {
+    return invalidRef(
+      field,
+      "skillspace ref object must include a non-empty 'name'",
+    );
+  }
+
+  if (value.plugin !== undefined && !isNonEmpty(value.plugin)) {
+    return invalidRef(
+      field,
+      "skillspace ref object 'plugin' must be non-empty when provided",
+    );
+  }
+
+  const head = value.plugin ? `${value.plugin}:${value.skillspace}` : value.skillspace;
+  return `${head}/${value.name}`;
+};
+
 // ---------------------------------------------------------------------------
 // Identity
 // ---------------------------------------------------------------------------
@@ -313,12 +378,14 @@ export type ClaudeCodeModelTarget = typeof ClaudeCodeModelTarget.Type;
 export const AccessSchema = Schema.Struct({
   tools: Schema.optional(Schema.Array(ToolRefInputSchema)),
   toolGroups: Schema.optional(Schema.Array(ToolGroupRefInputSchema)),
+  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
 });
 export type Access = typeof AccessSchema.Type;
 
 export const NormalizedAccessSchema = Schema.Struct({
   tools: Schema.Array(Schema.String),
   toolGroups: Schema.Array(Schema.String),
+  skills: Schema.Array(Schema.String),
 });
 export type NormalizedAccess = typeof NormalizedAccessSchema.Type;
 
@@ -333,7 +400,7 @@ export type SchemaSourceRef = typeof SchemaSourceRefSchema.Type;
 // ---------------------------------------------------------------------------
 
 export const TraitInjectSchema = Schema.Struct({
-  skills: Schema.optional(Schema.Array(Schema.String)),
+  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
 });
 export type TraitInject = typeof TraitInjectSchema.Type;
 
@@ -353,7 +420,7 @@ export type TraitToolAttachment = typeof TraitToolAttachmentSchema.Type;
 
 export const TraitRequireSchema = Schema.Struct({
   tools: Schema.optional(Schema.Array(Schema.String)),
-  skills: Schema.optional(Schema.Array(Schema.String)),
+  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
 });
 export type TraitRequire = typeof TraitRequireSchema.Type;
 
@@ -460,7 +527,7 @@ export const AgentSchema = Schema.Struct({
   model: Schema.optional(ModelProfileRefInputSchema),
   traits: Schema.optional(Schema.Array(Schema.Union(TraitRefInputSchema, TraitBindingInputSchema))),
   access: Schema.optional(AccessSchema),
-  skills: Schema.optional(Schema.Array(Schema.String)),
+  skills: Schema.optional(Schema.Array(SkillRefInputSchema)),
   color: Schema.optional(Schema.String),
   targets: Schema.optional(
     Schema.Record({ key: Schema.String, value: Schema.Object }),
@@ -567,6 +634,40 @@ export class Modelspace extends Schema.Class<Modelspace>("Modelspace")({
   sourcePath: Schema.String,
   description: Schema.optional(Schema.String),
   profiles: Schema.Record({ key: Schema.String, value: ModelProfileSchema }),
+}) {}
+
+// ---------------------------------------------------------------------------
+// Skillspace
+// ---------------------------------------------------------------------------
+
+export class Skill extends Schema.Class<Skill>("Skill")({
+  name: Schema.String,
+  sourcePath: Schema.String,
+}) {}
+
+export const SkillTargetBindingSchema = Schema.Struct({
+  name: Schema.String,
+});
+export type SkillTargetBinding = typeof SkillTargetBindingSchema.Type;
+
+export const SkillDefinitionSchema = Schema.Struct({
+  description: Schema.optional(Schema.String),
+  targets: Schema.Record({ key: Schema.String, value: SkillTargetBindingSchema }),
+});
+export type SkillDefinition = typeof SkillDefinitionSchema.Type;
+
+export const SkillspaceSchema = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  skills: Schema.Record({ key: Schema.String, value: SkillDefinitionSchema }),
+});
+export type SkillspaceInput = typeof SkillspaceSchema.Type;
+
+export class Skillspace extends Schema.Class<Skillspace>("Skillspace")({
+  name: Schema.String,
+  sourcePath: Schema.String,
+  description: Schema.optional(Schema.String),
+  skills: Schema.Record({ key: Schema.String, value: SkillDefinitionSchema }),
 }) {}
 
 // ---------------------------------------------------------------------------

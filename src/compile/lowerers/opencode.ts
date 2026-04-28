@@ -63,6 +63,8 @@ const COMPILER_OWNED_KEYS = [
 ] as const;
 
 const GENERATED_PLUGIN_PREFIX = "agentpkg-generated";
+type PermissionAction = "allow" | "ask" | "deny";
+type PermissionValue = PermissionAction | Record<string, PermissionAction>;
 
 export interface OpenCodeLowerTarget {
   readonly scope: HarnessScope;
@@ -256,8 +258,15 @@ const buildInventory = (
 
 const serializeFrontmatter = (
   fm: Record<string, string>,
-  permissions: Record<string, "allow" | "ask" | "deny">
+  permissions: Record<string, PermissionValue>
 ): string => {
+  const formatKey = (key: string): string => {
+    if (key === "*" || key.includes(":") || key.includes("#") || key.includes('"')) {
+      return JSON.stringify(key);
+    }
+    return key;
+  };
+
   const keys = Object.keys(fm);
   const lines = ["---"];
   for (const key of keys) {
@@ -274,7 +283,18 @@ const serializeFrontmatter = (
   if (permissionKeys.length > 0) {
     lines.push("permission:");
     for (const key of permissionKeys) {
-      lines.push(`  ${key}: ${permissions[key]}`);
+      const value = permissions[key];
+      if (!value) continue;
+      if (typeof value === "string") {
+        lines.push(`  ${formatKey(key)}: ${value}`);
+        continue;
+      }
+      lines.push(`  ${formatKey(key)}:`);
+      for (const pattern of Object.keys(value).sort()) {
+        const action = value[pattern];
+        if (!action) continue;
+        lines.push(`    ${formatKey(pattern)}: ${action}`);
+      }
     }
   }
   lines.push("---");
@@ -289,10 +309,14 @@ const renderAgentMarkdown = (
     ...(inventory.byAgent.get(agent.name) ?? []),
     ...agent.allowedTools,
   ]);
-  const permissions: Record<string, "allow" | "ask" | "deny"> = {};
+  const permissions: Record<string, PermissionValue> = {};
   for (const tool of new Set([...inventory.allToolNames, ...agent.allowedTools])) {
     permissions[tool] = own.has(tool) ? "allow" : "deny";
   }
+  permissions.skill = {
+    "*": "deny",
+    ...Object.fromEntries(agent.allowedSkills.map((skill) => [skill, "allow"] as const)),
+  };
   const frontmatter = serializeFrontmatter(
     { name: agent.name, description: agent.description },
     permissions

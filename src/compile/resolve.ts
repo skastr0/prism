@@ -34,6 +34,7 @@ import {
   type MaterializedTraitTool,
 } from "./protocol-tools.js";
 import type { PluginRegistry } from "./registry.js";
+import { resolveManifestTargets } from "../manifest.js";
 
 export interface ResolvedContractBinding {
   readonly kind: "permission" | "synthetic";
@@ -70,6 +71,7 @@ export interface ResolvedAgentCapabilities {
   readonly access: {
     readonly tools: ReadonlyArray<string>;
     readonly toolGroups: ReadonlyArray<string>;
+    readonly skills: ReadonlyArray<string>;
   };
 }
 
@@ -81,6 +83,7 @@ export interface ResolvedAgent {
   readonly traits: ReadonlyArray<ResolvedTrait>;
   readonly canonicalTraitIds: ReadonlyArray<string>;
   readonly skills: ReadonlyArray<string>;
+  readonly allowedSkills: ReadonlyArray<string>;
   readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
   readonly allowedTools: ReadonlyArray<string>;
 }
@@ -266,17 +269,13 @@ export const resolveAgentCapabilities = (
     }
 
     const finalToolRefs = new Map<string, MaterializedTraitTool & { traitId: string }>();
-    const injectedSkills: string[] = [];
-    const availableSkillNames = new Set(agent.skills);
-
     const accessTools = new Set(agent.access.tools);
     const accessToolGroups = new Set(agent.access.toolGroups);
+    const accessSkills = new Set(agent.access.skills);
 
     for (const resolvedTrait of resolvedTraits) {
       for (const skill of resolvedTrait.trait.inject.skills) {
-        if (availableSkillNames.has(skill)) continue;
-        availableSkillNames.add(skill);
-        injectedSkills.push(skill);
+        accessSkills.add(skill);
       }
 
       for (const toolRef of resolvedTrait.trait.access.tools) {
@@ -284,6 +283,9 @@ export const resolveAgentCapabilities = (
       }
       for (const toolGroupRef of resolvedTrait.trait.access.toolGroups) {
         accessToolGroups.add(toolGroupRef);
+      }
+      for (const skill of resolvedTrait.trait.access.skills) {
+        accessSkills.add(skill);
       }
 
       const materializedTraitTools = materializeTraitTools({
@@ -344,15 +346,10 @@ export const resolveAgentCapabilities = (
       const missingTools = resolvedTrait.trait.require.tools.filter(
         (logicalName) => !availableToolNames.has(logicalName),
       );
-      const missingSkills = resolvedTrait.trait.require.skills.filter(
-        (skillName) => !availableSkillNames.has(skillName),
-      );
-
-      if (missingTools.length === 0 && missingSkills.length === 0) continue;
+      if (missingTools.length === 0) continue;
 
       const missingParts = [
         missingTools.length > 0 ? `tools: ${missingTools.join(", ")}` : undefined,
-        missingSkills.length > 0 ? `skills: ${missingSkills.join(", ")}` : undefined,
       ].filter((part): part is string => part !== undefined);
 
       return yield* Effect.fail(
@@ -370,7 +367,7 @@ export const resolveAgentCapabilities = (
       canonicalTraitIds: [...canonicalTraitIds].sort((left, right) =>
         left.localeCompare(right),
       ),
-      skills: [...agent.skills, ...injectedSkills],
+      skills: [...agent.skills],
       toolRefs: [...finalToolRefs.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([logicalName, resolved]) => ({
@@ -384,6 +381,7 @@ export const resolveAgentCapabilities = (
       access: {
         tools: [...accessTools].sort((left, right) => left.localeCompare(right)),
         toolGroups: [...accessToolGroups].sort((left, right) => left.localeCompare(right)),
+        skills: [...accessSkills].sort((left, right) => left.localeCompare(right)),
       },
     };
   });
@@ -518,6 +516,139 @@ const resolveAccessToolsForTarget = (
 
     return [...concrete].sort((left, right) => left.localeCompare(right));
   });
+
+const resolveSkillRefForTarget = (
+  agent: Agent,
+  skillRef: string,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<string, CompileError> =>
+  Effect.gen(function* () {
+    const parsed = parseSpaceItemRef(skillRef, "/");
+    if (parsed) {
+      const reg = yield* resolveRefToRegistry(skillRef, registry, agent.sourcePath);
+      const skillspace = reg.skillspaces.get(parsed.space);
+      if (!skillspace) {
+        return yield* Effect.fail(
+          new UnknownReferenceError({
+            agentName: agent.name,
+            sourcePath: agent.sourcePath,
+            field: "skill",
+            referenceName: skillRef,
+          }),
+        );
+      }
+
+      const skill = skillspace.skills[parsed.name];
+      if (!skill) {
+        return yield* Effect.fail(
+          new UnknownReferenceError({
+            agentName: agent.name,
+            sourcePath: agent.sourcePath,
+            field: "skill",
+            referenceName: skillRef,
+          }),
+        );
+      }
+
+      const concrete = skill.targets[target];
+      if (!concrete) {
+        return yield* Effect.fail(
+          new MissingTargetResolutionError({
+            agentName: agent.name,
+            referenceKind: "skill",
+            referenceName: skillRef,
+            target,
+          }),
+        );
+      }
+
+      const invalidSkillName = validateConcreteSkillName(
+        agent,
+        skillRef,
+        target,
+        concrete.name,
+      );
+      if (invalidSkillName) {
+        return yield* Effect.fail(invalidSkillName);
+      }
+
+      return concrete.name;
+    }
+
+    const reg = yield* resolveRefToRegistry(skillRef, registry, agent.sourcePath);
+    const name = parseNamedRef(skillRef).name;
+    if (!reg.skills.has(name)) {
+      return yield* Effect.fail(
+        new UnknownReferenceError({
+          agentName: agent.name,
+          sourcePath: agent.sourcePath,
+          field: "skill",
+          referenceName: skillRef,
+        }),
+      );
+    }
+
+    if (!registryTargetsSkillForHarness(reg, target)) {
+      return yield* Effect.fail(
+        new MissingTargetResolutionError({
+          agentName: agent.name,
+          referenceKind: "skill",
+          referenceName: skillRef,
+          target,
+        }),
+      );
+    }
+
+    const invalidSkillName = validateConcreteSkillName(agent, skillRef, target, name);
+    if (invalidSkillName) {
+      return yield* Effect.fail(invalidSkillName);
+    }
+
+    return name;
+  });
+
+const resolveSkillsForTarget = (
+  agent: Agent,
+  skillRefs: ReadonlyArray<string>,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<ReadonlyArray<string>, CompileError> =>
+  Effect.gen(function* () {
+    const concrete = new Set<string>();
+
+    for (const skillRef of skillRefs) {
+      concrete.add(yield* resolveSkillRefForTarget(agent, skillRef, registry, target));
+    }
+
+    return [...concrete].sort((left, right) => left.localeCompare(right));
+  });
+
+const registryTargetsSkillForHarness = (
+  registry: PluginRegistry,
+  target: string,
+): boolean => {
+  const targets = registry.targets.skills ?? [];
+  return resolveManifestTargets(targets).some((harnessId) => harnessId === target);
+};
+
+const OPENCODE_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const validateConcreteSkillName = (
+  agent: Agent,
+  referenceName: string,
+  target: string,
+  concreteName: string,
+): AgentValidationError | undefined => {
+  if (target !== "opencode") return undefined;
+  if (OPENCODE_SKILL_NAME_PATTERN.test(concreteName)) return undefined;
+
+  return agentError(
+    agent,
+    "skill",
+    `skill '${referenceName}' resolves to invalid OpenCode skill name '${concreteName}'`,
+  );
+};
 
 const resolveModelProfile = (
   agent: Agent,
@@ -885,6 +1016,22 @@ export const resolveAgent = (
     }
 
     const capabilities = yield* resolveAgentCapabilities(agent, registry);
+    const resolvedDependencySkills = yield* resolveSkillsForTarget(
+      agent,
+      capabilities.skills,
+      registry,
+      target,
+    );
+    const resolvedAccessSkills = yield* resolveSkillsForTarget(
+      agent,
+      capabilities.access.skills,
+      registry,
+      target,
+    );
+    const allowedSkills = [...new Set([
+      ...resolvedDependencySkills,
+      ...resolvedAccessSkills,
+    ])].sort((left, right) => left.localeCompare(right));
 
     const toolBindings: ResolvedContractBinding[] = capabilities.toolRefs.map(
       ({ kind, logicalName, contract, toolPluginName, toolName, toolSourcePath }) => ({
@@ -904,6 +1051,28 @@ export const resolveAgent = (
       target,
     );
 
+    const availableSkillNames = new Set(allowedSkills);
+    for (const resolvedTrait of capabilities.traits) {
+      const requiredSkills = yield* resolveSkillsForTarget(
+        agent,
+        resolvedTrait.trait.require.skills,
+        registry,
+        target,
+      );
+      const missingSkills = requiredSkills.filter(
+        (skillName) => !availableSkillNames.has(skillName),
+      );
+      if (missingSkills.length === 0) continue;
+
+      return yield* Effect.fail(
+        agentError(
+          agent,
+          "traits",
+          `trait '${resolvedTrait.canonicalId}' requires missing skills: ${missingSkills.join(", ")}`,
+        ),
+      );
+    }
+
     return {
       agent,
       identity,
@@ -911,7 +1080,8 @@ export const resolveAgent = (
       resolvedModel,
       traits: capabilities.traits,
       canonicalTraitIds: capabilities.canonicalTraitIds,
-      skills: capabilities.skills,
+      skills: resolvedDependencySkills,
+      allowedSkills,
       toolBindings,
       allowedTools,
     };

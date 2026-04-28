@@ -135,7 +135,7 @@ agentpkg/
 
 ## Compile pipeline (v0.1)
 
-agentpkg has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, traits, agents, and lifecycles, and agentpkg lowers them into per-harness artifacts.
+agentpkg has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, skillspaces, traits, agents, and lifecycles, and agentpkg lowers them into per-harness artifacts.
 
 In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description, refining schemas via slots, and adding capability-specific instructions. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool bindings plus ordered trait instructions; target lowerers do not need to understand trait or tool internals.
 
@@ -149,8 +149,9 @@ Canonical structured source artifacts are TypeScript-authored:
 | `personality` | `personalities/<name>.personality.md` | Reusable personality policy (temperament, virtues, communication) |
 | `toolspace` | `toolspaces/<name>.toolspace.ts` | Logical tool vocabulary plus per-target concrete tool-name bindings |
 | `modelspace` | `modelspaces/<name>.modelspace.ts` | Logical model profiles plus per-target concrete model config blocks |
+| `skillspace` | `skillspaces/<name>.skillspace.ts` | Logical unmanaged or harness-native skill vocabulary plus per-target concrete skill names |
 | `tool` | `tools/<name>.tool.ts` | Canonical tool definition: strict input/output contract + portable handle implementation |
-| `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, ordered instructions, injected skills, and logical access intent |
+| `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, ordered instructions, skill permission intent, and logical access intent |
 | `agent` | `agents/<name>.agent.ts` | Canonical compiled agent definition |
 | `lifecycle` | `lifecycles/<name>.lifecycle.ts` | Higher-order recipe composing agents / other lifecycles with compile-time validation |
 
@@ -170,6 +171,7 @@ import {
   defineTool,
   defineToolspace,
   defineModelspace,
+  defineSkillspace,
   defineTrait,
   agentRef,
   lifecycleRef,
@@ -177,6 +179,8 @@ import {
   toolRef,
   toolGroupRef,
   modelProfileRef,
+  skillRef,
+  skillspaceRef,
   schemaSlot,
   slotRef,
   valueSlot,
@@ -211,9 +215,11 @@ Each trait may:
 - `slots` — declare the binding contract for agent-provided schema/config values
 - `tools` — attach canonical tools by `ref`, optionally overriding description or refining input/output schemas (business-logic override is not allowed)
 - `instructions` — add capability-specific guidance to the generated agent in the same order the agent binds traits
-- `inject.skills` — add default skills when the agent does not already include them
-- `require.tools` / `require.skills` — assert that the final combined synthetic surface contains those logical names
-- `access` — declare logical tool / tool-group intent that resolves through toolspaces for the selected harness target
+- `access.skills` / `inject.skills` — grant permission or visibility for skills without making them direct agent dependencies
+- `require.tools` / `require.skills` — assert that the final combined synthetic surface contains those resolved tools or concrete skills
+- `access` — declare logical tool / tool-group / skill intent that resolves through toolspaces and skillspaces for the selected harness target
+
+Agent-level `skills` are direct dependencies and render as recommended skills in the generated agent body. Use `skillRef(...)` for managed plugin skills in `skills/<name>/SKILL.md`, and `skillspaceRef(...)` when referencing unmanaged or harness-native skills through a target-specific skillspace. Plain skill strings are not accepted in the compile language.
 
 Canonical tools are the semantic interface. The compiler resolves canonical tool refs, merges trait attachments with the canonical base, validates agent-provided slot bindings fail-closed, materializes ordinary resolved synthetic tool modules, and hands those to lowerers just like any other resolved tool binding.
 
@@ -221,7 +227,7 @@ The compiler resolves traits and their attached canonical tools through the same
 
 ### Toolspaces and modelspaces
 
-Toolspaces and modelspaces move target-bound tool/model strings out of semantic agent definitions.
+Toolspaces, modelspaces, and skillspaces move target-bound tool/model/skill strings out of semantic agent definitions.
 
 #### Toolspace
 
@@ -241,6 +247,15 @@ Modelspaces define:
 - per-target concrete model config blocks
 
 Agents reference model profiles through `modelProfileRef(...)`. Resolution is target-aware and fail-closed if the selected target has no binding.
+
+#### Skillspace
+
+Skillspaces define:
+
+- logical unmanaged or harness-native skills
+- per-target concrete skill names
+
+Agents and traits reference skill permissions through `skillRef(...)` or `skillspaceRef(...)`. Resolution is target-aware and fail-closed if a managed skill is not targeted to the compile harness or if a skillspace mapping is missing.
 
 ### Parameterized lifecycle templates
 
@@ -619,6 +634,8 @@ my-plugin/
 │   └── <skill-name>/
 │       ├── SKILL.md    # Skill definition
 │       └── *.md        # Supporting files
+├── skillspaces/        # Compile-time skill name disambiguation tables
+│   └── *.skillspace.ts
 └── harness/            # Optional harness-specific overlays
     └── <id>/           # e.g. opencode, openclaw
         ├── commands/
@@ -641,7 +658,8 @@ Install targeting lives in `plugin.json` and nowhere else.
     "rules": ["coding-harness"],
     "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"],
     "agents": ["claude-code", "opencode"],
-    "skills": ["coding-harness", "claw-harness"]
+    "skills": ["coding-harness", "claw-harness"],
+    "skillspaces": ["opencode", "claude-code"]
   }
 }
 ```

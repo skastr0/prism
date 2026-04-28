@@ -62,6 +62,7 @@ export const COMPILE_ARTIFACT_TYPES = [
   "tools",
   "toolspaces",
   "modelspaces",
+  "skillspaces",
 ] as const;
 export type CompileArtifactType = (typeof COMPILE_ARTIFACT_TYPES)[number];
 
@@ -170,6 +171,7 @@ export interface OpenCodeAgentFrontmatter {
     webfetch?: OpenCodePermission;
     doom_loop?: OpenCodePermission;
     external_directory?: OpenCodePermission;
+    skill?: OpenCodePermission | Record<string, OpenCodePermission>;
   };
 }
 

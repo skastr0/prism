@@ -7,6 +7,7 @@
  * - lifecycles/*.lifecycle.ts
  * - toolspaces/*.toolspace.ts
  * - modelspaces/*.modelspace.ts
+ * - skillspaces/*.skillspace.ts
  *
  * These helpers are identity constructors for authoring ergonomics.
  */
@@ -49,17 +50,32 @@ export interface ModelProfileRefDefinition {
   readonly name: string;
 }
 
+export interface SkillRefDefinition {
+  readonly kind: "skill-ref";
+  readonly plugin?: string;
+  readonly name: string;
+}
+
+export interface SkillspaceRefDefinition {
+  readonly kind: "skillspace-ref";
+  readonly plugin?: string;
+  readonly skillspace: string;
+  readonly name: string;
+}
+
 export type TraitRefInput = string | TraitRefDefinition;
 export type AgentRefInput = string | AgentRefDefinition;
 export type LifecycleRefInput = string | LifecycleRefDefinition;
 export type ToolRefInput = string | ToolRefDefinition;
 export type ToolGroupRefInput = string | ToolGroupRefDefinition;
 export type ModelProfileRefInput = string | ModelProfileRefDefinition;
+export type SkillRefInput = SkillRefDefinition | SkillspaceRefDefinition;
 export type EffectSchemaValue = import("effect").Schema.Schema.AnyNoContext;
 
 export interface AccessDefinition {
   readonly tools?: ReadonlyArray<ToolRefInput>;
   readonly toolGroups?: ReadonlyArray<ToolGroupRefInput>;
+  readonly skills?: ReadonlyArray<SkillRefInput>;
 }
 
 export interface AgentDefinition {
@@ -70,7 +86,7 @@ export interface AgentDefinition {
   readonly model?: ModelProfileRefInput;
   readonly traits?: ReadonlyArray<TraitRefInput | TraitBindingDefinition>;
   readonly access?: AccessDefinition;
-  readonly skills?: ReadonlyArray<string>;
+  readonly skills?: ReadonlyArray<SkillRefInput>;
   readonly color?: string;
   readonly targets?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
@@ -91,11 +107,11 @@ export interface TraitDefinition {
   readonly access?: AccessDefinition;
   readonly tools?: Readonly<Record<string, TraitToolAttachmentDefinition>>;
   readonly inject?: {
-    readonly skills?: ReadonlyArray<string>;
+    readonly skills?: ReadonlyArray<SkillRefInput>;
   };
   readonly require?: {
     readonly tools?: ReadonlyArray<string>;
-    readonly skills?: ReadonlyArray<string>;
+    readonly skills?: ReadonlyArray<SkillRefInput>;
   };
 }
 
@@ -208,6 +224,21 @@ export interface ModelspaceDefinition {
   readonly profiles: Readonly<Record<string, ModelProfileDefinition>>;
 }
 
+export interface SkillTargetBindingDefinition {
+  readonly name: string;
+}
+
+export interface SkillDefinition {
+  readonly description?: string;
+  readonly targets: Readonly<Record<string, SkillTargetBindingDefinition>>;
+}
+
+export interface SkillspaceDefinition {
+  readonly name: string;
+  readonly description?: string;
+  readonly skills: Readonly<Record<string, SkillDefinition>>;
+}
+
 export const withNamedRef = <TKind extends string>(
   kind: TKind,
   first: string,
@@ -294,6 +325,36 @@ export function modelProfileRef(
       };
 }
 
+export function skillRef(name: string): SkillRefDefinition;
+export function skillRef(plugin: string, name: string): SkillRefDefinition;
+export function skillRef(first: string, second?: string): SkillRefDefinition {
+  return withNamedRef("skill-ref", first, second);
+}
+
+export function skillspaceRef(
+  skillspace: string,
+  name: string,
+): SkillspaceRefDefinition;
+export function skillspaceRef(
+  plugin: string,
+  skillspace: string,
+  name: string,
+): SkillspaceRefDefinition;
+export function skillspaceRef(
+  first: string,
+  second: string,
+  third?: string,
+): SkillspaceRefDefinition {
+  return third === undefined
+    ? { kind: "skillspace-ref", skillspace: first, name: second }
+    : {
+        kind: "skillspace-ref",
+        plugin: first,
+        skillspace: second,
+        name: third,
+      };
+}
+
 export const schemaSlot = (
   options: Omit<ToolSchemaSlotDefinition, "kind"> = {},
 ): ToolSchemaSlotDefinition => ({
@@ -319,5 +380,7 @@ export const defineToolspace = <T extends ToolspaceDefinition>(toolspace: T): T 
   toolspace;
 export const defineModelspace = <T extends ModelspaceDefinition>(modelspace: T): T =>
   modelspace;
+export const defineSkillspace = <T extends SkillspaceDefinition>(skillspace: T): T =>
+  skillspace;
 
 export type { ToolRuntimeContext, ToolRuntimeCost } from "./compile/runtime/schema-bridge";

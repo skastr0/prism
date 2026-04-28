@@ -14,6 +14,8 @@ import type {
   Identity,
   Modelspace,
   Personality,
+  Skill,
+  Skillspace,
   Toolspace,
   Trait,
 } from "./sources.js";
@@ -33,15 +35,17 @@ export const CACHE_FORMAT_VERSION = 3;
  * fixes such as generated tool naming or permission-lowering changes.
  */
 export const COMPILER_SEMANTICS_VERSION =
-  "2026-04-28-opencode-generated-tool-permissions-v1";
+  "2026-04-28-opencode-skill-permissions-v1";
 
 type SourceLike =
   | Identity
   | Personality
   | Modelspace
+  | Skillspace
   | Toolspace
   | Trait
   | CanonicalTool
+  | Skill
   | Agent;
 
 export interface CacheInputFile {
@@ -268,9 +272,14 @@ const collectTraitDescriptors = async (
 const collectAccessRefs = (
   agent: Agent,
   traits: ReadonlyArray<{ trait: Trait | undefined }>,
-): { readonly tools: ReadonlyArray<string>; readonly toolGroups: ReadonlyArray<string> } => {
+): {
+  readonly tools: ReadonlyArray<string>;
+  readonly toolGroups: ReadonlyArray<string>;
+  readonly skills: ReadonlyArray<string>;
+} => {
   const tools = new Set(agent.access.tools);
   const toolGroups = new Set(agent.access.toolGroups);
+  const skills = new Set(agent.access.skills);
 
   for (const { trait } of traits) {
     if (!trait) continue;
@@ -280,12 +289,38 @@ const collectAccessRefs = (
     for (const toolGroup of trait.access.toolGroups) {
       toolGroups.add(toolGroup);
     }
+    for (const skill of trait.access.skills) {
+      skills.add(skill);
+    }
   }
 
   return {
     tools: [...tools].sort((left, right) => left.localeCompare(right)),
     toolGroups: [...toolGroups].sort((left, right) => left.localeCompare(right)),
+    skills: [...skills].sort((left, right) => left.localeCompare(right)),
   };
+};
+
+const collectSkillRefs = (
+  agent: Agent,
+  traits: ReadonlyArray<{ trait: Trait | undefined }>,
+): ReadonlyArray<string> => {
+  const skills = new Set([...agent.skills, ...agent.access.skills]);
+
+  for (const { trait } of traits) {
+    if (!trait) continue;
+    for (const skill of trait.access.skills) {
+      skills.add(skill);
+    }
+    for (const skill of trait.inject.skills) {
+      skills.add(skill);
+    }
+    for (const skill of trait.require.skills) {
+      skills.add(skill);
+    }
+  }
+
+  return [...skills].sort((left, right) => left.localeCompare(right));
 };
 
 export const computeCacheKey = (
@@ -325,6 +360,7 @@ export const computeAgentCacheDescriptor = async (
     : undefined;
   const traits = await collectTraitDescriptors(agent, registry);
   const access = collectAccessRefs(agent, traits);
+  const skillRefs = collectSkillRefs(agent, traits);
 
   const toolspaces = await Promise.all([
     ...access.tools.map((toolRef) =>
@@ -334,6 +370,20 @@ export const computeAgentCacheDescriptor = async (
       resolveSpaceDescriptor(toolGroupRef, registry, "#", (owner) => owner.toolspaces),
     ),
   ]);
+  const skillspaces = await Promise.all(
+    skillRefs
+      .filter((skillRef) => parseSpaceItemRef(skillRef, "/"))
+      .map((skillRef) =>
+        resolveSpaceDescriptor(skillRef, registry, "/", (owner) => owner.skillspaces),
+      ),
+  );
+  const managedSkills = await Promise.all(
+    skillRefs
+      .filter((skillRef) => !parseSpaceItemRef(skillRef, "/"))
+      .map((skillRef) =>
+        resolveSourceDescriptor(skillRef, registry, (owner) => owner.skills),
+      ),
+  );
 
   for (const descriptor of [
     identity,
@@ -342,6 +392,8 @@ export const computeAgentCacheDescriptor = async (
     ...traits.map((item) => item.source),
     ...traits.flatMap((item) => item.tools),
     ...toolspaces,
+    ...skillspaces,
+    ...managedSkills,
   ]) {
     if (!descriptor || "missing" in descriptor) continue;
     inputs.set(`${descriptor.plugin}:${descriptor.path}`, {
@@ -360,6 +412,8 @@ export const computeAgentCacheDescriptor = async (
       traits: traits.map(({ ref, binding, source, tools }) => ({ ref, binding, source, tools })),
       access,
       toolspaces,
+      skillspaces,
+      managedSkills,
     },
   };
 

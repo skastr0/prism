@@ -137,7 +137,7 @@ agentpkg/
 
 agentpkg has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, traits, agents, and lifecycles, and agentpkg lowers them into per-harness artifacts.
 
-In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description, refining schemas via slots, and adding capability-specific instructions. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool surfaces plus ordered trait instructions; target lowerers do not need to understand trait or tool internals.
+In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description, refining schemas via slots, and adding capability-specific instructions. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool bindings plus ordered trait instructions; target lowerers do not need to understand trait or tool internals.
 
 ### Canonical source types
 
@@ -215,7 +215,7 @@ Each trait may:
 - `require.tools` / `require.skills` — assert that the final combined synthetic surface contains those logical names
 - `access` — declare logical tool / tool-group intent that resolves through toolspaces for the selected harness target
 
-Canonical tools are the semantic surface. The compiler resolves canonical tool refs, merges trait attachments with the canonical base, validates agent-provided slot bindings fail-closed, materializes ordinary resolved synthetic tool modules, and hands those to lowerers just like any other resolved tool surface.
+Canonical tools are the semantic interface. The compiler resolves canonical tool refs, merges trait attachments with the canonical base, validates agent-provided slot bindings fail-closed, materializes ordinary resolved synthetic tool modules, and hands those to lowerers just like any other resolved tool binding.
 
 The compiler resolves traits and their attached canonical tools through the same cross-plugin reference model as agents, toolspaces, and modelspaces. It combines explicit agent access intent with trait access intent, and validates the final surface fail-closed.
 
@@ -338,9 +338,9 @@ Validation rules:
 - for each requirement, the compiler counts assigned agents whose canonical trait set includes **all** required traits
 - compile fails if that count is less than `min`
 
-### Lifecycle tool grants
+### Lifecycle tool permissions
 
-Lifecycle files may grant canonical tools to agents assigned in that lifecycle. Grants are protocol-agnostic: the compiler does not know whether the tool backs a work-item board, a queue, Matrix transport, an approval ledger, or something else.
+Lifecycle files may assign canonical tool permissions to agents assigned in that lifecycle. Permissions are protocol-agnostic: the compiler does not know whether the tool backs a work-item board, a queue, Matrix transport, an approval ledger, or something else.
 
 Use `bind` when the lifecycle wants a generated wrapper to pre-fill canonical-tool input fields:
 
@@ -349,7 +349,7 @@ export default defineLifecycle({
   name: "delivery-contract",
   description: "Compile-time orchestration contract",
   phases: [{ name: "Implement change", agents: [agentRef("builder")] }],
-  tool_grants: [
+  tool_permissions: [
     {
       agents: [agentRef("builder")],
       tools: [
@@ -552,7 +552,7 @@ agentpkg compile ./my-plugin --harness claude-code --dry-run
 - Writes `<opencode-root>/agents/<name>.md` for each compiled agent with composed body
 - Writes `<opencode-root>/skills/<lifecycle-name>/SKILL.md` for each concrete lifecycle instance
 - Patches `agent.<name>` in `<opencode-root>/opencode.json` with compiler-owned model/behavior keys
-- Syncs `<opencode-root>/plugins/agentpkg-generated-<source-plugin>/` for synthetic tool plumbing when any compiled agent binds typed tool surfaces
+- Syncs `<opencode-root>/plugins/agentpkg-generated-<source-plugin>/` for synthetic tool plumbing when any compiled agent binds typed tool slots
 
 #### Claude Code
 

@@ -34,7 +34,7 @@ export interface SyntheticToolBinding {
 }
 
 export type MaterializedTraitTool = ToolPermissionBinding | SyntheticToolBinding;
-export type MaterializedLifecycleToolGrant = MaterializedTraitTool;
+export type MaterializedLifecycleToolPermission = MaterializedTraitTool;
 
 export type TraitBindingValidationResult =
   | { readonly ok: true }
@@ -348,15 +348,15 @@ export const materializeTraitTools = (options: {
   return materialized;
 };
 
-export const materializeLifecycleToolGrant = (options: {
+export const materializeLifecycleToolPermission = (options: {
   readonly logicalName: string;
   readonly toolRef: string;
   readonly registry: PluginRegistry;
-}): MaterializedLifecycleToolGrant | ProtocolSurfaceError => {
+}): MaterializedLifecycleToolPermission | ProtocolSurfaceError => {
   const resolved = resolveToolRef(options.toolRef, options.registry);
   if (!resolved) {
     return protocolError(
-      "tool_grants.tools.ref",
+      "tool_permissions.tools.ref",
       `references unknown tool '${options.toolRef}'`,
     );
   }

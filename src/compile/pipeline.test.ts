@@ -53,7 +53,7 @@ const getFailure = (
 
 const createCanonicalLanguageFixture = async (options?: {
   invalidLifecycle?: boolean;
-  invalidLifecycleGrantAgent?: boolean;
+  invalidLifecyclePermissionAgent?: boolean;
   inlineSlotSchema?: boolean;
   undeclaredSlot?: boolean;
   mixedTraitRefsBeforeSlotBinding?: boolean;
@@ -66,7 +66,7 @@ const createCanonicalLanguageFixture = async (options?: {
     pluginRoot,
     projectRoot,
     invalidLifecycle: options?.invalidLifecycle,
-    invalidLifecycleGrantAgent: options?.invalidLifecycleGrantAgent,
+    invalidLifecyclePermissionAgent: options?.invalidLifecyclePermissionAgent,
     inlineSlotSchema: options?.inlineSlotSchema,
     undeclaredSlot: options?.undeclaredSlot,
     mixedTraitRefsBeforeSlotBinding: options?.mixedTraitRefsBeforeSlotBinding,
@@ -516,9 +516,9 @@ test("lifecycle validation fails when assigned agents do not satisfy requirement
   }
 });
 
-test("lifecycle tool grants fail when targeting an unassigned agent", async () => {
+test("lifecycle tool permissions fail when targeting an unassigned agent", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    invalidLifecycleGrantAgent: true,
+    invalidLifecyclePermissionAgent: true,
   });
 
   const exit = await Effect.runPromiseExit(
@@ -535,7 +535,7 @@ test("lifecycle tool grants fail when targeting an unassigned agent", async () =
   const failure = getFailure(exit);
   expect(failure._tag).toBe("LifecycleValidationError");
   if (failure._tag === "LifecycleValidationError") {
-    expect(failure.field).toBe("tool_grants[0].agents[0]");
+    expect(failure.field).toBe("tool_permissions[0].agents[0]");
     expect(failure.message).toContain("not assigned");
   }
 });
@@ -625,7 +625,7 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
   expect(reviewContract).toContain("../schemas/review-slots");
 });
 
-test("compilePluginForTarget lowers executable canonical tool surfaces for opencode", async () => {
+test("compilePluginForTarget lowers executable canonical tools for opencode", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   const opencode = await Effect.runPromise(

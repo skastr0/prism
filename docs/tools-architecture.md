@@ -1,6 +1,6 @@
 # Tools Architecture
 
-This document is the canonical design for `agentpkg` tool surfaces.
+This document is the canonical design for `agentpkg` tools and toolspaces.
 
 The purpose is simple: tools are definitions, permissions are visibility, and
 filled tool slots are the only reason to synthesize a new harness tool. The
@@ -31,8 +31,8 @@ extension points that the tool implementation explicitly agrees to accept.
 **Filled slot**
 
 An agent binding supplies a concrete schema for a declared tool slot. Filling a
-slot creates a synthetic tool wrapper for that agent-facing contract and grants
-permission to the wrapper instead of the base tool.
+slot creates a synthetic tool wrapper for that agent-facing contract and gives
+the agent permission to the wrapper instead of the base tool.
 
 **Synthetic tool**
 
@@ -83,7 +83,7 @@ A tool may declare optional slots. The tool owns the slot names and semantics.
 
 ```ts
 import { defineTool, schemaSlot } from "agentpkg";
-import { LifecyclePacketReceipt, WorkSubmissionBase } from "../schemas/tool-surfaces.ts";
+import { LifecyclePacketReceipt, WorkSubmissionBase } from "../schemas/tool-schemas.ts";
 
 export default defineTool({
   name: "submit_work",
@@ -106,7 +106,7 @@ If the tool does not declare `builder_report`, no trait or agent can fill it.
 
 ### Trait Permission
 
-A trait grants permission to a tool. It does not define slots.
+A trait gives an agent permission to a tool. It does not define slots.
 
 ```ts
 import { defineTrait } from "agentpkg";
@@ -136,7 +136,7 @@ The agent receives the base `lifecycle-core:submit_work` harness tool.
 The agent fills a tool-owned slot with an imported runtime schema artifact.
 
 ```ts
-import { BuilderSubmitWorkReport } from "../schemas/tool-surfaces.ts";
+import { BuilderSubmitWorkReport } from "../schemas/tool-schemas.ts";
 
 bindTrait("submittable", {
   tools: {
@@ -203,7 +203,7 @@ names are visible to each agent.
 
 For a generic permission, the agent receives permission to the owner tool.
 
-For a filled slot, the compiler creates a synthetic wrapper and grants
+For a filled slot, the compiler creates a synthetic wrapper and gives the agent
 permission to that wrapper.
 
 ## Toolspaces
@@ -247,17 +247,11 @@ The first custom lint rules should enforce:
 - trait tool attachments must not replace `input` or `output`
 - compiler DSL files must not contain runtime tool implementation logic
 
-## Delete These Concepts
+## Deleted Concepts
 
-The final system should not contain these as domain concepts:
-
-- `shared-canonical`
-- tool `grant` as a synonym for permission
-- input override
-- output override
-- generated contracts for plain tool references
-- dependency tool mirrors under consumer plugin ownership
-- Effect Schema AST replay
+The final system does not keep obsolete naming, input/output replacement,
+generated contracts for plain tool references, dependency tool mirrors under
+consumer plugin ownership, or Effect Schema AST replay.
 
 ## Acceptance Bar
 

@@ -136,16 +136,16 @@ export interface LifecycleTraitRequirementDefinition {
   readonly min?: number;
 }
 
-export type LifecycleToolGrantToolDefinition =
+export type LifecycleToolPermissionToolDefinition =
   | string
   | {
       readonly ref: string;
       readonly as?: string;
     };
 
-export interface LifecycleToolGrantDefinition {
+export interface LifecycleToolPermissionDefinition {
   readonly agents: ReadonlyArray<AgentRefInput>;
-  readonly tools: ReadonlyArray<LifecycleToolGrantToolDefinition>;
+  readonly tools: ReadonlyArray<LifecycleToolPermissionToolDefinition>;
 }
 
 export interface LifecyclePhaseDefinition {
@@ -170,7 +170,7 @@ export interface LifecycleDefinition {
   readonly produces?: string;
   readonly parameters?: ReadonlyArray<LifecycleParameterDefinition>;
   readonly phases: ReadonlyArray<LifecyclePhaseDefinition>;
-  readonly tool_grants?: ReadonlyArray<LifecycleToolGrantDefinition>;
+  readonly tool_permissions?: ReadonlyArray<LifecycleToolPermissionDefinition>;
   readonly taste_checkpoints?: ReadonlyArray<LifecycleTasteCheckpointDefinition>;
   readonly evolution?: string;
   readonly body?: string;

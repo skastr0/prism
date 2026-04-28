@@ -7,7 +7,7 @@ Do not migrate these agents by copying their markdown into `ai-plugins`. Redesig
 - durable identity and method live in canonical plugin sources or skills
 - portable business/domain logic becomes canonical tools only when it can stay harness-free
 - provider/auth/session/TUI/runtime integrations become standalone OpenCode plugin projects
-- compiled agents bind the resulting tools through traits, lifecycle tool grants, or explicit tool access
+- compiled agents bind the resulting tools through traits, lifecycle tool permissions, or explicit tool access
 
 ## Sequencing
 

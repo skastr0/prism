@@ -595,20 +595,20 @@ export const LifecyclePhaseTraitRequirementSchema = Schema.Struct({
 export type LifecyclePhaseTraitRequirement =
   typeof LifecyclePhaseTraitRequirementSchema.Type;
 
-export const LifecycleToolGrantToolSchema = Schema.Union(
+export const LifecycleToolPermissionToolSchema = Schema.Union(
   Schema.String,
   Schema.Struct({
     ref: Schema.String,
     as: Schema.optional(Schema.String),
   }),
 );
-export type LifecycleToolGrantTool = typeof LifecycleToolGrantToolSchema.Type;
+export type LifecycleToolPermissionTool = typeof LifecycleToolPermissionToolSchema.Type;
 
-export const LifecycleToolGrantSchema = Schema.Struct({
+export const LifecycleToolPermissionSchema = Schema.Struct({
   agents: Schema.Array(AgentRefInputSchema),
-  tools: Schema.Array(LifecycleToolGrantToolSchema),
+  tools: Schema.Array(LifecycleToolPermissionToolSchema),
 });
-export type LifecycleToolGrant = typeof LifecycleToolGrantSchema.Type;
+export type LifecycleToolPermission = typeof LifecycleToolPermissionSchema.Type;
 
 export const LifecyclePhaseSchema = Schema.Struct({
   name: Schema.String,
@@ -646,19 +646,19 @@ export const NormalizedLifecyclePhaseSchema = Schema.Struct({
 });
 export type NormalizedLifecyclePhase = typeof NormalizedLifecyclePhaseSchema.Type;
 
-export const NormalizedLifecycleToolGrantToolSchema = Schema.Struct({
+export const NormalizedLifecycleToolPermissionToolSchema = Schema.Struct({
   ref: Schema.String,
   logicalName: Schema.String,
 });
-export type NormalizedLifecycleToolGrantTool =
-  typeof NormalizedLifecycleToolGrantToolSchema.Type;
+export type NormalizedLifecycleToolPermissionTool =
+  typeof NormalizedLifecycleToolPermissionToolSchema.Type;
 
-export const NormalizedLifecycleToolGrantSchema = Schema.Struct({
+export const NormalizedLifecycleToolPermissionSchema = Schema.Struct({
   agents: Schema.Array(Schema.String),
-  tools: Schema.Array(NormalizedLifecycleToolGrantToolSchema),
+  tools: Schema.Array(NormalizedLifecycleToolPermissionToolSchema),
 });
-export type NormalizedLifecycleToolGrant =
-  typeof NormalizedLifecycleToolGrantSchema.Type;
+export type NormalizedLifecycleToolPermission =
+  typeof NormalizedLifecycleToolPermissionSchema.Type;
 
 export const LifecycleTasteCheckpointSchema = Schema.Struct({
   after: Schema.optional(Schema.String),
@@ -673,7 +673,7 @@ export const LifecycleDefinitionSchema = Schema.Struct({
   produces: Schema.optional(Schema.String),
   parameters: Schema.optional(Schema.Array(LifecycleParameterSchema)),
   phases: Schema.Array(LifecyclePhaseSchema),
-  tool_grants: Schema.optional(Schema.Array(LifecycleToolGrantSchema)),
+  tool_permissions: Schema.optional(Schema.Array(LifecycleToolPermissionSchema)),
   taste_checkpoints: Schema.optional(Schema.Array(LifecycleTasteCheckpointSchema)),
   evolution: Schema.optional(Schema.String),
   body: Schema.optional(Schema.String),
@@ -687,7 +687,7 @@ export class Lifecycle extends Schema.Class<Lifecycle>("Lifecycle")({
   produces: Schema.optional(Schema.String),
   parameters: Schema.Array(LifecycleParameterSchema),
   phases: Schema.Array(NormalizedLifecyclePhaseSchema),
-  tool_grants: Schema.Array(NormalizedLifecycleToolGrantSchema),
+  tool_permissions: Schema.Array(NormalizedLifecycleToolPermissionSchema),
   taste_checkpoints: Schema.Array(LifecycleTasteCheckpointSchema),
   evolution: Schema.optional(Schema.String),
   body: Schema.String,

@@ -21,7 +21,7 @@ export const createCanonicalCompileFixture = async (options: {
   pluginRoot: string;
   projectRoot: string;
   invalidLifecycle?: boolean;
-  invalidLifecycleGrantAgent?: boolean;
+  invalidLifecyclePermissionAgent?: boolean;
   inlineSlotSchema?: boolean;
   undeclaredSlot?: boolean;
   mixedTraitRefsBeforeSlotBinding?: boolean;
@@ -535,15 +535,15 @@ export default defineAgent({
   );
 
   const reviewAgents = options.invalidLifecycle ? ["builder"] : ["reviewer"];
-  const grantAgents = options.invalidLifecycleGrantAgent
+  const permissionAgents = options.invalidLifecyclePermissionAgent
     ? ["security-reviewer"]
     : ["builder"];
 
-  const lifecycleToolGrants = withCanonicalToolBindings
+  const lifecycleToolPermissions = withCanonicalToolBindings
     ? `,
-  tool_grants: [
+  tool_permissions: [
     {
-      agents: [${grantAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
+      agents: [${permissionAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
       tools: [
         {
           ref: "protocol-core:create_item",
@@ -602,7 +602,7 @@ export default defineLifecycle({
         "Done": "Work has been handed off cleanly",
       },
     },
-  ]${lifecycleToolGrants},
+  ]${lifecycleToolPermissions},
   body: "Use this lifecycle when you want the compile-time graph to prove that each phase has the right agents assigned.",
 });
 `

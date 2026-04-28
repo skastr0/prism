@@ -37,10 +37,10 @@ import {
   normalizeTraitRefInput,
   type Access,
   type LifecycleDefinition,
-  type LifecycleToolGrantTool,
+  type LifecycleToolPermissionTool,
   type NormalizedAccess,
   type NormalizedLifecyclePhase,
-  type NormalizedLifecycleToolGrant,
+  type NormalizedLifecycleToolPermission,
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
 } from "./sources.js";
@@ -1352,19 +1352,19 @@ const parseCanonicalToolName = (ref: string): string => {
   return colon === -1 ? ref : ref.slice(colon + 1);
 };
 
-const normalizeLifecycleGrantTool = (
+const normalizeLifecyclePermissionTool = (
   sourcePath: string,
-  tool: LifecycleToolGrantTool,
-  grantIndex: number,
+  tool: LifecycleToolPermissionTool,
+  permissionIndex: number,
   toolIndex: number,
-): NormalizedLifecycleToolGrant["tools"][number] | SourceParseError => {
+): NormalizedLifecycleToolPermission["tools"][number] | SourceParseError => {
   const rawRef = typeof tool === "string" ? tool : tool.ref;
   const ref = rawRef.trim();
   if (!ref) {
     return new SourceParseError({
       sourcePath,
       kind: "lifecycle",
-      message: `tool_grants[${grantIndex}].tools[${toolIndex}].ref: must be a non-empty canonical tool reference`,
+      message: `tool_permissions[${permissionIndex}].tools[${toolIndex}].ref: must be a non-empty canonical tool reference`,
     });
   }
 
@@ -1375,7 +1375,7 @@ const normalizeLifecycleGrantTool = (
     return new SourceParseError({
       sourcePath,
       kind: "lifecycle",
-      message: `tool_grants[${grantIndex}].tools[${toolIndex}].as: must be non-empty when provided`,
+      message: `tool_permissions[${permissionIndex}].tools[${toolIndex}].as: must be non-empty when provided`,
     });
   }
 
@@ -1385,17 +1385,17 @@ const normalizeLifecycleGrantTool = (
   };
 };
 
-const normalizeLifecycleToolGrants = (
+const normalizeLifecycleToolPermissions = (
   sourcePath: string,
-  grants: LifecycleDefinition["tool_grants"],
-): NormalizedLifecycleToolGrant[] | SourceParseError => {
-  const normalized: NormalizedLifecycleToolGrant[] = [];
+  permissions: LifecycleDefinition["tool_permissions"],
+): NormalizedLifecycleToolPermission[] | SourceParseError => {
+  const normalized: NormalizedLifecycleToolPermission[] = [];
 
-  for (const [grantIndex, grant] of (grants ?? []).entries()) {
+  for (const [permissionIndex, permission] of (permissions ?? []).entries()) {
     const agents: string[] = [];
-    for (const [agentIndex, agent] of grant.agents.entries()) {
+    for (const [agentIndex, agent] of permission.agents.entries()) {
       const normalizedAgent = normalizeAgentRefInput(
-        `tool_grants[${grantIndex}].agents[${agentIndex}]`,
+        `tool_permissions[${permissionIndex}].agents[${agentIndex}]`,
         agent,
       );
       if (typeof normalizedAgent !== "string") {
@@ -1408,13 +1408,13 @@ const normalizeLifecycleToolGrants = (
       agents.push(normalizedAgent);
     }
 
-    const tools: Array<NormalizedLifecycleToolGrant["tools"][number]> = [];
+    const tools: Array<NormalizedLifecycleToolPermission["tools"][number]> = [];
     const logicalNames = new Set<string>();
-    for (const [toolIndex, tool] of grant.tools.entries()) {
-      const normalizedTool = normalizeLifecycleGrantTool(
+    for (const [toolIndex, tool] of permission.tools.entries()) {
+      const normalizedTool = normalizeLifecyclePermissionTool(
         sourcePath,
         tool,
-        grantIndex,
+        permissionIndex,
         toolIndex,
       );
       if (normalizedTool instanceof SourceParseError) {
@@ -1424,7 +1424,7 @@ const normalizeLifecycleToolGrants = (
         return new SourceParseError({
           sourcePath,
           kind: "lifecycle",
-          message: `tool_grants[${grantIndex}].tools[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
+          message: `tool_permissions[${permissionIndex}].tools[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
         });
       }
       logicalNames.add(normalizedTool.logicalName);
@@ -1479,9 +1479,9 @@ const parseLifecycleDefinition = (
       phases.push(normalized);
     }
 
-    const toolGrants = normalizeLifecycleToolGrants(sourcePath, parsed.tool_grants);
-    if (toolGrants instanceof SourceParseError) {
-      return yield* Effect.fail(toolGrants);
+    const toolPermissions = normalizeLifecycleToolPermissions(sourcePath, parsed.tool_permissions);
+    if (toolPermissions instanceof SourceParseError) {
+      return yield* Effect.fail(toolPermissions);
     }
 
     return new Lifecycle({
@@ -1494,7 +1494,7 @@ const parseLifecycleDefinition = (
         required: parameter.required ?? true,
       })),
       phases,
-      tool_grants: toolGrants,
+      tool_permissions: toolPermissions,
       taste_checkpoints: parsed.taste_checkpoints ?? [],
       evolution: parsed.evolution,
       body: body.trim(),

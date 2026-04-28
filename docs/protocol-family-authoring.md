@@ -61,7 +61,7 @@ Ownership:
 
 - board helpers own create/list/read/update/transition/promote behavior
 - canonical tools mutate by id, not by caller-authored path
-- lifecycle source files can grant pre-bound board tools to assigned agents through `tool_grants`
+- lifecycle source files can assign pre-bound board tool permissions to agents through `tool_permissions`
 
 Work item ids follow:
 
@@ -107,7 +107,7 @@ The family should define:
 - canonical tool handles
 - tests for accepted and rejected inputs
 
-Traits or lifecycle `tool_grants` expose those canonical tools to agents. A lifecycle `tool_grants` entry may bind arbitrary canonical-tool input fields, such as `{ "board": "project-alpha" }` or `{ "channel": "matrix-room-id" }`; the generated wrapper omits those fields from the agent-facing input and injects them before delegating to the canonical handle. Lowerers for targets with generated-tool runtime support create synthetic wrappers and target-specific visibility, but wrappers do not own business logic. Targets without that runtime support must fail or use a future explicit adapter path rather than pretending the canonical mutation surface is executable.
+Traits or lifecycle `tool_permissions` expose those canonical tools to agents. A lifecycle `tool_permissions` entry may bind arbitrary canonical-tool input fields, such as `{ "board": "project-alpha" }` or `{ "channel": "matrix-room-id" }`; the generated wrapper omits those fields from the agent-facing input and injects them before delegating to the canonical handle. Lowerers for targets with generated-tool runtime support create synthetic wrappers and target-specific visibility, but wrappers do not own business logic. Targets without that runtime support must fail or use a future explicit adapter path rather than pretending the canonical mutation interface is executable.
 
 ## Boundary Rules
 
@@ -179,7 +179,7 @@ The current canonical end state is:
 canonical protocol family
 + shared TypeScript writer/board
 + canonical tools
-+ trait attachment or lifecycle tool grant
++ trait attachment or lifecycle tool permission assignment
 + generated synthetic wrapper
 = audited filesystem artifact
 ```

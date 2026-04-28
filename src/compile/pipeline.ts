@@ -13,7 +13,7 @@ import { loadPlugin } from "./load.js";
 import {
   instantiateLifecycle,
   resolveAgent,
-  resolveLifecycleToolGrants,
+  resolveLifecycleToolPermissions,
   validateLifecycle,
 } from "./resolve.js";
 import { composeAgent, type ComposedAgent } from "./compose.js";
@@ -134,17 +134,17 @@ const collectCacheOutputs = (
   return outputs;
 };
 
-const applyLifecycleToolGrants = (
+const applyLifecycleToolPermissions = (
   agents: ReadonlyArray<ComposedAgent>,
-  grants: ReadonlyMap<string, ReadonlyArray<ComposedAgent["toolBindings"][number]>>,
+  permissions: ReadonlyMap<string, ReadonlyArray<ComposedAgent["toolBindings"][number]>>,
 ): ComposedAgent[] =>
   agents.map((agent) => {
-    const granted = grants.get(agent.name) ?? [];
-    if (granted.length === 0) return agent;
+    const permitted = permissions.get(agent.name) ?? [];
+    if (permitted.length === 0) return agent;
 
     const existing = new Set(agent.toolBindings.map((binding) => binding.logicalName));
     const merged = [...agent.toolBindings];
-    for (const binding of granted) {
+    for (const binding of permitted) {
       if (existing.has(binding.logicalName)) {
         continue;
       }
@@ -287,8 +287,8 @@ export const compilePluginForTarget = (
       lifecycles.push(yield* instantiateLifecycle(lifecycle));
     }
 
-    const lifecycleToolGrants = yield* resolveLifecycleToolGrants(lifecycles, registry);
-    const composedForLowering = applyLifecycleToolGrants(composed, lifecycleToolGrants);
+    const lifecycleToolPermissions = yield* resolveLifecycleToolPermissions(lifecycles, registry);
+    const composedForLowering = applyLifecycleToolPermissions(composed, lifecycleToolPermissions);
     yield* assertTargetSupportsGeneratedCanonicalTools(
       options.target,
       composedForLowering,

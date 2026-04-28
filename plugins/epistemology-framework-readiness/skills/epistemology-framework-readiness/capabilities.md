@@ -56,7 +56,7 @@ What it provides:
 - Augments tool descriptions so agents know when to prefer provenance tools
 - Adds compaction context when compaction is enabled
 - Captures local traces and evidence for changed files, messages, and work items
-- Registers the `prov_*` tool surface
+- Registers the `prov_*` tools
 
 `prov_*` tools by group:
 

@@ -1629,7 +1629,7 @@ export default defineAgent({
   }
 });
 
-test("trait-lifecycle example lowers lifecycle skill traits into opencode permissions", async () => {
+test("trait-lifecycle example lowers assigned skill traits into opencode permissions", async () => {
   const projectRoot = await createTempRoot();
   const pluginRoot = join(process.cwd(), "examples", "trait-lifecycle-contracts");
 
@@ -1644,42 +1644,99 @@ test("trait-lifecycle example lowers lifecycle skill traits into opencode permis
     }),
   );
 
-  const builder = result.composed.find((agent) => agent.name === "builder");
-  expect(builder?.skills).toEqual([]);
-  expect(builder?.allowedSkills).toEqual([
-    "backpressure",
-    "build",
-    "commit",
-    "evolve",
-    "requirements",
-    "review",
-    "sdlc",
-    "testing",
-  ]);
+  const expectedSkillAccess = {
+    builder: [
+      "ast-grep",
+      "backpressure",
+      "build",
+      "code-reviewer",
+      "commit",
+      "contracts",
+      "ddd",
+      "effect",
+      "evolve",
+      "harness-programming",
+      "repo-research",
+      "requirements",
+      "review",
+      "sdlc",
+      "security-reviewer",
+      "semgrep-usage",
+      "testing",
+      "type-level",
+      "unslop",
+    ],
+    reviewer: [
+      "ast-grep",
+      "backpressure",
+      "build",
+      "code-reviewer",
+      "commit",
+      "contracts",
+      "evolve",
+      "harness-programming",
+      "model-intelligence",
+      "repo-research",
+      "requirements",
+      "research",
+      "review",
+      "sdlc",
+      "security-reviewer",
+      "semgrep-usage",
+      "testing",
+      "unslop",
+      "video-research",
+      "web-research",
+    ],
+    "security-reviewer": [
+      "ast-grep",
+      "backpressure",
+      "build",
+      "code-reviewer",
+      "commit",
+      "contracts",
+      "ddd",
+      "effect",
+      "evolve",
+      "harness-programming",
+      "repo-research",
+      "requirements",
+      "review",
+      "sdlc",
+      "security-reviewer",
+      "semgrep-usage",
+      "testing",
+      "type-level",
+      "unslop",
+    ],
+  } as const;
 
-  const builderMarkdown = result.operations.find(
-    (operation) =>
-      operation.kind === "write-md" && operation.target.endsWith("agents/builder.md"),
-  );
-  if (!builderMarkdown || builderMarkdown.kind !== "write-md") {
-    throw new Error("expected builder markdown operation");
+  for (const [agentName, expectedSkills] of Object.entries(expectedSkillAccess)) {
+    const agent = result.composed.find((candidate) => candidate.name === agentName);
+    expect(agent?.skills).toEqual([]);
+    expect(agent?.allowedSkills).toEqual(expectedSkills);
+
+    const markdown = result.operations.find(
+      (operation) =>
+        operation.kind === "write-md" && operation.target.endsWith(`agents/${agentName}.md`),
+    );
+    if (!markdown || markdown.kind !== "write-md") {
+      throw new Error(`expected ${agentName} markdown operation`);
+    }
+    const frontmatter = matter(markdown.content).data as {
+      permission?: { skill?: Record<string, string> };
+    };
+
+    expect(markdown.content).not.toContain("## Recommended Skills");
+    expect(frontmatter.permission?.skill).toEqual(
+      Object.fromEntries([
+        ["*", "deny"],
+        ...expectedSkills.map((skill) => [skill, "allow"] as const),
+      ]),
+    );
+    expect(expectedSkills).not.toContain("marketing");
+    expect(expectedSkills).not.toContain("media-generation");
   }
-  const frontmatter = matter(builderMarkdown.content).data as {
-    permission?: { skill?: Record<string, string> };
-  };
-
-  expect(builderMarkdown.content).not.toContain("## Recommended Skills");
-  expect(frontmatter.permission?.skill).toEqual({
-    "*": "deny",
-    backpressure: "allow",
-    build: "allow",
-    commit: "allow",
-    evolve: "allow",
-    requirements: "allow",
-    review: "allow",
-    sdlc: "allow",
-    testing: "allow",
-  });
 });
 
 test("domain skill permission traits compile one opencode agent per family", async () => {

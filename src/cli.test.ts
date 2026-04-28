@@ -191,6 +191,74 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   expect(readme).toContain("OXC's documented project config and `jsPlugins` fields");
 });
 
+test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {
+  const root = await createTempRoot();
+
+  const result = await runCli(["init", "typed-agent", "--dir", root, "--with-agent"], {});
+
+  expect(result.exitCode).toBe(0);
+
+  const pluginRoot = join(root, "typed-agent");
+  expect(await pathExists(join(pluginRoot, "agents", "reviewer.agent.ts"))).toBe(true);
+  expect(await pathExists(join(pluginRoot, "identities", "reviewer.identity.md"))).toBe(true);
+  expect(await pathExists(join(pluginRoot, "agents", "reviewer.md"))).toBe(false);
+});
+
+test("validate rejects source markdown agents", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "legacy-agent");
+  await mkdir(join(pluginRoot, "agents"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "legacy-agent",
+        version: "0.1.0",
+        targets: { agents: ["opencode"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    join(pluginRoot, "agents", "reviewer.md"),
+    `---
+description: Legacy source markdown agent
+---
+
+You are a reviewer.
+`,
+  );
+
+  const result = await runCli(["validate", pluginRoot], {});
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("Source markdown agents are not supported");
+});
+
+test("validate rejects agent targets for harnesses without compile lowerers", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "unsupported-agent-target");
+  await mkdir(pluginRoot, { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "unsupported-agent-target",
+        version: "0.1.0",
+        targets: { agents: ["opencode", "codex-cli"] },
+      },
+      null,
+      2,
+    ),
+  );
+
+  const result = await runCli(["validate", pluginRoot], {});
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("targets.agents resolves to unsupported compile harnesses");
+});
+
 test("generated Oxlint rule rejects inline Schema slot fills but allows imported schemas", async () => {
   const invalidBinding = callExpression(identifier("bindTrait"), [
     literal("submittable"),

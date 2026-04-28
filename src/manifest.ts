@@ -332,6 +332,35 @@ async function validateNoFileLevelInstallTargets(pluginPath: string): Promise<st
   return errors;
 }
 
+async function validateNoSourceMarkdownAgents(pluginPath: string): Promise<string[]> {
+  const errors: string[] = [];
+
+  const checkLayer = async (rootPath: string, displayPrefix: string): Promise<void> => {
+    const files = await listDirRecursive(rootPath);
+    for (const relativePath of files) {
+      if (!relativePath.endsWith(".md")) continue;
+      errors.push(
+        `Source markdown agents are not supported at ${displayPrefix}/${relativePath}. Author agents as agents/*.agent.ts and let harness lowerers generate markdown output.`
+      );
+    }
+  };
+
+  await checkLayer(join(pluginPath, "agents"), "agents");
+
+  const harnessRoot = join(pluginPath, HARNESS_ROOT);
+  const harnessFiles = await listDirRecursive(harnessRoot);
+  for (const relativePath of harnessFiles) {
+    const [harnessId, artifact, ...rest] = relativePath.split("/");
+    if (!harnessId || artifact !== "agents" || rest.length === 0) continue;
+    if (!relativePath.endsWith(".md")) continue;
+    errors.push(
+      `Source markdown agents are not supported at ${HARNESS_ROOT}/${relativePath}. Author agents as agents/*.agent.ts and let harness lowerers generate markdown output.`
+    );
+  }
+
+  return errors;
+}
+
 async function getPresentArtifacts(pluginPath: string): Promise<PluginArtifactType[]> {
   const presentArtifacts: PluginArtifactType[] = [];
 
@@ -510,6 +539,7 @@ async function validateManifest(
   const typedManifest = manifest as PluginManifest;
   const presentArtifacts = await getPresentArtifacts(pluginPath);
   errors.push(...await validateNoFileLevelInstallTargets(pluginPath));
+  errors.push(...await validateNoSourceMarkdownAgents(pluginPath));
   errors.push(...await validateHarnessOverlays(pluginPath, typedManifest));
 
   for (const artifact of presentArtifacts) {
@@ -527,16 +557,21 @@ async function validateManifest(
       continue;
     }
 
-    const unsupportedAgents = resolveManifestTargets(declaredTargets).filter(
-      (harnessId) => !harnessSupportsArtifact(harnessId, artifact)
-    );
+    const unsupportedAgents = resolveManifestTargets(declaredTargets).filter((harnessId) => {
+      if (artifact === "agents") {
+        return !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId);
+      }
+      return !harnessSupportsArtifact(harnessId, artifact);
+    });
 
     if (unsupportedAgents.length > 0) {
       const unsupportedList = unsupportedAgents
         .map((harnessId) => `${harnessId} (${getHarness(harnessId).name})`)
         .join(", ");
       errors.push(
-        `targets.${artifact} resolves to unsupported harnesses for ${artifact}: ${unsupportedList}`
+        artifact === "agents"
+          ? `targets.agents resolves to unsupported compile harnesses: ${unsupportedList}. Source agents must be authored as agents/*.agent.ts and can only target compile-supported harnesses.`
+          : `targets.${artifact} resolves to unsupported harnesses for ${artifact}: ${unsupportedList}`
       );
     }
   }
@@ -1121,12 +1156,9 @@ export function validateAgentDescription(description: unknown): {
 export async function validateAgent(
   agentPath: string
 ): Promise<AgentValidationResult> {
-  const errors: string[] = [];
-  const warnings: string[] = [];
   const expandedPath = expandPath(agentPath);
   const agentName = agentPath.split("/").pop()?.replace(/\.md$/, "");
 
-  // Check file exists
   if (!(await exists(expandedPath))) {
     return {
       valid: false,
@@ -1136,68 +1168,12 @@ export async function validateAgent(
     };
   }
 
-  // Parse the file
-  let frontmatter: Record<string, unknown>;
-
-  try {
-    const raw = await readFile(expandedPath);
-
-    // Check frontmatter format
-    if (!raw.startsWith("---")) {
-      return {
-        valid: false,
-        errors: ["No YAML frontmatter found (file must start with ---)"],
-        warnings: [],
-        agentPath: expandedPath,
-        agentName,
-      };
-    }
-
-    const { data } = matter(raw);
-
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      return {
-        valid: false,
-        errors: ["Frontmatter must be a YAML dictionary"],
-        warnings: [],
-        agentPath: expandedPath,
-        agentName,
-      };
-    }
-
-    frontmatter = data as Record<string, unknown>;
-  } catch (error) {
-    return {
-      valid: false,
-      errors: [
-        `Invalid YAML in frontmatter: ${error instanceof Error ? error.message : String(error)}`,
-      ],
-      warnings: [],
-      agentPath: expandedPath,
-      agentName,
-    };
-  }
-
-  // Validate required field: description
-  if (!("description" in frontmatter)) {
-    errors.push("Missing 'description' in frontmatter");
-  } else {
-    const descResult = validateAgentDescription(frontmatter.description);
-    if (!descResult.valid && descResult.error) {
-      errors.push(descResult.error);
-    }
-  }
-
-  if ("targets" in frontmatter) {
-    errors.push(
-      "File-level install targets are not supported in agent frontmatter. Move install scope to plugin.json targets.agents"
-    );
-  }
-
   return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
+    valid: false,
+    errors: [
+      "Source markdown agents are not supported. Author agents as agents/*.agent.ts and let harness lowerers generate markdown output.",
+    ],
+    warnings: [],
     agentName,
     agentPath: expandedPath,
   };
@@ -1216,7 +1192,6 @@ export async function validatePluginAgents(
     return results;
   }
 
-  // Get all .md files in agents/
   const { readdir } = await import("node:fs/promises");
   const entries = await readdir(agentsDir, { withFileTypes: true });
 

@@ -511,6 +511,9 @@ program
       await ensureDir(join(targetDir, "rules", "project"));
       await ensureDir(join(targetDir, "commands"));
       await ensureDir(join(targetDir, "agents"));
+      if (options.withAgent) {
+        await ensureDir(join(targetDir, "identities"));
+      }
 
       // Create plugin.json
       const manifestTargets: PluginManifestTargets = {};
@@ -619,23 +622,11 @@ Run the test suite with coverage reporting.
 
       // Create example agent if requested
       if (options.withAgent) {
-        const exampleAgent = `---
-description: Code reviewer that focuses on best practices
-# No file-level targets. Install targeting lives in plugin.json -> targets.agents
-
-# Claude Code specific
-claude-code:
-  model: sonnet
-
-# OpenCode specific  
-opencode:
-  mode: subagent
-  model: anthropic/claude-sonnet-4-20250514
-  temperature: 0.1
-  tools:
-    write: false
-    edit: false
+        const exampleIdentity = `---
+description: Code reviewer identity for the example agent
 ---
+
+# Reviewer
 
 You are a code review specialist. Your role is to:
 
@@ -646,6 +637,7 @@ You are a code review specialist. Your role is to:
 5. Verify proper error handling
 
 When reviewing:
+
 - Be constructive and specific
 - Provide examples of improvements
 - Prioritize issues by severity
@@ -653,8 +645,32 @@ When reviewing:
 
 You have READ-ONLY access. Do not modify files directly.
 `;
-        await writeFile(join(targetDir, "agents", "reviewer.md"), exampleAgent);
-        created.push("agents/reviewer.md");
+        const exampleAgent = `import { defineAgent } from "agentpkg";
+
+export default defineAgent({
+  name: "reviewer",
+  description: "Code reviewer that focuses on best practices",
+  identity: "reviewer",
+  targets: {
+    opencode: {
+      mode: "subagent",
+      model: "anthropic/claude-sonnet-4-20250514",
+      temperature: 0.1,
+      tools: {
+        write: false,
+        edit: false,
+      },
+    },
+    "claude-code": {
+      model: "sonnet",
+    },
+  },
+});
+`;
+        await writeFile(join(targetDir, "identities", "reviewer.identity.md"), exampleIdentity);
+        await writeFile(join(targetDir, "agents", "reviewer.agent.ts"), exampleAgent);
+        created.push("identities/reviewer.identity.md");
+        created.push("agents/reviewer.agent.ts");
       }
 
       // Create example skill if requested
@@ -764,7 +780,8 @@ ${typescriptStructure}├── rules/
 │   ├── global/          # Shared rules appended to targeted global rules files
 │   └── project/         # Shared project rules copied when --project is set
 ├── commands/            # Shared slash commands
-├── agents/              # Shared custom agent definitions
+├── agents/              # TypeScript agent DSL definitions (*.agent.ts)
+├── identities/          # Agent identity markdown used by the DSL
 ├── skills/
 │   └── example-skill/
 │       ├── SKILL.md     # Main instructions + frontmatter

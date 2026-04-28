@@ -391,32 +391,18 @@ async function planCommandsInstallation(
 
 /**
  * Plan agents installation
+ *
+ * Source markdown agents are no longer an install-phase artifact. Agents must
+ * be authored as `agents/*.agent.ts`; compile lowerers generate the harness
+ * markdown files.
  */
 async function planAgentsInstallation(
   pluginPath: string,
   harness: HarnessConfig
 ): Promise<FileOperation[]> {
-  const operations: FileOperation[] = [];
-  const files = await collectArtifactSourceFiles(pluginPath, "agents", harness.id);
-  const mdFiles = files.filter((file) => file.relativePath.endsWith(".md"));
-
-  for (const file of mdFiles) {
-    const targetDir = join(expandPath(harness.globalConfigPath), harness.agentsDir!);
-    const targetFile = harness.id === "codex-cli"
-      ? file.relativePath.replace(".md", ".toml")
-      : file.relativePath;
-    const targetPath = join(targetDir, targetFile);
-
-    operations.push({
-      type: "copy",
-      source: file.sourcePath,
-      target: targetPath,
-      harness: harness.id,
-      artifact: "agent",
-    });
-  }
-
-  return operations;
+  void pluginPath;
+  void harness;
+  return [];
 }
 
 /**

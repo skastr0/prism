@@ -13,6 +13,7 @@ import { loadPlugin } from "./load.js";
 import {
   instantiateLifecycle,
   resolveAgent,
+  resolveLifecycleSkillPermissions,
   resolveLifecycleToolPermissions,
   validateLifecycle,
 } from "./resolve.js";
@@ -156,6 +157,22 @@ const applyLifecycleToolPermissions = (
       ...agent,
       toolBindings: merged.sort((left, right) =>
         left.logicalName.localeCompare(right.logicalName),
+      ),
+    };
+  });
+
+const applyLifecycleSkillPermissions = (
+  agents: ReadonlyArray<ComposedAgent>,
+  permissions: ReadonlyMap<string, ReadonlyArray<string>>,
+): ComposedAgent[] =>
+  agents.map((agent) => {
+    const permitted = permissions.get(agent.name) ?? [];
+    if (permitted.length === 0) return agent;
+
+    return {
+      ...agent,
+      allowedSkills: [...new Set([...agent.allowedSkills, ...permitted])].sort((left, right) =>
+        left.localeCompare(right),
       ),
     };
   });
@@ -327,7 +344,18 @@ export const compilePluginForTarget = (
     }
 
     const lifecycleToolPermissions = yield* resolveLifecycleToolPermissions(lifecycles, registry);
-    const composedForLowering = applyLifecycleToolPermissions(composed, lifecycleToolPermissions);
+    const lifecycleSkillPermissions =
+      getCompileTargetCapabilities(options.target).skillPermissions === "supported"
+        ? resolveLifecycleSkillPermissions(lifecycles, registry)
+        : new Map<string, ReadonlyArray<string>>();
+    const composedWithLifecycleTools = applyLifecycleToolPermissions(
+      composed,
+      lifecycleToolPermissions,
+    );
+    const composedForLowering = applyLifecycleSkillPermissions(
+      composedWithLifecycleTools,
+      lifecycleSkillPermissions,
+    );
     yield* assertTargetSupportsGeneratedCanonicalTools(
       options.target,
       composedForLowering,

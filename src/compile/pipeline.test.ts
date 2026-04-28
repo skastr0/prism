@@ -1730,7 +1730,7 @@ export default defineAgent({
   }
 });
 
-test("trait-lifecycle example lowers assigned skill traits into opencode permissions", async () => {
+test("trait-lifecycle example lowers assigned traits and lifecycle skill into opencode permissions", async () => {
   const projectRoot = await createTempRoot();
   const pluginRoot = join(process.cwd(), "examples", "trait-lifecycle-contracts");
 
@@ -1754,6 +1754,7 @@ test("trait-lifecycle example lowers assigned skill traits into opencode permiss
       "commit",
       "contracts",
       "ddd",
+      "delivery-contract",
       "effect",
       "evolve",
       "harness-programming",
@@ -1774,6 +1775,7 @@ test("trait-lifecycle example lowers assigned skill traits into opencode permiss
       "code-reviewer",
       "commit",
       "contracts",
+      "delivery-contract",
       "evolve",
       "harness-programming",
       "model-intelligence",

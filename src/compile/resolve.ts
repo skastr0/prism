@@ -1243,6 +1243,30 @@ const assignedLocalAgentsForLifecycle = (
   return assigned;
 };
 
+export const resolveLifecycleSkillPermissions = (
+  lifecycles: ReadonlyArray<Lifecycle>,
+  registry: PluginRegistry,
+): ReadonlyMap<string, ReadonlyArray<string>> => {
+  const byAgent = new Map<string, Set<string>>();
+
+  for (const lifecycle of lifecycles) {
+    const assignedLocalAgents = assignedLocalAgentsForLifecycle(lifecycle, registry);
+
+    for (const agentName of assignedLocalAgents) {
+      const agentSkills = byAgent.get(agentName) ?? new Set<string>();
+      agentSkills.add(lifecycle.name);
+      byAgent.set(agentName, agentSkills);
+    }
+  }
+
+  return new Map(
+    [...byAgent.entries()].map(([agentName, skills]) => [
+      agentName,
+      [...skills].sort((left, right) => left.localeCompare(right)),
+    ]),
+  );
+};
+
 export const resolveLifecycleToolPermissions = (
   lifecycles: ReadonlyArray<Lifecycle>,
   registry: PluginRegistry,

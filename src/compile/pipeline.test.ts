@@ -608,7 +608,7 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
     join(generatedRoot, "src", "plugins", "canonical-compile-fixture", "contracts"),
   );
   const reviewContractName = contractFiles.find((file) =>
-    file.includes("reviewable__submit_review"),
+    file.includes("submit_review__review_findings_slot"),
   );
   expect(reviewContractName).toBeDefined();
   const reviewContract = await readFile(
@@ -649,16 +649,18 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(opencodeAgent).toContain(
     "description: Builder agent for canonical compile integration tests",
   );
-  expect(opencodeAgent).toContain("read: true");
-  expect(opencodeAgent).toContain("grep: true");
-  expect(opencodeAgent).toContain("bash: true");
-  expect(opencodeAgent).toContain("canonical_compile_fixture_commit_work: true");
-  expect(opencodeAgent).toContain("protocol_core_external_submit: true");
-  expect(opencodeAgent).toContain("protocol_core_create_item: true");
+  expect(opencodeAgent).toContain("permission:");
+  expect(opencodeAgent).not.toContain("tools:");
+  expect(opencodeAgent).toContain("read: allow");
+  expect(opencodeAgent).toContain("grep: allow");
+  expect(opencodeAgent).toContain("bash: allow");
+  expect(opencodeAgent).toContain("canonical_compile_fixture_commit_work: allow");
+  expect(opencodeAgent).toContain("protocol_core_external_submit: allow");
+  expect(opencodeAgent).toContain("protocol_core_create_item: allow");
   expect(opencodeAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
   expect(opencodeAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_item");
-  expect(opencodeAgent).toMatch(
-    /canonical_compile_fixture_reviewable__submit_review__[a-f0-9]+: false/,
+  expect(opencodeAgent).toContain(
+    "canonical_compile_fixture_submit_review__review_findings_slot: deny",
   );
   const submittableInstructionIndex = opencodeAgent.indexOf(
     "Submit completed work through the typed submission surface before handing off.",
@@ -677,12 +679,12 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     join(projectRoot, ".opencode", "agents", "reviewer.md"),
     "utf8",
   );
-  expect(reviewerAgent).toContain("protocol_core_external_submit: true");
+  expect(reviewerAgent).toContain("protocol_core_external_submit: allow");
   expect(reviewerAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(reviewerAgent).toContain("protocol_core_create_item: false");
+  expect(reviewerAgent).toContain("protocol_core_create_item: deny");
   expect(reviewerAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_item");
   expect(reviewerAgent).toMatch(
-    /canonical_compile_fixture_reviewable__submit_review__[a-f0-9]+: true/,
+    /canonical_compile_fixture_submit_review__review_findings_slot: allow/,
   );
 
   const generatedRoot = join(
@@ -765,7 +767,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     ),
   ).toBe(false);
   const reviewContractName = contractFiles.find((file) =>
-    file.includes("reviewable__submit_review"),
+    file.includes("submit_review__review_findings_slot"),
   );
   expect(reviewContractName).toBeDefined();
   const reviewContract = await readFile(
@@ -859,7 +861,12 @@ export const tool = Object.assign((definition) => definition, { schema });
   ) as {
     agent: Record<string, Record<string, unknown>>;
     plugin: string[];
+    permission: Record<string, string>;
   };
+  expect(opencodeConfig.permission).toMatchObject({
+    "canonical_compile_fixture_*": "deny",
+    "protocol_core_*": "deny",
+  });
   expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(
       projectRoot,
@@ -956,12 +963,17 @@ test("external permission-only consumers do not emit empty generated plugin shel
     join(projectRoot, ".opencode", "agents", "worker.md"),
     "utf8",
   );
-  expect(opencodeAgent).toContain("protocol_core_external_submit: true");
-  expect(opencodeAgent).toContain("protocol_core_unreferenced: false");
+  expect(opencodeAgent).toContain("permission:");
+  expect(opencodeAgent).toContain("protocol_core_external_submit: allow");
+  expect(opencodeAgent).toContain("protocol_core_unreferenced: deny");
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { plugin?: string[] };
+  ) as { permission?: Record<string, string>; plugin?: string[] };
+  expect(opencodeConfig.permission).toMatchObject({
+    "protocol_core_*": "deny",
+  });
+  expect(opencodeConfig.permission).not.toHaveProperty("permission_only_consumer_*");
   expect(opencodeConfig.plugin).toEqual([
     "agentpkg-generated-stale-dep",
     generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
@@ -1033,7 +1045,10 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { plugin?: string[] };
+  ) as { permission?: Record<string, string>; plugin?: string[] };
+  expect(opencodeConfig.permission).toMatchObject({
+    "protocol_core_*": "deny",
+  });
   expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
   );
@@ -1095,7 +1110,9 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   ).toBe(false);
 
   const consumerServer = await readFile(join(consumerGeneratedRoot, "src", "server.ts"), "utf8");
-  expect(consumerServer).toMatch(/external_synthetic_consumer_submittable__submit_work__[a-f0-9]+/);
+  expect(consumerServer).toContain(
+    "external_synthetic_consumer_submit_work__worker_details",
+  );
   const protocolServer = await readFile(join(protocolGeneratedRoot, "src", "server.ts"), "utf8");
   expect(protocolServer).toContain("protocol_core_external_submit");
 
@@ -1103,10 +1120,10 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     join(projectRoot, ".opencode", "agents", "worker.md"),
     "utf8",
   );
-  expect(opencodeAgent).toMatch(
-    /external_synthetic_consumer_submittable__submit_work__[a-f0-9]+: true/,
+  expect(opencodeAgent).toContain(
+    "external_synthetic_consumer_submit_work__worker_details: allow",
   );
-  expect(opencodeAgent).toContain("protocol_core_external_submit: false");
+  expect(opencodeAgent).toContain("protocol_core_external_submit: deny");
 
   const contractFiles = await readdir(
     join(
@@ -1118,7 +1135,7 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     ),
   );
   const contractName = contractFiles.find((file) =>
-    file.includes("submittable__submit_work"),
+    file.includes("submit_work__worker_details"),
   );
   expect(contractName).toBeDefined();
   const contract = await readFile(
@@ -1136,7 +1153,11 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
-  ) as { plugin?: string[] };
+  ) as { permission?: Record<string, string>; plugin?: string[] };
+  expect(opencodeConfig.permission).toMatchObject({
+    "external_synthetic_consumer_*": "deny",
+    "protocol_core_*": "deny",
+  });
   expect(opencodeConfig.plugin).toEqual([
     generatedPluginEntry(
       projectRoot,

@@ -1,7 +1,7 @@
 /**
  * Content-addressable cache for compiled agents.
  *
- * Cache key: hash(normalized source fingerprint + target + scope)
+ * Cache key: hash(normalized source fingerprint + target + scope + compiler semantics)
  * Cache value: serialized ComposedAgent + primary output hashes.
  */
 
@@ -25,7 +25,15 @@ interface CacheContext {
   readonly scope: string;
 }
 
-const CACHE_FORMAT_VERSION = 2;
+export const CACHE_FORMAT_VERSION = 3;
+
+/**
+ * Bump this whenever compile/lowering semantics change without a corresponding
+ * source DSL change. This prevents stale composed agents from surviving compiler
+ * fixes such as generated tool naming or permission-lowering changes.
+ */
+export const COMPILER_SEMANTICS_VERSION =
+  "2026-04-28-opencode-generated-tool-permissions-v1";
 
 type SourceLike =
   | Identity
@@ -139,6 +147,7 @@ const compareInputFiles = (left: CacheInputFile, right: CacheInputFile): number 
 
 const getContextShape = (options: CacheContext) => ({
   cacheFormatVersion: CACHE_FORMAT_VERSION,
+  compilerSemanticsVersion: COMPILER_SEMANTICS_VERSION,
   target: options.target,
   scope: options.scope,
 });

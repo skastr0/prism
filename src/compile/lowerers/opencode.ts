@@ -4,10 +4,10 @@
  * Takes a set of ComposedAgents + lifecycles and produces:
  *
  *   1. Per-agent markdown at <opencode-root>/agents/<name>.md with
- *      {name, description, tools?} frontmatter and the composed body.
- *      When the agent has contract-bound tools, the frontmatter's `tools`
- *      block enables only those synthetic tools and denies every other
- *      agent's synthetic tools.
+ *      {name, description, permission?} frontmatter and the composed body.
+ *      When the agent has generated tool bindings, the frontmatter's
+ *      `permission` block enables only those generated tools and denies every
+ *      other generated tool in the current inventory.
  *
  *   2. Idempotent patches to <opencode-root>/opencode.json:
  *        - agent.<name> block (compiler-owned keys only; hand-authored keys preserved)
@@ -160,6 +160,9 @@ const generatedPluginEntryForName = (
 const generatedPluginEntry = (target: OpenCodeLowerTarget): string =>
   generatedPluginEntryForName(target, target.sourcePluginName);
 
+const generatedToolDenyPatternForName = (pluginName: string): string =>
+  `${syntheticToolNamespace(pluginName)}_*`;
+
 // ---------------------------------------------------------------------------
 // Operation shape
 // ---------------------------------------------------------------------------
@@ -192,6 +195,13 @@ export type LowerOperation =
       readonly reason: "new" | "changed" | "unchanged";
     }
   | {
+      readonly kind: "patch-opencode-permission";
+      readonly target: string;
+      readonly permissionKey: string;
+      readonly desiredAction: "allow" | "ask" | "deny" | undefined;
+      readonly reason: "new" | "changed" | "unchanged";
+    }
+  | {
       readonly kind: "prune-plugin-path";
       readonly target: string;
       readonly targetType: "file" | "dir";
@@ -214,9 +224,10 @@ interface SyntheticToolInventory {
  * Permission-only tool names are `<tool-owner-plugin>_<tool>`.
  *
  * The plugin namespace keeps independently generated OpenCode plugins from
- * colliding inside the harness-global tool registry. Contract names already
- * include a stable filled-slot signature, so two agents with the same contract
- * share one harness-visible tool instead of duplicating an identical surface.
+ * colliding inside the harness-global tool registry. Synthetic contract names
+ * are derived from filled slot schema symbols, so two agents that share one
+ * schema share one harness-visible tool instead of duplicating an identical
+ * surface.
  */
 const buildInventory = (
   sourcePluginName: string,
@@ -245,7 +256,7 @@ const buildInventory = (
 
 const serializeFrontmatter = (
   fm: Record<string, string>,
-  tools: Record<string, boolean>
+  permissions: Record<string, "allow" | "ask" | "deny">
 ): string => {
   const keys = Object.keys(fm);
   const lines = ["---"];
@@ -259,11 +270,11 @@ const serializeFrontmatter = (
       lines.push(`${key}: ${value}`);
     }
   }
-  const toolKeys = Object.keys(tools).sort();
-  if (toolKeys.length > 0) {
-    lines.push("tools:");
-    for (const k of toolKeys) {
-      lines.push(`  ${k}: ${tools[k] ? "true" : "false"}`);
+  const permissionKeys = Object.keys(permissions).sort();
+  if (permissionKeys.length > 0) {
+    lines.push("permission:");
+    for (const key of permissionKeys) {
+      lines.push(`  ${key}: ${permissions[key]}`);
     }
   }
   lines.push("---");
@@ -278,13 +289,13 @@ const renderAgentMarkdown = (
     ...(inventory.byAgent.get(agent.name) ?? []),
     ...agent.allowedTools,
   ]);
-  const tools: Record<string, boolean> = {};
+  const permissions: Record<string, "allow" | "ask" | "deny"> = {};
   for (const tool of new Set([...inventory.allToolNames, ...agent.allowedTools])) {
-    tools[tool] = own.has(tool);
+    permissions[tool] = own.has(tool) ? "allow" : "deny";
   }
   const frontmatter = serializeFrontmatter(
     { name: agent.name, description: agent.description },
-    tools
+    permissions
   );
   return `${frontmatter}\n\n${agent.body}\n`;
 };
@@ -362,6 +373,46 @@ const fileExists = async (path: string): Promise<boolean> => {
 
 const readJson = async <T>(path: string): Promise<T> => {
   return Bun.file(path).json() as Promise<T>;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const getPermissionBlock = (
+  config: Record<string, unknown>,
+): Record<string, unknown> =>
+  isRecord(config.permission) ? config.permission : {};
+
+const permissionPatchReason = (
+  config: Record<string, unknown>,
+  permissionKey: string,
+  desiredAction: "allow" | "ask" | "deny" | undefined,
+): "new" | "changed" | "unchanged" => {
+  const permissions = getPermissionBlock(config);
+  const hasKey = Object.prototype.hasOwnProperty.call(permissions, permissionKey);
+
+  if (desiredAction === undefined) {
+    return hasKey ? "changed" : "unchanged";
+  }
+
+  if (!hasKey) return "new";
+  return permissions[permissionKey] === desiredAction ? "unchanged" : "changed";
+};
+
+const normalizePermissionBlockForWrite = (
+  config: Record<string, unknown>,
+): Record<string, unknown> => {
+  if (isRecord(config.permission)) {
+    return { ...config.permission };
+  }
+  if (
+    config.permission === "allow" ||
+    config.permission === "ask" ||
+    config.permission === "deny"
+  ) {
+    return { "*": config.permission };
+  }
+  return {};
 };
 
 // ---------------------------------------------------------------------------
@@ -774,9 +825,12 @@ const planPluginMirrors = async (
       const pluginFiles = generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
       for (const file of contract.generatedFiles) {
         const existing = pluginFiles.get(file.relativePath);
-        if (!existing || existing === file.content) {
-          pluginFiles.set(file.relativePath, file.content);
+        if (existing && existing !== file.content) {
+          throw new Error(
+            `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
+          );
         }
+        pluginFiles.set(file.relativePath, file.content);
       }
       generatedFiles.set(contract.pluginName, pluginFiles);
     }
@@ -1519,12 +1573,18 @@ export const planLowering = async (
   const legacyGeneratedPluginEntriesToPrune = new Set<string>([
     ownedGeneratedPluginId,
   ]);
+  const desiredGeneratedPermissionNamespaces = new Set<string>();
+  const generatedPermissionNamespacesToTouch = new Set<string>([
+    input.target.sourcePluginName,
+  ]);
   const rememberDesiredGeneratedPlugin = (pluginName: string): void => {
     const pluginEntry = generatedPluginEntryForName(input.target, pluginName);
     desiredGeneratedPluginEntries.add(pluginEntry);
     legacyGeneratedPluginEntriesToPrune.add(
       generatedPluginIdForName(pluginName)
     );
+    desiredGeneratedPermissionNamespaces.add(pluginName);
+    generatedPermissionNamespacesToTouch.add(pluginName);
   };
 
   if (hasAnyTool || sourceCanonicalToolBindings.length > 0) {
@@ -1641,6 +1701,28 @@ export const planLowering = async (
     });
   }
 
+  // ---- opencode.json global permission defaults for generated tools
+  //
+  // OpenCode loads plugin tools into the harness-wide registry. Without a
+  // global deny, any non-compiled Markdown agent with no explicit permission
+  // block inherits default access to generated agentpkg tools. The generated
+  // agent frontmatter then allows its assigned tools explicitly.
+  for (const pluginName of [...generatedPermissionNamespacesToTouch].sort((left, right) =>
+    left.localeCompare(right),
+  )) {
+    const desiredAction = desiredGeneratedPermissionNamespaces.has(pluginName)
+      ? "deny"
+      : undefined;
+    const permissionKey = generatedToolDenyPatternForName(pluginName);
+    operations.push({
+      kind: "patch-opencode-permission",
+      target: jsonTarget,
+      permissionKey,
+      desiredAction,
+      reason: permissionPatchReason(config, permissionKey, desiredAction),
+    });
+  }
+
   return operations;
 };
 
@@ -1660,7 +1742,11 @@ export const executeLowering = async (
 
   for (const op of operations) {
     if (op.reason === "unchanged") continue;
-    if (op.kind === "patch-json" || op.kind === "patch-opencode-plugins") continue;
+    if (
+      op.kind === "patch-json" ||
+      op.kind === "patch-opencode-plugins" ||
+      op.kind === "patch-opencode-permission"
+    ) continue;
 
     if (op.kind === "write-md" || op.kind === "write-plugin-file") {
       if (options.backup && op.kind === "write-md") {
@@ -1684,7 +1770,9 @@ export const executeLowering = async (
   // Aggregate all JSON patches into one write.
   const jsonOps = operations.filter(
     (op) =>
-      (op.kind === "patch-json" || op.kind === "patch-opencode-plugins") &&
+      (op.kind === "patch-json" ||
+        op.kind === "patch-opencode-plugins" ||
+        op.kind === "patch-opencode-permission") &&
       op.reason !== "unchanged"
   );
   if (jsonOps.length > 0) {
@@ -1728,6 +1816,19 @@ export const executeLowering = async (
         } else {
           delete config.plugin;
         }
+      } else if (op.kind === "patch-opencode-permission") {
+        const permissions = normalizePermissionBlockForWrite(config);
+        if (op.desiredAction === undefined) {
+          delete permissions[op.permissionKey];
+        } else {
+          permissions[op.permissionKey] = op.desiredAction;
+        }
+
+        if (Object.keys(permissions).length > 0) {
+          config.permission = permissions;
+        } else {
+          delete config.permission;
+        }
       }
     }
     config.agent = agentsMap;
@@ -1749,6 +1850,8 @@ export const describeOperation = (op: LowerOperation): string => {
       return `${op.reason.padEnd(9)} plugin ${op.target}`;
     case "patch-opencode-plugins":
       return `${op.reason.padEnd(9)} json   ${op.target} [plugin ${op.desiredPresent ? "+=" : "-="} ${op.pluginEntry}]`;
+    case "patch-opencode-permission":
+      return `${op.reason.padEnd(9)} json   ${op.target} [permission ${op.desiredAction === undefined ? "-=" : "="} ${op.permissionKey}]`;
     case "prune-plugin-path":
       return `${op.reason.padEnd(9)} prune  ${op.target}${op.targetType === "dir" ? " [dir]" : ""}`;
   }

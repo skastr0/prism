@@ -206,6 +206,18 @@ For a generic permission, the agent receives permission to the owner tool.
 For a filled slot, the compiler creates a synthetic wrapper and gives the agent
 permission to that wrapper.
 
+For harnesses with global tool registries such as OpenCode, generated
+agentpkg plugin tools must fail closed. The lowerer writes a global default-deny
+permission for each generated plugin namespace, then generated agent
+frontmatter writes explicit per-tool `allow` entries for assigned tools. An
+agent with no generated-tool permission block therefore has access to none of
+the generated agentpkg plugin tools.
+
+Compiled-agent cache keys include a compiler-semantics version, not just source
+hashes. When generated tool naming, slot lowering, permission lowering, or other
+compile semantics change, cached composed agents must be invalidated even when
+the source DSL files did not change.
+
 ## Toolspaces
 
 Toolspaces are the harness-facing permission inventory.

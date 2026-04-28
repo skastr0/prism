@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { basename, relative } from "node:path";
 import { Schema } from "effect";
 import {
@@ -45,19 +44,16 @@ const protocolError = (field: string, message: string): ProtocolSurfaceError => 
   message,
 });
 
-const stableValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map((item) => stableValue(item));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, stableValue(nested)]),
-    );
-  }
-  return value;
-};
+const semanticNameSegment = (value: string, fallback: string): string => {
+  const normalized = value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
 
-const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
+  return normalized.length > 0 ? normalized : fallback;
+};
 
 const parseNamedRef = (ref: string): { pluginPrefix: string | undefined; name: string } => {
   const colon = ref.indexOf(":");
@@ -150,24 +146,26 @@ const schemaImportPath = (
   modulePath: string,
 ): string => pluginModuleImportPath(contractPluginName, schemaPluginName, modulePath);
 
-const bindingSignature = (
-  toolRef: string,
+const bindingSemanticName = (
+  logicalName: string,
   slots: Readonly<Record<string, NormalizedTraitBindingToolSlot>>,
-): string =>
-  stableStringify({
-    toolRef,
-    slots: Object.fromEntries(
-      Object.entries(slots)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([slotName, slot]) => [
-          slotName,
-          {
-            sourcePath: slot.source.sourcePath,
-            exportName: slot.source.exportName,
-          },
-        ]),
-    ),
-  });
+): string => {
+  const slotSegments = Object.entries(slots)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, slot]) =>
+      semanticNameSegment(
+        slot.source.exportName === "default"
+          ? basename(slot.source.sourcePath, ".ts")
+          : slot.source.exportName,
+        "slot",
+      ),
+    );
+
+  return [
+    semanticNameSegment(logicalName, "tool"),
+    ...slotSegments,
+  ].join("__");
+};
 
 const renderSlotWrapperContractSource = (options: {
   readonly description: string;
@@ -319,11 +317,7 @@ export const materializeTraitTools = (options: {
     });
     if (typeof contractSource !== "string") return contractSource;
 
-    const suffix = createHash("sha256")
-      .update(bindingSignature(attachment.ref, filledSlots))
-      .digest("hex")
-      .slice(0, 12);
-    const contractName = `${options.trait.name}__${logicalName}__${suffix}`;
+    const contractName = bindingSemanticName(logicalName, filledSlots);
 
     materialized.push({
       kind: "synthetic",

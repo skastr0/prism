@@ -10,6 +10,7 @@ import { Effect, Schema } from "effect";
 import { basename, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import matter from "gray-matter";
 import {
   Agent,
@@ -28,7 +29,6 @@ import {
   ToolspaceSchema,
   Trait,
   TraitSchema,
-  TraitSlotRefSchema,
   normalizeAgentRefInput,
   normalizeLifecycleRefInput,
   normalizeModelProfileRefInput,
@@ -42,8 +42,7 @@ import {
   type NormalizedLifecyclePhase,
   type NormalizedLifecycleToolGrant,
   type NormalizedTraitBinding,
-  type NormalizedTraitToolSchemaValue,
-  type TraitSlot,
+  type NormalizedTraitBindingToolSlot,
 } from "./sources.js";
 import {
   AgentNameMismatchError,
@@ -134,13 +133,11 @@ export const modelProfileRef = (first, second, third) =>
     ? { kind: "model-profile-ref", modelspace: first, name: second }
     : { kind: "model-profile-ref", plugin: first, modelspace: second, name: third };
 
-export const slotRef = (slot) => ({ kind: "trait-slot-ref", slot });
 export const schemaSlot = (options = {}) => ({ kind: "schema", ...options });
-export const valueSlot = (schema, options = {}) => ({ kind: "value", schema, ...options });
 export const bindTrait = (trait, options = {}) => ({
   kind: "trait-binding",
   trait,
-  ...(options.slots ? { slots: options.slots } : {}),
+  ...(options.tools ? { tools: options.tools } : {}),
 });
 
 export const defineAgent = (agent) => agent;
@@ -220,7 +217,19 @@ const rewriteImportSpecifiers = (
     );
 };
 
-const transformedPluginRoots = new Map<string, Promise<string>>();
+const TRANSFORMED_PLUGIN_CACHE_TTL_MS = 30_000;
+const MAX_TRANSFORMED_PLUGIN_CACHE_ENTRIES = 16;
+
+interface TransformedPluginRoot {
+  readonly pluginRoot: string;
+  readonly root: string;
+  readonly outputParent: string;
+  activeImports: number;
+  lastUsed: number;
+  cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+}
+
+const transformedPluginRoots = new Map<string, Promise<TransformedPluginRoot>>();
 
 const findPluginRoot = async (sourcePath: string): Promise<string> => {
   const fs = await import("node:fs/promises");
@@ -270,9 +279,71 @@ const listTransformableTsFiles = async (
   return files;
 };
 
-const getTransformedPluginRoot = async (pluginRoot: string): Promise<string> => {
+const cleanupTransformedPluginRoot = async (
+  entry: TransformedPluginRoot,
+): Promise<void> => {
+  if (entry.activeImports > 0) return;
+
+  const current = await transformedPluginRoots.get(entry.pluginRoot)?.catch(() => undefined);
+  if (current !== entry) return;
+
+  transformedPluginRoots.delete(entry.pluginRoot);
+  const fs = await import("node:fs/promises");
+  await fs.rm(entry.outputParent, { recursive: true, force: true });
+};
+
+const scheduleTransformedPluginRootCleanup = (
+  entry: TransformedPluginRoot,
+): void => {
+  if (entry.cleanupTimer) clearTimeout(entry.cleanupTimer);
+  if (entry.activeImports > 0) return;
+
+  entry.cleanupTimer = setTimeout(() => {
+    entry.cleanupTimer = undefined;
+    if (Date.now() - entry.lastUsed < TRANSFORMED_PLUGIN_CACHE_TTL_MS) {
+      scheduleTransformedPluginRootCleanup(entry);
+      return;
+    }
+    void cleanupTransformedPluginRoot(entry);
+  }, TRANSFORMED_PLUGIN_CACHE_TTL_MS);
+  entry.cleanupTimer.unref?.();
+};
+
+const pruneTransformedPluginRootCache = async (): Promise<void> => {
+  if (transformedPluginRoots.size <= MAX_TRANSFORMED_PLUGIN_CACHE_ENTRIES) return;
+
+  const entries = await Promise.all(
+    [...transformedPluginRoots.values()].map((entry) =>
+      entry.catch(() => undefined),
+    ),
+  );
+  const inactive = entries
+    .filter((entry): entry is TransformedPluginRoot =>
+      entry !== undefined && entry.activeImports === 0,
+    )
+    .sort((left, right) => left.lastUsed - right.lastUsed);
+
+  for (const entry of inactive) {
+    if (transformedPluginRoots.size <= MAX_TRANSFORMED_PLUGIN_CACHE_ENTRIES) return;
+    if (entry.cleanupTimer) {
+      clearTimeout(entry.cleanupTimer);
+      entry.cleanupTimer = undefined;
+    }
+    await cleanupTransformedPluginRoot(entry);
+  }
+};
+
+const getTransformedPluginRoot = async (pluginRoot: string): Promise<TransformedPluginRoot> => {
   const existing = transformedPluginRoots.get(pluginRoot);
-  if (existing) return existing;
+  if (existing) {
+    const entry = await existing;
+    entry.lastUsed = Date.now();
+    if (entry.cleanupTimer) {
+      clearTimeout(entry.cleanupTimer);
+      entry.cleanupTimer = undefined;
+    }
+    return entry;
+  }
 
   const pending = (async () => {
     const fs = await import("node:fs/promises");
@@ -288,10 +359,18 @@ const getTransformedPluginRoot = async (pluginRoot: string): Promise<string> => 
       visited: new Set<string>(),
     });
 
-    return join(outputParent, basename(pluginRoot));
+    return {
+      pluginRoot,
+      root: join(outputParent, basename(pluginRoot)),
+      outputParent,
+      activeImports: 0,
+      lastUsed: Date.now(),
+      cleanupTimer: undefined,
+    };
   })();
 
   transformedPluginRoots.set(pluginRoot, pending);
+  await pruneTransformedPluginRootCache();
   return pending;
 };
 
@@ -344,12 +423,21 @@ const prepareImportWrapper = async (
   sourcePath: string,
 ): Promise<{ readonly specifier: string; readonly cleanup: () => Promise<void> }> => {
   const pluginRoot = await findPluginRoot(sourcePath);
-  const transformedRoot = await getTransformedPluginRoot(pluginRoot);
-  const transformedPath = join(transformedRoot, relative(pluginRoot, sourcePath));
+  const transformed = await getTransformedPluginRoot(pluginRoot);
+  transformed.activeImports += 1;
+  transformed.lastUsed = Date.now();
+  let cleaned = false;
+  const transformedPath = join(transformed.root, relative(pluginRoot, sourcePath));
 
   return {
     specifier: `${toFileSpecifier(transformedPath)}?t=${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    cleanup: async () => {},
+    cleanup: async () => {
+      if (cleaned) return;
+      cleaned = true;
+      transformed.activeImports = Math.max(0, transformed.activeImports - 1);
+      transformed.lastUsed = Date.now();
+      scheduleTransformedPluginRootCleanup(transformed);
+    },
   };
 };
 
@@ -451,82 +539,153 @@ const normalizeAccess = (
   return { tools, toolGroups };
 };
 
-const TRAIT_SLOT_TEMPLATE_PATTERN = /\$\{([^}]+)\}/g;
-
 const isEffectSchema = (value: unknown): value is Schema.Schema.AnyNoContext =>
   Schema.isSchema(value);
 
-const collectTemplateSlotNames = (value: string): ReadonlyArray<string> => {
-  const names = new Set<string>();
-  for (const match of value.matchAll(TRAIT_SLOT_TEMPLATE_PATTERN)) {
-    const name = match[1]?.trim();
-    if (!name) continue;
-    names.add(name);
+interface SchemaSymbolSource {
+  readonly sourcePath: string;
+  readonly exportName: string;
+}
+
+type BindingToolSlotSources = Map<number, Map<string, Map<string, SchemaSymbolSource>>>;
+
+const propertyNameText = (name: ts.PropertyName): string | undefined => {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
   }
-  return [...names];
+  return undefined;
 };
 
-const normalizeTraitToolSchemaValue = (
+const objectProperty = (
+  object: ts.ObjectLiteralExpression | undefined,
+  name: string,
+): ts.Expression | undefined => {
+  if (!object) return undefined;
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const propertyName = propertyNameText(property.name);
+    if (propertyName === name) return property.initializer;
+  }
+  return undefined;
+};
+
+const asObjectLiteral = (value: ts.Expression | undefined): ts.ObjectLiteralExpression | undefined =>
+  value && ts.isObjectLiteralExpression(value) ? value : undefined;
+
+const asArrayLiteral = (value: ts.Expression | undefined): ts.ArrayLiteralExpression | undefined =>
+  value && ts.isArrayLiteralExpression(value) ? value : undefined;
+
+const resolveImportedModuleSource = (
   sourcePath: string,
-  field: string,
-  value: unknown,
-  slots: Readonly<Record<string, TraitSlot>>,
-): NormalizedTraitToolSchemaValue | SourceParseError => {
-  const slotRef = Schema.decodeUnknownEither(TraitSlotRefSchema)(value);
-  if (slotRef._tag === "Right") {
-    const slot = slots[slotRef.right.slot];
-    if (!slot) {
-      return new SourceParseError({
-        sourcePath,
-        kind: "trait",
-        message: `${field}: references unknown slot '${slotRef.right.slot}'`,
+  moduleSpecifier: string,
+): string => {
+  if (moduleSpecifier.startsWith(".")) {
+    const resolved = resolvePath(sourcePath, "..", moduleSpecifier);
+    return resolved.endsWith(".ts") ? resolved : `${resolved}.ts`;
+  }
+  if (moduleSpecifier.startsWith("/")) {
+    return moduleSpecifier.endsWith(".ts") ? moduleSpecifier : `${moduleSpecifier}.ts`;
+  }
+  return moduleSpecifier;
+};
+
+const collectImportedSchemaSymbols = (
+  sourcePath: string,
+  source: ts.SourceFile,
+): Map<string, SchemaSymbolSource> => {
+  const imports = new Map<string, SchemaSymbolSource>();
+
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const moduleSource = resolveImportedModuleSource(sourcePath, statement.moduleSpecifier.text);
+    const clause = statement.importClause;
+    if (!clause) continue;
+
+    if (clause.name) {
+      imports.set(clause.name.text, {
+        sourcePath: moduleSource,
+        exportName: "default",
       });
     }
 
-    if (slot.kind !== "schema") {
-      return new SourceParseError({
-        sourcePath,
-        kind: "trait",
-        message: `${field}: slot '${slotRef.right.slot}' must be declared as kind 'schema'`,
+    const namedBindings = clause.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) continue;
+    for (const element of namedBindings.elements) {
+      imports.set(element.name.text, {
+        sourcePath: moduleSource,
+        exportName: element.propertyName?.text ?? element.name.text,
       });
     }
-
-    return slotRef.right;
   }
 
-  if (!isEffectSchema(value)) {
-    return new SourceParseError({
-      sourcePath,
-      kind: "trait",
-      message: `${field}: must be an Effect Schema or slotRef(...)`,
-    });
-  }
+  return imports;
+};
 
-  return {
-    kind: "inline-schema",
-    schema: value,
+const collectBindingToolSlotSources = (
+  sourcePath: string,
+  sourceText: string,
+): BindingToolSlotSources => {
+  const source = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true);
+  const importedSymbols = collectImportedSchemaSymbols(sourcePath, source);
+  const result: BindingToolSlotSources = new Map();
+
+  const collectFromBindTrait = (
+    traitIndex: number,
+    call: ts.CallExpression,
+  ): void => {
+    const options = asObjectLiteral(call.arguments[1]);
+    const tools = asObjectLiteral(objectProperty(options, "tools"));
+    if (!tools) return;
+
+    const byTool = new Map<string, Map<string, SchemaSymbolSource>>();
+    for (const toolProperty of tools.properties) {
+      if (!ts.isPropertyAssignment(toolProperty)) continue;
+      const logicalName = propertyNameText(toolProperty.name);
+      const toolOptions = asObjectLiteral(toolProperty.initializer);
+      const slots = asObjectLiteral(objectProperty(toolOptions, "slots"));
+      if (!logicalName || !slots) continue;
+
+      const bySlot = new Map<string, SchemaSymbolSource>();
+      for (const slotProperty of slots.properties) {
+        if (!ts.isPropertyAssignment(slotProperty)) continue;
+        const slotName = propertyNameText(slotProperty.name);
+        if (!slotName || !ts.isIdentifier(slotProperty.initializer)) continue;
+        const imported = importedSymbols.get(slotProperty.initializer.text);
+        if (imported) bySlot.set(slotName, imported);
+      }
+      byTool.set(logicalName, bySlot);
+    }
+    result.set(traitIndex, byTool);
   };
-};
 
-const normalizeTraitSlots = (
-  sourcePath: string,
-  slots: Readonly<Record<string, TraitSlot>> | undefined,
-): Readonly<Record<string, TraitSlot>> | SourceParseError => {
-  const normalized: Record<string, TraitSlot> = {};
-
-  for (const [slotName, slot] of Object.entries(slots ?? {})) {
-    if (slot.kind === "value" && !isEffectSchema(slot.schema)) {
-      return new SourceParseError({
-        sourcePath,
-        kind: "trait",
-        message: `slots.${slotName}.schema: value slots must declare an Effect Schema`,
-      });
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "defineAgent"
+    ) {
+      const agent = asObjectLiteral(node.arguments[0]);
+      const traits = asArrayLiteral(objectProperty(agent, "traits"));
+      if (traits) {
+        for (const [traitIndex, element] of traits.elements.entries()) {
+          if (
+            ts.isCallExpression(element) &&
+            ts.isIdentifier(element.expression) &&
+            element.expression.text === "bindTrait"
+          ) {
+            collectFromBindTrait(traitIndex, element);
+          }
+        }
+      }
+      return;
     }
 
-    normalized[slotName] = slot;
-  }
+    ts.forEachChild(node, visit);
+  };
 
-  return normalized;
+  visit(source);
+  return result;
 };
 
 const normalizeTraitInstructions = (
@@ -693,11 +852,6 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       return yield* Effect.fail(access);
     }
 
-    const slots = normalizeTraitSlots(sourcePath, result.right.slots);
-    if (slots instanceof SourceParseError) {
-      return yield* Effect.fail(slots);
-    }
-
     const tools: Record<string, Trait["tools"][string]> = {};
     for (const [toolName, tool] of Object.entries(result.right.tools ?? {})) {
       if (!tool.ref || typeof tool.ref !== "string" || tool.ref.trim().length === 0) {
@@ -712,48 +866,6 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
 
       const attachment: Record<string, unknown> = { ref: tool.ref };
 
-      if (tool.description !== undefined) {
-        const unknownTemplateSlots = collectTemplateSlotNames(tool.description).filter(
-          (slotName) => !Object.prototype.hasOwnProperty.call(slots, slotName),
-        );
-        if (unknownTemplateSlots.length > 0) {
-          return yield* Effect.fail(
-            new SourceParseError({
-              sourcePath,
-              kind: "trait",
-              message: `tools.${toolName}.description: uses unknown slot(s): ${unknownTemplateSlots.join(", ")}`,
-            }),
-          );
-        }
-        attachment.description = tool.description;
-      }
-
-      if (tool.input !== undefined) {
-        const input = normalizeTraitToolSchemaValue(
-          sourcePath,
-          `tools.${toolName}.input`,
-          tool.input,
-          slots,
-        );
-        if (input instanceof SourceParseError) {
-          return yield* Effect.fail(input);
-        }
-        attachment.input = input;
-      }
-
-      if (tool.output !== undefined) {
-        const output = normalizeTraitToolSchemaValue(
-          sourcePath,
-          `tools.${toolName}.output`,
-          tool.output,
-          slots,
-        );
-        if (output instanceof SourceParseError) {
-          return yield* Effect.fail(output);
-        }
-        attachment.output = output;
-      }
-
       tools[toolName] = attachment as Trait["tools"][string];
     }
 
@@ -763,7 +875,6 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       description: result.right.description,
       instructions: normalizeTraitInstructions(result.right.instructions),
       access,
-      slots,
       tools,
       inject: {
         skills: result.right.inject?.skills ?? [],
@@ -808,6 +919,8 @@ const parseAgentModule = (
   raw: unknown,
 ): Effect.Effect<Agent, CompileError> =>
   Effect.gen(function* () {
+    const sourceText = yield* readText(sourcePath, "agent");
+    const bindingToolSlotSources = collectBindingToolSlotSources(sourcePath, sourceText);
     const result = Schema.decodeUnknownEither(AgentSchema, STRICT_PARSE_OPTIONS)(raw);
     if (result._tag === "Left") {
       return yield* Effect.fail(
@@ -849,12 +962,42 @@ const parseAgentModule = (
           }),
         );
       }
+      const tools: Record<string, { slots: Record<string, NormalizedTraitBindingToolSlot> }> = {};
+      if (typeof trait !== "string" && trait.kind !== "trait-ref") {
+        const sourceTools = bindingToolSlotSources.get(index) ?? new Map();
+        for (const [logicalName, toolBinding] of Object.entries(trait.tools ?? {})) {
+          const normalizedSlots: Record<string, NormalizedTraitBindingToolSlot> = {};
+          const sourceSlots = sourceTools.get(logicalName) ?? new Map();
+          for (const [slotName, schema] of Object.entries(toolBinding.slots ?? {})) {
+            if (!isEffectSchema(schema)) {
+              return yield* Effect.fail(
+                new SourceParseError({
+                  sourcePath,
+                  kind: "agent",
+                  message: `traits[${index}].tools.${logicalName}.slots.${slotName}: must be an Effect Schema`,
+                }),
+              );
+            }
+            const source = sourceSlots.get(slotName);
+            if (!source) {
+              return yield* Effect.fail(
+                new SourceParseError({
+                  sourcePath,
+                  kind: "agent",
+                  message:
+                    `traits[${index}].tools.${logicalName}.slots.${slotName}: ` +
+                    "must be an imported schema identifier; inline Effect Schema expressions are not supported",
+                }),
+              );
+            }
+            normalizedSlots[slotName] = { schema, source };
+          }
+          tools[logicalName] = { slots: normalizedSlots };
+        }
+      }
       traits.push({
         ref: normalized,
-        slots:
-          typeof trait === "string" || trait.kind === "trait-ref"
-            ? {}
-            : { ...(trait.slots ?? {}) },
+        tools,
       });
     }
 
@@ -1239,10 +1382,6 @@ const normalizeLifecycleGrantTool = (
   return {
     ref,
     logicalName,
-    ...(typeof tool !== "string" && tool.description !== undefined
-      ? { description: tool.description }
-      : {}),
-    bind: typeof tool !== "string" ? (tool.bind ?? {}) : {},
   };
 };
 
@@ -1517,6 +1656,7 @@ const parseCanonicalTool = (sourcePath: string): Effect.Effect<CanonicalTool, Co
       description: parsed.description,
       input: parsed.input,
       output: parsed.output,
+      slots: parsed.slots ?? {},
       handle: parsed.handle,
     });
   });

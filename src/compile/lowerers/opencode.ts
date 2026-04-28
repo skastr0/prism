@@ -31,7 +31,7 @@
  * entries like node_modules/ and lockfiles, which are preserved across syncs.
  */
 
-import { dirname, join } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import {
   composeLifecyclePhaseReference,
   type ComposedAgent,
@@ -114,16 +114,39 @@ const syntheticToolNamespace = (sourcePluginName: string): string =>
 
 const syntheticToolName = (
   sourcePluginName: string,
-  agentName: string,
-  logicalName: string
+  contractName: string,
 ): string =>
-  `${syntheticToolNamespace(sourcePluginName)}_${sanitizeSyntheticToolSegment(agentName, "agent")}_${sanitizeSyntheticToolSegment(logicalName, "tool")}`;
+  `${syntheticToolNamespace(sourcePluginName)}_${sanitizeSyntheticToolSegment(contractName, "tool")}`;
+
+const ownerToolName = (toolPluginName: string, toolName: string): string =>
+  `${syntheticToolNamespace(toolPluginName)}_${sanitizeSyntheticToolSegment(toolName, "tool")}`;
+
+const runtimeToolName = (
+  sourcePluginName: string,
+  binding: ComposedAgent["toolBindings"][number],
+): string => {
+  if (binding.kind === "permission") {
+    return ownerToolName(binding.toolPluginName, binding.toolName);
+  }
+  if (!binding.contract) {
+    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
+  }
+  return syntheticToolName(sourcePluginName, binding.contract.name);
+};
+
+const generatedPluginIdForName = (pluginName: string): string =>
+  `${GENERATED_PLUGIN_PREFIX}-${normalizeGeneratedPluginSourcePluginName(pluginName)}`;
 
 const generatedPluginId = (target: OpenCodeLowerTarget): string =>
-  `${GENERATED_PLUGIN_PREFIX}-${normalizeGeneratedPluginSourcePluginName(target.sourcePluginName)}`;
+  generatedPluginIdForName(target.sourcePluginName);
 
 const generatedPluginRoot = (target: OpenCodeLowerTarget): string =>
   join(target.root, "plugins", generatedPluginId(target));
+
+const generatedPluginRootForName = (
+  target: OpenCodeLowerTarget,
+  pluginName: string,
+): string => join(target.root, "plugins", generatedPluginIdForName(pluginName));
 
 // ---------------------------------------------------------------------------
 // Operation shape
@@ -168,19 +191,20 @@ export type LowerOperation =
 // ---------------------------------------------------------------------------
 
 interface SyntheticToolInventory {
-  /** All synthetic tool names across every agent. Format: <plugin>_<agent>_<logical>. */
+  /** All generated/assigned tool names across every agent. */
   readonly allToolNames: ReadonlyArray<string>;
   /** Tool names owned by each agent. */
   readonly byAgent: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
 /**
- * Synthetic tool names are `<plugin-sanitized>_<agent-sanitized>_<logical-sanitized>`.
+ * Synthetic tool names are `<source-plugin>_<contract>`.
+ * Permission-only tool names are `<tool-owner-plugin>_<tool>`.
  *
  * The plugin namespace keeps independently generated OpenCode plugins from
- * colliding inside the harness-global tool registry. Agent and logical names
- * are sanitized the same way so generated frontmatter keys and server exports
- * stay aligned and JS-safe.
+ * colliding inside the harness-global tool registry. Contract names already
+ * include a stable filled-slot signature, so two agents with the same contract
+ * share one harness-visible tool instead of duplicating an identical surface.
  */
 const buildInventory = (
   sourcePluginName: string,
@@ -191,11 +215,7 @@ const buildInventory = (
   for (const agent of agents) {
     const own: string[] = [];
     for (const binding of agent.toolBindings) {
-      const toolName = syntheticToolName(
-        sourcePluginName,
-        agent.name,
-        binding.logicalName
-      );
+      const toolName = runtimeToolName(sourcePluginName, binding);
       own.push(toolName);
       all.push(toolName);
     }
@@ -430,27 +450,35 @@ const renderLifecycleSkill = (
 //           └── schemas/*.ts
 // ---------------------------------------------------------------------------
 
-/** Source-plugin subdirectories that get mirrored into src/plugins/<name>/. */
-const MIRRORED_SUBDIRS = ["contracts", "schemas", "tools"] as const;
-
 interface PluginMirror {
   readonly pluginName: string;
-  readonly files: ReadonlyArray<{
-    relativePath: string;
-    sourcePath?: string;
-    content?: string;
-  }>;
+  readonly pluginRoot?: string;
+  readonly files: ReadonlyArray<MirrorFile>;
 }
 
-interface AdapterSpec {
-  readonly pluginName: string;
-  readonly contractName: string;
-  /**
-   * Path to the contract file relative to the generated plugin's
-   * src/plugins/<pluginName>/ mirror — i.e. always starts with "contracts/".
-   */
-  readonly contractRelativePath: string;
+interface MirrorFile {
+  readonly relativePath: string;
+  readonly sourcePath?: string;
+  readonly content?: string;
 }
+
+type AdapterSpec =
+  | {
+      readonly kind: "tool";
+      readonly pluginName: string;
+      readonly toolName: string;
+      readonly sourcePath: string;
+    }
+  | {
+      readonly kind: "synthetic";
+      readonly pluginName: string;
+      readonly contractName: string;
+      /**
+       * Path to the contract file relative to the generated plugin's
+       * src/plugins/<pluginName>/ mirror — i.e. always starts with "contracts/".
+       */
+      readonly contractRelativePath: string;
+    };
 
 const RUNTIME_MANAGED_PLUGIN_DIRS = new Set(["node_modules"]);
 const RUNTIME_MANAGED_PLUGIN_FILES = new Set([
@@ -603,13 +631,113 @@ const planLifecycleSkillPruning = async (
   return operations;
 };
 
+const SOURCE_IMPORT_PATTERN =
+  /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
+
+const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
+
+const resolveTsImportCandidate = async (
+  absoluteWithoutQuery: string,
+): Promise<string | undefined> => {
+  const candidates = extname(absoluteWithoutQuery)
+    ? [absoluteWithoutQuery]
+    : [`${absoluteWithoutQuery}.ts`, join(absoluteWithoutQuery, "index.ts")];
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+  return undefined;
+};
+
+const collectRelativeImportSpecifiers = (source: string): string[] => {
+  const specifiers: string[] = [];
+  for (const match of source.matchAll(SOURCE_IMPORT_PATTERN)) {
+    const specifier = match[1] ?? match[2];
+    if (specifier) specifiers.push(specifier);
+  }
+  return specifiers;
+};
+
+const resolveMirrorImport = async (options: {
+  readonly pluginRoot: string;
+  readonly file: MirrorFile;
+  readonly specifier: string;
+}): Promise<MirrorFile | undefined> => {
+  const basePath = options.file.sourcePath
+    ? dirname(options.file.sourcePath)
+    : dirname(join(options.pluginRoot, options.file.relativePath));
+  const resolved = await resolveTsImportCandidate(resolve(basePath, options.specifier));
+  if (!resolved || !sourceIsInsidePlugin(resolved, options.pluginRoot)) {
+    return undefined;
+  }
+
+  return {
+    relativePath: normalizeRelativePath(relative(options.pluginRoot, resolved)),
+    sourcePath: resolved,
+  };
+};
+
+const collectMirrorRuntimeClosure = async (
+  pluginRoot: string,
+  entries: ReadonlyArray<MirrorFile>,
+): Promise<MirrorFile[]> => {
+  const files = new Map<string, MirrorFile>();
+  const queue: MirrorFile[] = [...entries];
+
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (files.has(file.relativePath)) continue;
+    files.set(file.relativePath, file);
+
+    const source = file.content ?? (file.sourcePath ? await readFile(file.sourcePath) : "");
+    for (const specifier of collectRelativeImportSpecifiers(source)) {
+      const imported = await resolveMirrorImport({ pluginRoot, file, specifier });
+      if (!imported || files.has(imported.relativePath)) continue;
+      queue.push(imported);
+    }
+  }
+
+  return [...files.values()].sort((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
+};
+
+const collectTsFilesInSubdirs = async (
+  pluginRoot: string,
+  subdirs: ReadonlyArray<string>,
+): Promise<MirrorFile[]> => {
+  const files: MirrorFile[] = [];
+  for (const subdir of subdirs) {
+    const subRoot = join(pluginRoot, subdir);
+    const entries = await listDirRecursive(subRoot);
+    for (const relativeEntry of entries) {
+      if (!relativeEntry.endsWith(".ts")) continue;
+      files.push({
+        relativePath: `${subdir}/${relativeEntry}`,
+        sourcePath: join(subRoot, relativeEntry),
+      });
+    }
+  }
+  return files;
+};
+
 const planPluginMirrors = async (
+  sourcePluginName: string,
   bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
 ): Promise<PluginMirror[]> => {
   const byPlugin = new Map<string, { pluginRoot: string }>();
   const generatedFiles = new Map<string, Map<string, string>>();
+  const entryFiles = new Map<string, Map<string, MirrorFile>>();
 
-  const contracts = bindings.map((binding) => binding.contract);
+  const addEntryFile = (pluginName: string, file: MirrorFile): void => {
+    const pluginFiles = entryFiles.get(pluginName) ?? new Map<string, MirrorFile>();
+    pluginFiles.set(file.relativePath, file);
+    entryFiles.set(pluginName, pluginFiles);
+  };
+
+  const contracts = bindings
+    .map((binding) => binding.contract)
+    .filter((contract): contract is Contract => contract !== undefined);
   for (const contract of contracts) {
     if (contract.generatedFiles && contract.generatedFiles.length > 0) {
       const pluginFiles = generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
@@ -629,35 +757,47 @@ const planPluginMirrors = async (
     }
   }
 
-  for (const binding of bindings) {
-    if (byPlugin.has(binding.canonicalToolPlugin)) continue;
-    const toolsDir = dirname(binding.canonicalToolSourcePath);
-    const pluginRoot = dirname(toolsDir);
-    byPlugin.set(binding.canonicalToolPlugin, { pluginRoot });
+    for (const binding of bindings) {
+      if (binding.kind === "synthetic") {
+        if (!binding.contract) {
+          throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
+        }
+        if (binding.toolPluginName === binding.contract.pluginName) {
+          addEntryFile(binding.contract.pluginName, {
+            relativePath: `tools/${binding.toolName}.tool.ts`,
+            sourcePath: binding.toolSourcePath,
+          });
+        }
+        continue;
+      }
+    if (binding.toolPluginName !== sourcePluginName) {
+      continue;
+    }
+    if (!byPlugin.has(binding.toolPluginName)) {
+      const toolsDir = dirname(binding.toolSourcePath);
+      const pluginRoot = dirname(toolsDir);
+      byPlugin.set(binding.toolPluginName, { pluginRoot });
+    }
+    addEntryFile(binding.toolPluginName, {
+      relativePath: `tools/${binding.toolName}.tool.ts`,
+      sourcePath: binding.toolSourcePath,
+    });
   }
 
   const mirrors: PluginMirror[] = [];
   for (const [pluginName, { pluginRoot }] of byPlugin) {
-    const files: Array<{ relativePath: string; sourcePath?: string; content?: string }> = [];
-    for (const sub of MIRRORED_SUBDIRS) {
-      const subRoot = join(pluginRoot, sub);
-      const entries = await listDirRecursive(subRoot);
-      for (const rel of entries) {
-        if (!rel.endsWith(".ts")) continue;
-        files.push({
-          sourcePath: join(subRoot, rel),
-          relativePath: `${sub}/${rel}`,
-        });
-      }
-    }
+    const files = new Map(entryFiles.get(pluginName) ?? []);
     const generated = generatedFiles.get(pluginName);
     if (generated) {
       for (const [relativePath, content] of generated) {
-        if (files.some((file) => file.relativePath === relativePath)) continue;
-        files.push({ relativePath, content });
+        files.set(relativePath, { relativePath, content });
       }
     }
-    mirrors.push({ pluginName, files });
+    mirrors.push({
+      pluginName,
+      pluginRoot,
+      files: await collectMirrorRuntimeClosure(pluginRoot, [...files.values()]),
+    });
   }
 
   for (const [pluginName, files] of generatedFiles) {
@@ -675,50 +815,182 @@ const planPluginMirrors = async (
 };
 
 const planAdapters = (
+  sourcePluginName: string,
   agents: ReadonlyArray<ComposedAgent>,
 ): AdapterSpec[] => {
   const seen = new Set<string>();
   const specs: AdapterSpec[] = [];
   for (const agent of agents) {
     for (const binding of agent.toolBindings) {
-      const key = `${binding.contract.pluginName}/${binding.contract.name}`;
+      if (binding.kind === "permission" && binding.toolPluginName !== sourcePluginName) {
+        continue;
+      }
+      const key = binding.kind === "permission"
+        ? `tool/${binding.toolPluginName}/${binding.toolName}`
+        : `synthetic/${binding.contract!.pluginName}/${binding.contract!.name}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      specs.push({
-        pluginName: binding.contract.pluginName,
-        contractName: binding.contract.name,
-        contractRelativePath: `contracts/${binding.contract.name}.contract`,
-      });
+      if (binding.kind === "permission") {
+        specs.push({
+          kind: "tool",
+          pluginName: binding.toolPluginName,
+          toolName: binding.toolName,
+          sourcePath: binding.toolSourcePath,
+        });
+      } else {
+        specs.push({
+          kind: "synthetic",
+          pluginName: binding.contract!.pluginName,
+          contractName: binding.contract!.name,
+          contractRelativePath: `contracts/${binding.contract!.name}.contract`,
+        });
+      }
     }
   }
   return specs;
 };
 
 const normalizeMirroredPluginSource = (
-  relativePath: string,
-  source: string,
+  options: {
+    readonly pluginName: string;
+    readonly pluginRoot?: string;
+    readonly relativePath: string;
+    readonly sourcePath?: string;
+    readonly source: string;
+    readonly importPluginRoots: ReadonlyMap<string, string>;
+  },
 ): string => {
-  if (!relativePath.endsWith(".tool.ts")) {
-    return source;
+  const currentGeneratedPath = `src/plugins/${options.pluginName}/${options.relativePath}`;
+  const withRewrittenImports = rewriteCrossPluginRelativeImports({
+    pluginName: options.pluginName,
+    pluginRoot: options.pluginRoot,
+    sourcePath: options.sourcePath,
+    source: options.source,
+    currentGeneratedPath,
+    importPluginRoots: options.importPluginRoots,
+  });
+
+  if (!options.relativePath.endsWith(".tool.ts")) {
+    return withRewrittenImports;
   }
 
-  return source
-    .replace(/^\s*import\s+\{\s*defineTool\s*\}\s+from\s+["']agentpkg["'];\s*\n/m, "")
-    .replace(/\bdefineTool\s*\(/g, "(");
+  return stripToolAuthoringHelpers(withRewrittenImports)
+    .replace(/\bdefineTool\s*\(/g, "(")
+    .replace(/\bschemaSlot\s*\(/g, "(");
+};
+
+const sourceIsInsidePlugin = (sourcePath: string, pluginRoot: string): boolean => {
+  const rel = relative(pluginRoot, sourcePath);
+  return rel.length === 0 || (!rel.startsWith("..") && !rel.startsWith("/"));
+};
+
+const resolveImportedSourcePath = (
+  sourcePath: string,
+  source: string,
+): string => {
+  const absolute = resolve(dirname(sourcePath), source);
+  if (extname(absolute)) return absolute;
+  return `${absolute}.ts`;
+};
+
+const findSourcePlugin = (
+  sourcePath: string,
+  pluginRoots: ReadonlyMap<string, string>,
+): { pluginName: string; pluginRoot: string } | undefined => {
+  const matches = [...pluginRoots.entries()]
+    .filter(([, pluginRoot]) => sourceIsInsidePlugin(sourcePath, pluginRoot))
+    .sort((left, right) => right[1].length - left[1].length);
+  const first = matches[0];
+  if (!first) return undefined;
+  return { pluginName: first[0], pluginRoot: first[1] };
+};
+
+const siblingGeneratedPluginModulePath = (
+  currentGeneratedPath: string,
+  pluginName: string,
+  modulePath: string,
+): string => {
+  const currentDir = dirname(currentGeneratedPath).replace(/\\/g, "/");
+  const depth = currentDir.split("/").filter(Boolean).length;
+  const prefix = "../".repeat(depth + 1);
+  return `${prefix}${generatedPluginIdForName(pluginName)}/src/plugins/${pluginName}/${modulePath.replace(/\.ts$/, "")}`;
+};
+
+const rewriteCrossPluginRelativeImports = (options: {
+  readonly pluginName: string;
+  readonly pluginRoot?: string;
+  readonly sourcePath?: string;
+  readonly source: string;
+  readonly currentGeneratedPath: string;
+  readonly importPluginRoots: ReadonlyMap<string, string>;
+}): string => {
+  if (!options.sourcePath || !options.pluginRoot) return options.source;
+
+  return options.source.replace(
+    /(\bfrom\s+)(["'])(\.[^"']+)\2/g,
+    (match, prefix: string, quote: string, specifier: string) => {
+      const importedSourcePath = resolveImportedSourcePath(options.sourcePath!, specifier);
+      const owner = findSourcePlugin(importedSourcePath, options.importPluginRoots);
+      if (!owner || owner.pluginName === options.pluginName) return match;
+
+      const modulePath = relative(owner.pluginRoot, importedSourcePath).replace(/\\/g, "/");
+      return `${prefix}${quote}${siblingGeneratedPluginModulePath(
+        options.currentGeneratedPath,
+        owner.pluginName,
+        modulePath,
+      )}${quote}`;
+    },
+  );
+};
+
+const stripToolAuthoringHelpers = (source: string): string => {
+  return source.replace(
+    /^\s*import\s+\{([^}]+)\}\s+from\s+["'][^"']+["'];\s*\n/gm,
+    (match, specifiers: string) => {
+      const kept = specifiers
+        .split(",")
+        .map((specifier) => specifier.trim())
+        .filter(Boolean)
+        .filter((specifier) => {
+          const importedName = specifier
+            .replace(/\s+as\s+.*$/u, "")
+            .trim();
+          return importedName !== "defineTool" && importedName !== "schemaSlot";
+        });
+      if (kept.length === specifiers.split(",").map((s) => s.trim()).filter(Boolean).length) {
+        return match;
+      }
+      return kept.length > 0
+        ? match.replace(`{${specifiers}}`, `{ ${kept.join(", ")} }`)
+        : "";
+    },
+  );
 };
 
 const renderAdapter = (spec: AdapterSpec): string => {
-  // adapter is at: src/adapters/<pluginName>/<contractName>.adapter.ts
-  // contract is at: src/plugins/<pluginName>/contracts/<contractName>.contract.ts
+  // adapter is at: src/adapters/<pluginName>/<name>.adapter.ts
+  // synthetic contract is at: src/plugins/<pluginName>/contracts/<name>.contract.ts
+  // owner tool is at: src/plugins/<pluginName>/tools/<toolName>.tool.ts
   // bridge is at:   src/runtime/schema-bridge.ts
-  const contractImport = `../../plugins/${spec.pluginName}/${spec.contractRelativePath}`;
+  const surfaceImport =
+    spec.kind === "synthetic"
+      ? `../../plugins/${spec.pluginName}/${spec.contractRelativePath}`
+      : `../../plugins/${spec.pluginName}/tools/${spec.toolName}.tool`;
   const bridgeImport = `../../runtime/schema-bridge`;
   const lines: string[] = [];
   lines.push(`// GENERATED by agentpkg — do not edit.`);
-  lines.push(`// Adapter for contract '${spec.pluginName}:${spec.contractName}'.`);
+  lines.push(
+    spec.kind === "synthetic"
+      ? `// Adapter for synthetic tool '${spec.pluginName}:${spec.contractName}'.`
+      : `// Adapter for tool '${spec.pluginName}:${spec.toolName}'.`,
+  );
   lines.push("");
   lines.push(`import { tool, type ToolContext } from "@opencode-ai/plugin";`);
-  lines.push(`import * as contract from "${contractImport}";`);
+  if (spec.kind === "synthetic") {
+    lines.push(`import * as surface from "${surfaceImport}";`);
+  } else {
+    lines.push(`import surface from "${surfaceImport}";`);
+  }
   lines.push(
     `import { toolArgsFromSchema, decodeInput, type ToolRuntimeContext } from "${bridgeImport}";`,
   );
@@ -732,11 +1004,11 @@ const renderAdapter = (spec: AdapterSpec): string => {
   lines.push(`};`);
   lines.push("");
   lines.push(`export default tool({`);
-  lines.push(`  description: (contract as any).description ?? "",`);
-  lines.push(`  args: toolArgsFromSchema((contract as any).Input),`);
+  lines.push(`  description: (surface as any).description ?? "",`);
+  lines.push(`  args: toolArgsFromSchema((surface as any).Input ?? (surface as any).input),`);
   lines.push(`  async execute(rawArgs, context) {`);
   lines.push(
-    `    const input = decodeInput((contract as any).Input, rawArgs);`,
+    `    const input = decodeInput((surface as any).Input ?? (surface as any).input, rawArgs);`,
   );
   lines.push(`    const toolContext = context as SyntheticToolExecuteContext;`);
   lines.push(`    const runtimeContext: ToolRuntimeContext = {`);
@@ -749,7 +1021,7 @@ const renderAdapter = (spec: AdapterSpec): string => {
   lines.push(`      workingDirectory: toolContext.workingDirectory ?? context.directory,`);
   lines.push(`      repoRoot: toolContext.repoRoot ?? context.worktree,`);
   lines.push(`    };`);
-  lines.push(`    const output = await contract.handle(input, runtimeContext);`);
+  lines.push(`    const output = await (surface as any).handle(input, runtimeContext);`);
   lines.push(`    return JSON.stringify(output, null, 2);`);
   lines.push(`  },`);
   lines.push(`});`);
@@ -757,34 +1029,41 @@ const renderAdapter = (spec: AdapterSpec): string => {
   return lines.join("\n");
 };
 
-const renderGeneratedServerTs = (
-  agents: ReadonlyArray<ComposedAgent>,
+const renderGeneratedServerTsForBindings = (
+  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
   sourcePluginName: string,
   pluginId: string,
-  adapters: AdapterSpec[],
+  adapters: ReadonlyArray<AdapterSpec>,
 ): string => {
   const importEntries = adapters.map((a, idx) => {
-    const ident = `adapter_${idx}_${a.pluginName.replace(/[^a-zA-Z0-9_]/g, "_")}_${a.contractName.replace(/[^a-zA-Z0-9_]/g, "_")}`;
-    const importPath = `./adapters/${a.pluginName}/${a.contractName}.adapter`;
-    return { ident, importPath, pluginName: a.pluginName, contractName: a.contractName };
+    const name = a.kind === "synthetic" ? a.contractName : a.toolName;
+    const ident = `adapter_${idx}_${a.pluginName.replace(/[^a-zA-Z0-9_]/g, "_")}_${name.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+    const importPath = `./adapters/${a.pluginName}/${name}.adapter`;
+    return { ident, importPath, spec: a };
   });
 
   const toolEntries: string[] = [];
-  for (const agent of agents) {
-    for (const binding of agent.toolBindings) {
-      const toolName = syntheticToolName(
-        sourcePluginName,
-        agent.name,
-        binding.logicalName
+  const emittedToolNames = new Set<string>();
+  for (const binding of bindings) {
+    const toolName = runtimeToolName(sourcePluginName, binding);
+    const entry = importEntries.find((e) => {
+      if (binding.kind === "permission") {
+        return (
+          e.spec.kind === "tool" &&
+          e.spec.pluginName === binding.toolPluginName &&
+          e.spec.toolName === binding.toolName
+        );
+      }
+      return (
+        e.spec.kind === "synthetic" &&
+        e.spec.pluginName === binding.contract!.pluginName &&
+        e.spec.contractName === binding.contract!.name
       );
-      const entry = importEntries.find(
-        (e) =>
-          e.pluginName === binding.contract.pluginName &&
-          e.contractName === binding.contract.name,
-      );
-      if (!entry) continue;
-      toolEntries.push(`    ${JSON.stringify(toolName)}: ${entry.ident},`);
-    }
+    });
+    if (!entry) continue;
+    if (emittedToolNames.has(toolName)) continue;
+    emittedToolNames.add(toolName);
+    toolEntries.push(`    ${JSON.stringify(toolName)}: ${entry.ident},`);
   }
 
   const lines: string[] = [];
@@ -842,6 +1121,163 @@ const getSchemaBridgeSource = async (): Promise<string> => {
   return readFile(sourcePath);
 };
 
+const pluginRootFromToolSource = (toolSourcePath: string): string =>
+  dirname(dirname(toolSourcePath));
+
+const planRuntimePluginMirrors = async (
+  pluginName: string,
+  pluginRoot: string,
+  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+): Promise<PluginMirror> => {
+  const entries = [
+    ...bindings.map((binding): MirrorFile => ({
+      sourcePath: binding.toolSourcePath,
+      relativePath: `tools/${binding.toolName}.tool.ts`,
+    })),
+    ...(await collectTsFilesInSubdirs(pluginRoot, ["contracts", "schemas"])),
+  ];
+  return {
+    pluginName,
+    pluginRoot,
+    files: await collectMirrorRuntimeClosure(pluginRoot, entries),
+  };
+};
+
+const planGeneratedPluginFiles = async (options: {
+  readonly root: string;
+  readonly pluginId: string;
+  readonly runtimeToolNamespace: string;
+  readonly mirrors: ReadonlyArray<PluginMirror>;
+  readonly importPluginRoots: ReadonlyMap<string, string>;
+  readonly adapters: ReadonlyArray<AdapterSpec>;
+  readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+}): Promise<LowerOperation[]> => {
+  const operations: LowerOperation[] = [];
+  const desiredPluginFiles = new Set<string>();
+
+  desiredPluginFiles.add("package.json");
+  const pkgTarget = join(options.root, "package.json");
+  const desiredPkg = GENERATED_PACKAGE_JSON(options.pluginId);
+  let pkgReason: "new" | "changed" | "unchanged";
+  if (await fileExists(pkgTarget)) {
+    const current = await readFile(pkgTarget);
+    pkgReason = current === desiredPkg ? "unchanged" : "changed";
+  } else {
+    pkgReason = "new";
+  }
+  operations.push({
+    kind: "write-plugin-file",
+    target: pkgTarget,
+    content: desiredPkg,
+    reason: pkgReason,
+  });
+
+  desiredPluginFiles.add("src/runtime/schema-bridge.ts");
+  const bridgeTarget = join(options.root, "src", "runtime", "schema-bridge.ts");
+  const desiredBridge = await getSchemaBridgeSource();
+  let bridgeReason: "new" | "changed" | "unchanged";
+  if (await fileExists(bridgeTarget)) {
+    const current = await readFile(bridgeTarget);
+    bridgeReason = current === desiredBridge ? "unchanged" : "changed";
+  } else {
+    bridgeReason = "new";
+  }
+  operations.push({
+    kind: "write-plugin-file",
+    target: bridgeTarget,
+    content: desiredBridge,
+    reason: bridgeReason,
+  });
+
+  for (const mirror of options.mirrors) {
+    for (const file of mirror.files) {
+      const relativeTarget = `src/plugins/${mirror.pluginName}/${file.relativePath}`;
+      desiredPluginFiles.add(relativeTarget);
+      const target = join(
+        options.root,
+        "src",
+        "plugins",
+        mirror.pluginName,
+        file.relativePath,
+      );
+      const raw = file.content ?? (await readFile(file.sourcePath!));
+      const desired = normalizeMirroredPluginSource({
+        pluginName: mirror.pluginName,
+        pluginRoot: mirror.pluginRoot,
+        relativePath: file.relativePath,
+        sourcePath: file.sourcePath,
+        source: raw,
+        importPluginRoots: options.importPluginRoots,
+      });
+      let reason: "new" | "changed" | "unchanged";
+      if (await fileExists(target)) {
+        const current = await readFile(target);
+        reason = current === desired ? "unchanged" : "changed";
+      } else {
+        reason = "new";
+      }
+      operations.push({
+        kind: "write-plugin-file",
+        target,
+        content: desired,
+        reason,
+      });
+    }
+  }
+
+  for (const spec of options.adapters) {
+    const adapterName = spec.kind === "synthetic" ? spec.contractName : spec.toolName;
+    const relativeTarget = `src/adapters/${spec.pluginName}/${adapterName}.adapter.ts`;
+    desiredPluginFiles.add(relativeTarget);
+    const target = join(
+      options.root,
+      "src",
+      "adapters",
+      spec.pluginName,
+      `${adapterName}.adapter.ts`,
+    );
+    const desired = renderAdapter(spec);
+    let reason: "new" | "changed" | "unchanged";
+    if (await fileExists(target)) {
+      const current = await readFile(target);
+      reason = current === desired ? "unchanged" : "changed";
+    } else {
+      reason = "new";
+    }
+    operations.push({
+      kind: "write-plugin-file",
+      target,
+      content: desired,
+      reason,
+    });
+  }
+
+  desiredPluginFiles.add("src/server.ts");
+  const serverTarget = join(options.root, "src", "server.ts");
+  const desiredServer = renderGeneratedServerTsForBindings(
+    options.serverBindings,
+    options.runtimeToolNamespace,
+    options.pluginId,
+    options.adapters,
+  );
+  let serverReason: "new" | "changed" | "unchanged";
+  if (await fileExists(serverTarget)) {
+    const current = await readFile(serverTarget);
+    serverReason = current === desiredServer ? "unchanged" : "changed";
+  } else {
+    serverReason = "new";
+  }
+  operations.push({
+    kind: "write-plugin-file",
+    target: serverTarget,
+    content: desiredServer,
+    reason: serverReason,
+  });
+
+  operations.push(...(await planPluginPruning(options.root, desiredPluginFiles)));
+  return operations;
+};
+
 // ---------------------------------------------------------------------------
 // Planning
 // ---------------------------------------------------------------------------
@@ -858,7 +1294,7 @@ export const planLowering = async (
   const operations: LowerOperation[] = [];
   const inventory = buildInventory(input.target.sourcePluginName, input.agents);
   const hasAnyTool = inventory.allToolNames.length > 0;
-  const desiredPluginFiles = new Set<string>();
+  const referencedBindings = input.agents.flatMap((a) => a.toolBindings);
   const desiredLifecycleSkillFiles = new Set<string>();
   const ownedGeneratedPluginId = generatedPluginId(input.target);
 
@@ -939,150 +1375,139 @@ export const planLowering = async (
   );
 
   // ---- Generated plugin emission (only if any agent has tool bindings)
+  const desiredGeneratedPluginIds = new Set<string>();
   if (hasAnyTool) {
-    const root = generatedPluginRoot(input.target);
-
-    // package.json
-    desiredPluginFiles.add("package.json");
-    const pkgTarget = join(root, "package.json");
-    const desiredPkg = GENERATED_PACKAGE_JSON(ownedGeneratedPluginId);
-    let pkgReason: "new" | "changed" | "unchanged";
-    if (await fileExists(pkgTarget)) {
-      const current = await readFile(pkgTarget);
-      pkgReason = current === desiredPkg ? "unchanged" : "changed";
-    } else {
-      pkgReason = "new";
-    }
-    operations.push({
-      kind: "write-plugin-file",
-      target: pkgTarget,
-      content: desiredPkg,
-      reason: pkgReason,
-    });
-
-    // schema-bridge.ts (shipped verbatim from agentpkg)
-    desiredPluginFiles.add("src/runtime/schema-bridge.ts");
-    const bridgeTarget = join(root, "src", "runtime", "schema-bridge.ts");
-    const desiredBridge = await getSchemaBridgeSource();
-    let bridgeReason: "new" | "changed" | "unchanged";
-    if (await fileExists(bridgeTarget)) {
-      const current = await readFile(bridgeTarget);
-      bridgeReason = current === desiredBridge ? "unchanged" : "changed";
-    } else {
-      bridgeReason = "new";
-    }
-    operations.push({
-      kind: "write-plugin-file",
-      target: bridgeTarget,
-      content: desiredBridge,
-      reason: bridgeReason,
-    });
-
-    // Mirror every source plugin's contracts/ and schemas/ under src/plugins/<name>/
-    const referencedBindings = input.agents.flatMap((a) => a.toolBindings);
-    const mirrors = await planPluginMirrors(referencedBindings);
-    for (const mirror of mirrors) {
-      for (const file of mirror.files) {
-        const relativeTarget = `src/plugins/${mirror.pluginName}/${file.relativePath}`;
-        desiredPluginFiles.add(relativeTarget);
-        const target = join(
-          root,
-          "src",
-          "plugins",
-          mirror.pluginName,
-          file.relativePath,
-        );
-        const raw = file.content ?? (await readFile(file.sourcePath!));
-        const desired = normalizeMirroredPluginSource(file.relativePath, raw);
-        let reason: "new" | "changed" | "unchanged";
-        if (await fileExists(target)) {
-          const current = await readFile(target);
-          reason = current === desired ? "unchanged" : "changed";
-        } else {
-          reason = "new";
-        }
-        operations.push({
-          kind: "write-plugin-file",
-          target,
-          content: desired,
-          reason,
-        });
-      }
-    }
-
-    // Generated adapters, one per bound contract
-    const adapters = planAdapters(input.agents);
-    for (const spec of adapters) {
-      const relativeTarget = `src/adapters/${spec.pluginName}/${spec.contractName}.adapter.ts`;
-      desiredPluginFiles.add(relativeTarget);
-      const target = join(
-        root,
-        "src",
-        "adapters",
-        spec.pluginName,
-        `${spec.contractName}.adapter.ts`,
-      );
-      const desired = renderAdapter(spec);
-      let reason: "new" | "changed" | "unchanged";
-      if (await fileExists(target)) {
-        const current = await readFile(target);
-        reason = current === desired ? "unchanged" : "changed";
-      } else {
-        reason = "new";
-      }
-      operations.push({
-        kind: "write-plugin-file",
-        target,
-        content: desired,
-        reason,
-      });
-    }
-
-    // Generated server.ts (imports adapters)
-    desiredPluginFiles.add("src/server.ts");
-    const serverTarget = join(root, "src", "server.ts");
-    const desiredServer = renderGeneratedServerTs(
-      input.agents,
+    const mirrors = await planPluginMirrors(
       input.target.sourcePluginName,
-      ownedGeneratedPluginId,
-      adapters,
+      referencedBindings,
     );
-    let serverReason: "new" | "changed" | "unchanged";
-    if (await fileExists(serverTarget)) {
-      const current = await readFile(serverTarget);
-      serverReason = current === desiredServer ? "unchanged" : "changed";
-    } else {
-      serverReason = "new";
-    }
-    operations.push({
-      kind: "write-plugin-file",
-      target: serverTarget,
-      content: desiredServer,
-      reason: serverReason,
-    });
+    const adapters = planAdapters(input.target.sourcePluginName, input.agents);
+    const ownedRuntimeBindings = referencedBindings.filter(
+      (binding) =>
+        binding.kind === "synthetic" ||
+        binding.toolPluginName === input.target.sourcePluginName,
+    );
+    const ownerPlugins = new Map<
+      string,
+      {
+        pluginRoot: string;
+        runtimeBindings: ComposedAgent["toolBindings"][number][];
+        permissionBindings: ComposedAgent["toolBindings"][number][];
+      }
+    >();
 
-    operations.push(...(await planPluginPruning(root, desiredPluginFiles)));
+    for (const binding of referencedBindings) {
+      if (binding.toolPluginName === input.target.sourcePluginName) continue;
+      const current = ownerPlugins.get(binding.toolPluginName) ?? {
+        pluginRoot: pluginRootFromToolSource(binding.toolSourcePath),
+        runtimeBindings: [],
+        permissionBindings: [],
+      };
+      current.runtimeBindings.push(binding);
+      if (binding.kind === "permission") {
+        current.permissionBindings.push(binding);
+      }
+      ownerPlugins.set(binding.toolPluginName, current);
+    }
+
+    const importPluginRoots = new Map<string, string>();
+    for (const mirror of mirrors) {
+      if (mirror.pluginRoot) {
+        importPluginRoots.set(mirror.pluginName, mirror.pluginRoot);
+      }
+    }
+    for (const [pluginName, owner] of ownerPlugins) {
+      importPluginRoots.set(pluginName, owner.pluginRoot);
+    }
+
+    if (ownedRuntimeBindings.length > 0) {
+      desiredGeneratedPluginIds.add(ownedGeneratedPluginId);
+      operations.push(
+        ...(await planGeneratedPluginFiles({
+          root: generatedPluginRoot(input.target),
+          pluginId: ownedGeneratedPluginId,
+          runtimeToolNamespace: input.target.sourcePluginName,
+          mirrors,
+          importPluginRoots,
+          adapters,
+          serverBindings: ownedRuntimeBindings,
+        })),
+      );
+    } else {
+      operations.push(
+        ...(await planPluginPruning(
+          generatedPluginRoot(input.target),
+          new Set<string>(),
+        )),
+      );
+    }
+
+    for (const [pluginName, owner] of ownerPlugins) {
+      const pluginId = generatedPluginIdForName(pluginName);
+      desiredGeneratedPluginIds.add(pluginId);
+      const ownerMirror = await planRuntimePluginMirrors(
+        pluginName,
+        owner.pluginRoot,
+        owner.runtimeBindings,
+      );
+      const ownerAdapters = planAdapters(pluginName, [
+        {
+          name: `${pluginName}-owner`,
+          description: `${pluginName} owner tool surface`,
+          body: "",
+          color: undefined,
+          model: undefined,
+          targetOverride: {},
+          skills: [],
+          toolBindings: owner.permissionBindings,
+          allowedTools: [],
+        },
+      ]);
+      operations.push(
+        ...(await planGeneratedPluginFiles({
+          root: generatedPluginRootForName(input.target, pluginName),
+          pluginId,
+          runtimeToolNamespace: pluginName,
+          mirrors: [ownerMirror],
+          importPluginRoots,
+          adapters: ownerAdapters,
+          serverBindings: owner.permissionBindings,
+        })),
+      );
+    }
   }
 
-  // ---- opencode.json plugin array entry for this compile root only
+  // ---- opencode.json plugin array entries for every generated runtime plugin
   const plugins = (config.plugin as unknown) instanceof Array
     ? (config.plugin as unknown[])
     : [];
-  const already = plugins.includes(ownedGeneratedPluginId);
-  const pluginReason: "new" | "changed" | "unchanged" = hasAnyTool
-    ? already
-      ? "unchanged"
-      : "new"
-    : already
-      ? "changed"
-      : "unchanged";
-  operations.push({
-    kind: "patch-opencode-plugins",
-    target: jsonTarget,
-    pluginId: ownedGeneratedPluginId,
-    desiredPresent: hasAnyTool,
-    reason: pluginReason,
-  });
+  const existingGeneratedPluginIds = plugins.filter(
+    (pluginId): pluginId is string =>
+      typeof pluginId === "string" &&
+      pluginId.startsWith(`${GENERATED_PLUGIN_PREFIX}-`),
+  );
+  for (const pluginId of new Set([
+    ownedGeneratedPluginId,
+    ...desiredGeneratedPluginIds,
+    ...existingGeneratedPluginIds,
+  ])) {
+    const desiredPresent = desiredGeneratedPluginIds.has(pluginId);
+    const already = plugins.includes(pluginId);
+    const pluginReason: "new" | "changed" | "unchanged" = desiredPresent
+      ? already
+        ? "unchanged"
+        : "new"
+      : already
+        ? "changed"
+        : "unchanged";
+    operations.push({
+      kind: "patch-opencode-plugins",
+      target: jsonTarget,
+      pluginId,
+      desiredPresent,
+      reason: pluginReason,
+    });
+  }
 
   return operations;
 };

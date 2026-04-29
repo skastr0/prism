@@ -33,6 +33,7 @@ import {
 } from "../../fs.js";
 import { resolveManifestTargets } from "../../manifest.js";
 import type { HarnessScope, PluginTargetId } from "../../types.js";
+import { effectBundleImportPath } from "../runtime-deps.js";
 import type { LowerOperation } from "./opencode.js";
 
 const TARGET_ID = "claude-code" as const;
@@ -334,9 +335,6 @@ const renderHooksJson = async (
 
   return json({ hooks: groupedHooks });
 };
-
-const effectBundleImportPath = (): string =>
-  fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/");
 
 const hookSourcesImportPath = (): string =>
   fileURLToPath(new URL("../sources.ts", import.meta.url)).replace(/\\/g, "/");

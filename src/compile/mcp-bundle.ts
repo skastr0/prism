@@ -2,10 +2,10 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Contract } from "./sources.js";
 import type { ResolvedContractBinding } from "./resolve.js";
+import { effectBundleImportPath } from "./runtime-deps.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -496,9 +496,6 @@ const describeMcpAdapterSpec = (spec: McpAdapterSpec): string => {
 
 const safeIdentifier = (value: string): string =>
   value.replace(/[^a-zA-Z0-9_$]/g, "_").replace(/^[^a-zA-Z_$]/, "_$&");
-
-const effectBundleImportPath = (): string =>
-  fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/");
 
 const renderMcpServerEntry = (options: {
   readonly serverName: string;

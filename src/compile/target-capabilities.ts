@@ -17,11 +17,11 @@ const CAPABILITIES: Record<string, CompileTargetCapabilities> = {
   },
   "gemini-cli": {
     generatedCanonicalTools: "executable",
-    skillPermissions: "unsupported",
+    skillPermissions: "supported",
   },
   "codex-cli": {
     generatedCanonicalTools: "executable",
-    skillPermissions: "unsupported",
+    skillPermissions: "supported",
   },
 };
 

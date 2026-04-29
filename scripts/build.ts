@@ -2,6 +2,7 @@
 
 import { mkdirSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
+import { fileURLToPath } from "url";
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const version = packageJson.version;
@@ -36,6 +37,9 @@ for (const { platform, arch } of targets) {
       entrypoints: ["src/cli.ts"],
       define: {
         APP_VERSION: `'${version}'`,
+        AGENTPKG_EFFECT_ENTRYPOINT: JSON.stringify(
+          fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/")
+        ),
         SCHEMA_BRIDGE_SOURCE: JSON.stringify(
           readFileSync("src/compile/runtime/schema-bridge.ts", "utf8")
         ),

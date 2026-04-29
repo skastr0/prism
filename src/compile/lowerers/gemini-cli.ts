@@ -20,6 +20,7 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import { effectBundleImportPath } from "../runtime-deps.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Lifecycle } from "../sources.js";
@@ -149,6 +150,9 @@ const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLo
     ),
   ]);
   if (tools.length > 0) frontmatter.tools = tools;
+
+  const skills = uniqueSorted(agent.allowedSkills);
+  if (skills.length > 0) frontmatter.skills = skills;
 
   return frontmatter;
 };
@@ -356,9 +360,6 @@ const geminiHookEvent = (event: Hook["event"]): string => {
       return "SessionEnd";
   }
 };
-
-const effectBundleImportPath = (): string =>
-  fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/");
 
 const hookSourcesImportPath = (): string =>
   fileURLToPath(new URL("../sources.ts", import.meta.url)).replace(/\\/g, "/");

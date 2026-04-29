@@ -2137,7 +2137,7 @@ export default defineAgent({
   }
 });
 
-test("permission-only skill access fails on targets without skill permission support", async () => {
+test("permission-only skill access lowers into Gemini agent skill frontmatter", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
   const projectRoot = join(root, "project");
@@ -2209,7 +2209,7 @@ export default defineAgent({
 `,
   );
 
-  const exit = await Effect.runPromiseExit(
+  await Effect.runPromise(
     compilePluginForTarget({
       pluginPath: pluginRoot,
       target: "gemini-cli",
@@ -2220,12 +2220,12 @@ export default defineAgent({
     }),
   );
 
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
-  if (failure._tag === "UnsupportedTargetCapabilityError") {
-    expect(failure.capability).toBe("skill-permissions");
-    expect(failure.message).toContain("worker (testing)");
-  }
+  const agentMarkdown = await readFile(
+    join(projectRoot, ".gemini", "extensions", "agentpkg-generated-unsupported-skill-permission-demo", "agents", "worker.md"),
+    "utf8",
+  );
+  expect(agentMarkdown).toContain("skills:");
+  expect(agentMarkdown).toContain('- "testing"');
 });
 
 test("trait-lifecycle example lowers assigned traits and lifecycle skill into opencode permissions", async () => {

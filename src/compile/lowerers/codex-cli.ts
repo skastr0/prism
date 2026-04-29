@@ -14,6 +14,7 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import { effectBundleImportPath } from "../runtime-deps.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Lifecycle, Skill } from "../sources.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -189,10 +190,13 @@ const renderAgentToml = (
   target: CodexCliLowerTarget,
   mcpServerName?: string,
 ): string => {
+  const developerInstructions = agent.allowedSkills.length > 0
+    ? `${agent.body}\n\n## Agentpkg Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.allowedSkills).join(", ")}.`
+    : agent.body;
   const lines = [
     `name = ${quote(agent.name)}`,
     `description = ${quote(agent.description)}`,
-    `developer_instructions = ${quote(agent.body)}`,
+    `developer_instructions = ${quote(developerInstructions)}`,
   ];
 
   for (const [key, value] of Object.entries(composeModelConfig(agent)).sort(([left], [right]) =>
@@ -321,9 +325,6 @@ const hookMatcher = (
 };
 
 const regexEscape = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
-
-const effectBundleImportPath = (): string =>
-  fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/");
 
 const hookSourcesImportPath = (): string =>
   fileURLToPath(new URL("../sources.ts", import.meta.url)).replace(/\\/g, "/");

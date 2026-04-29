@@ -73,7 +73,7 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     id: "codex-cli",
     name: "Codex CLI",
     globalConfigPath: "~/.codex/",
-    projectConfigPath: null,
+    projectConfigPath: ".codex/",
     rulesFile: "AGENTS.md",
     rulesDir: null,
     commandsDir: "prompts/",

@@ -8,7 +8,7 @@
 import { Effect } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
-import type { HarnessId, HarnessScope } from "../types.js";
+import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
   instantiateLifecycle,
@@ -29,12 +29,23 @@ import {
   planLowering as planClaudeCodeLowering,
 } from "./lowerers/claude-code.js";
 import {
+  executeLowering as executeGeminiCliLowering,
+  planLowering as planGeminiCliLowering,
+} from "./lowerers/gemini-cli.js";
+import {
+  executeLowering as executeCodexCliLowering,
+  planLowering as planCodexCliLowering,
+} from "./lowerers/codex-cli.js";
+import {
   InvalidTargetScopeError,
   UnsupportedTargetCapabilityError,
   UnknownTargetError,
+  AgentValidationError,
   type CompileError,
 } from "./errors.js";
-import type { CanonicalTool, Lifecycle } from "./sources.js";
+import type { CanonicalTool, Hook, Lifecycle, Skill } from "./sources.js";
+import type { PluginRegistry } from "./registry.js";
+import { resolveManifestTargets } from "../manifest.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
 import {
   computeAgentCacheDescriptor,
@@ -52,10 +63,15 @@ interface LowererModule {
     readonly agents: ReadonlyArray<ComposedAgent>;
     readonly lifecycles: ReadonlyArray<Lifecycle>;
     readonly tools: ReadonlyArray<CanonicalTool>;
+    readonly skills: ReadonlyArray<Skill>;
+    readonly hooks: ReadonlyArray<Hook>;
+    readonly registry: PluginRegistry;
     readonly target: {
       readonly scope: HarnessScope;
       readonly root: string;
       readonly sourcePluginName: string;
+      readonly sourcePluginVersion?: string;
+      readonly sourcePluginPath?: string;
     };
   }) => Promise<LowerOperation[]>;
   readonly executeLowering: (
@@ -87,7 +103,7 @@ export interface CompileResult {
   readonly fromCache: ReadonlyArray<string>;
 }
 
-const SUPPORTED_TARGETS = ["opencode", "claude-code"] as const;
+const SUPPORTED_TARGETS = ["opencode", "claude-code", "gemini-cli", "codex-cli"] as const;
 
 const getLowerer = (target: string): LowererModule => {
   switch (target) {
@@ -100,6 +116,16 @@ const getLowerer = (target: string): LowererModule => {
       return {
         planLowering: planClaudeCodeLowering,
         executeLowering: executeClaudeCodeLowering,
+      };
+    case "gemini-cli":
+      return {
+        planLowering: planGeminiCliLowering,
+        executeLowering: executeGeminiCliLowering,
+      };
+    case "codex-cli":
+      return {
+        planLowering: planCodexCliLowering,
+        executeLowering: executeCodexCliLowering,
       };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
@@ -176,6 +202,65 @@ const applyLifecycleSkillPermissions = (
       ),
     };
   });
+
+const registryTargetsHarness = (
+  registry: PluginRegistry,
+  artifact: string,
+  target: HarnessId,
+): boolean => {
+  const targets = (registry.targets as Record<string, readonly PluginTargetId[] | undefined>)[artifact];
+  return resolveManifestTargets(targets ?? []).includes(target);
+};
+
+const findRegistryByPluginName = (
+  registry: PluginRegistry,
+  pluginName: string,
+): PluginRegistry | undefined => {
+  if (registry.pluginName === pluginName) return registry;
+
+  for (const dep of registry.deps.values()) {
+    const found = findRegistryByPluginName(dep, pluginName);
+    if (found) return found;
+  }
+
+  return undefined;
+};
+
+const bindingToolsTargetHarness = (
+  registry: PluginRegistry,
+  binding: ComposedAgent["toolBindings"][number],
+  target: HarnessId,
+): boolean => {
+  const owner = findRegistryByPluginName(registry, binding.toolPluginName);
+  return owner ? registryTargetsHarness(owner, "tools", target) : false;
+};
+
+const assertAgentToolBindingsAreTargeted = (
+  agents: ReadonlyArray<ComposedAgent>,
+  registry: PluginRegistry,
+  target: HarnessId,
+): Effect.Effect<void, CompileError> => {
+  const leakingAgent = agents
+    .map((agent) => ({
+      agent,
+      binding: agent.toolBindings.find((binding) => !bindingToolsTargetHarness(registry, binding, target)),
+    }))
+    .find(({ binding }) => binding !== undefined);
+
+  if (!leakingAgent?.binding) return Effect.void;
+
+  return Effect.fail(
+    new AgentValidationError({
+      sourcePath: "<composed-agent>",
+      agentName: leakingAgent.agent.name,
+      field: "tools",
+      message:
+        `agent '${leakingAgent.agent.name}' resolves canonical tool binding '${leakingAgent.binding.logicalName}' ` +
+        `from plugin '${leakingAgent.binding.toolPluginName}' for target '${target}', but that plugin's ` +
+        `targets.tools does not include '${target}'`,
+    }),
+  );
+};
 
 const assertTargetSupportsGeneratedCanonicalTools = (
   target: string,
@@ -297,6 +382,22 @@ export const compilePluginForTarget = (
     const cacheDir = getCacheDir(options.pluginPath);
     const useCache = !options.dryRun;
     const registry = yield* loadPlugin(options.pluginPath);
+    const targetId = options.target as HarnessId;
+    const targetsAgents = registryTargetsHarness(registry, "agents", targetId);
+    const targetsLifecycles = registryTargetsHarness(registry, "lifecycles", targetId);
+    const targetsTools = registryTargetsHarness(registry, "tools", targetId);
+    const targetsSkills = registryTargetsHarness(registry, "skills", targetId);
+    const targetsHooks = registryTargetsHarness(registry, "hooks", targetId);
+    const targetsRules = registryTargetsHarness(registry, "rules", targetId);
+    const targetsCommands = registryTargetsHarness(registry, "commands", targetId);
+    const hasLowerableArtifacts =
+      targetsAgents ||
+      targetsLifecycles ||
+      targetsTools ||
+      targetsSkills ||
+      targetsHooks ||
+      targetsRules ||
+      targetsCommands;
 
     const composed: ComposedAgent[] = [];
     const built: string[] = [];
@@ -306,6 +407,7 @@ export const compilePluginForTarget = (
     for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) =>
       a.localeCompare(b)
     )) {
+      if (!targetsAgents) break;
       const descriptor = yield* Effect.promise(() =>
         computeAgentCacheDescriptor(agent, registry, {
           target: options.target,
@@ -338,6 +440,7 @@ export const compilePluginForTarget = (
     for (const [, lifecycle] of [...registry.lifecycles.entries()].sort(
       ([a], [b]) => a.localeCompare(b)
     )) {
+      if (!targetsLifecycles) break;
       yield* validateLifecycle(lifecycle, registry);
       if (lifecycle.parameters.length > 0) continue;
       lifecycles.push(yield* instantiateLifecycle(lifecycle));
@@ -352,6 +455,11 @@ export const compilePluginForTarget = (
       composed,
       lifecycleToolPermissions,
     );
+    yield* assertAgentToolBindingsAreTargeted(
+      composedWithLifecycleTools,
+      registry,
+      targetId,
+    );
     const composedForLowering = applyLifecycleSkillPermissions(
       composedWithLifecycleTools,
       lifecycleSkillPermissions,
@@ -365,20 +473,35 @@ export const compilePluginForTarget = (
       composedForLowering,
     );
 
-    const allOps = yield* Effect.promise(() =>
-      lowerer.planLowering({
-        agents: composedForLowering,
-        lifecycles,
-        tools: [...registry.tools.values()].sort((left, right) =>
-          left.name.localeCompare(right.name),
-        ),
-        target: {
-          scope: options.scope,
-          root: outputRoot,
-          sourcePluginName: registry.pluginName,
-        },
-      })
-    );
+    const targetTools = targetsTools
+      ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [];
+    const targetSkills = targetsSkills
+      ? [...registry.skills.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [];
+    const targetHooks = targetsHooks
+      ? [...registry.hooks.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [];
+
+    const allOps = hasLowerableArtifacts
+      ? yield* Effect.promise(() =>
+          lowerer.planLowering({
+            agents: composedForLowering,
+            lifecycles,
+            tools: targetTools,
+            skills: targetSkills,
+            hooks: targetHooks,
+            registry,
+            target: {
+              scope: options.scope,
+              root: outputRoot,
+              sourcePluginName: registry.pluginName,
+              sourcePluginVersion: registry.pluginVersion,
+              sourcePluginPath: registry.pluginPath,
+            },
+          })
+        )
+      : [];
 
     let backups: string[] = [];
     if (!options.dryRun) {

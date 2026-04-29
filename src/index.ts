@@ -8,6 +8,7 @@
  * - toolspaces/*.toolspace.ts
  * - modelspaces/*.modelspace.ts
  * - skillspaces/*.skillspace.ts
+ * - hooks/*.hook.ts
  *
  * These helpers are identity constructors for authoring ergonomics.
  */
@@ -239,6 +240,140 @@ export interface SkillspaceDefinition {
   readonly skills: Readonly<Record<string, SkillDefinition>>;
 }
 
+export const hookEvent = {
+  toolBefore: "tool.before",
+  toolAfter: "tool.after",
+  sessionStart: "session.start",
+  sessionEnd: "session.end",
+} as const;
+
+export type HookEvent = (typeof hookEvent)[keyof typeof hookEvent];
+
+export interface HookTargetContextDefinition {
+  readonly harness: string;
+  readonly nativeEvent: string;
+}
+
+export interface HookSessionContextDefinition {
+  readonly id?: string;
+  readonly transcriptPath?: string;
+}
+
+export interface HookToolContextDefinition {
+  readonly logical?: string;
+  readonly nativeName: string;
+  readonly input: unknown;
+}
+
+export interface ToolBeforeHookEventDefinition {
+  readonly event: typeof hookEvent.toolBefore;
+  readonly target: HookTargetContextDefinition;
+  readonly tool: HookToolContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+}
+
+export interface ToolAfterHookEventDefinition {
+  readonly event: typeof hookEvent.toolAfter;
+  readonly target: HookTargetContextDefinition;
+  readonly tool: HookToolContextDefinition & {
+    readonly output: unknown;
+    readonly success?: boolean;
+  };
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+}
+
+export interface SessionStartHookEventDefinition {
+  readonly event: typeof hookEvent.sessionStart;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session: HookSessionContextDefinition;
+}
+
+export interface SessionEndHookEventDefinition {
+  readonly event: typeof hookEvent.sessionEnd;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session: HookSessionContextDefinition;
+  readonly reason?: string;
+}
+
+export type HookEventPayloadDefinition =
+  | ToolBeforeHookEventDefinition
+  | ToolAfterHookEventDefinition
+  | SessionStartHookEventDefinition
+  | SessionEndHookEventDefinition;
+
+export type HookEventPayloadFor<E extends HookEvent> = Extract<
+  HookEventPayloadDefinition,
+  { readonly event: E }
+>;
+
+export interface ContinueHookResultDefinition {
+  readonly decision: "continue";
+}
+
+export interface BlockHookResultDefinition {
+  readonly decision: "block";
+  readonly message: string;
+}
+
+export type ToolBeforeHookResultDefinition =
+  | ContinueHookResultDefinition
+  | BlockHookResultDefinition;
+
+export type HookResultFor<E extends HookEvent> = E extends typeof hookEvent.toolBefore
+  ? ToolBeforeHookResultDefinition
+  : ContinueHookResultDefinition;
+
+export type HookHandlerDefinition<E extends HookEvent> = (
+  event: HookEventPayloadFor<E>,
+) => import("effect").Effect.Effect<HookResultFor<E>, unknown, never>;
+
+export interface HookAnyToolMatcherDefinition {
+  readonly kind: "hook-any-tool";
+}
+
+export interface HookToolspaceToolMatcherDefinition {
+  readonly kind: "hook-toolspace-tool";
+  readonly tool: ToolRefInput;
+}
+
+export interface HookToolspaceGroupMatcherDefinition {
+  readonly kind: "hook-toolspace-group";
+  readonly group: ToolGroupRefInput;
+}
+
+export interface HookCanonicalToolMatcherDefinition {
+  readonly kind: "hook-canonical-tool";
+  readonly ref: string;
+}
+
+export type HookToolMatcherDefinition =
+  | HookAnyToolMatcherDefinition
+  | HookToolspaceToolMatcherDefinition
+  | HookToolspaceGroupMatcherDefinition
+  | HookCanonicalToolMatcherDefinition;
+
+export interface ToolHookMatchDefinition {
+  readonly tool?: HookToolMatcherDefinition;
+}
+
+export type HookMatchDefinition<E extends HookEvent> = E extends
+  | typeof hookEvent.toolBefore
+  | typeof hookEvent.toolAfter
+  ? ToolHookMatchDefinition
+  : never;
+
+export interface HookDefinition<E extends HookEvent = HookEvent> {
+  readonly name: string;
+  readonly description?: string;
+  readonly event: E;
+  readonly match?: HookMatchDefinition<E>;
+  readonly handle: HookHandlerDefinition<E>;
+}
+
 export const withNamedRef = <TKind extends string>(
   kind: TKind,
   first: string,
@@ -371,6 +506,26 @@ export const bindTrait = (
   ...(options.tools ? { tools: options.tools } : {}),
 });
 
+export const hookTool = {
+  any: (): HookAnyToolMatcherDefinition => ({ kind: "hook-any-tool" }),
+  tool: (tool: ToolRefInput): HookToolspaceToolMatcherDefinition => ({
+    kind: "hook-toolspace-tool",
+    tool,
+  }),
+  group: (group: ToolGroupRefInput): HookToolspaceGroupMatcherDefinition => ({
+    kind: "hook-toolspace-group",
+    group,
+  }),
+  canonical: (ref: string): HookCanonicalToolMatcherDefinition => ({
+    kind: "hook-canonical-tool",
+    ref,
+  }),
+} as const;
+
+export const hookMatcher = {
+  tool: hookTool,
+} as const;
+
 export const defineAgent = <T extends AgentDefinition>(agent: T): T => agent;
 export const defineTrait = <T extends TraitDefinition>(trait: T): T => trait;
 export const defineLifecycle = <T extends LifecycleDefinition>(lifecycle: T): T =>
@@ -382,5 +537,8 @@ export const defineModelspace = <T extends ModelspaceDefinition>(modelspace: T):
   modelspace;
 export const defineSkillspace = <T extends SkillspaceDefinition>(skillspace: T): T =>
   skillspace;
+export const defineHook = <E extends HookEvent, T extends HookDefinition<E>>(
+  hook: T,
+): T => hook;
 
 export type { ToolRuntimeContext, ToolRuntimeCost } from "./compile/runtime/schema-bridge";

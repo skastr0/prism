@@ -64,6 +64,17 @@ const parseOpencodeSkillPermissions = (markdown: string): Record<string, string>
   return frontmatter.permission?.skill ?? {};
 };
 
+const effectImportPath = join(
+  process.cwd(),
+  "node_modules",
+  "effect",
+  "dist",
+  "esm",
+  "index.js",
+).replace(/\\/g, "/");
+
+const agentpkgImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+
 const skillPermissionAction = (
   permission: Record<string, string>,
   skill: string,
@@ -98,6 +109,297 @@ const createCanonicalLanguageFixture = async (options?: {
     mixedTraitRefsBeforeSlotBinding: options?.mixedTraitRefsBeforeSlotBinding,
     withCanonicalToolBindings: options?.withCanonicalToolBindings,
   });
+};
+
+const createGeminiExtensionFixture = async (): Promise<{
+  pluginRoot: string;
+  projectRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "gemini-extension-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "gemini_extension.demo",
+        version: "0.2.0",
+        targets: {
+          rules: ["gemini-cli"],
+          commands: ["gemini-cli"],
+          skills: ["gemini-cli"],
+          agents: ["gemini-cli"],
+          lifecycles: ["gemini-cli"],
+          tools: ["gemini-cli"],
+          toolspaces: ["gemini-cli"],
+          hooks: ["gemini-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Gemini context\n\nUse the generated extension context.\n`);
+  await writeText(join(pluginRoot, "rules", "project", "project-context.md"), `# Project context\n\nKeep extension-local project guidance.\n`);
+  await writeText(join(pluginRoot, "commands", "hello.md"), `---\ndescription: Say hello\n---\n\nSay hello from the generated command.\n`);
+  await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
+  await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the extension bundle.\n`);
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  tools: { read_repo: { targets: { "gemini-cli": { name: "read_file" } } } },
+});
+`);
+  await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input, context) { return { acknowledged: true }; },
+});
+`);
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  instructions: "Submit work through the typed Gemini extension tool.",
+  access: { tools: [toolRef("workspace", "read_repo")] },
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`);
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Gemini extension worker",
+  identity: "worker",
+  traits: ["submittable"],
+  skills: [skillRef("testing")],
+});
+`);
+  await writeText(join(pluginRoot, "lifecycles", "delivery.lifecycle.ts"), `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineLifecycle({
+  name: "delivery",
+  description: "Deliver work through Gemini",
+  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "audit-read",
+  description: "Audit read calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "audit-submit",
+  description: "Audit canonical submit calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.canonical("submit_work") },
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+
+  return { pluginRoot, projectRoot };
+};
+
+const createCodexProjectFixture = async (): Promise<{
+  pluginRoot: string;
+  projectRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "codex-project-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-project-demo",
+        version: "0.4.0",
+        targets: {
+          rules: ["codex-cli"],
+          skills: ["codex-cli"],
+          agents: ["codex-cli"],
+          tools: ["codex-cli"],
+          toolspaces: ["codex-cli"],
+          hooks: ["codex-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Codex context\n\nUse project-local Codex guidance.\n`);
+  await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
+  await writeText(join(pluginRoot, "identities", "reviewer.identity.md"), `---\ndescription: Reviewer identity\n---\n\n# Reviewer\n\nReview through Codex.\n`);
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  tools: { shell: { targets: { "codex-cli": { name: "shell.command" } } } },
+});
+`);
+  await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(_input, _context) { return { acknowledged: true }; },
+});
+`);
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  instructions: "Submit through the generated Codex MCP tool.",
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`);
+  await writeText(join(pluginRoot, "agents", "reviewer.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineAgent({
+  name: "reviewer",
+  description: "Codex project reviewer",
+  identity: "reviewer",
+  traits: ["submittable"],
+  skills: [skillRef("testing")],
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "audit-shell",
+  description: "Audit shell calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+
+  return { pluginRoot, projectRoot };
+};
+
+const createOpenCodeHookFixture = async (options?: {
+  sessionHook?: boolean;
+}): Promise<{
+  pluginRoot: string;
+  projectRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "opencode-hook-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "opencode-hook-demo",
+        version: "0.1.0",
+        targets: {
+          hooks: ["opencode"],
+          toolspaces: ["opencode"],
+          tools: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "toolspaces", "core.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineToolspace({
+  name: "core",
+  tools: { shell: { targets: { opencode: { name: "bash" } } } },
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-before.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "audit-before",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.tool(toolRef("core", "shell")) },
+  handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-after.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "audit-after",
+  event: hookEvent.toolAfter,
+  match: { tool: hookTool.tool(toolRef("core", "shell")) },
+  handle: (_event) => Effect.succeed({ decision: "block" as const, message: "ignored for observational hooks" }),
+});
+`);
+  await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(_input, _context) { return { acknowledged: true }; },
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "audit-submit",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.canonical("submit_work") },
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+  if (options?.sessionHook) {
+    await writeText(join(pluginRoot, "hooks", "session-start.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "session-start",
+  event: hookEvent.sessionStart,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+    await writeText(join(pluginRoot, "hooks", "session-end.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineHook({
+  name: "session-end",
+  event: hookEvent.sessionEnd,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+  }
+
+  return { pluginRoot, projectRoot };
 };
 
 const createExternalPermissionOnlyFixture = async (): Promise<{
@@ -692,6 +994,202 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
     "utf8",
   );
   expect(reviewContract).toContain("../schemas/review-slots");
+});
+
+test("compilePluginForTarget emits a Gemini extension bundle", async () => {
+  const { pluginRoot, projectRoot } = await createGeminiExtensionFixture();
+  const extensionRoot = join(projectRoot, ".gemini", "extensions", "agentpkg-generated-gemini-extension-demo");
+  await writeText(join(extensionRoot, "stale", "old.txt"), "stale\n");
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "gemini-cli",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(result.composed).toHaveLength(1);
+  expect(result.outputRoot.replace(/\/$/u, "")).toBe(join(projectRoot, ".gemini"));
+
+  const manifest = JSON.parse(await readFile(join(extensionRoot, "gemini-extension.json"), "utf8")) as {
+    name: string;
+    version: string;
+    contextFileName?: string | string[];
+    mcpServers?: Record<string, { command: string; args: string[]; trust?: unknown }>;
+  };
+
+  expect(manifest).toEqual({
+    name: "agentpkg-generated-gemini-extension-demo",
+    version: "0.2.0",
+    contextFileName: "GEMINI.md",
+    mcpServers: {
+      "agentpkg-generated-gemini-extension-demo": {
+        command: "node",
+        args: ["${extensionPath}/mcp/agentpkg_generated_gemini_extension_demo/server.mjs"],
+      },
+    },
+  });
+  expect(manifest.mcpServers?.["agentpkg-generated-gemini-extension-demo"]).not.toHaveProperty("trust");
+
+  const context = await readFile(join(extensionRoot, "GEMINI.md"), "utf8");
+  expect(context).toContain("<!-- agentpkg:context-source global/context.md -->");
+  expect(context).toContain("# Gemini context");
+  expect(context).toContain("<!-- agentpkg:context-source project/project-context.md -->");
+  expect(context).toContain("# Project context");
+
+  const agent = await readFile(join(extensionRoot, "agents", "worker.md"), "utf8");
+  const parsedAgent = matter(agent);
+  expect(parsedAgent.data).toMatchObject({
+    name: "worker",
+    description: "Gemini extension worker",
+    tools: [
+      "mcp_agentpkg-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
+      "read_file",
+    ],
+  });
+  expect(parsedAgent.content).toContain("# Worker");
+  expect(parsedAgent.content).toContain("Submit work through the typed Gemini extension tool.");
+
+  expect(await readFile(join(extensionRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
+  const lifecycleSkill = await readFile(join(extensionRoot, "skills", "delivery", "SKILL.md"), "utf8");
+  expect(lifecycleSkill).toContain('<!-- agentpkg:lifecycle-skill owner="gemini_extension.demo" -->');
+  expect(lifecycleSkill).toContain("# delivery");
+  expect(lifecycleSkill).toContain("### 1. Build — agent `worker`");
+
+  const command = await readFile(join(extensionRoot, "commands", "hello.toml"), "utf8");
+  expect(command).toBe('description = "Say hello"\nprompt = """Say hello from the generated command."""\n');
+
+  expect(await pathExists(join(extensionRoot, "mcp", "agentpkg_generated_gemini_extension_demo", "server.mjs"))).toBe(true);
+
+  const hookConfig = JSON.parse(await readFile(join(extensionRoot, "hooks", "hooks.json"), "utf8")) as {
+    hooks: { BeforeTool: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
+  };
+  expect(hookConfig).toEqual({
+    hooks: {
+      BeforeTool: [
+        {
+          matcher: "read_file",
+          hooks: [{ type: "command", command: 'node "${extensionPath}/hooks/audit-read.mjs"' }],
+        },
+        {
+          matcher: "mcp_agentpkg-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
+          hooks: [{ type: "command", command: 'node "${extensionPath}/hooks/audit-submit.mjs"' }],
+        },
+      ],
+    },
+  });
+  const hookWrapper = await readFile(join(extensionRoot, "hooks", "audit-submit.mjs"), "utf8");
+  expect(hookWrapper).toStartWith("#!/usr/bin/env node");
+  expect(hookWrapper).toContain("gemini-cli");
+  expect(hookWrapper).toContain("BeforeTool");
+  expect(hookWrapper).toContain("hookSpecificOutput");
+  expect(hookWrapper).toContain('decision: "deny"');
+  expect(hookWrapper).toContain("reason:");
+  expect(hookWrapper).not.toContain("stopReason");
+  expect(hookWrapper).not.toContain("continue:!1");
+  expect(hookWrapper).not.toContain("continue:false");
+  expect(hookWrapper).toContain("validation failed");
+  expect(hookWrapper).toContain("result");
+
+  expect(await pathExists(join(extensionRoot, "stale", "old.txt"))).toBe(false);
+  expect(result.operations.some((operation) => operation.kind === "prune-plugin-path" && operation.target.endsWith(join("stale", "old.txt")))).toBe(true);
+});
+
+test("compilePluginForTarget emits a Codex project bundle", async () => {
+  const { pluginRoot, projectRoot } = await createCodexProjectFixture();
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "codex-cli",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const codexRoot = join(projectRoot, ".codex");
+  expect(result.composed).toHaveLength(1);
+  expect(result.outputRoot.replace(/\/$/u, "")).toBe(codexRoot);
+
+  const config = await readFile(join(codexRoot, "config.toml"), "utf8");
+  expect(config).toContain("# --- agentpkg codex-cli begin: codex-project-demo ---");
+  expect(config).toContain('["mcp_servers"."agentpkg-generated-codex-project-demo"]');
+  expect(config).toContain('enabled_tools = ["codex_project_demo_submit_work"]');
+  expect(config).toContain('[["hooks"."PreToolUse"]]');
+  expect(config).toContain('matcher = "shell\\\\.command"');
+
+  const agent = await readFile(join(codexRoot, "agents", "reviewer.toml"), "utf8");
+  expect(agent).toContain('name = "reviewer"');
+  expect(agent).toContain('["mcp_servers"."agentpkg-generated-codex-project-demo"]');
+
+  expect(await pathExists(join(codexRoot, "mcp", "agentpkg_generated_codex_project_demo", "server.mjs"))).toBe(true);
+  expect(await pathExists(join(codexRoot, "hooks", "audit-shell.mjs"))).toBe(true);
+  expect(await readFile(join(codexRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
+  expect(await readFile(join(codexRoot, "AGENTS.md"), "utf8")).toContain("Use project-local Codex guidance.");
+});
+
+test("compilePluginForTarget lowers OpenCode session hooks through plugin events", async () => {
+  const { pluginRoot, projectRoot } = await createOpenCodeHookFixture({ sessionHook: true });
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const serverSource = await readFile(
+    join(
+      projectRoot,
+      ".opencode",
+      "plugins",
+      "agentpkg-generated-opencode-hook-demo",
+      "src",
+      "server.ts",
+    ),
+    "utf8",
+  );
+
+  expect(serverSource).toContain("event: async ({ event })");
+  expect(serverSource).toContain('"tool.execute.before"');
+  expect(serverSource).toContain('"tool.execute.after"');
+  expect(serverSource).toContain('toolName === "opencode_hook_demo_submit_work"');
+  expect(serverSource).toContain('from "./runtime/hook-runtime"');
+  expect(serverSource).not.toContain("/Projects/agentpkg/src/compile/sources.ts");
+  expect(serverSource).toContain('eventType === "session.created"');
+  expect(serverSource).toContain('nativeEvent: "session.created"');
+  expect(serverSource).toContain('"session.start", nativePayload');
+  expect(serverSource).toContain('eventType === "session.deleted"');
+  expect(serverSource).toContain('nativeEvent: "session.deleted"');
+  expect(serverSource).toContain('"session.end", nativePayload');
+  expect(serverSource).toContain("cwd: context.directory");
+  expect(serverSource).toContain("decodeNativeHookPayloadForEvent");
+  expect(serverSource).toContain("decodeHookResultForEvent");
+
+  const generatedRoot = join(
+    projectRoot,
+    ".opencode",
+    "plugins",
+    "agentpkg-generated-opencode-hook-demo",
+  );
+  expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-runtime.ts"))).toBe(true);
+  expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-authoring-bridge.ts"))).toBe(true);
+  const mirroredHook = await readFile(
+    join(generatedRoot, "src", "plugins", "opencode-hook-demo", "hooks", "session-start.hook.ts"),
+    "utf8",
+  );
+  expect(mirroredHook).toContain('from "../../../runtime/hook-authoring-bridge"');
+  expect(mirroredHook).not.toContain(agentpkgImportPath);
 });
 
 test("compilePluginForTarget lowers executable canonical tools for opencode", async () => {
@@ -1652,8 +2150,8 @@ test("permission-only skill access fails on targets without skill permission sup
         name: "unsupported-skill-permission-demo",
         version: "0.1.0",
         targets: {
-          agents: ["claude-code"],
-          skillspaces: ["claude-code"],
+          agents: ["gemini-cli"],
+          skillspaces: ["gemini-cli"],
         },
       },
       null,
@@ -1691,7 +2189,7 @@ export default defineSkillspace({
   skills: {
     testing: {
       targets: {
-        "claude-code": { name: "testing" },
+        "gemini-cli": { name: "testing" },
       },
     },
   },
@@ -1714,7 +2212,7 @@ export default defineAgent({
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
       pluginPath: pluginRoot,
-      target: "claude-code",
+      target: "gemini-cli",
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
@@ -2500,10 +2998,10 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   ]);
 });
 
-test("compilePluginForTarget fails closed when target cannot execute canonical tool bindings", async () => {
+test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin bundle", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
-  const exit = await Effect.runPromiseExit(
+  const claude = await Effect.runPromise(
     compilePluginForTarget({
       pluginPath: pluginRoot,
       target: "claude-code",
@@ -2514,16 +3012,33 @@ test("compilePluginForTarget fails closed when target cannot execute canonical t
     }),
   );
 
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
-  if (failure._tag === "UnsupportedTargetCapabilityError") {
-    expect(failure.target).toBe("claude-code");
-    expect(failure.capability).toBe("generated-canonical-tools");
-    expect(failure.message).toContain("builder");
-  }
+  expect(claude.composed).toHaveLength(3);
+
+  const pluginRootPath = join(
+    projectRoot,
+    ".claude",
+    "plugins",
+    "agentpkg-generated-canonical-compile-fixture",
+  );
+  const claudeAgent = await readFile(join(pluginRootPath, "agents", "builder.md"), "utf8");
+  expect(claudeAgent).toContain('description: "Builder agent for canonical compile integration tests"');
+  expect(claudeAgent).toContain('model: "sonnet"');
+  expect(claudeAgent).toContain("protocol_core_external_submit");
+
+  const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
+  expect(mcpConfig).toContain('"agentpkg-generated-canonical-compile-fixture"');
+  expect(mcpConfig).toContain(
+    '"${CLAUDE_PLUGIN_ROOT}/mcp/agentpkg_generated_canonical_compile_fixture/server.mjs"',
+  );
+  expect(
+    await pathExists(
+      join(pluginRootPath, "mcp", "agentpkg_generated_canonical_compile_fixture", "server.mjs"),
+    ),
+  ).toBe(true);
+  expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
 });
 
-test("compilePluginForTarget lowers native Claude surfaces when no canonical tool runtime is required", async () => {
+test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canonical tool runtime is required", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
     withCanonicalToolBindings: false,
   });
@@ -2541,8 +3056,14 @@ test("compilePluginForTarget lowers native Claude surfaces when no canonical too
 
   expect(claude.composed).toHaveLength(3);
 
+  const pluginRootPath = join(
+    projectRoot,
+    ".claude",
+    "plugins",
+    "agentpkg-generated-canonical-compile-fixture",
+  );
   const claudeAgent = await readFile(
-    join(projectRoot, ".claude", "agents", "builder.md"),
+    join(pluginRootPath, "agents", "builder.md"),
     "utf8",
   );
   expect(claudeAgent).toContain(
@@ -2551,25 +3072,151 @@ test("compilePluginForTarget lowers native Claude surfaces when no canonical too
   expect(claudeAgent).toContain('model: "sonnet"');
   expect(claudeAgent).toContain("temperature: 0.1");
   expect(claudeAgent).toContain("top_p: 0.7");
-  expect(claudeAgent).toContain("allowed-tools:");
+  expect(claudeAgent).toContain("tools:");
   expect(claudeAgent).toContain('- "Read"');
   expect(claudeAgent).toContain('- "Grep"');
   expect(claudeAgent).toContain('- "Bash"');
-  expect(claudeAgent).toContain("## Recommended Skills");
-  expect(claudeAgent).toContain("- `testing`");
+  expect(claudeAgent).toContain("skills:");
+  expect(claudeAgent).toContain('- "testing"');
   expect(claudeAgent).toContain("## Trait Instructions");
   expect(claudeAgent).toContain(
     "Commit owned implementation changes only after the submitted work is complete.",
   );
   expect(
     await pathExists(
-      join(projectRoot, ".claude", "skills", "delivery-contract", "SKILL.md"),
+      join(pluginRootPath, "skills", "delivery-contract", "SKILL.md"),
     ),
   ).toBe(true);
   expect(
     await pathExists(
-      join(projectRoot, ".claude", "lifecycles", "delivery-contract.md"),
+      join(pluginRootPath, "lifecycles", "delivery-contract.md"),
     ),
   ).toBe(false);
+  expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "settings.json"))).toBe(false);
+});
+
+test("compilePluginForTarget does not lower runtime artifacts for metadata-only target declarations", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "metadata-only-plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "metadata-only-plugin",
+        version: "0.1.0",
+        targets: {
+          toolspaces: ["opencode", "claude-code", "gemini-cli", "codex-cli"],
+          modelspaces: ["opencode", "claude-code", "gemini-cli", "codex-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  for (const target of ["opencode", "claude-code", "gemini-cli", "codex-cli"] as const) {
+    const result = await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target,
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: true,
+        backup: false,
+      }),
+    );
+
+    expect(result.composed).toHaveLength(0);
+    expect(result.lifecycles).toHaveLength(0);
+    expect(result.operations).toHaveLength(0);
+  }
+});
+
+test("compilePluginForTarget fails when targeted agents bind tools not targeted for that harness", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "tool-target-leak");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "tool-target-leak",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          tools: ["claude-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---\ndescription: Worker\n---\n\n# Worker\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo input",
+  input: Schema.Struct({ text: Schema.String }),
+  output: Schema.Struct({ text: Schema.String }),
+  async handle(input) {
+    return input;
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "echoer.trait.ts"),
+    `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTrait({
+  name: "echoer",
+  tools: {
+    echo: { ref: "echo" },
+  },
+  require: { tools: ["echo"] },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: ["echoer"],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("AgentValidationError");
+  if (failure._tag === "AgentValidationError") {
+    expect(failure.field).toBe("tools");
+    expect(failure.message).toContain("that plugin's targets.tools does not include 'opencode'");
+  }
 });

@@ -63,6 +63,7 @@ export const COMPILE_ARTIFACT_TYPES = [
   "toolspaces",
   "modelspaces",
   "skillspaces",
+  "hooks",
 ] as const;
 export type CompileArtifactType = (typeof COMPILE_ARTIFACT_TYPES)[number];
 

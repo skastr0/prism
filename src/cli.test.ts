@@ -246,7 +246,7 @@ test("validate rejects agent targets for harnesses without compile lowerers", as
       {
         name: "unsupported-agent-target",
         version: "0.1.0",
-        targets: { agents: ["opencode", "codex-cli"] },
+        targets: { agents: ["opencode", "factory-droid"] },
       },
       null,
       2,
@@ -388,15 +388,38 @@ test("install-all compiles discovered child plugins with project scope", async (
     await pathExists(join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"))
   ).toBe(true);
   expect(
-    await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))
+    await pathExists(
+      join(
+        projectRoot,
+        ".claude",
+        "plugins",
+        "agentpkg-generated-canonical-compile-fixture",
+        "agents",
+        "builder.md",
+      ),
+    )
   ).toBe(true);
   expect(
-    await pathExists(join(projectRoot, ".claude", "skills", "delivery-contract", "SKILL.md"))
+    await pathExists(
+      join(
+        projectRoot,
+        ".claude",
+        "plugins",
+        "agentpkg-generated-canonical-compile-fixture",
+        "skills",
+        "delivery-contract",
+        "SKILL.md",
+      ),
+    )
   ).toBe(true);
   expect(
     await pathExists(join(homeRoot, ".config", "opencode", "agents", "builder.md"))
   ).toBe(false);
-  expect(await pathExists(join(homeRoot, ".claude", "agents", "builder.md"))).toBe(false);
+  expect(
+    await pathExists(
+      join(homeRoot, ".claude", "plugins", "agentpkg-generated-canonical-compile-fixture", "agents", "builder.md"),
+    )
+  ).toBe(false);
 });
 
 test("install-all skips skill validation when skills are not targeted", async () => {

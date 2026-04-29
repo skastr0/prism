@@ -107,6 +107,357 @@ export const SkillRefInputSchema = Schema.Union(
 );
 export type SkillRefInput = typeof SkillRefInputSchema.Type;
 
+// ---------------------------------------------------------------------------
+// Hook refs, events, payloads, and results
+// ---------------------------------------------------------------------------
+
+export const HookEventSchema = Schema.Literal(
+  "tool.before",
+  "tool.after",
+  "session.start",
+  "session.end",
+);
+export type HookEvent = typeof HookEventSchema.Type;
+
+export const HookToolMatcherInputSchema = Schema.Union(
+  Schema.Struct({ kind: Schema.Literal("hook-any-tool") }),
+  Schema.Struct({
+    kind: Schema.Literal("hook-toolspace-tool"),
+    tool: ToolRefInputSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("hook-toolspace-group"),
+    group: ToolGroupRefInputSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("hook-canonical-tool"),
+    ref: Schema.String,
+  }),
+);
+export type HookToolMatcherInput = typeof HookToolMatcherInputSchema.Type;
+
+export const HookMatchInputSchema = Schema.Struct({
+  tool: Schema.optional(HookToolMatcherInputSchema),
+});
+export type HookMatchInput = typeof HookMatchInputSchema.Type;
+
+export const NormalizedHookToolMatcherSchema = Schema.Union(
+  Schema.Struct({ kind: Schema.Literal("any") }),
+  Schema.Struct({
+    kind: Schema.Literal("toolspace-tool"),
+    ref: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("toolspace-group"),
+    ref: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("canonical-tool"),
+    ref: Schema.String,
+  }),
+);
+export type NormalizedHookToolMatcher = typeof NormalizedHookToolMatcherSchema.Type;
+
+export const NormalizedHookMatchSchema = Schema.Struct({
+  tool: Schema.optional(NormalizedHookToolMatcherSchema),
+});
+export type NormalizedHookMatch = typeof NormalizedHookMatchSchema.Type;
+
+export const HookDefinitionSchema = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  event: HookEventSchema,
+  match: Schema.optional(HookMatchInputSchema),
+  handle: Schema.Any,
+});
+export type HookDefinition = typeof HookDefinitionSchema.Type;
+
+export const HookTargetContextSchema = Schema.Struct({
+  harness: Schema.String,
+  nativeEvent: Schema.String,
+});
+export type HookTargetContext = typeof HookTargetContextSchema.Type;
+
+export const HookSessionContextSchema = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  transcriptPath: Schema.optional(Schema.String),
+});
+export type HookSessionContext = typeof HookSessionContextSchema.Type;
+
+export const HookToolContextSchema = Schema.Struct({
+  logical: Schema.optional(Schema.String),
+  nativeName: Schema.String,
+  input: Schema.Unknown,
+});
+export type HookToolContext = typeof HookToolContextSchema.Type;
+
+export const ToolBeforeEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("tool.before"),
+  target: HookTargetContextSchema,
+  tool: HookToolContextSchema,
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+});
+export type ToolBeforeEventPayload = typeof ToolBeforeEventPayloadSchema.Type;
+
+export const ToolAfterEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("tool.after"),
+  target: HookTargetContextSchema,
+  tool: Schema.extend(
+    HookToolContextSchema,
+    Schema.Struct({
+      output: Schema.Unknown,
+      success: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+});
+export type ToolAfterEventPayload = typeof ToolAfterEventPayloadSchema.Type;
+
+export const SessionStartEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("session.start"),
+  target: HookTargetContextSchema,
+  cwd: Schema.optional(Schema.String),
+  session: HookSessionContextSchema,
+});
+export type SessionStartEventPayload = typeof SessionStartEventPayloadSchema.Type;
+
+export const SessionEndEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("session.end"),
+  target: HookTargetContextSchema,
+  cwd: Schema.optional(Schema.String),
+  session: HookSessionContextSchema,
+  reason: Schema.optional(Schema.String),
+});
+export type SessionEndEventPayload = typeof SessionEndEventPayloadSchema.Type;
+
+export const HookEventPayloadSchema = Schema.Union(
+  ToolBeforeEventPayloadSchema,
+  ToolAfterEventPayloadSchema,
+  SessionStartEventPayloadSchema,
+  SessionEndEventPayloadSchema,
+);
+export type HookEventPayload = typeof HookEventPayloadSchema.Type;
+
+const NativeToolBeforeContextSchema = Schema.Struct({
+  logical: Schema.optional(Schema.String),
+  name: Schema.String,
+  input: Schema.Unknown,
+});
+
+const NativeToolAfterContextSchema = Schema.Struct({
+  logical: Schema.optional(Schema.String),
+  name: Schema.String,
+  input: Schema.Unknown,
+  output: Schema.Unknown,
+  success: Schema.optional(Schema.Boolean),
+});
+
+export const NativeToolBeforeHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    tool: NativeToolBeforeContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+  }),
+  ToolBeforeEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "tool.before" as const,
+      target: native.target,
+      tool: {
+        logical: native.tool.logical,
+        nativeName: native.tool.name,
+        input: native.tool.input,
+      },
+      cwd: native.cwd,
+      session: native.session,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      tool: {
+        logical: payload.tool.logical,
+        name: payload.tool.nativeName,
+        input: payload.tool.input,
+      },
+      cwd: payload.cwd,
+      session: payload.session,
+    }),
+  },
+);
+export type NativeToolBeforeHookPayload = typeof NativeToolBeforeHookPayloadSchema.Type;
+
+export const NativeToolAfterHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    tool: NativeToolAfterContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+  }),
+  ToolAfterEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "tool.after" as const,
+      target: native.target,
+      tool: {
+        logical: native.tool.logical,
+        nativeName: native.tool.name,
+        input: native.tool.input,
+        output: native.tool.output,
+        success: native.tool.success,
+      },
+      cwd: native.cwd,
+      session: native.session,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      tool: {
+        logical: payload.tool.logical,
+        name: payload.tool.nativeName,
+        input: payload.tool.input,
+        output: payload.tool.output,
+        success: payload.tool.success,
+      },
+      cwd: payload.cwd,
+      session: payload.session,
+    }),
+  },
+);
+export type NativeToolAfterHookPayload = typeof NativeToolAfterHookPayloadSchema.Type;
+
+export const NativeSessionStartHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: HookSessionContextSchema,
+  }),
+  SessionStartEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "session.start" as const,
+      target: native.target,
+      cwd: native.cwd,
+      session: native.session,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      cwd: payload.cwd,
+      session: payload.session,
+    }),
+  },
+);
+export type NativeSessionStartHookPayload = typeof NativeSessionStartHookPayloadSchema.Type;
+
+export const NativeSessionEndHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: HookSessionContextSchema,
+    reason: Schema.optional(Schema.String),
+  }),
+  SessionEndEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "session.end" as const,
+      target: native.target,
+      cwd: native.cwd,
+      session: native.session,
+      reason: native.reason,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      cwd: payload.cwd,
+      session: payload.session,
+      reason: payload.reason,
+    }),
+  },
+);
+export type NativeSessionEndHookPayload = typeof NativeSessionEndHookPayloadSchema.Type;
+
+export const NativeHookPayloadSchema = Schema.Union(
+  NativeToolBeforeHookPayloadSchema,
+  NativeToolAfterHookPayloadSchema,
+  NativeSessionStartHookPayloadSchema,
+  NativeSessionEndHookPayloadSchema,
+);
+export type NativeHookPayload = typeof NativeHookPayloadSchema.Type;
+
+export const ToolBeforeHookResultSchema = Schema.Union(
+  Schema.Struct({ decision: Schema.Literal("continue") }),
+  Schema.Struct({ decision: Schema.Literal("block"), message: Schema.String }),
+);
+export type ToolBeforeHookResult = typeof ToolBeforeHookResultSchema.Type;
+
+export const ContinueHookResultSchema = Schema.Struct({
+  decision: Schema.Literal("continue"),
+});
+export type ContinueHookResult = typeof ContinueHookResultSchema.Type;
+
+export const ObservationalHookResultSchema = ContinueHookResultSchema;
+export type ObservationalHookResult = ContinueHookResult;
+
+export const HookEventResultSchema = Schema.Union(
+  Schema.Struct({
+    event: Schema.Literal("tool.before"),
+    result: ToolBeforeHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("tool.after"),
+    result: ObservationalHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("session.start"),
+    result: ObservationalHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("session.end"),
+    result: ObservationalHookResultSchema,
+  }),
+);
+export type HookEventResult = typeof HookEventResultSchema.Type;
+
+export const HookResultSchema = Schema.Union(
+  ToolBeforeHookResultSchema,
+  ObservationalHookResultSchema,
+);
+export type HookResult = typeof HookResultSchema.Type;
+
+export const hookResultSchemaForEvent = (
+  event: HookEvent,
+): Schema.Schema.AnyNoContext =>
+  event === "tool.before" ? ToolBeforeHookResultSchema : ObservationalHookResultSchema;
+
+export const decodeHookResultForEvent = (event: HookEvent, result: unknown) =>
+  Schema.decodeUnknownEither(hookResultSchemaForEvent(event))(result);
+
+export const nativeHookPayloadSchemaForEvent = (
+  event: HookEvent,
+): Schema.Schema.AnyNoContext => {
+  switch (event) {
+    case "tool.before":
+      return NativeToolBeforeHookPayloadSchema;
+    case "tool.after":
+      return NativeToolAfterHookPayloadSchema;
+    case "session.start":
+      return NativeSessionStartHookPayloadSchema;
+    case "session.end":
+      return NativeSessionEndHookPayloadSchema;
+  }
+};
+
+export const decodeNativeHookPayloadForEvent = (event: HookEvent, payload: unknown) =>
+  Schema.decodeUnknownEither(nativeHookPayloadSchemaForEvent(event))(payload);
+
+export class Hook extends Schema.Class<Hook>("Hook")({
+  name: Schema.String,
+  sourcePath: Schema.String,
+  description: Schema.optional(Schema.String),
+  event: HookEventSchema,
+  match: NormalizedHookMatchSchema,
+  handle: Schema.Any,
+}) {}
+
 export interface RefNormalizationError {
   readonly field: string;
   readonly message: string;

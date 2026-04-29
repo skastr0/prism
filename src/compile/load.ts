@@ -17,6 +17,8 @@ import {
   AgentSchema,
   CanonicalTool,
   CanonicalToolSchema,
+  Hook,
+  HookDefinitionSchema,
   Identity,
   IdentityFrontmatter,
   Lifecycle,
@@ -40,9 +42,12 @@ import {
   normalizeToolRefInput,
   normalizeTraitRefInput,
   type Access,
+  type HookToolMatcherInput,
   type LifecycleDefinition,
   type LifecycleToolPermissionTool,
   type NormalizedAccess,
+  type NormalizedHookMatch,
+  type NormalizedHookToolMatcher,
   type NormalizedLifecyclePhase,
   type NormalizedLifecycleToolPermission,
   type NormalizedTraitBinding,
@@ -166,6 +171,25 @@ export const defineTool = (tool) => tool;
 export const defineToolspace = (toolspace) => toolspace;
 export const defineModelspace = (modelspace) => modelspace;
 export const defineSkillspace = (skillspace) => skillspace;
+export const defineHook = (hook) => hook;
+
+export const hookEvent = {
+  toolBefore: "tool.before",
+  toolAfter: "tool.after",
+  sessionStart: "session.start",
+  sessionEnd: "session.end",
+};
+
+export const hookTool = {
+  any: () => ({ kind: "hook-any-tool" }),
+  tool: (tool) => ({ kind: "hook-toolspace-tool", tool }),
+  group: (group) => ({ kind: "hook-toolspace-group", group }),
+  canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),
+};
+
+export const hookMatcher = {
+  tool: hookTool,
+};
 `;
 
 const makeEffectRuntimeJs = (): string => {
@@ -491,6 +515,7 @@ const MODELSPACE_SUFFIX_TS = ".modelspace.ts";
 const SKILLSPACE_SUFFIX_TS = ".skillspace.ts";
 const LIFECYCLE_SUFFIX_TS = ".lifecycle.ts";
 const TOOL_SUFFIX_TS = ".tool.ts";
+const HOOK_SUFFIX_TS = ".hook.ts";
 
 const stripSuffix = (fileName: string, suffixes: string[]): string => {
   for (const suffix of suffixes) {
@@ -592,6 +617,95 @@ const normalizeSkillRefs = (
     normalizedSkills.push(normalized);
   }
   return normalizedSkills;
+};
+
+const normalizeHookToolMatcher = (
+  sourcePath: string,
+  field: string,
+  matcher: HookToolMatcherInput,
+): NormalizedHookToolMatcher | SourceParseError => {
+  switch (matcher.kind) {
+    case "hook-any-tool":
+      return { kind: "any" };
+    case "hook-toolspace-tool": {
+      const normalized = normalizeToolRefInput(`${field}.tool`, matcher.tool);
+      if (typeof normalized !== "string") {
+        return new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: `${normalized.field}: ${normalized.message}`,
+        });
+      }
+      return { kind: "toolspace-tool", ref: normalized };
+    }
+    case "hook-toolspace-group": {
+      const normalized = normalizeToolGroupRefInput(`${field}.group`, matcher.group);
+      if (typeof normalized !== "string") {
+        return new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: `${normalized.field}: ${normalized.message}`,
+        });
+      }
+      return { kind: "toolspace-group", ref: normalized };
+    }
+    case "hook-canonical-tool": {
+      const ref = matcher.ref.trim();
+      if (!ref) {
+        return new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: `${field}.ref: must be a non-empty canonical tool reference`,
+        });
+      }
+      return { kind: "canonical-tool", ref };
+    }
+  }
+};
+
+const normalizeHookMatch = (
+  sourcePath: string,
+  event: Hook["event"],
+  match: { readonly tool?: HookToolMatcherInput } | undefined,
+): NormalizedHookMatch | SourceParseError => {
+  if (!match?.tool) return {};
+  if (event !== "tool.before" && event !== "tool.after") {
+    return new SourceParseError({
+      sourcePath,
+      kind: "hook",
+      message: `match.tool is only supported for tool.before and tool.after hooks`,
+    });
+  }
+
+  const tool = normalizeHookToolMatcher(sourcePath, "match.tool", match.tool);
+  if (tool instanceof SourceParseError) return tool;
+  return { tool };
+};
+
+const FORBIDDEN_HOOK_FIELDS = [
+  "agent",
+  "agents",
+  "trait",
+  "traits",
+  "slot",
+  "slots",
+] as const;
+
+const unsupportedHookFieldError = (
+  sourcePath: string,
+  raw: unknown,
+): SourceParseError | undefined => {
+  if (!isRecord(raw)) return undefined;
+  for (const field of FORBIDDEN_HOOK_FIELDS) {
+    if (!hasOwn(raw, field)) continue;
+    return forbiddenFieldError(
+      sourcePath,
+      "hook",
+      field,
+      "is not supported in hook V1; hooks are plugin-level and are not agent-bound, trait-bound, or slot-specialized",
+    );
+  }
+  return undefined;
 };
 
 const isEffectSchema = (value: unknown): value is Schema.Schema.AnyNoContext =>
@@ -1691,6 +1805,88 @@ const loadLifecycles = (
     return map;
   });
 
+const parseHook = (sourcePath: string): Effect.Effect<Hook, CompileError> =>
+  Effect.gen(function* () {
+    const raw = yield* importTsModule<unknown>(sourcePath, "hook");
+    const unsupported = unsupportedHookFieldError(sourcePath, raw);
+    if (unsupported) return yield* Effect.fail(unsupported);
+
+    const result = Schema.decodeUnknownEither(HookDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
+    if (result._tag === "Left") {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: result.left.message,
+        }),
+      );
+    }
+
+    const parsed = result.right;
+    const fileStem = stripSuffix(basename(sourcePath), [HOOK_SUFFIX_TS]);
+    if (parsed.name !== fileStem) {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: `hook 'name' field ('${parsed.name}') must match file stem ('${fileStem}')`,
+        }),
+      );
+    }
+
+    if (typeof parsed.handle !== "function") {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: `handle must be a function`,
+        }),
+      );
+    }
+
+    const match = normalizeHookMatch(sourcePath, parsed.event, parsed.match);
+    if (match instanceof SourceParseError) {
+      return yield* Effect.fail(match);
+    }
+
+    return new Hook({
+      name: parsed.name,
+      sourcePath,
+      description: parsed.description,
+      event: parsed.event,
+      match,
+      handle: parsed.handle,
+    });
+  });
+
+const loadHooks = (
+  pluginPath: string,
+): Effect.Effect<Map<string, Hook>, CompileError> =>
+  Effect.gen(function* () {
+    const dir = join(pluginPath, "hooks");
+    const entries = yield* listDir(dir);
+    const map = new Map<string, Hook>();
+
+    for (const entry of entries.sort()) {
+      if (!entry.endsWith(HOOK_SUFFIX_TS)) continue;
+      const hook = yield* parseHook(join(dir, entry));
+      const existing = map.get(hook.name);
+      if (existing) {
+        return yield* Effect.fail(
+          new DuplicateNameError({
+            kind: "hook",
+            name: hook.name,
+            firstPath: existing.sourcePath,
+            secondPath: hook.sourcePath,
+          }),
+        );
+      }
+      map.set(hook.name, hook);
+    }
+
+    return map;
+  });
+
 interface PluginManifest {
   name: string;
   version: string;
@@ -1868,6 +2064,7 @@ const loadPluginArtifacts = (
     registry.skills = yield* loadSkills(pluginPath);
     registry.traits = yield* loadTraits(pluginPath);
     registry.tools = yield* loadCanonicalTools(pluginPath);
+    registry.hooks = yield* loadHooks(pluginPath);
     registry.lifecycles = yield* loadLifecycles(pluginPath);
     registry.agents = yield* loadAgents(pluginPath);
     return registry;

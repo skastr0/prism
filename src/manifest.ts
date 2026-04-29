@@ -42,7 +42,12 @@ const TARGET_PRESETS = {
   "claw-harness": ["openclaw"],
 } as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
 
-const COMPILE_SUPPORTED_HARNESSES = ["opencode", "claude-code"] as const satisfies ReadonlyArray<HarnessId>;
+const COMPILE_SUPPORTED_HARNESSES = [
+  "opencode",
+  "claude-code",
+  "gemini-cli",
+  "codex-cli",
+] as const satisfies ReadonlyArray<HarnessId>;
 
 function isTargetPresetId(value: string): value is TargetPresetId {
   return TARGET_PRESET_IDS.includes(value as TargetPresetId);

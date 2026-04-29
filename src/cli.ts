@@ -880,7 +880,7 @@ program
   .description("Compile agent language sources into per-harness artifacts")
   .option(
     "--harness <id>",
-    "Target harness ID ('opencode' or 'claude-code')",
+    "Target harness ID ('opencode', 'claude-code', 'gemini-cli', or 'codex-cli')",
     "opencode"
   )
   .option(

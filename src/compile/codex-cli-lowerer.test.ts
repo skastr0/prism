@@ -192,6 +192,9 @@ export default defineTool({
   expect(agentToml?.content).not.toContain("temperature");
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
   expect(agentToml?.content).toContain('["mcp_servers"."agentpkg-generated-codex-mcp-fixture"]');
+  expect(agentToml?.content).toContain('command = "bun"');
+  expect(agentToml?.content).toContain('args = ["mcp/agentpkg_generated_codex_mcp_fixture/server.mjs"]');
+  expect(agentToml?.content).toContain(`cwd = ${JSON.stringify(outputRoot)}`);
   expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
 
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));

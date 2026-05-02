@@ -60,6 +60,12 @@ interface PlannedHook {
   readonly relativePath: string;
 }
 
+interface AgentMcpServerConfig {
+  readonly name: string;
+  readonly bundlePath: string;
+  readonly root: string;
+}
+
 const quote = (value: string): string => JSON.stringify(value);
 
 const tomlArray = (values: ReadonlyArray<string>): string =>
@@ -188,7 +194,7 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
 const renderAgentToml = (
   agent: ComposedAgent,
   target: CodexCliLowerTarget,
-  mcpServerName?: string,
+  mcpServer?: AgentMcpServerConfig,
 ): string => {
   const developerInstructions = agent.allowedSkills.length > 0
     ? `${agent.body}\n\n## Agentpkg Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.allowedSkills).join(", ")}.`
@@ -215,11 +221,15 @@ const renderAgentToml = (
   }
 
   const mcpToolNames = mcpToolNamesForAgent(target.sourcePluginName, agent);
-  if (mcpServerName && mcpToolNames.length > 0) {
+  if (mcpServer && mcpToolNames.length > 0) {
     lines.push(
       "",
-      tomlDottedTable(["mcp_servers", mcpServerName]),
+      tomlDottedTable(["mcp_servers", mcpServer.name]),
+      'command = "bun"',
+      `args = ${tomlArray([mcpServer.bundlePath])}`,
+      `cwd = ${quote(mcpServer.root)}`,
       "enabled = true",
+      "required = false",
       'default_tools_approval_mode = "prompt"',
       `enabled_tools = ${tomlArray(mcpToolNames)}`,
     );
@@ -556,16 +566,20 @@ const planMcpServer = async (
 
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
-  const bindings = input.agents.flatMap((agent) => agent.toolBindings);
-  const agentMcpServerName = bindings.length
-    ? generatedServerName(input.target.sourcePluginName)
+  const mcp = await planMcpServer(input, operations);
+  const agentMcpServer = mcp.mcpServerName && mcp.mcpBundlePath
+    ? {
+        name: mcp.mcpServerName,
+        bundlePath: mcp.mcpBundlePath,
+        root: input.target.root,
+      }
     : undefined;
 
   for (const agent of input.agents) {
     await pushWrite(
       operations,
       join(input.target.root, "agents", `${agent.name}.toml`),
-      renderAgentToml(agent, input.target, agentMcpServerName),
+      renderAgentToml(agent, input.target, agentMcpServer),
       "write-md",
     );
   }
@@ -595,7 +609,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     await pushWrite(operations, join(input.target.root, "AGENTS.md"), rules, "write-md");
   }
 
-  const mcp = await planMcpServer(input, operations);
   const hooks = await planHooks(input, operations);
   const configTarget = join(input.target.root, "config.toml");
   const currentConfig = (await exists(configTarget)) ? await readFile(configTarget) : "";

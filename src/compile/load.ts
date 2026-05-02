@@ -7,6 +7,7 @@
 
 import * as EffectModule from "effect";
 import { Effect, Schema } from "effect";
+import { createRequire } from "node:module";
 import { basename, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -235,12 +236,98 @@ const getImportRuntimePaths = async (): Promise<{
 
 const toFileSpecifier = (path: string): string => pathToFileURL(path).href;
 
-const rewriteImportSpecifiers = (
+const BARE_RUNTIME_IMPORT_PATTERN =
+  /(\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(\s*)(["'])([^"'.][^"']*)\2/g;
+
+const packageNameFromSpecifier = (specifier: string): string => {
+  if (specifier.startsWith("@")) {
+    const [scope, name] = specifier.split("/");
+    return scope && name ? `${scope}/${name}` : specifier;
+  }
+
+  return specifier.split("/")[0] ?? specifier;
+};
+
+const readPluginRuntimeDependencyNames = async (pluginRoot: string): Promise<ReadonlySet<string>> => {
+  try {
+    const raw = await Bun.file(join(pluginRoot, "package.json")).text();
+    const parsed = JSON.parse(raw) as {
+      readonly dependencies?: Record<string, string>;
+      readonly peerDependencies?: Record<string, string>;
+    };
+
+    return new Set([
+      ...Object.keys(parsed.dependencies ?? {}),
+      ...Object.keys(parsed.peerDependencies ?? {}),
+    ]);
+  } catch {
+    return new Set();
+  }
+};
+
+const rewriteNodeSqliteImportForBun = (source: string): string =>
+  source.replace(
+    /^\s*import\s+\{([^}]+)\}\s+from\s+["']node:sqlite["'];?\s*$/gm,
+    (_match, specifiers: string) =>
+      specifiers
+        .split(",")
+        .map((specifier) => specifier.trim())
+        .filter(Boolean)
+        .map((specifier) => {
+          const [imported, local] = specifier.split(/\s+as\s+/u).map((part) => part.trim());
+          const localName = local || imported;
+          if (imported === "DatabaseSync") {
+            return `const ${localName} = class DatabaseSync { constructor() { throw new Error("node:sqlite DatabaseSync is unavailable during agentpkg source parsing"); } };`;
+          }
+          return `const ${localName} = undefined;`;
+        })
+        .join("\n"),
+  );
+
+const rewritePluginRuntimeDependencyImports = async (
+  source: string,
+  pluginRoot: string,
+): Promise<string> => {
+  const runtimeDependencies = await readPluginRuntimeDependencyNames(pluginRoot);
+  if (runtimeDependencies.size === 0) return source;
+
+  const requireFromPlugin = createRequire(join(pluginRoot, "package.json"));
+  const replacements = new Map<string, string>();
+
+  for (const match of source.matchAll(BARE_RUNTIME_IMPORT_PATTERN)) {
+    const specifier = match[3];
+    if (!specifier || specifier === "agentpkg" || specifier === "effect" || specifier.startsWith("node:")) {
+      continue;
+    }
+
+    const packageName = packageNameFromSpecifier(specifier);
+    if (!runtimeDependencies.has(packageName)) continue;
+
+    try {
+      replacements.set(specifier, requireFromPlugin.resolve(specifier).replace(/\\/g, "/"));
+    } catch {
+      // Leave unresolved specifiers untouched so the parse error points at the original import.
+    }
+  }
+
+  if (replacements.size === 0) return source;
+
+  return source.replace(BARE_RUNTIME_IMPORT_PATTERN, (match, prefix: string, quote: string, specifier: string) => {
+    const replacement = replacements.get(specifier);
+    return replacement ? `${prefix}${quote}${replacement}${quote}` : match;
+  });
+};
+
+const rewriteImportSpecifiers = async (
   source: string,
   authoringRuntimeSpecifier: string,
   effectRuntimeSpecifier: string,
-): string => {
-  return source
+  pluginRoot: string,
+): Promise<string> => {
+  const rewrittenBuiltins = rewriteNodeSqliteImportForBun(source);
+  const rewrittenPluginDeps = await rewritePluginRuntimeDependencyImports(rewrittenBuiltins, pluginRoot);
+
+  return rewrittenPluginDeps
     .replace(
       /(\bfrom\s*)(["'])agentpkg\2/g,
       (_match, prefix) => `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}`,
@@ -437,10 +524,11 @@ const copyTransformedPluginTree = async (options: {
     const sourcePath = join(pluginRoot, file);
     const targetPath = join(outputRoot, file);
     const source = await Bun.file(sourcePath).text();
-    const rewritten = rewriteImportSpecifiers(
+    const rewritten = await rewriteImportSpecifiers(
       source,
       options.authoringRuntimeSpecifier,
       options.effectRuntimeSpecifier,
+      pluginRoot,
     );
     await fs.mkdir(resolvePath(targetPath, ".."), { recursive: true });
     await fs.writeFile(targetPath, rewritten, "utf8");

@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -56,6 +57,18 @@ export interface McpServerBundle {
 
 const SOURCE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
+
+const BARE_IMPORT_PATTERN =
+  /(\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(\s*)(["'])([^"'.][^"']*)\2/g;
+
+const NODE_BUILTIN_EXTERNALS = [
+  ...new Set([
+    ...builtinModules,
+    ...builtinModules.map((moduleName) => `node:${moduleName}`),
+    "bun:sqlite",
+    "node:sqlite",
+  ]),
+].sort();
 
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
@@ -397,14 +410,88 @@ const rewriteGeneratedPluginImportsForStandaloneBundle = (
 const rewriteBareEffectImportsForBundle = (source: string): string =>
   source.replace(/(\bfrom\s+)(["'])effect\2/g, `$1${JSON.stringify(effectBundleImportPath())}`);
 
-const normalizeMirroredPluginSource = (options: {
+const packageNameFromSpecifier = (specifier: string): string => {
+  if (specifier.startsWith("@")) {
+    const [scope, name] = specifier.split("/");
+    return scope && name ? `${scope}/${name}` : specifier;
+  }
+
+  return specifier.split("/")[0] ?? specifier;
+};
+
+const readPluginRuntimeDependencies = async (pluginRoot?: string): Promise<ReadonlySet<string>> => {
+  if (!pluginRoot) return new Set();
+
+  try {
+    const raw = await readFile(join(pluginRoot, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as {
+      readonly dependencies?: Record<string, string>;
+      readonly peerDependencies?: Record<string, string>;
+    };
+
+    return new Set([
+      ...Object.keys(parsed.dependencies ?? {}),
+      ...Object.keys(parsed.peerDependencies ?? {}),
+    ]);
+  } catch {
+    return new Set();
+  }
+};
+
+const resolvePluginDependencyImport = async (options: {
+  readonly pluginRoot?: string;
+  readonly runtimeDependencies: ReadonlySet<string>;
+  readonly specifier: string;
+}): Promise<string | undefined> => {
+  if (!options.pluginRoot) return undefined;
+  if (options.specifier.startsWith("node:")) return undefined;
+
+  const packageName = packageNameFromSpecifier(options.specifier);
+  if (!options.runtimeDependencies.has(packageName)) return undefined;
+
+  try {
+    return createRequire(join(options.pluginRoot, "package.json")).resolve(options.specifier).replace(/\\/g, "/");
+  } catch {
+    return undefined;
+  }
+};
+
+const rewriteBarePluginDependencyImportsForBundle = async (options: {
+  readonly source: string;
+  readonly pluginRoot?: string;
+}): Promise<string> => {
+  const runtimeDependencies = await readPluginRuntimeDependencies(options.pluginRoot);
+  if (runtimeDependencies.size === 0) return options.source;
+
+  const replacements = new Map<string, string>();
+  for (const match of options.source.matchAll(BARE_IMPORT_PATTERN)) {
+    const specifier = match[3];
+    if (!specifier || specifier === "effect") continue;
+
+    const resolved = await resolvePluginDependencyImport({
+      pluginRoot: options.pluginRoot,
+      runtimeDependencies,
+      specifier,
+    });
+    if (resolved) replacements.set(specifier, resolved);
+  }
+
+  if (replacements.size === 0) return options.source;
+
+  return options.source.replace(BARE_IMPORT_PATTERN, (match, prefix: string, quote: string, specifier: string) => {
+    const replacement = replacements.get(specifier);
+    return replacement ? `${prefix}${quote}${replacement}${quote}` : match;
+  });
+};
+
+const normalizeMirroredPluginSource = async (options: {
   readonly pluginName: string;
   readonly pluginRoot?: string;
   readonly relativePath: string;
   readonly sourcePath?: string;
   readonly source: string;
   readonly importPluginRoots: ReadonlyMap<string, string>;
-}): string => {
+}): Promise<string> => {
   const currentGeneratedPath = `plugins/${options.pluginName}/${options.relativePath}`;
   const withCrossPluginImports = rewriteCrossPluginRelativeImports({
     pluginName: options.pluginName,
@@ -420,10 +507,14 @@ const normalizeMirroredPluginSource = (options: {
   );
 
   const withBundledEffectImports = rewriteBareEffectImportsForBundle(withStandaloneImports);
+  const withPluginDependencyImports = await rewriteBarePluginDependencyImportsForBundle({
+    source: withBundledEffectImports,
+    pluginRoot: options.pluginRoot,
+  });
 
-  if (!options.relativePath.endsWith(".tool.ts")) return withBundledEffectImports;
+  if (!options.relativePath.endsWith(".tool.ts")) return withPluginDependencyImports;
 
-  return stripToolAuthoringHelpers(withBundledEffectImports)
+  return stripToolAuthoringHelpers(withPluginDependencyImports)
     .replace(/\bdefineTool\s*\(/g, "(")
     .replace(/\bschemaSlot\s*\(/g, "(");
 };
@@ -514,7 +605,7 @@ const renderMcpServerEntry = (options: {
     toolEntries.push(`  ${JSON.stringify(spec.mcpName)}: createTool(${JSON.stringify(spec.mcpName)}, ${ident} as ToolSurface),`);
   }
 
-  return `#!/usr/bin/env node
+  return `#!/usr/bin/env bun
 // GENERATED by agentpkg — do not edit.
 // Standalone MCP stdio server for compiled canonical tool bindings.
 
@@ -568,6 +659,8 @@ const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema => {
       return { type: "number" };
     case "BooleanKeyword":
       return { type: "boolean" };
+    case "UnknownKeyword":
+      return { type: "object", additionalProperties: true };
     case "Literal":
       return { const: ast.literal };
     case "Union": {
@@ -776,7 +869,7 @@ const writeTempBundleSources = async (options: {
       const target = join(options.tempRoot, "plugins", mirror.pluginName, file.relativePath);
       await mkdir(dirname(target), { recursive: true });
       const raw = file.content ?? (await readFile(file.sourcePath!, "utf8"));
-      const source = normalizeMirroredPluginSource({
+      const normalized = await normalizeMirroredPluginSource({
         pluginName: mirror.pluginName,
         pluginRoot: mirror.pluginRoot,
         relativePath: file.relativePath,
@@ -784,7 +877,7 @@ const writeTempBundleSources = async (options: {
         source: raw,
         importPluginRoots: options.importPluginRoots,
       });
-      await writeFile(target, source);
+      await writeFile(target, normalized);
     }
   }
 
@@ -818,14 +911,14 @@ const validationErrorDetail = (error: unknown): string => {
 
 const validateBuiltMcpServerBundle = async (builtPath: string): Promise<void> => {
   try {
-    await execFileAsync("node", [builtPath], {
+    await execFileAsync("bun", [builtPath], {
       env: { ...process.env, AGENTPKG_MCP_VALIDATE: "1" },
       timeout: 5_000,
       maxBuffer: 1024 * 1024,
     });
   } catch (error) {
     throw new Error(
-      `failed to validate MCP server bundle with node: ${validationErrorDetail(error)}`,
+      `failed to validate MCP server bundle with bun: ${validationErrorDetail(error)}`,
       { cause: error },
     );
   }
@@ -861,9 +954,10 @@ export const generateMcpServerBundle = async (
     const build = await Bun.build({
       entrypoints: [entryPath],
       outdir,
-      target: "node",
+      target: "bun",
       format: "esm",
       packages: "bundle",
+      external: NODE_BUILTIN_EXTERNALS,
       naming: "server.mjs",
       sourcemap: "none",
       minify: false,
@@ -879,7 +973,7 @@ export const generateMcpServerBundle = async (
     const content = await readFile(builtPath, "utf8");
     return {
       relativePath: mcpServerArtifactRelativePath(bundleId),
-      content: content.startsWith("#!") ? content : `#!/usr/bin/env node\n${content}`,
+      content: content.startsWith("#!") ? content : `#!/usr/bin/env bun\n${content}`,
       toolNames,
     };
   } finally {

@@ -285,7 +285,7 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
 
-  const child = spawn("node", [serverPath], {
+  const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -334,7 +334,7 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
   }
 });
 
-test("MCP bundle generation fails closed when a tool input schema cannot become JSON Schema", async () => {
+test("MCP bundle generation supports unknown object payload schemas", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "schema-fixture");
   const toolPath = join(pluginRoot, "tools", "inspect.tool.ts");
@@ -345,7 +345,7 @@ import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
 
 export default defineTool({
   name: "inspect",
-  description: "Uses an intentionally unsupported MCP input schema",
+  description: "Accepts an arbitrary JSON object payload",
   input: Schema.Struct({
     payload: Schema.Unknown,
   }),
@@ -371,7 +371,47 @@ export default defineTool({
         },
       ],
     }),
-  ).rejects.toThrow(/MCP tool 'schema_fixture_inspect'.*unsupported AST tag: UnknownKeyword/);
+  ).resolves.toMatchObject({ toolNames: ["schema_fixture_inspect"] });
+});
+
+test("MCP bundle generation fails closed when a tool input schema cannot become JSON Schema", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "schema-fixture");
+  const toolPath = join(pluginRoot, "tools", "inspect.tool.ts");
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineTool({
+  name: "inspect",
+  description: "Uses an intentionally unsupported MCP input schema",
+  input: Schema.Struct({
+    payload: Schema.BigIntFromSelf,
+  }),
+  output: Schema.Struct({ ok: Schema.Boolean }),
+  async handle() {
+    return { ok: true };
+  },
+});
+`,
+  );
+
+  await expect(
+    generateMcpServerBundle({
+      sourcePluginName: "schema-fixture",
+      serverName: "agentpkg-mcp-schema-fixture",
+      bindings: [
+        {
+          kind: "permission",
+          logicalName: "inspect",
+          toolPluginName: "schema-fixture",
+          toolName: "inspect",
+          toolSourcePath: toolPath,
+        },
+      ],
+    }),
+  ).rejects.toThrow(/MCP tool 'schema_fixture_inspect'.*unsupported AST tag: BigIntKeyword/);
 });
 
 test("MCP bundle generation rejects non-identical tool-name collisions", async () => {

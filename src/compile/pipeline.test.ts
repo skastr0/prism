@@ -1028,7 +1028,7 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
     contextFileName: "GEMINI.md",
     mcpServers: {
       "agentpkg-generated-gemini-extension-demo": {
-        command: "node",
+        command: "bun",
         args: ["${extensionPath}/mcp/agentpkg_generated_gemini_extension_demo/server.mjs"],
       },
     },
@@ -3027,6 +3027,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
   expect(mcpConfig).toContain('"agentpkg-generated-canonical-compile-fixture"');
+  expect(mcpConfig).toContain('"command": "bun"');
   expect(mcpConfig).toContain(
     '"${CLAUDE_PLUGIN_ROOT}/mcp/agentpkg_generated_canonical_compile_fixture/server.mjs"',
   );

@@ -1375,7 +1375,49 @@ const renderGeneratedServerTsForBindings = (
   return lines.join("\n");
 };
 
-const GENERATED_PACKAGE_JSON = (pluginId: string): string =>
+type PackageJsonRuntimeDeps = {
+  readonly dependencies?: Record<string, string>;
+  readonly peerDependencies?: Record<string, string>;
+};
+
+const readPluginRuntimeDependencyMap = async (pluginRoot?: string): Promise<Record<string, string>> => {
+  if (!pluginRoot) return {};
+
+  try {
+    const raw = await readFile(join(pluginRoot, "package.json"));
+    const parsed = JSON.parse(raw) as PackageJsonRuntimeDeps;
+    return {
+      ...(parsed.dependencies ?? {}),
+      ...(parsed.peerDependencies ?? {}),
+    };
+  } catch {
+    return {};
+  }
+};
+
+const collectGeneratedPackageDependencies = async (
+  mirrors: ReadonlyArray<PluginMirror>,
+): Promise<Record<string, string>> => {
+  const dependencies: Record<string, string> = {
+    "@opencode-ai/plugin": "^1.4.6",
+    effect: "^3.21.0",
+  };
+  const pluginRoots = [...new Set(mirrors.map((mirror) => mirror.pluginRoot).filter((root): root is string => root !== undefined))]
+    .sort((left, right) => left.localeCompare(right));
+
+  for (const pluginRoot of pluginRoots) {
+    Object.assign(dependencies, await readPluginRuntimeDependencyMap(pluginRoot));
+  }
+
+  dependencies["@opencode-ai/plugin"] ??= "^1.4.6";
+  dependencies.effect ??= "^3.21.0";
+
+  return Object.fromEntries(
+    Object.entries(dependencies).sort(([left], [right]) => left.localeCompare(right)),
+  );
+};
+
+const GENERATED_PACKAGE_JSON = (pluginId: string, dependencies: Record<string, string>): string =>
   JSON.stringify(
     {
       name: pluginId,
@@ -1386,10 +1428,7 @@ const GENERATED_PACKAGE_JSON = (pluginId: string): string =>
       exports: {
         "./server": "./src/server.ts",
       },
-      dependencies: {
-        "@opencode-ai/plugin": "^1.4.6",
-        effect: "^3.21.0",
-      },
+      dependencies,
     },
     null,
     2,
@@ -1511,7 +1550,10 @@ const planGeneratedPluginFiles = async (options: {
 
   desiredPluginFiles.add("package.json");
   const pkgTarget = join(options.root, "package.json");
-  const desiredPkg = GENERATED_PACKAGE_JSON(options.pluginId);
+  const desiredPkg = GENERATED_PACKAGE_JSON(
+    options.pluginId,
+    await collectGeneratedPackageDependencies(options.mirrors),
+  );
   let pkgReason: "new" | "changed" | "unchanged";
   if (await fileExists(pkgTarget)) {
     const current = await readFile(pkgTarget);

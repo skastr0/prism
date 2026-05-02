@@ -510,7 +510,7 @@ const renderManagedConfigBlock = (options: {
   if (options.mcpServerName && options.mcpBundlePath) {
     lines.push(
       tomlDottedTable(["mcp_servers", options.mcpServerName]),
-      'command = "node"',
+      'command = "bun"',
       `args = ${tomlArray([options.mcpBundlePath])}`,
       `cwd = ${quote(options.root)}`,
       "enabled = true",

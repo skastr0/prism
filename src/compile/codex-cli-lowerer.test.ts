@@ -212,7 +212,7 @@ export default defineTool({
   expect(configToml?.content).toContain('model = "codex-default"');
   expect(configToml?.content).not.toContain("stale = true");
   expect(configToml?.content).toContain("# --- agentpkg codex-cli begin: codex-mcp-fixture ---");
-  expect(configToml?.content).toContain('command = "node"');
+  expect(configToml?.content).toContain('command = "bun"');
   expect(configToml?.content).toContain('args = ["mcp/agentpkg_generated_codex_mcp_fixture/server.mjs"]');
   expect(configToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');

@@ -5,7 +5,7 @@
  *
  * Supports the bounded schema feature set used in contracts:
  *
- *   - StringKeyword, NumberKeyword, BooleanKeyword
+ *   - StringKeyword, NumberKeyword, BooleanKeyword, UnknownKeyword
  *   - Literal (single) and Union of Literals (enum)
  *   - TupleType with rest (arrays)
  *   - TypeLiteral (nested structs)
@@ -82,6 +82,8 @@ const astToToolSchema = (ast: SchemaAST.AST): ZodNode => {
       return tool.schema.number();
     case "BooleanKeyword":
       return tool.schema.boolean();
+    case "UnknownKeyword":
+      return tool.schema.object({}).catchall(tool.schema.unknown());
     case "Literal":
       return tool.schema.literal(ast.literal as string | number | boolean);
     case "Union": {

@@ -538,7 +538,7 @@ const planMcpServer = async (
     json({
       mcpServers: {
         [pluginId]: {
-          command: "node",
+          command: "bun",
           args: [`\${CLAUDE_PLUGIN_ROOT}/${bundle.relativePath}`],
         },
       },

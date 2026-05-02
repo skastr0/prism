@@ -522,7 +522,7 @@ const planMcpBundle = async (
 
   return {
     [extensionId]: {
-      command: "node",
+      command: "bun",
       args: [`\${extensionPath}/${bundle.relativePath}`],
     },
   };

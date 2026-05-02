@@ -194,8 +194,11 @@ export default defineAgent({
   return { pluginRoot, projectRoot };
 };
 
-const encodeRpc = (message: unknown): string => {
+type RpcFraming = "content-length" | "newline";
+
+const encodeRpc = (message: unknown, framing: RpcFraming = "content-length"): string => {
   const payload = JSON.stringify(message);
+  if (framing === "newline") return `${payload}\n`;
   return `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
 };
 
@@ -204,7 +207,10 @@ class RpcClient {
   private buffer = Buffer.alloc(0);
   private readonly waiters: Array<(value: unknown) => void> = [];
 
-  constructor(private readonly child: ChildProcessWithoutNullStreams) {
+  constructor(
+    private readonly child: ChildProcessWithoutNullStreams,
+    private readonly framing: RpcFraming = "content-length",
+  ) {
     child.stdout.on("data", (chunk) => {
       this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
       this.drain();
@@ -213,7 +219,7 @@ class RpcClient {
 
   request(method: string, params?: unknown): Promise<any> {
     const id = this.nextId++;
-    this.child.stdin.write(encodeRpc({ jsonrpc: "2.0", id, method, params }));
+    this.child.stdin.write(encodeRpc({ jsonrpc: "2.0", id, method, params }, this.framing));
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`timed out waiting for ${method}`)), 5_000);
       this.waiters.push((value) => {
@@ -225,6 +231,17 @@ class RpcClient {
 
   private drain(): void {
     while (true) {
+      if (this.framing === "newline") {
+        const newlineEnd = this.buffer.indexOf("\n");
+        if (newlineEnd === -1) return;
+        const line = this.buffer.subarray(0, newlineEnd).toString("utf8").trim();
+        this.buffer = this.buffer.subarray(newlineEnd + 1);
+        if (line.length === 0) continue;
+        const waiter = this.waiters.shift();
+        waiter?.(JSON.parse(line));
+        continue;
+      }
+
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) return;
       const header = this.buffer.subarray(0, headerEnd).toString("utf8");
@@ -329,6 +346,52 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
     });
     expect(invalid.result.isError).toBe(true);
     expect(invalid.result.content[0].text).toContain("details");
+  } finally {
+    child.kill();
+  }
+});
+
+test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "sdlc-core",
+    serverName: "agentpkg-mcp-sdlc-core",
+    bundleId: "sdlc-core",
+    bindings: builder?.toolBindings ?? [],
+  });
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const client = new RpcClient(child, "newline");
+  try {
+    const initialized = await client.request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "agentpkg-test", version: "0.1.0" },
+    });
+    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc-core");
+
+    const listed = await client.request("tools/list");
+    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "lifecycle_core_create_item",
+      "sdlc_core_submit_review__review_details",
+    ]);
   } finally {
     child.kill();
   }

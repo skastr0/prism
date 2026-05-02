@@ -756,10 +756,22 @@ if (process.env.AGENTPKG_MCP_VALIDATE === "1") {
   process.exit(0);
 }
 
+type RpcFraming = "content-length" | "newline";
+
+let responseFraming: RpcFraming = "content-length";
+
 const writeMessage = (message: unknown): void => {
-  const payload = Buffer.from(JSON.stringify(message), "utf8");
-  process.stdout.write(\`Content-Length: \${payload.byteLength}\\r\\n\\r\\n\`);
-  process.stdout.write(payload);
+  const payload = JSON.stringify(message);
+  if (responseFraming === "newline") {
+    process.stdout.write(payload + "\\n");
+    return;
+  }
+
+  const bytes = Buffer.from(payload, "utf8");
+  process.stdout.write(
+    \`Content-Length: \${bytes.byteLength}\\r\\n\\r\\n\`,
+  );
+  process.stdout.write(bytes);
 };
 
 const rpcResult = (id: JsonRpcId | undefined, result: unknown): void => {
@@ -828,22 +840,37 @@ let buffer = Buffer.alloc(0);
 const drainBuffer = (): void => {
   while (true) {
     const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-    if (headerEnd === -1) return;
-    const header = buffer.subarray(0, headerEnd).toString("utf8");
-    const lengthMatch = /content-length:\\s*(\\d+)/i.exec(header);
-    if (!lengthMatch) {
-      buffer = buffer.subarray(headerEnd + 4);
-      rpcError(null, -32700, "Missing Content-Length header");
+    if (headerEnd !== -1) {
+      const header = buffer.subarray(0, headerEnd).toString("utf8");
+      const lengthMatch = /content-length:\\s*(\\d+)/i.exec(header);
+      if (!lengthMatch) {
+        buffer = buffer.subarray(headerEnd + 4);
+        rpcError(null, -32700, "Missing Content-Length header");
+        continue;
+      }
+      const length = Number(lengthMatch[1]);
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + length;
+      if (buffer.byteLength < bodyEnd) return;
+      const body = buffer.subarray(bodyStart, bodyEnd).toString("utf8");
+      buffer = buffer.subarray(bodyEnd);
+      responseFraming = "content-length";
+      try {
+        void handleMessage(JSON.parse(body) as JsonRpcMessage);
+      } catch (error) {
+        rpcError(null, -32700, errorMessage(error));
+      }
       continue;
     }
-    const length = Number(lengthMatch[1]);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + length;
-    if (buffer.byteLength < bodyEnd) return;
-    const body = buffer.subarray(bodyStart, bodyEnd).toString("utf8");
-    buffer = buffer.subarray(bodyEnd);
+
+    const newlineEnd = buffer.indexOf("\\n");
+    if (newlineEnd === -1) return;
+    const line = buffer.subarray(0, newlineEnd).toString("utf8").trim();
+    buffer = buffer.subarray(newlineEnd + 1);
+    if (line.length === 0) continue;
+    responseFraming = "newline";
     try {
-      void handleMessage(JSON.parse(body) as JsonRpcMessage);
+      void handleMessage(JSON.parse(line) as JsonRpcMessage);
     } catch (error) {
       rpcError(null, -32700, errorMessage(error));
     }

@@ -896,8 +896,15 @@ const planPluginMirrors = async (
     }
 
     if (!byPlugin.has(contract.pluginName)) {
-      const contractsDir = dirname(contract.sourcePath);
-      const pluginRoot = dirname(contractsDir);
+      // Prefer the host plugin's root when the contract is attributed to it.
+      // contract.sourcePath traces back to the trait file's location, which
+      // may live in a *different* plugin from the contract's owning plugin
+      // (e.g. cross-plugin trait + slot binding). Using contract.sourcePath
+      // unconditionally would map the host plugin to the trait plugin's root.
+      const pluginRoot =
+        contract.pluginName === sourcePluginName && sourcePluginRoot
+          ? sourcePluginRoot
+          : dirname(dirname(contract.sourcePath));
       byPlugin.set(contract.pluginName, { pluginRoot });
     }
   }

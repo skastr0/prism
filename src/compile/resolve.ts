@@ -290,7 +290,7 @@ export const resolveAgentCapabilities = (
 
       const materializedTraitTools = materializeTraitTools({
         agentName: agent.name,
-        ownerPluginName: resolvedTrait.owner.pluginName,
+        ownerPluginName: registry.pluginName,
         canonicalTraitId: resolvedTrait.canonicalId,
         trait: resolvedTrait.trait,
         binding: resolvedTrait.binding,

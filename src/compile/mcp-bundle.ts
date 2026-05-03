@@ -46,6 +46,7 @@ type McpAdapterSpec =
 
 export interface McpServerBundleOptions {
   readonly sourcePluginName: string;
+  readonly sourcePluginRoot?: string;
   readonly serverName: string;
   readonly version?: string;
   readonly bundleId?: string;
@@ -199,6 +200,8 @@ const pluginRootFromContractSource = (contractSourcePath: string): string => {
 
 const collectMirrorsForBindings = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
+  sourcePluginName?: string,
+  sourcePluginRoot?: string,
 ): Promise<PluginMirror[]> => {
   const byPlugin = new Map<string, { pluginRoot: string; entries: Map<string, MirrorFile> }>();
   const generatedFiles = new Map<string, Map<string, string>>();
@@ -273,7 +276,17 @@ const collectMirrorsForBindings = async (
       if (!binding.contract) {
         throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
       }
-      ensurePlugin(binding.contract.pluginName, pluginRootFromContractSource(binding.contract.sourcePath));
+      // Prefer the host plugin's root when the contract is attributed to it.
+      // contract.sourcePath traces back to the trait file's location, which
+      // may live in a *different* plugin from the contract's owning plugin
+      // (e.g. cross-plugin trait + slot binding). Falling back to deriving
+      // from contract.sourcePath would map the host plugin to the trait
+      // plugin's root, which is wrong.
+      const contractPluginRoot =
+        binding.contract.pluginName === sourcePluginName && sourcePluginRoot
+          ? sourcePluginRoot
+          : pluginRootFromContractSource(binding.contract.sourcePath);
+      ensurePlugin(binding.contract.pluginName, contractPluginRoot);
       addGeneratedFiles(binding.contract);
     }
   }
@@ -873,7 +886,11 @@ export const generateMcpServerBundle = async (
   const bundleId = options.bundleId ?? normalizeGeneratedPluginName(options.sourcePluginName);
   const specs = adapterSpecsForBindings(options.sourcePluginName, options.bindings);
   const toolNames = specs.map((spec) => spec.mcpName);
-  const mirrors = await collectMirrorsForBindings(options.bindings);
+  const mirrors = await collectMirrorsForBindings(
+    options.bindings,
+    options.sourcePluginName,
+    options.sourcePluginRoot,
+  );
   const importPluginRoots = new Map<string, string>();
   for (const mirror of mirrors) {
     if (mirror.pluginRoot) importPluginRoots.set(mirror.pluginName, mirror.pluginRoot);

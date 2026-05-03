@@ -5,12 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
-import {
-  composeLifecycleOrchestratorSection,
-  composeLifecyclePhaseReference,
-  composeLifecycleWideToolsSection,
-  type ComposedAgent,
-} from "../compose.js";
+import { type ComposedAgent } from "../compose.js";
+import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -243,8 +239,12 @@ const renderAgentToml = (
 const lifecycleSkillOwnerMarker = (sourcePluginName: string): string =>
   `<!-- agentpkg:lifecycle-skill owner=${quote(sourcePluginName)} -->`;
 
-const renderLifecycleSkill = (lifecycle: Lifecycle, sourcePluginName: string): string => {
-  const lines = [
+const renderLifecycleSkill = (
+  lifecycle: Lifecycle,
+  sourcePluginName: string,
+  registry: PluginRegistry | undefined,
+): string => {
+  const lines: string[] = [
     "---",
     `name: ${quote(lifecycle.name)}`,
     `description: ${quote(lifecycle.description)}`,
@@ -252,59 +252,15 @@ const renderLifecycleSkill = (lifecycle: Lifecycle, sourcePluginName: string): s
     "",
     lifecycleSkillOwnerMarker(sourcePluginName),
     "",
-    `# ${lifecycle.name}`,
-    "",
-    lifecycle.description,
-    "",
   ];
-
-  if (lifecycle.produces) {
-    lines.push("## Produces", "", lifecycle.produces, "");
-  }
-
-  const orchestratorSection = composeLifecycleOrchestratorSection(lifecycle);
-  if (orchestratorSection.length > 0) {
-    lines.push(...orchestratorSection, "");
-  }
-
-  const wideToolsSection = composeLifecycleWideToolsSection(lifecycle);
-  if (wideToolsSection.length > 0) {
-    lines.push(...wideToolsSection, "");
-  }
-
-  lines.push("## Phases", "");
-
-  lifecycle.phases.forEach((phase, index) => {
-    const reference = composeLifecyclePhaseReference(phase);
-    lines.push(`### ${index + 1}. ${phase.name} — ${reference.label}`, "", ...reference.detailLines);
-    if (phase.notes) {
-      for (const [key, value] of Object.entries(phase.notes)) {
-        lines.push(`- **${key}**: ${value}`);
-      }
+  if (registry) {
+    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+  } else {
+    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
+    if (lifecycle.body.trim().length > 0) {
+      lines.push(lifecycle.body.trim(), "");
     }
-    lines.push("");
-  });
-
-  if (lifecycle.taste_checkpoints.length > 0) {
-    lines.push("## Taste Checkpoints", "");
-    for (const checkpoint of lifecycle.taste_checkpoints) {
-      const parts: string[] = [];
-      if (checkpoint.after) parts.push(`after: ${checkpoint.after}`);
-      if (checkpoint.before) parts.push(`before: ${checkpoint.before}`);
-      if (checkpoint.note) parts.push(`note: ${checkpoint.note}`);
-      lines.push(`- ${parts.join(" — ")}`);
-    }
-    lines.push("");
   }
-
-  if (lifecycle.evolution) {
-    lines.push("## Evolution", "", lifecycle.evolution.trim(), "");
-  }
-
-  if (lifecycle.body.trim().length > 0) {
-    lines.push(lifecycle.body.trim(), "");
-  }
-
   return lines.join("\n");
 };
 
@@ -638,7 +594,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     await pushWrite(
       operations,
       join(input.target.root, "skills", lifecycle.name, "SKILL.md"),
-      renderLifecycleSkill(lifecycle, input.target.sourcePluginName),
+      renderLifecycleSkill(lifecycle, input.target.sourcePluginName, input.registry),
       "write-md",
     );
   }

@@ -3,10 +3,7 @@
  * ComposedAgent for the lowerers.
  */
 
-import type {
-  Lifecycle,
-  NormalizedLifecyclePhase as LifecyclePhase,
-} from "./sources.js";
+import type { NormalizedLifecyclePhase as LifecyclePhase } from "./sources.js";
 import type { ResolvedAgent, ResolvedContractBinding } from "./resolve.js";
 
 export interface ComposedAgent {
@@ -121,39 +118,6 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
     toolBindings: resolved.toolBindings,
     allowedTools: resolved.allowedTools,
   };
-};
-
-export const composeLifecycleOrchestratorSection = (
-  lifecycle: Lifecycle,
-): ReadonlyArray<string> => {
-  if (!lifecycle.orchestrator) return [];
-  const lines: string[] = ["## Orchestrator", ""];
-  lines.push(
-    `The orchestrator agent for this lifecycle is \`${lifecycle.orchestrator.agent}\`. It owns work-item state transitions and signal handling, and is not a phase agent.`,
-  );
-  if (lifecycle.orchestrator.tools.length > 0) {
-    lines.push("", "Orchestrator-only tools:", "");
-    for (const tool of lifecycle.orchestrator.tools) {
-      lines.push(`- \`${tool.logicalName}\` (canonical \`${tool.ref}\`)`);
-    }
-  }
-  return lines;
-};
-
-export const composeLifecycleWideToolsSection = (
-  lifecycle: Lifecycle,
-): ReadonlyArray<string> => {
-  if (lifecycle.tool_permissions.length === 0) return [];
-  const lines: string[] = [
-    "## Tools available to every phase agent",
-    "",
-    "These tools are granted to every phase agent of this lifecycle:",
-    "",
-  ];
-  for (const tool of lifecycle.tool_permissions) {
-    lines.push(`- \`${tool.logicalName}\` (canonical \`${tool.ref}\`)`);
-  }
-  return lines;
 };
 
 export const composeLifecyclePhaseReference = (

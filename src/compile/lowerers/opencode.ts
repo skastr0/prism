@@ -33,12 +33,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
-import {
-  composeLifecycleOrchestratorSection,
-  composeLifecyclePhaseReference,
-  composeLifecycleWideToolsSection,
-  type ComposedAgent,
-} from "../compose.js";
+import { type ComposedAgent } from "../compose.js";
+import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { CanonicalTool, Contract, Hook, Lifecycle } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
@@ -503,7 +499,8 @@ const isOwnedLifecycleSkill = (
 
 const renderLifecycleSkill = (
   lifecycle: Lifecycle,
-  sourcePluginName: string
+  sourcePluginName: string,
+  registry: PluginRegistry | undefined,
 ): string => {
   const lines: string[] = [];
   lines.push(
@@ -515,75 +512,15 @@ const renderLifecycleSkill = (
   lines.push("");
   lines.push(lifecycleSkillOwnerMarker(sourcePluginName));
   lines.push("");
-  lines.push(`# ${lifecycle.name}`);
-  lines.push("");
-  lines.push(lifecycle.description);
-  lines.push("");
-  lines.push(
-    "_Runtime-facing lowering of a concrete lifecycle instance. Parameterized lifecycle templates remain source-only until another lifecycle binds them._",
-  );
-  lines.push("");
-
-  if (lifecycle.produces) {
-    lines.push("## Produces");
-    lines.push("");
-    lines.push(lifecycle.produces);
-    lines.push("");
-  }
-
-  const orchestratorSection = composeLifecycleOrchestratorSection(lifecycle);
-  if (orchestratorSection.length > 0) {
-    lines.push(...orchestratorSection, "");
-  }
-
-  const wideToolsSection = composeLifecycleWideToolsSection(lifecycle);
-  if (wideToolsSection.length > 0) {
-    lines.push(...wideToolsSection, "");
-  }
-
-  lines.push("## Phases");
-  lines.push("");
-  let i = 1;
-  for (const phase of lifecycle.phases) {
-    const reference = composeLifecyclePhaseReference(phase);
-    lines.push(`### ${i}. ${phase.name} — ${reference.label}`);
-    lines.push("");
-    for (const detail of reference.detailLines) {
-      lines.push(detail);
+  if (registry) {
+    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+  } else {
+    // Defensive fallback: emit the raw description and body so the file is
+    // still meaningful even when no registry is wired in (test harnesses).
+    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
+    if (lifecycle.body.trim().length > 0) {
+      lines.push(lifecycle.body.trim(), "");
     }
-    if (phase.notes) {
-      for (const [name, value] of Object.entries(phase.notes)) {
-        lines.push(`- **${name}**: ${value}`);
-      }
-    }
-    lines.push("");
-    i++;
-  }
-
-  if (lifecycle.taste_checkpoints.length > 0) {
-    lines.push("## Taste Checkpoints");
-    lines.push("");
-    for (const cp of lifecycle.taste_checkpoints) {
-      const parts: string[] = [];
-      if (cp.after) parts.push(`after: ${cp.after}`);
-      if (cp.before) parts.push(`before: ${cp.before}`);
-      if (cp.note) parts.push(`note: ${cp.note}`);
-      lines.push(`- ${parts.join(" — ")}`);
-    }
-    lines.push("");
-  }
-
-  if (lifecycle.evolution) {
-    lines.push("## Evolution");
-    lines.push("");
-    lines.push(lifecycle.evolution.trim());
-    lines.push("");
-  }
-
-  const body = lifecycle.body.trim();
-  if (body.length > 0) {
-    lines.push(body);
-    lines.push("");
   }
 
   return lines.join("\n");
@@ -1886,6 +1823,7 @@ export const planLowering = async (
     const desired = renderLifecycleSkill(
       lifecycle,
       input.target.sourcePluginName,
+      input.registry,
     );
     let reason: "new" | "changed" | "unchanged";
     if (await fileExists(target)) {

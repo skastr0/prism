@@ -11,12 +11,8 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import matter from "gray-matter";
-import {
-  composeLifecycleOrchestratorSection,
-  composeLifecyclePhaseReference,
-  composeLifecycleWideToolsSection,
-  type ComposedAgent,
-} from "../compose.js";
+import { type ComposedAgent } from "../compose.js";
+import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -165,68 +161,21 @@ const renderGeminiAgentMarkdown = (agent: ComposedAgent, target: GeminiCliLowerT
 const renderGeminiLifecycleSkillMarkdown = (
   lifecycle: Lifecycle,
   sourcePluginName: string,
+  registry: PluginRegistry | undefined,
 ): string => {
   const lines: string[] = [];
   lines.push(serializeFrontmatter({ name: lifecycle.name, description: lifecycle.description }));
   lines.push("");
   lines.push(lifecycleSkillOwnerMarker(sourcePluginName));
   lines.push("");
-  lines.push(`# ${lifecycle.name}`);
-  lines.push("");
-  lines.push(lifecycle.description);
-  lines.push("");
-  lines.push(
-    "_Runtime-facing lowering of a concrete lifecycle instance. Parameterized lifecycle templates remain source-only until another lifecycle binds them._",
-  );
-  lines.push("");
-
-  if (lifecycle.produces) {
-    lines.push("## Produces", "", lifecycle.produces, "");
-  }
-
-  const orchestratorSection = composeLifecycleOrchestratorSection(lifecycle);
-  if (orchestratorSection.length > 0) {
-    lines.push(...orchestratorSection, "");
-  }
-
-  const wideToolsSection = composeLifecycleWideToolsSection(lifecycle);
-  if (wideToolsSection.length > 0) {
-    lines.push(...wideToolsSection, "");
-  }
-
-  lines.push("## Phases", "");
-  let index = 1;
-  for (const phase of lifecycle.phases) {
-    const reference = composeLifecyclePhaseReference(phase);
-    lines.push(`### ${index}. ${phase.name} — ${reference.label}`, "");
-    for (const detail of reference.detailLines) lines.push(detail);
-    if (phase.notes) {
-      for (const [name, value] of Object.entries(phase.notes)) {
-        lines.push(`- **${name}**: ${value}`);
-      }
+  if (registry) {
+    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+  } else {
+    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
+    if (lifecycle.body.trim().length > 0) {
+      lines.push(lifecycle.body.trim(), "");
     }
-    lines.push("");
-    index++;
   }
-
-  if (lifecycle.taste_checkpoints.length > 0) {
-    lines.push("## Taste Checkpoints", "");
-    for (const checkpoint of lifecycle.taste_checkpoints) {
-      const parts: string[] = [];
-      if (checkpoint.after) parts.push(`after: ${checkpoint.after}`);
-      if (checkpoint.before) parts.push(`before: ${checkpoint.before}`);
-      if (checkpoint.note) parts.push(`note: ${checkpoint.note}`);
-      lines.push(`- ${parts.join(" — ")}`);
-    }
-    lines.push("");
-  }
-
-  if (lifecycle.evolution) {
-    lines.push("## Evolution", "", lifecycle.evolution.trim(), "");
-  }
-
-  const body = lifecycle.body.trim();
-  if (body.length > 0) lines.push(body, "");
   return lines.join("\n");
 };
 
@@ -587,7 +536,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     await pushWrite(
       operations,
       target,
-      renderGeminiLifecycleSkillMarkdown(lifecycle, input.target.sourcePluginName),
+      renderGeminiLifecycleSkillMarkdown(lifecycle, input.target.sourcePluginName, input.registry),
       "write-md",
     );
   }

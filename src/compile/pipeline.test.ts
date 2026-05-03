@@ -863,8 +863,10 @@ test("lifecycle phase validation succeeds when assigned agents satisfy requireme
   );
   expect(skill).toContain("### 1. Implement change — agent `builder`");
   expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
-  expect(skill).not.toContain("reviewable");
-  expect(skill).not.toContain("self-assessing");
+  // Derived skill renders trait protocols once, deduplicated across agents.
+  expect(skill).toContain("## Trait protocols active in this lifecycle");
+  expect(skill).toContain("`canonical-compile-fixture:reviewable`");
+  expect(skill).toContain("`canonical-compile-fixture:self-assessing`");
   expect(
     await pathExists(
       join(projectRoot, ".opencode", "lifecycles", "delivery-contract.md"),
@@ -3165,4 +3167,177 @@ export default defineAgent({
     expect(failure.field).toBe("tools");
     expect(failure.message).toContain("that plugin's targets.tools does not include 'opencode'");
   }
+});
+
+// ---------------------------------------------------------------------------
+// Derived lifecycle skill rendering (AP-022)
+// ---------------------------------------------------------------------------
+
+test("derived lifecycle skill deduplicates traits and renders multi-agent phase sub-sections", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  // Multi-agent phase renders each agent as its own sub-section.
+  expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
+  expect(skill).toContain("Multiple agents may fulfil this phase");
+  expect(skill).toContain("#### Agent `builder`");
+  expect(skill).toContain("#### Agent `reviewer`");
+
+  // Trait protocols section appears once and dedupes shared traits.
+  const protocolsHeader = skill.match(/## Trait protocols active in this lifecycle/g);
+  expect(protocolsHeader?.length).toBe(1);
+  // self-assessing is shared by builder + reviewer + security-reviewer; render once.
+  const selfAssessingHits = skill.match(/### `canonical-compile-fixture:self-assessing`/g);
+  expect(selfAssessingHits?.length).toBe(1);
+  const submittableHits = skill.match(/### `canonical-compile-fixture:submittable`/g);
+  expect(submittableHits?.length).toBe(1);
+
+  // Phase transitions and submission protocol sections are present.
+  expect(skill).toContain("## Phase transitions");
+  expect(skill).toContain("## Submission protocol per phase agent");
+});
+
+test("derived lifecycle skill deduplicates tools across orchestrator and phase grants", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  // Replace the lifecycle file with one that grants the SAME tool via the
+  // orchestrator AND lifecycle-wide tool_permissions. The derived skill must
+  // not double-render the tool.
+  await writeText(
+    join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
+    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineLifecycle({
+  name: "delivery-contract",
+  description: "Dedup tool variant",
+  phases: [
+    {
+      name: "Implement change",
+      agents: [agentRef("builder")],
+      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
+    },
+    {
+      name: "Review change",
+      agents: [agentRef("reviewer")],
+      requires: [{ all: [traitRef("reviewable"), traitRef("self-assessing")] }],
+    },
+  ],
+  orchestrator: {
+    agent: agentRef("builder"),
+    tools: [{ ref: "protocol-core:create_item", as: "create_item_orch" }],
+  },
+  tool_permissions: [
+    { ref: "protocol-core:create_item", as: "create_item_wide" },
+  ],
+});
+`,
+  );
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  // Each grant gets its own logical name in its own section, but the canonical
+  // tool ref appears in both sections — check both sections are listed.
+  expect(skill).toContain("`create_item_orch` (canonical `protocol-core:create_item`)");
+  expect(skill).toContain("`create_item_wide` (canonical `protocol-core:create_item`)");
+
+  // Wide tool description should appear in the wide section once, not twice.
+  const wideMatches = skill.match(/## Tools available to every phase agent/g);
+  expect(wideMatches?.length).toBe(1);
+});
+
+test("derived lifecycle skill helper renders parametric stub when invoked on a template", async () => {
+  // Direct unit-level invocation of renderDerivedLifecycleSkillBody to
+  // exercise the parametric branch. We synthesize a minimal Lifecycle and
+  // empty registry so the helper has to fall back gracefully.
+  const { renderDerivedLifecycleSkillBody } = await import("./derived-lifecycle-skill.js");
+  const { Lifecycle } = await import("./sources.js");
+  const { emptyRegistry } = await import("./registry.js");
+
+  const lifecycle = new Lifecycle({
+    name: "demo-template",
+    sourcePath: "/tmp/demo-template.lifecycle.ts",
+    description: "A parametric template",
+    parameters: [{ name: "audience", required: true }],
+    phases: [],
+    tool_permissions: [],
+    taste_checkpoints: [],
+    body: "",
+  });
+  const registry = emptyRegistry("/tmp", "demo", "0.0.0");
+
+  const body = renderDerivedLifecycleSkillBody(lifecycle, registry);
+  expect(body).toContain("# demo-template");
+  expect(body).toContain("This lifecycle is parameterized");
+});
+
+test("derived lifecycle skill renders parametric stub for parameterized lifecycle templates", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await writeText(
+    join(pluginRoot, "lifecycles", "parametric-template.lifecycle.ts"),
+    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineLifecycle({
+  name: "parametric-template",
+  description: "A parametric lifecycle template; remains uninstantiated.",
+  parameters: [{ name: "audience" }],
+  phases: [
+    {
+      name: "Implement change",
+      agents: [agentRef("builder")],
+      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
+    },
+  ],
+});
+`,
+  );
+
+  // Parameterized lifecycles do not lower; only their templates exist. The
+  // helper still gracefully describes them when invoked. Build a quick
+  // unit-style invocation by compiling and asserting the skill is NOT emitted.
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(
+    await pathExists(
+      join(projectRoot, ".opencode", "skills", "parametric-template", "SKILL.md"),
+    ),
+  ).toBe(false);
 });

@@ -12,7 +12,7 @@ Preferred homes:
 
 `~/.config/opencode/opencode.json` no longer loads broad local plugin sources. It loads:
 
-- `agentpkg-generated-sdlc-core`
+- `agentpkg-generated-sdlc`
 - `agentpkg-generated-rlc`
 - `agentpkg-generated-mlc`
 - `agentpkg-generated-wlc`

@@ -194,7 +194,7 @@ runtime artifacts.
 
 For example, `lifecycle-core` owns `submit_work`, so the generated OpenCode
 plugin for `lifecycle-core` owns that runtime tool. `rlc`, `mlc`, `wlc`, and
-`sdlc-core` must not mirror or copy `submit_work` as if they own it.
+`sdlc` must not mirror or copy `submit_work` as if they own it.
 
 ### Permission Lane
 
@@ -283,5 +283,5 @@ The `submit_work` test case is the standing smoke test:
 - generic `submittable` agents receive permission to that one tool
 - builder-style agents receive a synthetic wrapper only if they fill a
   `submit_work` slot declared by `lifecycle-core`
-- no `rlc`, `mlc`, `wlc`, or `sdlc-core` generated plugin owns a duplicate
+- no `rlc`, `mlc`, `wlc`, or `sdlc` generated plugin owns a duplicate
   `submit_work.tool.ts`

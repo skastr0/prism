@@ -36,7 +36,7 @@ const createSdlcMcpFixture = async (): Promise<{
   projectRoot: string;
 }> => {
   const root = await createTempRoot();
-  const pluginRoot = join(root, "sdlc-core");
+  const pluginRoot = join(root, "sdlc");
   const projectRoot = join(root, "project");
   const lifecycleRoot = join(pluginRoot, "deps", "lifecycle-core");
   await mkdir(projectRoot, { recursive: true });
@@ -45,7 +45,7 @@ const createSdlcMcpFixture = async (): Promise<{
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "sdlc-core",
+        name: "sdlc",
         version: "0.1.0",
         deps: {
           "lifecycle-core": "./deps/lifecycle-core",
@@ -282,21 +282,21 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
   expect(builder).toBeDefined();
 
   const bundle = await generateMcpServerBundle({
-    sourcePluginName: "sdlc-core",
-    serverName: "agentpkg-mcp-sdlc-core",
-    bundleId: "sdlc-core",
+    sourcePluginName: "sdlc",
+    serverName: "agentpkg-mcp-sdlc",
+    bundleId: "sdlc",
     bindings: builder?.toolBindings ?? [],
   });
 
-  expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("sdlc-core"));
+  expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("sdlc"));
   expect(bundle.toolNames).toEqual([
     "lifecycle_core_create_item",
-    "sdlc_core_submit_review__review_details",
+    "sdlc_submit_review__review_details",
   ]);
   expect(bundle.content).toContain("tools/list");
   expect(bundle.content).toContain("tools/call");
   expect(bundle.content).toContain("lifecycle_core_create_item");
-  expect(bundle.content).toContain("sdlc_core_submit_review__review_details");
+  expect(bundle.content).toContain("sdlc_submit_review__review_details");
   expect(bundle.content).not.toContain("unreferenced");
 
   const serverPath = join(projectRoot, bundle.relativePath);
@@ -313,12 +313,12 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
       capabilities: {},
       clientInfo: { name: "agentpkg-test", version: "0.1.0" },
     });
-    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc-core");
+    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc");
 
     const listed = await client.request("tools/list");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "lifecycle_core_create_item",
-      "sdlc_core_submit_review__review_details",
+      "sdlc_submit_review__review_details",
     ]);
 
     const created = await client.request("tools/call", {
@@ -332,7 +332,7 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
     });
 
     const reviewed = await client.request("tools/call", {
-      name: "sdlc_core_submit_review__review_details",
+      name: "sdlc_submit_review__review_details",
       arguments: { summary: "Looks good", details: { verdict: "approve" } },
     });
     expect(JSON.parse(reviewed.result.content[0].text)).toEqual({
@@ -341,7 +341,7 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
     });
 
     const invalid = await client.request("tools/call", {
-      name: "sdlc_core_submit_review__review_details",
+      name: "sdlc_submit_review__review_details",
       arguments: { summary: "Missing details" },
     });
     expect(invalid.result.isError).toBe(true);
@@ -366,9 +366,9 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
 
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
-    sourcePluginName: "sdlc-core",
-    serverName: "agentpkg-mcp-sdlc-core",
-    bundleId: "sdlc-core",
+    sourcePluginName: "sdlc",
+    serverName: "agentpkg-mcp-sdlc",
+    bundleId: "sdlc",
     bindings: builder?.toolBindings ?? [],
   });
   const serverPath = join(projectRoot, bundle.relativePath);
@@ -385,12 +385,12 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
       capabilities: {},
       clientInfo: { name: "agentpkg-test", version: "0.1.0" },
     });
-    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc-core");
+    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc");
 
     const listed = await client.request("tools/list");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "lifecycle_core_create_item",
-      "sdlc_core_submit_review__review_details",
+      "sdlc_submit_review__review_details",
     ]);
   } finally {
     child.kill();

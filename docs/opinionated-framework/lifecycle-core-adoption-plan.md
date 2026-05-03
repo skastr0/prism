@@ -18,7 +18,7 @@ It is not the owner of broad domain knowledge, session transport, or harness-nat
 
 | Surface | Current State | Adoption Direction |
 |---------|---------------|--------------------|
-| `sdlc-core` | Already depends on `lifecycle-core` for message packet tools and generated OpenCode synthetic submission tools. Work-item helpers now exist in `lifecycle-core`, but are not yet exposed as generated agent tools. | Keep as first consumer. Add lifecycle-owned work-item tool exposure before proof/cleanup. |
+| `sdlc` | Already depends on `lifecycle-core` for message packet tools and generated OpenCode synthetic submission tools. Work-item helpers now exist in `lifecycle-core`, but are not yet exposed as generated agent tools. | Keep as first consumer. Add lifecycle-owned work-item tool exposure before proof/cleanup. |
 | `rlc` / RLC | Depends on `lifecycle-core`, owns `rlc.lifecycle.ts`, and assigns lifecycle work-item tool permissions through the RLC orchestrator. | Keep `.agents/rlc/` as the lifecycle work-item root. Keep `research` as the broad domain skill/surface. |
 | `mlc` / MLC | Depends on `lifecycle-core`, owns `mlc.lifecycle.ts`, and assigns lifecycle work-item tool permissions through the MLC orchestrator. | Keep `.agents/mlc/` as the lifecycle work-item root. Keep `marketing` as the broad domain skill/surface. |
 | `wlc` / Writing | Depends on `lifecycle-core`, owns `wlc.lifecycle.ts`, and assigns lifecycle work-item tool permissions through the WLC orchestrator. | Keep `.agents/wlc/` as the lifecycle work-item root. Keep `writing`, voice, and platform skills as broad domain capabilities. |

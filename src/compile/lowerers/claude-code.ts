@@ -226,9 +226,13 @@ const renderLifecycleSkill = (lifecycle: Lifecycle, sourcePluginName: string): s
     "",
     "_Runtime-facing lowering of a concrete lifecycle instance. Parameterized lifecycle templates remain source-only until another lifecycle binds them._",
     "",
-    "## Phases",
-    "",
   ];
+
+  if (lifecycle.produces) {
+    lines.push("## Produces", "", lifecycle.produces, "");
+  }
+
+  lines.push("## Phases", "");
 
   lifecycle.phases.forEach((phase, index) => {
     const reference = composeLifecyclePhaseReference(phase);
@@ -242,6 +246,22 @@ const renderLifecycleSkill = (lifecycle: Lifecycle, sourcePluginName: string): s
 
     lines.push("");
   });
+
+  if (lifecycle.taste_checkpoints.length > 0) {
+    lines.push("## Taste Checkpoints", "");
+    for (const checkpoint of lifecycle.taste_checkpoints) {
+      const parts: string[] = [];
+      if (checkpoint.after) parts.push(`after: ${checkpoint.after}`);
+      if (checkpoint.before) parts.push(`before: ${checkpoint.before}`);
+      if (checkpoint.note) parts.push(`note: ${checkpoint.note}`);
+      lines.push(`- ${parts.join(" — ")}`);
+    }
+    lines.push("");
+  }
+
+  if (lifecycle.evolution) {
+    lines.push("## Evolution", "", lifecycle.evolution.trim(), "");
+  }
 
   if (lifecycle.body.trim().length > 0) {
     lines.push(lifecycle.body.trim(), "");

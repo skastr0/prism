@@ -915,7 +915,7 @@ test("lifecycle validation fails when assigned agents do not satisfy requirement
   }
 });
 
-test("lifecycle tool permissions fail when targeting an unassigned agent", async () => {
+test("lifecycle orchestrator validation fails when the orchestrator agent does not exist", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
     invalidLifecyclePermissionAgent: true,
   });
@@ -934,9 +934,151 @@ test("lifecycle tool permissions fail when targeting an unassigned agent", async
   const failure = getFailure(exit);
   expect(failure._tag).toBe("LifecycleValidationError");
   if (failure._tag === "LifecycleValidationError") {
-    expect(failure.field).toBe("tool_permissions[0].agents[0]");
-    expect(failure.message).toContain("not assigned");
+    expect(failure.field).toBe("orchestrator.agent");
+    expect(failure.message).toContain("unknown agent");
   }
+});
+
+test("lifecycle skill renders orchestrator section and grants the lifecycle skill to the orchestrator", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+  expect(skill).toContain("## Orchestrator");
+  expect(skill).toContain("`builder`");
+  expect(skill).toContain("`create_item`");
+
+  // The orchestrator agent (builder) auto-receives the lifecycle skill.
+  const builder = result.composed.find((agent) => agent.name === "builder");
+  expect(builder?.allowedSkills).toContain("delivery-contract");
+});
+
+test("lifecycle-wide tool_permissions materialize on every phase agent", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  // Replace the lifecycle file with one that uses lifecycle-wide tool_permissions
+  // and no orchestrator. Both phase agents (builder + reviewer) should get the
+  // wide-granted tool.
+  await writeText(
+    join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
+    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineLifecycle({
+  name: "delivery-contract",
+  description: "Wide-grant variant",
+  phases: [
+    {
+      name: "Implement change",
+      agents: [agentRef("builder")],
+      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
+    },
+    {
+      name: "Review change",
+      agents: [agentRef("reviewer")],
+      requires: [{ all: [traitRef("reviewable"), traitRef("self-assessing")] }],
+    },
+  ],
+  tool_permissions: [
+    { ref: "protocol-core:create_item", as: "create_item" },
+  ],
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const builder = result.composed.find((agent) => agent.name === "builder");
+  const reviewer = result.composed.find((agent) => agent.name === "reviewer");
+  expect(
+    builder?.toolBindings.some((binding) => binding.logicalName === "create_item"),
+  ).toBe(true);
+  expect(
+    reviewer?.toolBindings.some((binding) => binding.logicalName === "create_item"),
+  ).toBe(true);
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+  expect(skill).toContain("## Tools available to every phase agent");
+  expect(skill).toContain("`create_item`");
+});
+
+test("lifecycle parser rejects the legacy tool_permissions shape with agents", async () => {
+  const projectRoot = await createTempRoot();
+  const pluginRoot = join(projectRoot, "plugin");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "legacy-shape",
+        version: "0.1.0",
+        targets: {
+          lifecycles: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(pluginRoot, "lifecycles", "legacy.lifecycle.ts"),
+    `import { defineLifecycle } from ${JSON.stringify(agentpkgImportPath)};
+
+export default defineLifecycle({
+  name: "legacy",
+  description: "Uses the deprecated tool_permissions shape with agents",
+  phases: [],
+  tool_permissions: [
+    { agents: ["builder"], tools: ["protocol-core:create_item"] },
+  ],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(exit._tag).toBe("Failure");
+  if (exit._tag !== "Failure") return;
+  const failure = Cause.failureOption(exit.cause);
+  if (Option.isNone(failure)) {
+    throw new Error("expected typed compile failure");
+  }
+  const error = failure.value as CompileError;
+  expect(error._tag).toBe("SourceParseError");
 });
 
 test("slot-filled trait tools fail closed on inline schemas", async () => {

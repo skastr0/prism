@@ -552,23 +552,21 @@ export default defineAgent({
   );
 
   const reviewAgents = options.invalidLifecycle ? ["builder"] : ["reviewer"];
-  const permissionAgents = options.invalidLifecyclePermissionAgent
-    ? ["security-reviewer"]
-    : ["builder"];
+  const orchestratorAgent = options.invalidLifecyclePermissionAgent
+    ? "ghost-orchestrator"
+    : "builder";
 
-  const lifecycleToolPermissions = withCanonicalToolBindings
+  const lifecycleOrchestrator = withCanonicalToolBindings
     ? `,
-  tool_permissions: [
-    {
-      agents: [${permissionAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
-      tools: [
-        {
-          ref: "protocol-core:create_item",
-          as: "create_item",
-        },
-      ],
-    },
-  ]`
+  orchestrator: {
+    agent: agentRef(${JSON.stringify(orchestratorAgent)}),
+    tools: [
+      {
+        ref: "protocol-core:create_item",
+        as: "create_item",
+      },
+    ],
+  }`
     : "";
 
   await writeText(
@@ -619,7 +617,7 @@ export default defineLifecycle({
         "Done": "Work has been handed off cleanly",
       },
     },
-  ]${lifecycleToolPermissions},
+  ]${lifecycleOrchestrator},
   body: "Use this lifecycle when you want the compile-time graph to prove that each phase has the right agents assigned.",
 });
 `

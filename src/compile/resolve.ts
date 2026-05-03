@@ -942,13 +942,23 @@ const instantiateLifecyclePhase = (
 };
 
 const cloneLifecycleToolPermissions = (lifecycle: Lifecycle): Lifecycle["tool_permissions"] =>
-  lifecycle.tool_permissions.map((permission) => ({
-    agents: [...permission.agents],
-    tools: permission.tools.map((tool) => ({
-      ref: tool.ref,
-      logicalName: tool.logicalName,
-    })),
+  lifecycle.tool_permissions.map((tool) => ({
+    ref: tool.ref,
+    logicalName: tool.logicalName,
   }));
+
+const cloneLifecycleOrchestrator = (
+  lifecycle: Lifecycle,
+): Lifecycle["orchestrator"] | undefined =>
+  lifecycle.orchestrator
+    ? {
+        agent: lifecycle.orchestrator.agent,
+        tools: lifecycle.orchestrator.tools.map((tool) => ({
+          ref: tool.ref,
+          logicalName: tool.logicalName,
+        })),
+      }
+    : undefined;
 
 const instantiateLifecycleCheckpoint = (
   lifecycle: Lifecycle,
@@ -1170,6 +1180,8 @@ export const instantiateLifecycle = (
       return yield* Effect.fail(body);
     }
 
+    const clonedOrchestrator = cloneLifecycleOrchestrator(lifecycle);
+
     return new Lifecycle({
       name: lifecycle.name,
       sourcePath: lifecycle.sourcePath,
@@ -1177,6 +1189,7 @@ export const instantiateLifecycle = (
       produces,
       parameters: [],
       phases,
+      ...(clonedOrchestrator ? { orchestrator: clonedOrchestrator } : {}),
       tool_permissions: cloneLifecycleToolPermissions(lifecycle),
       taste_checkpoints: tasteCheckpoints,
       evolution,
@@ -1227,7 +1240,7 @@ const resolveLifecycleAssignedAgent = (
     return yield* resolveAgentCapabilities(agent, reg);
   });
 
-const assignedLocalAgentsForLifecycle = (
+const phaseAssignedLocalAgents = (
   lifecycle: Lifecycle,
   registry: PluginRegistry,
 ): Set<string> => {
@@ -1243,6 +1256,27 @@ const assignedLocalAgentsForLifecycle = (
   return assigned;
 };
 
+const orchestratorLocalAgent = (
+  lifecycle: Lifecycle,
+  registry: PluginRegistry,
+): string | undefined => {
+  if (!lifecycle.orchestrator) return undefined;
+  const parsed = parseNamedRef(lifecycle.orchestrator.agent);
+  if (parsed.pluginPrefix) return undefined;
+  if (!registry.agents.has(parsed.name)) return undefined;
+  return parsed.name;
+};
+
+const lifecycleSkillRecipients = (
+  lifecycle: Lifecycle,
+  registry: PluginRegistry,
+): Set<string> => {
+  const recipients = phaseAssignedLocalAgents(lifecycle, registry);
+  const orchestrator = orchestratorLocalAgent(lifecycle, registry);
+  if (orchestrator) recipients.add(orchestrator);
+  return recipients;
+};
+
 export const resolveLifecycleSkillPermissions = (
   lifecycles: ReadonlyArray<Lifecycle>,
   registry: PluginRegistry,
@@ -1250,9 +1284,9 @@ export const resolveLifecycleSkillPermissions = (
   const byAgent = new Map<string, Set<string>>();
 
   for (const lifecycle of lifecycles) {
-    const assignedLocalAgents = assignedLocalAgentsForLifecycle(lifecycle, registry);
+    const recipients = lifecycleSkillRecipients(lifecycle, registry);
 
-    for (const agentName of assignedLocalAgents) {
+    for (const agentName of recipients) {
       const agentSkills = byAgent.get(agentName) ?? new Set<string>();
       agentSkills.add(lifecycle.name);
       byAgent.set(agentName, agentSkills);
@@ -1267,6 +1301,47 @@ export const resolveLifecycleSkillPermissions = (
   );
 };
 
+interface LifecycleToolGrant {
+  readonly logicalName: string;
+  readonly ref: string;
+  readonly field: string;
+}
+
+const grantLifecycleTool = (
+  lifecycle: Lifecycle,
+  registry: PluginRegistry,
+  agentName: string,
+  grant: LifecycleToolGrant,
+  byAgent: Map<string, ResolvedContractBinding[]>,
+): CompileError | undefined => {
+  const bindings = byAgent.get(agentName) ?? [];
+  const existing = new Set(bindings.map((binding) => binding.logicalName));
+  if (existing.has(grant.logicalName)) {
+    // Lifecycle-wide grant already added this logical name to this agent; idempotent skip.
+    return undefined;
+  }
+
+  const materialized = materializeLifecycleToolPermission({
+    logicalName: grant.logicalName,
+    toolRef: grant.ref,
+    registry,
+  });
+  if (!(materialized instanceof Object) || "message" in materialized) {
+    return lifecycleError(lifecycle, grant.field, materialized.message);
+  }
+
+  bindings.push({
+    kind: materialized.kind,
+    logicalName: materialized.logicalName,
+    contract: materialized.contract,
+    toolPluginName: materialized.toolPluginName,
+    toolName: materialized.toolName,
+    toolSourcePath: materialized.toolSourcePath,
+  });
+  byAgent.set(agentName, bindings);
+  return undefined;
+};
+
 export const resolveLifecycleToolPermissions = (
   lifecycles: ReadonlyArray<Lifecycle>,
   registry: PluginRegistry,
@@ -1275,83 +1350,56 @@ export const resolveLifecycleToolPermissions = (
     const byAgent = new Map<string, ResolvedContractBinding[]>();
 
     for (const lifecycle of lifecycles) {
-      const assignedLocalAgents = assignedLocalAgentsForLifecycle(lifecycle, registry);
+      const phaseAgents = phaseAssignedLocalAgents(lifecycle, registry);
 
-      for (const [permissionIndex, permission] of lifecycle.tool_permissions.entries()) {
-        for (const [agentIndex, agentRef] of permission.agents.entries()) {
-          const parsed = parseNamedRef(agentRef);
-          if (parsed.pluginPrefix) {
-            return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
-                `tool_permissions[${permissionIndex}].agents[${agentIndex}]`,
-                `lifecycle tool permissions can only target local agents compiled by '${registry.pluginName}', got '${agentRef}'`,
-              ),
-            );
-          }
+      // Lifecycle-wide tool_permissions: materialize on every phase agent.
+      for (const [toolIndex, tool] of lifecycle.tool_permissions.entries()) {
+        const field = `tool_permissions[${toolIndex}]`;
+        for (const agentName of phaseAgents) {
+          const error = grantLifecycleTool(
+            lifecycle,
+            registry,
+            agentName,
+            { logicalName: tool.logicalName, ref: tool.ref, field },
+            byAgent,
+          );
+          if (error) return yield* Effect.fail(error);
+        }
+      }
 
-          const agent = registry.agents.get(parsed.name);
-          if (!agent) {
-            return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
-                `tool_permissions[${permissionIndex}].agents[${agentIndex}]`,
-                `references unknown agent '${agentRef}'`,
-              ),
-            );
-          }
+      // Orchestrator-only tools: validate the orchestrator agent and materialize on it.
+      if (lifecycle.orchestrator) {
+        const parsed = parseNamedRef(lifecycle.orchestrator.agent);
+        if (parsed.pluginPrefix) {
+          return yield* Effect.fail(
+            lifecycleError(
+              lifecycle,
+              "orchestrator.agent",
+              `lifecycle orchestrator must be a local agent compiled by '${registry.pluginName}', got '${lifecycle.orchestrator.agent}'`,
+            ),
+          );
+        }
 
-          if (!assignedLocalAgents.has(parsed.name)) {
-            return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
-                `tool_permissions[${permissionIndex}].agents[${agentIndex}]`,
-                `agent '${agentRef}' is not assigned to any phase in lifecycle '${lifecycle.name}'`,
-              ),
-            );
-          }
+        if (!registry.agents.has(parsed.name)) {
+          return yield* Effect.fail(
+            lifecycleError(
+              lifecycle,
+              "orchestrator.agent",
+              `references unknown agent '${lifecycle.orchestrator.agent}'`,
+            ),
+          );
+        }
 
-          const agentBindings = byAgent.get(agent.name) ?? [];
-          const existingLogicalNames = new Set(agentBindings.map((binding) => binding.logicalName));
-
-          for (const [toolIndex, tool] of permission.tools.entries()) {
-            if (existingLogicalNames.has(tool.logicalName)) {
-              return yield* Effect.fail(
-                lifecycleError(
-                  lifecycle,
-                  `tool_permissions[${permissionIndex}].tools[${toolIndex}]`,
-                  `duplicate lifecycle-permitted tool '${tool.logicalName}' for agent '${agent.name}'`,
-                ),
-              );
-            }
-
-            const materialized = materializeLifecycleToolPermission({
-              logicalName: tool.logicalName,
-              toolRef: tool.ref,
-              registry,
-            });
-            if (!(materialized instanceof Object) || "message" in materialized) {
-              return yield* Effect.fail(
-                lifecycleError(
-                  lifecycle,
-                  `tool_permissions[${permissionIndex}].tools[${toolIndex}]`,
-                  materialized.message,
-                ),
-              );
-            }
-
-            agentBindings.push({
-              kind: materialized.kind,
-              logicalName: materialized.logicalName,
-              contract: materialized.contract,
-              toolPluginName: materialized.toolPluginName,
-              toolName: materialized.toolName,
-              toolSourcePath: materialized.toolSourcePath,
-            });
-            existingLogicalNames.add(tool.logicalName);
-          }
-
-          byAgent.set(agent.name, agentBindings);
+        for (const [toolIndex, tool] of lifecycle.orchestrator.tools.entries()) {
+          const field = `orchestrator.tools[${toolIndex}]`;
+          const error = grantLifecycleTool(
+            lifecycle,
+            registry,
+            parsed.name,
+            { logicalName: tool.logicalName, ref: tool.ref, field },
+            byAgent,
+          );
+          if (error) return yield* Effect.fail(error);
         }
       }
     }

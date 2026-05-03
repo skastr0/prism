@@ -34,7 +34,9 @@ import { basename, dirname, extname, join, posix, relative, resolve } from "node
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import {
+  composeLifecycleOrchestratorSection,
   composeLifecyclePhaseReference,
+  composeLifecycleWideToolsSection,
   type ComposedAgent,
 } from "../compose.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
@@ -527,6 +529,16 @@ const renderLifecycleSkill = (
     lines.push("");
     lines.push(lifecycle.produces);
     lines.push("");
+  }
+
+  const orchestratorSection = composeLifecycleOrchestratorSection(lifecycle);
+  if (orchestratorSection.length > 0) {
+    lines.push(...orchestratorSection, "");
+  }
+
+  const wideToolsSection = composeLifecycleWideToolsSection(lifecycle);
+  if (wideToolsSection.length > 0) {
+    lines.push(...wideToolsSection, "");
   }
 
   lines.push("## Phases");

@@ -160,8 +160,8 @@ export type LifecycleToolPermissionToolDefinition =
       readonly as?: string;
     };
 
-export interface LifecycleToolPermissionDefinition {
-  readonly agents: ReadonlyArray<AgentRefInput>;
+export interface LifecycleOrchestratorDefinition {
+  readonly agent: AgentRefInput;
   readonly tools: ReadonlyArray<LifecycleToolPermissionToolDefinition>;
 }
 
@@ -187,7 +187,8 @@ export interface LifecycleDefinition {
   readonly produces?: string;
   readonly parameters?: ReadonlyArray<LifecycleParameterDefinition>;
   readonly phases: ReadonlyArray<LifecyclePhaseDefinition>;
-  readonly tool_permissions?: ReadonlyArray<LifecycleToolPermissionDefinition>;
+  readonly orchestrator?: LifecycleOrchestratorDefinition;
+  readonly tool_permissions?: ReadonlyArray<LifecycleToolPermissionToolDefinition>;
   readonly taste_checkpoints?: ReadonlyArray<LifecycleTasteCheckpointDefinition>;
   readonly evolution?: string;
   readonly body?: string;

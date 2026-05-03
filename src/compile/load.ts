@@ -49,8 +49,9 @@ import {
   type NormalizedAccess,
   type NormalizedHookMatch,
   type NormalizedHookToolMatcher,
+  type NormalizedLifecycleOrchestrator,
   type NormalizedLifecyclePhase,
-  type NormalizedLifecycleToolPermission,
+  type NormalizedLifecycleToolPermissionTool,
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
   type SkillRefInput,
@@ -1706,16 +1707,16 @@ const parseCanonicalToolName = (ref: string): string => {
 const normalizeLifecyclePermissionTool = (
   sourcePath: string,
   tool: LifecycleToolPermissionTool,
-  permissionIndex: number,
+  fieldPrefix: string,
   toolIndex: number,
-): NormalizedLifecycleToolPermission["tools"][number] | SourceParseError => {
+): NormalizedLifecycleToolPermissionTool | SourceParseError => {
   const rawRef = typeof tool === "string" ? tool : tool.ref;
   const ref = rawRef.trim();
   if (!ref) {
     return new SourceParseError({
       sourcePath,
       kind: "lifecycle",
-      message: `tool_permissions[${permissionIndex}].tools[${toolIndex}].ref: must be a non-empty canonical tool reference`,
+      message: `${fieldPrefix}[${toolIndex}].ref: must be a non-empty canonical tool reference`,
     });
   }
 
@@ -1726,7 +1727,7 @@ const normalizeLifecyclePermissionTool = (
     return new SourceParseError({
       sourcePath,
       kind: "lifecycle",
-      message: `tool_permissions[${permissionIndex}].tools[${toolIndex}].as: must be non-empty when provided`,
+      message: `${fieldPrefix}[${toolIndex}].as: must be non-empty when provided`,
     });
   }
 
@@ -1736,60 +1737,74 @@ const normalizeLifecyclePermissionTool = (
   };
 };
 
-const normalizeLifecycleToolPermissions = (
+const normalizeLifecycleToolList = (
   sourcePath: string,
-  permissions: LifecycleDefinition["tool_permissions"],
-): NormalizedLifecycleToolPermission[] | SourceParseError => {
-  const normalized: NormalizedLifecycleToolPermission[] = [];
-
-  for (const [permissionIndex, permission] of (permissions ?? []).entries()) {
-    const agents: string[] = [];
-    for (const [agentIndex, agent] of permission.agents.entries()) {
-      const normalizedAgent = normalizeAgentRefInput(
-        `tool_permissions[${permissionIndex}].agents[${agentIndex}]`,
-        agent,
-      );
-      if (typeof normalizedAgent !== "string") {
-        return new SourceParseError({
-          sourcePath,
-          kind: "lifecycle",
-          message: `${normalizedAgent.field}: ${normalizedAgent.message}`,
-        });
-      }
-      agents.push(normalizedAgent);
+  tools: ReadonlyArray<LifecycleToolPermissionTool>,
+  fieldPrefix: string,
+): NormalizedLifecycleToolPermissionTool[] | SourceParseError => {
+  const normalized: NormalizedLifecycleToolPermissionTool[] = [];
+  const logicalNames = new Set<string>();
+  for (const [toolIndex, tool] of tools.entries()) {
+    const normalizedTool = normalizeLifecyclePermissionTool(
+      sourcePath,
+      tool,
+      fieldPrefix,
+      toolIndex,
+    );
+    if (normalizedTool instanceof SourceParseError) {
+      return normalizedTool;
     }
-
-    const tools: Array<NormalizedLifecycleToolPermission["tools"][number]> = [];
-    const logicalNames = new Set<string>();
-    for (const [toolIndex, tool] of permission.tools.entries()) {
-      const normalizedTool = normalizeLifecyclePermissionTool(
+    if (logicalNames.has(normalizedTool.logicalName)) {
+      return new SourceParseError({
         sourcePath,
-        tool,
-        permissionIndex,
-        toolIndex,
-      );
-      if (normalizedTool instanceof SourceParseError) {
-        return normalizedTool;
-      }
-      if (logicalNames.has(normalizedTool.logicalName)) {
-        return new SourceParseError({
-          sourcePath,
-          kind: "lifecycle",
-          message: `tool_permissions[${permissionIndex}].tools[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
-        });
-      }
-      logicalNames.add(normalizedTool.logicalName);
-      tools.push(normalizedTool);
+        kind: "lifecycle",
+        message: `${fieldPrefix}[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
+      });
     }
+    logicalNames.add(normalizedTool.logicalName);
+    normalized.push(normalizedTool);
+  }
+  return normalized;
+};
 
-    normalized.push({
-      agents,
-      tools,
+const normalizeLifecycleOrchestrator = (
+  sourcePath: string,
+  orchestrator: LifecycleDefinition["orchestrator"],
+): NormalizedLifecycleOrchestrator | undefined | SourceParseError => {
+  if (!orchestrator) return undefined;
+
+  const normalizedAgent = normalizeAgentRefInput(
+    "orchestrator.agent",
+    orchestrator.agent,
+  );
+  if (typeof normalizedAgent !== "string") {
+    return new SourceParseError({
+      sourcePath,
+      kind: "lifecycle",
+      message: `${normalizedAgent.field}: ${normalizedAgent.message}`,
     });
   }
 
-  return normalized;
+  const tools = normalizeLifecycleToolList(
+    sourcePath,
+    orchestrator.tools,
+    "orchestrator.tools",
+  );
+  if (tools instanceof SourceParseError) {
+    return tools;
+  }
+
+  return {
+    agent: normalizedAgent,
+    tools,
+  };
 };
+
+const normalizeLifecycleToolPermissions = (
+  sourcePath: string,
+  permissions: LifecycleDefinition["tool_permissions"],
+): NormalizedLifecycleToolPermissionTool[] | SourceParseError =>
+  normalizeLifecycleToolList(sourcePath, permissions ?? [], "tool_permissions");
 
 const parseLifecycleDefinition = (
   sourcePath: string,
@@ -1835,6 +1850,11 @@ const parseLifecycleDefinition = (
       return yield* Effect.fail(toolPermissions);
     }
 
+    const orchestrator = normalizeLifecycleOrchestrator(sourcePath, parsed.orchestrator);
+    if (orchestrator instanceof SourceParseError) {
+      return yield* Effect.fail(orchestrator);
+    }
+
     return new Lifecycle({
       name: parsed.name,
       sourcePath,
@@ -1845,6 +1865,7 @@ const parseLifecycleDefinition = (
         required: parameter.required ?? true,
       })),
       phases,
+      ...(orchestrator ? { orchestrator } : {}),
       tool_permissions: toolPermissions,
       taste_checkpoints: parsed.taste_checkpoints ?? [],
       evolution: parsed.evolution,

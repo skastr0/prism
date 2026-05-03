@@ -11,7 +11,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import {
+  composeLifecycleOrchestratorSection,
   composeLifecyclePhaseReference,
+  composeLifecycleWideToolsSection,
   type ComposedAgent,
 } from "../compose.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
@@ -230,6 +232,16 @@ const renderLifecycleSkill = (lifecycle: Lifecycle, sourcePluginName: string): s
 
   if (lifecycle.produces) {
     lines.push("## Produces", "", lifecycle.produces, "");
+  }
+
+  const orchestratorSection = composeLifecycleOrchestratorSection(lifecycle);
+  if (orchestratorSection.length > 0) {
+    lines.push(...orchestratorSection, "");
+  }
+
+  const wideToolsSection = composeLifecycleWideToolsSection(lifecycle);
+  if (wideToolsSection.length > 0) {
+    lines.push(...wideToolsSection, "");
   }
 
   lines.push("## Phases", "");

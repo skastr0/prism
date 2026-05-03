@@ -1,11 +1,15 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Contract } from "./sources.js";
 import type { ResolvedContractBinding } from "./resolve.js";
+import {
+  NODE_BUILTIN_EXTERNALS,
+  rewriteBareEffectImportsForBundle,
+  rewriteBarePluginDependencyImportsForBundle,
+} from "./bundle-utils.js";
 import { effectBundleImportPath } from "./runtime-deps.js";
 
 const execFileAsync = promisify(execFile);
@@ -57,18 +61,6 @@ export interface McpServerBundle {
 
 const SOURCE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
-
-const BARE_IMPORT_PATTERN =
-  /(\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(\s*)(["'])([^"'.][^"']*)\2/g;
-
-const NODE_BUILTIN_EXTERNALS = [
-  ...new Set([
-    ...builtinModules,
-    ...builtinModules.map((moduleName) => `node:${moduleName}`),
-    "bun:sqlite",
-    "node:sqlite",
-  ]),
-].sort();
 
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
@@ -406,83 +398,6 @@ const rewriteGeneratedPluginImportsForStandaloneBundle = (
       return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
     },
   );
-
-const rewriteBareEffectImportsForBundle = (source: string): string =>
-  source.replace(/(\bfrom\s+)(["'])effect\2/g, `$1${JSON.stringify(effectBundleImportPath())}`);
-
-const packageNameFromSpecifier = (specifier: string): string => {
-  if (specifier.startsWith("@")) {
-    const [scope, name] = specifier.split("/");
-    return scope && name ? `${scope}/${name}` : specifier;
-  }
-
-  return specifier.split("/")[0] ?? specifier;
-};
-
-const readPluginRuntimeDependencies = async (pluginRoot?: string): Promise<ReadonlySet<string>> => {
-  if (!pluginRoot) return new Set();
-
-  try {
-    const raw = await readFile(join(pluginRoot, "package.json"), "utf8");
-    const parsed = JSON.parse(raw) as {
-      readonly dependencies?: Record<string, string>;
-      readonly peerDependencies?: Record<string, string>;
-    };
-
-    return new Set([
-      ...Object.keys(parsed.dependencies ?? {}),
-      ...Object.keys(parsed.peerDependencies ?? {}),
-    ]);
-  } catch {
-    return new Set();
-  }
-};
-
-const resolvePluginDependencyImport = async (options: {
-  readonly pluginRoot?: string;
-  readonly runtimeDependencies: ReadonlySet<string>;
-  readonly specifier: string;
-}): Promise<string | undefined> => {
-  if (!options.pluginRoot) return undefined;
-  if (options.specifier.startsWith("node:")) return undefined;
-
-  const packageName = packageNameFromSpecifier(options.specifier);
-  if (!options.runtimeDependencies.has(packageName)) return undefined;
-
-  try {
-    return createRequire(join(options.pluginRoot, "package.json")).resolve(options.specifier).replace(/\\/g, "/");
-  } catch {
-    return undefined;
-  }
-};
-
-const rewriteBarePluginDependencyImportsForBundle = async (options: {
-  readonly source: string;
-  readonly pluginRoot?: string;
-}): Promise<string> => {
-  const runtimeDependencies = await readPluginRuntimeDependencies(options.pluginRoot);
-  if (runtimeDependencies.size === 0) return options.source;
-
-  const replacements = new Map<string, string>();
-  for (const match of options.source.matchAll(BARE_IMPORT_PATTERN)) {
-    const specifier = match[3];
-    if (!specifier || specifier === "effect") continue;
-
-    const resolved = await resolvePluginDependencyImport({
-      pluginRoot: options.pluginRoot,
-      runtimeDependencies,
-      specifier,
-    });
-    if (resolved) replacements.set(specifier, resolved);
-  }
-
-  if (replacements.size === 0) return options.source;
-
-  return options.source.replace(BARE_IMPORT_PATTERN, (match, prefix: string, quote: string, specifier: string) => {
-    const replacement = replacements.get(specifier);
-    return replacement ? `${prefix}${quote}${replacement}${quote}` : match;
-  });
-};
 
 const normalizeMirroredPluginSource = async (options: {
   readonly pluginName: string;

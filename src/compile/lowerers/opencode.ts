@@ -21,18 +21,17 @@
  *
  *   4. A generated OpenCode plugin directory at
  *      <opencode-root>/plugins/agentpkg-generated-<source-plugin>/ containing:
- *        - package.json
- *        - src/server.ts
- *        - src/runtime/schema-bridge.ts
- *        - src/adapters/<source-plugin>/<name>.adapter.ts
- *        - src/plugins/<source-plugin>/{contracts,schemas}/...
+ *        - dist/server.mjs
  *
- * The generated plugin tree is compiler-owned except for runtime-managed
- * entries like node_modules/ and lockfiles, which are preserved across syncs.
+ * The generated plugin directory is compiler-owned. Re-running compile prunes
+ * stale legacy raw-TypeScript generated output such as src/**, package.json,
+ * lockfiles, and node_modules/.
  */
 
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { mkdir, mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import {
   composeLifecyclePhaseReference,
@@ -42,6 +41,12 @@ import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { CanonicalTool, Contract, Hook, Lifecycle } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
+import {
+  NODE_BUILTIN_EXTERNALS,
+  rewriteBareEffectImportsForBundle,
+  rewriteBareImportsForBundle,
+  rewriteBarePluginDependencyImportsForBundle,
+} from "../bundle-utils.js";
 import {
   backupFile,
   readFile,
@@ -159,14 +164,56 @@ const generatedPluginEntryForName = (
   pluginName: string,
 ): string =>
   pathToFileURL(
-    join(generatedPluginRootForName(target, pluginName), "src", "server.ts")
+    join(generatedPluginRootForName(target, pluginName), "dist", "server.mjs")
   ).href;
 
 const generatedPluginEntry = (target: OpenCodeLowerTarget): string =>
   generatedPluginEntryForName(target, target.sourcePluginName);
 
+const legacyGeneratedPluginSourceEntryForName = (
+  target: OpenCodeLowerTarget,
+  pluginName: string,
+): string =>
+  pathToFileURL(
+    join(generatedPluginRootForName(target, pluginName), "src", "server.ts")
+  ).href;
+
+const isLegacyGeneratedPluginEntry = (
+  entry: unknown,
+  target: OpenCodeLowerTarget,
+): entry is string => {
+  if (typeof entry !== "string") return false;
+  if (entry.startsWith(`${GENERATED_PLUGIN_PREFIX}-`)) return true;
+
+  let pathname: string;
+  try {
+    const url = new URL(entry);
+    if (url.protocol !== "file:") return false;
+    pathname = fileURLToPath(url);
+  } catch {
+    return false;
+  }
+
+  const relativePluginPath = relative(join(target.root, "plugins"), pathname).replace(/\\/g, "/");
+  return (
+    !relativePluginPath.startsWith("../") &&
+    !relativePluginPath.startsWith("/") &&
+    relativePluginPath.startsWith(`${GENERATED_PLUGIN_PREFIX}-`) &&
+    relativePluginPath.endsWith("/src/server.ts")
+  );
+};
+
 const generatedToolDenyPatternForName = (pluginName: string): string =>
   `${syntheticToolNamespace(pluginName)}_*`;
+
+const opencodePluginBundleImportPath = (): string =>
+  fileURLToPath(import.meta.resolve("@opencode-ai/plugin")).replace(/\\/g, "/");
+
+const rewriteGeneratedOpenCodeRuntimeImportsForBundle = (source: string): string =>
+  rewriteBareImportsForBundle(
+    rewriteBareEffectImportsForBundle(source),
+    new Map([["@opencode-ai/plugin", opencodePluginBundleImportPath()]]),
+  );
 
 // ---------------------------------------------------------------------------
 // Operation shape
@@ -537,14 +584,7 @@ const renderLifecycleSkill = (
 //
 // Layout:
 //   agentpkg-generated-<source-plugin>/
-//   ├── package.json
-//   └── src/
-//       ├── server.ts                          (imports adapters)
-//       ├── runtime/schema-bridge.ts           (Effect Schema → tool.schema)
-//       ├── adapters/<plugin>/<name>.adapter.ts
-//       └── plugins/<plugin>/                  (mirrored source plugin tree)
-//           ├── contracts/*.contract.ts
-//           └── schemas/*.ts
+//   └── dist/server.mjs                        (bundled native plugin)
 // ---------------------------------------------------------------------------
 
 interface PluginMirror {
@@ -577,26 +617,12 @@ type AdapterSpec =
       readonly contractRelativePath: string;
     };
 
-const RUNTIME_MANAGED_PLUGIN_DIRS = new Set(["node_modules"]);
-const RUNTIME_MANAGED_PLUGIN_FILES = new Set([
-  "bun.lock",
-  "bun.lockb",
-  "package-lock.json",
-  "pnpm-lock.yaml",
-  "yarn.lock",
-]);
-
 interface PluginTree {
   readonly files: ReadonlyArray<string>;
   readonly dirs: ReadonlyArray<string>;
 }
 
-const isRuntimeManagedPluginPath = (relativePath: string): boolean => {
-  const [first] = relativePath.split("/");
-  if (!first) return false;
-  if (RUNTIME_MANAGED_PLUGIN_DIRS.has(first)) return true;
-  return !relativePath.includes("/") && RUNTIME_MANAGED_PLUGIN_FILES.has(first);
-};
+const isRuntimeManagedPluginPath = (_relativePath: string): boolean => false;
 
 const collectPluginTree = async (root: string): Promise<PluginTree> => {
   if (!(await fileExists(root))) {
@@ -744,6 +770,13 @@ const SOURCE_IMPORT_PATTERN =
   /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
 
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
+
+const relativeModulePath = (fromFile: string, toFileWithoutExtension: string): string => {
+  const fromDir = posix.dirname(fromFile);
+  let rel = posix.relative(fromDir, toFileWithoutExtension);
+  if (!rel.startsWith(".")) rel = `./${rel}`;
+  return rel;
+};
 
 const resolveTsImportCandidate = async (
   absoluteWithoutQuery: string,
@@ -972,7 +1005,7 @@ const planAdaptersForBindings = (
   return specs;
 };
 
-const normalizeMirroredPluginSource = (
+const normalizeMirroredPluginSource = async (
   options: {
     readonly pluginName: string;
     readonly pluginRoot?: string;
@@ -981,8 +1014,8 @@ const normalizeMirroredPluginSource = (
     readonly source: string;
     readonly importPluginRoots: ReadonlyMap<string, string>;
   },
-): string => {
-  const currentGeneratedPath = `src/plugins/${options.pluginName}/${options.relativePath}`;
+): Promise<string> => {
+  const currentGeneratedPath = `plugins/${options.pluginName}/${options.relativePath}`;
   const withRewrittenImports = rewriteCrossPluginRelativeImports({
     pluginName: options.pluginName,
     pluginRoot: options.pluginRoot,
@@ -992,16 +1025,26 @@ const normalizeMirroredPluginSource = (
     importPluginRoots: options.importPluginRoots,
   });
 
+  const withStandaloneImports = rewriteGeneratedPluginImportsForBundle(
+    withRewrittenImports,
+    currentGeneratedPath,
+  );
+  const withBundledEffectImports = rewriteBareEffectImportsForBundle(withStandaloneImports);
+  const withPluginDependencyImports = await rewriteBarePluginDependencyImportsForBundle({
+    source: withBundledEffectImports,
+    pluginRoot: options.pluginRoot,
+  });
+
   if (!options.relativePath.endsWith(".tool.ts")) {
     return options.relativePath.endsWith(".hook.ts")
       ? rewriteHookAuthoringImports(
-          withRewrittenImports,
+          withPluginDependencyImports,
           hookAuthoringBridgeImportFor(currentGeneratedPath),
         )
-      : withRewrittenImports;
+      : withPluginDependencyImports;
   }
 
-  return stripToolAuthoringHelpers(withRewrittenImports)
+  return stripToolAuthoringHelpers(withPluginDependencyImports)
     .replace(/\bdefineTool\s*\(/g, "(")
     .replace(/\bschemaSlot\s*\(/g, "(");
 };
@@ -1032,17 +1075,6 @@ const findSourcePlugin = (
   return { pluginName: first[0], pluginRoot: first[1] };
 };
 
-const siblingGeneratedPluginModulePath = (
-  currentGeneratedPath: string,
-  pluginName: string,
-  modulePath: string,
-): string => {
-  const currentDir = dirname(currentGeneratedPath).replace(/\\/g, "/");
-  const depth = currentDir.split("/").filter(Boolean).length;
-  const prefix = "../".repeat(depth + 1);
-  return `${prefix}${generatedPluginIdForName(pluginName)}/src/plugins/${pluginName}/${modulePath.replace(/\.ts$/, "")}`;
-};
-
 const rewriteCrossPluginRelativeImports = (options: {
   readonly pluginName: string;
   readonly pluginRoot?: string;
@@ -1060,15 +1092,29 @@ const rewriteCrossPluginRelativeImports = (options: {
       const owner = findSourcePlugin(importedSourcePath, options.importPluginRoots);
       if (!owner || owner.pluginName === options.pluginName) return match;
 
-      const modulePath = relative(owner.pluginRoot, importedSourcePath).replace(/\\/g, "/");
-      return `${prefix}${quote}${siblingGeneratedPluginModulePath(
+      const modulePath = normalizeRelativePath(
+        relative(owner.pluginRoot, importedSourcePath),
+      ).replace(/\.ts$/u, "");
+      const targetGeneratedPath = `plugins/${owner.pluginName}/${modulePath}`;
+      return `${prefix}${quote}${relativeModulePath(
         options.currentGeneratedPath,
-        owner.pluginName,
-        modulePath,
+        targetGeneratedPath,
       )}${quote}`;
     },
   );
 };
+
+const rewriteGeneratedPluginImportsForBundle = (
+  source: string,
+  currentGeneratedPath: string,
+): string =>
+  source.replace(
+    /(["'])\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/agentpkg-generated-[^"']+\/src\/plugins\/([^/]+)\/([^"']+)\1/g,
+    (_match, quote: string, pluginName: string, modulePath: string) => {
+      const targetGeneratedPath = `plugins/${pluginName}/${modulePath.replace(/\.ts$/u, "")}`;
+      return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
+    },
+  );
 
 const stripToolAuthoringHelpers = (source: string): string => {
   return source.replace(
@@ -1094,11 +1140,8 @@ const stripToolAuthoringHelpers = (source: string): string => {
   );
 };
 
-const hookAuthoringBridgeImportFor = (currentGeneratedPath: string): string => {
-  const currentDir = dirname(currentGeneratedPath).replace(/\\/g, "/");
-  const depth = currentDir.split("/").filter(Boolean).length;
-  return `${"../".repeat(Math.max(0, depth - 1))}runtime/hook-authoring-bridge`;
-};
+const hookAuthoringBridgeImportFor = (currentGeneratedPath: string): string =>
+  relativeModulePath(currentGeneratedPath, "runtime/hook-authoring-bridge");
 
 const rewriteHookAuthoringImports = (
   source: string,
@@ -1375,65 +1418,6 @@ const renderGeneratedServerTsForBindings = (
   return lines.join("\n");
 };
 
-type PackageJsonRuntimeDeps = {
-  readonly dependencies?: Record<string, string>;
-  readonly peerDependencies?: Record<string, string>;
-};
-
-const readPluginRuntimeDependencyMap = async (pluginRoot?: string): Promise<Record<string, string>> => {
-  if (!pluginRoot) return {};
-
-  try {
-    const raw = await readFile(join(pluginRoot, "package.json"));
-    const parsed = JSON.parse(raw) as PackageJsonRuntimeDeps;
-    return {
-      ...(parsed.dependencies ?? {}),
-      ...(parsed.peerDependencies ?? {}),
-    };
-  } catch {
-    return {};
-  }
-};
-
-const collectGeneratedPackageDependencies = async (
-  mirrors: ReadonlyArray<PluginMirror>,
-): Promise<Record<string, string>> => {
-  const dependencies: Record<string, string> = {
-    "@opencode-ai/plugin": "^1.4.6",
-    effect: "^3.21.0",
-  };
-  const pluginRoots = [...new Set(mirrors.map((mirror) => mirror.pluginRoot).filter((root): root is string => root !== undefined))]
-    .sort((left, right) => left.localeCompare(right));
-
-  for (const pluginRoot of pluginRoots) {
-    Object.assign(dependencies, await readPluginRuntimeDependencyMap(pluginRoot));
-  }
-
-  dependencies["@opencode-ai/plugin"] ??= "^1.4.6";
-  dependencies.effect ??= "^3.21.0";
-
-  return Object.fromEntries(
-    Object.entries(dependencies).sort(([left], [right]) => left.localeCompare(right)),
-  );
-};
-
-const GENERATED_PACKAGE_JSON = (pluginId: string, dependencies: Record<string, string>): string =>
-  JSON.stringify(
-    {
-      name: pluginId,
-      version: "0.1.0",
-      private: true,
-      type: "module",
-      main: "./src/server.ts",
-      exports: {
-        "./server": "./src/server.ts",
-      },
-      dependencies,
-    },
-    null,
-    2,
-  ) + "\n";
-
 declare const SCHEMA_BRIDGE_SOURCE: string | undefined;
 
 const getSchemaBridgeSource = async (): Promise<string> => {
@@ -1535,6 +1519,178 @@ const mergePluginMirrors = (
     }));
 };
 
+const expandBundleMirrors = async (
+  mirrors: ReadonlyArray<PluginMirror>,
+  importPluginRoots: ReadonlyMap<string, string>,
+): Promise<PluginMirror[]> => {
+  const existing = new Set(mirrors.map((mirror) => mirror.pluginName));
+  const supplemental: PluginMirror[] = [];
+
+  for (const [pluginName, pluginRoot] of [...importPluginRoots.entries()].sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    if (existing.has(pluginName)) continue;
+    const entries = await collectTsFilesInSubdirs(pluginRoot, ["tools", "contracts", "schemas"]);
+    if (entries.length === 0) continue;
+    supplemental.push({
+      pluginName,
+      pluginRoot,
+      files: await collectMirrorRuntimeClosure(pluginRoot, entries),
+    });
+  }
+
+  return mergePluginMirrors([...mirrors, ...supplemental]);
+};
+
+const writeTempSource = async (
+  tempRoot: string,
+  relativePath: string,
+  content: string,
+): Promise<string> => {
+  const target = join(tempRoot, relativePath);
+  await mkdir(dirname(target), { recursive: true });
+  await nodeWriteFile(target, content);
+  return target;
+};
+
+const writeTempGeneratedPluginSources = async (options: {
+  readonly tempRoot: string;
+  readonly pluginId: string;
+  readonly runtimeToolNamespace: string;
+  readonly mirrors: ReadonlyArray<PluginMirror>;
+  readonly importPluginRoots: ReadonlyMap<string, string>;
+  readonly adapters: ReadonlyArray<AdapterSpec>;
+  readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+  readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
+}): Promise<string> => {
+  await writeTempSource(
+    options.tempRoot,
+    "runtime/schema-bridge.ts",
+    rewriteGeneratedOpenCodeRuntimeImportsForBundle(await getSchemaBridgeSource()),
+  );
+
+  if ((options.hookRegistrations?.length ?? 0) > 0) {
+    await writeTempSource(
+      options.tempRoot,
+      "runtime/hook-authoring-bridge.ts",
+      GENERATED_HOOK_AUTHORING_BRIDGE,
+    );
+    await writeTempSource(
+      options.tempRoot,
+      "runtime/hook-runtime.ts",
+      GENERATED_HOOK_RUNTIME,
+    );
+  }
+
+  for (const mirror of options.mirrors) {
+    for (const file of mirror.files) {
+      const raw = file.content ?? (await readFile(file.sourcePath!));
+      const normalized = await normalizeMirroredPluginSource({
+        pluginName: mirror.pluginName,
+        pluginRoot: mirror.pluginRoot,
+        relativePath: file.relativePath,
+        sourcePath: file.sourcePath,
+        source: raw,
+        importPluginRoots: options.importPluginRoots,
+      });
+      await writeTempSource(
+        options.tempRoot,
+        `plugins/${mirror.pluginName}/${file.relativePath}`,
+        normalized,
+      );
+    }
+  }
+
+  for (const spec of options.adapters) {
+    const adapterName = spec.kind === "synthetic" ? spec.contractName : spec.toolName;
+    await writeTempSource(
+      options.tempRoot,
+      `adapters/${spec.pluginName}/${adapterName}.adapter.ts`,
+      rewriteGeneratedOpenCodeRuntimeImportsForBundle(renderToolAdapter(spec)),
+    );
+  }
+
+  return writeTempSource(
+    options.tempRoot,
+    "server.ts",
+    rewriteGeneratedOpenCodeRuntimeImportsForBundle(
+      renderGeneratedServerTsForBindings(
+        options.serverBindings,
+        options.runtimeToolNamespace,
+        options.pluginId,
+        options.adapters,
+        options.hookRegistrations ?? [],
+      ),
+    ),
+  );
+};
+
+const validateBuiltOpenCodeGeneratedPluginBundle = async (
+  builtPath: string,
+  pluginId: string,
+): Promise<void> => {
+  const moduleUrl = `${pathToFileURL(builtPath).href}?agentpkg=${Date.now()}`;
+  const loaded = await import(moduleUrl) as { readonly default?: unknown };
+  const plugin = loaded.default as { readonly id?: unknown; readonly server?: unknown } | undefined;
+  if (!plugin || plugin.id !== pluginId || typeof plugin.server !== "function") {
+    throw new Error(
+      `built OpenCode plugin bundle '${pluginId}' does not export a valid PluginModule`,
+    );
+  }
+};
+
+const normalizeBuiltOpenCodeGeneratedPluginBundle = (content: string): string =>
+  content.replace(/^\/\/ .*agentpkg-opencode-plugin-[^\n]*\n/gm, "");
+
+const buildGeneratedOpenCodePluginBundle = async (options: {
+  readonly root: string;
+  readonly pluginId: string;
+  readonly runtimeToolNamespace: string;
+  readonly mirrors: ReadonlyArray<PluginMirror>;
+  readonly importPluginRoots: ReadonlyMap<string, string>;
+  readonly adapters: ReadonlyArray<AdapterSpec>;
+  readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
+  readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
+}): Promise<string> => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "agentpkg-opencode-plugin-"));
+  try {
+    const mirrors = await expandBundleMirrors(options.mirrors, options.importPluginRoots);
+    const entryPath = await writeTempGeneratedPluginSources({
+      tempRoot,
+      pluginId: options.pluginId,
+      runtimeToolNamespace: options.runtimeToolNamespace,
+      mirrors,
+      importPluginRoots: options.importPluginRoots,
+      adapters: options.adapters,
+      serverBindings: options.serverBindings,
+      hookRegistrations: options.hookRegistrations,
+    });
+    const outdir = join(tempRoot, "dist");
+    const build = await Bun.build({
+      entrypoints: [entryPath],
+      outdir,
+      target: "bun",
+      format: "esm",
+      packages: "bundle",
+      external: NODE_BUILTIN_EXTERNALS,
+      naming: "server.mjs",
+      sourcemap: "none",
+      minify: false,
+    });
+
+    if (!build.success) {
+      const diagnostics = build.logs.map((log) => log.message).join("\n");
+      throw new Error(`failed to build OpenCode generated plugin '${options.pluginId}': ${diagnostics}`);
+    }
+
+    const builtPath = join(outdir, "server.mjs");
+    await validateBuiltOpenCodeGeneratedPluginBundle(builtPath, options.pluginId);
+    return normalizeBuiltOpenCodeGeneratedPluginBundle(await readFile(builtPath));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+};
+
 const planGeneratedPluginFiles = async (options: {
   readonly root: string;
   readonly pluginId: string;
@@ -1546,163 +1702,21 @@ const planGeneratedPluginFiles = async (options: {
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
-  const desiredPluginFiles = new Set<string>();
-
-  desiredPluginFiles.add("package.json");
-  const pkgTarget = join(options.root, "package.json");
-  const desiredPkg = GENERATED_PACKAGE_JSON(
-    options.pluginId,
-    await collectGeneratedPackageDependencies(options.mirrors),
-  );
-  let pkgReason: "new" | "changed" | "unchanged";
-  if (await fileExists(pkgTarget)) {
-    const current = await readFile(pkgTarget);
-    pkgReason = current === desiredPkg ? "unchanged" : "changed";
+  const desiredPluginFiles = new Set<string>(["dist/server.mjs"]);
+  const bundleTarget = join(options.root, "dist", "server.mjs");
+  const desiredBundle = await buildGeneratedOpenCodePluginBundle(options);
+  let bundleReason: "new" | "changed" | "unchanged";
+  if (await fileExists(bundleTarget)) {
+    const current = await readFile(bundleTarget);
+    bundleReason = current === desiredBundle ? "unchanged" : "changed";
   } else {
-    pkgReason = "new";
+    bundleReason = "new";
   }
   operations.push({
     kind: "write-plugin-file",
-    target: pkgTarget,
-    content: desiredPkg,
-    reason: pkgReason,
-  });
-
-  desiredPluginFiles.add("src/runtime/schema-bridge.ts");
-  const bridgeTarget = join(options.root, "src", "runtime", "schema-bridge.ts");
-  const desiredBridge = await getSchemaBridgeSource();
-  let bridgeReason: "new" | "changed" | "unchanged";
-  if (await fileExists(bridgeTarget)) {
-    const current = await readFile(bridgeTarget);
-    bridgeReason = current === desiredBridge ? "unchanged" : "changed";
-  } else {
-    bridgeReason = "new";
-  }
-  operations.push({
-    kind: "write-plugin-file",
-    target: bridgeTarget,
-    content: desiredBridge,
-    reason: bridgeReason,
-  });
-
-  if ((options.hookRegistrations?.length ?? 0) > 0) {
-    desiredPluginFiles.add("src/runtime/hook-authoring-bridge.ts");
-    const hookBridgeTarget = join(options.root, "src", "runtime", "hook-authoring-bridge.ts");
-    let hookBridgeReason: "new" | "changed" | "unchanged";
-    if (await fileExists(hookBridgeTarget)) {
-      const current = await readFile(hookBridgeTarget);
-      hookBridgeReason = current === GENERATED_HOOK_AUTHORING_BRIDGE ? "unchanged" : "changed";
-    } else {
-      hookBridgeReason = "new";
-    }
-    operations.push({
-      kind: "write-plugin-file",
-      target: hookBridgeTarget,
-      content: GENERATED_HOOK_AUTHORING_BRIDGE,
-      reason: hookBridgeReason,
-    });
-
-    desiredPluginFiles.add("src/runtime/hook-runtime.ts");
-    const hookRuntimeTarget = join(options.root, "src", "runtime", "hook-runtime.ts");
-    let hookRuntimeReason: "new" | "changed" | "unchanged";
-    if (await fileExists(hookRuntimeTarget)) {
-      const current = await readFile(hookRuntimeTarget);
-      hookRuntimeReason = current === GENERATED_HOOK_RUNTIME ? "unchanged" : "changed";
-    } else {
-      hookRuntimeReason = "new";
-    }
-    operations.push({
-      kind: "write-plugin-file",
-      target: hookRuntimeTarget,
-      content: GENERATED_HOOK_RUNTIME,
-      reason: hookRuntimeReason,
-    });
-  }
-
-  for (const mirror of options.mirrors) {
-    for (const file of mirror.files) {
-      const relativeTarget = `src/plugins/${mirror.pluginName}/${file.relativePath}`;
-      desiredPluginFiles.add(relativeTarget);
-      const target = join(
-        options.root,
-        "src",
-        "plugins",
-        mirror.pluginName,
-        file.relativePath,
-      );
-      const raw = file.content ?? (await readFile(file.sourcePath!));
-      const desired = normalizeMirroredPluginSource({
-        pluginName: mirror.pluginName,
-        pluginRoot: mirror.pluginRoot,
-        relativePath: file.relativePath,
-        sourcePath: file.sourcePath,
-        source: raw,
-        importPluginRoots: options.importPluginRoots,
-      });
-      let reason: "new" | "changed" | "unchanged";
-      if (await fileExists(target)) {
-        const current = await readFile(target);
-        reason = current === desired ? "unchanged" : "changed";
-      } else {
-        reason = "new";
-      }
-      operations.push({
-        kind: "write-plugin-file",
-        target,
-        content: desired,
-        reason,
-      });
-    }
-  }
-
-  for (const spec of options.adapters) {
-    const adapterName = spec.kind === "synthetic" ? spec.contractName : spec.toolName;
-    const relativeTarget = `src/adapters/${spec.pluginName}/${adapterName}.adapter.ts`;
-    desiredPluginFiles.add(relativeTarget);
-    const target = join(
-      options.root,
-      "src",
-      "adapters",
-      spec.pluginName,
-      `${adapterName}.adapter.ts`,
-    );
-    const desired = renderToolAdapter(spec);
-    let reason: "new" | "changed" | "unchanged";
-    if (await fileExists(target)) {
-      const current = await readFile(target);
-      reason = current === desired ? "unchanged" : "changed";
-    } else {
-      reason = "new";
-    }
-    operations.push({
-      kind: "write-plugin-file",
-      target,
-      content: desired,
-      reason,
-    });
-  }
-
-  desiredPluginFiles.add("src/server.ts");
-  const serverTarget = join(options.root, "src", "server.ts");
-  const desiredServer = renderGeneratedServerTsForBindings(
-    options.serverBindings,
-    options.runtimeToolNamespace,
-    options.pluginId,
-    options.adapters,
-    options.hookRegistrations ?? [],
-  );
-  let serverReason: "new" | "changed" | "unchanged";
-  if (await fileExists(serverTarget)) {
-    const current = await readFile(serverTarget);
-    serverReason = current === desiredServer ? "unchanged" : "changed";
-  } else {
-    serverReason = "new";
-  }
-  operations.push({
-    kind: "write-plugin-file",
-    target: serverTarget,
-    content: desiredServer,
-    reason: serverReason,
+    target: bundleTarget,
+    content: desiredBundle,
+    reason: bundleReason,
   });
 
   operations.push(...(await planPluginPruning(options.root, desiredPluginFiles)));
@@ -1882,7 +1896,21 @@ export const planLowering = async (
   const desiredGeneratedPluginEntries = new Set<string>();
   const legacyGeneratedPluginEntriesToPrune = new Set<string>([
     ownedGeneratedPluginId,
+    legacyGeneratedPluginSourceEntryForName(input.target, input.target.sourcePluginName),
   ]);
+  const configuredPluginEntries = Array.isArray(config.plugin) ? config.plugin : [];
+  for (const pluginEntry of configuredPluginEntries) {
+    if (isLegacyGeneratedPluginEntry(pluginEntry, input.target)) {
+      legacyGeneratedPluginEntriesToPrune.add(pluginEntry);
+    }
+  }
+  for (const pluginEntry of (config.plugin as unknown) instanceof Array
+    ? (config.plugin as unknown[])
+    : []) {
+    if (isLegacyGeneratedPluginEntry(pluginEntry, input.target)) {
+      legacyGeneratedPluginEntriesToPrune.add(pluginEntry);
+    }
+  }
   const desiredGeneratedPermissionNamespaces = new Set<string>();
   const generatedPermissionNamespacesToTouch = new Set<string>([
     input.target.sourcePluginName,
@@ -1892,6 +1920,9 @@ export const planLowering = async (
     desiredGeneratedPluginEntries.add(pluginEntry);
     legacyGeneratedPluginEntriesToPrune.add(
       generatedPluginIdForName(pluginName)
+    );
+    legacyGeneratedPluginEntriesToPrune.add(
+      legacyGeneratedPluginSourceEntryForName(input.target, pluginName),
     );
     desiredGeneratedPermissionNamespaces.add(pluginName);
     generatedPermissionNamespacesToTouch.add(pluginName);

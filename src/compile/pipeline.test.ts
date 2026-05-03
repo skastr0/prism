@@ -34,6 +34,11 @@ const pathExists = async (path: string): Promise<boolean> => {
 
 const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
   pathToFileURL(
+    join(projectRoot, ".opencode", "plugins", pluginId, "dist", "server.mjs"),
+  ).href;
+
+const generatedLegacySourcePluginEntry = (projectRoot: string, pluginId: string): string =>
+  pathToFileURL(
     join(projectRoot, ".opencode", "plugins", pluginId, "src", "server.ts"),
   ).href;
 
@@ -542,7 +547,12 @@ export default defineTool({
             projectRoot,
             "agentpkg-generated-permission-only-consumer",
           ),
+          generatedLegacySourcePluginEntry(
+            projectRoot,
+            "agentpkg-generated-permission-only-consumer",
+          ),
           generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
+          generatedLegacySourcePluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
         ],
       },
       null,
@@ -860,6 +870,24 @@ test("lifecycle phase validation succeeds when assigned agents satisfy requireme
       join(projectRoot, ".opencode", "lifecycles", "delivery-contract.md"),
     ),
   ).toBe(false);
+
+  const warmOpencode = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+  const generatedPluginWrites = warmOpencode.operations.filter(
+    (operation) =>
+      operation.kind === "write-plugin-file" &&
+      operation.target.includes(join(".opencode", "plugins", "agentpkg-generated")),
+  );
+  expect(generatedPluginWrites.length).toBeGreaterThan(0);
+  expect(generatedPluginWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
 });
 
 test("lifecycle validation fails when assigned agents do not satisfy requirements", async () => {
@@ -975,25 +1003,9 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
     "plugins",
     "agentpkg-generated-canonical-compile-fixture",
   );
-  const contractFiles = await readdir(
-    join(generatedRoot, "src", "plugins", "canonical-compile-fixture", "contracts"),
-  );
-  const reviewContractName = contractFiles.find((file) =>
-    file.includes("submit_review__review_findings_slot"),
-  );
-  expect(reviewContractName).toBeDefined();
-  const reviewContract = await readFile(
-    join(
-      generatedRoot,
-      "src",
-      "plugins",
-      "canonical-compile-fixture",
-      "contracts",
-      reviewContractName!,
-    ),
-    "utf8",
-  );
-  expect(reviewContract).toContain("../schemas/review-slots");
+  const bundle = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+  expect(bundle).toContain("submit_review__review_findings_slot");
+  expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
 });
 
 test("compilePluginForTarget emits a Gemini extension bundle", async () => {
@@ -1148,48 +1160,28 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
     }),
   );
 
-  const serverSource = await readFile(
-    join(
-      projectRoot,
-      ".opencode",
-      "plugins",
-      "agentpkg-generated-opencode-hook-demo",
-      "src",
-      "server.ts",
-    ),
-    "utf8",
-  );
-
-  expect(serverSource).toContain("event: async ({ event })");
-  expect(serverSource).toContain('"tool.execute.before"');
-  expect(serverSource).toContain('"tool.execute.after"');
-  expect(serverSource).toContain('toolName === "opencode_hook_demo_submit_work"');
-  expect(serverSource).toContain('from "./runtime/hook-runtime"');
-  expect(serverSource).not.toContain("/Projects/agentpkg/src/compile/sources.ts");
-  expect(serverSource).toContain('eventType === "session.created"');
-  expect(serverSource).toContain('nativeEvent: "session.created"');
-  expect(serverSource).toContain('"session.start", nativePayload');
-  expect(serverSource).toContain('eventType === "session.deleted"');
-  expect(serverSource).toContain('nativeEvent: "session.deleted"');
-  expect(serverSource).toContain('"session.end", nativePayload');
-  expect(serverSource).toContain("cwd: context.directory");
-  expect(serverSource).toContain("decodeNativeHookPayloadForEvent");
-  expect(serverSource).toContain("decodeHookResultForEvent");
-
   const generatedRoot = join(
     projectRoot,
     ".opencode",
     "plugins",
     "agentpkg-generated-opencode-hook-demo",
   );
-  expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-runtime.ts"))).toBe(true);
-  expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-authoring-bridge.ts"))).toBe(true);
-  const mirroredHook = await readFile(
-    join(generatedRoot, "src", "plugins", "opencode-hook-demo", "hooks", "session-start.hook.ts"),
-    "utf8",
-  );
-  expect(mirroredHook).toContain('from "../../../runtime/hook-authoring-bridge"');
-  expect(mirroredHook).not.toContain(agentpkgImportPath);
+  const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+
+  expect(serverSource).toContain('"tool.execute.before"');
+  expect(serverSource).toContain('"tool.execute.after"');
+  expect(serverSource).toContain('"opencode_hook_demo_submit_work"');
+  expect(serverSource).not.toContain("/Projects/agentpkg/src/compile/sources.ts");
+  expect(serverSource).toContain('"session.created"');
+  expect(serverSource).toContain('"session.start"');
+  expect(serverSource).toContain('"session.deleted"');
+  expect(serverSource).toContain('"session.end"');
+  expect(serverSource).toContain("decodeNativeHookPayloadForEvent");
+  expect(serverSource).toContain("decodeHookResultForEvent");
+  expect(serverSource).not.toContain(agentpkgImportPath);
+  expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
+  expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-runtime.ts"))).toBe(false);
+  expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-authoring-bridge.ts"))).toBe(false);
 });
 
 test("compilePluginForTarget lowers executable canonical tools for opencode", async () => {
@@ -1260,168 +1252,56 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     "plugins",
     "agentpkg-generated-canonical-compile-fixture",
   );
-  const adapterDir = join(generatedRoot, "src", "adapters", "canonical-compile-fixture");
-  const adapterFiles = await readdir(adapterDir);
-  expect(adapterFiles.length).toBeGreaterThan(0);
-
-  const adapter = await readFile(join(adapterDir, adapterFiles[0]!), "utf8");
-  expect(adapter).toContain("await (surface as any).handle(input, runtimeContext)");
-  expect(adapter).not.toContain("canonical.handle");
   const protocolGeneratedRoot = join(
     projectRoot,
     ".opencode",
     "plugins",
     "agentpkg-generated-protocol-core",
   );
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "create_item.tool.ts",
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "external-submit.tool.ts",
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        generatedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "external-submit.tool.ts",
-      ),
-    ),
-  ).toBe(false);
-  const mirroredSubmitReviewTool = await readFile(
-    join(
-      generatedRoot,
-      "src",
-      "plugins",
-      "canonical-compile-fixture",
-      "tools",
-      "submit-review.tool.ts",
-    ),
-    "utf8",
-  );
-  expect(mirroredSubmitReviewTool).not.toContain('from "agentpkg"');
-  expect(mirroredSubmitReviewTool).not.toContain("src/index.ts");
-  expect(mirroredSubmitReviewTool).not.toContain("schemaSlot");
-  expect(mirroredSubmitReviewTool).not.toContain("defineTool");
-
-  const contractFiles = await readdir(
-    join(generatedRoot, "src", "plugins", "canonical-compile-fixture", "contracts"),
-  );
-  expect(
-    contractFiles.some((file) =>
-      file.includes("delivery-contract__builder__create_item"),
-    ),
-  ).toBe(false);
-  const reviewContractName = contractFiles.find((file) =>
-    file.includes("submit_review__review_findings_slot"),
-  );
-  expect(reviewContractName).toBeDefined();
-  const reviewContract = await readFile(
-    join(
-      generatedRoot,
-      "src",
-      "plugins",
-      "canonical-compile-fixture",
-      "contracts",
-      reviewContractName!,
-    ),
-    "utf8",
-  );
-  expect(reviewContract).toContain("../schemas/review-slots");
-  expect(reviewContract).not.toContain("Schema.omit");
-
-  const mirroredReviewSlots = await readFile(
-    join(
-      generatedRoot,
-      "src",
-      "plugins",
-      "canonical-compile-fixture",
-      "schemas",
-      "review-slots.ts",
-    ),
-    "utf8",
-  );
-  expect(mirroredReviewSlots).toContain(
-    "agentpkg-generated-protocol-core/src/plugins/protocol-core/schemas/review-evidence",
-  );
-
-  const opencodePluginStub = join(
-    generatedRoot,
-    "node_modules",
-    "@opencode-ai",
-    "plugin",
-  );
-  await mkdir(opencodePluginStub, { recursive: true });
-  await writeFile(
-    join(opencodePluginStub, "package.json"),
-    JSON.stringify({ type: "module", main: "./index.js" }),
-  );
-  await writeFile(
-    join(opencodePluginStub, "index.js"),
-    `const node = () => ({ describe: () => node(), optional: () => node() });
-const schema = {
-  string: node,
-  number: node,
-  boolean: node,
-  literal: node,
-  enum: node,
-  array: node,
-  object: node,
-};
-export const tool = Object.assign((definition) => definition, { schema });
-`,
-  );
-  const effectStub = join(generatedRoot, "node_modules", "effect");
-  await mkdir(effectStub, { recursive: true });
-  await writeFile(
-    join(effectStub, "package.json"),
-    JSON.stringify({ type: "module", main: "./index.js" }),
-  );
-  await writeFile(
-    join(effectStub, "index.js"),
-    `export * from ${JSON.stringify(import.meta.resolve("effect"))};\n`,
-  );
-
-  const generatedServer = await import(
-    pathToFileURL(join(generatedRoot, "src", "server.ts")).href
-  );
+  const generatedBundlePath = join(generatedRoot, "dist", "server.mjs");
+  const protocolBundlePath = join(protocolGeneratedRoot, "dist", "server.mjs");
+  const generatedServer = await import(pathToFileURL(generatedBundlePath).href);
   expect(generatedServer.default.id).toBe("agentpkg-generated-canonical-compile-fixture");
-  const generatedServerSource = await readFile(join(generatedRoot, "src", "server.ts"), "utf8");
+  const generatedPlugin = await generatedServer.default.server({
+    directory: projectRoot,
+    worktree: projectRoot,
+  });
+  const generatedToolNames = Object.keys(generatedPlugin.tool ?? {});
+  expect(generatedToolNames).toContain("canonical_compile_fixture_submit_review__review_findings_slot");
+  expect(generatedToolNames).not.toContain("protocol_core_external_submit");
+  expect(generatedToolNames).not.toContain("canonical_compile_fixture_builder_submit_work");
+  expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
+  expect(await pathExists(join(generatedRoot, "package.json"))).toBe(false);
+  expect(await pathExists(join(generatedRoot, "node_modules", "effect", "package.json"))).toBe(false);
+
+  const generatedServerSource = await readFile(generatedBundlePath, "utf8");
+  expect(generatedServerSource).not.toContain("canonical.handle");
+  expect(generatedServerSource).not.toContain('from "agentpkg"');
+  expect(generatedServerSource).not.toContain("src/index.ts");
+  expect(generatedServerSource).not.toContain("schemaSlot");
+  expect(generatedServerSource).not.toContain("defineTool");
+  expect(generatedServerSource).not.toContain('from "effect"');
+  expect(generatedServerSource).not.toContain('from "@opencode-ai/plugin"');
   expect(generatedServerSource).not.toContain('"protocol_core_external_submit":');
   expect(generatedServerSource).not.toContain("canonical_compile_fixture_builder_submit_work");
-  const protocolGeneratedServerSource = await readFile(
-    join(protocolGeneratedRoot, "src", "server.ts"),
-    "utf8",
-  );
-  expect(protocolGeneratedServerSource).toContain('"protocol_core_external_submit":');
-  expect(protocolGeneratedServerSource).toContain('"protocol_core_create_item":');
-  expect(
-    (protocolGeneratedServerSource.match(/"protocol_core_external_submit":/g) ?? []).length,
-  ).toBe(1);
-  expect((protocolGeneratedServerSource.match(/"protocol_core_create_item":/g) ?? []).length).toBe(
-    1,
-  );
+  expect(generatedServerSource).not.toContain("delivery-contract__builder__create_item");
+  expect(generatedServerSource).toContain("submit_review__review_findings_slot");
+  expect(generatedServerSource).not.toContain("Schema.omit");
+  expect(generatedServerSource).not.toContain("agentpkg-generated-protocol-core/src/plugins");
+
+  const protocolServer = await import(pathToFileURL(protocolBundlePath).href);
+  const protocolPlugin = await protocolServer.default.server({
+    directory: projectRoot,
+    worktree: projectRoot,
+  });
+  const protocolToolNames = Object.keys(protocolPlugin.tool ?? {});
+  expect(protocolToolNames).toContain("protocol_core_external_submit");
+  expect(protocolToolNames).toContain("protocol_core_create_item");
+  const protocolGeneratedServerSource = await readFile(protocolBundlePath, "utf8");
+  expect(protocolGeneratedServerSource).not.toContain('from "effect"');
+  expect(protocolGeneratedServerSource).not.toContain('from "@opencode-ai/plugin"');
+  expect(await pathExists(join(protocolGeneratedRoot, "src", "server.ts"))).toBe(false);
+  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
@@ -2750,43 +2630,13 @@ test("external permission-only consumers do not emit empty generated plugin shel
   );
 
   expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(false);
-  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "external-submit.tool.ts",
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "schemas",
-        "shared.ts",
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "unreferenced.tool.ts",
-      ),
-    ),
-  ).toBe(true);
+  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
+  expect(await pathExists(join(protocolGeneratedRoot, "dist", "server.mjs"))).toBe(true);
+  expect(await pathExists(join(protocolGeneratedRoot, "src", "server.ts"))).toBe(false);
+  const protocolBundle = await readFile(join(protocolGeneratedRoot, "dist", "server.mjs"), "utf8");
+  expect(protocolBundle).toContain("protocol_core_external_submit");
+  expect(protocolBundle).toContain("protocol_core_unreferenced");
+  expect(protocolBundle).toContain("shared");
 
   const opencodeAgent = await readFile(
     join(projectRoot, ".opencode", "agents", "worker.md"),
@@ -2806,10 +2656,13 @@ test("external permission-only consumers do not emit empty generated plugin shel
   });
   expect(opencodeConfig.permission).not.toHaveProperty("permission_only_consumer_*");
   expect(opencodeConfig.plugin).toEqual([
-    "agentpkg-generated-stale-dep",
     generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
     generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
   ]);
+  expect(opencodeConfig.plugin).not.toContain("agentpkg-generated-stale-dep");
+  expect(opencodeConfig.plugin).not.toContain(
+    generatedLegacySourcePluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
+  );
   expect(opencodeConfig.plugin).not.toContain(
     "agentpkg-generated-permission-only-consumer",
   );
@@ -2842,33 +2695,12 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
     "agentpkg-generated-protocol-core",
   );
 
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "external-submit.tool.ts",
-      ),
-    ),
-  ).toBe(true);
-  expect(
-    await pathExists(
-      join(
-        protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "unreferenced.tool.ts",
-      ),
-    ),
-  ).toBe(true);
+  expect(await pathExists(join(protocolGeneratedRoot, "dist", "server.mjs"))).toBe(true);
+  expect(await pathExists(join(protocolGeneratedRoot, "src", "server.ts"))).toBe(false);
+  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
 
   const server = await readFile(
-    join(protocolGeneratedRoot, "src", "server.ts"),
+    join(protocolGeneratedRoot, "dist", "server.mjs"),
     "utf8",
   );
   expect(server).toContain("protocol_core_external_submit");
@@ -2913,17 +2745,14 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     "agentpkg-generated-protocol-core",
   );
 
-  expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(true);
-  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(true);
+  expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(false);
+  expect(await pathExists(join(protocolGeneratedRoot, "package.json"))).toBe(false);
   expect(
     await pathExists(
       join(
         protocolGeneratedRoot,
-        "src",
-        "plugins",
-        "protocol-core",
-        "tools",
-        "external-submit.tool.ts",
+        "dist",
+        "server.mjs",
       ),
     ),
   ).toBe(true);
@@ -2932,19 +2761,16 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
       join(
         consumerGeneratedRoot,
         "src",
-        "plugins",
-        "external-synthetic-consumer",
-        "tools",
-        "external-submit.tool.ts",
+        "server.ts",
       ),
     ),
   ).toBe(false);
 
-  const consumerServer = await readFile(join(consumerGeneratedRoot, "src", "server.ts"), "utf8");
+  const consumerServer = await readFile(join(consumerGeneratedRoot, "dist", "server.mjs"), "utf8");
   expect(consumerServer).toContain(
     "external_synthetic_consumer_submit_work__worker_details",
   );
-  const protocolServer = await readFile(join(protocolGeneratedRoot, "src", "server.ts"), "utf8");
+  const protocolServer = await readFile(join(protocolGeneratedRoot, "dist", "server.mjs"), "utf8");
   expect(protocolServer).toContain("protocol_core_external_submit");
 
   const opencodeAgent = await readFile(
@@ -2956,31 +2782,8 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   );
   expect(opencodeAgent).toContain("protocol_core_external_submit: deny");
 
-  const contractFiles = await readdir(
-    join(
-      consumerGeneratedRoot,
-      "src",
-      "plugins",
-      "external-synthetic-consumer",
-      "contracts",
-    ),
-  );
-  const contractName = contractFiles.find((file) =>
-    file.includes("submit_work__worker_details"),
-  );
-  expect(contractName).toBeDefined();
-  const contract = await readFile(
-    join(
-      consumerGeneratedRoot,
-      "src",
-      "plugins",
-      "external-synthetic-consumer",
-      "contracts",
-      contractName!,
-    ),
-    "utf8",
-  );
-  expect(contract).toContain("agentpkg-generated-protocol-core/src/plugins/protocol-core/tools/external-submit.tool");
+  expect(consumerServer).toContain("submit_work__worker_details");
+  expect(consumerServer).not.toContain("agentpkg-generated-protocol-core/src/plugins/protocol-core/tools/external-submit.tool");
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),

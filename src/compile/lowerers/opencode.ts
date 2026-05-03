@@ -47,6 +47,7 @@ import {
   rewriteBareImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
 } from "../bundle-utils.js";
+import { opencodePluginBundleImportPath } from "../runtime-deps.js";
 import {
   backupFile,
   readFile,
@@ -205,9 +206,6 @@ const isLegacyGeneratedPluginEntry = (
 
 const generatedToolDenyPatternForName = (pluginName: string): string =>
   `${syntheticToolNamespace(pluginName)}_*`;
-
-const opencodePluginBundleImportPath = (): string =>
-  fileURLToPath(import.meta.resolve("@opencode-ai/plugin")).replace(/\\/g, "/");
 
 const rewriteGeneratedOpenCodeRuntimeImportsForBundle = (source: string): string =>
   rewriteBareImportsForBundle(

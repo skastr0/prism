@@ -40,6 +40,9 @@ for (const { platform, arch } of targets) {
         AGENTPKG_EFFECT_ENTRYPOINT: JSON.stringify(
           fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/")
         ),
+        AGENTPKG_OPENCODE_PLUGIN_ENTRYPOINT: JSON.stringify(
+          fileURLToPath(import.meta.resolve("@opencode-ai/plugin")).replace(/\\/g, "/")
+        ),
         SCHEMA_BRIDGE_SOURCE: JSON.stringify(
           readFileSync("src/compile/runtime/schema-bridge.ts", "utf8")
         ),

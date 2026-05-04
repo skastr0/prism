@@ -366,7 +366,7 @@ test("install-all compiles discovered child plugins with project scope", async (
       "project",
       "--project",
       projectRoot,
-      "--no-backup",
+
     ],
     { HOME: homeRoot }
   );
@@ -440,7 +440,7 @@ test("install-all skips skill validation when skills are not targeted", async ()
       "project",
       "--project",
       projectRoot,
-      "--no-backup",
+
     ],
     { HOME: homeRoot }
   );

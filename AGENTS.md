@@ -80,7 +80,7 @@ agentpkg install <plugin-path> [options]
   --project <path>  Project path for project-specific rules
   --scope <scope>   Compile output scope: global or project
   --overwrite       Overwrite existing files
-  --no-backup       Skip creating backups
+  --backup          Create .bak backups before overwriting files
   --dry-run         Preview operations without executing
 
 # Install every child plugin in a directory
@@ -90,7 +90,7 @@ agentpkg install-all <directory> [options]
   --project <path>  Project path for project-specific rules
   --scope <scope>   Compile output scope: global or project
   --overwrite       Overwrite existing files
-  --no-backup       Skip creating backups
+  --backup          Create .bak backups before overwriting files
   --dry-run         Preview operations without executing
 
 # Validate plugin structure
@@ -885,7 +885,7 @@ agentpkg validate ./test-plugin
 # Dry run to preview
 agentpkg install ./test-plugin --all --dry-run
 
-# Install for real (with backup)
+# Install for real
 agentpkg install ./test-plugin --all
 ```
 

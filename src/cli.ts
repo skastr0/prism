@@ -62,7 +62,7 @@ program
     "global"
   )
   .option("--overwrite", "Overwrite existing files", false)
-  .option("--no-backup", "Skip creating backups")
+  .option("--backup", "Create .bak backups before overwriting files")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (pluginPath: string, options) => {
@@ -137,7 +137,7 @@ program
         scope: options.scope,
         projectPath: options.project,
         dryRun: options.dryRun,
-        backup: options.backup !== false,
+        backup: options.backup,
       });
       if (!compilePhase.success) {
         process.exit(1);
@@ -150,7 +150,7 @@ program
         harnesses: harnesses as HarnessId[],
         projectPath: options.project,
         overwrite: options.overwrite,
-        backup: options.backup !== false,
+        backup: options.backup,
         dryRun: options.dryRun,
       });
 
@@ -166,7 +166,7 @@ program
         harnesses: harnesses as HarnessId[],
         projectPath: options.project,
         overwrite: options.overwrite,
-        backup: options.backup !== false,
+        backup: options.backup,
         dryRun: false,
       });
 
@@ -213,7 +213,7 @@ program
     "global"
   )
   .option("--overwrite", "Overwrite existing files", false)
-  .option("--no-backup", "Skip creating backups")
+  .option("--backup", "Create .bak backups before overwriting files")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (directory: string, options) => {
@@ -365,7 +365,7 @@ program
           scope: options.scope,
           projectPath: options.project,
           dryRun: options.dryRun,
-          backup: options.backup !== false,
+          backup: options.backup,
         });
 
         if (!compilePhase.success) {
@@ -388,7 +388,7 @@ program
           harnesses: harnesses as HarnessId[],
           projectPath: options.project,
           overwrite: options.overwrite,
-          backup: options.backup !== false,
+          backup: options.backup,
           dryRun: options.dryRun,
         });
 
@@ -412,7 +412,7 @@ program
           harnesses: harnesses as HarnessId[],
           projectPath: options.project,
           overwrite: options.overwrite,
-          backup: options.backup !== false,
+          backup: options.backup,
           dryRun: false,
         });
 
@@ -892,7 +892,7 @@ program
   .option("-p, --project <path>", "Project root when compiling with --scope project")
   .option("--dry-run", "Preview operations without writing", false)
   .option("--clean", "Clear compile cache before compiling", false)
-  .option("--no-backup", "Skip creating backups")
+  .option("--backup", "Create .bak backups before overwriting files")
   .action(async (pluginPath: string, options) => {
     try {
       const expanded = expandPath(pluginPath);
@@ -914,7 +914,7 @@ program
         scope: options.scope,
         projectPath: options.project,
         dryRun: options.dryRun,
-        backup: options.backup !== false,
+        backup: options.backup,
       });
 
       const exit = await Effect.runPromiseExit(program);

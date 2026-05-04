@@ -228,7 +228,7 @@ const renderAgentToml = (
       `cwd = ${quote(mcpServer.root)}`,
       "enabled = true",
       "required = false",
-      'default_tools_approval_mode = "prompt"',
+      'default_tools_approval_mode = "approve"',
       `enabled_tools = ${tomlArray(mcpToolNames)}`,
     );
   }
@@ -519,7 +519,7 @@ const renderManagedConfigBlock = (options: {
       `cwd = ${quote(options.root)}`,
       "enabled = true",
       "required = false",
-      'default_tools_approval_mode = "prompt"',
+      'default_tools_approval_mode = "approve"',
       `enabled_tools = ${tomlArray(options.enabledTools)}`,
       "",
     );

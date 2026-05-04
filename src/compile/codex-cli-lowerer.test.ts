@@ -195,6 +195,7 @@ export default defineTool({
   expect(agentToml?.content).toContain('command = "bun"');
   expect(agentToml?.content).toContain('args = ["mcp/agentpkg_generated_codex_mcp_fixture/server.mjs"]');
   expect(agentToml?.content).toContain(`cwd = ${JSON.stringify(outputRoot)}`);
+  expect(agentToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
 
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
@@ -217,6 +218,7 @@ export default defineTool({
   expect(configToml?.content).toContain("# --- agentpkg codex-cli begin: codex-mcp-fixture ---");
   expect(configToml?.content).toContain('command = "bun"');
   expect(configToml?.content).toContain('args = ["mcp/agentpkg_generated_codex_mcp_fixture/server.mjs"]');
+  expect(configToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(configToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');
   expect(configToml?.content).toContain('matcher = "shell\\\\.command"');

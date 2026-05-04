@@ -485,7 +485,7 @@ const renderPhaseTransitionsSection = (
   lines.push(
     "Lifecycle work items move through canonical states. The orchestrator owns transitions; phase agents stay inside their phase folder until their submission lands.",
     "",
-    "Common state arc: `backlog/` → `exploring/` → `committed/` → `building/` → `reviewing/` → `done/` (or `abandoned/`). Lifecycles with domain-specific build folders (e.g. WLC's `drafting/`) substitute the build state.",
+    "Common state arc: `backlog/` → `exploring/` → `committed/` → `building/` → `reviewing/` → `done/` (or `abandoned/`). All lifecycles follow the same explore / build / review convention; build means whatever the lifecycle's domain produces (code for SDLC, claims for RLC, assets for MLC, content for WLC).",
     "",
     "Phase ownership of state transitions:",
     "",

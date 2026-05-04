@@ -407,6 +407,73 @@ export default defineHook({
   return { pluginRoot, projectRoot };
 };
 
+const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
+  pluginRoot: string;
+  projectRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "signal-core");
+  const projectRoot = join(root, "project");
+  const lifecycleRoot = join(pluginRoot, "deps", "lifecycle-core");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "signal-core",
+        version: "0.1.0",
+        deps: {
+          "lifecycle-core": "./deps/lifecycle-core",
+        },
+        targets: {
+          tools: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(lifecycleRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "lifecycle-core",
+        version: "0.1.0",
+        targets: {
+          tools: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(lifecycleRoot, "tools", "shared", "lifecycle-server-client.ts"),
+    `export const normalizeLifecycleMessage = (value: string): string => value.trim().toUpperCase();
+`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "record_signal.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { normalizeLifecycleMessage } from "../deps/lifecycle-core/tools/shared/lifecycle-server-client.ts";
+
+export default defineTool({
+  name: "record_signal",
+  description: "Record a signal",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: normalizeLifecycleMessage(input.message) };
+  },
+});
+`,
+  );
+
+  return { pluginRoot, projectRoot };
+};
+
 const createExternalPermissionOnlyFixture = async (): Promise<{
   pluginRoot: string;
   protocolRoot: string;
@@ -2816,6 +2883,32 @@ test("external permission-only consumers do not emit empty generated plugin shel
       "agentpkg-generated-permission-only-consumer",
     ),
   );
+});
+
+test("opencode tools-only plugins bundle runtime helper imports from declared deps", async () => {
+  const { pluginRoot, projectRoot } = await createToolsOnlyRuntimeDepImportFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const generatedRoot = join(
+    projectRoot,
+    ".opencode",
+    "plugins",
+    "agentpkg-generated-signal-core",
+  );
+  const server = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+
+  expect(server).toContain("signal_core_record_signal");
+  expect(server).toContain("normalizeLifecycleMessage");
 });
 
 test("tools-only plugins emit the complete owner runtime plugin", async () => {

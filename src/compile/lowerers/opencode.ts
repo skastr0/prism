@@ -1473,6 +1473,21 @@ const mergePluginMirrors = (
     }));
 };
 
+const collectRegistryDependencyPluginRoots = (
+  registry: PluginRegistry | undefined,
+): Map<string, string> => {
+  const roots = new Map<string, string>();
+  const visit = (current: PluginRegistry): void => {
+    for (const dep of current.deps.values()) {
+      if (!roots.has(dep.pluginName)) roots.set(dep.pluginName, dep.pluginPath);
+      visit(dep);
+    }
+  };
+
+  if (registry) visit(registry);
+  return roots;
+};
+
 const expandBundleMirrors = async (
   mirrors: ReadonlyArray<PluginMirror>,
   importPluginRoots: ReadonlyMap<string, string>,
@@ -1920,6 +1935,11 @@ export const planLowering = async (
     }
     for (const [pluginName, owner] of ownerPlugins) {
       importPluginRoots.set(pluginName, owner.pluginRoot);
+    }
+    for (const [pluginName, pluginRoot] of collectRegistryDependencyPluginRoots(input.registry)) {
+      if (!importPluginRoots.has(pluginName)) {
+        importPluginRoots.set(pluginName, pluginRoot);
+      }
     }
 
     if (sourceRuntimeBindings.length > 0 || hasAnyHook) {

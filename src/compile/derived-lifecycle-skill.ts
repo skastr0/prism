@@ -16,7 +16,6 @@ import { composeLifecyclePhaseReference } from "./compose.js";
 import type {
   Agent,
   CanonicalTool,
-  Identity,
   Lifecycle,
   NormalizedLifecyclePhase as LifecyclePhase,
   Personality,
@@ -72,16 +71,6 @@ const lookupAgent = (
   return { agent, registry: reg };
 };
 
-const lookupIdentity = (
-  ref: string,
-  registry: PluginRegistry,
-): Identity | undefined => {
-  const reg = lookupRegistry(ref, registry);
-  if (!reg) return undefined;
-  const name = parseNamedRef(ref).name;
-  return reg.identities.get(name);
-};
-
 const lookupPersonality = (
   ref: string,
   registry: PluginRegistry,
@@ -135,15 +124,6 @@ const lookupCanonicalTool = (
   return undefined;
 };
 
-const inputShapeSummary = (tool: CanonicalTool | undefined): string | undefined => {
-  if (!tool) return undefined;
-  // Effect Schema instances expose `.ast` and `_tag`; we don't try to render
-  // the structural detail. The presence of an input schema is enough signal
-  // that a tool takes structured input.
-  if (tool.input === undefined) return undefined;
-  return "Structured input — see canonical tool schema for fields.";
-};
-
 const sortStrings = (values: ReadonlyArray<string>): string[] =>
   [...values].sort((left, right) => left.localeCompare(right));
 
@@ -152,26 +132,24 @@ const renderToolDetail = (
   logicalName: string,
   registry: PluginRegistry,
 ): string[] => {
-  const lines: string[] = [];
   const tool = lookupCanonicalTool(ref, registry);
   const description = tool?.description;
-  const inputHint = inputShapeSummary(tool);
   const head = `- \`${logicalName}\` (canonical \`${ref}\`)${description ? ` — ${description}` : ""}`;
-  lines.push(head);
-  if (inputHint) {
-    lines.push(`  - Input: ${inputHint}`);
-  }
-  return lines;
+  return [head];
 };
 
 const sectionHeader = (level: number, text: string): string =>
   `${"#".repeat(level)} ${text}`;
 
+const personalityLine = (personality: Personality): string => {
+  const description = personality.description.replace(/\.+$/, "");
+  return `**Personality**: \`${personality.name}\` — ${description}.`;
+};
+
 interface PhaseAgentView {
   readonly ref: string;
   readonly agent: Agent;
   readonly registry: PluginRegistry;
-  readonly identity: Identity | undefined;
   readonly personality: Personality | undefined;
   readonly traits: ReadonlyArray<ResolvedTraitView>;
 }
@@ -184,7 +162,6 @@ const collectPhaseAgents = (
   for (const ref of phase.agents) {
     const found = lookupAgent(ref, registry);
     if (!found) continue;
-    const identity = lookupIdentity(found.agent.identity, found.registry);
     const personality = found.agent.personality
       ? lookupPersonality(found.agent.personality, found.registry)
       : undefined;
@@ -197,7 +174,6 @@ const collectPhaseAgents = (
       ref,
       agent: found.agent,
       registry: found.registry,
-      identity,
       personality,
       traits,
     });
@@ -213,7 +189,6 @@ const orchestratorAgentView = (
   const ref = lifecycle.orchestrator.agent;
   const found = lookupAgent(ref, registry);
   if (!found) return undefined;
-  const identity = lookupIdentity(found.agent.identity, found.registry);
   const personality = found.agent.personality
     ? lookupPersonality(found.agent.personality, found.registry)
     : undefined;
@@ -222,17 +197,7 @@ const orchestratorAgentView = (
     const view = lookupTrait(binding.ref, found.registry);
     if (view) traits.push(view);
   }
-  return { ref, agent: found.agent, registry: found.registry, identity, personality, traits };
-};
-
-const personalityGloss = (personality: Personality | undefined): string | undefined => {
-  if (!personality) return undefined;
-  const parts: string[] = [];
-  if (personality.temperament) parts.push(`temperament ${personality.temperament}`);
-  if (personality.orientation) parts.push(`orientation ${personality.orientation}`);
-  if (personality.virtues) parts.push(`virtues ${personality.virtues}`);
-  if (parts.length === 0) return undefined;
-  return parts.join("; ");
+  return { ref, agent: found.agent, registry: found.registry, personality, traits };
 };
 
 const renderAgentSubsection = (
@@ -246,17 +211,7 @@ const renderAgentSubsection = (
   }
 
   if (view.personality) {
-    const gloss = personalityGloss(view.personality);
-    lines.push(
-      gloss
-        ? `**Personality**: \`${view.personality.name}\` — ${view.personality.description}; ${gloss}.`
-        : `**Personality**: \`${view.personality.name}\` — ${view.personality.description}.`,
-    );
-    lines.push("");
-  }
-
-  if (view.identity?.description) {
-    lines.push(`**Identity**: ${view.identity.description}`);
+    lines.push(personalityLine(view.personality));
     lines.push("");
   }
 
@@ -320,16 +275,7 @@ const renderOrchestratorSection = (
       lines.push(view.agent.description, "");
     }
     if (view.personality) {
-      const gloss = personalityGloss(view.personality);
-      lines.push(
-        gloss
-          ? `**Personality**: \`${view.personality.name}\` — ${view.personality.description}; ${gloss}.`
-          : `**Personality**: \`${view.personality.name}\` — ${view.personality.description}.`,
-      );
-      lines.push("");
-    }
-    if (view.identity?.description) {
-      lines.push(`**Identity**: ${view.identity.description}`);
+      lines.push(personalityLine(view.personality));
       lines.push("");
     }
     if (view.traits.length > 0) {
@@ -450,19 +396,30 @@ const renderSubmissionProtocolsSection = (
   lines.push("");
 };
 
+interface TraitBindingSummary {
+  readonly trait: Trait;
+  readonly boundBy: Set<string>;
+}
+
 const collectAllTraits = (
   lifecycle: Lifecycle,
   registry: PluginRegistry,
-): Map<string, Trait> => {
-  const byCanonicalId = new Map<string, Trait>();
+): Map<string, TraitBindingSummary> => {
+  const byCanonicalId = new Map<string, TraitBindingSummary>();
   const visit = (agentRef: string): void => {
     const found = lookupAgent(agentRef, registry);
     if (!found) return;
     for (const binding of found.agent.traits) {
       const trait = lookupTrait(binding.ref, found.registry);
       if (!trait) continue;
-      if (!byCanonicalId.has(trait.canonicalId)) {
-        byCanonicalId.set(trait.canonicalId, trait.trait);
+      const existing = byCanonicalId.get(trait.canonicalId);
+      if (existing) {
+        existing.boundBy.add(found.agent.name);
+      } else {
+        byCanonicalId.set(trait.canonicalId, {
+          trait: trait.trait,
+          boundBy: new Set([found.agent.name]),
+        });
       }
     }
   };
@@ -483,20 +440,39 @@ const renderTraitProtocolsSection = (
   const sorted = [...traits.entries()].sort(([left], [right]) => left.localeCompare(right));
   lines.push("## Trait protocols active in this lifecycle", "");
   lines.push(
-    "Every assigned agent carries one or more traits. Each trait below names its protocol once; the agent sub-sections above reference these by canonical id.",
+    "Each trait active in this lifecycle is summarized once: its description, the agents that bind it, and any tools or skills it grants. Per-trait agent-side instructions live with the trait source and are compiled into the bound agents directly; they are not re-rendered here.",
     "",
   );
-  for (const [canonicalId, trait] of sorted) {
+  for (const [canonicalId, summary] of sorted) {
+    const { trait, boundBy } = summary;
+    const grantedTools = sortStrings(Object.keys(trait.tools));
+    const grantedSkills = sortStrings(trait.inject.skills);
+
+    if (!trait.description && grantedTools.length === 0 && grantedSkills.length === 0) {
+      lines.push(
+        `_\`${canonicalId}\`: no orchestration-relevant surface; see trait source for agent-side instructions._`,
+        "",
+      );
+      continue;
+    }
+
     lines.push(`### \`${canonicalId}\``, "");
     if (trait.description) {
       lines.push(trait.description, "");
     }
-    if (trait.instructions.length > 0) {
-      for (const instruction of trait.instructions) {
-        lines.push(`- ${instruction}`);
-      }
-      lines.push("");
+    const boundList = sortStrings([...boundBy]).map((name) => `\`${name}\``).join(", ");
+    lines.push(`- Bound by: ${boundList}`);
+    if (grantedTools.length > 0) {
+      lines.push(
+        `- Grants tool(s): ${grantedTools.map((name) => `\`${name}\``).join(", ")}`,
+      );
     }
+    if (grantedSkills.length > 0) {
+      lines.push(
+        `- Grants skill(s): ${grantedSkills.map((name) => `\`${name}\``).join(", ")}`,
+      );
+    }
+    lines.push("");
   }
 };
 
@@ -525,37 +501,6 @@ const renderPhaseTransitionsSection = (
     );
   }
   lines.push("");
-};
-
-const renderClosureDisciplineSection = (
-  lifecycle: Lifecycle,
-  registry: PluginRegistry,
-  lines: string[],
-): void => {
-  const traits = collectAllTraits(lifecycle, registry);
-  // Look for a `committable` trait — its instructions describe closure discipline.
-  let committable: Trait | undefined;
-  for (const [canonicalId, trait] of traits) {
-    if (canonicalId.endsWith(":committable")) {
-      committable = trait;
-      break;
-    }
-  }
-  if (!committable) return;
-  lines.push("## Closure discipline", "");
-  lines.push(
-    `The \`committable\` trait governs how each phase agent closes work before transitioning. Its protocol applies to every agent that carries it in this lifecycle:`,
-    "",
-  );
-  if (committable.description) {
-    lines.push(committable.description, "");
-  }
-  if (committable.instructions.length > 0) {
-    for (const instruction of committable.instructions) {
-      lines.push(`- ${instruction}`);
-    }
-    lines.push("");
-  }
 };
 
 const renderProducesSection = (lifecycle: Lifecycle, lines: string[]): void => {
@@ -625,7 +570,6 @@ export const renderDerivedLifecycleSkillBody = (
   renderSubmissionProtocolsSection(lifecycle, registry, lines);
   renderTraitProtocolsSection(lifecycle, registry, lines);
   renderPhaseTransitionsSection(lifecycle, lines);
-  renderClosureDisciplineSection(lifecycle, registry, lines);
   renderTasteCheckpointsSection(lifecycle, lines);
   renderEvolutionSection(lifecycle, lines);
   renderBodySection(lifecycle, lines);

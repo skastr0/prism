@@ -3341,3 +3341,239 @@ export default defineLifecycle({
     ),
   ).toBe(false);
 });
+
+test("derived lifecycle skill renders trait sections from description + bound-by + grants without instructions", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  // The committable trait carries a description and grants `commit_work`.
+  expect(skill).toContain("### `canonical-compile-fixture:committable`");
+  expect(skill).toContain("Can create implementation commits");
+  expect(skill).toContain("- Bound by: `builder`");
+  expect(skill).toContain("- Grants tool(s): `commit_work`");
+
+  // Verbatim trait instructions must NOT leak into the lifecycle skill.
+  expect(skill).not.toContain(
+    "Commit owned implementation changes only after the submitted work is complete.",
+  );
+  expect(skill).not.toContain(
+    "Submit completed work through the typed submission surface before handing off.",
+  );
+
+  // Reviewable trait is bound by the reviewer and grants `submit_review`.
+  expect(skill).toContain("### `canonical-compile-fixture:reviewable`");
+  expect(skill).toContain("- Bound by: `reviewer`");
+  expect(skill).toContain("- Grants tool(s): `submit_review`");
+});
+
+test("derived lifecycle skill suppresses traits with no description and no grants", async () => {
+  const { renderDerivedLifecycleSkillBody } = await import("./derived-lifecycle-skill.js");
+  const { Lifecycle, Trait, Agent } = await import("./sources.js");
+  const { emptyRegistry } = await import("./registry.js");
+
+  // Build a registry with a single agent whose trait has no description and
+  // no granted tools or skills. The trait section should emit only the
+  // suppression note.
+  const registry = emptyRegistry("/tmp/min", "min", "0.0.0");
+  const trait = new Trait({
+    name: "bare",
+    sourcePath: "/tmp/bare.trait.ts",
+    instructions: ["These instructions should never be rendered in the lifecycle skill."],
+    access: { tools: [], toolGroups: [], skills: [] },
+    tools: {},
+    inject: { skills: [] },
+    require: { tools: [], skills: [] },
+  });
+  registry.traits.set("bare", trait);
+  const agent = new Agent({
+    name: "worker",
+    sourcePath: "/tmp/worker.agent.ts",
+    description: "Worker agent",
+    identity: "worker",
+    traits: [{ ref: "bare", tools: {} }],
+    access: { tools: [], toolGroups: [], skills: [] },
+    skills: [],
+    targets: {},
+  });
+  registry.agents.set("worker", agent);
+
+  const lifecycle = new Lifecycle({
+    name: "min-lifecycle",
+    sourcePath: "/tmp/min.lifecycle.ts",
+    description: "minimal",
+    parameters: [],
+    phases: [
+      {
+        name: "Do work",
+        agents: ["worker"],
+        requires: [],
+      },
+    ],
+    tool_permissions: [],
+    taste_checkpoints: [],
+    body: "",
+  });
+
+  const body = renderDerivedLifecycleSkillBody(lifecycle, registry);
+  expect(body).toContain(
+    "_`min:bare`: no orchestration-relevant surface; see trait source for agent-side instructions._",
+  );
+  // The bare trait's instructions never reach the lifecycle skill.
+  expect(body).not.toContain("These instructions should never be rendered in the lifecycle skill.");
+  // No `### \`min:bare\`` block is emitted for the suppressed trait.
+  expect(body).not.toContain("### `min:bare`");
+});
+
+test("derived lifecycle skill drops the closure-discipline section", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  expect(skill).not.toContain("## Closure discipline");
+});
+
+test("derived lifecycle skill drops the input-shape placeholder line", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  expect(skill).not.toContain("Input: Structured input — see canonical tool schema for fields.");
+  // Tool entries still render the head line itself.
+  expect(skill).toContain("`create_item` (canonical `protocol-core:create_item`)");
+});
+
+test("derived lifecycle skill agent sub-sections do not render a duplicated **Identity** line", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  expect(skill).not.toMatch(/^\*\*Identity\*\*:/m);
+});
+
+test("derived lifecycle skill personality block renders only archetype + gloss", async () => {
+  const { renderDerivedLifecycleSkillBody } = await import("./derived-lifecycle-skill.js");
+  const { Lifecycle, Personality, Agent, Identity } = await import("./sources.js");
+  const { emptyRegistry } = await import("./registry.js");
+
+  const registry = emptyRegistry("/tmp/persona", "persona", "0.0.0");
+  registry.identities.set(
+    "worker",
+    new Identity({
+      name: "worker",
+      sourcePath: "/tmp/worker.identity.md",
+      description: "Worker identity description",
+      body: "",
+    }),
+  );
+  registry.personalities.set(
+    "passionate-screenwriter",
+    new Personality({
+      name: "passionate-screenwriter",
+      sourcePath: "/tmp/passionate-screenwriter.personality.md",
+      description: "Forward-projecting orchestration that drives momentum across phases without losing rigor.",
+      temperament: "Passionate (`E-A-S`) — emotional, active, secondary",
+      orientation: "affirms outward",
+      virtues: "primary **Prudence**, secondary **Temperance**, ambition **magnanimous**",
+      body: "",
+    }),
+  );
+  const agent = new Agent({
+    name: "worker",
+    sourcePath: "/tmp/worker.agent.ts",
+    description: "Agent paragraph description",
+    identity: "worker",
+    personality: "passionate-screenwriter",
+    traits: [],
+    access: { tools: [], toolGroups: [], skills: [] },
+    skills: [],
+    targets: {},
+  });
+  registry.agents.set("worker", agent);
+
+  const lifecycle = new Lifecycle({
+    name: "persona-demo",
+    sourcePath: "/tmp/persona-demo.lifecycle.ts",
+    description: "demo",
+    parameters: [],
+    phases: [
+      {
+        name: "Do work",
+        agents: ["worker"],
+        requires: [],
+      },
+    ],
+    tool_permissions: [],
+    taste_checkpoints: [],
+    body: "",
+  });
+
+  const body = renderDerivedLifecycleSkillBody(lifecycle, registry);
+
+  // Trimmed personality form.
+  expect(body).toContain(
+    "**Personality**: `passionate-screenwriter` — Forward-projecting orchestration that drives momentum across phases without losing rigor.",
+  );
+  // Temperament / orientation / virtues clauses are no longer rendered.
+  expect(body).not.toContain("temperament Passionate");
+  expect(body).not.toContain("orientation affirms outward");
+  expect(body).not.toContain("virtues primary **Prudence**");
+  // No double trailing period.
+  expect(body).not.toContain("rigor..");
+});

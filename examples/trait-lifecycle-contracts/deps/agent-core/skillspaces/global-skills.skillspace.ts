@@ -62,7 +62,6 @@ export default defineSkillspace({
     "diagrams": shared("diagrams"),
     "domain-orchestration": shared("domain-orchestration"),
     "effect": shared("effect"),
-    "epistemology-framework-readiness": opencodeOnly("epistemology-framework-readiness"),
     "evolve": shared("evolve"),
     "example-skill": opencodeOnly("example-skill"),
     "explore": shared("explore"),

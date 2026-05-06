@@ -18,7 +18,7 @@ The shared example skillspace lives at `examples/trait-lifecycle-contracts/deps/
 
 Most skill names are identical across all three harnesses. The first skillspace records those common names with identical `opencode`, `claude-code`, and `codex-cli` target names, plus a small number of harness-specific entries:
 
-- OpenCode-only: `epistemology-framework-readiness`, `example-skill`, `policy-toml-guardrails`, `tiktok-creative-intelligence`
+- OpenCode-only: `example-skill`, `policy-toml-guardrails`, `tiktok-creative-intelligence`
 - Claude-only examples: `agent-browser` and several specialized design/domain-analysis skills not present in the current OpenCode and Codex roots
 - Codex-only examples: `agentpkg-usage`, `codex-primary-runtime`
 

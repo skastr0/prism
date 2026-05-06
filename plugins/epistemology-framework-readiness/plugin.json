@@ -1,8 +1,0 @@
-{
-  "name": "epistemology-framework-readiness",
-  "version": "0.1.0",
-  "description": "Configure or audit a code repo, docs vault, or mixed workspace so the epistemology-framework plugin can deliver worldview inheritance, policy guardrails, provenance tools, destructive-command protection, SDLC/IAP work tracking, and optional knowledge mapping.",
-  "targets": {
-    "skills": ["opencode"]
-  }
-}

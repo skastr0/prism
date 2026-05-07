@@ -16,7 +16,7 @@ export class SourceParseError extends Schema.TaggedError<SourceParseError>()(
       "toolspace",
       "modelspace",
       "skillspace",
-      "lifecycle",
+      "orbit",
       "tool",
       "hook",
     ),
@@ -37,8 +37,8 @@ export class UnknownReferenceError extends Schema.TaggedError<UnknownReferenceEr
       "tool",
       "tool-group",
       "skill",
-      "lifecycle",
-      "phase.lifecycle",
+      "orbit",
+      "phase.orbit",
       "phase.agent",
     ),
     referenceName: Schema.String,
@@ -96,11 +96,11 @@ export class UnsupportedTargetCapabilityError extends Schema.TaggedError<Unsuppo
   },
 ) {}
 
-export class LifecycleValidationError extends Schema.TaggedError<LifecycleValidationError>()(
-  "LifecycleValidationError",
+export class OrbitValidationError extends Schema.TaggedError<OrbitValidationError>()(
+  "OrbitValidationError",
   {
     sourcePath: Schema.String,
-    lifecycleName: Schema.String,
+    orbitName: Schema.String,
     field: Schema.String,
     message: Schema.String,
   },
@@ -127,7 +127,7 @@ export class DuplicateNameError extends Schema.TaggedError<DuplicateNameError>()
       "toolspace",
       "modelspace",
       "skillspace",
-      "lifecycle",
+      "orbit",
       "tool",
       "hook",
     ),
@@ -164,7 +164,7 @@ export class MissingTargetResolutionError extends Schema.TaggedError<MissingTarg
 export type CompileError =
   | SourceParseError
   | UnknownReferenceError
-  | LifecycleValidationError
+  | OrbitValidationError
   | AgentValidationError
   | UnknownTargetError
   | InvalidTargetScopeError
@@ -182,8 +182,8 @@ export const formatCompileError = (error: CompileError): string => {
       return `${error.sourcePath}: failed to parse ${error.kind}: ${error.message}`;
     case "UnknownReferenceError":
       return `${error.sourcePath}: agent '${error.agentName}' references unknown ${error.field} '${error.referenceName}'`;
-    case "LifecycleValidationError":
-      return `${error.sourcePath}: lifecycle '${error.lifecycleName}' invalid ${error.field}: ${error.message}`;
+    case "OrbitValidationError":
+      return `${error.sourcePath}: orbit '${error.orbitName}' invalid ${error.field}: ${error.message}`;
     case "AgentValidationError":
       return `${error.sourcePath}: agent '${error.agentName}' invalid ${error.field}: ${error.message}`;
     case "UnknownTargetError":

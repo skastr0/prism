@@ -30,10 +30,10 @@ An example plugin that demonstrates shared artifact targeting from `plugin.json`
 
 ```bash
 # Validate the example
-agentpkg validate ./examples/my-standards
+prism validate ./examples/my-standards
 
 # Preview the shared install plan
-agentpkg install ./examples/my-standards --all --dry-run
+prism install ./examples/my-standards --all --dry-run
 ```
 
 ## Notes

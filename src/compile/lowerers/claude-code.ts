@@ -2,7 +2,7 @@
  * Claude Code plugin-bundle lowerer.
  *
  * Produces one compiler-owned Claude plugin bundle under
- * <claude-root>/plugins/agentpkg-generated-<source-plugin>/.
+ * <claude-root>/plugins/prism-generated-<source-plugin>/.
  */
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
+import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -19,7 +19,7 @@ import {
 } from "../mcp-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { Hook, Lifecycle, Skill } from "../sources.js";
+import type { Hook, Orbit, Skill } from "../sources.js";
 import {
   backupFile,
   exists,
@@ -35,7 +35,7 @@ import { effectBundleImportPath } from "../runtime-deps.js";
 import type { LowerOperation } from "./opencode.js";
 
 const TARGET_ID = "claude-code" as const;
-const GENERATED_PLUGIN_PREFIX = "agentpkg-generated";
+const GENERATED_PLUGIN_PREFIX = "prism-generated";
 
 export interface ClaudeCodeLowerTarget {
   readonly scope: HarnessScope;
@@ -47,7 +47,7 @@ export interface ClaudeCodeLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly lifecycles: ReadonlyArray<Lifecycle>;
+  readonly orbits: ReadonlyArray<Orbit>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
   readonly registry?: PluginRegistry;
@@ -137,10 +137,10 @@ const renderUnsupportedOverrideDiagnostics = (
 
   const bullets = unsupportedFields.map(
     (field) =>
-      `- \`${field}\` is not supported on Claude plugin agents; agentpkg kept a single plugin-bundle lower and did not emit a direct .claude fallback.`,
+      `- \`${field}\` is not supported on Claude plugin agents; prism kept a single plugin-bundle lower and did not emit a direct .claude fallback.`,
   );
 
-  return `\n\n## Agentpkg Claude Plugin Diagnostics\n\n${bullets.join("\n")}`;
+  return `\n\n## Prism Claude Plugin Diagnostics\n\n${bullets.join("\n")}`;
 };
 
 const composeAgentFrontmatter = (
@@ -209,26 +209,26 @@ const renderAgentMarkdown = (
   return `${serializeFrontmatter(composeAgentFrontmatter(agent, target))}\n\n${agent.body}${diagnostics}\n`;
 };
 
-const lifecycleSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- agentpkg:lifecycle-skill owner=${JSON.stringify(sourcePluginName)} -->`;
+const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
+  `<!-- prism:orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
 
-const renderLifecycleSkill = (
-  lifecycle: Lifecycle,
+const renderOrbitSkill = (
+  orbit: Orbit,
   sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string => {
   const lines: string[] = [
-    serializeFrontmatter({ name: lifecycle.name, description: lifecycle.description }),
+    serializeFrontmatter({ name: orbit.name, description: orbit.description }),
     "",
-    lifecycleSkillOwnerMarker(sourcePluginName),
+    orbitSkillOwnerMarker(sourcePluginName),
     "",
   ];
   if (registry) {
-    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
   } else {
-    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
-    if (lifecycle.body.trim().length > 0) {
-      lines.push(lifecycle.body.trim(), "");
+    lines.push(`# ${orbit.name}`, "", orbit.description, "");
+    if (orbit.body.trim().length > 0) {
+      lines.push(orbit.body.trim(), "");
     }
   }
   return lines.join("\n");
@@ -377,7 +377,7 @@ const normalizePayload = (input) => {
 
 const unwrapDecode = (decoded, label) => {
   if (decoded && decoded._tag === "Right") return decoded.right;
-  throw new Error("agentpkg hook " + label + " validation failed");
+  throw new Error("prism hook " + label + " validation failed");
 };
 
 const toPromise = (value) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
@@ -399,7 +399,7 @@ if (${JSON.stringify(hook.event)} === "tool.before" && result.decision === "bloc
 `;
 
 const bundleHookWrapper = async (hook: Hook): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "agentpkg-claude-hook-"));
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-claude-hook-"));
 
   try {
     const entry = join(tempRoot, "hook-entry.ts");
@@ -589,7 +589,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     json({
       name: generatedPluginId(input.target),
       version: input.target.sourcePluginVersion ?? "0.1.0",
-      description: `Generated by agentpkg from ${input.target.sourcePluginName}.`,
+      description: `Generated by prism from ${input.target.sourcePluginName}.`,
     }),
   );
 
@@ -615,13 +615,13 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     );
   }
 
-  for (const lifecycle of input.lifecycles) {
+  for (const orbit of input.orbits) {
     await pushWrite(
       operations,
       desiredRelativePaths,
       input.target,
-      `skills/${lifecycle.name}/SKILL.md`,
-      renderLifecycleSkill(lifecycle, input.target.sourcePluginName, input.registry),
+      `skills/${orbit.name}/SKILL.md`,
+      renderOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
   }

@@ -10,7 +10,7 @@ const effectImportPath = join(
   "index.js"
 ).replace(/\\/g, "/");
 
-const agentpkgImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -20,8 +20,8 @@ const writeText = async (path: string, content: string): Promise<void> => {
 export const createCanonicalCompileFixture = async (options: {
   pluginRoot: string;
   projectRoot: string;
-  invalidLifecycle?: boolean;
-  invalidLifecyclePermissionAgent?: boolean;
+  invalidOrbit?: boolean;
+  invalidOrbitPermissionAgent?: boolean;
   inlineSlotSchema?: boolean;
   undeclaredSlot?: boolean;
   mixedTraitRefsBeforeSlotBinding?: boolean;
@@ -45,7 +45,7 @@ export const createCanonicalCompileFixture = async (options: {
         },
         targets: {
           agents: ["opencode", "claude-code"],
-          lifecycles: ["opencode", "claude-code"],
+          orbits: ["opencode", "claude-code"],
           tools: ["opencode", "claude-code"],
           toolspaces: ["opencode", "claude-code"],
           modelspaces: ["opencode", "claude-code"],
@@ -90,7 +90,7 @@ export const createCanonicalCompileFixture = async (options: {
 
   await writeText(
     join(coreRoot, "toolspaces", "workspace-tools.toolspace.ts"),
-    `import { defineToolspace, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineToolspace, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace-tools",
@@ -133,7 +133,7 @@ export default defineToolspace({
 
   await writeText(
     join(coreRoot, "modelspaces", "default-models.modelspace.ts"),
-    `import { defineModelspace } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineModelspace({
   name: "default-models",
@@ -209,7 +209,7 @@ export const ProtocolReviewEvidence = Schema.Struct({
   await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "submit-work",
@@ -230,7 +230,7 @@ export default defineTool({
   await writeText(
     join(protocolRoot, "tools", "external-submit.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "external-submit",
@@ -251,7 +251,7 @@ export default defineTool({
   await writeText(
     join(protocolRoot, "tools", "create_item.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "create_item",
@@ -276,7 +276,7 @@ export default defineTool({
   await writeText(
     join(pluginRoot, "tools", "commit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "commit-work",
@@ -297,7 +297,7 @@ export default defineTool({
   await writeText(
     join(pluginRoot, "tools", "submit-review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool, schemaSlot } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool, schemaSlot } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "submit-review",
@@ -322,7 +322,7 @@ export default defineTool({
 
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "submittable",
@@ -342,7 +342,7 @@ export default defineTrait({
 
   await writeText(
     join(pluginRoot, "traits", "committable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "committable",
@@ -379,7 +379,7 @@ export const SecurityReviewSlot = Schema.Struct({
 
   await writeText(
     join(pluginRoot, "traits", "reviewable.trait.ts"),
-    `import { defineTrait, toolGroupRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait, toolGroupRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "reviewable",
@@ -401,7 +401,7 @@ export default defineTrait({
 
   await writeText(
     join(pluginRoot, "traits", "self-assessing.trait.ts"),
-    `import { defineTrait, toolGroupRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait, toolGroupRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "self-assessing",
@@ -416,7 +416,7 @@ export default defineTrait({
 
   await writeText(
     join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
-    `import { defineSkillspace } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineSkillspace({
   name: "core-skills",
@@ -435,7 +435,7 @@ export default defineSkillspace({
 
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineAgent({
   name: "builder",
@@ -480,7 +480,7 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "agents", "reviewer.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(prismImportPath)};
 ${options.inlineSlotSchema ? `import { Schema } from ${JSON.stringify(effectImportPath)};` : ""}
 ${reviewerSchemaImport}
 
@@ -517,7 +517,7 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "agents", "security-reviewer.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(prismImportPath)};
 ${withCanonicalToolBindings ? `import { SecurityReviewSlot } from "../schemas/review-slots.ts";` : ""}
 
 export default defineAgent({
@@ -551,12 +551,12 @@ export default defineAgent({
 `
   );
 
-  const reviewAgents = options.invalidLifecycle ? ["builder"] : ["reviewer"];
-  const orchestratorAgent = options.invalidLifecyclePermissionAgent
+  const reviewAgents = options.invalidOrbit ? ["builder"] : ["reviewer"];
+  const orchestratorAgent = options.invalidOrbitPermissionAgent
     ? "ghost-orchestrator"
     : "builder";
 
-  const lifecycleOrchestrator = withCanonicalToolBindings
+  const orbitOrchestrator = withCanonicalToolBindings
     ? `,
   orchestrator: {
     agent: agentRef(${JSON.stringify(orchestratorAgent)}),
@@ -570,10 +570,10 @@ export default defineAgent({
     : "";
 
   await writeText(
-    join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
-    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
+    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineLifecycle({
+export default defineOrbit({
   name: "delivery-contract",
   description: "Validate that work moves through the right trait-conforming agents",
   phases: [
@@ -617,8 +617,8 @@ export default defineLifecycle({
         "Done": "Work has been handed off cleanly",
       },
     },
-  ]${lifecycleOrchestrator},
-  body: "Use this lifecycle when you want the compile-time graph to prove that each phase has the right agents assigned.",
+  ]${orbitOrchestrator},
+  body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
 });
 `
   );

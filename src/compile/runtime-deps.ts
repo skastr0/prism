@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 
-declare const AGENTPKG_EFFECT_ENTRYPOINT: string | undefined;
-declare const AGENTPKG_OPENCODE_PLUGIN_ENTRYPOINT: string | undefined;
+declare const PRISM_EFFECT_ENTRYPOINT: string | undefined;
+declare const PRISM_OPENCODE_PLUGIN_ENTRYPOINT: string | undefined;
 
 const bundledEntrypoint = (value: string | undefined): string | undefined => {
   if (typeof value === "string" && value.length > 0) {
@@ -11,10 +11,10 @@ const bundledEntrypoint = (value: string | undefined): string | undefined => {
 };
 
 const bundledEffectEntrypoint = (): string | undefined =>
-  bundledEntrypoint(AGENTPKG_EFFECT_ENTRYPOINT);
+  bundledEntrypoint(PRISM_EFFECT_ENTRYPOINT);
 
 const bundledOpenCodePluginEntrypoint = (): string | undefined =>
-  bundledEntrypoint(AGENTPKG_OPENCODE_PLUGIN_ENTRYPOINT);
+  bundledEntrypoint(PRISM_OPENCODE_PLUGIN_ENTRYPOINT);
 
 export const effectBundleImportPath = (): string => {
   try {

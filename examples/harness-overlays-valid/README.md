@@ -42,9 +42,9 @@ harness-overlays-valid/
 ## Validation
 
 ```bash
-agentpkg validate ./examples/harness-overlays-valid
-agentpkg install ./examples/harness-overlays-valid --harness opencode --dry-run
-agentpkg install ./examples/harness-overlays-valid --harness openclaw --dry-run
+prism validate ./examples/harness-overlays-valid
+prism install ./examples/harness-overlays-valid --harness opencode --dry-run
+prism install ./examples/harness-overlays-valid --harness openclaw --dry-run
 ```
 
 There are no file-level `targets:` blocks in this fixture. The shared/overlay layout plus `plugin.json` targets define the plan.

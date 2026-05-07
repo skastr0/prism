@@ -4,7 +4,7 @@
  * Canonical structured artifacts are TypeScript-authored:
  * - Agent         : agents/*.agent.ts
  * - Trait         : traits/*.trait.ts
- * - Lifecycle     : lifecycles/*.lifecycle.ts
+ * - Orbit     : orbits/*.orbit.ts
  * - Toolspace     : toolspaces/*.toolspace.ts
  * - Modelspace    : modelspaces/*.modelspace.ts
  * - Skillspace    : skillspaces/*.skillspace.ts
@@ -48,15 +48,15 @@ export const AgentRefInputSchema = Schema.Union(
 );
 export type AgentRefInput = typeof AgentRefInputSchema.Type;
 
-export const LifecycleRefInputSchema = Schema.Union(
+export const OrbitRefInputSchema = Schema.Union(
   Schema.String,
   Schema.Struct({
-    kind: Schema.Literal("lifecycle-ref"),
+    kind: Schema.Literal("orbit-ref"),
     plugin: Schema.optional(Schema.String),
     name: Schema.String,
   }),
 );
-export type LifecycleRefInput = typeof LifecycleRefInputSchema.Type;
+export type OrbitRefInput = typeof OrbitRefInputSchema.Type;
 
 export const ToolRefInputSchema = Schema.Union(
   Schema.String,
@@ -508,9 +508,9 @@ export const normalizeAgentRefInput = (
     ? normalizeNamedRefParts(field, value)
     : normalizeNamedRefParts(field, { plugin: value.plugin, name: value.name });
 
-export const normalizeLifecycleRefInput = (
+export const normalizeOrbitRefInput = (
   field: string,
-  value: LifecycleRefInput,
+  value: OrbitRefInput,
 ): string | RefNormalizationError =>
   typeof value === "string"
     ? normalizeNamedRefParts(field, value)
@@ -1022,127 +1022,127 @@ export class Skillspace extends Schema.Class<Skillspace>("Skillspace")({
 }) {}
 
 // ---------------------------------------------------------------------------
-// Lifecycle
+// Orbit
 // ---------------------------------------------------------------------------
 
-export const LifecycleParameterSchema = Schema.Struct({
+export const OrbitParameterSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
   required: Schema.optional(Schema.Boolean),
 });
-export type LifecycleParameter = typeof LifecycleParameterSchema.Type;
+export type OrbitParameter = typeof OrbitParameterSchema.Type;
 
-export const LifecycleBindingSchema = Schema.Struct({
-  lifecycle: LifecycleRefInputSchema,
+export const OrbitBindingSchema = Schema.Struct({
+  orbit: OrbitRefInputSchema,
   bindings: Schema.optional(
     Schema.Record({ key: Schema.String, value: Schema.String }),
   ),
 });
-export type LifecycleBinding = typeof LifecycleBindingSchema.Type;
+export type OrbitBinding = typeof OrbitBindingSchema.Type;
 
-export const LifecyclePhaseTraitRequirementSchema = Schema.Struct({
+export const OrbitPhaseTraitRequirementSchema = Schema.Struct({
   all: Schema.Array(TraitRefInputSchema),
   min: Schema.optional(Schema.Number),
 });
-export type LifecyclePhaseTraitRequirement =
-  typeof LifecyclePhaseTraitRequirementSchema.Type;
+export type OrbitPhaseTraitRequirement =
+  typeof OrbitPhaseTraitRequirementSchema.Type;
 
-export const LifecycleToolPermissionToolSchema = Schema.Union(
+export const OrbitToolPermissionToolSchema = Schema.Union(
   Schema.String,
   Schema.Struct({
     ref: Schema.String,
     as: Schema.optional(Schema.String),
   }),
 );
-export type LifecycleToolPermissionTool = typeof LifecycleToolPermissionToolSchema.Type;
+export type OrbitToolPermissionTool = typeof OrbitToolPermissionToolSchema.Type;
 
-export const LifecycleOrchestratorSchema = Schema.Struct({
+export const OrbitOrchestratorSchema = Schema.Struct({
   agent: AgentRefInputSchema,
-  tools: Schema.Array(LifecycleToolPermissionToolSchema),
+  tools: Schema.Array(OrbitToolPermissionToolSchema),
 });
-export type LifecycleOrchestrator = typeof LifecycleOrchestratorSchema.Type;
+export type OrbitOrchestrator = typeof OrbitOrchestratorSchema.Type;
 
-export const LifecyclePhaseSchema = Schema.Struct({
+export const OrbitPhaseSchema = Schema.Struct({
   name: Schema.String,
-  lifecycle: Schema.optional(LifecycleRefInputSchema),
-  lifecycle_binding: Schema.optional(LifecycleBindingSchema),
+  orbit: Schema.optional(OrbitRefInputSchema),
+  orbit_binding: Schema.optional(OrbitBindingSchema),
   agents: Schema.optional(Schema.Array(AgentRefInputSchema)),
   agent: Schema.optional(AgentRefInputSchema),
-  requires: Schema.optional(Schema.Array(LifecyclePhaseTraitRequirementSchema)),
+  requires: Schema.optional(Schema.Array(OrbitPhaseTraitRequirementSchema)),
   notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
 });
-export type LifecyclePhase = typeof LifecyclePhaseSchema.Type;
+export type OrbitPhase = typeof OrbitPhaseSchema.Type;
 
-export const NormalizedLifecycleBindingSchema = Schema.Struct({
-  lifecycle: Schema.String,
+export const NormalizedOrbitBindingSchema = Schema.Struct({
+  orbit: Schema.String,
   bindings: Schema.optional(
     Schema.Record({ key: Schema.String, value: Schema.String }),
   ),
 });
 
-export const NormalizedLifecyclePhaseTraitRequirementSchema = Schema.Struct({
+export const NormalizedOrbitPhaseTraitRequirementSchema = Schema.Struct({
   all: Schema.Array(Schema.String),
   min: Schema.optional(Schema.Number),
 });
-export type NormalizedLifecyclePhaseTraitRequirement =
-  typeof NormalizedLifecyclePhaseTraitRequirementSchema.Type;
+export type NormalizedOrbitPhaseTraitRequirement =
+  typeof NormalizedOrbitPhaseTraitRequirementSchema.Type;
 
-export const NormalizedLifecyclePhaseSchema = Schema.Struct({
+export const NormalizedOrbitPhaseSchema = Schema.Struct({
   name: Schema.String,
-  lifecycle: Schema.optional(Schema.String),
-  lifecycle_binding: Schema.optional(NormalizedLifecycleBindingSchema),
+  orbit: Schema.optional(Schema.String),
+  orbit_binding: Schema.optional(NormalizedOrbitBindingSchema),
   agent: Schema.optional(Schema.String),
   agents: Schema.Array(Schema.String),
-  requires: Schema.Array(NormalizedLifecyclePhaseTraitRequirementSchema),
+  requires: Schema.Array(NormalizedOrbitPhaseTraitRequirementSchema),
   notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
 });
-export type NormalizedLifecyclePhase = typeof NormalizedLifecyclePhaseSchema.Type;
+export type NormalizedOrbitPhase = typeof NormalizedOrbitPhaseSchema.Type;
 
-export const NormalizedLifecycleToolPermissionToolSchema = Schema.Struct({
+export const NormalizedOrbitToolPermissionToolSchema = Schema.Struct({
   ref: Schema.String,
   logicalName: Schema.String,
 });
-export type NormalizedLifecycleToolPermissionTool =
-  typeof NormalizedLifecycleToolPermissionToolSchema.Type;
+export type NormalizedOrbitToolPermissionTool =
+  typeof NormalizedOrbitToolPermissionToolSchema.Type;
 
-export const NormalizedLifecycleOrchestratorSchema = Schema.Struct({
+export const NormalizedOrbitOrchestratorSchema = Schema.Struct({
   agent: Schema.String,
-  tools: Schema.Array(NormalizedLifecycleToolPermissionToolSchema),
+  tools: Schema.Array(NormalizedOrbitToolPermissionToolSchema),
 });
-export type NormalizedLifecycleOrchestrator =
-  typeof NormalizedLifecycleOrchestratorSchema.Type;
+export type NormalizedOrbitOrchestrator =
+  typeof NormalizedOrbitOrchestratorSchema.Type;
 
-export const LifecycleTasteCheckpointSchema = Schema.Struct({
+export const OrbitPulsarCheckpointSchema = Schema.Struct({
   after: Schema.optional(Schema.String),
   before: Schema.optional(Schema.String),
   note: Schema.optional(Schema.String),
 });
-export type LifecycleTasteCheckpoint = typeof LifecycleTasteCheckpointSchema.Type;
+export type OrbitPulsarCheckpoint = typeof OrbitPulsarCheckpointSchema.Type;
 
-export const LifecycleDefinitionSchema = Schema.Struct({
+export const OrbitDefinitionSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   produces: Schema.optional(Schema.String),
-  parameters: Schema.optional(Schema.Array(LifecycleParameterSchema)),
-  phases: Schema.Array(LifecyclePhaseSchema),
-  orchestrator: Schema.optional(LifecycleOrchestratorSchema),
-  tool_permissions: Schema.optional(Schema.Array(LifecycleToolPermissionToolSchema)),
-  taste_checkpoints: Schema.optional(Schema.Array(LifecycleTasteCheckpointSchema)),
+  parameters: Schema.optional(Schema.Array(OrbitParameterSchema)),
+  phases: Schema.Array(OrbitPhaseSchema),
+  orchestrator: Schema.optional(OrbitOrchestratorSchema),
+  tool_permissions: Schema.optional(Schema.Array(OrbitToolPermissionToolSchema)),
+  pulsar_checkpoints: Schema.optional(Schema.Array(OrbitPulsarCheckpointSchema)),
   evolution: Schema.optional(Schema.String),
   body: Schema.optional(Schema.String),
 });
-export type LifecycleDefinition = typeof LifecycleDefinitionSchema.Type;
+export type OrbitDefinition = typeof OrbitDefinitionSchema.Type;
 
-export class Lifecycle extends Schema.Class<Lifecycle>("Lifecycle")({
+export class Orbit extends Schema.Class<Orbit>("Orbit")({
   name: Schema.String,
   sourcePath: Schema.String,
   description: Schema.String,
   produces: Schema.optional(Schema.String),
-  parameters: Schema.Array(LifecycleParameterSchema),
-  phases: Schema.Array(NormalizedLifecyclePhaseSchema),
-  orchestrator: Schema.optional(NormalizedLifecycleOrchestratorSchema),
-  tool_permissions: Schema.Array(NormalizedLifecycleToolPermissionToolSchema),
-  taste_checkpoints: Schema.Array(LifecycleTasteCheckpointSchema),
+  parameters: Schema.Array(OrbitParameterSchema),
+  phases: Schema.Array(NormalizedOrbitPhaseSchema),
+  orchestrator: Schema.optional(NormalizedOrbitOrchestratorSchema),
+  tool_permissions: Schema.Array(NormalizedOrbitToolPermissionToolSchema),
+  pulsar_checkpoints: Schema.Array(OrbitPulsarCheckpointSchema),
   evolution: Schema.optional(Schema.String),
   body: Schema.String,
 }) {}

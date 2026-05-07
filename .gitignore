@@ -4,4 +4,4 @@ dist/
 *.bak.*
 .DS_Store
 
-.cmap/
+.atlas/

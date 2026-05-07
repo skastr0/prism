@@ -1,6 +1,6 @@
 # Tools Architecture
 
-This document is the canonical design for `agentpkg` tools and toolspaces.
+This document is the canonical design for `prism` tools and toolspaces.
 
 The purpose is simple: tools are definitions, permissions are visibility, and
 filled tool slots are the only reason to synthesize a new harness tool. The
@@ -44,7 +44,7 @@ to the original tool implementation. It does not own business logic.
 
 A target-specific map from logical tool intent to harness-final tool names.
 Toolspaces cover built-in harness tools, external plugin tools, and generated
-agentpkg tools. They are permission inventory, not implementation factories.
+prism tools. They are permission inventory, not implementation factories.
 
 **Runtime artifact**
 
@@ -53,7 +53,7 @@ schemas, slot schemas, shared helpers, and tests where applicable.
 
 **Compiler DSL artifact**
 
-TypeScript that configures `agentpkg`: agents, traits, lifecycles, toolspaces,
+TypeScript that configures `prism`: agents, traits, orbits, toolspaces,
 modelspaces, plugin manifests, and other compile-time declarations.
 
 ## Laws
@@ -82,14 +82,14 @@ modelspaces, plugin manifests, and other compile-time declarations.
 A tool may declare optional slots. The tool owns the slot names and semantics.
 
 ```ts
-import { defineTool, schemaSlot } from "agentpkg";
-import { LifecyclePacketReceipt, WorkSubmissionBase } from "../schemas/tool-schemas.ts";
+import { defineTool, schemaSlot } from "prism";
+import { OrbitPacketReceipt, WorkSubmissionBase } from "../schemas/tool-schemas.ts";
 
 export default defineTool({
   name: "submit_work",
-  description: "Persist completed lifecycle work to the canonical packet store.",
+  description: "Persist completed orbit work to the canonical packet store.",
   input: WorkSubmissionBase,
-  output: LifecyclePacketReceipt,
+  output: OrbitPacketReceipt,
   slots: {
     builder_report: schemaSlot({
       description: "Additional builder-only fields persisted with the work packet.",
@@ -109,13 +109,13 @@ If the tool does not declare `builder_report`, no trait or agent can fill it.
 A trait gives an agent permission to a tool. It does not define slots.
 
 ```ts
-import { defineTrait } from "agentpkg";
+import { defineTrait } from "prism";
 
 export default defineTrait({
   name: "submittable",
   tools: {
     submit_work: {
-      ref: "lifecycle-core:submit_work",
+      ref: "orbit-core:submit_work",
     },
   },
 });
@@ -129,7 +129,7 @@ No slots filled means permission only.
 bindTrait("submittable");
 ```
 
-The agent receives the base `lifecycle-core:submit_work` harness tool.
+The agent receives the base `orbit-core:submit_work` harness tool.
 
 ### Filled Slot Binding
 
@@ -151,7 +151,7 @@ bindTrait("submittable", {
 
 The compiler creates one synthetic wrapper for this filled-slot contract. The
 wrapper validates `builder_report` as part of the agent-facing input and then
-delegates to `lifecycle-core:submit_work`.
+delegates to `orbit-core:submit_work`.
 
 ## Runtime Artifact Rules
 
@@ -192,13 +192,13 @@ Lowering happens in two independent lanes.
 Each tool-owning plugin lowers to one harness plugin for its owned tools and
 runtime artifacts.
 
-For example, `lifecycle-core` owns `submit_work`, so the generated OpenCode
-plugin for `lifecycle-core` owns that runtime tool. `rlc`, `mlc`, `wlc`, and
-`sdlc` must not mirror or copy `submit_work` as if they own it.
+For example, `orbit-core` owns `submit_work`, so the generated OpenCode
+plugin for `orbit-core` owns that runtime tool. `survey`, `beacon`, `scribe`, and
+`forge` must not mirror or copy `submit_work` as if they own it.
 
 ### Permission Lane
 
-Agents, traits, lifecycles, and toolspaces determine which harness-final tool
+Agents, traits, orbits, and toolspaces determine which harness-final tool
 names are visible to each agent.
 
 For a generic permission, the agent receives permission to the owner tool.
@@ -207,11 +207,11 @@ For a filled slot, the compiler creates a synthetic wrapper and gives the agent
 permission to that wrapper.
 
 For harnesses with global tool registries such as OpenCode, generated
-agentpkg plugin tools must fail closed. The lowerer writes a global default-deny
+prism plugin tools must fail closed. The lowerer writes a global default-deny
 permission for each generated plugin namespace, then generated agent
 frontmatter writes explicit per-tool `allow` entries for assigned tools. An
 agent with no generated-tool permission block therefore has access to none of
-the generated agentpkg plugin tools.
+the generated prism plugin tools.
 
 Compiled-agent cache keys include a compiler-semantics version, not just source
 hashes. When generated tool naming, slot lowering, permission lowering, or other
@@ -233,13 +233,13 @@ They answer:
 Toolspaces do not create executable implementations. They resolve concrete
 harness names so traits and agents can stay semantic.
 
-Generated agentpkg tools should be added to the same final permission inventory
+Generated prism tools should be added to the same final permission inventory
 as harness-native tools. That lets one permission pass produce each agent's
 complete allow/block surface.
 
 ## OXC Guardrails
 
-`agentpkg init` should scaffold OXC guardrails for TypeScript plugin authors.
+`prism init` should scaffold OXC guardrails for TypeScript plugin authors.
 
 Oxlint supports project configuration files and JavaScript plugins through
 `jsPlugins`, with paths resolved relative to the config file. Oxfmt supports
@@ -271,7 +271,7 @@ The compiler is broken if any of these happen:
 
 - one plain permission creates a tool
 - one generic tool is emitted under more than one owning plugin
-- one lifecycle plugin contains a copied dependency tool implementation
+- one orbit plugin contains a copied dependency tool implementation
 - one tool without slots produces a synthetic wrapper
 - one filled undeclared slot compiles
 - one schema is re-rendered from Effect Schema AST
@@ -279,9 +279,9 @@ The compiler is broken if any of these happen:
 
 The `submit_work` test case is the standing smoke test:
 
-- `lifecycle-core:submit_work` exists once
+- `orbit-core:submit_work` exists once
 - generic `submittable` agents receive permission to that one tool
 - builder-style agents receive a synthetic wrapper only if they fill a
-  `submit_work` slot declared by `lifecycle-core`
-- no `rlc`, `mlc`, `wlc`, or `sdlc` generated plugin owns a duplicate
+  `submit_work` slot declared by `orbit-core`
+- no `survey`, `beacon`, `scribe`, or `forge` generated plugin owns a duplicate
   `submit_work.tool.ts`

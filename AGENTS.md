@@ -1,10 +1,10 @@
-# agentpkg
+# prism
 
 A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`agentpkg` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -60,21 +60,21 @@ bun run install:local
 bun run dev -- <command>
 
 # After installation
-agentpkg <command>
+prism <command>
 ```
 
 ### CLI Commands
 
 ```bash
 # Create a new plugin
-agentpkg init <name> [options]
+prism init <name> [options]
   --dir <path>      Directory to create plugin in (default: .)
   --with-agent      Include example agent definition
   --with-skill      Include example skill scaffold (preset targets for coding + claw harnesses)
   --minimal         Create minimal plugin (manifest only)
 
 # Install a plugin
-agentpkg install <plugin-path> [options]
+prism install <plugin-path> [options]
   --harness <ids>   Comma-separated harness IDs
   --all             Install to all supported harnesses
   --project <path>  Project path for project-specific rules
@@ -84,7 +84,7 @@ agentpkg install <plugin-path> [options]
   --dry-run         Preview operations without executing
 
 # Install every child plugin in a directory
-agentpkg install-all <directory> [options]
+prism install-all <directory> [options]
   --harness <ids>   Comma-separated harness IDs
   --all             Install to all supported harnesses
   --project <path>  Project path for project-specific rules
@@ -94,16 +94,16 @@ agentpkg install-all <directory> [options]
   --dry-run         Preview operations without executing
 
 # Validate plugin structure
-agentpkg validate <plugin-path>
+prism validate <plugin-path>
 
 # List supported harness IDs
-agentpkg harnesses
+prism harnesses
 ```
 
 ## Project Structure
 
 ```
-agentpkg/
+prism/
 ├── src/
 │   ├── cli.ts          # CLI entry point and commands
 │   ├── types.ts        # TypeScript types and interfaces
@@ -135,7 +135,7 @@ agentpkg/
 
 ## Compile pipeline (v0.1)
 
-agentpkg has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, skillspaces, traits, agents, and lifecycles, and agentpkg lowers them into per-harness artifacts.
+prism has two phases. The **install** phase is a file router that copies plugin artifacts (rules, commands, markdown agents, skills) to per-harness locations. The **compile** phase (v0.1) is a structured language-and-compiler for durable agent surfaces: you author identities, personalities, toolspaces, modelspaces, skillspaces, traits, agents, and orbits, and prism lowers them into per-harness artifacts.
 
 In the converged language, **canonical tools own business logic** and **traits attach and refine them**. A canonical tool declares a strict input/output contract and a portable implementation. Traits then reference canonical tools, optionally overriding description, refining schemas via slots, and adding capability-specific instructions. Agents bind traits with agent-specific slot values. Lowering still stops at ordinary resolved tool bindings plus ordered trait instructions; target lowerers do not need to understand trait or tool internals.
 
@@ -153,7 +153,7 @@ Canonical structured source artifacts are TypeScript-authored:
 | `tool` | `tools/<name>.tool.ts` | Canonical tool definition: strict input/output contract + portable handle implementation |
 | `trait` | `traits/<name>.trait.ts` | Canonical protocol/capability unit: slot declarations, canonical tool attachments, ordered instructions, skill permission intent, and logical access intent |
 | `agent` | `agents/<name>.agent.ts` | Canonical compiled agent definition |
-| `lifecycle` | `lifecycles/<name>.lifecycle.ts` | Higher-order recipe composing agents / other lifecycles with compile-time validation |
+| `orbit` | `orbits/<name>.orbit.ts` | Higher-order recipe composing agents / other orbits with compile-time validation |
 
 Prose-heavy artifacts remain markdown-only by design: identities and personalities.
 
@@ -161,20 +161,20 @@ Prose-heavy artifacts remain markdown-only by design: identities and personaliti
 
 The canonical source model uses typed helper constructors rather than raw target strings as the only authoring surface.
 
-Helpers exported from `agentpkg` include:
+Helpers exported from `prism` include:
 
 ```ts
 import {
   bindTrait,
   defineAgent,
-  defineLifecycle,
+  defineOrbit,
   defineTool,
   defineToolspace,
   defineModelspace,
   defineSkillspace,
   defineTrait,
   agentRef,
-  lifecycleRef,
+  orbitRef,
   traitRef,
   toolRef,
   toolGroupRef,
@@ -182,7 +182,7 @@ import {
   skillRef,
   skillspaceRef,
   schemaSlot,
-} from "agentpkg";
+} from "prism";
 ```
 
 Example:
@@ -257,19 +257,19 @@ Agents and traits reference skill permissions through `skillRef(...)` or `skills
 
 See `docs/skillspaces.md` for the current global OpenCode / Claude Code / Codex skill inventory and the `skillRef(...)` versus `skillspaceRef(...)` authoring rule.
 
-### Parameterized lifecycle templates
+### Parameterized orbit templates
 
-Lifecycle files can be either:
+Orbit files can be either:
 
-- **templates** — declare `parameters:` and stay source-only until another lifecycle binds them
+- **templates** — declare `parameters:` and stay source-only until another orbit binds them
 - **instances** — omit `parameters:` and compile directly into concrete target skills
 
-Template binding is explicit at the phase site via `lifecycle_binding`:
+Template binding is explicit at the phase site via `orbit_binding`:
 
 ```ts
-export default defineLifecycle({
+export default defineOrbit({
   name: "experiment",
-  description: "Reusable experiment lifecycle for ${H}",
+  description: "Reusable experiment orbit for ${H}",
   parameters: [
     { name: "H", description: "Hypothesis being tested" },
     { name: "App", description: "Application context" },
@@ -287,14 +287,14 @@ export default defineLifecycle({
 ```
 
 ```ts
-export default defineLifecycle({
+export default defineOrbit({
   name: "release-experiment",
   description: "Concrete release experiment",
   phases: [
     {
       name: "Experiment",
-      lifecycle_binding: {
-        lifecycle: lifecycleRef("experiment"),
+      orbit_binding: {
+        orbit: orbitRef("experiment"),
         bindings: {
           H: "Async commits reduce latency",
           App: "release pipeline",
@@ -308,15 +308,15 @@ export default defineLifecycle({
 Compile-time rules:
 
 - template placeholders use `${Name}` and must match declared `parameters`
-- direct `phase.lifecycle` references may only target non-parameterized lifecycles
-- parameterized lifecycle references must use `lifecycle_binding`
+- direct `phase.orbit` references may only target non-parameterized orbits
+- parameterized orbit references must use `orbit_binding`
 - required parameters must be bound, unknown bindings fail the compile
 - agent assignment refs and trait requirement refs may not contain template placeholders
 - lowering emits only concrete skills with substituted values; templates themselves do not become target-side runtime artifacts
 
-### Lifecycle phase assignment and capability requirements
+### Orbit phase assignment and capability requirements
 
-Lifecycle phases act as compile-time orchestration contracts over assigned agents.
+Orbit phases act as compile-time orchestration contracts over assigned agents.
 
 Each phase may declare:
 
@@ -328,7 +328,7 @@ Each phase may declare:
 Example:
 
 ```ts
-export default defineLifecycle({
+export default defineOrbit({
   name: "delivery-contract",
   description: "Compile-time orchestration contract",
   phases: [
@@ -353,14 +353,14 @@ Validation rules:
 - for each requirement, the compiler counts assigned agents whose canonical trait set includes **all** required traits
 - compile fails if that count is less than `min`
 
-### Lifecycle tool permissions
+### Orbit tool permissions
 
-Lifecycle files may assign canonical tool permissions to agents assigned in that lifecycle. Permissions are protocol-agnostic: the compiler does not know whether the tool backs a work-item board, a queue, Matrix transport, an approval ledger, or something else.
+Orbit files may assign canonical tool permissions to agents assigned in that orbit. Permissions are protocol-agnostic: the compiler does not know whether the tool backs a work-item board, a queue, Matrix transport, an approval ledger, or something else.
 
-Use `bind` when the lifecycle wants a generated wrapper to pre-fill canonical-tool input fields:
+Use `bind` when the orbit wants a generated wrapper to pre-fill canonical-tool input fields:
 
 ```ts
-export default defineLifecycle({
+export default defineOrbit({
   name: "delivery-contract",
   description: "Compile-time orchestration contract",
   phases: [{ name: "Implement change", agents: [agentRef("builder")] }],
@@ -381,7 +381,7 @@ export default defineLifecycle({
 
 The generated wrapper omits bound fields from the agent-facing input schema and injects them when it calls the canonical tool handle. Bound values must be JSON-serializable. Protocol-specific names such as board ids, queue names, rooms, or channels belong in plugin-owned tools and bindings, not in the compiler.
 
-Lowered lifecycle skills reflect the assigned agents (`agent \`builder\``, `agents \`builder\`, \`reviewer\``) but do **not** expose internal trait requirement machinery to the target harness.
+Lowered orbit skills reflect the assigned agents (`agent \`builder\``, `agents \`builder\`, \`reviewer\``) but do **not** expose internal trait requirement machinery to the target harness.
 
 ### Canonical tools and trait attachments
 
@@ -389,7 +389,7 @@ Canonical tools are first-class source artifacts in `tools/`. Each canonical too
 
 ```ts
 import { Schema } from "effect";
-import { defineTool } from "agentpkg";
+import { defineTool } from "prism";
 
 export default defineTool({
   name: "submit_review",
@@ -406,7 +406,7 @@ Traits attach canonical tools by `ref` and can refine description or input/outpu
 
 ```ts
 import { Schema } from "effect";
-import { bindTrait, defineAgent, defineTool, defineTrait, schemaSlot } from "agentpkg";
+import { bindTrait, defineAgent, defineTool, defineTrait, schemaSlot } from "prism";
 
 export default defineTool({
   name: "submit_review",
@@ -445,9 +445,9 @@ defineAgent({
 });
 ```
 
-During compile, agentpkg resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
+During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode currently supports executable generated canonical tools through compiler-owned generated plugins. Claude Code currently does not have an equivalent generated-tool runtime in agentpkg: it can receive native `allowed-tools` frontmatter from toolspaces, but compiling an agent that binds canonical synthetic tools to Claude Code fails closed instead of emitting non-executable prose.
+Generated canonical tool execution is target-capability-gated. OpenCode currently supports executable generated canonical tools through compiler-owned generated plugins. Claude Code currently does not have an equivalent generated-tool runtime in prism: it can receive native `allowed-tools` frontmatter from toolspaces, but compiling an agent that binds canonical synthetic tools to Claude Code fails closed instead of emitting non-executable prose.
 
 ### Canonical tools vs harness-native plugins
 
@@ -459,7 +459,7 @@ Do **not** force harness-specific runtime behavior into canonical tools. If the 
 
 Current design examples:
 
-- `lifecycle-core` in `ai-plugins` = canonical lifecycle-domain protocol tools
+- `orbit-core` in `ai-plugins` = canonical orbit-domain protocol tools
 - `session-inbox` as a standalone OpenCode project = session transport / sendoff UX
 
 Runtime-context guarantees for generated OpenCode adapters remain:
@@ -472,15 +472,15 @@ Agents can still layer inline access/permission overrides on top of trait-owned 
 
 ### Generated OpenCode plugin layout
 
-On compile, agentpkg emits one compiler-owned OpenCode plugin **per compiled source plugin** under the selected OpenCode root:
+On compile, prism emits one compiler-owned OpenCode plugin **per compiled source plugin** under the selected OpenCode root:
 
-- global (default): `~/.config/opencode/plugins/agentpkg-generated-<source-plugin>/`
-- project-local (`--scope project --project <path>`): `<path>/.opencode/plugins/agentpkg-generated-<source-plugin>/`
+- global (default): `~/.config/opencode/plugins/prism-generated-<source-plugin>/`
+- project-local (`--scope project --project <path>`): `<path>/.opencode/plugins/prism-generated-<source-plugin>/`
 
 The generated layout is:
 
 ```text
-agentpkg-generated-<source-plugin>/
+prism-generated-<source-plugin>/
 ├── package.json
 └── src/
     ├── server.ts
@@ -499,7 +499,7 @@ Synthetic tool names are scoped by source plugin + agent: `<source-plugin>_<agen
 
 ### Cross-plugin references
 
-Agents, traits, toolspaces, modelspaces, and lifecycle phases can reference parts from other plugins:
+Agents, traits, toolspaces, modelspaces, and orbit phases can reference parts from other plugins:
 
 ```json
 {
@@ -508,7 +508,7 @@ Agents, traits, toolspaces, modelspaces, and lifecycle phases can reference part
   },
   "targets": {
     "agents": ["opencode"],
-    "lifecycles": ["opencode"],
+    "orbits": ["opencode"],
     "tools": ["opencode"],
     "toolspaces": ["opencode", "claude-code"],
     "modelspaces": ["opencode", "claude-code"]
@@ -535,7 +535,7 @@ Canonical example:
   },
   "targets": {
     "agents": ["opencode", "claude-code"],
-    "lifecycles": ["opencode", "claude-code"],
+    "orbits": ["opencode", "claude-code"],
     "toolspaces": ["opencode", "claude-code"],
     "modelspaces": ["opencode", "claude-code"]
   }
@@ -544,24 +544,24 @@ Canonical example:
 
 Notes:
 
-- compile-phase targets are `agents`, `lifecycles`, `tools`, `toolspaces`, and `modelspaces`
-- `lifecycles`, `tools`, `toolspaces`, and `modelspaces` name source-language artifact families, not fake harness directories
+- compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, and `modelspaces`
+- `orbits`, `tools`, `toolspaces`, and `modelspaces` name source-language artifact families, not fake harness directories
 - agents that bind canonical tools should target only harnesses with executable generated-tool support, currently OpenCode, unless a future explicit adapter exists
 
 ### CLI
 
 ```bash
 # Compile a plugin's source artifacts to OpenCode outputs
-agentpkg compile ./my-plugin --harness opencode
+prism compile ./my-plugin --harness opencode
 
 # Compile a plugin's source artifacts to Claude Code outputs
-agentpkg compile ./my-plugin --harness claude-code
+prism compile ./my-plugin --harness claude-code
 
 # Compile into a project-local OpenCode root for a business/app repo
-agentpkg compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
+prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
 
 # Dry run
-agentpkg compile ./my-plugin --harness claude-code --dry-run
+prism compile ./my-plugin --harness claude-code --dry-run
 ```
 
 ### Lowered outputs
@@ -569,29 +569,29 @@ agentpkg compile ./my-plugin --harness claude-code --dry-run
 #### OpenCode
 
 - Writes `<opencode-root>/agents/<name>.md` for each compiled agent with composed body
-- Writes `<opencode-root>/skills/<lifecycle-name>/SKILL.md` for each concrete lifecycle instance
+- Writes `<opencode-root>/skills/<orbit-name>/SKILL.md` for each concrete orbit instance
 - Patches `agent.<name>` in `<opencode-root>/opencode.json` with compiler-owned model/behavior keys
-- Syncs `<opencode-root>/plugins/agentpkg-generated-<source-plugin>/` for synthetic tool plumbing when any compiled agent binds typed tool slots
+- Syncs `<opencode-root>/plugins/prism-generated-<source-plugin>/` for synthetic tool plumbing when any compiled agent binds typed tool slots
 
 #### Claude Code
 
 - Writes `<claude-root>/agents/<name>.md` for each compiled agent with Claude-style YAML frontmatter
 - Supports `description`, `model`, `temperature`, `top_p`, and `allowed-tools` from compile output
-- Writes `<claude-root>/skills/<lifecycle-name>/SKILL.md` for each concrete lifecycle instance
+- Writes `<claude-root>/skills/<orbit-name>/SKILL.md` for each concrete orbit instance
 - Does **not** emit generated plugins or synthetic contract tools
 - Fails closed when the composed agent surface contains canonical tool bindings, because those bindings require an executable generated-tool runtime
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 
-Lifecycle source artifacts are source-language constructs. For the current supported targets, concrete lifecycle instances lower into harness-intelligible skills at `skills/<lifecycle-name>/SKILL.md`; agentpkg does not emit generic target-side `lifecycles/` folders. A future harness may add a native lifecycle surface, but that would be a target-specific capability rather than the default output shape.
+Orbit source artifacts are source-language constructs. For the current supported targets, concrete orbit instances lower into harness-intelligible skills at `skills/<orbit-name>/SKILL.md`; prism does not emit generic target-side `orbits/` folders. A future harness may add a native orbit surface, but that would be a target-specific capability rather than the default output shape.
 
 ### Compile cache and lockfile
 
-- Successful non-dry-run compiles write a plugin-local cache under `<plugin>/dist/.agentpkg-cache/`
+- Successful non-dry-run compiles write a plugin-local cache under `<plugin>/dist/.prism-cache/`
 - Each compiled agent cache entry is keyed by `sha256(source-fingerprint + target + scope)`
 - The source fingerprint includes the agent source plus the referenced identity, personality, trait bindings, and toolspace/modelspace sources that affect composition for that agent
 - Cache hits skip agent resolution/composition and reuse the serialized `ComposedAgent`; cache misses rebuild only that agent
-- Successful non-dry-run compiles also write `<plugin>/agentpkg.lock`
+- Successful non-dry-run compiles also write `<plugin>/prism.lock`
 
 ### Adding a new target
 
@@ -603,22 +603,22 @@ Lifecycle source artifacts are source-language constructs. For the current suppo
 
 ### Install + compile unified
 
-`agentpkg install <plugin>` runs compile first (if the plugin has compile-phase targets for that harness) and then install.
+`prism install <plugin>` runs compile first (if the plugin has compile-phase targets for that harness) and then install.
 
-`agentpkg install-all <directory>` applies the same compile-first behavior to each discovered child plugin and honors the same `--scope` / `--project` compile options.
+`prism install-all <directory>` applies the same compile-first behavior to each discovered child plugin and honors the same `--scope` / `--project` compile options.
 
 For project-local OpenCode compilation via the unified command:
 
 ```bash
-agentpkg install ./my-plugin --harness opencode --scope project --project ~/code/my-app
-agentpkg install-all ./plugins --harness opencode,claude-code --scope project --project ~/code/my-app
+prism install ./my-plugin --harness opencode --scope project --project ~/code/my-app
+prism install-all ./plugins --harness opencode,claude-code --scope project --project ~/code/my-app
 ```
 
 Reserved for future:
 
 - Git / HTTP URL deps (currently local paths only)
 - richer permission/access ownership after the next work item
-- lifecycle runtime orchestration (heartbeat manager stays runtime state in opencode-config)
+- orbit runtime orchestration (heartbeat manager stays runtime state in opencode-config)
 
 ## Plugin Structure
 
@@ -877,16 +877,16 @@ You are a code review specialist...
 
 ```bash
 # Create test plugin
-agentpkg init test-plugin --with-agent --with-skill
+prism init test-plugin --with-agent --with-skill
 
 # Validate
-agentpkg validate ./test-plugin
+prism validate ./test-plugin
 
 # Dry run to preview
-agentpkg install ./test-plugin --all --dry-run
+prism install ./test-plugin --all --dry-run
 
 # Install for real
-agentpkg install ./test-plugin --all
+prism install ./test-plugin --all
 ```
 
 ## Creating Skills
@@ -944,9 +944,9 @@ Instructions...
 
 1. **Understand** - Get concrete usage examples
 2. **Plan** - Identify reusable supporting files and assets
-3. **Initialize** - `agentpkg init my-plugin --with-skill`
+3. **Initialize** - `prism init my-plugin --with-skill`
 4. **Write** - Complete SKILL.md and resources
-5. **Validate** - `agentpkg validate ./my-plugin`
+5. **Validate** - `prism validate ./my-plugin`
 6. **Iterate** - Test and improve based on real usage
 
 ### Validation Rules

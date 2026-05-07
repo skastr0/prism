@@ -5,7 +5,7 @@ import { join } from "path";
 import { homedir, platform, arch } from "os";
 
 const INSTALL_DIR = process.env.INSTALL_DIR || join(homedir(), ".local", "bin");
-const BINARY_NAME = "agentpkg";
+const BINARY_NAME = "prism";
 
 function detectPlatform(): string {
   const os = platform();

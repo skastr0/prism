@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * agentpkg CLI - Unified plugin distribution for AI coding harnesses
+ * prism CLI - Unified plugin distribution for AI coding harnesses
  */
 
 import { Command, InvalidArgumentError } from "commander";
@@ -34,7 +34,7 @@ import {
 import { formatCompileError, type CompileError } from "./compile/errors.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import {
-  agentpkgOxlintPluginJs,
+  prismOxlintPluginJs,
   createTypescriptPackageJson,
   oxlintConfigJson,
   oxfmtConfigJson,
@@ -44,7 +44,7 @@ import {
 const program = new Command();
 
 program
-  .name("agentpkg")
+  .name("prism")
   .description("Unified plugin distribution for AI coding harnesses")
   .version("0.1.0");
 
@@ -553,13 +553,13 @@ program
         await writeFile(join(targetDir, "tsconfig.json"), typescriptTsconfigJson);
         await writeFile(join(targetDir, ".oxlintrc.json"), oxlintConfigJson);
         await writeFile(join(targetDir, ".oxfmtrc.json"), oxfmtConfigJson);
-        await writeFile(join(targetDir, "agentpkg-oxlint-plugin.js"), agentpkgOxlintPluginJs);
+        await writeFile(join(targetDir, "prism-oxlint-plugin.js"), prismOxlintPluginJs);
         created.push(
           "package.json",
           "tsconfig.json",
           ".oxlintrc.json",
           ".oxfmtrc.json",
-          "agentpkg-oxlint-plugin.js"
+          "prism-oxlint-plugin.js"
         );
       }
 
@@ -645,7 +645,7 @@ When reviewing:
 
 You have READ-ONLY access. Do not modify files directly.
 `;
-        const exampleAgent = `import { defineAgent } from "agentpkg";
+        const exampleAgent = `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "reviewer",
@@ -734,9 +734,9 @@ Use this file for detailed rules, examples, and edge cases that should not live 
         options.typescript && !options.minimal
           ? `├── package.json         # TypeScript authoring scripts for lint/format/typecheck
 ├── tsconfig.json        # Strict TypeScript checks for plugin DSL/runtime files
-├── .oxlintrc.json       # Oxlint config with local agentpkg DSL guardrails
+├── .oxlintrc.json       # Oxlint config with local prism DSL guardrails
 ├── .oxfmtrc.json        # Oxfmt config
-├── agentpkg-oxlint-plugin.js # Local Oxlint JS plugin for agentpkg DSL rules
+├── prism-oxlint-plugin.js # Local Oxlint JS plugin for prism DSL rules
 `
           : "";
       const typescriptValidation =
@@ -753,9 +753,9 @@ npm run typecheck
         options.typescript && !options.minimal
           ? `## TypeScript authoring guardrails
 
-The generated Oxlint config uses OXC's documented project config and \`jsPlugins\` fields to load \`./agentpkg-oxlint-plugin.js\`.
+The generated Oxlint config uses OXC's documented project config and \`jsPlugins\` fields to load \`./prism-oxlint-plugin.js\`.
 
-The local \`agentpkg\` rules keep compiler DSL files declarative:
+The local \`prism\` rules keep compiler DSL files declarative:
 
 - Tool slot fills in \`bindTrait(..., { tools: ... })\` must use imported runtime schema identifiers from \`schemas/\` or \`slots/\`.
 - Traits must not define root-level \`slots\`.
@@ -825,19 +825,19 @@ Matching overlay files replace shared files for that harness. Non-overridden fil
 
 \`\`\`bash
 # Install to all harnesses
-agentpkg install ./${name} --all
+prism install ./${name} --all
 
 # Install to specific harness IDs
-agentpkg install ./${name} --harness claude-code,opencode,openclaw
+prism install ./${name} --harness claude-code,opencode,openclaw
 
 # Install with project context
-agentpkg install ./${name} --all --project ~/code/my-project
+prism install ./${name} --all --project ~/code/my-project
 
-# Compile OpenCode agents/lifecycles into a project-local harness root
-agentpkg install ./${name} --harness opencode --scope project --project ~/code/my-project
+# Compile OpenCode agents/orbits into a project-local harness root
+prism install ./${name} --harness opencode --scope project --project ~/code/my-project
 
 # Preview without installing
-agentpkg install ./${name} --all --dry-run
+prism install ./${name} --all --dry-run
 \`\`\`
 
 When \`--scope project\` is set, compile-phase OpenCode outputs land in \`<project>/.opencode/\` instead of \`~/.config/opencode/\`. Regular install-phase artifacts keep their existing routing; project rules still use \`--project\`.
@@ -846,14 +846,14 @@ When \`--scope project\` is set, compile-phase OpenCode outputs land in \`<proje
 
 \`\`\`bash
 # Validate plugin structure and skill frontmatter
-agentpkg validate ./${name}
+prism validate ./${name}
 ${typescriptValidation}
 \`\`\`
 
 ${typescriptGuardrails}
 ## Harness notes
 
-- See \`agentpkg harnesses\` for the current harness support matrix.
+- See \`prism harnesses\` for the current harness support matrix.
 - OpenClaw v1 installs shared skill files plus matching \`harness/openclaw/skills/...\` overlays into \`~/.openclaw/skills/\`.
 - OpenClaw v1 does not install rules, commands, or custom agents.
 `;
@@ -867,7 +867,7 @@ ${typescriptGuardrails}
       console.log("\n✅ Plugin created successfully!");
       console.log(`\nNext steps:`);
       console.log(`   cd ${name}`);
-      console.log(`   agentpkg install . --all --dry-run`);
+      console.log(`   prism install . --all --dry-run`);
     } catch (error) {
       printCliError(error, "Error");
       process.exit(1);

@@ -1,0 +1,8 @@
+{
+  "name": "experiment-orbit",
+  "version": "0.1.0",
+  "description": "Example compile-phase plugin showing parameterized orbit templates and concrete bindings.",
+  "targets": {
+    "orbits": ["opencode"]
+  }
+}

@@ -18,10 +18,10 @@ const effectImportPath = join(
   "index.js",
 ).replace(/\\/g, "/");
 
-const agentpkgImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
 const createTempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), "agentpkg-mcp-test-"));
+  const root = await mkdtemp(join(tmpdir(), "prism-mcp-test-"));
   tempRoots.push(root);
   return root;
 };
@@ -36,19 +36,19 @@ const createSdlcMcpFixture = async (): Promise<{
   projectRoot: string;
 }> => {
   const root = await createTempRoot();
-  const pluginRoot = join(root, "sdlc");
+  const pluginRoot = join(root, "forge");
   const projectRoot = join(root, "project");
-  const lifecycleRoot = join(pluginRoot, "deps", "lifecycle-core");
+  const orbitRoot = join(pluginRoot, "deps", "orbit-core");
   await mkdir(projectRoot, { recursive: true });
 
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "sdlc",
+        name: "forge",
         version: "0.1.0",
         deps: {
-          "lifecycle-core": "./deps/lifecycle-core",
+          "orbit-core": "./deps/orbit-core",
         },
         targets: {
           agents: ["opencode"],
@@ -59,10 +59,10 @@ const createSdlcMcpFixture = async (): Promise<{
     )}\n`,
   );
   await writeText(
-    join(lifecycleRoot, "plugin.json"),
+    join(orbitRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "lifecycle-core",
+        name: "orbit-core",
         version: "0.1.0",
         targets: {
           tools: ["opencode"],
@@ -80,7 +80,7 @@ description: Builder identity
 
 # Builder
 
-Use lifecycle-core canonical tools through SDLC wrappers.
+Use orbit-core canonical tools through Forge wrappers.
 `,
   );
   await writeText(
@@ -93,37 +93,37 @@ export const ReviewDetails = Schema.Struct({
 `,
   );
   await writeText(
-    join(lifecycleRoot, "tools", "create_item.tool.ts"),
+    join(orbitRoot, "tools", "create_item.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "create_item",
-  description: "Create a lifecycle work item",
+  description: "Create a orbit work item",
   input: Schema.Struct({
-    lifecycle: Schema.Literal("sdlc", "rlc"),
+    orbit: Schema.Literal("forge", "survey"),
     id: Schema.String,
     title: Schema.String,
   }),
   output: Schema.Struct({
     created: Schema.Boolean,
-    lifecycle: Schema.Literal("sdlc", "rlc"),
+    orbit: Schema.Literal("forge", "survey"),
     id: Schema.String,
   }),
   async handle(input, context) {
-    return { created: true, lifecycle: input.lifecycle, id: input.id };
+    return { created: true, orbit: input.orbit, id: input.id };
   },
 });
 `,
   );
   await writeText(
-    join(lifecycleRoot, "tools", "submit_review.tool.ts"),
+    join(orbitRoot, "tools", "submit_review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool, schemaSlot } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool, schemaSlot } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "submit_review",
-  description: "Submit lifecycle review findings",
+  description: "Submit orbit review findings",
   input: Schema.Struct({
     summary: Schema.String,
   }),
@@ -132,7 +132,7 @@ export default defineTool({
     verdict: Schema.Literal("approve", "request_changes"),
   }),
   slots: {
-    details: schemaSlot({ description: "SDLC review details" }),
+    details: schemaSlot({ description: "Forge review details" }),
   },
   async handle(input, context) {
     return { acknowledged: true, verdict: input.details.verdict };
@@ -142,13 +142,13 @@ export default defineTool({
   );
   await writeText(
     join(pluginRoot, "traits", "work-item-writer.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "work-item-writer",
-  description: "Can create lifecycle work items",
+  description: "Can create orbit work items",
   tools: {
-    create_item: { ref: "lifecycle-core:create_item" },
+    create_item: { ref: "orbit-core:create_item" },
   },
   require: { tools: ["create_item"] },
 });
@@ -156,13 +156,13 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "traits", "review-submitter.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "review-submitter",
-  description: "Can submit SDLC-specialized review findings",
+  description: "Can submit Forge-specialized review findings",
   tools: {
-    submit_review: { ref: "lifecycle-core:submit_review" },
+    submit_review: { ref: "orbit-core:submit_review" },
   },
   require: { tools: ["submit_review"] },
 });
@@ -170,12 +170,12 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(agentpkgImportPath)};
+    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
 import { ReviewDetails } from "../schemas/review-details.ts";
 
 export default defineAgent({
   name: "builder",
-  description: "Builder with lifecycle-core tools",
+  description: "Builder with orbit-core tools",
   identity: "builder",
   traits: [
     bindTrait("work-item-writer"),
@@ -265,7 +265,7 @@ afterEach(async () => {
   );
 });
 
-test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wrapper tools", async () => {
+test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapper tools", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
@@ -282,21 +282,21 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
   expect(builder).toBeDefined();
 
   const bundle = await generateMcpServerBundle({
-    sourcePluginName: "sdlc",
-    serverName: "agentpkg-mcp-sdlc",
-    bundleId: "sdlc",
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
     bindings: builder?.toolBindings ?? [],
   });
 
-  expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("sdlc"));
+  expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("forge"));
   expect(bundle.toolNames).toEqual([
-    "lifecycle_core_create_item",
-    "sdlc_submit_review__review_details",
+    "forge_submit_review__review_details",
+    "orbit_core_create_item",
   ]);
   expect(bundle.content).toContain("tools/list");
   expect(bundle.content).toContain("tools/call");
-  expect(bundle.content).toContain("lifecycle_core_create_item");
-  expect(bundle.content).toContain("sdlc_submit_review__review_details");
+  expect(bundle.content).toContain("orbit_core_create_item");
+  expect(bundle.content).toContain("forge_submit_review__review_details");
   expect(bundle.content).not.toContain("unreferenced");
 
   const serverPath = join(projectRoot, bundle.relativePath);
@@ -311,28 +311,28 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
     const initialized = await client.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "agentpkg-test", version: "0.1.0" },
+      clientInfo: { name: "prism-test", version: "0.1.0" },
     });
-    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc");
+    expect(initialized.result.serverInfo.name).toBe("prism-mcp-forge");
 
     const listed = await client.request("tools/list");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "lifecycle_core_create_item",
-      "sdlc_submit_review__review_details",
+      "forge_submit_review__review_details",
+      "orbit_core_create_item",
     ]);
 
     const created = await client.request("tools/call", {
-      name: "lifecycle_core_create_item",
-      arguments: { lifecycle: "sdlc", id: "AP-999", title: "Compile MCP" },
+      name: "orbit_core_create_item",
+      arguments: { orbit: "forge", id: "AP-999", title: "Compile MCP" },
     });
     expect(JSON.parse(created.result.content[0].text)).toEqual({
       created: true,
-      lifecycle: "sdlc",
+      orbit: "forge",
       id: "AP-999",
     });
 
     const reviewed = await client.request("tools/call", {
-      name: "sdlc_submit_review__review_details",
+      name: "forge_submit_review__review_details",
       arguments: { summary: "Looks good", details: { verdict: "approve" } },
     });
     expect(JSON.parse(reviewed.result.content[0].text)).toEqual({
@@ -341,7 +341,7 @@ test("MCP bundle exposes only resolved lifecycle-core canonical and SDLC slot wr
     });
 
     const invalid = await client.request("tools/call", {
-      name: "sdlc_submit_review__review_details",
+      name: "forge_submit_review__review_details",
       arguments: { summary: "Missing details" },
     });
     expect(invalid.result.isError).toBe(true);
@@ -366,9 +366,9 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
 
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
-    sourcePluginName: "sdlc",
-    serverName: "agentpkg-mcp-sdlc",
-    bundleId: "sdlc",
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
     bindings: builder?.toolBindings ?? [],
   });
   const serverPath = join(projectRoot, bundle.relativePath);
@@ -383,14 +383,14 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
     const initialized = await client.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "agentpkg-test", version: "0.1.0" },
+      clientInfo: { name: "prism-test", version: "0.1.0" },
     });
-    expect(initialized.result.serverInfo.name).toBe("agentpkg-mcp-sdlc");
+    expect(initialized.result.serverInfo.name).toBe("prism-mcp-forge");
 
     const listed = await client.request("tools/list");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "lifecycle_core_create_item",
-      "sdlc_submit_review__review_details",
+      "forge_submit_review__review_details",
+      "orbit_core_create_item",
     ]);
   } finally {
     child.kill();
@@ -404,7 +404,7 @@ test("MCP bundle generation supports unknown object payload schemas", async () =
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "inspect",
@@ -423,7 +423,7 @@ export default defineTool({
   await expect(
     generateMcpServerBundle({
       sourcePluginName: "schema-fixture",
-      serverName: "agentpkg-mcp-schema-fixture",
+      serverName: "prism-mcp-schema-fixture",
       bindings: [
         {
           kind: "permission",
@@ -444,7 +444,7 @@ test("MCP bundle generation fails closed when a tool input schema cannot become 
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "inspect",
@@ -463,7 +463,7 @@ export default defineTool({
   await expect(
     generateMcpServerBundle({
       sourcePluginName: "schema-fixture",
-      serverName: "agentpkg-mcp-schema-fixture",
+      serverName: "prism-mcp-schema-fixture",
       bindings: [
         {
           kind: "permission",
@@ -489,7 +489,7 @@ test("MCP bundle generation rejects non-identical tool-name collisions", async (
   await expect(
     generateMcpServerBundle({
       sourcePluginName: "collision-fixture",
-      serverName: "agentpkg-mcp-collision-fixture",
+      serverName: "prism-mcp-collision-fixture",
       bindings: [
         {
           kind: "permission",

@@ -1,4 +1,4 @@
-import { defineAgent } from "agentpkg";
+import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "reviewer",

@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const version = packageJson.version;
 const distDir = "dist";
-const binaryName = "agentpkg";
+const binaryName = "prism";
 
 const targets = [
   { platform: "darwin", arch: "x64" },
@@ -37,10 +37,10 @@ for (const { platform, arch } of targets) {
       entrypoints: ["src/cli.ts"],
       define: {
         APP_VERSION: `'${version}'`,
-        AGENTPKG_EFFECT_ENTRYPOINT: JSON.stringify(
+        PRISM_EFFECT_ENTRYPOINT: JSON.stringify(
           fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/")
         ),
-        AGENTPKG_OPENCODE_PLUGIN_ENTRYPOINT: JSON.stringify(
+        PRISM_OPENCODE_PLUGIN_ENTRYPOINT: JSON.stringify(
           fileURLToPath(import.meta.resolve("@opencode-ai/plugin")).replace(/\\/g, "/")
         ),
         SCHEMA_BRIDGE_SOURCE: JSON.stringify(

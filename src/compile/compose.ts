@@ -3,7 +3,7 @@
  * ComposedAgent for the lowerers.
  */
 
-import type { NormalizedLifecyclePhase as LifecyclePhase } from "./sources.js";
+import type { NormalizedOrbitPhase as OrbitPhase } from "./sources.js";
 import type { ResolvedAgent, ResolvedContractBinding } from "./resolve.js";
 
 export interface ComposedAgent {
@@ -19,7 +19,7 @@ export interface ComposedAgent {
   readonly allowedTools: ReadonlyArray<string>;
 }
 
-export interface ComposedLifecyclePhaseReference {
+export interface ComposedOrbitPhaseReference {
   readonly label: string;
   readonly detailLines: ReadonlyArray<string>;
 }
@@ -120,24 +120,24 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
   };
 };
 
-export const composeLifecyclePhaseReference = (
-  phase: LifecyclePhase,
-): ComposedLifecyclePhaseReference => {
-  if (phase.lifecycle_binding) {
-    const bindings = Object.entries(phase.lifecycle_binding.bindings ?? {})
+export const composeOrbitPhaseReference = (
+  phase: OrbitPhase,
+): ComposedOrbitPhaseReference => {
+  if (phase.orbit_binding) {
+    const bindings = Object.entries(phase.orbit_binding.bindings ?? {})
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([name, value]) => `\`${name}=${value}\``);
 
     return {
-      label: `lifecycle \`${phase.lifecycle_binding.lifecycle}\``,
+      label: `orbit \`${phase.orbit_binding.orbit}\``,
       detailLines:
         bindings.length > 0 ? [`- **Bindings**: ${bindings.join(", ")}`] : [],
     };
   }
 
-  if (phase.lifecycle) {
+  if (phase.orbit) {
     return {
-      label: `lifecycle \`${phase.lifecycle}\``,
+      label: `orbit \`${phase.orbit}\``,
       detailLines: [],
     };
   }

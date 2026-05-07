@@ -631,7 +631,7 @@ function convertCommandToToml(
     lines.push(`description = "${frontmatter.description}"`);
   }
 
-  // Replace agentpkg argument placeholders with Gemini CLI format
+  // Replace prism argument placeholders with Gemini CLI format
   const promptContent = content.replace(/\$ARGUMENTS/g, "{{args}}");
 
   // The content becomes the prompt
@@ -708,8 +708,8 @@ async function mergeCodexAgentConfig(
     : "unknown";
 
   const configPath = join(expandPath(harness.globalConfigPath), harness.configFile!);
-  const beginMarker = `# BEGIN: agentpkg:${agentName}`;
-  const endMarker = `# END: agentpkg:${agentName}`;
+  const beginMarker = `# BEGIN: prism:${agentName}`;
+  const endMarker = `# END: prism:${agentName}`;
 
   const description = typeof frontmatter.description === "string"
     ? frontmatter.description.replace(/"/g, '\\"')

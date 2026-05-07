@@ -2,7 +2,7 @@
  * Gemini CLI extension lowerer.
  *
  * Produces one compiler-owned extension bundle under
- * <gemini-root>/extensions/agentpkg-generated-<source-plugin>/.
+ * <gemini-root>/extensions/prism-generated-<source-plugin>/.
  */
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import matter from "gray-matter";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
+import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -21,7 +21,7 @@ import {
 import { effectBundleImportPath } from "../runtime-deps.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Lifecycle } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit } from "../sources.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
 import {
@@ -36,7 +36,7 @@ import {
 import type { LowerOperation } from "./opencode.js";
 
 const TARGET_ID = "gemini-cli" as const;
-const EXTENSION_PREFIX = "agentpkg-generated";
+const EXTENSION_PREFIX = "prism-generated";
 
 export interface GeminiCliLowerTarget {
   readonly scope: HarnessScope;
@@ -48,7 +48,7 @@ export interface GeminiCliLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly lifecycles: ReadonlyArray<Lifecycle>;
+  readonly orbits: ReadonlyArray<Orbit>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly hooks?: ReadonlyArray<Hook>;
   readonly registry?: PluginRegistry;
@@ -76,8 +76,8 @@ const extensionRoot = (target: GeminiCliLowerTarget): string =>
 const extensionRelativePath = (target: GeminiCliLowerTarget, path: string): string =>
   relative(extensionRoot(target), path).replace(/\\/g, "/");
 
-const lifecycleSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- agentpkg:lifecycle-skill owner=${JSON.stringify(sourcePluginName)} -->`;
+const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
+  `<!-- prism:orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
@@ -158,22 +158,22 @@ const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLo
 const renderGeminiAgentMarkdown = (agent: ComposedAgent, target: GeminiCliLowerTarget): string =>
   `${serializeFrontmatter(composeGeminiAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
 
-const renderGeminiLifecycleSkillMarkdown = (
-  lifecycle: Lifecycle,
+const renderGeminiOrbitSkillMarkdown = (
+  orbit: Orbit,
   sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string => {
   const lines: string[] = [];
-  lines.push(serializeFrontmatter({ name: lifecycle.name, description: lifecycle.description }));
+  lines.push(serializeFrontmatter({ name: orbit.name, description: orbit.description }));
   lines.push("");
-  lines.push(lifecycleSkillOwnerMarker(sourcePluginName));
+  lines.push(orbitSkillOwnerMarker(sourcePluginName));
   lines.push("");
   if (registry) {
-    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
   } else {
-    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
-    if (lifecycle.body.trim().length > 0) {
-      lines.push(lifecycle.body.trim(), "");
+    lines.push(`# ${orbit.name}`, "", orbit.description, "");
+    if (orbit.body.trim().length > 0) {
+      lines.push(orbit.body.trim(), "");
     }
   }
   return lines.join("\n");
@@ -225,7 +225,7 @@ const renderContext = (contexts: ReadonlyArray<{ label: string; content: string 
   if (contexts.length === 1) return `${contexts[0]!.content}\n`;
   const lines: string[] = [];
   for (const context of contexts) {
-    lines.push(`<!-- agentpkg:context-source ${context.label} -->`, "", context.content, "");
+    lines.push(`<!-- prism:context-source ${context.label} -->`, "", context.content, "");
   }
   return lines.join("\n");
 };
@@ -370,7 +370,7 @@ const normalizePayload = (input) => {
 
 const unwrapDecode = (decoded, label) => {
   if (decoded && decoded._tag === "Right") return decoded.right;
-  throw new Error("agentpkg hook " + label + " validation failed");
+  throw new Error("prism hook " + label + " validation failed");
 };
 
 const toGeminiHookOutput = (nativeEvent, result) => {
@@ -398,7 +398,7 @@ process.stdout.write(JSON.stringify(toGeminiHookOutput(${JSON.stringify(nativeEv
 `;
 
 const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "agentpkg-gemini-hook-"));
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-gemini-hook-"));
   try {
     const entry = join(tempRoot, "hook-entry.ts");
     await nodeWriteFile(entry, renderHookWrapperEntry(hook.sourcePath, hook.event, nativeEvent));
@@ -530,13 +530,13 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
 
   await copyTargetedSkillArtifacts(input, operations, desired);
 
-  for (const lifecycle of input.lifecycles) {
-    const target = join(root, "skills", lifecycle.name, "SKILL.md");
+  for (const orbit of input.orbits) {
+    const target = join(root, "skills", orbit.name, "SKILL.md");
     desired.add(extensionRelativePath(input.target, target));
     await pushWrite(
       operations,
       target,
-      renderGeminiLifecycleSkillMarkdown(lifecycle, input.target.sourcePluginName, input.registry),
+      renderGeminiOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
   }

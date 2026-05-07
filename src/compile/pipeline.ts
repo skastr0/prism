@@ -1,8 +1,8 @@
 /**
  * Compile pipeline orchestration.
  *
- * Flow: Load (+deps) → Resolve → Compose → Validate lifecycles → Instantiate
- * concrete lifecycle skills → Lower → Emit.
+ * Flow: Load (+deps) → Resolve → Compose → Validate orbits → Instantiate
+ * concrete orbit skills → Lower → Emit.
  */
 
 import { Effect } from "effect";
@@ -11,11 +11,11 @@ import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../
 import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
-  instantiateLifecycle,
+  instantiateOrbit,
   resolveAgent,
-  resolveLifecycleSkillPermissions,
-  resolveLifecycleToolPermissions,
-  validateLifecycle,
+  resolveOrbitSkillPermissions,
+  resolveOrbitToolPermissions,
+  validateOrbit,
 } from "./resolve.js";
 import { composeAgent, type ComposedAgent } from "./compose.js";
 import {
@@ -43,7 +43,7 @@ import {
   AgentValidationError,
   type CompileError,
 } from "./errors.js";
-import type { CanonicalTool, Hook, Lifecycle, Skill } from "./sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { resolveManifestTargets } from "../manifest.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
@@ -61,7 +61,7 @@ import { writeLockfile } from "./lockfile.js";
 interface LowererModule {
   readonly planLowering: (input: {
     readonly agents: ReadonlyArray<ComposedAgent>;
-    readonly lifecycles: ReadonlyArray<Lifecycle>;
+    readonly orbits: ReadonlyArray<Orbit>;
     readonly tools: ReadonlyArray<CanonicalTool>;
     readonly skills: ReadonlyArray<Skill>;
     readonly hooks: ReadonlyArray<Hook>;
@@ -96,7 +96,7 @@ export interface CompileResult {
   readonly cacheDir: string;
   readonly lockfilePath: string | null;
   readonly composed: ReadonlyArray<ComposedAgent>;
-  readonly lifecycles: ReadonlyArray<Lifecycle>;
+  readonly orbits: ReadonlyArray<Orbit>;
   readonly operations: ReadonlyArray<LowerOperation>;
   readonly backups: ReadonlyArray<string>;
   readonly built: ReadonlyArray<string>;
@@ -161,7 +161,7 @@ const collectCacheOutputs = (
   return outputs;
 };
 
-const applyLifecycleToolPermissions = (
+const applyOrbitToolPermissions = (
   agents: ReadonlyArray<ComposedAgent>,
   permissions: ReadonlyMap<string, ReadonlyArray<ComposedAgent["toolBindings"][number]>>,
 ): ComposedAgent[] =>
@@ -187,7 +187,7 @@ const applyLifecycleToolPermissions = (
     };
   });
 
-const applyLifecycleSkillPermissions = (
+const applyOrbitSkillPermissions = (
   agents: ReadonlyArray<ComposedAgent>,
   permissions: ReadonlyMap<string, ReadonlyArray<string>>,
 ): ComposedAgent[] =>
@@ -384,7 +384,7 @@ export const compilePluginForTarget = (
     const registry = yield* loadPlugin(options.pluginPath);
     const targetId = options.target as HarnessId;
     const targetsAgents = registryTargetsHarness(registry, "agents", targetId);
-    const targetsLifecycles = registryTargetsHarness(registry, "lifecycles", targetId);
+    const targetsOrbits = registryTargetsHarness(registry, "orbits", targetId);
     const targetsTools = registryTargetsHarness(registry, "tools", targetId);
     const targetsSkills = registryTargetsHarness(registry, "skills", targetId);
     const targetsHooks = registryTargetsHarness(registry, "hooks", targetId);
@@ -392,7 +392,7 @@ export const compilePluginForTarget = (
     const targetsCommands = registryTargetsHarness(registry, "commands", targetId);
     const hasLowerableArtifacts =
       targetsAgents ||
-      targetsLifecycles ||
+      targetsOrbits ||
       targetsTools ||
       targetsSkills ||
       targetsHooks ||
@@ -435,34 +435,34 @@ export const compilePluginForTarget = (
       built.push(agent.name);
     }
 
-    // Validate lifecycle sources, then lower only concrete instances.
-    const lifecycles: Lifecycle[] = [];
-    for (const [, lifecycle] of [...registry.lifecycles.entries()].sort(
+    // Validate orbit sources, then lower only concrete instances.
+    const orbits: Orbit[] = [];
+    for (const [, orbit] of [...registry.orbits.entries()].sort(
       ([a], [b]) => a.localeCompare(b)
     )) {
-      if (!targetsLifecycles) break;
-      yield* validateLifecycle(lifecycle, registry);
-      if (lifecycle.parameters.length > 0) continue;
-      lifecycles.push(yield* instantiateLifecycle(lifecycle));
+      if (!targetsOrbits) break;
+      yield* validateOrbit(orbit, registry);
+      if (orbit.parameters.length > 0) continue;
+      orbits.push(yield* instantiateOrbit(orbit));
     }
 
-    const lifecycleToolPermissions = yield* resolveLifecycleToolPermissions(lifecycles, registry);
-    const lifecycleSkillPermissions =
+    const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
+    const orbitSkillPermissions =
       getCompileTargetCapabilities(options.target).skillPermissions === "supported"
-        ? resolveLifecycleSkillPermissions(lifecycles, registry)
+        ? resolveOrbitSkillPermissions(orbits, registry)
         : new Map<string, ReadonlyArray<string>>();
-    const composedWithLifecycleTools = applyLifecycleToolPermissions(
+    const composedWithOrbitTools = applyOrbitToolPermissions(
       composed,
-      lifecycleToolPermissions,
+      orbitToolPermissions,
     );
     yield* assertAgentToolBindingsAreTargeted(
-      composedWithLifecycleTools,
+      composedWithOrbitTools,
       registry,
       targetId,
     );
-    const composedForLowering = applyLifecycleSkillPermissions(
-      composedWithLifecycleTools,
-      lifecycleSkillPermissions,
+    const composedForLowering = applyOrbitSkillPermissions(
+      composedWithOrbitTools,
+      orbitSkillPermissions,
     );
     yield* assertTargetSupportsGeneratedCanonicalTools(
       options.target,
@@ -487,7 +487,7 @@ export const compilePluginForTarget = (
       ? yield* Effect.promise(() =>
           lowerer.planLowering({
             agents: composedForLowering,
-            lifecycles,
+            orbits,
             tools: targetTools,
             skills: targetSkills,
             hooks: targetHooks,
@@ -544,7 +544,7 @@ export const compilePluginForTarget = (
       cacheDir,
       lockfilePath,
       composed: composedForLowering,
-      lifecycles,
+      orbits,
       operations: allOps,
       backups,
       built,

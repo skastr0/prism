@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
-import { agentpkgOxlintPluginJs } from "./init-templates.js";
+import { prismOxlintPluginJs } from "./init-templates.js";
 
 const tempRoots: string[] = [];
 
 const createTempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), "agentpkg-cli-"));
+  const root = await mkdtemp(join(tmpdir(), "prism-cli-"));
   tempRoots.push(root);
   return root;
 };
@@ -69,8 +69,8 @@ const readJson = async (path: string): Promise<JsonObject> =>
 
 const loadGeneratedLintPlugin = async (): Promise<LintPlugin> => {
   const root = await createTempRoot();
-  const pluginPath = join(root, "agentpkg-oxlint-plugin.mjs");
-  await writeFile(pluginPath, agentpkgOxlintPluginJs);
+  const pluginPath = join(root, "prism-oxlint-plugin.mjs");
+  await writeFile(pluginPath, prismOxlintPluginJs);
   const module = (await import(pathToFileURL(pluginPath).href)) as { default: LintPlugin };
   return module.default;
 };
@@ -126,7 +126,7 @@ const createInstallAllFixture = async (): Promise<{
   const monorepoRoot = join(root, "monorepo");
   const projectRoot = join(root, "project-root");
   const homeRoot = join(root, "home");
-  const compilePluginRoot = join(monorepoRoot, "trait-lifecycle-contracts");
+  const compilePluginRoot = join(monorepoRoot, "trait-orbit-contracts");
 
   await mkdir(monorepoRoot, { recursive: true });
   await mkdir(projectRoot, { recursive: true });
@@ -155,7 +155,7 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(".oxlintrc.json");
   expect(result.stdout).toContain(".oxfmtrc.json");
-  expect(result.stdout).toContain("agentpkg-oxlint-plugin.js");
+  expect(result.stdout).toContain("prism-oxlint-plugin.js");
 
   const pluginRoot = join(root, "typed-plugin");
   const packageJson = await readJson(join(pluginRoot, "package.json"));
@@ -175,13 +175,13 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   const oxlintConfig = await readJson(join(pluginRoot, ".oxlintrc.json"));
   expect(oxlintConfig.jsPlugins).toEqual([
     {
-      name: "agentpkg",
-      specifier: "./agentpkg-oxlint-plugin.js",
+      name: "prism",
+      specifier: "./prism-oxlint-plugin.js",
     },
   ]);
   expect(oxlintConfig.rules).toMatchObject({
-    "agentpkg/no-inline-slot-schemas": "error",
-    "agentpkg/no-trait-tool-contract-overrides": "error",
+    "prism/no-inline-slot-schemas": "error",
+    "prism/no-trait-tool-contract-overrides": "error",
   });
 
   const oxfmtConfig = await readJson(join(pluginRoot, ".oxfmtrc.json"));
@@ -321,9 +321,9 @@ test("generated Oxlint rule rejects trait-owned slots and tool input/output repl
           property(
             "submit_work",
             objectExpression([
-              property("ref", literal("lifecycle-core:submit_work")),
+              property("ref", literal("orbit-core:submit_work")),
               property("input", identifier("WorkSubmissionBase")),
-              property("output", identifier("LifecyclePacketReceipt")),
+              property("output", identifier("OrbitPacketReceipt")),
             ])
           ),
         ])
@@ -373,7 +373,7 @@ test("install-all compiles discovered child plugins with project scope", async (
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(
-    "Manifest targets: agents=[opencode, claude-code]; lifecycles=[opencode, claude-code]; tools=[opencode, claude-code]; toolspaces=[opencode, claude-code]; modelspaces=[opencode, claude-code]"
+    "Manifest targets: agents=[opencode, claude-code]; orbits=[opencode, claude-code]; tools=[opencode, claude-code]; toolspaces=[opencode, claude-code]; modelspaces=[opencode, claude-code]"
   );
   expect(result.stdout).toContain("Matching requested harnesses: opencode, claude-code");
   expect(result.stdout).toContain("Compile output scope: project");
@@ -393,7 +393,7 @@ test("install-all compiles discovered child plugins with project scope", async (
         projectRoot,
         ".claude",
         "plugins",
-        "agentpkg-generated-canonical-compile-fixture",
+        "prism-generated-canonical-compile-fixture",
         "agents",
         "builder.md",
       ),
@@ -405,7 +405,7 @@ test("install-all compiles discovered child plugins with project scope", async (
         projectRoot,
         ".claude",
         "plugins",
-        "agentpkg-generated-canonical-compile-fixture",
+        "prism-generated-canonical-compile-fixture",
         "skills",
         "delivery-contract",
         "SKILL.md",
@@ -417,7 +417,7 @@ test("install-all compiles discovered child plugins with project scope", async (
   ).toBe(false);
   expect(
     await pathExists(
-      join(homeRoot, ".claude", "plugins", "agentpkg-generated-canonical-compile-fixture", "agents", "builder.md"),
+      join(homeRoot, ".claude", "plugins", "prism-generated-canonical-compile-fixture", "agents", "builder.md"),
     )
   ).toBe(false);
 });
@@ -426,7 +426,7 @@ test("install-all skips skill validation when skills are not targeted", async ()
   const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
 
   await mkdir(
-    join(monorepoRoot, "trait-lifecycle-contracts", "skills", "leaf-agent-protocol"),
+    join(monorepoRoot, "trait-orbit-contracts", "skills", "leaf-agent-protocol"),
     { recursive: true }
   );
 

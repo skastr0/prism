@@ -18,7 +18,7 @@ import {
 const tempRoots: string[] = [];
 
 const createTempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), "agentpkg-compile-"));
+  const root = await mkdtemp(join(tmpdir(), "prism-compile-"));
   tempRoots.push(root);
   return root;
 };
@@ -78,7 +78,7 @@ const effectImportPath = join(
   "index.js",
 ).replace(/\\/g, "/");
 
-const agentpkgImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
 const skillPermissionAction = (
   permission: Record<string, string>,
@@ -94,8 +94,8 @@ const visibleSkillsForPermission = (
     .sort((left, right) => left.localeCompare(right));
 
 const createCanonicalLanguageFixture = async (options?: {
-  invalidLifecycle?: boolean;
-  invalidLifecyclePermissionAgent?: boolean;
+  invalidOrbit?: boolean;
+  invalidOrbitPermissionAgent?: boolean;
   inlineSlotSchema?: boolean;
   undeclaredSlot?: boolean;
   mixedTraitRefsBeforeSlotBinding?: boolean;
@@ -107,8 +107,8 @@ const createCanonicalLanguageFixture = async (options?: {
   return createCanonicalCompileFixture({
     pluginRoot,
     projectRoot,
-    invalidLifecycle: options?.invalidLifecycle,
-    invalidLifecyclePermissionAgent: options?.invalidLifecyclePermissionAgent,
+    invalidOrbit: options?.invalidOrbit,
+    invalidOrbitPermissionAgent: options?.invalidOrbitPermissionAgent,
     inlineSlotSchema: options?.inlineSlotSchema,
     undeclaredSlot: options?.undeclaredSlot,
     mixedTraitRefsBeforeSlotBinding: options?.mixedTraitRefsBeforeSlotBinding,
@@ -136,7 +136,7 @@ const createGeminiExtensionFixture = async (): Promise<{
           commands: ["gemini-cli"],
           skills: ["gemini-cli"],
           agents: ["gemini-cli"],
-          lifecycles: ["gemini-cli"],
+          orbits: ["gemini-cli"],
           tools: ["gemini-cli"],
           toolspaces: ["gemini-cli"],
           hooks: ["gemini-cli"],
@@ -151,7 +151,7 @@ const createGeminiExtensionFixture = async (): Promise<{
   await writeText(join(pluginRoot, "commands", "hello.md"), `---\ndescription: Say hello\n---\n\nSay hello from the generated command.\n`);
   await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
   await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the extension bundle.\n`);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace",
@@ -159,7 +159,7 @@ export default defineToolspace({
 });
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "submit-work",
@@ -169,7 +169,7 @@ export default defineTool({
   async handle(input, context) { return { acknowledged: true }; },
 });
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "submittable",
@@ -180,7 +180,7 @@ export default defineTrait({
   require: { tools: ["submit_work"] },
 });
 `);
-  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineAgent({
   name: "worker",
@@ -190,16 +190,16 @@ export default defineAgent({
   skills: [skillRef("testing")],
 });
 `);
-  await writeText(join(pluginRoot, "lifecycles", "delivery.lifecycle.ts"), `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineLifecycle({
+export default defineOrbit({
   name: "delivery",
   description: "Deliver work through Gemini",
   phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-read",
@@ -210,7 +210,7 @@ export default defineHook({
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-submit",
@@ -255,7 +255,7 @@ const createCodexProjectFixture = async (): Promise<{
   await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Codex context\n\nUse project-local Codex guidance.\n`);
   await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
   await writeText(join(pluginRoot, "identities", "reviewer.identity.md"), `---\ndescription: Reviewer identity\n---\n\n# Reviewer\n\nReview through Codex.\n`);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace",
@@ -263,7 +263,7 @@ export default defineToolspace({
 });
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "submit-work",
@@ -273,7 +273,7 @@ export default defineTool({
   async handle(_input, _context) { return { acknowledged: true }; },
 });
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "submittable",
@@ -283,7 +283,7 @@ export default defineTrait({
   require: { tools: ["submit_work"] },
 });
 `);
-  await writeText(join(pluginRoot, "agents", "reviewer.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "agents", "reviewer.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineAgent({
   name: "reviewer",
@@ -294,7 +294,7 @@ export default defineAgent({
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-shell",
@@ -335,7 +335,7 @@ const createOpenCodeHookFixture = async (options?: {
       2,
     )}\n`,
   );
-  await writeText(join(pluginRoot, "toolspaces", "core.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "toolspaces", "core.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "core",
@@ -343,7 +343,7 @@ export default defineToolspace({
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-before.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-before",
@@ -353,7 +353,7 @@ export default defineHook({
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-after.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-after",
@@ -363,7 +363,7 @@ export default defineHook({
 });
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "submit-work",
@@ -374,7 +374,7 @@ export default defineTool({
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-submit",
@@ -385,7 +385,7 @@ export default defineHook({
 `);
   if (options?.sessionHook) {
     await writeText(join(pluginRoot, "hooks", "session-start.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "session-start",
@@ -394,7 +394,7 @@ export default defineHook({
 });
 `);
     await writeText(join(pluginRoot, "hooks", "session-end.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "session-end",
@@ -414,7 +414,7 @@ const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
   const root = await createTempRoot();
   const pluginRoot = join(root, "signal-core");
   const projectRoot = join(root, "project");
-  const lifecycleRoot = join(pluginRoot, "deps", "lifecycle-core");
+  const orbitRoot = join(pluginRoot, "deps", "orbit-core");
   await mkdir(projectRoot, { recursive: true });
 
   await writeText(
@@ -424,7 +424,7 @@ const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
         name: "signal-core",
         version: "0.1.0",
         deps: {
-          "lifecycle-core": "./deps/lifecycle-core",
+          "orbit-core": "./deps/orbit-core",
         },
         targets: {
           tools: ["opencode"],
@@ -435,10 +435,10 @@ const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
     )}\n`,
   );
   await writeText(
-    join(lifecycleRoot, "plugin.json"),
+    join(orbitRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "lifecycle-core",
+        name: "orbit-core",
         version: "0.1.0",
         targets: {
           tools: ["opencode"],
@@ -449,15 +449,15 @@ const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
     )}\n`,
   );
   await writeText(
-    join(lifecycleRoot, "tools", "shared", "lifecycle-server-client.ts"),
-    `export const normalizeLifecycleMessage = (value: string): string => value.trim().toUpperCase();
+    join(orbitRoot, "tools", "shared", "orbit-server-client.ts"),
+    `export const normalizeOrbitMessage = (value: string): string => value.trim().toUpperCase();
 `,
   );
   await writeText(
     join(pluginRoot, "tools", "record_signal.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
-import { normalizeLifecycleMessage } from "../deps/lifecycle-core/tools/shared/lifecycle-server-client.ts";
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+import { normalizeOrbitMessage } from "../deps/orbit-core/tools/shared/orbit-server-client.ts";
 
 export default defineTool({
   name: "record_signal",
@@ -465,7 +465,7 @@ export default defineTool({
   input: Schema.Struct({ message: Schema.String }),
   output: Schema.Struct({ message: Schema.String }),
   async handle(input) {
-    return { message: normalizeLifecycleMessage(input.message) };
+    return { message: normalizeOrbitMessage(input.message) };
   },
 });
 `,
@@ -531,7 +531,7 @@ Use the protocol tool.
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from "agentpkg";
+    `import { defineTrait } from "prism";
 
 export default defineTrait({
   name: "submittable",
@@ -549,7 +549,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "agentpkg";
+    `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -571,7 +571,7 @@ export const SharedInput = Schema.Struct({
   await writeText(
     join(protocolRoot, "tools", "external-submit.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool } from "agentpkg";
+import { defineTool } from "prism";
 import { SharedInput } from "../schemas/shared.ts";
 
 export default defineTool({
@@ -590,7 +590,7 @@ export default defineTool({
   await writeText(
     join(protocolRoot, "tools", "unreferenced.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool } from "agentpkg";
+import { defineTool } from "prism";
 
 export default defineTool({
   name: "unreferenced",
@@ -608,18 +608,18 @@ export default defineTool({
     `${JSON.stringify(
       {
         plugin: [
-          "agentpkg-generated-permission-only-consumer",
-          "agentpkg-generated-stale-dep",
+          "prism-generated-permission-only-consumer",
+          "prism-generated-stale-dep",
           generatedPluginEntry(
             projectRoot,
-            "agentpkg-generated-permission-only-consumer",
+            "prism-generated-permission-only-consumer",
           ),
           generatedLegacySourcePluginEntry(
             projectRoot,
-            "agentpkg-generated-permission-only-consumer",
+            "prism-generated-permission-only-consumer",
           ),
-          generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
-          generatedLegacySourcePluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
+          generatedPluginEntry(projectRoot, "prism-generated-stale-dep"),
+          generatedLegacySourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
         ],
       },
       null,
@@ -693,7 +693,7 @@ export const WorkerDetails = Schema.Struct({
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from "agentpkg";
+    `import { defineTrait } from "prism";
 
 export default defineTrait({
   name: "submittable",
@@ -711,7 +711,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { bindTrait, defineAgent } from "agentpkg";
+    `import { bindTrait, defineAgent } from "prism";
 import { WorkerDetails } from "../schemas/worker-details.ts";
 
 export default defineAgent({
@@ -744,7 +744,7 @@ export const SharedInput = Schema.Struct({
   await writeText(
     join(protocolRoot, "tools", "external-submit.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool, schemaSlot } from "agentpkg";
+import { defineTool, schemaSlot } from "prism";
 import { SharedInput } from "../schemas/shared.ts";
 
 export default defineTool({
@@ -783,7 +783,7 @@ test("readManifest accepts canonical compile target keys", async () => {
   expect(manifest.name).toBe("canonical-compile-fixture");
   expect(manifest.targets).toEqual({
     agents: ["opencode", "claude-code"],
-    lifecycles: ["opencode", "claude-code"],
+    orbits: ["opencode", "claude-code"],
     tools: ["opencode", "claude-code"],
     toolspaces: ["opencode", "claude-code"],
     modelspaces: ["opencode", "claude-code"],
@@ -809,7 +809,7 @@ test("readManifest treats skillspaces as compile artifacts", async () => {
   );
   await writeText(
     join(pluginRoot, "skillspaces", "core.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "core",
@@ -910,7 +910,7 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   ).toBeUndefined();
 });
 
-test("lifecycle phase validation succeeds when assigned agents satisfy requirements", async () => {
+test("orbit phase validation succeeds when assigned agents satisfy requirements", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await Effect.runPromise(
@@ -931,12 +931,12 @@ test("lifecycle phase validation succeeds when assigned agents satisfy requireme
   expect(skill).toContain("### 1. Implement change — agent `builder`");
   expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
   // Derived skill renders trait protocols once, deduplicated across agents.
-  expect(skill).toContain("## Trait protocols active in this lifecycle");
+  expect(skill).toContain("## Trait protocols active in this orbit");
   expect(skill).toContain("`canonical-compile-fixture:reviewable`");
   expect(skill).toContain("`canonical-compile-fixture:self-assessing`");
   expect(
     await pathExists(
-      join(projectRoot, ".opencode", "lifecycles", "delivery-contract.md"),
+      join(projectRoot, ".opencode", "orbits", "delivery-contract.md"),
     ),
   ).toBe(false);
 
@@ -953,15 +953,15 @@ test("lifecycle phase validation succeeds when assigned agents satisfy requireme
   const generatedPluginWrites = warmOpencode.operations.filter(
     (operation) =>
       operation.kind === "write-plugin-file" &&
-      operation.target.includes(join(".opencode", "plugins", "agentpkg-generated")),
+      operation.target.includes(join(".opencode", "plugins", "prism-generated")),
   );
   expect(generatedPluginWrites.length).toBeGreaterThan(0);
   expect(generatedPluginWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
 });
 
-test("lifecycle validation fails when assigned agents do not satisfy requirements", async () => {
+test("orbit validation fails when assigned agents do not satisfy requirements", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    invalidLifecycle: true,
+    invalidOrbit: true,
   });
 
   const exit = await Effect.runPromiseExit(
@@ -976,17 +976,17 @@ test("lifecycle validation fails when assigned agents do not satisfy requirement
   );
 
   const failure = getFailure(exit);
-  expect(failure._tag).toBe("LifecycleValidationError");
-  if (failure._tag === "LifecycleValidationError") {
+  expect(failure._tag).toBe("OrbitValidationError");
+  if (failure._tag === "OrbitValidationError") {
     expect(failure.field).toBe("phases[1].requires[0]");
     expect(failure.message).toContain("reviewable");
     expect(failure.message).toContain("only 0 match");
   }
 });
 
-test("lifecycle orchestrator validation fails when the orchestrator agent does not exist", async () => {
+test("orbit orchestrator validation fails when the orchestrator agent does not exist", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
-    invalidLifecyclePermissionAgent: true,
+    invalidOrbitPermissionAgent: true,
   });
 
   const exit = await Effect.runPromiseExit(
@@ -1001,14 +1001,14 @@ test("lifecycle orchestrator validation fails when the orchestrator agent does n
   );
 
   const failure = getFailure(exit);
-  expect(failure._tag).toBe("LifecycleValidationError");
-  if (failure._tag === "LifecycleValidationError") {
+  expect(failure._tag).toBe("OrbitValidationError");
+  if (failure._tag === "OrbitValidationError") {
     expect(failure.field).toBe("orchestrator.agent");
     expect(failure.message).toContain("unknown agent");
   }
 });
 
-test("lifecycle skill renders orchestrator section and grants the lifecycle skill to the orchestrator", async () => {
+test("orbit skill renders orchestrator section and grants the orbit skill to the orchestrator", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   const result = await Effect.runPromise(
@@ -1030,22 +1030,22 @@ test("lifecycle skill renders orchestrator section and grants the lifecycle skil
   expect(skill).toContain("`builder`");
   expect(skill).toContain("`create_item`");
 
-  // The orchestrator agent (builder) auto-receives the lifecycle skill.
+  // The orchestrator agent (builder) auto-receives the orbit skill.
   const builder = result.composed.find((agent) => agent.name === "builder");
   expect(builder?.allowedSkills).toContain("delivery-contract");
 });
 
-test("lifecycle-wide tool_permissions materialize on every phase agent", async () => {
+test("orbit-wide tool_permissions materialize on every phase agent", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
-  // Replace the lifecycle file with one that uses lifecycle-wide tool_permissions
+  // Replace the orbit file with one that uses orbit-wide tool_permissions
   // and no orchestrator. Both phase agents (builder + reviewer) should get the
   // wide-granted tool.
   await writeText(
-    join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
-    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
+    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineLifecycle({
+export default defineOrbit({
   name: "delivery-contract",
   description: "Wide-grant variant",
   phases: [
@@ -1095,7 +1095,7 @@ export default defineLifecycle({
   expect(skill).toContain("`create_item`");
 });
 
-test("lifecycle parser rejects the legacy tool_permissions shape with agents", async () => {
+test("orbit parser rejects the legacy tool_permissions shape with agents", async () => {
   const projectRoot = await createTempRoot();
   const pluginRoot = join(projectRoot, "plugin");
 
@@ -1106,7 +1106,7 @@ test("lifecycle parser rejects the legacy tool_permissions shape with agents", a
         name: "legacy-shape",
         version: "0.1.0",
         targets: {
-          lifecycles: ["opencode"],
+          orbits: ["opencode"],
         },
       },
       null,
@@ -1115,10 +1115,10 @@ test("lifecycle parser rejects the legacy tool_permissions shape with agents", a
   );
 
   await writeText(
-    join(pluginRoot, "lifecycles", "legacy.lifecycle.ts"),
-    `import { defineLifecycle } from ${JSON.stringify(agentpkgImportPath)};
+    join(pluginRoot, "orbits", "legacy.orbit.ts"),
+    `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
 
-export default defineLifecycle({
+export default defineOrbit({
   name: "legacy",
   description: "Uses the deprecated tool_permissions shape with agents",
   phases: [],
@@ -1212,7 +1212,7 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-canonical-compile-fixture",
+    "prism-generated-canonical-compile-fixture",
   );
   const bundle = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
   expect(bundle).toContain("submit_review__review_findings_slot");
@@ -1221,7 +1221,7 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
 
 test("compilePluginForTarget emits a Gemini extension bundle", async () => {
   const { pluginRoot, projectRoot } = await createGeminiExtensionFixture();
-  const extensionRoot = join(projectRoot, ".gemini", "extensions", "agentpkg-generated-gemini-extension-demo");
+  const extensionRoot = join(projectRoot, ".gemini", "extensions", "prism-generated-gemini-extension-demo");
   await writeText(join(extensionRoot, "stale", "old.txt"), "stale\n");
 
   const result = await Effect.runPromise(
@@ -1246,22 +1246,22 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
   };
 
   expect(manifest).toEqual({
-    name: "agentpkg-generated-gemini-extension-demo",
+    name: "prism-generated-gemini-extension-demo",
     version: "0.2.0",
     contextFileName: "GEMINI.md",
     mcpServers: {
-      "agentpkg-generated-gemini-extension-demo": {
+      "prism-generated-gemini-extension-demo": {
         command: "bun",
-        args: ["${extensionPath}/mcp/agentpkg_generated_gemini_extension_demo/server.mjs"],
+        args: ["${extensionPath}/mcp/prism_generated_gemini_extension_demo/server.mjs"],
       },
     },
   });
-  expect(manifest.mcpServers?.["agentpkg-generated-gemini-extension-demo"]).not.toHaveProperty("trust");
+  expect(manifest.mcpServers?.["prism-generated-gemini-extension-demo"]).not.toHaveProperty("trust");
 
   const context = await readFile(join(extensionRoot, "GEMINI.md"), "utf8");
-  expect(context).toContain("<!-- agentpkg:context-source global/context.md -->");
+  expect(context).toContain("<!-- prism:context-source global/context.md -->");
   expect(context).toContain("# Gemini context");
-  expect(context).toContain("<!-- agentpkg:context-source project/project-context.md -->");
+  expect(context).toContain("<!-- prism:context-source project/project-context.md -->");
   expect(context).toContain("# Project context");
 
   const agent = await readFile(join(extensionRoot, "agents", "worker.md"), "utf8");
@@ -1270,7 +1270,7 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
     name: "worker",
     description: "Gemini extension worker",
     tools: [
-      "mcp_agentpkg-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
+      "mcp_prism-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
       "read_file",
     ],
   });
@@ -1278,15 +1278,15 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
   expect(parsedAgent.content).toContain("Submit work through the typed Gemini extension tool.");
 
   expect(await readFile(join(extensionRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
-  const lifecycleSkill = await readFile(join(extensionRoot, "skills", "delivery", "SKILL.md"), "utf8");
-  expect(lifecycleSkill).toContain('<!-- agentpkg:lifecycle-skill owner="gemini_extension.demo" -->');
-  expect(lifecycleSkill).toContain("# delivery");
-  expect(lifecycleSkill).toContain("### 1. Build — agent `worker`");
+  const orbitSkill = await readFile(join(extensionRoot, "skills", "delivery", "SKILL.md"), "utf8");
+  expect(orbitSkill).toContain('<!-- prism:orbit-skill owner="gemini_extension.demo" -->');
+  expect(orbitSkill).toContain("# delivery");
+  expect(orbitSkill).toContain("### 1. Build — agent `worker`");
 
   const command = await readFile(join(extensionRoot, "commands", "hello.toml"), "utf8");
   expect(command).toBe('description = "Say hello"\nprompt = """Say hello from the generated command."""\n');
 
-  expect(await pathExists(join(extensionRoot, "mcp", "agentpkg_generated_gemini_extension_demo", "server.mjs"))).toBe(true);
+  expect(await pathExists(join(extensionRoot, "mcp", "prism_generated_gemini_extension_demo", "server.mjs"))).toBe(true);
 
   const hookConfig = JSON.parse(await readFile(join(extensionRoot, "hooks", "hooks.json"), "utf8")) as {
     hooks: { BeforeTool: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
@@ -1299,7 +1299,7 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
           hooks: [{ type: "command", command: 'node "${extensionPath}/hooks/audit-read.mjs"' }],
         },
         {
-          matcher: "mcp_agentpkg-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
+          matcher: "mcp_prism-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
           hooks: [{ type: "command", command: 'node "${extensionPath}/hooks/audit-submit.mjs"' }],
         },
       ],
@@ -1341,17 +1341,17 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
   expect(result.outputRoot.replace(/\/$/u, "")).toBe(codexRoot);
 
   const config = await readFile(join(codexRoot, "config.toml"), "utf8");
-  expect(config).toContain("# --- agentpkg codex-cli begin: codex-project-demo ---");
-  expect(config).toContain('["mcp_servers"."agentpkg-generated-codex-project-demo"]');
+  expect(config).toContain("# --- prism codex-cli begin: codex-project-demo ---");
+  expect(config).toContain('["mcp_servers"."prism-generated-codex-project-demo"]');
   expect(config).toContain('enabled_tools = ["codex_project_demo_submit_work"]');
   expect(config).toContain('[["hooks"."PreToolUse"]]');
   expect(config).toContain('matcher = "shell\\\\.command"');
 
   const agent = await readFile(join(codexRoot, "agents", "reviewer.toml"), "utf8");
   expect(agent).toContain('name = "reviewer"');
-  expect(agent).toContain('["mcp_servers"."agentpkg-generated-codex-project-demo"]');
+  expect(agent).toContain('["mcp_servers"."prism-generated-codex-project-demo"]');
 
-  expect(await pathExists(join(codexRoot, "mcp", "agentpkg_generated_codex_project_demo", "server.mjs"))).toBe(true);
+  expect(await pathExists(join(codexRoot, "mcp", "prism_generated_codex_project_demo", "server.mjs"))).toBe(true);
   expect(await pathExists(join(codexRoot, "hooks", "audit-shell.mjs"))).toBe(true);
   expect(await readFile(join(codexRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
   expect(await readFile(join(codexRoot, "AGENTS.md"), "utf8")).toContain("Use project-local Codex guidance.");
@@ -1375,21 +1375,21 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-opencode-hook-demo",
+    "prism-generated-opencode-hook-demo",
   );
   const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
 
   expect(serverSource).toContain('"tool.execute.before"');
   expect(serverSource).toContain('"tool.execute.after"');
   expect(serverSource).toContain('"opencode_hook_demo_submit_work"');
-  expect(serverSource).not.toContain("/Projects/agentpkg/src/compile/sources.ts");
+  expect(serverSource).not.toContain("/Projects/prism/src/compile/sources.ts");
   expect(serverSource).toContain('"session.created"');
   expect(serverSource).toContain('"session.start"');
   expect(serverSource).toContain('"session.deleted"');
   expect(serverSource).toContain('"session.end"');
   expect(serverSource).toContain("decodeNativeHookPayloadForEvent");
   expect(serverSource).toContain("decodeHookResultForEvent");
-  expect(serverSource).not.toContain(agentpkgImportPath);
+  expect(serverSource).not.toContain(prismImportPath);
   expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
   expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-runtime.ts"))).toBe(false);
   expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-authoring-bridge.ts"))).toBe(false);
@@ -1461,18 +1461,18 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-canonical-compile-fixture",
+    "prism-generated-canonical-compile-fixture",
   );
   const protocolGeneratedRoot = join(
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-protocol-core",
+    "prism-generated-protocol-core",
   );
   const generatedBundlePath = join(generatedRoot, "dist", "server.mjs");
   const protocolBundlePath = join(protocolGeneratedRoot, "dist", "server.mjs");
   const generatedServer = await import(pathToFileURL(generatedBundlePath).href);
-  expect(generatedServer.default.id).toBe("agentpkg-generated-canonical-compile-fixture");
+  expect(generatedServer.default.id).toBe("prism-generated-canonical-compile-fixture");
   const generatedPlugin = await generatedServer.default.server({
     directory: projectRoot,
     worktree: projectRoot,
@@ -1487,7 +1487,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
 
   const generatedServerSource = await readFile(generatedBundlePath, "utf8");
   expect(generatedServerSource).not.toContain("canonical.handle");
-  expect(generatedServerSource).not.toContain('from "agentpkg"');
+  expect(generatedServerSource).not.toContain('from "prism"');
   expect(generatedServerSource).not.toContain("src/index.ts");
   expect(generatedServerSource).not.toContain("schemaSlot");
   expect(generatedServerSource).not.toContain("defineTool");
@@ -1498,7 +1498,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(generatedServerSource).not.toContain("delivery-contract__builder__create_item");
   expect(generatedServerSource).toContain("submit_review__review_findings_slot");
   expect(generatedServerSource).not.toContain("Schema.omit");
-  expect(generatedServerSource).not.toContain("agentpkg-generated-protocol-core/src/plugins");
+  expect(generatedServerSource).not.toContain("prism-generated-protocol-core/src/plugins");
 
   const protocolServer = await import(pathToFileURL(protocolBundlePath).href);
   const protocolPlugin = await protocolServer.default.server({
@@ -1528,11 +1528,11 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(
       projectRoot,
-      "agentpkg-generated-canonical-compile-fixture",
+      "prism-generated-canonical-compile-fixture",
     ),
   );
   expect(opencodeConfig.plugin).toContain(
-    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+    generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   );
   expect(opencodeConfig.agent.builder?.model).toBe("openai/gpt-5.4");
   expect(opencodeConfig.agent.builder?.variant).toBe("xhigh");
@@ -1546,7 +1546,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   ).toBe(true);
   expect(
     await pathExists(
-      join(projectRoot, ".opencode", "lifecycles", "delivery-contract.md"),
+      join(projectRoot, ".opencode", "orbits", "delivery-contract.md"),
     ),
   ).toBe(false);
 });
@@ -1586,7 +1586,7 @@ Use only the skills that fit the work.
   );
   await writeText(
     join(pluginRoot, "traits", "marketing-enabled.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "agentpkg";
+    `import { defineTrait, skillspaceRef } from "prism";
 
 export default defineTrait({
   name: "marketing-enabled",
@@ -1602,7 +1602,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "external-skills",
@@ -1636,7 +1636,7 @@ Lock down interfaces before implementation.
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "agentpkg";
+    `import { defineAgent, skillRef } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -1704,7 +1704,7 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "external-skills",
@@ -1772,7 +1772,7 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "needs-testing.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "agentpkg";
+    `import { defineTrait, skillspaceRef } from "prism";
 
 export default defineTrait({
   name: "needs-testing",
@@ -1785,7 +1785,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "skillspaces", "core-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "core-skills",
@@ -1811,7 +1811,7 @@ description: Testing guidance
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "agentpkg";
+    `import { defineAgent, skillRef } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -1848,7 +1848,7 @@ test("plain skill strings fail closed in agent and trait source fields", async (
     {
       label: "agent.skills",
       expectedKind: "agent",
-      agentSource: `import { defineAgent } from "agentpkg";
+      agentSource: `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -1861,7 +1861,7 @@ export default defineAgent({
     {
       label: "agent.access.skills",
       expectedKind: "agent",
-      agentSource: `import { defineAgent } from "agentpkg";
+      agentSource: `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -1876,7 +1876,7 @@ export default defineAgent({
     {
       label: "trait.access.skills",
       expectedKind: "trait",
-      traitSource: `import { defineTrait } from "agentpkg";
+      traitSource: `import { defineTrait } from "prism";
 
 export default defineTrait({
   name: "skillful",
@@ -1890,7 +1890,7 @@ export default defineTrait({
     {
       label: "trait.inject.skills",
       expectedKind: "trait",
-      traitSource: `import { defineTrait } from "agentpkg";
+      traitSource: `import { defineTrait } from "prism";
 
 export default defineTrait({
   name: "skillful",
@@ -1904,7 +1904,7 @@ export default defineTrait({
     {
       label: "trait.require.skills",
       expectedKind: "trait",
-      traitSource: `import { defineTrait } from "agentpkg";
+      traitSource: `import { defineTrait } from "prism";
 
 export default defineTrait({
   name: "skillful",
@@ -1952,7 +1952,7 @@ description: Worker identity
     await writeText(
       join(pluginRoot, "agents", "worker.agent.ts"),
       item.agentSource ??
-        `import { defineAgent } from "agentpkg";
+        `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2025,7 +2025,7 @@ description: Contract guidance
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "agentpkg";
+    `import { defineAgent, skillRef } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2088,7 +2088,7 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from "agentpkg";
+    `import { defineToolspace } from "prism";
 
 export default defineToolspace({
   name: "workspace",
@@ -2104,7 +2104,7 @@ export default defineToolspace({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, toolRef } from "agentpkg";
+    `import { defineAgent, toolRef } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2169,7 +2169,7 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "external.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "agentpkg";
+    `import { defineTrait, skillspaceRef } from "prism";
 
 export default defineTrait({
   name: "external",
@@ -2182,7 +2182,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "external-skills",
@@ -2198,7 +2198,7 @@ export default defineSkillspace({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "agentpkg";
+    `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2260,7 +2260,7 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "external.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "agentpkg";
+    `import { defineTrait, skillspaceRef } from "prism";
 
 export default defineTrait({
   name: "external",
@@ -2273,7 +2273,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "external-skills",
@@ -2289,7 +2289,7 @@ export default defineSkillspace({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "agentpkg";
+    `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2312,16 +2312,16 @@ export default defineAgent({
   );
 
   const agentMarkdown = await readFile(
-    join(projectRoot, ".gemini", "extensions", "agentpkg-generated-unsupported-skill-permission-demo", "agents", "worker.md"),
+    join(projectRoot, ".gemini", "extensions", "prism-generated-unsupported-skill-permission-demo", "agents", "worker.md"),
     "utf8",
   );
   expect(agentMarkdown).toContain("skills:");
   expect(agentMarkdown).toContain('- "testing"');
 });
 
-test("trait-lifecycle example lowers assigned traits and lifecycle skill into opencode permissions", async () => {
+test("trait-orbit example lowers assigned traits and orbit skill into opencode permissions", async () => {
   const projectRoot = await createTempRoot();
-  const pluginRoot = join(process.cwd(), "examples", "trait-lifecycle-contracts");
+  const pluginRoot = join(process.cwd(), "examples", "trait-orbit-contracts");
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
@@ -2346,11 +2346,11 @@ test("trait-lifecycle example lowers assigned traits and lifecycle skill into op
       "delivery-contract",
       "effect",
       "evolve",
+      "forge",
       "harness-programming",
       "repo-research",
       "requirements",
       "review",
-      "sdlc",
       "security-reviewer",
       "semgrep-usage",
       "testing",
@@ -2366,13 +2366,13 @@ test("trait-lifecycle example lowers assigned traits and lifecycle skill into op
       "contracts",
       "delivery-contract",
       "evolve",
+      "forge",
       "harness-programming",
       "model-intelligence",
       "repo-research",
       "requirements",
       "research",
       "review",
-      "sdlc",
       "security-reviewer",
       "semgrep-usage",
       "testing",
@@ -2390,11 +2390,11 @@ test("trait-lifecycle example lowers assigned traits and lifecycle skill into op
       "ddd",
       "effect",
       "evolve",
+      "forge",
       "harness-programming",
       "repo-research",
       "requirements",
       "review",
-      "sdlc",
       "security-reviewer",
       "semgrep-usage",
       "testing",
@@ -2438,7 +2438,7 @@ test("domain skill permission traits compile one opencode agent per family", asy
   const agentCoreRoot = join(
     process.cwd(),
     "examples",
-    "trait-lifecycle-contracts",
+    "trait-orbit-contracts",
     "deps",
     "agent-core",
   );
@@ -2483,9 +2483,9 @@ test("domain skill permission traits compile one opencode agent per family", asy
         "content-mining",
         "copy-engineering",
         "platform-twitter",
+        "scribe",
         "typefully-cli",
         "voice-profile",
-        "wlc",
       ],
     },
     {
@@ -2556,7 +2556,7 @@ description: Domain worker identity
   for (const family of traitFamilies) {
     await writeText(
       join(pluginRoot, "agents", `${family.agent}.agent.ts`),
-      `import { bindTrait, defineAgent } from "agentpkg";
+      `import { bindTrait, defineAgent } from "prism";
 
 export default defineAgent({
   name: ${JSON.stringify(family.agent)},
@@ -2638,7 +2638,7 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "testing-enabled.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "agentpkg";
+    `import { defineTrait, skillspaceRef } from "prism";
 
 export default defineTrait({
   name: "testing-enabled",
@@ -2651,7 +2651,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "external-skills",
@@ -2677,7 +2677,7 @@ description: Contract guidance
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "agentpkg";
+    `import { defineAgent, skillRef } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2754,7 +2754,7 @@ description: Worker identity
   );
   await writeText(
     join(missingPluginRoot, "traits", "testing-enabled.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "agentpkg";
+    `import { defineTrait, skillspaceRef } from "prism";
 
 export default defineTrait({
   name: "testing-enabled",
@@ -2767,7 +2767,7 @@ export default defineTrait({
   );
   await writeText(
     join(missingPluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "agentpkg";
+    `import { defineSkillspace } from "prism";
 
 export default defineSkillspace({
   name: "external-skills",
@@ -2783,7 +2783,7 @@ export default defineSkillspace({
   );
   await writeText(
     join(missingPluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "agentpkg";
+    `import { defineAgent } from "prism";
 
 export default defineAgent({
   name: "worker",
@@ -2831,13 +2831,13 @@ test("external permission-only consumers do not emit empty generated plugin shel
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-permission-only-consumer",
+    "prism-generated-permission-only-consumer",
   );
   const protocolGeneratedRoot = join(
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-protocol-core",
+    "prism-generated-protocol-core",
   );
 
   expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(false);
@@ -2867,20 +2867,20 @@ test("external permission-only consumers do not emit empty generated plugin shel
   });
   expect(opencodeConfig.permission).not.toHaveProperty("permission_only_consumer_*");
   expect(opencodeConfig.plugin).toEqual([
-    generatedPluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
-    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+    generatedPluginEntry(projectRoot, "prism-generated-stale-dep"),
+    generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   ]);
-  expect(opencodeConfig.plugin).not.toContain("agentpkg-generated-stale-dep");
+  expect(opencodeConfig.plugin).not.toContain("prism-generated-stale-dep");
   expect(opencodeConfig.plugin).not.toContain(
-    generatedLegacySourcePluginEntry(projectRoot, "agentpkg-generated-stale-dep"),
+    generatedLegacySourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
   );
   expect(opencodeConfig.plugin).not.toContain(
-    "agentpkg-generated-permission-only-consumer",
+    "prism-generated-permission-only-consumer",
   );
   expect(opencodeConfig.plugin).not.toContain(
     generatedPluginEntry(
       projectRoot,
-      "agentpkg-generated-permission-only-consumer",
+      "prism-generated-permission-only-consumer",
     ),
   );
 });
@@ -2903,12 +2903,12 @@ test("opencode tools-only plugins bundle runtime helper imports from declared de
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-signal-core",
+    "prism-generated-signal-core",
   );
   const server = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
 
   expect(server).toContain("signal_core_record_signal");
-  expect(server).toContain("normalizeLifecycleMessage");
+  expect(server).toContain("normalizeOrbitMessage");
 });
 
 test("tools-only plugins emit the complete owner runtime plugin", async () => {
@@ -2929,7 +2929,7 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-protocol-core",
+    "prism-generated-protocol-core",
   );
 
   expect(await pathExists(join(protocolGeneratedRoot, "dist", "server.mjs"))).toBe(true);
@@ -2950,9 +2950,9 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
     "protocol_core_*": "deny",
   });
   expect(opencodeConfig.plugin).toContain(
-    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+    generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   );
-  expect(opencodeConfig.plugin).not.toContain("agentpkg-generated-protocol-core");
+  expect(opencodeConfig.plugin).not.toContain("prism-generated-protocol-core");
 });
 
 test("external synthetic wrappers keep the owner runtime dependency without exposing the base tool", async () => {
@@ -2973,13 +2973,13 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-external-synthetic-consumer",
+    "prism-generated-external-synthetic-consumer",
   );
   const protocolGeneratedRoot = join(
     projectRoot,
     ".opencode",
     "plugins",
-    "agentpkg-generated-protocol-core",
+    "prism-generated-protocol-core",
   );
 
   expect(await pathExists(join(consumerGeneratedRoot, "package.json"))).toBe(false);
@@ -3020,7 +3020,7 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   expect(opencodeAgent).toContain("protocol_core_external_submit: deny");
 
   expect(consumerServer).toContain("submit_work__worker_details");
-  expect(consumerServer).not.toContain("agentpkg-generated-protocol-core/src/plugins/protocol-core/tools/external-submit.tool");
+  expect(consumerServer).not.toContain("prism-generated-protocol-core/src/plugins/protocol-core/tools/external-submit.tool");
 
   const opencodeConfig = JSON.parse(
     await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
@@ -3032,9 +3032,9 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   expect(opencodeConfig.plugin).toEqual([
     generatedPluginEntry(
       projectRoot,
-      "agentpkg-generated-external-synthetic-consumer",
+      "prism-generated-external-synthetic-consumer",
     ),
-    generatedPluginEntry(projectRoot, "agentpkg-generated-protocol-core"),
+    generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
   ]);
 });
 
@@ -3058,7 +3058,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
     projectRoot,
     ".claude",
     "plugins",
-    "agentpkg-generated-canonical-compile-fixture",
+    "prism-generated-canonical-compile-fixture",
   );
   const claudeAgent = await readFile(join(pluginRootPath, "agents", "builder.md"), "utf8");
   expect(claudeAgent).toContain('description: "Builder agent for canonical compile integration tests"');
@@ -3066,14 +3066,14 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   expect(claudeAgent).toContain("protocol_core_external_submit");
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
-  expect(mcpConfig).toContain('"agentpkg-generated-canonical-compile-fixture"');
+  expect(mcpConfig).toContain('"prism-generated-canonical-compile-fixture"');
   expect(mcpConfig).toContain('"command": "bun"');
   expect(mcpConfig).toContain(
-    '"${CLAUDE_PLUGIN_ROOT}/mcp/agentpkg_generated_canonical_compile_fixture/server.mjs"',
+    '"${CLAUDE_PLUGIN_ROOT}/mcp/prism_generated_canonical_compile_fixture/server.mjs"',
   );
   expect(
     await pathExists(
-      join(pluginRootPath, "mcp", "agentpkg_generated_canonical_compile_fixture", "server.mjs"),
+      join(pluginRootPath, "mcp", "prism_generated_canonical_compile_fixture", "server.mjs"),
     ),
   ).toBe(true);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
@@ -3101,7 +3101,7 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
     projectRoot,
     ".claude",
     "plugins",
-    "agentpkg-generated-canonical-compile-fixture",
+    "prism-generated-canonical-compile-fixture",
   );
   const claudeAgent = await readFile(
     join(pluginRootPath, "agents", "builder.md"),
@@ -3130,7 +3130,7 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
   ).toBe(true);
   expect(
     await pathExists(
-      join(pluginRootPath, "lifecycles", "delivery-contract.md"),
+      join(pluginRootPath, "orbits", "delivery-contract.md"),
     ),
   ).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
@@ -3171,7 +3171,7 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
     );
 
     expect(result.composed).toHaveLength(0);
-    expect(result.lifecycles).toHaveLength(0);
+    expect(result.orbits).toHaveLength(0);
     expect(result.operations).toHaveLength(0);
   }
 });
@@ -3204,7 +3204,7 @@ test("compilePluginForTarget fails when targeted agents bind tools not targeted 
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "echo",
@@ -3219,7 +3219,7 @@ export default defineTool({
   );
   await writeText(
     join(pluginRoot, "traits", "echoer.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "echoer",
@@ -3232,7 +3232,7 @@ export default defineTrait({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
 
 export default defineAgent({
   name: "worker",
@@ -3263,10 +3263,10 @@ export default defineAgent({
 });
 
 // ---------------------------------------------------------------------------
-// Derived lifecycle skill rendering (AP-022)
+// Derived orbit skill rendering (AP-022)
 // ---------------------------------------------------------------------------
 
-test("derived lifecycle skill deduplicates traits and renders multi-agent phase sub-sections", async () => {
+test("derived orbit skill deduplicates traits and renders multi-agent phase sub-sections", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await Effect.runPromise(
@@ -3292,7 +3292,7 @@ test("derived lifecycle skill deduplicates traits and renders multi-agent phase 
   expect(skill).toContain("#### Agent `reviewer`");
 
   // Trait protocols section appears once and dedupes shared traits.
-  const protocolsHeader = skill.match(/## Trait protocols active in this lifecycle/g);
+  const protocolsHeader = skill.match(/## Trait protocols active in this orbit/g);
   expect(protocolsHeader?.length).toBe(1);
   // self-assessing is shared by builder + reviewer + security-reviewer; render once.
   const selfAssessingHits = skill.match(/### `canonical-compile-fixture:self-assessing`/g);
@@ -3305,17 +3305,17 @@ test("derived lifecycle skill deduplicates traits and renders multi-agent phase 
   expect(skill).toContain("## Submission protocol per phase agent");
 });
 
-test("derived lifecycle skill deduplicates tools across orchestrator and phase grants", async () => {
+test("derived orbit skill deduplicates tools across orchestrator and phase grants", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
-  // Replace the lifecycle file with one that grants the SAME tool via the
-  // orchestrator AND lifecycle-wide tool_permissions. The derived skill must
+  // Replace the orbit file with one that grants the SAME tool via the
+  // orchestrator AND orbit-wide tool_permissions. The derived skill must
   // not double-render the tool.
   await writeText(
-    join(pluginRoot, "lifecycles", "delivery-contract.lifecycle.ts"),
-    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
+    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineLifecycle({
+export default defineOrbit({
   name: "delivery-contract",
   description: "Dedup tool variant",
   phases: [
@@ -3367,41 +3367,41 @@ export default defineLifecycle({
   expect(wideMatches?.length).toBe(1);
 });
 
-test("derived lifecycle skill helper renders parametric stub when invoked on a template", async () => {
-  // Direct unit-level invocation of renderDerivedLifecycleSkillBody to
-  // exercise the parametric branch. We synthesize a minimal Lifecycle and
+test("derived orbit skill helper renders parametric stub when invoked on a template", async () => {
+  // Direct unit-level invocation of renderDerivedOrbitSkillBody to
+  // exercise the parametric branch. We synthesize a minimal Orbit and
   // empty registry so the helper has to fall back gracefully.
-  const { renderDerivedLifecycleSkillBody } = await import("./derived-lifecycle-skill.js");
-  const { Lifecycle } = await import("./sources.js");
+  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
+  const { Orbit } = await import("./sources.js");
   const { emptyRegistry } = await import("./registry.js");
 
-  const lifecycle = new Lifecycle({
+  const orbit = new Orbit({
     name: "demo-template",
-    sourcePath: "/tmp/demo-template.lifecycle.ts",
+    sourcePath: "/tmp/demo-template.orbit.ts",
     description: "A parametric template",
     parameters: [{ name: "audience", required: true }],
     phases: [],
     tool_permissions: [],
-    taste_checkpoints: [],
+    pulsar_checkpoints: [],
     body: "",
   });
   const registry = emptyRegistry("/tmp", "demo", "0.0.0");
 
-  const body = renderDerivedLifecycleSkillBody(lifecycle, registry);
+  const body = renderDerivedOrbitSkillBody(orbit, registry);
   expect(body).toContain("# demo-template");
-  expect(body).toContain("This lifecycle is parameterized");
+  expect(body).toContain("This orbit is parameterized");
 });
 
-test("derived lifecycle skill renders parametric stub for parameterized lifecycle templates", async () => {
+test("derived orbit skill renders parametric stub for parameterized orbit templates", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await writeText(
-    join(pluginRoot, "lifecycles", "parametric-template.lifecycle.ts"),
-    `import { agentRef, defineLifecycle, traitRef } from ${JSON.stringify(agentpkgImportPath)};
+    join(pluginRoot, "orbits", "parametric-template.orbit.ts"),
+    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineLifecycle({
+export default defineOrbit({
   name: "parametric-template",
-  description: "A parametric lifecycle template; remains uninstantiated.",
+  description: "A parametric orbit template; remains uninstantiated.",
   parameters: [{ name: "audience" }],
   phases: [
     {
@@ -3414,7 +3414,7 @@ export default defineLifecycle({
 `,
   );
 
-  // Parameterized lifecycles do not lower; only their templates exist. The
+  // Parameterized orbits do not lower; only their templates exist. The
   // helper still gracefully describes them when invoked. Build a quick
   // unit-style invocation by compiling and asserting the skill is NOT emitted.
   await Effect.runPromise(
@@ -3435,7 +3435,7 @@ export default defineLifecycle({
   ).toBe(false);
 });
 
-test("derived lifecycle skill renders trait sections from description + bound-by + grants without instructions", async () => {
+test("derived orbit skill renders trait sections from description + bound-by + grants without instructions", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await Effect.runPromise(
@@ -3460,7 +3460,7 @@ test("derived lifecycle skill renders trait sections from description + bound-by
   expect(skill).toContain("- Bound by: `builder`");
   expect(skill).toContain("- Grants tool(s): `commit_work`");
 
-  // Verbatim trait instructions must NOT leak into the lifecycle skill.
+  // Verbatim trait instructions must NOT leak into the orbit skill.
   expect(skill).not.toContain(
     "Commit owned implementation changes only after the submitted work is complete.",
   );
@@ -3474,9 +3474,9 @@ test("derived lifecycle skill renders trait sections from description + bound-by
   expect(skill).toContain("- Grants tool(s): `submit_review`");
 });
 
-test("derived lifecycle skill suppresses traits with no description and no grants", async () => {
-  const { renderDerivedLifecycleSkillBody } = await import("./derived-lifecycle-skill.js");
-  const { Lifecycle, Trait, Agent } = await import("./sources.js");
+test("derived orbit skill suppresses traits with no description and no grants", async () => {
+  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
+  const { Orbit, Trait, Agent } = await import("./sources.js");
   const { emptyRegistry } = await import("./registry.js");
 
   // Build a registry with a single agent whose trait has no description and
@@ -3486,7 +3486,7 @@ test("derived lifecycle skill suppresses traits with no description and no grant
   const trait = new Trait({
     name: "bare",
     sourcePath: "/tmp/bare.trait.ts",
-    instructions: ["These instructions should never be rendered in the lifecycle skill."],
+    instructions: ["These instructions should never be rendered in the orbit skill."],
     access: { tools: [], toolGroups: [], skills: [] },
     tools: {},
     inject: { skills: [] },
@@ -3505,9 +3505,9 @@ test("derived lifecycle skill suppresses traits with no description and no grant
   });
   registry.agents.set("worker", agent);
 
-  const lifecycle = new Lifecycle({
-    name: "min-lifecycle",
-    sourcePath: "/tmp/min.lifecycle.ts",
+  const orbit = new Orbit({
+    name: "min-orbit",
+    sourcePath: "/tmp/min.orbit.ts",
     description: "minimal",
     parameters: [],
     phases: [
@@ -3518,21 +3518,21 @@ test("derived lifecycle skill suppresses traits with no description and no grant
       },
     ],
     tool_permissions: [],
-    taste_checkpoints: [],
+    pulsar_checkpoints: [],
     body: "",
   });
 
-  const body = renderDerivedLifecycleSkillBody(lifecycle, registry);
+  const body = renderDerivedOrbitSkillBody(orbit, registry);
   expect(body).toContain(
     "_`min:bare`: no orchestration-relevant surface; see trait source for agent-side instructions._",
   );
-  // The bare trait's instructions never reach the lifecycle skill.
-  expect(body).not.toContain("These instructions should never be rendered in the lifecycle skill.");
+  // The bare trait's instructions never reach the orbit skill.
+  expect(body).not.toContain("These instructions should never be rendered in the orbit skill.");
   // No `### \`min:bare\`` block is emitted for the suppressed trait.
   expect(body).not.toContain("### `min:bare`");
 });
 
-test("derived lifecycle skill drops the closure-discipline section", async () => {
+test("derived orbit skill drops the closure-discipline section", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await Effect.runPromise(
@@ -3554,7 +3554,7 @@ test("derived lifecycle skill drops the closure-discipline section", async () =>
   expect(skill).not.toContain("## Closure discipline");
 });
 
-test("derived lifecycle skill drops the input-shape placeholder line", async () => {
+test("derived orbit skill drops the input-shape placeholder line", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await Effect.runPromise(
@@ -3578,7 +3578,7 @@ test("derived lifecycle skill drops the input-shape placeholder line", async () 
   expect(skill).toContain("`create_item` (canonical `protocol-core:create_item`)");
 });
 
-test("derived lifecycle skill agent sub-sections do not render a duplicated **Identity** line", async () => {
+test("derived orbit skill agent sub-sections do not render a duplicated **Identity** line", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
   await Effect.runPromise(
@@ -3600,9 +3600,9 @@ test("derived lifecycle skill agent sub-sections do not render a duplicated **Id
   expect(skill).not.toMatch(/^\*\*Identity\*\*:/m);
 });
 
-test("derived lifecycle skill personality block renders only archetype + gloss", async () => {
-  const { renderDerivedLifecycleSkillBody } = await import("./derived-lifecycle-skill.js");
-  const { Lifecycle, Personality, Agent, Identity } = await import("./sources.js");
+test("derived orbit skill personality block renders only archetype + gloss", async () => {
+  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
+  const { Orbit, Personality, Agent, Identity } = await import("./sources.js");
   const { emptyRegistry } = await import("./registry.js");
 
   const registry = emptyRegistry("/tmp/persona", "persona", "0.0.0");
@@ -3640,9 +3640,9 @@ test("derived lifecycle skill personality block renders only archetype + gloss",
   });
   registry.agents.set("worker", agent);
 
-  const lifecycle = new Lifecycle({
+  const orbit = new Orbit({
     name: "persona-demo",
-    sourcePath: "/tmp/persona-demo.lifecycle.ts",
+    sourcePath: "/tmp/persona-demo.orbit.ts",
     description: "demo",
     parameters: [],
     phases: [
@@ -3653,11 +3653,11 @@ test("derived lifecycle skill personality block renders only archetype + gloss",
       },
     ],
     tool_permissions: [],
-    taste_checkpoints: [],
+    pulsar_checkpoints: [],
     body: "",
   });
 
-  const body = renderDerivedLifecycleSkillBody(lifecycle, registry);
+  const body = renderDerivedOrbitSkillBody(orbit, registry);
 
   // Trimmed personality form.
   expect(body).toContain(

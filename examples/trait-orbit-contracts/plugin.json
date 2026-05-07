@@ -1,0 +1,14 @@
+{
+  "name": "trait-orbit-contracts",
+  "version": "0.1.0",
+  "deps": {
+    "agent-core": "./deps/agent-core"
+  },
+  "targets": {
+    "agents": ["opencode"],
+    "orbits": ["opencode"],
+    "toolspaces": ["opencode", "claude-code"],
+    "modelspaces": ["opencode", "claude-code"],
+    "tools": ["opencode"]
+  }
+}

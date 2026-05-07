@@ -1,6 +1,6 @@
 /**
  * Resolve phase: materialize referenced parts for each agent and validate
- * lifecycle wiring against the loaded registry graph.
+ * orbit wiring against the loaded registry graph.
  */
 
 import { Effect, Schema } from "effect";
@@ -9,18 +9,18 @@ import {
   ClaudeCodeModelTarget,
   Contract,
   Identity,
-  Lifecycle,
+  Orbit,
   OpenCodeModelTarget,
   Personality,
   Trait,
-  type LifecycleParameter,
-  type LifecycleTasteCheckpoint,
-  type NormalizedLifecyclePhase as LifecyclePhase,
+  type OrbitParameter,
+  type OrbitPulsarCheckpoint,
+  type NormalizedOrbitPhase as OrbitPhase,
   type NormalizedTraitBinding,
 } from "./sources.js";
 import {
   AgentValidationError,
-  LifecycleValidationError,
+  OrbitValidationError,
   MissingTargetResolutionError,
   SourceParseError,
   UnknownDependencyError,
@@ -28,7 +28,7 @@ import {
   type CompileError,
 } from "./errors.js";
 import {
-  materializeLifecycleToolPermission,
+  materializeOrbitToolPermission,
   materializeTraitTools,
   validateTraitBindingSlots,
   type MaterializedTraitTool,
@@ -709,25 +709,25 @@ const resolveModelProfile = (
     return decoded;
   });
 
-const lifecycleError = (
-  lifecycle: Lifecycle,
+const orbitError = (
+  orbit: Orbit,
   field: string,
   message: string,
-): LifecycleValidationError =>
-  new LifecycleValidationError({
-    sourcePath: lifecycle.sourcePath,
-    lifecycleName: lifecycle.name,
+): OrbitValidationError =>
+  new OrbitValidationError({
+    sourcePath: orbit.sourcePath,
+    orbitName: orbit.name,
     field,
     message,
   });
 
-const parameterIsRequired = (parameter: LifecycleParameter): boolean =>
+const parameterIsRequired = (parameter: OrbitParameter): boolean =>
   parameter.required !== false;
 
-const lifecycleParameterMap = (
-  lifecycle: Lifecycle,
-): ReadonlyMap<string, LifecycleParameter> =>
-  new Map(lifecycle.parameters.map((parameter) => [parameter.name, parameter]));
+const orbitParameterMap = (
+  orbit: Orbit,
+): ReadonlyMap<string, OrbitParameter> =>
+  new Map(orbit.parameters.map((parameter) => [parameter.name, parameter]));
 
 const hasBinding = (bindings: BindingMap, name: string): boolean =>
   Object.prototype.hasOwnProperty.call(bindings, name);
@@ -742,15 +742,15 @@ const collectTemplateParameters = (value: string): ReadonlyArray<string> => {
   return [...seen];
 };
 
-const visitLifecycleStrings = (
-  lifecycle: Lifecycle,
-  visit: (field: string, value: string) => LifecycleValidationError | undefined,
-): LifecycleValidationError | undefined => {
+const visitOrbitStrings = (
+  orbit: Orbit,
+  visit: (field: string, value: string) => OrbitValidationError | undefined,
+): OrbitValidationError | undefined => {
   const topLevelFields: Array<[string, string | undefined]> = [
-    ["description", lifecycle.description],
-    ["produces", lifecycle.produces],
-    ["evolution", lifecycle.evolution],
-    ["body", lifecycle.body],
+    ["description", orbit.description],
+    ["produces", orbit.produces],
+    ["evolution", orbit.evolution],
+    ["body", orbit.body],
   ];
 
   for (const [field, value] of topLevelFields) {
@@ -759,13 +759,13 @@ const visitLifecycleStrings = (
     if (error) return error;
   }
 
-  for (const [index, phase] of lifecycle.phases.entries()) {
+  for (const [index, phase] of orbit.phases.entries()) {
     const phaseFields: Array<[string, string | undefined]> = [
       [`phases[${index}].name`, phase.name],
-      [`phases[${index}].lifecycle`, phase.lifecycle],
+      [`phases[${index}].orbit`, phase.orbit],
       [
-        `phases[${index}].lifecycle_binding.lifecycle`,
-        phase.lifecycle_binding?.lifecycle,
+        `phases[${index}].orbit_binding.orbit`,
+        phase.orbit_binding?.orbit,
       ],
       [`phases[${index}].agent`, phase.agent],
     ];
@@ -776,12 +776,12 @@ const visitLifecycleStrings = (
       if (error) return error;
     }
 
-    if (phase.lifecycle_binding?.bindings) {
+    if (phase.orbit_binding?.bindings) {
       for (const [bindingName, bindingValue] of Object.entries(
-        phase.lifecycle_binding.bindings,
+        phase.orbit_binding.bindings,
       )) {
         const error = visit(
-          `phases[${index}].lifecycle_binding.bindings.${bindingName}`,
+          `phases[${index}].orbit_binding.bindings.${bindingName}`,
           bindingValue,
         );
         if (error) return error;
@@ -814,16 +814,16 @@ const visitLifecycleStrings = (
   return undefined;
 };
 
-const validateLifecycleTemplateUsage = (
-  lifecycle: Lifecycle,
-): LifecycleValidationError | undefined => {
-  const parameters = lifecycleParameterMap(lifecycle);
+const validateOrbitTemplateUsage = (
+  orbit: Orbit,
+): OrbitValidationError | undefined => {
+  const parameters = orbitParameterMap(orbit);
   const seen = new Set<string>();
 
-  for (const parameter of lifecycle.parameters) {
+  for (const parameter of orbit.parameters) {
     if (seen.has(parameter.name)) {
-      return lifecycleError(
-        lifecycle,
+      return orbitError(
+        orbit,
         "parameters",
         `duplicate parameter '${parameter.name}'`,
       );
@@ -831,25 +831,25 @@ const validateLifecycleTemplateUsage = (
     seen.add(parameter.name);
   }
 
-  return visitLifecycleStrings(lifecycle, (field, value) => {
+  return visitOrbitStrings(orbit, (field, value) => {
     const names = collectTemplateParameters(value);
     if (names.length === 0) return undefined;
 
     if (
-      field.endsWith(".lifecycle") ||
-      field.endsWith(".lifecycle_binding.lifecycle") ||
+      field.endsWith(".orbit") ||
+      field.endsWith(".orbit_binding.orbit") ||
       field.endsWith(".agent") ||
       field.includes(".agents[") ||
       field.includes(".requires[")
     ) {
-      return lifecycleError(lifecycle, field, "reference names cannot contain template placeholders");
+      return orbitError(orbit, field, "reference names cannot contain template placeholders");
     }
 
     const unknown = names.filter((name) => !parameters.has(name));
     if (unknown.length === 0) return undefined;
 
-    return lifecycleError(
-      lifecycle,
+    return orbitError(
+      orbit,
       field,
       `uses unknown template parameter(s): ${unknown.join(", ")}`,
     );
@@ -857,17 +857,17 @@ const validateLifecycleTemplateUsage = (
 };
 
 const instantiateTemplateString = (
-  lifecycle: Lifecycle,
+  orbit: Orbit,
   field: string,
   value: string,
   bindings: BindingMap,
-): string | LifecycleValidationError => {
-  let error: LifecycleValidationError | undefined;
+): string | OrbitValidationError => {
+  let error: OrbitValidationError | undefined;
   const next = value.replace(TEMPLATE_PARAMETER_PATTERN, (_, rawName: string) => {
     const name = rawName.trim();
     if (!hasBinding(bindings, name)) {
-      error = lifecycleError(
-        lifecycle,
+      error = orbitError(
+        orbit,
         field,
         `missing binding '${name}' required by template string`,
       );
@@ -879,39 +879,39 @@ const instantiateTemplateString = (
   return error ?? next;
 };
 
-const instantiateLifecyclePhase = (
-  lifecycle: Lifecycle,
-  phase: LifecyclePhase,
+const instantiateOrbitPhase = (
+  orbit: Orbit,
+  phase: OrbitPhase,
   index: number,
   bindings: BindingMap,
-): LifecyclePhase | LifecycleValidationError => {
+): OrbitPhase | OrbitValidationError => {
   const instantiate = (field: string, value: string | undefined) => {
     if (value === undefined) return undefined;
-    return instantiateTemplateString(lifecycle, field, value, bindings);
+    return instantiateTemplateString(orbit, field, value, bindings);
   };
 
   const nextName = instantiate(`phases[${index}].name`, phase.name);
-  if (nextName instanceof LifecycleValidationError) return nextName;
+  if (nextName instanceof OrbitValidationError) return nextName;
 
-  const nextLifecycle = instantiate(`phases[${index}].lifecycle`, phase.lifecycle);
-  if (nextLifecycle instanceof LifecycleValidationError) return nextLifecycle;
+  const nextOrbit = instantiate(`phases[${index}].orbit`, phase.orbit);
+  if (nextOrbit instanceof OrbitValidationError) return nextOrbit;
 
-  let lifecycleBinding = phase.lifecycle_binding;
-  if (phase.lifecycle_binding?.bindings) {
+  let orbitBinding = phase.orbit_binding;
+  if (phase.orbit_binding?.bindings) {
     const nextBindings: Record<string, string> = {};
-    for (const [bindingName, bindingValue] of Object.entries(phase.lifecycle_binding.bindings)) {
+    for (const [bindingName, bindingValue] of Object.entries(phase.orbit_binding.bindings)) {
       const nextValue = instantiate(
-        `phases[${index}].lifecycle_binding.bindings.${bindingName}`,
+        `phases[${index}].orbit_binding.bindings.${bindingName}`,
         bindingValue,
       );
-      if (nextValue instanceof LifecycleValidationError) return nextValue;
+      if (nextValue instanceof OrbitValidationError) return nextValue;
       if (nextValue !== undefined) {
         nextBindings[bindingName] = nextValue;
       }
     }
 
-    lifecycleBinding = {
-      lifecycle: phase.lifecycle_binding.lifecycle,
+    orbitBinding = {
+      orbit: phase.orbit_binding.orbit,
       ...(Object.keys(nextBindings).length > 0 ? { bindings: nextBindings } : {}),
     };
   }
@@ -920,7 +920,7 @@ const instantiateLifecyclePhase = (
   if (phase.notes) {
     for (const [noteName, noteValue] of Object.entries(phase.notes)) {
       const nextValue = instantiate(`phases[${index}].notes.${noteName}`, noteValue);
-      if (nextValue instanceof LifecycleValidationError) return nextValue;
+      if (nextValue instanceof OrbitValidationError) return nextValue;
       if (nextValue !== undefined) {
         nextNotes[noteName] = nextValue;
       }
@@ -929,8 +929,8 @@ const instantiateLifecyclePhase = (
 
   return {
     name: nextName!,
-    ...(nextLifecycle ? { lifecycle: nextLifecycle } : {}),
-    ...(lifecycleBinding ? { lifecycle_binding: lifecycleBinding } : {}),
+    ...(nextOrbit ? { orbit: nextOrbit } : {}),
+    ...(orbitBinding ? { orbit_binding: orbitBinding } : {}),
     ...(phase.agent ? { agent: phase.agent } : {}),
     agents: [...phase.agents],
     requires: phase.requires.map((requirement) => ({
@@ -941,44 +941,44 @@ const instantiateLifecyclePhase = (
   };
 };
 
-const cloneLifecycleToolPermissions = (lifecycle: Lifecycle): Lifecycle["tool_permissions"] =>
-  lifecycle.tool_permissions.map((tool) => ({
+const cloneOrbitToolPermissions = (orbit: Orbit): Orbit["tool_permissions"] =>
+  orbit.tool_permissions.map((tool) => ({
     ref: tool.ref,
     logicalName: tool.logicalName,
   }));
 
-const cloneLifecycleOrchestrator = (
-  lifecycle: Lifecycle,
-): Lifecycle["orchestrator"] | undefined =>
-  lifecycle.orchestrator
+const cloneOrbitOrchestrator = (
+  orbit: Orbit,
+): Orbit["orchestrator"] | undefined =>
+  orbit.orchestrator
     ? {
-        agent: lifecycle.orchestrator.agent,
-        tools: lifecycle.orchestrator.tools.map((tool) => ({
+        agent: orbit.orchestrator.agent,
+        tools: orbit.orchestrator.tools.map((tool) => ({
           ref: tool.ref,
           logicalName: tool.logicalName,
         })),
       }
     : undefined;
 
-const instantiateLifecycleCheckpoint = (
-  lifecycle: Lifecycle,
-  checkpoint: LifecycleTasteCheckpoint,
+const instantiateOrbitCheckpoint = (
+  orbit: Orbit,
+  checkpoint: OrbitPulsarCheckpoint,
   index: number,
   bindings: BindingMap,
-): LifecycleTasteCheckpoint | LifecycleValidationError => {
+): OrbitPulsarCheckpoint | OrbitValidationError => {
   const instantiate = (field: string, value: string | undefined) => {
     if (value === undefined) return undefined;
-    return instantiateTemplateString(lifecycle, field, value, bindings);
+    return instantiateTemplateString(orbit, field, value, bindings);
   };
 
-  const after = instantiate(`taste_checkpoints[${index}].after`, checkpoint.after);
-  if (after instanceof LifecycleValidationError) return after;
+  const after = instantiate(`pulsar_checkpoints[${index}].after`, checkpoint.after);
+  if (after instanceof OrbitValidationError) return after;
 
-  const before = instantiate(`taste_checkpoints[${index}].before`, checkpoint.before);
-  if (before instanceof LifecycleValidationError) return before;
+  const before = instantiate(`pulsar_checkpoints[${index}].before`, checkpoint.before);
+  if (before instanceof OrbitValidationError) return before;
 
-  const note = instantiate(`taste_checkpoints[${index}].note`, checkpoint.note);
-  if (note instanceof LifecycleValidationError) return note;
+  const note = instantiate(`pulsar_checkpoints[${index}].note`, checkpoint.note);
+  if (note instanceof OrbitValidationError) return note;
 
   return { after, before, note };
 };
@@ -1097,31 +1097,31 @@ export const resolveAgent = (
     };
   });
 
-export const instantiateLifecycle = (
-  lifecycle: Lifecycle,
+export const instantiateOrbit = (
+  orbit: Orbit,
   bindings: BindingMap = {},
-): Effect.Effect<Lifecycle, CompileError> =>
+): Effect.Effect<Orbit, CompileError> =>
   Effect.gen(function* () {
-    const parameters = lifecycleParameterMap(lifecycle);
+    const parameters = orbitParameterMap(orbit);
     const unknownBindings = Object.keys(bindings).filter((name) => !parameters.has(name));
     if (unknownBindings.length > 0) {
       return yield* Effect.fail(
-        lifecycleError(
-          lifecycle,
+        orbitError(
+          orbit,
           "bindings",
           `received unknown binding(s): ${unknownBindings.join(", ")}`,
         ),
       );
     }
 
-    const missingRequired = lifecycle.parameters
+    const missingRequired = orbit.parameters
       .filter((parameter) => parameterIsRequired(parameter))
       .map((parameter) => parameter.name)
       .filter((name) => !hasBinding(bindings, name));
     if (missingRequired.length > 0) {
       return yield* Effect.fail(
-        lifecycleError(
-          lifecycle,
+        orbitError(
+          orbit,
           "bindings",
           `missing required binding(s): ${missingRequired.join(", ")}`,
         ),
@@ -1129,108 +1129,108 @@ export const instantiateLifecycle = (
     }
 
     const description = instantiateTemplateString(
-      lifecycle,
+      orbit,
       "description",
-      lifecycle.description,
+      orbit.description,
       bindings,
     );
-    if (description instanceof LifecycleValidationError) {
+    if (description instanceof OrbitValidationError) {
       return yield* Effect.fail(description);
     }
 
-    const produces = lifecycle.produces
-      ? instantiateTemplateString(lifecycle, "produces", lifecycle.produces, bindings)
+    const produces = orbit.produces
+      ? instantiateTemplateString(orbit, "produces", orbit.produces, bindings)
       : undefined;
-    if (produces instanceof LifecycleValidationError) {
+    if (produces instanceof OrbitValidationError) {
       return yield* Effect.fail(produces);
     }
 
-    const phases: LifecyclePhase[] = [];
-    for (const [index, phase] of lifecycle.phases.entries()) {
-      const nextPhase = instantiateLifecyclePhase(lifecycle, phase, index, bindings);
-      if (nextPhase instanceof LifecycleValidationError) {
+    const phases: OrbitPhase[] = [];
+    for (const [index, phase] of orbit.phases.entries()) {
+      const nextPhase = instantiateOrbitPhase(orbit, phase, index, bindings);
+      if (nextPhase instanceof OrbitValidationError) {
         return yield* Effect.fail(nextPhase);
       }
       phases.push(nextPhase);
     }
 
-    const tasteCheckpoints: LifecycleTasteCheckpoint[] = [];
-    for (const [index, checkpoint] of lifecycle.taste_checkpoints.entries()) {
-      const nextCheckpoint = instantiateLifecycleCheckpoint(
-        lifecycle,
+    const tasteCheckpoints: OrbitPulsarCheckpoint[] = [];
+    for (const [index, checkpoint] of orbit.pulsar_checkpoints.entries()) {
+      const nextCheckpoint = instantiateOrbitCheckpoint(
+        orbit,
         checkpoint,
         index,
         bindings,
       );
-      if (nextCheckpoint instanceof LifecycleValidationError) {
+      if (nextCheckpoint instanceof OrbitValidationError) {
         return yield* Effect.fail(nextCheckpoint);
       }
       tasteCheckpoints.push(nextCheckpoint);
     }
 
-    const evolution = lifecycle.evolution
-      ? instantiateTemplateString(lifecycle, "evolution", lifecycle.evolution, bindings)
+    const evolution = orbit.evolution
+      ? instantiateTemplateString(orbit, "evolution", orbit.evolution, bindings)
       : undefined;
-    if (evolution instanceof LifecycleValidationError) {
+    if (evolution instanceof OrbitValidationError) {
       return yield* Effect.fail(evolution);
     }
 
-    const body = instantiateTemplateString(lifecycle, "body", lifecycle.body, bindings);
-    if (body instanceof LifecycleValidationError) {
+    const body = instantiateTemplateString(orbit, "body", orbit.body, bindings);
+    if (body instanceof OrbitValidationError) {
       return yield* Effect.fail(body);
     }
 
-    const clonedOrchestrator = cloneLifecycleOrchestrator(lifecycle);
+    const clonedOrchestrator = cloneOrbitOrchestrator(orbit);
 
-    return new Lifecycle({
-      name: lifecycle.name,
-      sourcePath: lifecycle.sourcePath,
+    return new Orbit({
+      name: orbit.name,
+      sourcePath: orbit.sourcePath,
       description,
       produces,
       parameters: [],
       phases,
       ...(clonedOrchestrator ? { orchestrator: clonedOrchestrator } : {}),
-      tool_permissions: cloneLifecycleToolPermissions(lifecycle),
-      taste_checkpoints: tasteCheckpoints,
+      tool_permissions: cloneOrbitToolPermissions(orbit),
+      pulsar_checkpoints: tasteCheckpoints,
       evolution,
       body,
     });
   });
 
-const resolveLifecycleRequiredTraitId = (
-  lifecycle: Lifecycle,
+const resolveOrbitRequiredTraitId = (
+  orbit: Orbit,
   field: string,
   traitRef: string,
   registry: PluginRegistry,
 ): Effect.Effect<string, CompileError> =>
   Effect.gen(function* () {
-    const reg = yield* resolveRefToRegistry(traitRef, registry, lifecycle.sourcePath);
+    const reg = yield* resolveRefToRegistry(traitRef, registry, orbit.sourcePath);
     const name = parseNamedRef(traitRef).name;
     const trait = reg.traits.get(name);
     if (!trait) {
       return yield* Effect.fail(
-        lifecycleError(lifecycle, field, `references unknown trait '${traitRef}'`),
+        orbitError(orbit, field, `references unknown trait '${traitRef}'`),
       );
     }
 
     return canonicalTraitId(reg, trait);
   });
 
-const resolveLifecycleAssignedAgent = (
-  lifecycle: Lifecycle,
+const resolveOrbitAssignedAgent = (
+  orbit: Orbit,
   phaseIndex: number,
   agentIndex: number,
   agentRef: string,
   registry: PluginRegistry,
 ): Effect.Effect<ResolvedAgentCapabilities, CompileError> =>
   Effect.gen(function* () {
-    const reg = yield* resolveRefToRegistry(agentRef, registry, lifecycle.sourcePath);
+    const reg = yield* resolveRefToRegistry(agentRef, registry, orbit.sourcePath);
     const name = parseNamedRef(agentRef).name;
     const agent = reg.agents.get(name);
     if (!agent) {
       return yield* Effect.fail(
-        lifecycleError(
-          lifecycle,
+        orbitError(
+          orbit,
           `phases[${phaseIndex}].agents[${agentIndex}]`,
           `references unknown agent '${agentRef}'`,
         ),
@@ -1241,11 +1241,11 @@ const resolveLifecycleAssignedAgent = (
   });
 
 const phaseAssignedLocalAgents = (
-  lifecycle: Lifecycle,
+  orbit: Orbit,
   registry: PluginRegistry,
 ): Set<string> => {
   const assigned = new Set<string>();
-  for (const phase of lifecycle.phases) {
+  for (const phase of orbit.phases) {
     for (const agentRef of phase.agents) {
       const parsed = parseNamedRef(agentRef);
       if (parsed.pluginPrefix) continue;
@@ -1257,38 +1257,38 @@ const phaseAssignedLocalAgents = (
 };
 
 const orchestratorLocalAgent = (
-  lifecycle: Lifecycle,
+  orbit: Orbit,
   registry: PluginRegistry,
 ): string | undefined => {
-  if (!lifecycle.orchestrator) return undefined;
-  const parsed = parseNamedRef(lifecycle.orchestrator.agent);
+  if (!orbit.orchestrator) return undefined;
+  const parsed = parseNamedRef(orbit.orchestrator.agent);
   if (parsed.pluginPrefix) return undefined;
   if (!registry.agents.has(parsed.name)) return undefined;
   return parsed.name;
 };
 
-const lifecycleSkillRecipients = (
-  lifecycle: Lifecycle,
+const orbitSkillRecipients = (
+  orbit: Orbit,
   registry: PluginRegistry,
 ): Set<string> => {
-  const recipients = phaseAssignedLocalAgents(lifecycle, registry);
-  const orchestrator = orchestratorLocalAgent(lifecycle, registry);
+  const recipients = phaseAssignedLocalAgents(orbit, registry);
+  const orchestrator = orchestratorLocalAgent(orbit, registry);
   if (orchestrator) recipients.add(orchestrator);
   return recipients;
 };
 
-export const resolveLifecycleSkillPermissions = (
-  lifecycles: ReadonlyArray<Lifecycle>,
+export const resolveOrbitSkillPermissions = (
+  orbits: ReadonlyArray<Orbit>,
   registry: PluginRegistry,
 ): ReadonlyMap<string, ReadonlyArray<string>> => {
   const byAgent = new Map<string, Set<string>>();
 
-  for (const lifecycle of lifecycles) {
-    const recipients = lifecycleSkillRecipients(lifecycle, registry);
+  for (const orbit of orbits) {
+    const recipients = orbitSkillRecipients(orbit, registry);
 
     for (const agentName of recipients) {
       const agentSkills = byAgent.get(agentName) ?? new Set<string>();
-      agentSkills.add(lifecycle.name);
+      agentSkills.add(orbit.name);
       byAgent.set(agentName, agentSkills);
     }
   }
@@ -1301,33 +1301,33 @@ export const resolveLifecycleSkillPermissions = (
   );
 };
 
-interface LifecycleToolGrant {
+interface OrbitToolGrant {
   readonly logicalName: string;
   readonly ref: string;
   readonly field: string;
 }
 
-const grantLifecycleTool = (
-  lifecycle: Lifecycle,
+const grantOrbitTool = (
+  orbit: Orbit,
   registry: PluginRegistry,
   agentName: string,
-  grant: LifecycleToolGrant,
+  grant: OrbitToolGrant,
   byAgent: Map<string, ResolvedContractBinding[]>,
 ): CompileError | undefined => {
   const bindings = byAgent.get(agentName) ?? [];
   const existing = new Set(bindings.map((binding) => binding.logicalName));
   if (existing.has(grant.logicalName)) {
-    // Lifecycle-wide grant already added this logical name to this agent; idempotent skip.
+    // Orbit-wide grant already added this logical name to this agent; idempotent skip.
     return undefined;
   }
 
-  const materialized = materializeLifecycleToolPermission({
+  const materialized = materializeOrbitToolPermission({
     logicalName: grant.logicalName,
     toolRef: grant.ref,
     registry,
   });
   if (!(materialized instanceof Object) || "message" in materialized) {
-    return lifecycleError(lifecycle, grant.field, materialized.message);
+    return orbitError(orbit, grant.field, materialized.message);
   }
 
   bindings.push({
@@ -1342,22 +1342,22 @@ const grantLifecycleTool = (
   return undefined;
 };
 
-export const resolveLifecycleToolPermissions = (
-  lifecycles: ReadonlyArray<Lifecycle>,
+export const resolveOrbitToolPermissions = (
+  orbits: ReadonlyArray<Orbit>,
   registry: PluginRegistry,
 ): Effect.Effect<ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>>, CompileError> =>
   Effect.gen(function* () {
     const byAgent = new Map<string, ResolvedContractBinding[]>();
 
-    for (const lifecycle of lifecycles) {
-      const phaseAgents = phaseAssignedLocalAgents(lifecycle, registry);
+    for (const orbit of orbits) {
+      const phaseAgents = phaseAssignedLocalAgents(orbit, registry);
 
-      // Lifecycle-wide tool_permissions: materialize on every phase agent.
-      for (const [toolIndex, tool] of lifecycle.tool_permissions.entries()) {
+      // Orbit-wide tool_permissions: materialize on every phase agent.
+      for (const [toolIndex, tool] of orbit.tool_permissions.entries()) {
         const field = `tool_permissions[${toolIndex}]`;
         for (const agentName of phaseAgents) {
-          const error = grantLifecycleTool(
-            lifecycle,
+          const error = grantOrbitTool(
+            orbit,
             registry,
             agentName,
             { logicalName: tool.logicalName, ref: tool.ref, field },
@@ -1368,32 +1368,32 @@ export const resolveLifecycleToolPermissions = (
       }
 
       // Orchestrator-only tools: validate the orchestrator agent and materialize on it.
-      if (lifecycle.orchestrator) {
-        const parsed = parseNamedRef(lifecycle.orchestrator.agent);
+      if (orbit.orchestrator) {
+        const parsed = parseNamedRef(orbit.orchestrator.agent);
         if (parsed.pluginPrefix) {
           return yield* Effect.fail(
-            lifecycleError(
-              lifecycle,
+            orbitError(
+              orbit,
               "orchestrator.agent",
-              `lifecycle orchestrator must be a local agent compiled by '${registry.pluginName}', got '${lifecycle.orchestrator.agent}'`,
+              `orbit orchestrator must be a local agent compiled by '${registry.pluginName}', got '${orbit.orchestrator.agent}'`,
             ),
           );
         }
 
         if (!registry.agents.has(parsed.name)) {
           return yield* Effect.fail(
-            lifecycleError(
-              lifecycle,
+            orbitError(
+              orbit,
               "orchestrator.agent",
-              `references unknown agent '${lifecycle.orchestrator.agent}'`,
+              `references unknown agent '${orbit.orchestrator.agent}'`,
             ),
           );
         }
 
-        for (const [toolIndex, tool] of lifecycle.orchestrator.tools.entries()) {
+        for (const [toolIndex, tool] of orbit.orchestrator.tools.entries()) {
           const field = `orchestrator.tools[${toolIndex}]`;
-          const error = grantLifecycleTool(
-            lifecycle,
+          const error = grantOrbitTool(
+            orbit,
             registry,
             parsed.name,
             { logicalName: tool.logicalName, ref: tool.ref, field },
@@ -1412,45 +1412,45 @@ export const resolveLifecycleToolPermissions = (
     );
   });
 
-export const validateLifecycle = (
-  lifecycle: Lifecycle,
+export const validateOrbit = (
+  orbit: Orbit,
   registry: PluginRegistry,
 ): Effect.Effect<void, CompileError> =>
   Effect.gen(function* () {
-    const templateUsageError = validateLifecycleTemplateUsage(lifecycle);
+    const templateUsageError = validateOrbitTemplateUsage(orbit);
     if (templateUsageError) {
       return yield* Effect.fail(templateUsageError);
     }
 
-    for (const [index, phase] of lifecycle.phases.entries()) {
+    for (const [index, phase] of orbit.phases.entries()) {
       const referenceKinds = [
-        phase.lifecycle ? "lifecycle" : undefined,
-        phase.lifecycle_binding ? "lifecycle_binding" : undefined,
+        phase.orbit ? "orbit" : undefined,
+        phase.orbit_binding ? "orbit_binding" : undefined,
         phase.agents.length > 0 ? "agents" : undefined,
       ].filter((kind): kind is string => kind !== undefined);
 
       if (referenceKinds.length > 1) {
         return yield* Effect.fail(
-          lifecycleError(
-            lifecycle,
+          orbitError(
+            orbit,
             `phases[${index}]`,
-            `phase '${phase.name}' declares multiple references (${referenceKinds.join(", ")}); use only one of lifecycle, lifecycle_binding, or agents`,
+            `phase '${phase.name}' declares multiple references (${referenceKinds.join(", ")}); use only one of orbit, orbit_binding, or agents`,
           ),
         );
       }
 
-      if (phase.lifecycle) {
-        const reg = yield* resolveRefToRegistry(phase.lifecycle, registry, lifecycle.sourcePath);
-        const name = parseNamedRef(phase.lifecycle).name;
-        const referencedLifecycle = reg.lifecycles.get(name);
+      if (phase.orbit) {
+        const reg = yield* resolveRefToRegistry(phase.orbit, registry, orbit.sourcePath);
+        const name = parseNamedRef(phase.orbit).name;
+        const referencedOrbit = reg.orbits.get(name);
 
-        if (referencedLifecycle) {
-          if (referencedLifecycle.parameters.length > 0) {
+        if (referencedOrbit) {
+          if (referencedOrbit.parameters.length > 0) {
             return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
-                `phases[${index}].lifecycle`,
-                `phase '${phase.name}' references parameterized lifecycle '${phase.lifecycle}' without bindings; use lifecycle_binding instead`,
+              orbitError(
+                orbit,
+                `phases[${index}].orbit`,
+                `phase '${phase.name}' references parameterized orbit '${phase.orbit}' without bindings; use orbit_binding instead`,
               ),
             );
           }
@@ -1459,63 +1459,63 @@ export const validateLifecycle = (
 
         if (!reg.agents.has(name)) {
           return yield* Effect.fail(
-            lifecycleError(
-              lifecycle,
-              `phases[${index}].lifecycle`,
-              `phase '${phase.name}' references unknown lifecycle or agent '${phase.lifecycle}'`,
+            orbitError(
+              orbit,
+              `phases[${index}].orbit`,
+              `phase '${phase.name}' references unknown orbit or agent '${phase.orbit}'`,
             ),
           );
         }
       }
 
-      if (phase.lifecycle_binding) {
+      if (phase.orbit_binding) {
         const reg = yield* resolveRefToRegistry(
-          phase.lifecycle_binding.lifecycle,
+          phase.orbit_binding.orbit,
           registry,
-          lifecycle.sourcePath,
+          orbit.sourcePath,
         );
-        const name = parseNamedRef(phase.lifecycle_binding.lifecycle).name;
-        const referencedLifecycle = reg.lifecycles.get(name);
+        const name = parseNamedRef(phase.orbit_binding.orbit).name;
+        const referencedOrbit = reg.orbits.get(name);
 
-        if (!referencedLifecycle) {
+        if (!referencedOrbit) {
           const message = reg.agents.has(name)
-            ? `phase '${phase.name}' uses lifecycle_binding for '${phase.lifecycle_binding.lifecycle}', but that reference resolves to an agent`
-            : `phase '${phase.name}' references unknown lifecycle '${phase.lifecycle_binding.lifecycle}'`;
+            ? `phase '${phase.name}' uses orbit_binding for '${phase.orbit_binding.orbit}', but that reference resolves to an agent`
+            : `phase '${phase.name}' references unknown orbit '${phase.orbit_binding.orbit}'`;
           return yield* Effect.fail(
-            lifecycleError(
-              lifecycle,
-              `phases[${index}].lifecycle_binding`,
+            orbitError(
+              orbit,
+              `phases[${index}].orbit_binding`,
               message,
             ),
           );
         }
 
-        const providedBindings = phase.lifecycle_binding.bindings ?? {};
-        const targetParameters = lifecycleParameterMap(referencedLifecycle);
+        const providedBindings = phase.orbit_binding.bindings ?? {};
+        const targetParameters = orbitParameterMap(referencedOrbit);
 
         const unknownBindings = Object.keys(providedBindings).filter(
           (bindingName) => !targetParameters.has(bindingName),
         );
         if (unknownBindings.length > 0) {
           return yield* Effect.fail(
-            lifecycleError(
-              lifecycle,
-              `phases[${index}].lifecycle_binding.bindings`,
-              `phase '${phase.name}' passes unknown binding(s) to '${phase.lifecycle_binding.lifecycle}': ${unknownBindings.join(", ")}`,
+            orbitError(
+              orbit,
+              `phases[${index}].orbit_binding.bindings`,
+              `phase '${phase.name}' passes unknown binding(s) to '${phase.orbit_binding.orbit}': ${unknownBindings.join(", ")}`,
             ),
           );
         }
 
-        const missingRequired = referencedLifecycle.parameters
+        const missingRequired = referencedOrbit.parameters
           .filter((parameter) => parameterIsRequired(parameter))
           .map((parameter) => parameter.name)
           .filter((bindingName) => !hasBinding(providedBindings, bindingName));
         if (missingRequired.length > 0) {
           return yield* Effect.fail(
-            lifecycleError(
-              lifecycle,
-              `phases[${index}].lifecycle_binding.bindings`,
-              `phase '${phase.name}' is missing required binding(s) for '${phase.lifecycle_binding.lifecycle}': ${missingRequired.join(", ")}`,
+            orbitError(
+              orbit,
+              `phases[${index}].orbit_binding.bindings`,
+              `phase '${phase.name}' is missing required binding(s) for '${phase.orbit_binding.orbit}': ${missingRequired.join(", ")}`,
             ),
           );
         }
@@ -1523,8 +1523,8 @@ export const validateLifecycle = (
 
       if (phase.requires.length > 0 && phase.agents.length === 0) {
         return yield* Effect.fail(
-          lifecycleError(
-            lifecycle,
+          orbitError(
+            orbit,
             `phases[${index}].requires`,
             `phase '${phase.name}' declares trait requirements but assigns no agents`,
           ),
@@ -1536,8 +1536,8 @@ export const validateLifecycle = (
         const assignedAgentIds = new Set<string>();
 
         for (const [agentIndex, agentRef] of phase.agents.entries()) {
-          const agentCapabilities = yield* resolveLifecycleAssignedAgent(
-            lifecycle,
+          const agentCapabilities = yield* resolveOrbitAssignedAgent(
+            orbit,
             index,
             agentIndex,
             agentRef,
@@ -1546,8 +1546,8 @@ export const validateLifecycle = (
           const agentId = `${agentCapabilities.agent.name}:${agentCapabilities.agent.sourcePath}`;
           if (assignedAgentIds.has(agentId)) {
             return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
+              orbitError(
+                orbit,
                 `phases[${index}].agents[${agentIndex}]`,
                 `phase '${phase.name}' assigns duplicate agent '${agentRef}'`,
               ),
@@ -1561,8 +1561,8 @@ export const validateLifecycle = (
           const min = requirement.min ?? 1;
           if (!Number.isInteger(min) || min < 1) {
             return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
+              orbitError(
+                orbit,
                 `phases[${index}].requires[${requirementIndex}].min`,
                 "min must be an integer greater than or equal to 1",
               ),
@@ -1571,8 +1571,8 @@ export const validateLifecycle = (
 
           if (requirement.all.length === 0) {
             return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
+              orbitError(
+                orbit,
                 `phases[${index}].requires[${requirementIndex}].all`,
                 "trait requirement must include at least one trait",
               ),
@@ -1581,8 +1581,8 @@ export const validateLifecycle = (
 
           const requiredTraitIds = new Set<string>();
           for (const [traitIndex, traitRef] of requirement.all.entries()) {
-            const traitId = yield* resolveLifecycleRequiredTraitId(
-              lifecycle,
+            const traitId = yield* resolveOrbitRequiredTraitId(
+              orbit,
               `phases[${index}].requires[${requirementIndex}].all[${traitIndex}]`,
               traitRef,
               registry,
@@ -1598,8 +1598,8 @@ export const validateLifecycle = (
 
           if (satisfiedCount < min) {
             return yield* Effect.fail(
-              lifecycleError(
-                lifecycle,
+              orbitError(
+                orbit,
                 `phases[${index}].requires[${requirementIndex}]`,
                 `phase '${phase.name}' requires at least ${min} assigned agent(s) with all traits [${[...requiredTraitIds].join(", ")}], but only ${satisfiedCount} match`,
               ),

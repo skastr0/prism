@@ -2,12 +2,12 @@
 
 Skill permission traits grant visibility to method skills without turning those skills into direct agent dependencies.
 
-Initial lifecycle trait families:
+Initial orbit trait families:
 
-- `sdlc-practitioner`
-- `rlc-practitioner`
-- `wlc-practitioner`
-- `mlc-practitioner`
+- `forge-practitioner`
+- `survey-practitioner`
+- `scribe-practitioner`
+- `beacon-practitioner`
 
 Initial domain trait families:
 

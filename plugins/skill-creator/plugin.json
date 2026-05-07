@@ -2,7 +2,7 @@
   "name": "skill-creator",
   "version": "1.0.0",
   "description": "Anthropic-derived skill creator with bundled eval, benchmark, and description optimization tooling for agent skills.",
-  "author": "agentpkg",
+  "author": "prism",
   "targets": {
     "skills": ["coding-harness", "claw-harness"]
   }

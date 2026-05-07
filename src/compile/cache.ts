@@ -429,7 +429,7 @@ export const computeAgentCacheDescriptor = async (
 };
 
 export const getCacheDir = (pluginPath: string): string =>
-  join(pluginPath, "dist", ".agentpkg-cache");
+  join(pluginPath, "dist", ".prism-cache");
 
 export const readCacheEntry = async (
   cacheDir: string,

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
+import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -14,7 +14,7 @@ import {
 } from "../mcp-bundle.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import type { PluginRegistry } from "../registry.js";
-import type { CanonicalTool, Hook, Lifecycle, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
   backupFile,
@@ -28,7 +28,7 @@ import type { HarnessScope, PluginArtifactType, PluginTargetId } from "../../typ
 import type { LowerOperation } from "./opencode.js";
 
 const TARGET_ID = "codex-cli" as const;
-const GENERATED_SERVER_PREFIX = "agentpkg-generated";
+const GENERATED_SERVER_PREFIX = "prism-generated";
 
 export interface CodexCliLowerTarget {
   readonly scope: HarnessScope;
@@ -40,7 +40,7 @@ export interface CodexCliLowerTarget {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly lifecycles: ReadonlyArray<Lifecycle>;
+  readonly orbits: ReadonlyArray<Orbit>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
@@ -92,10 +92,10 @@ const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
   [...new Set(values)].sort((left, right) => left.localeCompare(right));
 
 const managedBlockBegin = (pluginName: string): string =>
-  `# --- agentpkg codex-cli begin: ${pluginName} ---`;
+  `# --- prism codex-cli begin: ${pluginName} ---`;
 
 const managedBlockEnd = (pluginName: string): string =>
-  `# --- agentpkg codex-cli end: ${pluginName} ---`;
+  `# --- prism codex-cli end: ${pluginName} ---`;
 
 const manifestTargetsCodex = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
@@ -195,7 +195,7 @@ const renderAgentToml = (
   mcpServer?: AgentMcpServerConfig,
 ): string => {
   const developerInstructions = agent.allowedSkills.length > 0
-    ? `${agent.body}\n\n## Agentpkg Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.allowedSkills).join(", ")}.`
+    ? `${agent.body}\n\n## Prism Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.allowedSkills).join(", ")}.`
     : agent.body;
   const lines = [
     `name = ${quote(agent.name)}`,
@@ -213,7 +213,7 @@ const renderAgentToml = (
   if (agent.allowedTools.length > 0) {
     lines.push(
       "",
-      "# agentpkg diagnostic: Codex has no direct equivalent for harness-native per-role tool allowlists.",
+      "# prism diagnostic: Codex has no direct equivalent for harness-native per-role tool allowlists.",
       `# Native tool bindings requested by source traits: ${agent.allowedTools.join(", ")}`,
     );
   }
@@ -236,29 +236,29 @@ const renderAgentToml = (
   return `${lines.join("\n")}\n`;
 };
 
-const lifecycleSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- agentpkg:lifecycle-skill owner=${quote(sourcePluginName)} -->`;
+const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
+  `<!-- prism:orbit-skill owner=${quote(sourcePluginName)} -->`;
 
-const renderLifecycleSkill = (
-  lifecycle: Lifecycle,
+const renderOrbitSkill = (
+  orbit: Orbit,
   sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string => {
   const lines: string[] = [
     "---",
-    `name: ${quote(lifecycle.name)}`,
-    `description: ${quote(lifecycle.description)}`,
+    `name: ${quote(orbit.name)}`,
+    `description: ${quote(orbit.description)}`,
     "---",
     "",
-    lifecycleSkillOwnerMarker(sourcePluginName),
+    orbitSkillOwnerMarker(sourcePluginName),
     "",
   ];
   if (registry) {
-    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
   } else {
-    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
-    if (lifecycle.body.trim().length > 0) {
-      lines.push(lifecycle.body.trim(), "");
+    lines.push(`# ${orbit.name}`, "", orbit.description, "");
+    if (orbit.body.trim().length > 0) {
+      lines.push(orbit.body.trim(), "");
     }
   }
   return lines.join("\n");
@@ -277,7 +277,7 @@ const renderRules = async (input: LowerInput): Promise<string | undefined> => {
   const chunks: string[] = [];
   for (const file of files) {
     chunks.push(
-      `<!-- agentpkg:rules source=${quote(file.relativePath)} -->`,
+      `<!-- prism:rules source=${quote(file.relativePath)} -->`,
       (await readFile(file.sourcePath)).trimEnd(),
     );
   }
@@ -386,7 +386,7 @@ const normalizePayload = (input) => {
 
 const unwrapDecode = (decoded, label) => {
   if (decoded && decoded._tag === "Right") return decoded.right;
-  throw new Error("agentpkg hook " + label + " validation failed");
+  throw new Error("prism hook " + label + " validation failed");
 };
 
 const toPromise = (value) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
@@ -408,7 +408,7 @@ if (${quote(hook.event)} === "tool.before" && result.decision === "block") {
 `;
 
 const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "agentpkg-codex-hook-"));
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-codex-hook-"));
 
   try {
     const entry = join(tempRoot, "hook-entry.ts");
@@ -481,7 +481,7 @@ const renderHooksConfig = (
     'type = "command"',
     `command = ${quote(`node ${quote(join(root, ...hook.relativePath.split("/")))}`)}`,
     "timeout = 600",
-    `statusMessage = ${quote(`agentpkg hook ${hook.hook.name}`)}`,
+    `statusMessage = ${quote(`prism hook ${hook.hook.name}`)}`,
     "",
   ]);
 
@@ -590,11 +590,11 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     }
   }
 
-  for (const lifecycle of input.lifecycles) {
+  for (const orbit of input.orbits) {
     await pushWrite(
       operations,
-      join(input.target.root, "skills", lifecycle.name, "SKILL.md"),
-      renderLifecycleSkill(lifecycle, input.target.sourcePluginName, input.registry),
+      join(input.target.root, "skills", orbit.name, "SKILL.md"),
+      renderOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
   }

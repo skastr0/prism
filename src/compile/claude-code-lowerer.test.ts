@@ -18,10 +18,10 @@ const effectImportPath = join(
   "index.js",
 ).replace(/\\/g, "/");
 
-const agentpkgImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
 const createTempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), "agentpkg-claude-lowerer-"));
+  const root = await mkdtemp(join(tmpdir(), "prism-claude-lowerer-"));
   tempRoots.push(root);
   return root;
 };
@@ -87,7 +87,7 @@ test("claude-code lowerer emits a plugin bundle with agents, skills, MCP, and ho
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace",
@@ -99,7 +99,7 @@ export default defineToolspace({
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-shell",
@@ -114,7 +114,7 @@ export default defineHook({
   await writeText(
     join(pluginRoot, "hooks", "audit-echo.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-echo",
@@ -129,7 +129,7 @@ export default defineHook({
   await writeText(
     join(pluginRoot, "hooks", "session-ended.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "session-ended",
@@ -143,7 +143,7 @@ export default defineHook({
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "echo",
@@ -197,7 +197,7 @@ export default defineTool({
         ],
       },
     ],
-    lifecycles: [],
+    orbits: [],
     skills: [...registry.skills.values()],
     hooks: [hook, canonicalHook, sessionEndHook],
     registry,
@@ -215,27 +215,27 @@ export default defineTool({
     join(".claude-plugin", "plugin.json"),
   );
   expect(pluginManifest?.target).toContain(
-    join(".claude", "plugins", "agentpkg-generated-claude-plugin-fixture"),
+    join(".claude", "plugins", "prism-generated-claude-plugin-fixture"),
   );
-  expect(pluginManifest?.content).toContain('"name": "agentpkg-generated-claude-plugin-fixture"');
+  expect(pluginManifest?.content).toContain('"name": "prism-generated-claude-plugin-fixture"');
 
   const agent = findContentOperation(operations, join("agents", "reviewer.md"));
   expect(agent?.target).toContain(
-    join(".claude", "plugins", "agentpkg-generated-claude-plugin-fixture", "agents"),
+    join(".claude", "plugins", "prism-generated-claude-plugin-fixture", "agents"),
   );
   expect(agent?.content).toContain('description: "Claude plugin reviewer"');
   expect(agent?.content).toContain('model: "opus"');
   expect(agent?.content).toContain('effort: "high"');
   expect(agent?.content).toContain("temperature: 0.1");
   expect(agent?.content).toContain("top_p: 0.7");
-  expect(agent?.content).toContain('- "mcp__agentpkg-generated-claude-plugin-fixture__claude_plugin_fixture_echo"');
+  expect(agent?.content).toContain('- "mcp__prism-generated-claude-plugin-fixture__claude_plugin_fixture_echo"');
   expect(agent?.content).not.toContain('- "claude_plugin_fixture_echo"');
   expect(agent?.content).toContain('- "Bash"');
   expect(agent?.content).toContain('- "Grep"');
   expect(agent?.content).toContain('- "Read"');
   expect(agent?.content).toContain('disallowedTools:\n  - "WebFetch"');
   expect(agent?.content).toContain('skills:\n  - "testing"');
-  expect(agent?.content).toContain("Agentpkg Claude Plugin Diagnostics");
+  expect(agent?.content).toContain("Prism Claude Plugin Diagnostics");
   expect(agent?.content).toContain("mcpServers");
 
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
@@ -245,14 +245,14 @@ export default defineTool({
   expect(command?.content).toContain("Say hello from Claude plugin bundle.");
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  expect(mcpConfig?.content).toContain('"agentpkg-generated-claude-plugin-fixture"');
+  expect(mcpConfig?.content).toContain('"prism-generated-claude-plugin-fixture"');
   expect(mcpConfig?.content).toContain(
-    '"${CLAUDE_PLUGIN_ROOT}/mcp/agentpkg_generated_claude_plugin_fixture/server.mjs"',
+    '"${CLAUDE_PLUGIN_ROOT}/mcp/prism_generated_claude_plugin_fixture/server.mjs"',
   );
 
   const bundle = findContentOperation(
     operations,
-    join("mcp", "agentpkg_generated_claude_plugin_fixture", "server.mjs"),
+    join("mcp", "prism_generated_claude_plugin_fixture", "server.mjs"),
   );
   expect(bundle?.content).toContain("claude_plugin_fixture_echo");
   expect(bundle?.content).toContain("tools/list");
@@ -263,7 +263,7 @@ export default defineTool({
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "Bash"');
   expect(hookConfig?.content).toContain(
-    '"matcher": "mcp__agentpkg-generated-claude-plugin-fixture__claude_plugin_fixture_echo"',
+    '"matcher": "mcp__prism-generated-claude-plugin-fixture__claude_plugin_fixture_echo"',
   );
   expect(hookConfig?.content).toContain('node \\"${CLAUDE_PLUGIN_ROOT}/hooks/audit-shell.mjs\\"');
 
@@ -282,7 +282,7 @@ test("claude-code lowerer fails closed when hook matcher has no Claude target ma
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({ name: "invalid-claude-hook-fixture", version: "0.1.0", targets: { toolspaces: ["claude-code"], hooks: ["claude-code"] } }, null, 2)}\n`,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace",
@@ -290,7 +290,7 @@ export default defineToolspace({
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-shell",
@@ -307,7 +307,7 @@ export default defineHook({
   await expect(
     planLowering({
       agents: [],
-      lifecycles: [],
+      orbits: [],
       skills: [],
       hooks: [hook],
       registry,

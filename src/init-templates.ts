@@ -35,7 +35,7 @@ export const typescriptTsconfigJson = `${JSON.stringify(
     },
     include: [
       "agents/**/*.ts",
-      "lifecycles/**/*.ts",
+      "orbits/**/*.ts",
       "modelspaces/**/*.ts",
       "schemas/**/*.ts",
       "skillspaces/**/*.ts",
@@ -54,8 +54,8 @@ export const oxlintConfigJson = `${JSON.stringify(
     $schema: "./node_modules/oxlint/configuration_schema.json",
     jsPlugins: [
       {
-        name: "agentpkg",
-        specifier: "./agentpkg-oxlint-plugin.js",
+        name: "prism",
+        specifier: "./prism-oxlint-plugin.js",
       },
     ],
     categories: {
@@ -63,10 +63,10 @@ export const oxlintConfigJson = `${JSON.stringify(
       suspicious: "warn",
     },
     rules: {
-      "agentpkg/no-inline-slot-schemas": "error",
-      "agentpkg/no-trait-tool-contract-overrides": "error",
+      "prism/no-inline-slot-schemas": "error",
+      "prism/no-trait-tool-contract-overrides": "error",
     },
-    ignorePatterns: ["node_modules/**", "dist/**", ".agentpkg/**"],
+    ignorePatterns: ["node_modules/**", "dist/**", ".prism/**"],
   },
   null,
   2
@@ -81,13 +81,13 @@ export const oxfmtConfigJson = `${JSON.stringify(
     semi: true,
     singleQuote: false,
     trailingComma: "all",
-    ignorePatterns: ["node_modules/**", "dist/**", ".agentpkg/**"],
+    ignorePatterns: ["node_modules/**", "dist/**", ".prism/**"],
   },
   null,
   2
 )}\n`;
 
-export const agentpkgOxlintPluginJs = `const DSL_PATH_PATTERN = /(^|\\/)(agents|lifecycles|modelspaces|skillspaces|toolspaces|traits)(\\/|$)|\\.(agent|lifecycle|modelspace|skillspace|toolspace|trait)\\.ts$/;
+export const prismOxlintPluginJs = `const DSL_PATH_PATTERN = /(^|\\/)(agents|orbits|modelspaces|skillspaces|toolspaces|traits)(\\/|$)|\\.(agent|orbit|modelspace|skillspace|toolspace|trait)\\.ts$/;
 
 const getPropertyName = (property) => {
   if (!property || property.type !== "Property") {
@@ -251,7 +251,7 @@ const noTraitToolContractOverrides = {
 
 export default {
   meta: {
-    name: "agentpkg",
+    name: "prism",
   },
   rules: {
     "no-inline-slot-schemas": noInlineSlotSchemas,

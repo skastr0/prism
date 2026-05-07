@@ -4,7 +4,7 @@
  * The canonical structured source model is TypeScript-first:
  * - agents/*.agent.ts
  * - traits/*.trait.ts
- * - lifecycles/*.lifecycle.ts
+ * - orbits/*.orbit.ts
  * - toolspaces/*.toolspace.ts
  * - modelspaces/*.modelspace.ts
  * - skillspaces/*.skillspace.ts
@@ -26,8 +26,8 @@ export interface AgentRefDefinition extends NamedRefDefinition {
   readonly kind: "agent-ref";
 }
 
-export interface LifecycleRefDefinition extends NamedRefDefinition {
-  readonly kind: "lifecycle-ref";
+export interface OrbitRefDefinition extends NamedRefDefinition {
+  readonly kind: "orbit-ref";
 }
 
 export interface ToolRefDefinition {
@@ -66,7 +66,7 @@ export interface SkillspaceRefDefinition {
 
 export type TraitRefInput = string | TraitRefDefinition;
 export type AgentRefInput = string | AgentRefDefinition;
-export type LifecycleRefInput = string | LifecycleRefDefinition;
+export type OrbitRefInput = string | OrbitRefDefinition;
 export type ToolRefInput = string | ToolRefDefinition;
 export type ToolGroupRefInput = string | ToolGroupRefDefinition;
 export type ModelProfileRefInput = string | ModelProfileRefDefinition;
@@ -137,59 +137,59 @@ export interface TraitToolAttachmentDefinition {
   readonly ref: string;
 }
 
-export interface LifecycleParameterDefinition {
+export interface OrbitParameterDefinition {
   readonly name: string;
   readonly description?: string;
   readonly required?: boolean;
 }
 
-export interface LifecycleBindingDefinition {
-  readonly lifecycle: LifecycleRefInput;
+export interface OrbitBindingDefinition {
+  readonly orbit: OrbitRefInput;
   readonly bindings?: Readonly<Record<string, string>>;
 }
 
-export interface LifecycleTraitRequirementDefinition {
+export interface OrbitTraitRequirementDefinition {
   readonly all: ReadonlyArray<TraitRefInput>;
   readonly min?: number;
 }
 
-export type LifecycleToolPermissionToolDefinition =
+export type OrbitToolPermissionToolDefinition =
   | string
   | {
       readonly ref: string;
       readonly as?: string;
     };
 
-export interface LifecycleOrchestratorDefinition {
+export interface OrbitOrchestratorDefinition {
   readonly agent: AgentRefInput;
-  readonly tools: ReadonlyArray<LifecycleToolPermissionToolDefinition>;
+  readonly tools: ReadonlyArray<OrbitToolPermissionToolDefinition>;
 }
 
-export interface LifecyclePhaseDefinition {
+export interface OrbitPhaseDefinition {
   readonly name: string;
-  readonly lifecycle?: LifecycleRefInput;
-  readonly lifecycle_binding?: LifecycleBindingDefinition;
+  readonly orbit?: OrbitRefInput;
+  readonly orbit_binding?: OrbitBindingDefinition;
   readonly agents?: ReadonlyArray<AgentRefInput>;
   readonly agent?: AgentRefInput;
-  readonly requires?: ReadonlyArray<LifecycleTraitRequirementDefinition>;
+  readonly requires?: ReadonlyArray<OrbitTraitRequirementDefinition>;
   readonly notes?: Readonly<Record<string, string>>;
 }
 
-export interface LifecycleTasteCheckpointDefinition {
+export interface OrbitPulsarCheckpointDefinition {
   readonly after?: string;
   readonly before?: string;
   readonly note?: string;
 }
 
-export interface LifecycleDefinition {
+export interface OrbitDefinition {
   readonly name: string;
   readonly description: string;
   readonly produces?: string;
-  readonly parameters?: ReadonlyArray<LifecycleParameterDefinition>;
-  readonly phases: ReadonlyArray<LifecyclePhaseDefinition>;
-  readonly orchestrator?: LifecycleOrchestratorDefinition;
-  readonly tool_permissions?: ReadonlyArray<LifecycleToolPermissionToolDefinition>;
-  readonly taste_checkpoints?: ReadonlyArray<LifecycleTasteCheckpointDefinition>;
+  readonly parameters?: ReadonlyArray<OrbitParameterDefinition>;
+  readonly phases: ReadonlyArray<OrbitPhaseDefinition>;
+  readonly orchestrator?: OrbitOrchestratorDefinition;
+  readonly tool_permissions?: ReadonlyArray<OrbitToolPermissionToolDefinition>;
+  readonly pulsar_checkpoints?: ReadonlyArray<OrbitPulsarCheckpointDefinition>;
   readonly evolution?: string;
   readonly body?: string;
 }
@@ -396,10 +396,10 @@ export function agentRef(first: string, second?: string): AgentRefDefinition {
   return withNamedRef("agent-ref", first, second);
 }
 
-export function lifecycleRef(name: string): LifecycleRefDefinition;
-export function lifecycleRef(plugin: string, name: string): LifecycleRefDefinition;
-export function lifecycleRef(first: string, second?: string): LifecycleRefDefinition {
-  return withNamedRef("lifecycle-ref", first, second);
+export function orbitRef(name: string): OrbitRefDefinition;
+export function orbitRef(plugin: string, name: string): OrbitRefDefinition;
+export function orbitRef(first: string, second?: string): OrbitRefDefinition {
+  return withNamedRef("orbit-ref", first, second);
 }
 
 export function toolRef(toolspace: string, name: string): ToolRefDefinition;
@@ -529,8 +529,8 @@ export const hookMatcher = {
 
 export const defineAgent = <T extends AgentDefinition>(agent: T): T => agent;
 export const defineTrait = <T extends TraitDefinition>(trait: T): T => trait;
-export const defineLifecycle = <T extends LifecycleDefinition>(lifecycle: T): T =>
-  lifecycle;
+export const defineOrbit = <T extends OrbitDefinition>(orbit: T): T =>
+  orbit;
 export const defineTool = <T extends CanonicalToolDefinition>(tool: T): T => tool;
 export const defineToolspace = <T extends ToolspaceDefinition>(toolspace: T): T =>
   toolspace;

@@ -1,5 +1,5 @@
 {
-  "name": "agentpkg",
+  "name": "@skastr0/prism",
   "version": "0.1.0",
   "description": "Unified plugin distribution system for AI coding harnesses",
   "type": "module",

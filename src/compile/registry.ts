@@ -11,7 +11,7 @@ import {
   CanonicalTool,
   Hook,
   Identity,
-  Lifecycle,
+  Orbit,
   Modelspace,
   Personality,
   Skill,
@@ -36,7 +36,7 @@ export interface PluginRegistry {
   traits: Map<string, Trait>;
   tools: Map<string, CanonicalTool>;
   hooks: Map<string, Hook>;
-  lifecycles: Map<string, Lifecycle>;
+  orbits: Map<string, Orbit>;
   agents: Map<string, Agent>;
   deps: Map<string, PluginRegistry>;
 }
@@ -62,7 +62,7 @@ export const emptyRegistry = (
   traits: new Map(),
   tools: new Map(),
   hooks: new Map(),
-  lifecycles: new Map(),
+  orbits: new Map(),
   agents: new Map(),
   deps: new Map(),
 });

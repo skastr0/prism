@@ -1,7 +1,7 @@
 /**
  * OpenCode lowerer.
  *
- * Takes a set of ComposedAgents + lifecycles and produces:
+ * Takes a set of ComposedAgents + orbits and produces:
  *
  *   1. Per-agent markdown at <opencode-root>/agents/<name>.md with
  *      {name, description, permission?} frontmatter and the composed body.
@@ -12,15 +12,15 @@
  *   2. Idempotent patches to <opencode-root>/opencode.json:
  *        - agent.<name> block (compiler-owned keys only; hand-authored keys preserved)
  *        - plugin array entry for the source-plugin-owned generated plugin
- *          (for example `agentpkg-generated-review-core`) when any agent has
+ *          (for example `prism-generated-review-core`) when any agent has
  *          tool bindings
  *
- *   3. Per-lifecycle skills at <opencode-root>/skills/<name>/SKILL.md.
- *      Lifecycles remain source-language constructs; the generated skill is
+ *   3. Per-orbit skills at <opencode-root>/skills/<name>/SKILL.md.
+ *      Orbits remain source-language constructs; the generated skill is
  *      the runtime-facing lowering that OpenCode actually loads.
  *
  *   4. A generated OpenCode plugin directory at
- *      <opencode-root>/plugins/agentpkg-generated-<source-plugin>/ containing:
+ *      <opencode-root>/plugins/prism-generated-<source-plugin>/ containing:
  *        - dist/server.mjs
  *
  * The generated plugin directory is compiler-owned. Re-running compile prunes
@@ -34,9 +34,9 @@ import { basename, dirname, extname, join, posix, relative, resolve } from "node
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedLifecycleSkillBody } from "../derived-lifecycle-skill.js";
+import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
-import type { CanonicalTool, Contract, Hook, Lifecycle } from "../sources.js";
+import type { CanonicalTool, Contract, Hook, Orbit } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
 import {
@@ -69,7 +69,7 @@ const COMPILER_OWNED_KEYS = [
   "disable",
 ] as const;
 
-const GENERATED_PLUGIN_PREFIX = "agentpkg-generated";
+const GENERATED_PLUGIN_PREFIX = "prism-generated";
 type PermissionAction = "allow" | "ask" | "deny";
 type PermissionValue = PermissionAction | Record<string, PermissionAction>;
 
@@ -83,12 +83,12 @@ export interface OpenCodeLowerTarget {
 const agentMdPath = (target: OpenCodeLowerTarget, name: string): string =>
   join(target.root, "agents", `${name}.md`);
 
-const lifecycleSkillMdPath = (
+const orbitSkillMdPath = (
   target: OpenCodeLowerTarget,
   name: string
 ): string => join(target.root, "skills", name, "SKILL.md");
 
-const lifecycleSkillRelativePath = (name: string): string =>
+const orbitSkillRelativePath = (name: string): string =>
   `skills/${name}/SKILL.md`;
 
 const opencodeJsonPath = (target: OpenCodeLowerTarget): string =>
@@ -486,40 +486,40 @@ const normalizePermissionBlockForWrite = (
 };
 
 // ---------------------------------------------------------------------------
-// Lifecycle skill rendering
+// Orbit skill rendering
 // ---------------------------------------------------------------------------
 
-const lifecycleSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- agentpkg:lifecycle-skill owner=${JSON.stringify(sourcePluginName)} -->`;
+const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
+  `<!-- prism:orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
 
-const isOwnedLifecycleSkill = (
+const isOwnedOrbitSkill = (
   content: string,
   sourcePluginName: string
-): boolean => content.includes(lifecycleSkillOwnerMarker(sourcePluginName));
+): boolean => content.includes(orbitSkillOwnerMarker(sourcePluginName));
 
-const renderLifecycleSkill = (
-  lifecycle: Lifecycle,
+const renderOrbitSkill = (
+  orbit: Orbit,
   sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string => {
   const lines: string[] = [];
   lines.push(
     serializeFrontmatter(
-      { name: lifecycle.name, description: lifecycle.description },
+      { name: orbit.name, description: orbit.description },
       {},
     ),
   );
   lines.push("");
-  lines.push(lifecycleSkillOwnerMarker(sourcePluginName));
+  lines.push(orbitSkillOwnerMarker(sourcePluginName));
   lines.push("");
   if (registry) {
-    lines.push(renderDerivedLifecycleSkillBody(lifecycle, registry));
+    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
   } else {
     // Defensive fallback: emit the raw description and body so the file is
     // still meaningful even when no registry is wired in (test harnesses).
-    lines.push(`# ${lifecycle.name}`, "", lifecycle.description, "");
-    if (lifecycle.body.trim().length > 0) {
-      lines.push(lifecycle.body.trim(), "");
+    lines.push(`# ${orbit.name}`, "", orbit.description, "");
+    if (orbit.body.trim().length > 0) {
+      lines.push(orbit.body.trim(), "");
     }
   }
 
@@ -530,7 +530,7 @@ const renderLifecycleSkill = (
 // Generated plugin emission
 //
 // Layout:
-//   agentpkg-generated-<source-plugin>/
+//   prism-generated-<source-plugin>/
 //   └── dist/server.mjs                        (bundled native plugin)
 // ---------------------------------------------------------------------------
 
@@ -672,7 +672,7 @@ const planPluginPruning = async (
   return operations;
 };
 
-const planLifecycleSkillPruning = async (
+const planOrbitSkillPruning = async (
   target: OpenCodeLowerTarget,
   desiredSkillFiles: ReadonlySet<string>,
 ): Promise<LowerOperation[]> => {
@@ -689,7 +689,7 @@ const planLifecycleSkillPruning = async (
 
     const absolutePath = join(skillsRoot, relativePath);
     const current = await readFile(absolutePath);
-    if (!isOwnedLifecycleSkill(current, target.sourcePluginName)) continue;
+    if (!isOwnedOrbitSkill(current, target.sourcePluginName)) continue;
 
     operations.push({
       kind: "prune-plugin-path",
@@ -1063,7 +1063,7 @@ const rewriteGeneratedPluginImportsForBundle = (
   currentGeneratedPath: string,
 ): string =>
   source.replace(
-    /(["'])\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/agentpkg-generated-[^"']+\/src\/plugins\/([^/]+)\/([^"']+)\1/g,
+    /(["'])\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/prism-generated-[^"']+\/src\/plugins\/([^/]+)\/([^"']+)\1/g,
     (_match, quote: string, pluginName: string, modulePath: string) => {
       const targetGeneratedPath = `plugins/${pluginName}/${modulePath.replace(/\.ts$/u, "")}`;
       return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
@@ -1124,9 +1124,9 @@ const rewriteHookAuthoringImports = (
   );
 };
 
-const GENERATED_HOOK_AUTHORING_BRIDGE = `// GENERATED by agentpkg — do not edit.\nexport const defineHook = (hook) => hook;\nexport const hookEvent = {\n  toolBefore: "tool.before",\n  toolAfter: "tool.after",\n  sessionStart: "session.start",\n  sessionEnd: "session.end",\n};\nexport const toolRef = (first, second, third) => third === undefined\n  ? { kind: "tool-ref", toolspace: first, name: second }\n  : { kind: "tool-ref", plugin: first, toolspace: second, name: third };\nexport const hookTool = {\n  any: () => ({ kind: "hook-any-tool" }),\n  tool: (tool) => ({ kind: "hook-toolspace-tool", tool }),\n  group: (group) => ({ kind: "hook-toolspace-group", group }),\n  canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),\n};\nexport const hookMatcher = { tool: hookTool };\n`;
+const GENERATED_HOOK_AUTHORING_BRIDGE = `// GENERATED by prism — do not edit.\nexport const defineHook = (hook) => hook;\nexport const hookEvent = {\n  toolBefore: "tool.before",\n  toolAfter: "tool.after",\n  sessionStart: "session.start",\n  sessionEnd: "session.end",\n};\nexport const toolRef = (first, second, third) => third === undefined\n  ? { kind: "tool-ref", toolspace: first, name: second }\n  : { kind: "tool-ref", plugin: first, toolspace: second, name: third };\nexport const hookTool = {\n  any: () => ({ kind: "hook-any-tool" }),\n  tool: (tool) => ({ kind: "hook-toolspace-tool", tool }),\n  group: (group) => ({ kind: "hook-toolspace-group", group }),\n  canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),\n};\nexport const hookMatcher = { tool: hookTool };\n`;
 
-const GENERATED_HOOK_RUNTIME = `// GENERATED by agentpkg — do not edit.\nconst right = (value) => ({ _tag: "Right", right: value });\nconst left = (message) => ({ _tag: "Left", left: message });\nconst isObject = (value) => value !== null && typeof value === "object";\nconst decodeTarget = (payload) => isObject(payload?.target) && typeof payload.target.harness === "string" && typeof payload.target.nativeEvent === "string"\n  ? payload.target\n  : undefined;\nconst decodeSession = (payload) => payload?.session === undefined || isObject(payload.session)\n  ? payload.session\n  : undefined;\nexport const decodeNativeHookPayloadForEvent = (event, payload) => {\n  if (!isObject(payload)) return left("native hook payload must be an object");\n  const target = decodeTarget(payload);\n  if (!target) return left("native hook payload target is invalid");\n  const session = decodeSession(payload);\n  if (payload.session !== undefined && !session) return left("native hook payload session is invalid");\n  if (event === "tool.before") {\n    if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.before payload tool is invalid");\n    return right({ event, target, cwd: payload.cwd, session, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input } });\n  }\n  if (event === "tool.after") {\n    if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.after payload tool is invalid");\n    return right({ event, target, cwd: payload.cwd, session, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input, output: payload.tool.output, success: payload.tool.success } });\n  }\n  if (event === "session.start") {\n    if (!isObject(session)) return left("session.start payload session is invalid");\n    return right({ event, target, cwd: payload.cwd, session });\n  }\n  if (event === "session.end") {\n    if (!isObject(session)) return left("session.end payload session is invalid");\n    return right({ event, target, cwd: payload.cwd, session, reason: payload.reason });\n  }\n  return left("unknown hook event");\n};\nexport const decodeHookResultForEvent = (event, result) => {\n  if (!isObject(result)) return left("hook result must be an object");\n  if (event === "tool.before" && result.decision === "block" && typeof result.message === "string") return right(result);\n  if (result.decision === "continue") return right({ decision: "continue" });\n  return left("invalid hook result for " + event);\n};\n`;
+const GENERATED_HOOK_RUNTIME = `// GENERATED by prism — do not edit.\nconst right = (value) => ({ _tag: "Right", right: value });\nconst left = (message) => ({ _tag: "Left", left: message });\nconst isObject = (value) => value !== null && typeof value === "object";\nconst decodeTarget = (payload) => isObject(payload?.target) && typeof payload.target.harness === "string" && typeof payload.target.nativeEvent === "string"\n  ? payload.target\n  : undefined;\nconst decodeSession = (payload) => payload?.session === undefined || isObject(payload.session)\n  ? payload.session\n  : undefined;\nexport const decodeNativeHookPayloadForEvent = (event, payload) => {\n  if (!isObject(payload)) return left("native hook payload must be an object");\n  const target = decodeTarget(payload);\n  if (!target) return left("native hook payload target is invalid");\n  const session = decodeSession(payload);\n  if (payload.session !== undefined && !session) return left("native hook payload session is invalid");\n  if (event === "tool.before") {\n    if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.before payload tool is invalid");\n    return right({ event, target, cwd: payload.cwd, session, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input } });\n  }\n  if (event === "tool.after") {\n    if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.after payload tool is invalid");\n    return right({ event, target, cwd: payload.cwd, session, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input, output: payload.tool.output, success: payload.tool.success } });\n  }\n  if (event === "session.start") {\n    if (!isObject(session)) return left("session.start payload session is invalid");\n    return right({ event, target, cwd: payload.cwd, session });\n  }\n  if (event === "session.end") {\n    if (!isObject(session)) return left("session.end payload session is invalid");\n    return right({ event, target, cwd: payload.cwd, session, reason: payload.reason });\n  }\n  return left("unknown hook event");\n};\nexport const decodeHookResultForEvent = (event, result) => {\n  if (!isObject(result)) return left("hook result must be an object");\n  if (event === "tool.before" && result.decision === "block" && typeof result.message === "string") return right(result);\n  if (result.decision === "continue") return right({ decision: "continue" });\n  return left("invalid hook result for " + event);\n};\n`;
 
 const renderToolAdapter = (
   spec: AdapterSpec,
@@ -1141,7 +1141,7 @@ const renderToolAdapter = (
       : `../../plugins/${spec.pluginName}/tools/${spec.toolName}.tool`;
   const bridgeImport = `../../runtime/schema-bridge`;
   const lines: string[] = [];
-  lines.push(`// GENERATED by agentpkg — do not edit.`);
+  lines.push(`// GENERATED by prism — do not edit.`);
   lines.push(
     spec.kind === "synthetic"
       ? `// Adapter for synthetic tool '${spec.pluginName}:${spec.contractName}'.`
@@ -1234,10 +1234,10 @@ const renderOpenCodeHookRuntime = (registrations: ReadonlyArray<HookRegistration
   const lines: string[] = [];
   lines.push(`const unwrapDecode = (decoded: any, label: string) => {`);
   lines.push(`  if (decoded && decoded._tag === "Right") return decoded.right;`);
-  lines.push(`  throw new Error("agentpkg hook " + label + " validation failed");`);
+  lines.push(`  throw new Error("prism hook " + label + " validation failed");`);
   lines.push(`};`);
   lines.push(`const toPromise = (value: any) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);`);
-  lines.push(`const handleAgentpkgHook = async (hook: any, event: any, nativePayload: any) => {`);
+  lines.push(`const handlePrismHook = async (hook: any, event: any, nativePayload: any) => {`);
   lines.push(`  const payload = unwrapDecode(decodeNativeHookPayloadForEvent(event, nativePayload), "native payload");`);
   lines.push(`  const raw = await toPromise(hook.handle(payload));`);
   lines.push(`  const decoded = decodeHookResultForEvent(event, raw ?? { decision: "continue" });`);
@@ -1259,7 +1259,7 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
     lines.push(`    const nativePayload = { target: { harness: "opencode", nativeEvent: "tool.execute.before" }, tool: { name: toolName, input: output.args }, cwd: context.directory, session: { id: input.sessionID } };`);
     before.forEach((registration) => {
       const registrationIndex = registrations.indexOf(registration);
-      lines.push(`    if (${renderHookMatcher(registration, registration.hookPluginName)}) await handleAgentpkgHook(${hookIdentifier(registration.hook, registrationIndex)}, "tool.before", nativePayload);`);
+      lines.push(`    if (${renderHookMatcher(registration, registration.hookPluginName)}) await handlePrismHook(${hookIdentifier(registration.hook, registrationIndex)}, "tool.before", nativePayload);`);
     });
     lines.push(`  },`);
   }
@@ -1269,7 +1269,7 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
     lines.push(`    const nativePayload = { target: { harness: "opencode", nativeEvent: "tool.execute.after" }, tool: { name: toolName, input: input.args, output: output.output, success: output.metadata?.success }, cwd: context.directory, session: { id: input.sessionID } };`);
     after.forEach((registration) => {
       const registrationIndex = registrations.indexOf(registration);
-      lines.push(`    if (${renderHookMatcher(registration, registration.hookPluginName)}) await handleAgentpkgHook(${hookIdentifier(registration.hook, registrationIndex)}, "tool.after", nativePayload);`);
+      lines.push(`    if (${renderHookMatcher(registration, registration.hookPluginName)}) await handlePrismHook(${hookIdentifier(registration.hook, registrationIndex)}, "tool.after", nativePayload);`);
     });
     lines.push(`  },`);
   }
@@ -1282,7 +1282,7 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
       lines.push(`      const nativePayload = { target: { harness: "opencode", nativeEvent: "session.created" }, cwd: context.directory, session: { id: String(properties.sessionID ?? properties.info?.id ?? "opencode") } };`);
       sessionStart.forEach((registration) => {
         const registrationIndex = registrations.indexOf(registration);
-        lines.push(`      await handleAgentpkgHook(${hookIdentifier(registration.hook, registrationIndex)}, "session.start", nativePayload);`);
+        lines.push(`      await handlePrismHook(${hookIdentifier(registration.hook, registrationIndex)}, "session.start", nativePayload);`);
       });
       lines.push(`    }`);
     }
@@ -1291,7 +1291,7 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
       lines.push(`      const nativePayload = { target: { harness: "opencode", nativeEvent: "session.deleted" }, cwd: context.directory, session: { id: String(properties.sessionID ?? properties.info?.id ?? "opencode") }, reason: "deleted" };`);
       sessionEnd.forEach((registration) => {
         const registrationIndex = registrations.indexOf(registration);
-        lines.push(`      await handleAgentpkgHook(${hookIdentifier(registration.hook, registrationIndex)}, "session.end", nativePayload);`);
+        lines.push(`      await handlePrismHook(${hookIdentifier(registration.hook, registrationIndex)}, "session.end", nativePayload);`);
       });
       lines.push(`    }`);
     }
@@ -1339,8 +1339,8 @@ const renderGeneratedServerTsForBindings = (
   }
 
   const lines: string[] = [];
-  lines.push("// GENERATED by agentpkg — do not edit.");
-  lines.push("// Re-run `agentpkg compile` to regenerate.");
+  lines.push("// GENERATED by prism — do not edit.");
+  lines.push("// Re-run `prism compile` to regenerate.");
   lines.push("");
   lines.push(
     'import type { Hooks, Plugin, PluginModule } from "@opencode-ai/plugin";',
@@ -1598,7 +1598,7 @@ const validateBuiltOpenCodeGeneratedPluginBundle = async (
   builtPath: string,
   pluginId: string,
 ): Promise<void> => {
-  const moduleUrl = `${pathToFileURL(builtPath).href}?agentpkg=${Date.now()}`;
+  const moduleUrl = `${pathToFileURL(builtPath).href}?prism=${Date.now()}`;
   const loaded = await import(moduleUrl) as { readonly default?: unknown };
   const plugin = loaded.default as { readonly id?: unknown; readonly server?: unknown } | undefined;
   if (!plugin || plugin.id !== pluginId || typeof plugin.server !== "function") {
@@ -1609,7 +1609,7 @@ const validateBuiltOpenCodeGeneratedPluginBundle = async (
 };
 
 const normalizeBuiltOpenCodeGeneratedPluginBundle = (content: string): string =>
-  content.replace(/^\/\/ .*agentpkg-opencode-plugin-[^\n]*\n/gm, "");
+  content.replace(/^\/\/ .*prism-opencode-plugin-[^\n]*\n/gm, "");
 
 const buildGeneratedOpenCodePluginBundle = async (options: {
   readonly root: string;
@@ -1621,7 +1621,7 @@ const buildGeneratedOpenCodePluginBundle = async (options: {
   readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "agentpkg-opencode-plugin-"));
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-opencode-plugin-"));
   try {
     const mirrors = await expandBundleMirrors(options.mirrors, options.importPluginRoots);
     const entryPath = await writeTempGeneratedPluginSources({
@@ -1698,7 +1698,7 @@ const planGeneratedPluginFiles = async (options: {
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly lifecycles: ReadonlyArray<Lifecycle>;
+  readonly orbits: ReadonlyArray<Orbit>;
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly hooks?: ReadonlyArray<Hook>;
   readonly registry?: PluginRegistry;
@@ -1781,7 +1781,7 @@ export const planLowering = async (
     input.agents,
     generatedOwnerToolNames,
   );
-  const desiredLifecycleSkillFiles = new Set<string>();
+  const desiredOrbitSkillFiles = new Set<string>();
   const ownedGeneratedPluginId = generatedPluginId(input.target);
   const ownedGeneratedPluginEntry = generatedPluginEntry(input.target);
 
@@ -1831,12 +1831,12 @@ export const planLowering = async (
     });
   }
 
-  // ---- Lifecycle lowering (source lifecycles -> runtime skills)
-  for (const lifecycle of input.lifecycles) {
-    const target = lifecycleSkillMdPath(input.target, lifecycle.name);
-    desiredLifecycleSkillFiles.add(lifecycleSkillRelativePath(lifecycle.name));
-    const desired = renderLifecycleSkill(
-      lifecycle,
+  // ---- Orbit lowering (source orbits -> runtime skills)
+  for (const orbit of input.orbits) {
+    const target = orbitSkillMdPath(input.target, orbit.name);
+    desiredOrbitSkillFiles.add(orbitSkillRelativePath(orbit.name));
+    const desired = renderOrbitSkill(
+      orbit,
       input.target.sourcePluginName,
       input.registry,
     );
@@ -1856,9 +1856,9 @@ export const planLowering = async (
   }
 
   operations.push(
-    ...(await planLifecycleSkillPruning(
+    ...(await planOrbitSkillPruning(
       input.target,
-      desiredLifecycleSkillFiles,
+      desiredOrbitSkillFiles,
     )),
   );
 
@@ -2025,7 +2025,7 @@ export const planLowering = async (
   //
   // OpenCode loads plugin tools into the harness-wide registry. Without a
   // global deny, any non-compiled Markdown agent with no explicit permission
-  // block inherits default access to generated agentpkg tools. The generated
+  // block inherits default access to generated prism tools. The generated
   // agent frontmatter then allows its assigned tools explicitly.
   for (const pluginName of [...generatedPermissionNamespacesToTouch].sort((left, right) =>
     left.localeCompare(right),

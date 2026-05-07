@@ -13,7 +13,7 @@ This plugin vendors Anthropic's official `skill-creator` skill and its supportin
 ## Installation
 
 ```bash
-agentpkg install ./plugins/skill-creator --all
+prism install ./plugins/skill-creator --all
 ```
 
 ## Runtime expectations
@@ -28,7 +28,7 @@ For the full eval, benchmark, and description optimization loop, expect to have:
 
 ## Notes
 
-- `agentpkg init --with-skill` and `agentpkg validate` remain useful for creating and checking plugin structure.
+- `prism init --with-skill` and `prism validate` remain useful for creating and checking plugin structure.
 - The bundled `skill-creator` goes further than structure alone: it now includes test prompts, benchmark aggregation, blind comparisons, and description optimization workflows.
 
 ## Credits

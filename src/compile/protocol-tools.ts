@@ -33,7 +33,7 @@ export interface SyntheticToolBinding {
 }
 
 export type MaterializedTraitTool = ToolPermissionBinding | SyntheticToolBinding;
-export type MaterializedLifecycleToolPermission = MaterializedTraitTool;
+export type MaterializedOrbitToolPermission = MaterializedTraitTool;
 
 export type TraitBindingValidationResult =
   | { readonly ok: true }
@@ -87,7 +87,7 @@ const externalGeneratedPluginModulePath = (
   pluginName: string,
   modulePath: string,
 ): string =>
-  `../../../../../agentpkg-generated-${normalizeGeneratedPluginName(pluginName)}/src/plugins/${pluginName}/${modulePath}`;
+  `../../../../../prism-generated-${normalizeGeneratedPluginName(pluginName)}/src/plugins/${pluginName}/${modulePath}`;
 
 const pluginModuleImportPath = (
   contractPluginName: string,
@@ -342,11 +342,11 @@ export const materializeTraitTools = (options: {
   return materialized;
 };
 
-export const materializeLifecycleToolPermission = (options: {
+export const materializeOrbitToolPermission = (options: {
   readonly logicalName: string;
   readonly toolRef: string;
   readonly registry: PluginRegistry;
-}): MaterializedLifecycleToolPermission | ProtocolSurfaceError => {
+}): MaterializedOrbitToolPermission | ProtocolSurfaceError => {
   const resolved = resolveToolRef(options.toolRef, options.registry);
   if (!resolved) {
     return protocolError(

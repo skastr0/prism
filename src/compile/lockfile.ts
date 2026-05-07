@@ -26,7 +26,7 @@ export interface LockfileEntry {
   readonly sources: ReadonlyArray<LockfileSource>;
 }
 
-export interface AgentpkgLock {
+export interface PrismLock {
   readonly version: 1;
   readonly root: string;
   readonly rootVersion: string;
@@ -34,14 +34,14 @@ export interface AgentpkgLock {
   readonly entries: ReadonlyArray<LockfileEntry>;
 }
 
-const LOCKFILE_NAME = "agentpkg.lock";
+const LOCKFILE_NAME = "prism.lock";
 
 const normalizeRelativePath = (from: string, to: string): string => {
   const path = relative(from, to).replace(/\\/g, "/");
   return path.length > 0 ? path : ".";
 };
 
-const comparableLockShape = (lock: AgentpkgLock | Omit<AgentpkgLock, "generatedAt">) => ({
+const comparableLockShape = (lock: PrismLock | Omit<PrismLock, "generatedAt">) => ({
   version: lock.version,
   root: lock.root,
   rootVersion: lock.rootVersion,
@@ -77,7 +77,7 @@ const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => 
     ...registry.skillspaces.values(),
     ...registry.skills.values(),
     ...registry.traits.values(),
-    ...registry.lifecycles.values(),
+    ...registry.orbits.values(),
     ...registry.agents.values(),
   ].map((source) => source.sourcePath);
 
@@ -87,13 +87,13 @@ const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => 
 export const getLockfilePath = (pluginPath: string): string =>
   join(pluginPath, LOCKFILE_NAME);
 
-export const readLockfile = async (pluginPath: string): Promise<AgentpkgLock | null> => {
+export const readLockfile = async (pluginPath: string): Promise<PrismLock | null> => {
   const path = getLockfilePath(pluginPath);
   if (!(await exists(path))) return null;
 
   try {
     const data = await readFile(path);
-    return JSON.parse(data) as AgentpkgLock;
+    return JSON.parse(data) as PrismLock;
   } catch {
     return null;
   }
@@ -158,7 +158,7 @@ export const writeLockfile = async (
     }
   }
 
-  const lock: AgentpkgLock = {
+  const lock: PrismLock = {
     ...comparable,
     generatedAt: new Date().toISOString(),
   };

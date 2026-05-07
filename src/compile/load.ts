@@ -22,8 +22,8 @@ import {
   HookDefinitionSchema,
   Identity,
   IdentityFrontmatter,
-  Lifecycle,
-  LifecycleDefinitionSchema,
+  Orbit,
+  OrbitDefinitionSchema,
   Modelspace,
   ModelspaceSchema,
   Personality,
@@ -36,7 +36,7 @@ import {
   Trait,
   TraitSchema,
   normalizeAgentRefInput,
-  normalizeLifecycleRefInput,
+  normalizeOrbitRefInput,
   normalizeModelProfileRefInput,
   normalizeSkillRefInput,
   normalizeToolGroupRefInput,
@@ -44,14 +44,14 @@ import {
   normalizeTraitRefInput,
   type Access,
   type HookToolMatcherInput,
-  type LifecycleDefinition,
-  type LifecycleToolPermissionTool,
+  type OrbitDefinition,
+  type OrbitToolPermissionTool,
   type NormalizedAccess,
   type NormalizedHookMatch,
   type NormalizedHookToolMatcher,
-  type NormalizedLifecycleOrchestrator,
-  type NormalizedLifecyclePhase,
-  type NormalizedLifecycleToolPermissionTool,
+  type NormalizedOrbitOrchestrator,
+  type NormalizedOrbitPhase,
+  type NormalizedOrbitToolPermissionTool,
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
   type SkillRefInput,
@@ -103,9 +103,9 @@ const readText = (
   });
 
 const globalWithCompileRuntime = globalThis as typeof globalThis & {
-  __agentpkg_effect?: typeof EffectModule;
+  __prism_effect?: typeof EffectModule;
 };
-globalWithCompileRuntime.__agentpkg_effect = EffectModule;
+globalWithCompileRuntime.__prism_effect = EffectModule;
 
 const importTsModule = <T>(
   sourcePath: string,
@@ -135,7 +135,7 @@ const withNamedRef = (kind, first, second) =>
 
 export const traitRef = (first, second) => withNamedRef("trait-ref", first, second);
 export const agentRef = (first, second) => withNamedRef("agent-ref", first, second);
-export const lifecycleRef = (first, second) => withNamedRef("lifecycle-ref", first, second);
+export const orbitRef = (first, second) => withNamedRef("orbit-ref", first, second);
 
 export const toolRef = (first, second, third) =>
   third === undefined
@@ -168,7 +168,7 @@ export const bindTrait = (trait, options = {}) => ({
 
 export const defineAgent = (agent) => agent;
 export const defineTrait = (trait) => trait;
-export const defineLifecycle = (lifecycle) => lifecycle;
+export const defineOrbit = (orbit) => orbit;
 export const defineTool = (tool) => tool;
 export const defineToolspace = (toolspace) => toolspace;
 export const defineModelspace = (modelspace) => modelspace;
@@ -202,9 +202,9 @@ const makeEffectRuntimeJs = (): string => {
     .join("\n");
 
   return `
-const effect = globalThis.__agentpkg_effect;
+const effect = globalThis.__prism_effect;
 if (!effect) {
-  throw new Error("agentpkg Effect runtime bridge was not initialized");
+  throw new Error("prism Effect runtime bridge was not initialized");
 }
 
 ${namedExports}
@@ -224,8 +224,8 @@ const getImportRuntimePaths = async (): Promise<{
 }> => {
   importRuntimePaths ??= (async () => {
     const fs = await import("node:fs/promises");
-    const dir = await fs.mkdtemp(join(tmpdir(), "agentpkg-authoring-"));
-    const authoringPath = join(dir, "agentpkg-authoring-runtime.mjs");
+    const dir = await fs.mkdtemp(join(tmpdir(), "prism-authoring-"));
+    const authoringPath = join(dir, "prism-authoring-runtime.mjs");
     const effectPath = join(dir, "effect-runtime.mjs");
     await fs.writeFile(authoringPath, AUTHORING_RUNTIME_JS, "utf8");
     await fs.writeFile(effectPath, makeEffectRuntimeJs(), "utf8");
@@ -278,7 +278,7 @@ const rewriteNodeSqliteImportForBun = (source: string): string =>
           const [imported, local] = specifier.split(/\s+as\s+/u).map((part) => part.trim());
           const localName = local || imported;
           if (imported === "DatabaseSync") {
-            return `const ${localName} = class DatabaseSync { constructor() { throw new Error("node:sqlite DatabaseSync is unavailable during agentpkg source parsing"); } };`;
+            return `const ${localName} = class DatabaseSync { constructor() { throw new Error("node:sqlite DatabaseSync is unavailable during prism source parsing"); } };`;
           }
           return `const ${localName} = undefined;`;
         })
@@ -297,7 +297,7 @@ const rewritePluginRuntimeDependencyImports = async (
 
   for (const match of source.matchAll(BARE_RUNTIME_IMPORT_PATTERN)) {
     const specifier = match[3];
-    if (!specifier || specifier === "agentpkg" || specifier === "effect" || specifier.startsWith("node:")) {
+    if (!specifier || specifier === "prism" || specifier === "effect" || specifier.startsWith("node:")) {
       continue;
     }
 
@@ -330,11 +330,11 @@ const rewriteImportSpecifiers = async (
 
   return rewrittenPluginDeps
     .replace(
-      /(\bfrom\s*)(["'])agentpkg\2/g,
+      /(\bfrom\s*)(["'])prism\2/g,
       (_match, prefix) => `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}`,
     )
     .replace(
-      /(\bimport\s*\(\s*)(["'])agentpkg\2(\s*\))/g,
+      /(\bimport\s*\(\s*)(["'])prism\2(\s*\))/g,
       (_match, prefix, _quote, suffix) =>
         `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}${suffix}`,
     )
@@ -482,7 +482,7 @@ const getTransformedPluginRoot = async (pluginRoot: string): Promise<Transformed
     const runtimePaths = await getImportRuntimePaths();
     const authoringRuntimeSpecifier = toFileSpecifier(runtimePaths.authoring);
     const effectRuntimeSpecifier = toFileSpecifier(runtimePaths.effect);
-    const outputParent = await fs.mkdtemp(join(tmpdir(), "agentpkg-sources-"));
+    const outputParent = await fs.mkdtemp(join(tmpdir(), "prism-sources-"));
     await copyTransformedPluginTree({
       pluginRoot,
       outputParent,
@@ -602,7 +602,7 @@ const AGENT_SUFFIX_TS = ".agent.ts";
 const TOOLSPACE_SUFFIX_TS = ".toolspace.ts";
 const MODELSPACE_SUFFIX_TS = ".modelspace.ts";
 const SKILLSPACE_SUFFIX_TS = ".skillspace.ts";
-const LIFECYCLE_SUFFIX_TS = ".lifecycle.ts";
+const ORBIT_SUFFIX_TS = ".orbit.ts";
 const TOOL_SUFFIX_TS = ".tool.ts";
 const HOOK_SUFFIX_TS = ".hook.ts";
 
@@ -1582,41 +1582,41 @@ const loadSkills = (
     return map;
   });
 
-const normalizeLifecyclePhase = (
+const normalizeOrbitPhase = (
   sourcePath: string,
-  phase: LifecycleDefinition["phases"][number],
+  phase: OrbitDefinition["phases"][number],
   index: number,
-): NormalizedLifecyclePhase | SourceParseError => {
-  const lifecycle = phase.lifecycle
-    ? normalizeLifecycleRefInput(`phases[${index}].lifecycle`, phase.lifecycle)
+): NormalizedOrbitPhase | SourceParseError => {
+  const orbit = phase.orbit
+    ? normalizeOrbitRefInput(`phases[${index}].orbit`, phase.orbit)
     : undefined;
-  if (lifecycle && typeof lifecycle !== "string") {
+  if (orbit && typeof orbit !== "string") {
     return new SourceParseError({
       sourcePath,
-      kind: "lifecycle",
-      message: `${lifecycle.field}: ${lifecycle.message}`,
+      kind: "orbit",
+      message: `${orbit.field}: ${orbit.message}`,
     });
   }
 
-  let lifecycleBinding:
-    | { lifecycle: string; bindings?: Record<string, string> }
+  let orbitBinding:
+    | { orbit: string; bindings?: Record<string, string> }
     | undefined;
-  if (phase.lifecycle_binding) {
-    const normalized = normalizeLifecycleRefInput(
-      `phases[${index}].lifecycle_binding.lifecycle`,
-      phase.lifecycle_binding.lifecycle,
+  if (phase.orbit_binding) {
+    const normalized = normalizeOrbitRefInput(
+      `phases[${index}].orbit_binding.orbit`,
+      phase.orbit_binding.orbit,
     );
     if (typeof normalized !== "string") {
       return new SourceParseError({
         sourcePath,
-        kind: "lifecycle",
+        kind: "orbit",
         message: `${normalized.field}: ${normalized.message}`,
       });
     }
-    lifecycleBinding = {
-      lifecycle: normalized,
-      ...(phase.lifecycle_binding.bindings
-        ? { bindings: { ...phase.lifecycle_binding.bindings } }
+    orbitBinding = {
+      orbit: normalized,
+      ...(phase.orbit_binding.bindings
+        ? { bindings: { ...phase.orbit_binding.bindings } }
         : {}),
     };
   }
@@ -1630,7 +1630,7 @@ const normalizeLifecyclePhase = (
   if (uniqueAliases.length > 1) {
     return new SourceParseError({
         sourcePath,
-        kind: "lifecycle",
+        kind: "orbit",
         message: `phase ${index + 1} ('${phase.name}') declares multiple agent assignment aliases (${uniqueAliases.join(", ")}); use only one of agent or agents`,
       });
   }
@@ -1646,7 +1646,7 @@ const normalizeLifecyclePhase = (
     if (typeof normalized !== "string") {
       return new SourceParseError({
         sourcePath,
-        kind: "lifecycle",
+        kind: "orbit",
         message: `${normalized.field}: ${normalized.message}`,
       });
     }
@@ -1664,7 +1664,7 @@ const normalizeLifecyclePhase = (
       if (typeof normalized !== "string") {
         return new SourceParseError({
           sourcePath,
-          kind: "lifecycle",
+          kind: "orbit",
           message: `${normalized.field}: ${normalized.message}`,
         });
       }
@@ -1681,7 +1681,7 @@ const normalizeLifecyclePhase = (
     if (typeof normalized !== "string") {
       return new SourceParseError({
         sourcePath,
-        kind: "lifecycle",
+        kind: "orbit",
         message: `${normalized.field}: ${normalized.message}`,
       });
     }
@@ -1690,8 +1690,8 @@ const normalizeLifecyclePhase = (
 
   return {
     name: phase.name,
-    ...(lifecycle ? { lifecycle } : {}),
-    ...(lifecycleBinding ? { lifecycle_binding: lifecycleBinding } : {}),
+    ...(orbit ? { orbit } : {}),
+    ...(orbitBinding ? { orbit_binding: orbitBinding } : {}),
     ...(normalizedSingularAgent ? { agent: normalizedSingularAgent } : {}),
     agents,
     requires,
@@ -1704,18 +1704,18 @@ const parseCanonicalToolName = (ref: string): string => {
   return colon === -1 ? ref : ref.slice(colon + 1);
 };
 
-const normalizeLifecyclePermissionTool = (
+const normalizeOrbitPermissionTool = (
   sourcePath: string,
-  tool: LifecycleToolPermissionTool,
+  tool: OrbitToolPermissionTool,
   fieldPrefix: string,
   toolIndex: number,
-): NormalizedLifecycleToolPermissionTool | SourceParseError => {
+): NormalizedOrbitToolPermissionTool | SourceParseError => {
   const rawRef = typeof tool === "string" ? tool : tool.ref;
   const ref = rawRef.trim();
   if (!ref) {
     return new SourceParseError({
       sourcePath,
-      kind: "lifecycle",
+      kind: "orbit",
       message: `${fieldPrefix}[${toolIndex}].ref: must be a non-empty canonical tool reference`,
     });
   }
@@ -1726,7 +1726,7 @@ const normalizeLifecyclePermissionTool = (
   if (!logicalName) {
     return new SourceParseError({
       sourcePath,
-      kind: "lifecycle",
+      kind: "orbit",
       message: `${fieldPrefix}[${toolIndex}].as: must be non-empty when provided`,
     });
   }
@@ -1737,15 +1737,15 @@ const normalizeLifecyclePermissionTool = (
   };
 };
 
-const normalizeLifecycleToolList = (
+const normalizeOrbitToolList = (
   sourcePath: string,
-  tools: ReadonlyArray<LifecycleToolPermissionTool>,
+  tools: ReadonlyArray<OrbitToolPermissionTool>,
   fieldPrefix: string,
-): NormalizedLifecycleToolPermissionTool[] | SourceParseError => {
-  const normalized: NormalizedLifecycleToolPermissionTool[] = [];
+): NormalizedOrbitToolPermissionTool[] | SourceParseError => {
+  const normalized: NormalizedOrbitToolPermissionTool[] = [];
   const logicalNames = new Set<string>();
   for (const [toolIndex, tool] of tools.entries()) {
-    const normalizedTool = normalizeLifecyclePermissionTool(
+    const normalizedTool = normalizeOrbitPermissionTool(
       sourcePath,
       tool,
       fieldPrefix,
@@ -1757,7 +1757,7 @@ const normalizeLifecycleToolList = (
     if (logicalNames.has(normalizedTool.logicalName)) {
       return new SourceParseError({
         sourcePath,
-        kind: "lifecycle",
+        kind: "orbit",
         message: `${fieldPrefix}[${toolIndex}].as: duplicate logical tool name '${normalizedTool.logicalName}'`,
       });
     }
@@ -1767,10 +1767,10 @@ const normalizeLifecycleToolList = (
   return normalized;
 };
 
-const normalizeLifecycleOrchestrator = (
+const normalizeOrbitOrchestrator = (
   sourcePath: string,
-  orchestrator: LifecycleDefinition["orchestrator"],
-): NormalizedLifecycleOrchestrator | undefined | SourceParseError => {
+  orchestrator: OrbitDefinition["orchestrator"],
+): NormalizedOrbitOrchestrator | undefined | SourceParseError => {
   if (!orchestrator) return undefined;
 
   const normalizedAgent = normalizeAgentRefInput(
@@ -1780,12 +1780,12 @@ const normalizeLifecycleOrchestrator = (
   if (typeof normalizedAgent !== "string") {
     return new SourceParseError({
       sourcePath,
-      kind: "lifecycle",
+      kind: "orbit",
       message: `${normalizedAgent.field}: ${normalizedAgent.message}`,
     });
   }
 
-  const tools = normalizeLifecycleToolList(
+  const tools = normalizeOrbitToolList(
     sourcePath,
     orchestrator.tools,
     "orchestrator.tools",
@@ -1800,20 +1800,20 @@ const normalizeLifecycleOrchestrator = (
   };
 };
 
-const normalizeLifecycleToolPermissions = (
+const normalizeOrbitToolPermissions = (
   sourcePath: string,
-  permissions: LifecycleDefinition["tool_permissions"],
-): NormalizedLifecycleToolPermissionTool[] | SourceParseError =>
-  normalizeLifecycleToolList(sourcePath, permissions ?? [], "tool_permissions");
+  permissions: OrbitDefinition["tool_permissions"],
+): NormalizedOrbitToolPermissionTool[] | SourceParseError =>
+  normalizeOrbitToolList(sourcePath, permissions ?? [], "tool_permissions");
 
-const parseLifecycleDefinition = (
+const parseOrbitDefinition = (
   sourcePath: string,
   raw: unknown,
-  kind: "lifecycle",
+  kind: "orbit",
   body: string,
-): Effect.Effect<Lifecycle, CompileError> =>
+): Effect.Effect<Orbit, CompileError> =>
   Effect.gen(function* () {
-    const result = Schema.decodeUnknownEither(LifecycleDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
+    const result = Schema.decodeUnknownEither(OrbitDefinitionSchema, STRICT_PARSE_OPTIONS)(raw);
     if (result._tag === "Left") {
       return yield* Effect.fail(
         new SourceParseError({
@@ -1825,37 +1825,37 @@ const parseLifecycleDefinition = (
     }
 
     const parsed = result.right;
-    const fileStem = stripSuffix(basename(sourcePath), [LIFECYCLE_SUFFIX_TS]);
+    const fileStem = stripSuffix(basename(sourcePath), [ORBIT_SUFFIX_TS]);
     if (parsed.name !== fileStem) {
       return yield* Effect.fail(
         new SourceParseError({
           sourcePath,
           kind,
-          message: `lifecycle 'name' field ('${parsed.name}') must match file stem ('${fileStem}')`,
+          message: `orbit 'name' field ('${parsed.name}') must match file stem ('${fileStem}')`,
         }),
       );
     }
 
-    const phases: NormalizedLifecyclePhase[] = [];
+    const phases: NormalizedOrbitPhase[] = [];
     for (const [index, phase] of parsed.phases.entries()) {
-      const normalized = normalizeLifecyclePhase(sourcePath, phase, index);
+      const normalized = normalizeOrbitPhase(sourcePath, phase, index);
       if (normalized instanceof SourceParseError) {
         return yield* Effect.fail(normalized);
       }
       phases.push(normalized);
     }
 
-    const toolPermissions = normalizeLifecycleToolPermissions(sourcePath, parsed.tool_permissions);
+    const toolPermissions = normalizeOrbitToolPermissions(sourcePath, parsed.tool_permissions);
     if (toolPermissions instanceof SourceParseError) {
       return yield* Effect.fail(toolPermissions);
     }
 
-    const orchestrator = normalizeLifecycleOrchestrator(sourcePath, parsed.orchestrator);
+    const orchestrator = normalizeOrbitOrchestrator(sourcePath, parsed.orchestrator);
     if (orchestrator instanceof SourceParseError) {
       return yield* Effect.fail(orchestrator);
     }
 
-    return new Lifecycle({
+    return new Orbit({
       name: parsed.name,
       sourcePath,
       description: parsed.description,
@@ -1867,48 +1867,48 @@ const parseLifecycleDefinition = (
       phases,
       ...(orchestrator ? { orchestrator } : {}),
       tool_permissions: toolPermissions,
-      taste_checkpoints: parsed.taste_checkpoints ?? [],
+      pulsar_checkpoints: parsed.pulsar_checkpoints ?? [],
       evolution: parsed.evolution,
       body: body.trim(),
     });
   });
 
-const parseLifecycleTs = (
+const parseOrbitTs = (
   sourcePath: string,
-): Effect.Effect<Lifecycle, CompileError> =>
+): Effect.Effect<Orbit, CompileError> =>
   Effect.gen(function* () {
-    const raw = yield* importTsModule<unknown>(sourcePath, "lifecycle");
-    return yield* parseLifecycleDefinition(sourcePath, raw, "lifecycle", "");
+    const raw = yield* importTsModule<unknown>(sourcePath, "orbit");
+    return yield* parseOrbitDefinition(sourcePath, raw, "orbit", "");
   });
 
-const loadLifecycles = (
+const loadOrbits = (
   pluginPath: string,
-): Effect.Effect<Map<string, Lifecycle>, CompileError> =>
+): Effect.Effect<Map<string, Orbit>, CompileError> =>
   Effect.gen(function* () {
-    const dir = join(pluginPath, "lifecycles");
+    const dir = join(pluginPath, "orbits");
     const entries = yield* listDir(dir);
-    const map = new Map<string, Lifecycle>();
+    const map = new Map<string, Orbit>();
 
     for (const entry of entries.sort()) {
-      if (!entry.endsWith(LIFECYCLE_SUFFIX_TS)) {
+      if (!entry.endsWith(ORBIT_SUFFIX_TS)) {
         continue;
       }
 
-      const lifecycle = yield* parseLifecycleTs(join(dir, entry));
+      const orbit = yield* parseOrbitTs(join(dir, entry));
 
-      const existing = map.get(lifecycle.name);
+      const existing = map.get(orbit.name);
       if (existing) {
         return yield* Effect.fail(
           new DuplicateNameError({
-            kind: "lifecycle",
-            name: lifecycle.name,
+            kind: "orbit",
+            name: orbit.name,
             firstPath: existing.sourcePath,
-            secondPath: lifecycle.sourcePath,
+            secondPath: orbit.sourcePath,
           }),
         );
       }
 
-      map.set(lifecycle.name, lifecycle);
+      map.set(orbit.name, orbit);
     }
 
     return map;
@@ -2174,7 +2174,7 @@ const loadPluginArtifacts = (
     registry.traits = yield* loadTraits(pluginPath);
     registry.tools = yield* loadCanonicalTools(pluginPath);
     registry.hooks = yield* loadHooks(pluginPath);
-    registry.lifecycles = yield* loadLifecycles(pluginPath);
+    registry.orbits = yield* loadOrbits(pluginPath);
     registry.agents = yield* loadAgents(pluginPath);
     return registry;
   });

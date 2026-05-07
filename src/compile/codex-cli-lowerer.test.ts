@@ -18,10 +18,10 @@ const effectImportPath = join(
   "index.js",
 ).replace(/\\/g, "/");
 
-const agentpkgImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
 const createTempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), "agentpkg-codex-mcp-test-"));
+  const root = await mkdtemp(join(tmpdir(), "prism-codex-mcp-test-"));
   tempRoots.push(root);
   return root;
 };
@@ -79,9 +79,9 @@ test("codex-cli lowerer emits MCP server bundle and managed config", async () =>
     join(outputRoot, "config.toml"),
     `model = "codex-default"
 
-# --- agentpkg codex-cli begin: codex-mcp-fixture ---
+# --- prism codex-cli begin: codex-mcp-fixture ---
 stale = true
-# --- agentpkg codex-cli end: codex-mcp-fixture ---
+# --- prism codex-cli end: codex-mcp-fixture ---
 `,
   );
 
@@ -97,7 +97,7 @@ stale = true
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(agentpkgImportPath)};
+    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace",
@@ -111,7 +111,7 @@ export default defineToolspace({
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(agentpkgImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineHook({
   name: "audit-shell",
@@ -126,7 +126,7 @@ export default defineHook({
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(agentpkgImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
   name: "echo",
@@ -167,7 +167,7 @@ export default defineTool({
         ],
       },
     ],
-    lifecycles: [],
+    orbits: [],
     tools: [],
     skills: [...registry.skills.values()],
     hooks: [hook],
@@ -191,9 +191,9 @@ export default defineTool({
   expect(agentToml?.content).not.toContain('\neffort = "high"');
   expect(agentToml?.content).not.toContain("temperature");
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
-  expect(agentToml?.content).toContain('["mcp_servers"."agentpkg-generated-codex-mcp-fixture"]');
+  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
   expect(agentToml?.content).toContain('command = "bun"');
-  expect(agentToml?.content).toContain('args = ["mcp/agentpkg_generated_codex_mcp_fixture/server.mjs"]');
+  expect(agentToml?.content).toContain('args = ["mcp/prism_generated_codex_mcp_fixture/server.mjs"]');
   expect(agentToml?.content).toContain(`cwd = ${JSON.stringify(outputRoot)}`);
   expect(agentToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
@@ -202,12 +202,12 @@ export default defineTool({
   expect(skill?.content).toContain("# Testing");
 
   const rules = findContentOperation(operations, "AGENTS.md");
-  expect(rules?.content).toContain('<!-- agentpkg:rules source="global/context.md" -->');
+  expect(rules?.content).toContain('<!-- prism:rules source="global/context.md" -->');
   expect(rules?.content).toContain("Use project rules.");
 
   const bundle = findContentOperation(
     operations,
-    join("mcp", "agentpkg_generated_codex_mcp_fixture", "server.mjs"),
+    join("mcp", "prism_generated_codex_mcp_fixture", "server.mjs"),
   );
   expect(bundle?.content).toContain("codex_mcp_fixture_echo");
   expect(bundle?.content).toContain("tools/list");
@@ -215,14 +215,14 @@ export default defineTool({
   const configToml = findContentOperation(operations, "config.toml");
   expect(configToml?.content).toContain('model = "codex-default"');
   expect(configToml?.content).not.toContain("stale = true");
-  expect(configToml?.content).toContain("# --- agentpkg codex-cli begin: codex-mcp-fixture ---");
+  expect(configToml?.content).toContain("# --- prism codex-cli begin: codex-mcp-fixture ---");
   expect(configToml?.content).toContain('command = "bun"');
-  expect(configToml?.content).toContain('args = ["mcp/agentpkg_generated_codex_mcp_fixture/server.mjs"]');
+  expect(configToml?.content).toContain('args = ["mcp/prism_generated_codex_mcp_fixture/server.mjs"]');
   expect(configToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(configToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');
   expect(configToml?.content).toContain('matcher = "shell\\\\.command"');
-  expect(configToml?.content).toContain('statusMessage = "agentpkg hook audit-shell"');
+  expect(configToml?.content).toContain('statusMessage = "prism hook audit-shell"');
 
   const hookWrapper = findContentOperation(operations, join("hooks", "audit-shell.mjs"));
   expect(hookWrapper?.content).toContain("input?.tool_response");
@@ -251,7 +251,7 @@ test("codex-cli lowerer fails closed for unsupported model config keys", async (
           toolBindings: [],
         },
       ],
-      lifecycles: [],
+      orbits: [],
       tools: [],
       skills: [],
       hooks: [],

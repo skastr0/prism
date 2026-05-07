@@ -15,7 +15,7 @@ import {
 const tempRoots: string[] = [];
 
 const createTempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), "agentpkg-hooks-"));
+  const root = await mkdtemp(join(tmpdir(), "prism-hooks-"));
   tempRoots.push(root);
   return root;
 };
@@ -53,7 +53,7 @@ const createHookFixture = async (): Promise<string> => {
 
   await writeText(
     join(pluginRoot, "toolspaces", "core.toolspace.ts"),
-    `import { defineToolspace, toolRef } from "agentpkg";
+    `import { defineToolspace, toolRef } from "prism";
 
 export default defineToolspace({
   name: "core",
@@ -82,7 +82,7 @@ export default defineToolspace({
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from "effect";
-import { defineHook, hookEvent, hookTool, toolGroupRef } from "agentpkg";
+import { defineHook, hookEvent, hookTool, toolGroupRef } from "prism";
 
 export default defineHook({
   name: "audit-shell",
@@ -127,7 +127,7 @@ test("hook toolspace matchers resolve to target-native tool names", async () => 
   });
 });
 
-test("native hook payload schemas normalize target payloads into agentpkg events", () => {
+test("native hook payload schemas normalize target payloads into prism events", () => {
   const decoded = Schema.decodeUnknownSync(NativeToolBeforeHookPayloadSchema)({
     target: { harness: "opencode", nativeEvent: "tool.execute.before" },
     tool: { logical: "shell", name: "bash", input: { command: "pwd" } },
@@ -195,7 +195,7 @@ test("hook V1 fails closed for agent-bound authoring attempts", async () => {
   await writeText(
     join(pluginRoot, "hooks", "agent-bound.hook.ts"),
     `import { Effect } from "effect";
-import { defineHook, hookEvent } from "agentpkg";
+import { defineHook, hookEvent } from "prism";
 
 export default defineHook({
   name: "agent-bound",

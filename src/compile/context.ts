@@ -13,7 +13,7 @@
 import { Context, Effect, Ref } from "effect";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 
-export class CompileContext extends Context.Tag("agentpkg/CompileContext")<
+export class CompileContext extends Context.Tag("prism/CompileContext")<
   CompileContext,
   {
     readonly target: string;

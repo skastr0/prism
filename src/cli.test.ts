@@ -206,13 +206,13 @@ test("init --with-agent scaffolds TypeScript agent sources, not source markdown 
 
 test("validate rejects source markdown agents", async () => {
   const root = await createTempRoot();
-  const pluginRoot = join(root, "legacy-agent");
+  const pluginRoot = join(root, "source-markdown-agent");
   await mkdir(join(pluginRoot, "agents"), { recursive: true });
   await writeFile(
     join(pluginRoot, "plugin.json"),
     JSON.stringify(
       {
-        name: "legacy-agent",
+        name: "source-markdown-agent",
         version: "0.1.0",
         targets: { agents: ["opencode"] },
       },
@@ -223,7 +223,7 @@ test("validate rejects source markdown agents", async () => {
   await writeFile(
     join(pluginRoot, "agents", "reviewer.md"),
     `---
-description: Legacy source markdown agent
+description: Source markdown agent
 ---
 
 You are a reviewer.
@@ -323,7 +323,7 @@ test("generated Oxlint rule rejects trait-owned slots and tool input/output repl
             objectExpression([
               property("ref", literal("orbit-core:submit_work")),
               property("input", identifier("WorkSubmissionBase")),
-              property("output", identifier("OrbitPacketReceipt")),
+              property("output", identifier("OrbitDispatchReceipt")),
             ])
           ),
         ])

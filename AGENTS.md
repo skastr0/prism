@@ -369,8 +369,8 @@ export default defineOrbit({
       agents: [agentRef("builder")],
       tools: [
         {
-          ref: "protocol-core:create_item",
-          as: "create_item",
+          ref: "protocol-core:create_glyph",
+          as: "create_glyph",
           bind: { board: "project-alpha" },
         },
       ],
@@ -393,7 +393,7 @@ import { defineTool } from "prism";
 
 export default defineTool({
   name: "submit_review",
-  description: "Submit review findings for a work item.",
+  description: "Submit review findings for a glyph.",
   input: Schema.Struct({ summary: Schema.String }),
   output: Schema.Struct({ acknowledged: Schema.Boolean }),
   async handle(input, context) {
@@ -617,7 +617,7 @@ prism install-all ./plugins --harness opencode,claude-code --scope project --pro
 Reserved for future:
 
 - Git / HTTP URL deps (currently local paths only)
-- richer permission/access ownership after the next work item
+- richer permission/access ownership after the next glyph
 - orbit runtime orchestration (heartbeat manager stays runtime state in opencode-config)
 
 ## Plugin Structure

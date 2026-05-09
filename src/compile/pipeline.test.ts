@@ -37,7 +37,7 @@ const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
     join(projectRoot, ".opencode", "plugins", pluginId, "dist", "server.mjs"),
   ).href;
 
-const generatedLegacySourcePluginEntry = (projectRoot: string, pluginId: string): string =>
+const generatedStaleSourcePluginEntry = (projectRoot: string, pluginId: string): string =>
   pathToFileURL(
     join(projectRoot, ".opencode", "plugins", pluginId, "src", "server.ts"),
   ).href;
@@ -614,12 +614,12 @@ export default defineTool({
             projectRoot,
             "prism-generated-permission-only-consumer",
           ),
-          generatedLegacySourcePluginEntry(
+          generatedStaleSourcePluginEntry(
             projectRoot,
             "prism-generated-permission-only-consumer",
           ),
           generatedPluginEntry(projectRoot, "prism-generated-stale-dep"),
-          generatedLegacySourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
+          generatedStaleSourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
         ],
       },
       null,
@@ -862,7 +862,7 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(securityReviewer?.allowedTools).toEqual(["grep", "read"]);
   expect(builder?.toolBindings.map((binding) => binding.logicalName)).toEqual([
     "commit_work",
-    "create_item",
+    "create_glyph",
     "submit_work",
   ]);
   expect(reviewer?.toolBindings.map((binding) => binding.logicalName)).toEqual([
@@ -886,7 +886,7 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(builder?.toolBindings.find((binding) => binding.logicalName === "commit_work")?.kind).toBe(
     "permission",
   );
-  expect(builder?.toolBindings.find((binding) => binding.logicalName === "create_item")?.kind).toBe(
+  expect(builder?.toolBindings.find((binding) => binding.logicalName === "create_glyph")?.kind).toBe(
     "permission",
   );
   const reviewerSubmitReview = reviewer?.toolBindings.find(
@@ -1028,7 +1028,7 @@ test("orbit skill renders orchestrator section and grants the orbit skill to the
   );
   expect(skill).toContain("## Orchestrator");
   expect(skill).toContain("`builder`");
-  expect(skill).toContain("`create_item`");
+  expect(skill).toContain("`create_glyph`");
 
   // The orchestrator agent (builder) auto-receives the orbit skill.
   const builder = result.composed.find((agent) => agent.name === "builder");
@@ -1061,7 +1061,7 @@ export default defineOrbit({
     },
   ],
   tool_permissions: [
-    { ref: "protocol-core:create_item", as: "create_item" },
+    { ref: "protocol-core:create_glyph", as: "create_glyph" },
   ],
 });
 `,
@@ -1081,10 +1081,10 @@ export default defineOrbit({
   const builder = result.composed.find((agent) => agent.name === "builder");
   const reviewer = result.composed.find((agent) => agent.name === "reviewer");
   expect(
-    builder?.toolBindings.some((binding) => binding.logicalName === "create_item"),
+    builder?.toolBindings.some((binding) => binding.logicalName === "create_glyph"),
   ).toBe(true);
   expect(
-    reviewer?.toolBindings.some((binding) => binding.logicalName === "create_item"),
+    reviewer?.toolBindings.some((binding) => binding.logicalName === "create_glyph"),
   ).toBe(true);
 
   const skill = await readFile(
@@ -1092,10 +1092,10 @@ export default defineOrbit({
     "utf8",
   );
   expect(skill).toContain("## Tools available to every phase agent");
-  expect(skill).toContain("`create_item`");
+  expect(skill).toContain("`create_glyph`");
 });
 
-test("orbit parser rejects the legacy tool_permissions shape with agents", async () => {
+test("orbit parser rejects the obsolete tool_permissions shape with agents", async () => {
   const projectRoot = await createTempRoot();
   const pluginRoot = join(projectRoot, "plugin");
 
@@ -1103,7 +1103,7 @@ test("orbit parser rejects the legacy tool_permissions shape with agents", async
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "legacy-shape",
+        name: "obsolete-shape",
         version: "0.1.0",
         targets: {
           orbits: ["opencode"],
@@ -1115,15 +1115,15 @@ test("orbit parser rejects the legacy tool_permissions shape with agents", async
   );
 
   await writeText(
-    join(pluginRoot, "orbits", "legacy.orbit.ts"),
+    join(pluginRoot, "orbits", "obsolete.orbit.ts"),
     `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
 
 export default defineOrbit({
-  name: "legacy",
+  name: "obsolete",
   description: "Uses the deprecated tool_permissions shape with agents",
   phases: [],
   tool_permissions: [
-    { agents: ["builder"], tools: ["protocol-core:create_item"] },
+    { agents: ["builder"], tools: ["protocol-core:create_glyph"] },
   ],
 });
 `,
@@ -1426,9 +1426,9 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(opencodeAgent).toContain("bash: allow");
   expect(opencodeAgent).toContain("canonical_compile_fixture_commit_work: allow");
   expect(opencodeAgent).toContain("protocol_core_external_submit: allow");
-  expect(opencodeAgent).toContain("protocol_core_create_item: allow");
+  expect(opencodeAgent).toContain("protocol_core_create_glyph: allow");
   expect(opencodeAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(opencodeAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_item");
+  expect(opencodeAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_glyph");
   expect(opencodeAgent).toContain(
     "canonical_compile_fixture_submit_review__review_findings_slot: deny",
   );
@@ -1451,8 +1451,8 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   );
   expect(reviewerAgent).toContain("protocol_core_external_submit: allow");
   expect(reviewerAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(reviewerAgent).toContain("protocol_core_create_item: deny");
-  expect(reviewerAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_item");
+  expect(reviewerAgent).toContain("protocol_core_create_glyph: deny");
+  expect(reviewerAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_glyph");
   expect(reviewerAgent).toMatch(
     /canonical_compile_fixture_submit_review__review_findings_slot: allow/,
   );
@@ -1495,7 +1495,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(generatedServerSource).not.toContain('from "@opencode-ai/plugin"');
   expect(generatedServerSource).not.toContain('"protocol_core_external_submit":');
   expect(generatedServerSource).not.toContain("canonical_compile_fixture_builder_submit_work");
-  expect(generatedServerSource).not.toContain("delivery-contract__builder__create_item");
+  expect(generatedServerSource).not.toContain("delivery-contract__builder__create_glyph");
   expect(generatedServerSource).toContain("submit_review__review_findings_slot");
   expect(generatedServerSource).not.toContain("Schema.omit");
   expect(generatedServerSource).not.toContain("prism-generated-protocol-core/src/plugins");
@@ -1507,7 +1507,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   });
   const protocolToolNames = Object.keys(protocolPlugin.tool ?? {});
   expect(protocolToolNames).toContain("protocol_core_external_submit");
-  expect(protocolToolNames).toContain("protocol_core_create_item");
+  expect(protocolToolNames).toContain("protocol_core_create_glyph");
   const protocolGeneratedServerSource = await readFile(protocolBundlePath, "utf8");
   expect(protocolGeneratedServerSource).not.toContain('from "effect"');
   expect(protocolGeneratedServerSource).not.toContain('from "@opencode-ai/plugin"');
@@ -2872,7 +2872,7 @@ test("external permission-only consumers do not emit empty generated plugin shel
   ]);
   expect(opencodeConfig.plugin).not.toContain("prism-generated-stale-dep");
   expect(opencodeConfig.plugin).not.toContain(
-    generatedLegacySourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
+    generatedStaleSourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
   );
   expect(opencodeConfig.plugin).not.toContain(
     "prism-generated-permission-only-consumer",
@@ -3332,10 +3332,10 @@ export default defineOrbit({
   ],
   orchestrator: {
     agent: agentRef("builder"),
-    tools: [{ ref: "protocol-core:create_item", as: "create_item_orch" }],
+    tools: [{ ref: "protocol-core:create_glyph", as: "create_glyph_orch" }],
   },
   tool_permissions: [
-    { ref: "protocol-core:create_item", as: "create_item_wide" },
+    { ref: "protocol-core:create_glyph", as: "create_glyph_wide" },
   ],
 });
 `,
@@ -3359,8 +3359,8 @@ export default defineOrbit({
 
   // Each grant gets its own logical name in its own section, but the canonical
   // tool ref appears in both sections — check both sections are listed.
-  expect(skill).toContain("`create_item_orch` (canonical `protocol-core:create_item`)");
-  expect(skill).toContain("`create_item_wide` (canonical `protocol-core:create_item`)");
+  expect(skill).toContain("`create_glyph_orch` (canonical `protocol-core:create_glyph`)");
+  expect(skill).toContain("`create_glyph_wide` (canonical `protocol-core:create_glyph`)");
 
   // Wide tool description should appear in the wide section once, not twice.
   const wideMatches = skill.match(/## Tools available to every phase agent/g);
@@ -3575,7 +3575,7 @@ test("derived orbit skill drops the input-shape placeholder line", async () => {
 
   expect(skill).not.toContain("Input: Structured input — see canonical tool schema for fields.");
   // Tool entries still render the head line itself.
-  expect(skill).toContain("`create_item` (canonical `protocol-core:create_item`)");
+  expect(skill).toContain("`create_glyph` (canonical `protocol-core:create_glyph`)");
 });
 
 test("derived orbit skill agent sub-sections do not render a duplicated **Identity** line", async () => {

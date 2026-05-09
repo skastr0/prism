@@ -180,7 +180,7 @@ description: Build specialist for canonical compile tests
 
 # Builder
 
-You implement one committed work item and validate it before review.
+You implement one committed glyph and validate it before review.
 `
   );
 
@@ -249,13 +249,13 @@ export default defineTool({
   );
 
   await writeText(
-    join(protocolRoot, "tools", "create_item.tool.ts"),
+    join(protocolRoot, "tools", "create_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
-  name: "create_item",
-  description: "Create a protocol-owned work item",
+  name: "create_glyph",
+  description: "Create a protocol-owned glyph",
   input: Schema.Struct({
     board: Schema.Literal("project-alpha", "project-beta"),
     id: Schema.String,
@@ -562,8 +562,8 @@ export default defineAgent({
     agent: agentRef(${JSON.stringify(orchestratorAgent)}),
     tools: [
       {
-        ref: "protocol-core:create_item",
-        as: "create_item",
+        ref: "protocol-core:create_glyph",
+        as: "create_glyph",
       },
     ],
   }`

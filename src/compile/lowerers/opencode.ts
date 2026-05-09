@@ -24,7 +24,7 @@
  *        - dist/server.mjs
  *
  * The generated plugin directory is compiler-owned. Re-running compile prunes
- * stale legacy raw-TypeScript generated output such as src/**, package.json,
+ * stale stale raw-TypeScript generated output such as src/**, package.json,
  * lockfiles, and node_modules/.
  */
 
@@ -169,7 +169,7 @@ const generatedPluginEntryForName = (
 const generatedPluginEntry = (target: OpenCodeLowerTarget): string =>
   generatedPluginEntryForName(target, target.sourcePluginName);
 
-const legacyGeneratedPluginSourceEntryForName = (
+const staleGeneratedPluginSourceEntryForName = (
   target: OpenCodeLowerTarget,
   pluginName: string,
 ): string =>
@@ -177,7 +177,7 @@ const legacyGeneratedPluginSourceEntryForName = (
     join(generatedPluginRootForName(target, pluginName), "src", "server.ts")
   ).href;
 
-const isLegacyGeneratedPluginEntry = (
+const isStaleGeneratedPluginEntry = (
   entry: unknown,
   target: OpenCodeLowerTarget,
 ): entry is string => {
@@ -1864,21 +1864,21 @@ export const planLowering = async (
 
   // ---- Generated plugin emission
   const desiredGeneratedPluginEntries = new Set<string>();
-  const legacyGeneratedPluginEntriesToPrune = new Set<string>([
+  const staleGeneratedPluginEntriesToPrune = new Set<string>([
     ownedGeneratedPluginId,
-    legacyGeneratedPluginSourceEntryForName(input.target, input.target.sourcePluginName),
+    staleGeneratedPluginSourceEntryForName(input.target, input.target.sourcePluginName),
   ]);
   const configuredPluginEntries = Array.isArray(config.plugin) ? config.plugin : [];
   for (const pluginEntry of configuredPluginEntries) {
-    if (isLegacyGeneratedPluginEntry(pluginEntry, input.target)) {
-      legacyGeneratedPluginEntriesToPrune.add(pluginEntry);
+    if (isStaleGeneratedPluginEntry(pluginEntry, input.target)) {
+      staleGeneratedPluginEntriesToPrune.add(pluginEntry);
     }
   }
   for (const pluginEntry of (config.plugin as unknown) instanceof Array
     ? (config.plugin as unknown[])
     : []) {
-    if (isLegacyGeneratedPluginEntry(pluginEntry, input.target)) {
-      legacyGeneratedPluginEntriesToPrune.add(pluginEntry);
+    if (isStaleGeneratedPluginEntry(pluginEntry, input.target)) {
+      staleGeneratedPluginEntriesToPrune.add(pluginEntry);
     }
   }
   const desiredGeneratedPermissionNamespaces = new Set<string>();
@@ -1888,11 +1888,11 @@ export const planLowering = async (
   const rememberDesiredGeneratedPlugin = (pluginName: string): void => {
     const pluginEntry = generatedPluginEntryForName(input.target, pluginName);
     desiredGeneratedPluginEntries.add(pluginEntry);
-    legacyGeneratedPluginEntriesToPrune.add(
+    staleGeneratedPluginEntriesToPrune.add(
       generatedPluginIdForName(pluginName)
     );
-    legacyGeneratedPluginEntriesToPrune.add(
-      legacyGeneratedPluginSourceEntryForName(input.target, pluginName),
+    staleGeneratedPluginEntriesToPrune.add(
+      staleGeneratedPluginSourceEntryForName(input.target, pluginName),
     );
     desiredGeneratedPermissionNamespaces.add(pluginName);
     generatedPermissionNamespacesToTouch.add(pluginName);
@@ -2001,7 +2001,7 @@ export const planLowering = async (
     ownedGeneratedPluginId,
     ownedGeneratedPluginEntry,
     ...desiredGeneratedPluginEntries,
-    ...legacyGeneratedPluginEntriesToPrune,
+    ...staleGeneratedPluginEntriesToPrune,
   ])) {
     const desiredPresent = desiredGeneratedPluginEntries.has(pluginEntry);
     const already = plugins.includes(pluginEntry);

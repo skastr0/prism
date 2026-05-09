@@ -93,13 +93,13 @@ export const ReviewDetails = Schema.Struct({
 `,
   );
   await writeText(
-    join(orbitRoot, "tools", "create_item.tool.ts"),
+    join(orbitRoot, "tools", "create_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 import { defineTool } from ${JSON.stringify(prismImportPath)};
 
 export default defineTool({
-  name: "create_item",
-  description: "Create a orbit work item",
+  name: "create_glyph",
+  description: "Create an orbit glyph",
   input: Schema.Struct({
     orbit: Schema.Literal("forge", "survey"),
     id: Schema.String,
@@ -141,16 +141,16 @@ export default defineTool({
 `,
   );
   await writeText(
-    join(pluginRoot, "traits", "work-item-writer.trait.ts"),
+    join(pluginRoot, "traits", "glyph-writer.trait.ts"),
     `import { defineTrait } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
-  name: "work-item-writer",
-  description: "Can create orbit work items",
+  name: "glyph-writer",
+  description: "Can create orbit glyphs",
   tools: {
-    create_item: { ref: "orbit-core:create_item" },
+    create_glyph: { ref: "orbit-core:create_glyph" },
   },
-  require: { tools: ["create_item"] },
+  require: { tools: ["create_glyph"] },
 });
 `,
   );
@@ -178,7 +178,7 @@ export default defineAgent({
   description: "Builder with orbit-core tools",
   identity: "builder",
   traits: [
-    bindTrait("work-item-writer"),
+    bindTrait("glyph-writer"),
     bindTrait("review-submitter", {
       tools: {
         submit_review: {
@@ -291,11 +291,11 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
   expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("forge"));
   expect(bundle.toolNames).toEqual([
     "forge_submit_review__review_details",
-    "orbit_core_create_item",
+    "orbit_core_create_glyph",
   ]);
   expect(bundle.content).toContain("tools/list");
   expect(bundle.content).toContain("tools/call");
-  expect(bundle.content).toContain("orbit_core_create_item");
+  expect(bundle.content).toContain("orbit_core_create_glyph");
   expect(bundle.content).toContain("forge_submit_review__review_details");
   expect(bundle.content).not.toContain("unreferenced");
 
@@ -318,11 +318,11 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
     const listed = await client.request("tools/list");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "forge_submit_review__review_details",
-      "orbit_core_create_item",
+      "orbit_core_create_glyph",
     ]);
 
     const created = await client.request("tools/call", {
-      name: "orbit_core_create_item",
+      name: "orbit_core_create_glyph",
       arguments: { orbit: "forge", id: "AP-999", title: "Compile MCP" },
     });
     expect(JSON.parse(created.result.content[0].text)).toEqual({
@@ -390,7 +390,7 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
     const listed = await client.request("tools/list");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "forge_submit_review__review_details",
-      "orbit_core_create_item",
+      "orbit_core_create_glyph",
     ]);
   } finally {
     child.kill();

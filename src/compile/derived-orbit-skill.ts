@@ -381,7 +381,7 @@ const renderSubmissionProtocolsSection = (
   if (entries.length === 0) return;
   lines.push("## Submission protocol per phase agent", "");
   lines.push(
-    "Each phase agent submits work via a packet tool that the orbit relies on:",
+    "Each phase agent submits work via a dispatch tool that the orbit relies on:",
     "",
   );
   for (const entry of entries) {
@@ -483,7 +483,7 @@ const renderPhaseTransitionsSection = (
   if (orbit.phases.length === 0) return;
   lines.push("## Phase transitions", "");
   lines.push(
-    "Orbit work items move through canonical states. The orchestrator owns transitions; phase agents stay inside their phase folder until their submission lands.",
+    "Orbit glyphs move through canonical states. The orchestrator owns transitions; phase agents stay inside their phase folder until their submission lands.",
     "",
     "Common state arc: `backlog/` → `exploring/` → `committed/` → `building/` → `reviewing/` → `done/` (or `abandoned/`). All orbits follow the same explore / build / review convention; build means whatever the orbit's domain produces (code for Forge, claims for Survey, assets for Beacon, content for Scribe).",
     "",

@@ -83,16 +83,16 @@ A tool may declare optional slots. The tool owns the slot names and semantics.
 
 ```ts
 import { defineTool, schemaSlot } from "prism";
-import { OrbitPacketReceipt, WorkSubmissionBase } from "../schemas/tool-schemas.ts";
+import { OrbitDispatchReceipt, WorkSubmissionBase } from "../schemas/tool-schemas.ts";
 
 export default defineTool({
   name: "submit_work",
-  description: "Persist completed orbit work to the canonical packet store.",
+  description: "Persist completed orbit work to the canonical dispatch store.",
   input: WorkSubmissionBase,
-  output: OrbitPacketReceipt,
+  output: OrbitDispatchReceipt,
   slots: {
     builder_report: schemaSlot({
-      description: "Additional builder-only fields persisted with the work packet.",
+      description: "Additional builder-only fields persisted with the work dispatch.",
     }),
   },
   handle(input, context) {

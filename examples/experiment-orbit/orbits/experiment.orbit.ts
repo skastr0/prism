@@ -32,7 +32,7 @@ export default defineOrbit({
     {
       name: "Evaluate the result for ${App}",
       notes: {
-        Input: "Evidence packet for ${H}",
+        Input: "Evidence dispatch for ${H}",
         Done: "A decision is recorded for ${App}",
       },
     },

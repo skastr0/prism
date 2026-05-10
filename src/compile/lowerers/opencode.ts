@@ -34,7 +34,10 @@ import { basename, dirname, extname, join, posix, relative, resolve } from "node
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
+import {
+  renderDerivedOrbitPhaseReferences,
+  renderDerivedOrbitSkillBody,
+} from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { CanonicalTool, Contract, Hook, Orbit } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
@@ -1853,6 +1856,26 @@ export const planLowering = async (
       content: desired,
       reason,
     });
+
+    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
+      const referenceRelative = `skills/${orbit.name}/references/${reference.filename}`;
+      const referenceTarget = join(input.target.root, referenceRelative);
+      desiredOrbitSkillFiles.add(referenceRelative);
+      let referenceReason: "new" | "changed" | "unchanged";
+      if (await fileExists(referenceTarget)) {
+        const currentReference = await readFile(referenceTarget);
+        referenceReason =
+          currentReference === reference.content ? "unchanged" : "changed";
+      } else {
+        referenceReason = "new";
+      }
+      operations.push({
+        kind: "write-md",
+        target: referenceTarget,
+        content: reference.content,
+        reason: referenceReason,
+      });
+    }
   }
 
   operations.push(

@@ -1070,6 +1070,10 @@ export const OrbitPhaseSchema = Schema.Struct({
   agent: Schema.optional(AgentRefInputSchema),
   requires: Schema.optional(Schema.Array(OrbitPhaseTraitRequirementSchema)),
   notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+  telos: Schema.optional(Schema.String),
+  real_world_change: Schema.optional(Schema.String),
+  cold_pickup_test: Schema.optional(Schema.String),
+  body: Schema.optional(Schema.String),
 });
 export type OrbitPhase = typeof OrbitPhaseSchema.Type;
 
@@ -1095,6 +1099,10 @@ export const NormalizedOrbitPhaseSchema = Schema.Struct({
   agents: Schema.Array(Schema.String),
   requires: Schema.Array(NormalizedOrbitPhaseTraitRequirementSchema),
   notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+  telos: Schema.optional(Schema.String),
+  real_world_change: Schema.optional(Schema.String),
+  cold_pickup_test: Schema.optional(Schema.String),
+  body: Schema.optional(Schema.String),
 });
 export type NormalizedOrbitPhase = typeof NormalizedOrbitPhaseSchema.Type;
 

@@ -2,7 +2,10 @@
 
 import { basename, dirname, join } from "node:path";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
+import {
+  renderDerivedOrbitPhaseReferences,
+  renderDerivedOrbitSkillBody,
+} from "../derived-orbit-skill.js";
 import {
   ampPluginToolNameForBinding,
   generateAmpPluginBundle,
@@ -376,6 +379,17 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       renderAmpOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
+
+    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
+      const relativeReference = `${orbit.name}/references/${reference.filename}`;
+      desiredGeneratedSkillFiles.add(relativeReference);
+      await pushWrite(
+        operations,
+        join(ampSkillsRoot(input.target), relativeReference),
+        reference.content,
+        "write-md",
+      );
+    }
   }
 
   operations.push(...await planGeneratedSkillPruning(input.target, desiredGeneratedSkillFiles));

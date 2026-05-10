@@ -236,14 +236,24 @@ const renderPhasesSection = (
     const reference = composeOrbitPhaseReference(phase);
     lines.push(`### ${index + 1}. ${phase.name} — ${reference.label}`, "");
     for (const detail of reference.detailLines) lines.push(detail);
+    if (phase.telos) lines.push(`- **Telos**: ${phase.telos}`);
+    if (phase.real_world_change) {
+      lines.push(`- **Real-world change**: ${phase.real_world_change}`);
+    }
+    if (phase.cold_pickup_test) {
+      lines.push(`- **Cold-pickup test**: ${phase.cold_pickup_test}`);
+    }
     if (phase.notes) {
       for (const [key, value] of Object.entries(phase.notes)) {
         lines.push(`- **${key}**: ${value}`);
       }
-      lines.push("");
-    } else {
-      lines.push("");
     }
+    if (phase.body && phase.body.trim().length > 0) {
+      lines.push(
+        `- **Reference**: see \`references/${phase.name}.md\` for the full phase download.`,
+      );
+    }
+    lines.push("");
 
     const phaseAgents = collectPhaseAgents(phase, registry);
     if (phaseAgents.length > 1) {
@@ -612,4 +622,57 @@ export const renderDerivedOrbitSkillBody = (
   renderBodySection(orbit, lines);
 
   return lines.join("\n");
+};
+
+export interface OrbitPhaseReferenceFile {
+  /** Filename relative to the orbit's `references/` folder, e.g., `build.md`. */
+  readonly filename: string;
+  /** Markdown body of the reference file. */
+  readonly content: string;
+}
+
+/**
+ * Render reference files for orbit phases that declare a `body`. Each file
+ * lands at `<orbit-skill-folder>/references/<phase-name>.md` and carries the
+ * full per-phase download (telos, real-world change, cold-pickup test, then
+ * the hand-authored body). Phases without a body produce nothing.
+ */
+export const renderDerivedOrbitPhaseReferences = (
+  orbit: Orbit,
+): ReadonlyArray<OrbitPhaseReferenceFile> => {
+  const files: OrbitPhaseReferenceFile[] = [];
+  for (const phase of orbit.phases) {
+    if (!phase.body || phase.body.trim().length === 0) continue;
+
+    const lines: string[] = [];
+    lines.push(`# ${orbit.name}:${phase.name}`, "");
+    lines.push(
+      `_Phase reference for the **${phase.name}** phase of the **${orbit.name}** orbit. The orbit SKILL.md carries the cross-phase frame; this file is the full download for this phase specifically._`,
+      "",
+    );
+    if (phase.telos) lines.push("## Telos", "", phase.telos.trim(), "");
+    if (phase.real_world_change) {
+      lines.push(
+        "## Real-world change",
+        "",
+        phase.real_world_change.trim(),
+        "",
+      );
+    }
+    if (phase.cold_pickup_test) {
+      lines.push(
+        "## Cold-pickup test",
+        "",
+        phase.cold_pickup_test.trim(),
+        "",
+      );
+    }
+    lines.push(phase.body.trim(), "");
+
+    files.push({
+      filename: `${phase.name}.md`,
+      content: lines.join("\n"),
+    });
+  }
+  return files;
 };

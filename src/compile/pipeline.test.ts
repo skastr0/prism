@@ -3662,6 +3662,177 @@ test("orbit definitions participate in template instantiation", async () => {
   ]);
 });
 
+test("derived orbit skill renders per-phase telos, real-world change, and cold-pickup test", async () => {
+  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
+  const { Orbit } = await import("./sources.js");
+  const { emptyRegistry } = await import("./registry.js");
+
+  const orbit = new Orbit({
+    name: "phase-rich",
+    sourcePath: "/tmp/phase-rich.orbit.ts",
+    description: "Phase-rich orbit demo",
+    parameters: [],
+    phases: [
+      {
+        name: "build",
+        agents: [],
+        requires: [],
+        notes: { Input: "One committed glyph.", Done: "Validation clean." },
+        telos: "Bring working software into existence inside the bounds of the glyph.",
+        real_world_change:
+          "Code, tests, and product behavior are durably different and re-verifiable.",
+        cold_pickup_test:
+          "Could a reviewer judge satisfaction from only the diff and the glyph?",
+        body: "## Procrastination shapes\n\n- Moving the glyph forward without changing the codebase.\n",
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+  const registry = emptyRegistry("/tmp", "phase-rich", "0.0.0");
+
+  const skill = renderDerivedOrbitSkillBody(orbit, registry);
+  expect(skill).toContain("- **Telos**: Bring working software into existence");
+  expect(skill).toContain("- **Real-world change**: Code, tests, and product behavior");
+  expect(skill).toContain("- **Cold-pickup test**: Could a reviewer judge satisfaction");
+  expect(skill).toContain("- **Input**: One committed glyph.");
+  expect(skill).toContain("- **Reference**: see `references/build.md`");
+});
+
+test("derived orbit phase references render only when body is present", async () => {
+  const { renderDerivedOrbitPhaseReferences } = await import(
+    "./derived-orbit-skill.js"
+  );
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "phase-refs",
+    sourcePath: "/tmp/phase-refs.orbit.ts",
+    description: "Phase reference demo",
+    parameters: [],
+    phases: [
+      {
+        name: "explore",
+        agents: [],
+        requires: [],
+        telos: "Reduce ambiguity and recommend a direction.",
+        real_world_change:
+          "An option space exists with the alternatives considered and the rationale for the pick.",
+        cold_pickup_test:
+          "Could another agent pick up the recommendation cold and act?",
+        body: "## What good explore produces\n\nA sharper problem statement and a recommendation.\n",
+      },
+      {
+        name: "commit",
+        agents: [],
+        requires: [],
+        // No body — should produce no reference file.
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+  const refs = renderDerivedOrbitPhaseReferences(orbit);
+  expect(refs).toHaveLength(1);
+  expect(refs[0]?.filename).toBe("explore.md");
+  expect(refs[0]?.content).toContain("# phase-refs:explore");
+  expect(refs[0]?.content).toContain("## Telos");
+  expect(refs[0]?.content).toContain("Reduce ambiguity");
+  expect(refs[0]?.content).toContain("## Real-world change");
+  expect(refs[0]?.content).toContain("## Cold-pickup test");
+  expect(refs[0]?.content).toContain("## What good explore produces");
+});
+
+test("orbit body declared in TS source flows into the generated orbit skill", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  const declaredBody = "## The Orbit Principle\n\nForge is a routing utility, not the work.\n";
+
+  await writeText(
+    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
+    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "delivery-contract",
+  description: "Orbit body propagation check",
+  phases: [
+    {
+      name: "Implement change",
+      agents: [agentRef("builder")],
+      requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
+    },
+  ],
+  body: ${JSON.stringify(declaredBody)},
+});
+`,
+  );
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const skill = await readFile(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+
+  expect(skill).toContain("## The Orbit Principle");
+  expect(skill).toContain("Forge is a routing utility, not the work.");
+});
+
+test("orbit phase fields participate in template instantiation", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "phase-template",
+    sourcePath: "/tmp/phase-template.orbit.ts",
+    description: "${domain} phase template",
+    parameters: [{ name: "domain", required: true }],
+    phases: [
+      {
+        name: "build",
+        agents: [],
+        requires: [],
+        telos: "Bring ${domain} change into existence.",
+        real_world_change: "${domain} reality is different and re-verifiable.",
+        cold_pickup_test: "Could a ${domain} reviewer pick up the change cold?",
+        body: "## ${domain} build notes\n\nKeep scope inside the glyph.\n",
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+  const instantiated = await Effect.runPromise(
+    instantiateOrbit(orbit, { domain: "Forge" }),
+  );
+
+  expect(instantiated.phases[0]?.telos).toBe(
+    "Bring Forge change into existence.",
+  );
+  expect(instantiated.phases[0]?.real_world_change).toBe(
+    "Forge reality is different and re-verifiable.",
+  );
+  expect(instantiated.phases[0]?.cold_pickup_test).toBe(
+    "Could a Forge reviewer pick up the change cold?",
+  );
+  expect(instantiated.phases[0]?.body).toBe(
+    "## Forge build notes\n\nKeep scope inside the glyph.\n",
+  );
+});
+
 test("derived orbit skill renders parametric stub for parameterized orbit templates", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 

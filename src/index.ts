@@ -173,6 +173,21 @@ export interface OrbitPhaseDefinition {
   readonly agent?: AgentRefInput;
   readonly requires?: ReadonlyArray<OrbitTraitRequirementDefinition>;
   readonly notes?: Readonly<Record<string, string>>;
+  /**
+   * Short structured fields rendered into the root orbit SKILL.md per-phase
+   * block. Use these to describe the phase at a glance; deep content belongs
+   * in `body` (which lowers to `references/<phase>.md`).
+   */
+  readonly telos?: string;
+  readonly real_world_change?: string;
+  readonly cold_pickup_test?: string;
+  /**
+   * Long-form markdown for this phase. When present, lowerers write it to
+   * `references/<phase-name>.md` next to the orbit SKILL.md. Treat this as
+   * the full phase download — telos, procrastination shapes, per-agent
+   * focus, links to deeper modules.
+   */
+  readonly body?: string;
 }
 
 export interface OrbitPulsarCheckpointDefinition {

@@ -12,7 +12,10 @@ import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import matter from "gray-matter";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
+import {
+  renderDerivedOrbitPhaseReferences,
+  renderDerivedOrbitSkillBody,
+} from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -539,6 +542,18 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       renderGeminiOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
+
+    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
+      const referenceTarget = join(
+        root,
+        "skills",
+        orbit.name,
+        "references",
+        reference.filename,
+      );
+      desired.add(extensionRelativePath(input.target, referenceTarget));
+      await pushWrite(operations, referenceTarget, reference.content, "write-md");
+    }
   }
 
   await copyTargetedCommandArtifacts(input, operations, desired);

@@ -11,7 +11,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import { renderDerivedOrbitSkillBody } from "../derived-orbit-skill.js";
+import {
+  renderDerivedOrbitPhaseReferences,
+  renderDerivedOrbitSkillBody,
+} from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -624,6 +627,17 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       renderOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
+
+    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
+      await pushWrite(
+        operations,
+        desiredRelativePaths,
+        input.target,
+        `skills/${orbit.name}/references/${reference.filename}`,
+        reference.content,
+        "write-md",
+      );
+    }
   }
 
   await planCommands(input, operations, desiredRelativePaths);

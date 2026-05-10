@@ -785,6 +785,10 @@ const visitOrbitStrings = (
         phase.orbit_binding?.orbit,
       ],
       [`phases[${index}].agent`, phase.agent],
+      [`phases[${index}].telos`, phase.telos],
+      [`phases[${index}].real_world_change`, phase.real_world_change],
+      [`phases[${index}].cold_pickup_test`, phase.cold_pickup_test],
+      [`phases[${index}].body`, phase.body],
     ];
 
     for (const [field, value] of phaseFields) {
@@ -944,6 +948,24 @@ const instantiateOrbitPhase = (
     }
   }
 
+  const nextTelos = instantiate(`phases[${index}].telos`, phase.telos);
+  if (nextTelos instanceof OrbitValidationError) return nextTelos;
+
+  const nextRealWorldChange = instantiate(
+    `phases[${index}].real_world_change`,
+    phase.real_world_change,
+  );
+  if (nextRealWorldChange instanceof OrbitValidationError) return nextRealWorldChange;
+
+  const nextColdPickupTest = instantiate(
+    `phases[${index}].cold_pickup_test`,
+    phase.cold_pickup_test,
+  );
+  if (nextColdPickupTest instanceof OrbitValidationError) return nextColdPickupTest;
+
+  const nextBody = instantiate(`phases[${index}].body`, phase.body);
+  if (nextBody instanceof OrbitValidationError) return nextBody;
+
   return {
     name: nextName!,
     ...(nextOrbit ? { orbit: nextOrbit } : {}),
@@ -955,6 +977,14 @@ const instantiateOrbitPhase = (
       ...(requirement.min !== undefined ? { min: requirement.min } : {}),
     })),
     ...(Object.keys(nextNotes).length > 0 ? { notes: nextNotes } : {}),
+    ...(nextTelos !== undefined ? { telos: nextTelos } : {}),
+    ...(nextRealWorldChange !== undefined
+      ? { real_world_change: nextRealWorldChange }
+      : {}),
+    ...(nextColdPickupTest !== undefined
+      ? { cold_pickup_test: nextColdPickupTest }
+      : {}),
+    ...(nextBody !== undefined ? { body: nextBody } : {}),
   };
 };
 

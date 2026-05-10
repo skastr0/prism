@@ -1696,6 +1696,14 @@ const normalizeOrbitPhase = (
     agents,
     requires,
     notes: phase.notes,
+    ...(phase.telos !== undefined ? { telos: phase.telos } : {}),
+    ...(phase.real_world_change !== undefined
+      ? { real_world_change: phase.real_world_change }
+      : {}),
+    ...(phase.cold_pickup_test !== undefined
+      ? { cold_pickup_test: phase.cold_pickup_test }
+      : {}),
+    ...(phase.body !== undefined ? { body: phase.body } : {}),
   };
 };
 
@@ -1855,6 +1863,8 @@ const parseOrbitDefinition = (
       return yield* Effect.fail(orchestrator);
     }
 
+    const resolvedBody = (parsed.body ?? body).trim();
+
     return new Orbit({
       name: parsed.name,
       sourcePath,
@@ -1870,7 +1880,7 @@ const parseOrbitDefinition = (
       tool_permissions: toolPermissions,
       pulsar_checkpoints: parsed.pulsar_checkpoints ?? [],
       evolution: parsed.evolution,
-      body: body.trim(),
+      body: resolvedBody,
     });
   });
 

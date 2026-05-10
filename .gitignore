@@ -5,3 +5,5 @@ dist/
 .DS_Store
 
 .atlas/
+.exa-cli/
+.firecrawl-cli/

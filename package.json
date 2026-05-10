@@ -13,7 +13,8 @@
     "dev": "bun run ./src/cli.ts",
     "build": "bun scripts/build.ts",
     "install:local": "bun scripts/install.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "bun run typecheck && bun run build"
   },
   "dependencies": {
     "@effect/platform": "^0.96.0",
@@ -26,5 +27,14 @@
     "@opencode-ai/plugin": "^1.4.14",
     "@types/bun": "^1.2.14",
     "typescript": "^5.8.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skastr0/prism.git"
+  },
+  "homepage": "https://github.com/skastr0/prism#readme",
+  "bugs": {
+    "url": "https://github.com/skastr0/prism/issues"
   }
 }

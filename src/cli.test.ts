@@ -187,8 +187,7 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   const oxfmtConfig = await readJson(join(pluginRoot, ".oxfmtrc.json"));
   expect(oxfmtConfig.$schema).toBe("./node_modules/oxfmt/configuration_schema.json");
 
-  const readme = await readFile(join(pluginRoot, "README.md"), "utf8");
-  expect(readme).toContain("OXC's documented project config and `jsPlugins` fields");
+  expect(await pathExists(join(pluginRoot, "README.md"))).toBe(false);
 });
 
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {

@@ -675,7 +675,6 @@ export default defineAgent({
 
       // Create example skill if requested
       if (options.withSkill) {
-        await ensureDir(join(targetDir, "skills", "example-skill", "references"));
         await ensureDir(join(targetDir, "skills", "example-skill", "scripts"));
         await ensureDir(join(targetDir, "skills", "example-skill", "assets"));
 
@@ -705,162 +704,15 @@ A minimal skill scaffold showing progressive disclosure and eval-friendly instru
 2. Follow the documented process for the task.
 3. Verify the final output before returning it.
 
-## Resources
+## Resources Policy
 
-- Read \`references/domain-guide.md\` when you need domain-specific rules, examples, or edge cases.
 - Add deterministic helpers to \`scripts/\` when instructions alone are not enough.
 - Put reusable templates, sample inputs, or brand assets in \`assets/\`.
+- Add reference markdown only when it is real skill material loaded intentionally through progressive disclosure; do not add placeholder docs.
 `;
         await writeFile(join(targetDir, "skills", "example-skill", "SKILL.md"), skillMd);
-        await writeFile(
-          join(targetDir, "skills", "example-skill", "references", "domain-guide.md"),
-          `# Domain Guide
-
-Use this file for detailed rules, examples, and edge cases that should not live in \`SKILL.md\`.
-
-## Example Sections
-
-- Input formats the skill supports
-- Output conventions the skill must follow
-- Common failure modes and how to recover
-`
-        );
         created.push("skills/example-skill/SKILL.md");
-        created.push("skills/example-skill/references/domain-guide.md");
       }
-
-      // Create README
-      const typescriptStructure =
-        options.typescript && !options.minimal
-          ? `├── package.json         # TypeScript authoring scripts for lint/format/typecheck
-├── tsconfig.json        # Strict TypeScript checks for plugin DSL/runtime files
-├── .oxlintrc.json       # Oxlint config with local prism DSL guardrails
-├── .oxfmtrc.json        # Oxfmt config
-├── prism-oxlint-plugin.js # Local Oxlint JS plugin for prism DSL rules
-`
-          : "";
-      const typescriptValidation =
-        options.typescript && !options.minimal
-          ? `
-# Validate TypeScript plugin authoring guardrails
-npm install
-npm run lint
-npm run format:check
-npm run typecheck
-`
-          : "";
-      const typescriptGuardrails =
-        options.typescript && !options.minimal
-          ? `## TypeScript authoring guardrails
-
-The generated Oxlint config uses OXC's documented project config and \`jsPlugins\` fields to load \`./prism-oxlint-plugin.js\`.
-
-The local \`prism\` rules keep compiler DSL files declarative:
-
-- Tool slot fills in \`bindTrait(..., { tools: ... })\` must use imported runtime schema identifiers from \`schemas/\` or \`slots/\`.
-- Traits must not define root-level \`slots\`.
-- Traits must not replace a tool's \`input\` or \`output\`; define slots on the runtime tool and fill them from agent bindings.
-
-OXC JS plugins are alpha, so this local plugin is intentionally small and easy to replace. Compiler validation remains the fail-closed source of truth.
-
-`
-          : "";
-      const readme = `# ${name}
-
-A harness-aware plugin for AI coding harnesses.
-
-Use \`plugin.json\` to declare per-artifact harness targets. Do not add file-level install targets to individual markdown files.
-
-## Structure
-
-\`\`\`
-${name}/
-├── plugin.json          # Manifest with per-artifact harness targets
-${typescriptStructure}├── rules/
-│   ├── global/          # Shared rules appended to targeted global rules files
-│   └── project/         # Shared project rules copied when --project is set
-├── commands/            # Shared slash commands
-├── agents/              # TypeScript agent DSL definitions (*.agent.ts)
-├── identities/          # Agent identity markdown used by the DSL
-├── skills/
-│   └── example-skill/
-│       ├── SKILL.md     # Main instructions + frontmatter
-│       ├── references/  # Additional docs loaded as needed
-│       ├── scripts/     # Optional deterministic helpers
-│       └── assets/      # Templates, sample inputs, brand files
-└── harness/             # Optional harness-specific overlays
-    └── <id>/            # e.g. opencode, openclaw
-\`\`\`
-
-## Targeting model
-
-Install targeting lives only in \`plugin.json\`.
-
-\`\`\`json
-${JSON.stringify(manifest, null, 2)}
-\`\`\`
-
-- Use per-artifact \`targets\` entries to decide which harnesses receive rules, commands, agents, and skills.
-- Use presets like \`coding-harness\` and \`claw-harness\` when they match the supported surface for that artifact.
-- Do not add file-level \`targets:\` blocks to individual markdown files; frontmatter is for descriptions and harness-specific settings.
-
-## Harness overlays
-
-Use \`harness/<id>/...\` when one harness needs a different file than the shared default.
-
-\`\`\`text
-harness/
-├── opencode/
-│   └── commands/
-│       └── test.md
-└── openclaw/
-    └── skills/
-        └── example-skill/
-            └── SKILL.md
-\`\`\`
-
-Matching overlay files replace shared files for that harness. Non-overridden files still come from the shared artifact directories.
-
-## Installation
-
-\`\`\`bash
-# Install to all harnesses
-prism install ./${name} --all
-
-# Install to specific harness IDs
-prism install ./${name} --harness claude-code,opencode,openclaw,hermes
-
-# Install with project context
-prism install ./${name} --all --project ~/code/my-project
-
-# Compile OpenCode agents/orbits into a project-local harness root
-prism install ./${name} --harness opencode --scope project --project ~/code/my-project
-
-# Preview without installing
-prism install ./${name} --all --dry-run
-\`\`\`
-
-When \`--scope project\` is set, compile-phase OpenCode outputs land in \`<project>/.opencode/\` instead of \`~/.config/opencode/\`. Regular install-phase artifacts keep their existing routing; project rules still use \`--project\`.
-
-## Validation
-
-\`\`\`bash
-# Validate plugin structure and skill frontmatter
-prism validate ./${name}
-${typescriptValidation}
-\`\`\`
-
-${typescriptGuardrails}
-## Harness notes
-
-- See \`prism harnesses\` for the current harness support matrix.
-- OpenClaw v1 installs shared skill files plus matching \`harness/openclaw/skills/...\` overlays into \`~/.openclaw/skills/\`.
-- OpenClaw v1 does not install rules, commands, or custom agents.
-- Hermes is included in the \`claw-harness\` preset. It installs shared skill files plus matching \`harness/hermes/skills/...\` overlays into \`~/.hermes/skills/\`.
-- Hermes compile support lowers \`tools/*.tool.ts\` into a generated MCP stdio server and patches \`~/.hermes/config.yaml\`; it does not lower custom agents, commands, rules, profiles, SOUL, or native Python plugins.
-`;
-      await writeFile(join(targetDir, "README.md"), readme);
-      created.push("README.md");
 
       console.log("Created:");
       for (const file of created) {

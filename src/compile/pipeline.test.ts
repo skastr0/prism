@@ -3582,6 +3582,84 @@ test("derived orbit skill helper renders parametric stub when invoked on a templ
   expect(body).toContain("This orbit is parameterized");
 });
 
+test("derived orbit skill renders orbit definitions", async () => {
+  const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
+  const { Orbit } = await import("./sources.js");
+  const { emptyRegistry } = await import("./registry.js");
+
+  const orbit = new Orbit({
+    name: "artifact-demo",
+    sourcePath: "/tmp/artifact-demo.orbit.ts",
+    description: "A demo orbit",
+    definitions: {
+      glyphs: {
+        purpose: "Glyphs carry the moving work contract.",
+        contains: ["Intent, scope, acceptance criteria, and durable notes."],
+        boundaries: ["Glyph IDs are routing metadata, not domain vocabulary."],
+        avoid: ["Do not turn glyph IDs into source code names."],
+      },
+      dispatches: {
+        purpose: "Dispatches preserve phase outputs and evidence snapshots.",
+      },
+      chatter: {
+        purpose: "Chatter is transient conversation until promoted into a durable artifact.",
+      },
+      signals: {
+        purpose: "Signals are standalone orbit-bound inputs.",
+        boundaries: ["Do not use signals as phase handoff packets."],
+      },
+    },
+    parameters: [],
+    phases: [],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+  const registry = emptyRegistry("/tmp", "demo", "0.0.0");
+
+  const body = renderDerivedOrbitSkillBody(orbit, registry);
+  expect(body).toContain("## Definitions");
+  expect(body).toContain("### Glyphs");
+  expect(body).toContain("Glyph IDs are routing metadata, not domain vocabulary.");
+  expect(body).toContain("### Dispatches");
+  expect(body).toContain("### Chatter");
+  expect(body).toContain("### Signals");
+});
+
+test("orbit definitions participate in template instantiation", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "artifact-template",
+    sourcePath: "/tmp/artifact-template.orbit.ts",
+    description: "A ${domain} template",
+    definitions: {
+      glyphs: {
+        purpose: "${domain} glyphs carry the active work contract.",
+        contains: ["${domain} intent and acceptance criteria."],
+      },
+    },
+    parameters: [{ name: "domain", required: true }],
+    phases: [],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+  const instantiated = await Effect.runPromise(
+    instantiateOrbit(orbit, { domain: "Forge" }),
+  );
+
+  expect(instantiated.description).toBe("A Forge template");
+  expect(instantiated.definitions?.glyphs?.purpose).toBe(
+    "Forge glyphs carry the active work contract.",
+  );
+  expect(instantiated.definitions?.glyphs?.contains).toEqual([
+    "Forge intent and acceptance criteria.",
+  ]);
+});
+
 test("derived orbit skill renders parametric stub for parameterized orbit templates", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 

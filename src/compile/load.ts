@@ -1860,6 +1860,7 @@ const parseOrbitDefinition = (
       sourcePath,
       description: parsed.description,
       produces: parsed.produces,
+      definitions: parsed.definitions,
       parameters: (parsed.parameters ?? []).map((parameter) => ({
         ...parameter,
         required: parameter.required ?? true,

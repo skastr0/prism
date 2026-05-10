@@ -1119,10 +1119,27 @@ export const OrbitPulsarCheckpointSchema = Schema.Struct({
 });
 export type OrbitPulsarCheckpoint = typeof OrbitPulsarCheckpointSchema.Type;
 
+export const OrbitDefinitionEntrySchema = Schema.Struct({
+  purpose: Schema.String,
+  contains: Schema.optional(Schema.Array(Schema.String)),
+  boundaries: Schema.optional(Schema.Array(Schema.String)),
+  avoid: Schema.optional(Schema.Array(Schema.String)),
+});
+export type OrbitDefinitionEntry = typeof OrbitDefinitionEntrySchema.Type;
+
+export const OrbitDefinitionsSchema = Schema.Struct({
+  glyphs: Schema.optional(OrbitDefinitionEntrySchema),
+  dispatches: Schema.optional(OrbitDefinitionEntrySchema),
+  chatter: Schema.optional(OrbitDefinitionEntrySchema),
+  signals: Schema.optional(OrbitDefinitionEntrySchema),
+});
+export type OrbitDefinitions = typeof OrbitDefinitionsSchema.Type;
+
 export const OrbitDefinitionSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   produces: Schema.optional(Schema.String),
+  definitions: Schema.optional(OrbitDefinitionsSchema),
   parameters: Schema.optional(Schema.Array(OrbitParameterSchema)),
   phases: Schema.Array(OrbitPhaseSchema),
   orchestrator: Schema.optional(OrbitOrchestratorSchema),
@@ -1138,6 +1155,7 @@ export class Orbit extends Schema.Class<Orbit>("Orbit")({
   sourcePath: Schema.String,
   description: Schema.String,
   produces: Schema.optional(Schema.String),
+  definitions: Schema.optional(OrbitDefinitionsSchema),
   parameters: Schema.Array(OrbitParameterSchema),
   phases: Schema.Array(NormalizedOrbitPhaseSchema),
   orchestrator: Schema.optional(NormalizedOrbitOrchestratorSchema),

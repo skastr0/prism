@@ -14,6 +14,8 @@ import {
   Personality,
   Trait,
   type OrbitParameter,
+  type OrbitDefinitions,
+  type OrbitDefinitionEntry,
   type OrbitPulsarCheckpoint,
   type NormalizedOrbitPhase as OrbitPhase,
   type NormalizedTraitBinding,
@@ -759,6 +761,21 @@ const visitOrbitStrings = (
     if (error) return error;
   }
 
+  if (orbit.definitions) {
+    for (const [definitionName, role] of Object.entries(orbit.definitions)) {
+      if (!role) continue;
+      const purposeError = visit(`definitions.${definitionName}.purpose`, role.purpose);
+      if (purposeError) return purposeError;
+      for (const listName of ["contains", "boundaries", "avoid"] as const) {
+        const values = role[listName] ?? [];
+        for (const [index, value] of values.entries()) {
+          const error = visit(`definitions.${definitionName}.${listName}[${index}]`, value);
+          if (error) return error;
+        }
+      }
+    }
+  }
+
   for (const [index, phase] of orbit.phases.entries()) {
     const phaseFields: Array<[string, string | undefined]> = [
       [`phases[${index}].name`, phase.name],
@@ -983,6 +1000,62 @@ const instantiateOrbitCheckpoint = (
   return { after, before, note };
 };
 
+const instantiateOrbitDefinitionEntry = (
+  orbit: Orbit,
+  definitionName: string,
+  role: OrbitDefinitionEntry,
+  bindings: BindingMap,
+): OrbitDefinitionEntry | OrbitValidationError => {
+  const instantiate = (field: string, value: string) =>
+    instantiateTemplateString(orbit, field, value, bindings);
+
+  const purpose = instantiate(`definitions.${definitionName}.purpose`, role.purpose);
+  if (purpose instanceof OrbitValidationError) return purpose;
+
+  const lists: Partial<Record<"contains" | "boundaries" | "avoid", string[]>> = {};
+  for (const listName of ["contains", "boundaries", "avoid"] as const) {
+    const values = role[listName];
+    if (!values) continue;
+    const nextValues: string[] = [];
+    for (const [index, value] of values.entries()) {
+      const nextValue = instantiate(
+        `definitions.${definitionName}.${listName}[${index}]`,
+        value,
+      );
+      if (nextValue instanceof OrbitValidationError) return nextValue;
+      nextValues.push(nextValue);
+    }
+    lists[listName] = nextValues;
+  }
+  return {
+    purpose,
+    ...(lists.contains ? { contains: lists.contains } : {}),
+    ...(lists.boundaries ? { boundaries: lists.boundaries } : {}),
+    ...(lists.avoid ? { avoid: lists.avoid } : {}),
+  };
+};
+
+const instantiateOrbitDefinitions = (
+  orbit: Orbit,
+  bindings: BindingMap,
+): OrbitDefinitions | OrbitValidationError | undefined => {
+  if (!orbit.definitions) return undefined;
+  const roles: Partial<Record<"glyphs" | "dispatches" | "chatter" | "signals", OrbitDefinitionEntry>> = {};
+  for (const definitionName of ["glyphs", "dispatches", "chatter", "signals"] as const) {
+    const role = orbit.definitions[definitionName];
+    if (!role) continue;
+    const nextRole = instantiateOrbitDefinitionEntry(orbit, definitionName, role, bindings);
+    if (nextRole instanceof OrbitValidationError) return nextRole;
+    roles[definitionName] = nextRole;
+  }
+  return {
+    ...(roles.glyphs ? { glyphs: roles.glyphs } : {}),
+    ...(roles.dispatches ? { dispatches: roles.dispatches } : {}),
+    ...(roles.chatter ? { chatter: roles.chatter } : {}),
+    ...(roles.signals ? { signals: roles.signals } : {}),
+  };
+};
+
 export const resolveAgent = (
   agent: Agent,
   registry: PluginRegistry,
@@ -1145,6 +1218,11 @@ export const instantiateOrbit = (
       return yield* Effect.fail(produces);
     }
 
+    const definitions = instantiateOrbitDefinitions(orbit, bindings);
+    if (definitions instanceof OrbitValidationError) {
+      return yield* Effect.fail(definitions);
+    }
+
     const phases: OrbitPhase[] = [];
     for (const [index, phase] of orbit.phases.entries()) {
       const nextPhase = instantiateOrbitPhase(orbit, phase, index, bindings);
@@ -1187,6 +1265,7 @@ export const instantiateOrbit = (
       sourcePath: orbit.sourcePath,
       description,
       produces,
+      ...(definitions ? { definitions } : {}),
       parameters: [],
       phases,
       ...(clonedOrchestrator ? { orchestrator: clonedOrchestrator } : {}),

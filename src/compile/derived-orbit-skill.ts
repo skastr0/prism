@@ -17,6 +17,7 @@ import type {
   Agent,
   CanonicalTool,
   Orbit,
+  OrbitDefinitionEntry,
   NormalizedOrbitPhase as OrbitPhase,
   Personality,
   Trait,
@@ -508,6 +509,41 @@ const renderProducesSection = (orbit: Orbit, lines: string[]): void => {
   lines.push("## Produces", "", orbit.produces, "");
 };
 
+const renderDefinitionEntry = (
+  heading: string,
+  role: OrbitDefinitionEntry | undefined,
+  lines: string[],
+): void => {
+  if (!role) return;
+  lines.push(`### ${heading}`, "", role.purpose, "");
+  const sections: ReadonlyArray<[string, ReadonlyArray<string> | undefined]> = [
+    ["Contains", role.contains],
+    ["Boundaries", role.boundaries],
+    ["Avoid", role.avoid],
+  ];
+  for (const [label, values] of sections) {
+    if (!values || values.length === 0) continue;
+    lines.push(`**${label}**`);
+    for (const value of values) lines.push(`- ${value}`);
+    lines.push("");
+  }
+};
+
+const renderDefinitionsSection = (orbit: Orbit, lines: string[]): void => {
+  if (!orbit.definitions) return;
+  const { glyphs, dispatches, chatter, signals } = orbit.definitions;
+  if (!glyphs && !dispatches && !chatter && !signals) return;
+  lines.push("## Definitions", "");
+  lines.push(
+    "Use the active orbit's definitions to interpret glyphs, dispatches, chatter, and signals. IDs and board state are routing metadata; these definitions provide the orbit's vocabulary and boundaries.",
+    "",
+  );
+  renderDefinitionEntry("Glyphs", glyphs, lines);
+  renderDefinitionEntry("Dispatches", dispatches, lines);
+  renderDefinitionEntry("Chatter", chatter, lines);
+  renderDefinitionEntry("Signals", signals, lines);
+};
+
 const renderTasteCheckpointsSection = (orbit: Orbit, lines: string[]): void => {
   if (orbit.pulsar_checkpoints.length === 0) return;
   lines.push("## Pulsar Checkpoints", "");
@@ -564,6 +600,7 @@ export const renderDerivedOrbitSkillBody = (
   }
 
   renderProducesSection(orbit, lines);
+  renderDefinitionsSection(orbit, lines);
   renderOrchestratorSection(orbit, registry, lines);
   renderWideToolsSection(orbit, registry, lines);
   renderPhasesSection(orbit, registry, lines);

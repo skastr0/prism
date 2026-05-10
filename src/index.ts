@@ -181,10 +181,25 @@ export interface OrbitPulsarCheckpointDefinition {
   readonly note?: string;
 }
 
+export interface OrbitDefinitionEntryDefinition {
+  readonly purpose: string;
+  readonly contains?: ReadonlyArray<string>;
+  readonly boundaries?: ReadonlyArray<string>;
+  readonly avoid?: ReadonlyArray<string>;
+}
+
+export interface OrbitDefinitionsDefinition {
+  readonly glyphs?: OrbitDefinitionEntryDefinition;
+  readonly dispatches?: OrbitDefinitionEntryDefinition;
+  readonly chatter?: OrbitDefinitionEntryDefinition;
+  readonly signals?: OrbitDefinitionEntryDefinition;
+}
+
 export interface OrbitDefinition {
   readonly name: string;
   readonly description: string;
   readonly produces?: string;
+  readonly definitions?: OrbitDefinitionsDefinition;
   readonly parameters?: ReadonlyArray<OrbitParameterDefinition>;
   readonly phases: ReadonlyArray<OrbitPhaseDefinition>;
   readonly orchestrator?: OrbitOrchestratorDefinition;

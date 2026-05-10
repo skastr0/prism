@@ -91,6 +91,14 @@ const tomlDottedArrayTable = (segments: ReadonlyArray<string>): string =>
 const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
   [...new Set(values)].sort((left, right) => left.localeCompare(right));
 
+const isTomlTableHeader = (line: string): boolean => /^\s*\[.*\]\s*(?:#.*)?$/u.test(line);
+
+const isFeaturesTableHeader = (line: string): boolean => /^\s*\[features\]\s*(?:#.*)?$/u.test(line);
+
+const isCodexHooksFeature = (line: string): boolean => /^\s*codex_hooks\s*=/u.test(line);
+
+const isHooksFeature = (line: string): boolean => /^\s*hooks\s*=/u.test(line);
+
 const managedBlockBegin = (pluginName: string): string =>
   `# --- prism codex-cli begin: ${pluginName} ---`;
 
@@ -502,6 +510,44 @@ const replaceManagedBlock = (current: string, pluginName: string, block: string)
   return `${trimmedBase}${trimmedBase ? "\n\n" : ""}${begin}\n${block.trimEnd()}\n${end}\n`;
 };
 
+const renderConfigWithHookFeature = (current: string, enableHooks: boolean): string => {
+  const lines = current.split(/\r?\n/u);
+  const featuresStart = lines.findIndex(isFeaturesTableHeader);
+
+  if (featuresStart < 0) {
+    if (!enableHooks) {
+      return lines.filter((line) => !isCodexHooksFeature(line)).join("\n");
+    }
+
+    const trimmed = current.trimEnd();
+    return `${trimmed}${trimmed ? "\n\n" : ""}[features]\nhooks = true\n`;
+  }
+
+  let featuresEnd = lines.length;
+  for (let index = featuresStart + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line !== undefined && isTomlTableHeader(line)) {
+      featuresEnd = index;
+      break;
+    }
+  }
+
+  const before = lines.slice(0, featuresStart);
+  const featureLines = lines.slice(featuresStart, featuresEnd).filter((line) => !isCodexHooksFeature(line));
+  const after = lines.slice(featuresEnd);
+  const hooksLine = featureLines.findIndex(isHooksFeature);
+
+  if (enableHooks) {
+    if (hooksLine >= 0) {
+      featureLines[hooksLine] = "hooks = true";
+    } else {
+      featureLines.splice(1, 0, "hooks = true");
+    }
+  }
+
+  return [...before, ...featureLines, ...after].join("\n");
+};
+
 const renderManagedConfigBlock = (options: {
   readonly mcpServerName?: string;
   readonly mcpBundlePath?: string;
@@ -607,6 +653,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   const hooks = await planHooks(input, operations);
   const configTarget = join(input.target.root, "config.toml");
   const currentConfig = (await exists(configTarget)) ? await readFile(configTarget) : "";
+  const migratedConfig = renderConfigWithHookFeature(currentConfig, hooks.length > 0);
   const managedBlock = renderManagedConfigBlock({
     mcpServerName: mcp.mcpServerName,
     mcpBundlePath: mcp.mcpBundlePath,
@@ -618,7 +665,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   await pushWrite(
     operations,
     configTarget,
-    replaceManagedBlock(currentConfig, input.target.sourcePluginName, managedBlock),
+    replaceManagedBlock(migratedConfig, input.target.sourcePluginName, managedBlock),
     "write-plugin-file",
   );
 

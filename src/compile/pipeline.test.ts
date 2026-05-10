@@ -1346,6 +1346,8 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
   expect(result.outputRoot.replace(/\/$/u, "")).toBe(codexRoot);
 
   const config = await readFile(join(codexRoot, "config.toml"), "utf8");
+  expect(config).toContain("[features]\nhooks = true");
+  expect(config).not.toContain("codex_hooks");
   expect(config).toContain("# --- prism codex-cli begin: codex-project-demo ---");
   expect(config).toContain('["mcp_servers"."prism-generated-codex-project-demo"]');
   expect(config).toContain('enabled_tools = ["codex_project_demo_submit_work"]');

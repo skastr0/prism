@@ -79,6 +79,10 @@ test("codex-cli lowerer emits MCP server bundle and managed config", async () =>
     join(outputRoot, "config.toml"),
     `model = "codex-default"
 
+[features]
+codex_hooks = true
+model_widget = true
+
 # --- prism codex-cli begin: codex-mcp-fixture ---
 stale = true
 # --- prism codex-cli end: codex-mcp-fixture ---
@@ -214,6 +218,8 @@ export default defineTool({
 
   const configToml = findContentOperation(operations, "config.toml");
   expect(configToml?.content).toContain('model = "codex-default"');
+  expect(configToml?.content).toContain("[features]\nhooks = true\nmodel_widget = true");
+  expect(configToml?.content).not.toContain("codex_hooks");
   expect(configToml?.content).not.toContain("stale = true");
   expect(configToml?.content).toContain("# --- prism codex-cli begin: codex-mcp-fixture ---");
   expect(configToml?.content).toContain('command = "bun"');

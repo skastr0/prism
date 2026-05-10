@@ -37,6 +37,14 @@ import {
   planLowering as planCodexCliLowering,
 } from "./lowerers/codex-cli.js";
 import {
+  executeLowering as executeAmpCodeLowering,
+  planLowering as planAmpCodeLowering,
+} from "./lowerers/amp-code.js";
+import {
+  executeLowering as executeHermesLowering,
+  planLowering as planHermesLowering,
+} from "./lowerers/hermes.js";
+import {
   InvalidTargetScopeError,
   UnsupportedTargetCapabilityError,
   UnknownTargetError,
@@ -103,7 +111,14 @@ export interface CompileResult {
   readonly fromCache: ReadonlyArray<string>;
 }
 
-const SUPPORTED_TARGETS = ["opencode", "claude-code", "gemini-cli", "codex-cli"] as const;
+const SUPPORTED_TARGETS = [
+  "opencode",
+  "claude-code",
+  "gemini-cli",
+  "codex-cli",
+  "amp-code",
+  "hermes",
+] as const;
 
 const getLowerer = (target: string): LowererModule => {
   switch (target) {
@@ -126,6 +141,16 @@ const getLowerer = (target: string): LowererModule => {
       return {
         planLowering: planCodexCliLowering,
         executeLowering: executeCodexCliLowering,
+      };
+    case "amp-code":
+      return {
+        planLowering: planAmpCodeLowering,
+        executeLowering: executeAmpCodeLowering,
+      };
+    case "hermes":
+      return {
+        planLowering: planHermesLowering,
+        executeLowering: executeHermesLowering,
       };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);

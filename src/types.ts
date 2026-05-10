@@ -7,6 +7,7 @@ export type HarnessId =
   | "claude-code"
   | "opencode"
   | "openclaw"
+  | "hermes"
   | "codex-cli"
   | "gemini-cli"
   | "amp-code"
@@ -219,6 +220,7 @@ export interface UnifiedFrontmatter {
   "claude-code"?: ClaudeCodeFrontmatter;
   opencode?: OpenCodeAgentFrontmatter;
   openclaw?: Record<string, unknown>;
+  hermes?: Record<string, unknown>;
   "codex-cli"?: CodexCliFrontmatter;
   "gemini-cli"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;

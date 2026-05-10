@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Cause, Effect, Option } from "effect";
@@ -13,6 +13,7 @@ import {
   formatManifestTargets,
   manifestHasCompileTargets,
   readManifest,
+  resolveManifestTargets,
 } from "../manifest.js";
 
 const tempRoots: string[] = [];
@@ -831,6 +832,10 @@ export default defineSkillspace({
   expect(formatManifestTargets(manifest)).toBe("skillspaces=[opencode]");
 });
 
+test("claw-harness preset targets OpenClaw and Hermes", () => {
+  expect(resolveManifestTargets(["claw-harness"])).toEqual(["openclaw", "hermes"]);
+});
+
 test("canonical TS-authored agents resolve shared toolspace and modelspace bindings", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
@@ -1549,6 +1554,191 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
       join(projectRoot, ".opencode", "orbits", "delivery-contract.md"),
     ),
   ).toBe(false);
+});
+
+test("compilePluginForTarget lowers executable canonical tools for Amp plugins", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-tool-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-tool-demo",
+        version: "0.1.0",
+        targets: {
+          tools: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo a message through Amp.",
+  input: Schema.Struct({
+    message: Schema.String.annotations({ description: "Message to echo" }),
+  }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(result.outputRoot).toBe(join(projectRoot, ".agents/"));
+  const pluginPath = join(projectRoot, ".amp", "plugins", "prism-generated-amp-tool-demo.ts");
+  expect(await pathExists(pluginPath)).toBe(true);
+
+  const generated = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`) as {
+    readonly default: (amp: { registerTool(definition: unknown): void }) => void;
+  };
+  const registeredTools: unknown[] = [];
+  generated.default({ registerTool: (definition) => { registeredTools.push(definition); } });
+
+  expect(registeredTools).toHaveLength(1);
+  const echo = registeredTools[0] as {
+    readonly name: string;
+    readonly description: string;
+    readonly inputSchema: {
+      readonly type: string;
+      readonly properties?: Record<string, { description?: string }>;
+      readonly required?: string[];
+    };
+    readonly execute: (
+      input: Record<string, unknown>,
+      ctx: { logger: { log: (...args: unknown[]) => void } },
+    ) => Promise<string>;
+  };
+  expect(echo.name).toBe("amp_tool_demo_echo");
+  expect(echo.description).toBe("Echo a message through Amp.");
+  expect(echo.inputSchema.type).toBe("object");
+  expect(echo.inputSchema.properties?.message?.description).toBe("Message to echo");
+  expect(echo.inputSchema.required).toEqual(["message"]);
+  await expect(echo.execute({ message: "hello" }, { logger: { log: () => undefined } }))
+    .resolves.toBe(JSON.stringify({ echoed: "hello" }, null, 2));
+
+  const source = await readFile(pluginPath, "utf8");
+  expect(source).toContain("registerTool");
+  expect(source).not.toContain('from "prism"');
+  expect(source).not.toContain('from "effect"');
+  expect(source).not.toContain("defineTool");
+});
+
+test("compilePluginForTarget lowers Hermes skills and canonical tools into MCP config", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "hermes-tool-demo");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "hermes-tool-demo",
+        version: "0.1.0",
+        targets: {
+          skills: ["hermes"],
+          tools: ["hermes"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "hermes-demo", "SKILL.md"),
+    `---\nname: hermes-demo\ndescription: Hermes-specific operating guidance\n---\n\n# Hermes Demo\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo a message through Hermes MCP.",
+  input: Schema.Struct({
+    message: Schema.String.annotations({ description: "Message to echo" }),
+  }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const hermesRoot = join(homedir(), ".hermes/");
+  const serverPath = join(
+    hermesRoot,
+    "prism",
+    "mcp",
+    "prism_generated_hermes_tool_demo",
+    "server.mjs",
+  );
+  expect(result.outputRoot).toBe(hermesRoot);
+
+  const skillWrite = result.operations.find(
+    (operation) =>
+      operation.kind === "write-md" &&
+      operation.target === join(hermesRoot, "skills", "hermes-demo", "SKILL.md"),
+  );
+  expect(skillWrite?.kind).toBe("write-md");
+  if (skillWrite?.kind === "write-md") {
+    expect(skillWrite.content).toContain("# Hermes Demo");
+  }
+
+  const serverWrite = result.operations.find(
+    (operation) => operation.kind === "write-plugin-file" && operation.target === serverPath,
+  );
+  expect(serverWrite?.kind).toBe("write-plugin-file");
+  if (serverWrite?.kind === "write-plugin-file") {
+    expect(serverWrite.content).toContain("hermes_tool_demo_echo");
+    expect(serverWrite.content).toContain("Echo a message through Hermes MCP.");
+  }
+
+  const configWrite = result.operations.find(
+    (operation) =>
+      operation.kind === "write-plugin-file" &&
+      operation.target === join(hermesRoot, "config.yaml"),
+  );
+  expect(configWrite?.kind).toBe("write-plugin-file");
+  if (configWrite?.kind === "write-plugin-file") {
+    expect(configWrite.content).toContain("mcp_servers:");
+    expect(configWrite.content).toContain("prism-generated-hermes-tool-demo:");
+    expect(configWrite.content).toContain('command: "bun"');
+    expect(configWrite.content).toContain(JSON.stringify(serverPath));
+    expect(configWrite.content).toContain("hermes_tool_demo_echo");
+  }
 });
 
 test("opencode trait skill access lowers to permission without becoming a dependency", async () => {

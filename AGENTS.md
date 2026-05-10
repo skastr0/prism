@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -21,6 +21,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
 | OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/commands/` | `~/.config/opencode/agents/` | `~/.config/opencode/skills/` |
 | OpenClaw | - | - | - | `~/.openclaw/skills/` |
+| Hermes Agent | - | - | - | `~/.hermes/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` | `~/.gemini/agents/` | `~/.gemini/skills/` |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
@@ -28,6 +29,8 @@ A unified plugin distribution system for AI coding harnesses.
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | `~/.factory/droids/` | `~/.factory/skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
+
+Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
 
 ## Tech Stack
 
@@ -546,7 +549,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, and `modelspaces`
 - `orbits`, `tools`, `toolspaces`, and `modelspaces` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with executable generated-tool support, currently OpenCode, unless a future explicit adapter exists
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support; tools-only plugins may target Hermes for generated MCP exposure
 
 ### CLI
 
@@ -556,6 +559,9 @@ prism compile ./my-plugin --harness opencode
 
 # Compile a plugin's source artifacts to Claude Code outputs
 prism compile ./my-plugin --harness claude-code
+
+# Compile canonical tools into a Hermes MCP server and config entry
+prism compile ./my-plugin --harness hermes
 
 # Compile into a project-local OpenCode root for a business/app repo
 prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
@@ -580,6 +586,14 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Writes `<claude-root>/skills/<orbit-name>/SKILL.md` for each concrete orbit instance
 - Does **not** emit generated plugins or synthetic contract tools
 - Fails closed when the composed agent surface contains canonical tool bindings, because those bindings require an executable generated-tool runtime
+
+#### Hermes
+
+- Writes targeted plugin skills into `<hermes-root>/skills/<skill-name>/...`
+- Writes concrete orbit instances into `<hermes-root>/skills/<orbit-name>/SKILL.md`
+- Emits canonical `tools/*.tool.ts` as a generated MCP stdio server at `<hermes-root>/prism/mcp/prism_generated_<source-plugin>/server.mjs`
+- Patches `<hermes-root>/config.yaml` with a compiler-owned `mcp_servers.prism-generated-<source-plugin>` entry using `bun <server.mjs>`
+- Fails closed for compiled agents and hooks; profiles, SOUL, and native Hermes Python plugins are intentionally out of scope
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 
@@ -634,7 +648,7 @@ my-plugin/
 │   └── *.md
 ├── agents/             # Shared custom agent definitions
 │   └── *.md
-├── skills/             # Shared skills (including OpenClaw shared skill files)
+├── skills/             # Shared skills (including OpenClaw and Hermes shared skill files)
 │   └── <skill-name>/
 │       ├── SKILL.md    # Skill definition
 │       └── *.md        # Supporting files
@@ -671,7 +685,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 ### Preset groups
 
 - `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `gemini-cli`, `amp-code`, `cursor`, `factory-droid`
-- `claw-harness` → `openclaw`
+- `claw-harness` → `openclaw`, `hermes`
 
 ### Rules to remember
 
@@ -698,6 +712,8 @@ harness/
 Overlay paths mirror the shared artifact paths. If both a shared file and a harness overlay exist at the same relative path, the harness overlay wins for that harness. Non-overridden files still come from the shared directories.
 
 For OpenClaw, both the shared skill tree and any matching `harness/openclaw/skills/...` replacements are materialized into the same `~/.openclaw/skills/` destination.
+
+For Hermes, both the shared skill tree and any matching `harness/hermes/skills/...` replacements are materialized into the same `~/.hermes/skills/` destination. Compile-phase tools additionally materialize as generated MCP servers and `config.yaml` entries.
 
 ## Command Arguments
 
@@ -893,7 +909,7 @@ prism install ./test-plugin --all
 
 Skills extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents from general-purpose into specialized assistants with procedural knowledge.
 
-**Supported by:** Claude Code (native), OpenCode (native), OpenClaw (skills root with shared files plus matching `harness/openclaw` overlays)
+**Supported by:** Claude Code (native), OpenCode (native), OpenClaw (skills root with shared files plus matching `harness/openclaw` overlays), Hermes (skills root with shared files plus matching `harness/hermes` overlays)
 
 ### Skill Structure
 

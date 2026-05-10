@@ -39,7 +39,7 @@ const TARGET_PRESETS = {
     "cursor",
     "factory-droid",
   ],
-  "claw-harness": ["openclaw"],
+  "claw-harness": ["openclaw", "hermes"],
 } as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
 
 const COMPILE_SUPPORTED_HARNESSES = [
@@ -47,6 +47,8 @@ const COMPILE_SUPPORTED_HARNESSES = [
   "claude-code",
   "gemini-cli",
   "codex-cli",
+  "amp-code",
+  "hermes",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 function isTargetPresetId(value: string): value is TargetPresetId {
@@ -700,6 +702,7 @@ export function getHarnessFrontmatter(
     "claude-code",
     "opencode",
     "openclaw",
+    "hermes",
     "codex-cli",
     "gemini-cli",
     "amp-code",

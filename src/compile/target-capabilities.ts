@@ -23,6 +23,14 @@ const CAPABILITIES: Record<string, CompileTargetCapabilities> = {
     generatedCanonicalTools: "executable",
     skillPermissions: "supported",
   },
+  "amp-code": {
+    generatedCanonicalTools: "executable",
+    skillPermissions: "supported",
+  },
+  hermes: {
+    generatedCanonicalTools: "executable",
+    skillPermissions: "unsupported",
+  },
 };
 
 export const getCompileTargetCapabilities = (

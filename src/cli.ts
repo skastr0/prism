@@ -828,7 +828,7 @@ Matching overlay files replace shared files for that harness. Non-overridden fil
 prism install ./${name} --all
 
 # Install to specific harness IDs
-prism install ./${name} --harness claude-code,opencode,openclaw
+prism install ./${name} --harness claude-code,opencode,openclaw,hermes
 
 # Install with project context
 prism install ./${name} --all --project ~/code/my-project
@@ -856,6 +856,8 @@ ${typescriptGuardrails}
 - See \`prism harnesses\` for the current harness support matrix.
 - OpenClaw v1 installs shared skill files plus matching \`harness/openclaw/skills/...\` overlays into \`~/.openclaw/skills/\`.
 - OpenClaw v1 does not install rules, commands, or custom agents.
+- Hermes is included in the \`claw-harness\` preset. It installs shared skill files plus matching \`harness/hermes/skills/...\` overlays into \`~/.hermes/skills/\`.
+- Hermes compile support lowers \`tools/*.tool.ts\` into a generated MCP stdio server and patches \`~/.hermes/config.yaml\`; it does not lower custom agents, commands, rules, profiles, SOUL, or native Python plugins.
 `;
       await writeFile(join(targetDir, "README.md"), readme);
       created.push("README.md");

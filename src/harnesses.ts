@@ -69,6 +69,26 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsMCP: false,
   },
 
+  hermes: {
+    id: "hermes",
+    name: "Hermes Agent",
+    globalConfigPath: "~/.hermes/",
+    projectConfigPath: null,
+    rulesFile: null,
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: "skills/",
+    configFile: "config.yaml",
+    configFormat: "yaml",
+    supportsTools: true,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: true,
+    supportsMCP: true,
+  },
+
   "codex-cli": {
     id: "codex-cli",
     name: "Codex CLI",

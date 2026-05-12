@@ -3,7 +3,6 @@
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import {
@@ -16,6 +15,8 @@ import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
+import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
+import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -341,12 +342,9 @@ const hookMatcher = (
 
 const regexEscape = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 
-const hookSourcesImportPath = (): string =>
-  fileURLToPath(new URL("../sources.ts", import.meta.url)).replace(/\\/g, "/");
-
-const renderHookWrapperEntry = (hook: Hook, nativeEvent: string): string => `import { Effect } from ${quote(effectBundleImportPath())};
+const renderHookWrapperEntry = (hook: Hook, nativeEvent: string, hookRuntimePath: string): string => `import { Effect } from ${quote(effectBundleImportPath())};
 import hook from ${quote(hook.sourcePath.replace(/\\/g, "/"))};
-import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${quote(hookSourcesImportPath())};
+import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${quote(hookRuntimePath.replace(/\\/g, "/"))};
 
 const parseInput = async () => {
   let source = "";
@@ -423,24 +421,12 @@ const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<strin
 
   try {
     const entry = join(tempRoot, "hook-entry.ts");
-    await nodeWriteFile(entry, renderHookWrapperEntry(hook, nativeEvent));
+    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
+    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
+    await nodeWriteFile(entry, renderHookWrapperEntry(hook, nativeEvent, hookRuntimePath));
 
     const outdir = join(tempRoot, "dist");
-    const build = await Bun.build({
-      entrypoints: [entry],
-      outdir,
-      target: "node",
-      format: "esm",
-      packages: "bundle",
-      naming: "wrapper.mjs",
-      sourcemap: "none",
-      minify: false,
-    });
-
-    if (!build.success) {
-      const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new Error(`failed to build Codex hook wrapper '${hook.name}': ${diagnostics}`);
-    }
+    await buildHookWrapperWithBun(entry, outdir, `Codex '${hook.name}'`);
 
     const built = await readFile(join(outdir, "wrapper.mjs"));
     return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;

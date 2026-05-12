@@ -8,7 +8,6 @@
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import {
@@ -35,6 +34,8 @@ import {
 import { resolveManifestTargets } from "../../manifest.js";
 import type { HarnessScope, PluginTargetId } from "../../types.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
+import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
+import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { LowerOperation } from "./opencode.js";
 
 const TARGET_ID = "claude-code" as const;
@@ -323,12 +324,9 @@ const renderHooksJson = async (
   return json({ hooks: groupedHooks });
 };
 
-const hookSourcesImportPath = (): string =>
-  fileURLToPath(new URL("../sources.ts", import.meta.url)).replace(/\\/g, "/");
-
-const renderHookWrapperEntry = (hook: Hook): string => `import { Effect } from ${JSON.stringify(effectBundleImportPath())};
+const renderHookWrapperEntry = (hook: Hook, hookRuntimePath: string): string => `import { Effect } from ${JSON.stringify(effectBundleImportPath())};
 import hook from ${JSON.stringify(hook.sourcePath.replace(/\\/g, "/"))};
-import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookSourcesImportPath())};
+import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookRuntimePath.replace(/\\/g, "/"))};
 
 const parseInput = async () => {
   let source = "";
@@ -406,24 +404,12 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 
   try {
     const entry = join(tempRoot, "hook-entry.ts");
-    await nodeWriteFile(entry, renderHookWrapperEntry(hook));
+    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
+    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
+    await nodeWriteFile(entry, renderHookWrapperEntry(hook, hookRuntimePath));
 
     const outdir = join(tempRoot, "dist");
-    const build = await Bun.build({
-      entrypoints: [entry],
-      outdir,
-      target: "node",
-      format: "esm",
-      packages: "bundle",
-      naming: "wrapper.mjs",
-      sourcemap: "none",
-      minify: false,
-    });
-
-    if (!build.success) {
-      const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new Error(`failed to build Claude hook wrapper '${hook.name}': ${diagnostics}`);
-    }
+    await buildHookWrapperWithBun(entry, outdir, `Claude '${hook.name}'`);
 
     const built = await readFile(join(outdir, "wrapper.mjs"));
     return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;

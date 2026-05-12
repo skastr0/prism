@@ -8,7 +8,6 @@
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import matter from "gray-matter";
 import { type ComposedAgent } from "../compose.js";
@@ -22,6 +21,8 @@ import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
+import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
+import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -325,13 +326,10 @@ const geminiHookEvent = (event: Hook["event"]): string => {
   }
 };
 
-const hookSourcesImportPath = (): string =>
-  fileURLToPath(new URL("../sources.ts", import.meta.url)).replace(/\\/g, "/");
-
-const renderHookWrapperEntry = (hookSourcePath: string, event: Hook["event"], nativeEvent: string): string => `
+const renderHookWrapperEntry = (hookSourcePath: string, event: Hook["event"], nativeEvent: string, hookRuntimePath: string): string => `
 import { Effect } from ${JSON.stringify(effectBundleImportPath())};
 import hook from ${JSON.stringify(hookSourcePath.replace(/\\/g, "/"))};
-import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookSourcesImportPath())};
+import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookRuntimePath.replace(/\\/g, "/"))};
 
 const readStdin = async () => {
   const chunks = [];
@@ -404,22 +402,11 @@ const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<strin
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-gemini-hook-"));
   try {
     const entry = join(tempRoot, "hook-entry.ts");
-    await nodeWriteFile(entry, renderHookWrapperEntry(hook.sourcePath, hook.event, nativeEvent));
+    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
+    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
+    await nodeWriteFile(entry, renderHookWrapperEntry(hook.sourcePath, hook.event, nativeEvent, hookRuntimePath));
     const outdir = join(tempRoot, "dist");
-    const build = await Bun.build({
-      entrypoints: [entry],
-      outdir,
-      target: "node",
-      format: "esm",
-      packages: "bundle",
-      naming: "wrapper.mjs",
-      sourcemap: "none",
-      minify: false,
-    });
-    if (!build.success) {
-      const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new Error(`failed to build Gemini hook wrapper '${hook.name}': ${diagnostics}`);
-    }
+    await buildHookWrapperWithBun(entry, outdir, `Gemini '${hook.name}'`);
     const built = await readFile(join(outdir, "wrapper.mjs"));
     return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;
   } finally {

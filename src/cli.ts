@@ -1170,6 +1170,17 @@ function renderCompileError(cause: unknown): string {
     if (rendered) return;
     if (!node || typeof node !== "object") return;
     const n = node as Record<string, unknown>;
+    if (n._tag === "Die" && n.defect instanceof Error) {
+      rendered = n.defect.stack ?? n.defect.message;
+      return;
+    }
+    if (n._tag === "Die" && n.defect !== undefined) {
+      rendered =
+        typeof n.defect === "string"
+          ? n.defect
+          : JSON.stringify(n.defect, Object.getOwnPropertyNames(n.defect), 2);
+      return;
+    }
     if (typeof n._tag === "string" && COMPILE_ERROR_TAGS.has(n._tag)) {
       rendered = formatCompileError(n as unknown as CompileError);
       return;

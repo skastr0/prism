@@ -1198,8 +1198,7 @@ const renderToolAdapter = (
 type OpenCodeNativeHookEvent =
   | "tool.execute.before"
   | "tool.execute.after"
-  | "session.created"
-  | "session.deleted";
+  | "session.status";
 
 interface HookRegistration {
   readonly hook: Hook;
@@ -1216,9 +1215,9 @@ const opencodeNativeHookEvent = (event: Hook["event"]): OpenCodeNativeHookEvent 
     case "tool.after":
       return "tool.execute.after";
     case "session.start":
-      return "session.created";
+      return "session.status";
     case "session.end":
-      return "session.deleted";
+      return "session.status";
   }
 };
 
@@ -1253,8 +1252,14 @@ const renderOpenCodeHookRuntime = (registrations: ReadonlyArray<HookRegistration
 const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistration>): string[] => {
   const before = registrations.filter((registration) => registration.nativeEvent === "tool.execute.before");
   const after = registrations.filter((registration) => registration.nativeEvent === "tool.execute.after");
-  const sessionStart = registrations.filter((registration) => registration.nativeEvent === "session.created");
-  const sessionEnd = registrations.filter((registration) => registration.nativeEvent === "session.deleted");
+  const sessionStart = registrations.filter(
+    (registration) =>
+      registration.nativeEvent === "session.status" && registration.hook.event === "session.start",
+  );
+  const sessionEnd = registrations.filter(
+    (registration) =>
+      registration.nativeEvent === "session.status" && registration.hook.event === "session.end",
+  );
   const lines: string[] = [];
   if (before.length > 0) {
     lines.push(`  "tool.execute.before": async (input, output) => {`);
@@ -1281,8 +1286,8 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
     lines.push(`    const eventType = String(event.type ?? "");`);
     lines.push(`    const properties = event.properties ?? {};`);
     if (sessionStart.length > 0) {
-      lines.push(`    if (eventType === "session.created") {`);
-      lines.push(`      const nativePayload = { target: { harness: "opencode", nativeEvent: "session.created" }, cwd: context.directory, session: { id: String(properties.sessionID ?? properties.info?.id ?? "opencode") } };`);
+      lines.push(`    if (eventType === "session.status" && properties.status?.type === "busy") {`);
+      lines.push(`      const nativePayload = { target: { harness: "opencode", nativeEvent: "session.status" }, cwd: context.directory, session: { id: String(properties.sessionID ?? "opencode") } };`);
       sessionStart.forEach((registration) => {
         const registrationIndex = registrations.indexOf(registration);
         lines.push(`      await handlePrismHook(${hookIdentifier(registration.hook, registrationIndex)}, "session.start", nativePayload);`);
@@ -1290,8 +1295,8 @@ const renderOpenCodeHookHandlers = (registrations: ReadonlyArray<HookRegistratio
       lines.push(`    }`);
     }
     if (sessionEnd.length > 0) {
-      lines.push(`    if (eventType === "session.deleted") {`);
-      lines.push(`      const nativePayload = { target: { harness: "opencode", nativeEvent: "session.deleted" }, cwd: context.directory, session: { id: String(properties.sessionID ?? properties.info?.id ?? "opencode") }, reason: "deleted" };`);
+      lines.push(`    if ((eventType === "session.status" && properties.status?.type === "idle") || eventType === "session.idle") {`);
+      lines.push(`      const nativePayload = { target: { harness: "opencode", nativeEvent: eventType }, cwd: context.directory, session: { id: String(properties.sessionID ?? "opencode") } };`);
       sessionEnd.forEach((registration) => {
         const registrationIndex = registrations.indexOf(registration);
         lines.push(`      await handlePrismHook(${hookIdentifier(registration.hook, registrationIndex)}, "session.end", nativePayload);`);

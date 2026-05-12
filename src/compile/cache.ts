@@ -358,6 +358,17 @@ export const computeAgentCacheDescriptor = async (
   const model = agent.model
     ? await resolveSpaceDescriptor(agent.model, registry, "/", (owner) => owner.modelspaces)
     : undefined;
+  const modelPeers = agent.model
+    ? [...registry.agents.values()]
+        .filter((candidate) => candidate.model === agent.model)
+        .map((candidate) => ({
+          name: candidate.name,
+          sourcePath: candidate.sourcePath,
+        }))
+        .sort((left, right) =>
+          `${left.name}:${left.sourcePath}`.localeCompare(`${right.name}:${right.sourcePath}`),
+        )
+    : [];
   const traits = await collectTraitDescriptors(agent, registry);
   const access = collectAccessRefs(agent, traits);
   const skillRefs = collectSkillRefs(agent, traits);
@@ -409,6 +420,7 @@ export const computeAgentCacheDescriptor = async (
       identity,
       personality,
       model,
+      modelPeers,
       traits: traits.map(({ ref, binding, source, tools }) => ({ ref, binding, source, tools })),
       access,
       toolspaces,

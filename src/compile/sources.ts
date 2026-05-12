@@ -713,7 +713,15 @@ export const OpenCodeModelTarget = Schema.Struct({
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
 });
-export type OpenCodeModelTarget = typeof OpenCodeModelTarget.Type;
+export const OpenCodeModelPoolTarget = Schema.Struct({
+  strategy: Schema.Literal("any-of", "round-robin", "ordered"),
+  models: Schema.Array(OpenCodeModelTarget),
+});
+export const OpenCodeModelTargetBlock = Schema.Union(
+  OpenCodeModelTarget,
+  OpenCodeModelPoolTarget,
+);
+export type OpenCodeModelTarget = typeof OpenCodeModelTargetBlock.Type;
 
 export const ClaudeCodeModelTarget = Schema.Struct({
   model: Schema.optional(Schema.String),

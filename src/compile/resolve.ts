@@ -10,7 +10,7 @@ import {
   Contract,
   Identity,
   Orbit,
-  OpenCodeModelTarget,
+  OpenCodeModelTargetBlock,
   Personality,
   Trait,
   type OrbitParameter,
@@ -149,12 +149,12 @@ const resolveRefToRegistry = (
     return dep;
   });
 
-const decodeResolvedTargetBlock = (
+const decodeResolvedTargetBlock = <A>(
   sourcePath: string,
   target: string,
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Schema<A, any, never>,
   value: unknown,
-): Record<string, unknown> | SourceParseError => {
+): A | SourceParseError => {
   const result = Schema.decodeUnknownEither(schema)(value);
   if (result._tag === "Left") {
     return new SourceParseError({
@@ -164,22 +164,71 @@ const decodeResolvedTargetBlock = (
     });
   }
 
-  return result.right as Record<string, unknown>;
+  return result.right;
+};
+
+const stableModelPeerKey = (agent: Agent): string =>
+  `${agent.name}:${agent.sourcePath}`;
+
+const stableModelPeers = (
+  agent: Agent,
+  registry: PluginRegistry,
+): readonly Agent[] => {
+  if (!agent.model) return [agent];
+
+  return [...registry.agents.values()]
+    .filter((candidate) => candidate.model === agent.model)
+    .sort((left, right) => stableModelPeerKey(left).localeCompare(stableModelPeerKey(right)));
+};
+
+const selectOpenCodeModelTarget = (
+  agent: Agent,
+  registry: PluginRegistry,
+  sourcePath: string,
+  targetBlock: typeof OpenCodeModelTargetBlock.Type,
+): Record<string, unknown> | SourceParseError => {
+  if (!("strategy" in targetBlock)) {
+    return targetBlock;
+  }
+
+  if (targetBlock.models.length === 0) {
+    return new SourceParseError({
+      sourcePath,
+      kind: "modelspace",
+      message: "invalid 'opencode' target block: model pool must include at least one model",
+    });
+  }
+
+  if (targetBlock.strategy === "ordered") {
+    return targetBlock.models[0] as Record<string, unknown>;
+  }
+
+  const peers = stableModelPeers(agent, registry);
+  const peerIndex = Math.max(
+    0,
+    peers.findIndex((peer) => peer.name === agent.name && peer.sourcePath === agent.sourcePath),
+  );
+  return targetBlock.models[peerIndex % targetBlock.models.length] as Record<string, unknown>;
 };
 
 const resolveModelTargetBlock = (
+  agent: Agent,
+  registry: PluginRegistry,
   sourcePath: string,
   target: string,
   targetBlock: unknown,
 ): Record<string, unknown> | SourceParseError => {
   switch (target) {
-    case "opencode":
-      return decodeResolvedTargetBlock(
+    case "opencode": {
+      const decoded = decodeResolvedTargetBlock(
         sourcePath,
         target,
-        OpenCodeModelTarget,
+        OpenCodeModelTargetBlock,
         targetBlock,
       );
+      if (decoded instanceof SourceParseError) return decoded;
+      return selectOpenCodeModelTarget(agent, registry, sourcePath, decoded);
+    }
     case "claude-code":
       return decodeResolvedTargetBlock(
         sourcePath,
@@ -703,7 +752,13 @@ const resolveModelProfile = (
       );
     }
 
-    const decoded = resolveModelTargetBlock(modelspace.sourcePath, target, targetBlock);
+    const decoded = resolveModelTargetBlock(
+      agent,
+      registry,
+      modelspace.sourcePath,
+      target,
+      targetBlock,
+    );
     if (decoded instanceof SourceParseError) {
       return yield* Effect.fail(decoded);
     }

@@ -157,9 +157,19 @@ export default defineModelspace({
       description: "Primary review profile",
       targets: {
         opencode: {
-          model: "openai/gpt-5.4",
-          variant: "medium",
-          temperature: 0.1,
+          strategy: "round-robin",
+          models: [
+            {
+              model: "openai/gpt-5.4-reviewer-a",
+              variant: "medium",
+              temperature: 0.1,
+            },
+            {
+              model: "openai/gpt-5.4-reviewer-b",
+              variant: "medium",
+              temperature: 0.1,
+            },
+          ],
         },
         "claude-code": {
           model: "opus",

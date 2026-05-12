@@ -836,6 +836,111 @@ test("claw-harness preset targets OpenClaw and Hermes", () => {
   expect(resolveManifestTargets(["claw-harness"])).toEqual(["openclaw", "hermes"]);
 });
 
+test("opencode model pools distribute same-profile agents by stable peer order", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "model-pool-plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "model-pool-plugin",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          modelspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(pluginRoot, "modelspaces", "reviewers.modelspace.ts"),
+    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineModelspace({
+  name: "reviewers",
+  profiles: {
+    "verification-throughput": {
+      targets: {
+        opencode: {
+          strategy: "any-of",
+          models: [
+            { model: "provider-a/kimi-k2.6" },
+            { model: "provider-b/kimi-k2.6" },
+            { model: "provider-c/kimi-k2.6" },
+            { model: "provider-d/kimi-k2.6" },
+          ],
+        },
+      },
+    },
+  },
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "identities", "reviewer.identity.md"),
+    `---
+description: Model pool reviewer identity
+---
+
+# Reviewer
+
+You verify work.
+`,
+  );
+
+  for (let index = 0; index < 10; index++) {
+    const suffix = String(index).padStart(2, "0");
+    await writeText(
+      join(pluginRoot, "agents", `reviewer-${suffix}.agent.ts`),
+      `import { defineAgent, modelProfileRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "reviewer-${suffix}",
+  description: "Reviewer ${suffix}",
+  identity: "reviewer",
+  model: modelProfileRef("reviewers", "verification-throughput"),
+});
+`,
+    );
+  }
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const models = result.composed
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((agent) => agent.model?.model);
+
+  expect(models).toEqual([
+    "provider-a/kimi-k2.6",
+    "provider-b/kimi-k2.6",
+    "provider-c/kimi-k2.6",
+    "provider-d/kimi-k2.6",
+    "provider-a/kimi-k2.6",
+    "provider-b/kimi-k2.6",
+    "provider-c/kimi-k2.6",
+    "provider-d/kimi-k2.6",
+    "provider-a/kimi-k2.6",
+    "provider-b/kimi-k2.6",
+  ]);
+});
+
 test("canonical TS-authored agents resolve shared toolspace and modelspace bindings", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 
@@ -1544,6 +1649,12 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(opencodeConfig.agent.builder?.model).toBe("openai/gpt-5.4");
   expect(opencodeConfig.agent.builder?.variant).toBe("xhigh");
   expect(opencodeConfig.agent.builder?.temperature).toBe(0.2);
+  expect(opencodeConfig.agent.reviewer?.model).toBe("openai/gpt-5.4-reviewer-a");
+  expect(opencodeConfig.agent["security-reviewer"]?.model).toBe(
+    "openai/gpt-5.4-reviewer-b",
+  );
+  expect(opencodeConfig.agent.reviewer?.variant).toBe("medium");
+  expect(opencodeConfig.agent["security-reviewer"]?.variant).toBe("medium");
   expect(opencodeConfig.agent.builder?.mode).toBe("subagent");
   expect(opencodeConfig.agent.builder?.maxSteps).toBe(12);
   expect(

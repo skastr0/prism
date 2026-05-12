@@ -245,9 +245,26 @@ export interface ToolspaceDefinition {
   readonly groups?: Readonly<Record<string, ToolGroupDefinition>>;
 }
 
+export interface ModelTargetDefinition {
+  readonly model: string;
+  readonly variant?: string;
+  readonly temperature?: number;
+  readonly top_p?: number;
+}
+
+export interface ModelPoolTargetDefinition {
+  readonly strategy: "any-of" | "round-robin" | "ordered";
+  readonly models: readonly ModelTargetDefinition[];
+}
+
+export type ModelTargetBlockDefinition =
+  | ModelTargetDefinition
+  | ModelPoolTargetDefinition
+  | Readonly<Record<string, unknown>>;
+
 export interface ModelProfileDefinition {
   readonly description?: string;
-  readonly targets: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  readonly targets: Readonly<Record<string, ModelTargetBlockDefinition>>;
 }
 
 export interface ModelspaceDefinition {

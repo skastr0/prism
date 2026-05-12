@@ -196,6 +196,32 @@ export interface OrbitPulsarCheckpointDefinition {
   readonly note?: string;
 }
 
+export type OrbitSignalEmitterPriority = "low" | "normal" | "high" | "urgent";
+
+export interface OrbitSignalEmitterDestinationDefinition {
+  readonly project_key: string;
+  readonly orbit: string;
+  readonly default_priority?: OrbitSignalEmitterPriority;
+  readonly note?: string;
+}
+
+export interface OrbitSignalEmitterDefinition {
+  /**
+   * Known destinations this orbit may emit signals to. Each entry is a
+   * `project_key`/`orbit` pair, optionally with a default priority and a
+   * note describing what the destination handles. Used as structural
+   * documentation, as input for delegation-map validation, and as the
+   * basis for tighter bound trait surfaces (e.g., per-destination
+   * delegate wrappers) when wanted.
+   *
+   * Leaving this empty marks the orbit as an emitter without constraining
+   * destinations — appropriate when the routing table is fluid or
+   * authored entirely in agent doctrine. Filled destinations make the
+   * permission surface explicit and reviewable.
+   */
+  readonly destinations?: ReadonlyArray<OrbitSignalEmitterDestinationDefinition>;
+}
+
 export interface OrbitDefinitionEntryDefinition {
   readonly purpose: string;
   readonly contains?: ReadonlyArray<string>;
@@ -222,6 +248,16 @@ export interface OrbitDefinition {
   readonly pulsar_checkpoints?: ReadonlyArray<OrbitPulsarCheckpointDefinition>;
   readonly evolution?: string;
   readonly body?: string;
+  /**
+   * When present, declares this orbit emits signals to other orbits — the
+   * routing/delegation surface that is privileged separately from the
+   * receive-side signal tools. Authors should attach the `signal-emitter`
+   * trait (from the `oracle` plugin) to the orchestrator agent (and to
+   * any other phase agent that authentically owns inter-orbit
+   * delegation). Declared `destinations` make the routing surface
+   * explicit and auditable.
+   */
+  readonly signal_emitter?: OrbitSignalEmitterDefinition;
 }
 
 export interface ToolTargetBindingDefinition {

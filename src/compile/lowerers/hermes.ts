@@ -339,6 +339,7 @@ const planMcpServer = async (
   const bundle = await generateMcpServerBundle({
     sourcePluginName: input.target.sourcePluginName,
     sourcePluginRoot: input.target.sourcePluginPath ?? input.registry?.pluginPath,
+    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
     serverName,
     version: input.target.sourcePluginVersion,
     bundleId: serverName,

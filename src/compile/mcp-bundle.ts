@@ -48,6 +48,7 @@ type McpAdapterSpec =
 export interface McpServerBundleOptions {
   readonly sourcePluginName: string;
   readonly sourcePluginRoot?: string;
+  readonly dependencyPluginRoots?: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]>;
   readonly serverName: string;
   readonly version?: string;
   readonly bundleId?: string;
@@ -64,6 +65,7 @@ export interface McpServerBundle {
 export interface AmpPluginBundleOptions {
   readonly sourcePluginName: string;
   readonly sourcePluginRoot?: string;
+  readonly dependencyPluginRoots?: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]>;
   readonly version?: string;
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
 }
@@ -217,9 +219,16 @@ const collectMirrorsForBindings = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
   sourcePluginName?: string,
   sourcePluginRoot?: string,
+  dependencyPluginRoots: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]> = [],
 ): Promise<PluginMirror[]> => {
   const byPlugin = new Map<string, { pluginRoot: string; entries: Map<string, MirrorFile> }>();
   const generatedFiles = new Map<string, Map<string, string>>();
+
+  for (const [pluginName, pluginRoot] of dependencyPluginRoots instanceof Map
+    ? dependencyPluginRoots.entries()
+    : dependencyPluginRoots) {
+    byPlugin.set(pluginName, { pluginRoot, entries: new Map() });
+  }
 
   const ensurePlugin = (pluginName: string, pluginRoot: string): Map<string, MirrorFile> => {
     const current = byPlugin.get(pluginName) ?? {
@@ -330,6 +339,7 @@ const collectMirrorsForBindings = async (
   await addCrossPluginRuntimeClosures();
 
   for (const [pluginName, state] of byPlugin) {
+    if (state.entries.size === 0) continue;
     mirrors.push({
       pluginName,
       pluginRoot: state.pluginRoot,
@@ -1095,6 +1105,7 @@ export const generateMcpServerBundle = async (
     options.bindings,
     options.sourcePluginName,
     options.sourcePluginRoot,
+    options.dependencyPluginRoots,
   );
   const importPluginRoots = new Map<string, string>();
   for (const mirror of mirrors) {
@@ -1155,6 +1166,7 @@ export const generateAmpPluginBundle = async (
     options.bindings,
     options.sourcePluginName,
     options.sourcePluginRoot,
+    options.dependencyPluginRoots,
   );
   const importPluginRoots = new Map<string, string>();
   for (const mirror of mirrors) {

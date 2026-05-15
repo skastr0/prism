@@ -225,6 +225,50 @@ export default defineHook({
   return { pluginRoot, projectRoot };
 };
 
+const createStandaloneToolFixture = async (): Promise<{
+  pluginRoot: string;
+  projectRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "tool-only-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "tool-only-demo",
+        version: "0.1.0",
+        targets: {
+          tools: ["codex-cli", "claude-code", "gemini-cli", "grok"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(pluginRoot, "tools", "echo-message.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo-message",
+  description: "Echo a message",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  return { pluginRoot, projectRoot };
+};
+
 const createCodexProjectFixture = async (): Promise<{
   pluginRoot: string;
   projectRoot: string;
@@ -1430,6 +1474,81 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
 
   expect(await pathExists(join(extensionRoot, "stale", "old.txt"))).toBe(false);
   expect(result.operations.some((operation) => operation.kind === "prune-plugin-path" && operation.target.endsWith(join("stale", "old.txt")))).toBe(true);
+});
+
+test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
+  const { pluginRoot, projectRoot } = await createStandaloneToolFixture();
+  const targets = ["codex-cli", "claude-code", "gemini-cli", "grok"] as const;
+
+  for (const target of targets) {
+    await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target,
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+        backup: false,
+      }),
+    );
+  }
+
+  const expectedToolName = "tool_only_demo_echo_message";
+
+  const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
+  expect(codexConfig).toContain('["mcp_servers"."prism-generated-tool-only-demo"]');
+  expect(codexConfig).toContain('enabled_tools = ["tool_only_demo_echo_message"]');
+  const codexBundle = await readFile(
+    join(projectRoot, ".codex", "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(codexBundle).toContain(expectedToolName);
+  expect(codexBundle).toContain("tools/list");
+
+  const claudeRoot = join(projectRoot, ".claude", "plugins", "prism-generated-tool-only-demo");
+  const claudeMcp = JSON.parse(await readFile(join(claudeRoot, ".mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, { command: string; args: string[] }>;
+  };
+  expect(claudeMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+    command: "bun",
+    args: ["${CLAUDE_PLUGIN_ROOT}/mcp/prism_generated_tool_only_demo/server.mjs"],
+  });
+  const claudeBundle = await readFile(
+    join(claudeRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(claudeBundle).toContain(expectedToolName);
+  expect(claudeBundle).toContain("tools/list");
+
+  const geminiRoot = join(projectRoot, ".gemini", "extensions", "prism-generated-tool-only-demo");
+  const geminiManifest = JSON.parse(await readFile(join(geminiRoot, "gemini-extension.json"), "utf8")) as {
+    mcpServers?: Record<string, { command: string; args: string[] }>;
+  };
+  expect(geminiManifest.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+    command: "bun",
+    args: ["${extensionPath}/mcp/prism_generated_tool_only_demo/server.mjs"],
+  });
+  const geminiBundle = await readFile(
+    join(geminiRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(geminiBundle).toContain(expectedToolName);
+  expect(geminiBundle).toContain("tools/list");
+
+  const grokRoot = join(projectRoot, ".grok", "plugins", "prism-generated-tool-only-demo");
+  const grokMcp = JSON.parse(await readFile(join(grokRoot, ".mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, { command: string; args: string[] }>;
+  };
+  expect(grokMcp.mcpServers?.["prism-generated-tool-only-demo"]?.command).toBe("bun");
+  expect(grokMcp.mcpServers?.["prism-generated-tool-only-demo"]?.args).toEqual([
+    join(grokRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+  ]);
+  const grokBundle = await readFile(
+    join(grokRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(grokBundle).toContain(expectedToolName);
+  expect(grokBundle).toContain("tools/list");
 });
 
 test("compilePluginForTarget emits a Codex project bundle", async () => {

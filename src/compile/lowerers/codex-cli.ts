@@ -2,7 +2,7 @@
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import {
@@ -14,6 +14,7 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import type { ResolvedContractBinding } from "../resolve.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
@@ -201,6 +202,33 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
     agent.toolBindings.map((binding) => mcpToolNameForBinding(sourcePluginName, binding)),
   );
 
+const bindingFromToolSource = (
+  pluginName: string,
+  sourcePath: string,
+): ResolvedContractBinding => {
+  const toolName = basename(sourcePath, ".tool.ts");
+  return {
+    kind: "permission",
+    logicalName: toolName,
+    toolPluginName: pluginName,
+    toolName,
+    toolSourcePath: sourcePath,
+  };
+};
+
+const bindingsFromCanonicalTools = (
+  pluginName: string,
+  tools: ReadonlyArray<CanonicalTool>,
+): ReadonlyArray<ResolvedContractBinding> =>
+  tools
+    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
+    .sort((left, right) => left.toolName.localeCompare(right.toolName));
+
+const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
+  ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
+  ...input.agents.flatMap((agent) => agent.toolBindings),
+];
+
 const renderAgentToml = (
   agent: ComposedAgent,
   target: CodexCliLowerTarget,
@@ -312,11 +340,11 @@ const codexNativeHookEvent = (event: Hook["event"]): string => {
 
 const collectCanonicalToolNames = (
   sourcePluginName: string,
-  agents: ReadonlyArray<ComposedAgent>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Map<string, string> => {
   const names = new Map<string, string>();
 
-  for (const binding of agents.flatMap((agent) => agent.toolBindings)) {
+  for (const binding of bindings) {
     const mcpName = mcpToolNameForBinding(sourcePluginName, binding);
     names.set(binding.logicalName, mcpName);
     names.set(binding.toolName, mcpName);
@@ -442,7 +470,10 @@ const planHooks = async (
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
   if (!input.registry) return [];
 
-  const canonicalToolNames = collectCanonicalToolNames(input.target.sourcePluginName, input.agents);
+  const canonicalToolNames = collectCanonicalToolNames(
+    input.target.sourcePluginName,
+    mcpBindingsForInput(input),
+  );
   const plannedHooks: PlannedHook[] = [];
 
   for (const hook of hooks) {
@@ -568,7 +599,7 @@ const planMcpServer = async (
   input: LowerInput,
   operations: LowerOperation[],
 ): Promise<{ mcpServerName?: string; mcpBundlePath?: string; toolNames: string[] }> => {
-  const bindings = input.agents.flatMap((agent) => agent.toolBindings);
+  const bindings = mcpBindingsForInput(input);
   if (bindings.length === 0) return { toolNames: [] };
 
   const mcpServerName = generatedServerName(input.target.sourcePluginName);

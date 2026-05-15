@@ -7,7 +7,7 @@
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { Effect } from "effect";
 import matter from "gray-matter";
 import { type ComposedAgent } from "../compose.js";
@@ -87,6 +87,33 @@ const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
 const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
   [...new Set(values.filter((value) => value.length > 0))].sort((left, right) => left.localeCompare(right));
+
+const bindingFromToolSource = (
+  pluginName: string,
+  sourcePath: string,
+): ResolvedContractBinding => {
+  const toolName = basename(sourcePath, ".tool.ts");
+  return {
+    kind: "permission",
+    logicalName: toolName,
+    toolPluginName: pluginName,
+    toolName,
+    toolSourcePath: sourcePath,
+  };
+};
+
+const bindingsFromCanonicalTools = (
+  pluginName: string,
+  tools: ReadonlyArray<CanonicalTool>,
+): ReadonlyArray<ResolvedContractBinding> =>
+  tools
+    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
+    .sort((left, right) => left.toolName.localeCompare(right.toolName));
+
+const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
+  ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
+  ...input.agents.flatMap((agent) => agent.toolBindings),
+];
 
 const writeReason = async (target: string, content: string): Promise<Reason> => {
   if (!(await exists(target))) return "new";
@@ -277,10 +304,10 @@ const copyTargetedCommandArtifacts = async (
 const collectHookBindings = (
   sourcePluginName: string,
   serverName: string,
-  agents: ReadonlyArray<ComposedAgent>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ReadonlyMap<string, string> => {
   const byRef = new Map<string, string>();
-  for (const binding of agents.flatMap((agent) => agent.toolBindings)) {
+  for (const binding of bindings) {
     const mcpName = geminiMcpToolNameForBinding(sourcePluginName, serverName, binding);
     byRef.set(binding.logicalName, mcpName);
     byRef.set(binding.toolName, mcpName);
@@ -423,7 +450,11 @@ const planHooks = async (
   if (hooks.length === 0 || !input.registry || !artifactTargetsGemini(input.registry, "hooks")) return;
 
   const serverName = extensionIdForPlugin(input.target.sourcePluginName);
-  const canonicalToolNames = collectHookBindings(input.target.sourcePluginName, serverName, input.agents);
+  const canonicalToolNames = collectHookBindings(
+    input.target.sourcePluginName,
+    serverName,
+    mcpBindingsForInput(input),
+  );
   const byEvent: Record<string, unknown[]> = {};
   for (const hook of hooks) {
     const nativeEvent = geminiHookEvent(hook.event);
@@ -456,7 +487,7 @@ const planMcpBundle = async (
   operations: LowerOperation[],
   desired: Set<string>,
 ): Promise<Record<string, unknown>> => {
-  const bindings = input.agents.flatMap((agent) => agent.toolBindings);
+  const bindings = mcpBindingsForInput(input);
   if (bindings.length === 0) return {};
 
   const extensionId = extensionIdForPlugin(input.target.sourcePluginName);

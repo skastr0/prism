@@ -7,7 +7,7 @@
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import {
@@ -21,7 +21,7 @@ import {
 } from "../mcp-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
-import type { Hook, Orbit, Skill } from "../sources.js";
+import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   backupFile,
   exists,
@@ -51,6 +51,7 @@ export interface GrokLowerTarget {
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
+  readonly tools?: ReadonlyArray<CanonicalTool>;
   readonly skills?: ReadonlyArray<Skill>;
   readonly hooks?: ReadonlyArray<Hook>;
   readonly registry?: PluginRegistry;
@@ -88,6 +89,33 @@ const stringArray = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+
+const bindingFromToolSource = (
+  pluginName: string,
+  sourcePath: string,
+): ResolvedContractBinding => {
+  const toolName = basename(sourcePath, ".tool.ts");
+  return {
+    kind: "permission",
+    logicalName: toolName,
+    toolPluginName: pluginName,
+    toolName,
+    toolSourcePath: sourcePath,
+  };
+};
+
+const bindingsFromCanonicalTools = (
+  pluginName: string,
+  tools: ReadonlyArray<CanonicalTool>,
+): ReadonlyArray<ResolvedContractBinding> =>
+  tools
+    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
+    .sort((left, right) => left.toolName.localeCompare(right.toolName));
+
+const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
+  ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
+  ...input.agents.flatMap((agent) => agent.toolBindings),
+];
 
 const yamlScalar = (value: string | number | boolean): string =>
   typeof value === "string" ? JSON.stringify(value) : String(value);
@@ -245,10 +273,10 @@ const grokMcpToolNameForBinding = (
 const collectHookBindings = (
   sourcePluginName: string,
   pluginId: string,
-  agents: ReadonlyArray<ComposedAgent>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ReadonlyMap<string, string> => {
   const byRef = new Map<string, string>();
-  for (const binding of agents.flatMap((agent) => agent.toolBindings)) {
+  for (const binding of bindings) {
     const mcpName = grokMcpToolNameForBinding(sourcePluginName, pluginId, binding);
     byRef.set(binding.logicalName, mcpName);
     byRef.set(binding.toolName, mcpName);
@@ -277,13 +305,13 @@ const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
   registry: PluginRegistry | undefined,
   target: GrokLowerTarget,
-  agents: ReadonlyArray<ComposedAgent>,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectHookBindings(
     target.sourcePluginName,
     generatedPluginId(target),
-    agents,
+    bindings,
   );
 
   for (const hook of hooks) {
@@ -430,7 +458,7 @@ const planMcpServer = async (
   operations: LowerOperation[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  const bindings = input.agents.flatMap((agent) => agent.toolBindings);
+  const bindings = mcpBindingsForInput(input);
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {
@@ -488,7 +516,7 @@ const planHooks = async (
     desiredRelativePaths,
     input.target,
     "hooks/hooks.json",
-    await renderHooksJson(hooks, input.registry, input.target, input.agents),
+    await renderHooksJson(hooks, input.registry, input.target, mcpBindingsForInput(input)),
   );
 
   for (const hook of hooks) {

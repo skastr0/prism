@@ -45,6 +45,10 @@ import {
   planLowering as planHermesLowering,
 } from "./lowerers/hermes.js";
 import {
+  executeLowering as executeGrokLowering,
+  planLowering as planGrokLowering,
+} from "./lowerers/grok.js";
+import {
   InvalidTargetScopeError,
   UnsupportedTargetCapabilityError,
   UnknownTargetError,
@@ -118,6 +122,7 @@ const SUPPORTED_TARGETS = [
   "codex-cli",
   "amp-code",
   "hermes",
+  "grok",
 ] as const;
 
 const getLowerer = (target: string): LowererModule => {
@@ -151,6 +156,11 @@ const getLowerer = (target: string): LowererModule => {
       return {
         planLowering: planHermesLowering,
         executeLowering: executeHermesLowering,
+      };
+    case "grok":
+      return {
+        planLowering: planGrokLowering,
+        executeLowering: executeGrokLowering,
       };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);

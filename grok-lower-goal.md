@@ -49,11 +49,13 @@ Validation:
 
 Review dispatch:
 
-- Dispatch after commit using `grok --agent reviewer`.
+- `grok --agent reviewer` reviewed commit `fe05b40`.
+- Finding: low duplicate `Claude.md` entry in the Grok `alternativeRulesFiles` example.
+- Resolution: duplicate removed from this file and from the actual harness registration during GLYPH-GROK-02.
 
 ### GLYPH-GROK-02: Core Grok Compile Target
 
-Status: planned
+Status: done
 
 Intent:
 
@@ -81,16 +83,22 @@ Acceptance:
 - Generated plugin emits agents, skills, orbit skills, hooks, and MCP bundle files.
 - Hook wrappers normalize Grok payloads and emit Grok-native deny JSON for blocking decisions.
 - Claude-specific MCP permission names are not blindly used in Grok agent frontmatter.
+- Commands remain out of scope until Grok command discovery is verified.
 - `config.toml` is not patched in PR1.
 - `coding-harness` preset is not expanded to include Grok in PR1.
 - Typecheck and relevant tests pass.
 
 Validation:
 
-- `bun test src/compile/grok-lowerer.test.ts`
-- targeted pipeline test if added
-- `bun run typecheck`
-- `bun run build`
+- `bun test src/compile/grok-lowerer.test.ts` passed.
+- `bun test src/compile/pipeline.test.ts -t "Grok plugin-bundle"` passed.
+- `bun run typecheck` passed.
+- `bun run build` passed.
+- `quartz diagnostics '{"root":"/Users/guilhermecastro/Projects/prism","explain":true}' --format pretty` reported zero TypeScript diagnostics.
+- `quartz file '{"file":"src/compile/lowerers/grok.ts"}' --format pretty` resolved the exported lowerer contract as `planLowering(input) => Promise<LowerOperation[]>` and `executeLowering(...) => Promise<{ backups: string[] }>`.
+- `pulsar score --category generated-slop .` reported existing/new lowerer duplication pressure; accepted for PR1 because the Grok lowerer intentionally mirrors Claude-compatible bundle behavior and shared extraction is tracked as Phase 4.
+- `pulsar score --category legibility-decay .` reported pre-existing large-function outliers outside this Grok slice.
+- Full `bun test src/compile/pipeline.test.ts` currently has one unrelated OpenCode session-hook expectation failure on `"session.created"` versus the existing `session.status` event mapping; the Grok pipeline test passes.
 
 Review dispatch:
 
@@ -215,11 +223,11 @@ Included:
 - Emit managed skills and derived orbit skills under the generated plugin.
 - Emit plugin `.mcp.json`.
 - Emit plugin `hooks/hooks.json` and bundled hook wrappers.
-- Emit plugin-bundled commands only through the generated plugin if commands target `grok` and discovery is verified.
 - Add a smoke test path using `grok inspect --json` when the `grok` binary is present.
 
 Excluded from PR1:
 
+- Install-phase or plugin-bundled Grok commands.
 - Managed `~/.grok/config.toml` patching.
 - Marketplace source injection.
 - Native Grok marketplace publishing.
@@ -313,7 +321,6 @@ grok: {
     "Claude.md",
     "AGENT.md",
     "CLAUDE.md",
-    "Claude.md",
     "CLAUDE.local.md"
   ],
 },
@@ -535,13 +542,7 @@ Do not write block messages only to stderr. Grok docs say explicit deny JSON is 
 
 Install-phase commands are not in PR1.
 
-Plugin-bundled commands are allowed only after validation. Grok local README says Claude Code plugins can provide `commands/`, but the concise user-guide page does not document native command roots. If implemented in PR1:
-
-- Copy plugin `commands/*.md` into generated plugin `commands/`.
-- Gate copying on manifest targets resolving to `grok`.
-- Add a smoke assertion if `grok inspect --json` surfaces commands, or manually validate from the TUI command palette.
-
-If not validated, leave commands as a documented follow-up.
+Plugin-bundled commands are a follow-up. Grok local README says Claude Code plugins can provide `commands/`, but the concise user-guide page does not document native command roots, and Prism's harness registry keeps `supportsCommands: false` for Grok in PR1. Do not copy `commands/*.md` in the Grok lowerer until discovery is verified by `grok inspect --json` or a direct TUI command-palette check.
 
 ### Pruning
 
@@ -683,9 +684,13 @@ Run:
 
 ```bash
 bun test src/compile/grok-lowerer.test.ts
-bun test src/compile/pipeline.test.ts
+bun test src/compile/pipeline.test.ts -t "Grok plugin-bundle"
 bun run typecheck
 bun run build
+quartz diagnostics '{"root":"/Users/guilhermecastro/Projects/prism","explain":true}' --format pretty
+quartz file '{"file":"src/compile/lowerers/grok.ts"}' --format pretty
+pulsar score --category generated-slop .
+pulsar score --category legibility-decay .
 ```
 
 If the full suite is cheap enough:

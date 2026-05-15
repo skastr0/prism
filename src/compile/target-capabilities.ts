@@ -31,6 +31,10 @@ const CAPABILITIES: Record<string, CompileTargetCapabilities> = {
     generatedCanonicalTools: "executable",
     skillPermissions: "unsupported",
   },
+  grok: {
+    generatedCanonicalTools: "executable",
+    skillPermissions: "supported",
+  },
 };
 
 export const getCompileTargetCapabilities = (

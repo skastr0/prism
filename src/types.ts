@@ -12,7 +12,8 @@ export type HarnessId =
   | "gemini-cli"
   | "amp-code"
   | "cursor"
-  | "factory-droid";
+  | "factory-droid"
+  | "grok";
 
 export const HARNESS_SCOPES = ["global", "project"] as const;
 export type HarnessScope = (typeof HARNESS_SCOPES)[number];
@@ -226,6 +227,7 @@ export interface UnifiedFrontmatter {
   "amp-code"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
   "factory-droid"?: FactoryDroidFrontmatter;
+  grok?: Record<string, unknown>;
 }
 
 // Skill-specific frontmatter (stricter than unified)

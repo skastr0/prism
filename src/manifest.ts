@@ -49,6 +49,7 @@ const COMPILE_SUPPORTED_HARNESSES = [
   "codex-cli",
   "amp-code",
   "hermes",
+  "grok",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 function isTargetPresetId(value: string): value is TargetPresetId {
@@ -708,6 +709,7 @@ export function getHarnessFrontmatter(
     "amp-code",
     "cursor",
     "factory-droid",
+    "grok",
   ];
 
   const cleanBase: Record<string, unknown> = {};

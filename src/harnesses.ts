@@ -193,6 +193,33 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsMCP: true,
     alternativeRulesFiles: [".droid.yaml", "CLAUDE.md"],
   },
+
+  grok: {
+    id: "grok",
+    name: "Grok Build",
+    globalConfigPath: "~/.grok/",
+    projectConfigPath: ".grok/",
+    rulesFile: "AGENTS.md",
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: "agents/",
+    toolsDir: null,
+    skillsDir: "skills/",
+    configFile: "config.toml",
+    configFormat: "toml",
+    supportsTools: true,
+    supportsCommands: false,
+    supportsAgents: true,
+    supportsSkills: true,
+    supportsMCP: true,
+    alternativeRulesFiles: [
+      "Agents.md",
+      "Claude.md",
+      "AGENT.md",
+      "CLAUDE.md",
+      "CLAUDE.local.md",
+    ],
+  },
 };
 
 export function getHarness(id: HarnessId): HarnessConfig {

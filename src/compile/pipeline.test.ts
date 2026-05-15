@@ -3382,6 +3382,140 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
 });
 
+test("compilePluginForTarget lowers Grok plugin-bundle surfaces", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "grok-pipeline-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "grok-pipeline-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["grok"],
+          skills: ["grok"],
+          tools: ["grok"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "submit-work.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed Grok work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input) {
+    return { acknowledged: true };
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "submittable.trait.ts"),
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  instructions: "Submit completed work through the generated Grok MCP tool.",
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Grok worker",
+  identity: "worker",
+  traits: ["submittable"],
+  skills: [skillRef("testing")],
+  targets: {
+    grok: {
+      model: "grok-build",
+      tools: ["read_file"],
+      disallowedTools: ["web_fetch"],
+    },
+  },
+});
+`,
+  );
+
+  const grok = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "grok",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(grok.outputRoot).toBe(join(projectRoot, ".grok/"));
+  const pluginRootPath = join(
+    projectRoot,
+    ".grok",
+    "plugins",
+    "prism-generated-grok-pipeline-demo",
+  );
+  const agent = await readFile(join(pluginRootPath, "agents", "worker.md"), "utf8");
+  expect(agent).toContain('description: "Grok worker"');
+  expect(agent).toContain('model: "grok-build"');
+  expect(agent).toContain('- "read_file"');
+  expect(agent).toContain('disallowedTools:\n  - "web_fetch"');
+  expect(agent).toContain('skills:\n  - "testing"');
+  expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
+  const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
+  expect(mcpConfig).toContain('"prism-generated-grok-pipeline-demo"');
+  expect(mcpConfig).toContain(
+    join(
+      pluginRootPath,
+      "mcp",
+      "prism_generated_grok_pipeline_demo",
+      "server.mjs",
+    ),
+  );
+  const mcpServer = await readFile(
+    join(pluginRootPath, "mcp", "prism_generated_grok_pipeline_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(mcpServer).toContain("grok_pipeline_demo_submit_work");
+  expect(await pathExists(join(projectRoot, ".grok", "agents", "worker.md"))).toBe(false);
+});
+
 test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canonical tool runtime is required", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture({
     withCanonicalToolBindings: false,

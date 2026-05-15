@@ -13,16 +13,17 @@ Local global skill roots inspected:
 - OpenCode: `/Users/guilhermecastro/.config/opencode/skills` — 79 skills
 - Claude Code: `/Users/guilhermecastro/.claude/skills` — 131 skills
 - Codex: `/Users/guilhermecastro/.codex/skills` — 77 skills
+- Grok Build: not included in this snapshot
 
 The shared example skillspace lives at `examples/trait-orbit-contracts/deps/agent-core/skillspaces/global-skills.skillspace.ts`.
 
-Most skill names are identical across all three harnesses. The first skillspace records those common names with identical `opencode`, `claude-code`, and `codex-cli` target names, plus a small number of harness-specific entries:
+Most skill names are identical across the inspected harnesses. The first skillspace records those common names with identical `opencode`, `claude-code`, and `codex-cli` target names, plus a small number of harness-specific entries:
 
 - OpenCode-only: `example-skill`, `policy-toml-guardrails`, `tiktok-creative-intelligence`
 - Claude-only examples: `agent-browser` and several specialized design/domain-analysis skills not present in the current OpenCode and Codex roots
 - Codex-only examples: `prism-usage`, `codex-primary-runtime`
 
-The compiler currently lowers agents for OpenCode and Claude Code. Codex bindings are still useful as stable inventory data, but `targets.skillspaces` should name only compile-supported harnesses until Codex lowering exists.
+The compiler currently lowers agents for OpenCode, Claude Code, Codex CLI, Gemini CLI, Amp Code, and Grok Build, with target-specific capability gates. Grok skillspace bindings are allowed when the skill names are known for the Grok environment; do not infer them from the older OpenCode/Claude/Codex snapshot without checking the Grok skill root.
 
 ## Authoring Pattern
 
@@ -41,4 +42,4 @@ export default defineTrait({
 });
 ```
 
-The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Claude Code currently has no per-agent skill permission surface, so permission-only skill access fails closed for Claude Code.
+The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Grok emits resolved skill names into generated agent frontmatter. Claude Code currently has no per-agent skill permission surface, so permission-only skill access fails closed for Claude Code.

@@ -102,11 +102,17 @@ Validation:
 
 Review dispatch:
 
-- Dispatch after commit using at least two Grok reviewer agents, with different lenses.
+- `grok --agent requirements-tracer` reviewed commit `5c02014` and returned verdict `pass`.
+- `grok --agent contract-reviewer` reviewed commit `5c02014` and returned verdict `pass`.
+- Requirements-tracer low findings:
+  - Compile CLI `--harness` help text did not list `grok`; fixed during GLYPH-GROK-03.
+  - Live generated-plugin runtime smoke with `grok inspect --json` remains optional/future because PR1 already validates emitted operations and `grok inspect --json` was only required as a smoke path when practical.
+  - Install-phase Grok rules/skills are enabled by harness registration; documented during GLYPH-GROK-03.
+- Contract-reviewer noted lowerer input looseness matching the existing Claude lowerer pattern; accepted as pre-existing/tolerated interface shape.
 
 ### GLYPH-GROK-03: Documentation and Final Audit
 
-Status: planned
+Status: done
 
 Intent:
 
@@ -117,6 +123,7 @@ Scope:
 
 - `AGENTS.md`
 - `README.md` if it duplicates the supported harness table or compile target docs
+- `docs/skillspaces.md`
 - final validation notes in `grok-lower-goal.md` if needed
 
 Acceptance:
@@ -129,9 +136,30 @@ Acceptance:
 
 Validation:
 
-- Documentation readback.
-- `git diff --check`.
-- Final objective checklist.
+- Documentation readback via `rg -n "Grok Build|grok" AGENTS.md docs/skillspaces.md grok-lower-goal.md`.
+- `git diff --check` passed.
+- Public CLI smoke `bun run dev -- compile <temp-plugin> --harness grok --scope project --project <temp-project> --dry-run` passed and emitted operations under `<temp-project>/.grok/plugins/prism-generated-grok-cli-smoke/`.
+- `bun test src/compile/grok-lowerer.test.ts src/compile/pipeline.test.ts -t "grok|Grok"` passed after the CLI help fix.
+- `bun run typecheck` passed after docs edits.
+- `bun run build` passed after the CLI help fix.
+- `quartz diagnostics '{"root":"/Users/guilhermecastro/Projects/prism","explain":true}' --format pretty` reported zero TypeScript diagnostics after docs edits.
+- `grok inspect --json` ran successfully in the Prism repo and confirmed local Grok `0.1.210` inspection works; it was not run against a generated Prism fixture because the dry-run smoke intentionally performs no writes.
+- `pulsar score --category generated-slop .` hard-failed on existing generated-slop debt:
+  - `src/compile/lowerers/amp-code.ts:350` existing Amp hook `throw-not-implemented`.
+  - repo-wide lowerer duplication, including intentionally mirrored Claude/Grok helpers tracked for Phase 4 extraction.
+- `pulsar score --signal TS-SL-04-unfinished-implementations .` isolated the hard gate to the existing Amp hook stub.
+- `pulsar score --signal TS-SL-01-duplication .` confirmed the Grok-specific duplication is helper-level mirroring with Claude (`renderOrbitSkill`, `planPruning`, `matcherForHook`), accepted for PR1.
+- Final objective checklist completed.
+
+Completion audit:
+
+- First-class harness id: satisfied by `src/types.ts`, `src/harnesses.ts`, `src/manifest.ts`, `src/compile/target-capabilities.ts`, and `src/compile/pipeline.ts`.
+- Dedicated Grok lowerer: satisfied by `src/compile/lowerers/grok.ts`.
+- Native `.grok` output: satisfied by generated plugin root `<grok-root>/plugins/prism-generated-<source-plugin>/`.
+- Agents/skills/orbits/hooks/MCP bundle: satisfied by lowerer planning and `src/compile/grok-lowerer.test.ts`.
+- Pipeline integration: satisfied by `src/compile/pipeline.test.ts` `compilePluginForTarget lowers Grok plugin-bundle surfaces`.
+- Command/config preset restraint: satisfied by `supportsCommands: false`, no `coding-harness` expansion, and docs marking commands/config as follow-up.
+- Code quality gates: TypeScript and Quartz clean; Pulsar residual debt documented above.
 
 Review dispatch:
 

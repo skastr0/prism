@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Gemini CLI, Amp Code, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Gemini CLI, Amp Code, Grok Build, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -25,12 +25,15 @@ A unified plugin distribution system for AI coding harnesses.
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
 | Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` | `~/.gemini/agents/` | `~/.gemini/skills/` |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
+| Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | `~/.factory/droids/` | `~/.factory/skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
 Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
+
+Grok Build support is explicit-target-only in PR1 and is not part of the `coding-harness` preset yet. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml` in PR1.
 
 ## Tech Stack
 
@@ -450,7 +453,7 @@ defineAgent({
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode currently supports executable generated canonical tools through compiler-owned generated plugins. Claude Code currently does not have an equivalent generated-tool runtime in prism: it can receive native `allowed-tools` frontmatter from toolspaces, but compiling an agent that binds canonical synthetic tools to Claude Code fails closed instead of emitting non-executable prose.
+Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins, and Grok supports them through a compiler-owned Grok plugin bundle with a bundled MCP server. Claude Code currently does not have an equivalent generated-tool runtime in prism: it can receive native `allowed-tools` frontmatter from toolspaces, but compiling an agent that binds canonical synthetic tools to Claude Code fails closed instead of emitting non-executable prose.
 
 ### Canonical tools vs harness-native plugins
 
@@ -537,19 +540,20 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code"],
-    "orbits": ["opencode", "claude-code"],
-    "toolspaces": ["opencode", "claude-code"],
-    "modelspaces": ["opencode", "claude-code"]
+    "agents": ["opencode", "claude-code", "grok"],
+    "orbits": ["opencode", "claude-code", "grok"],
+    "tools": ["opencode", "grok"],
+    "toolspaces": ["opencode", "claude-code", "grok"],
+    "modelspaces": ["opencode", "claude-code", "grok"]
   }
 }
 ```
 
 Notes:
 
-- compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, and `modelspaces`
-- `orbits`, `tools`, `toolspaces`, and `modelspaces` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support; tools-only plugins may target Hermes for generated MCP exposure
+- compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
+- `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode and Grok; tools-only plugins may target Hermes for generated MCP exposure
 
 ### CLI
 
@@ -562,6 +566,9 @@ prism compile ./my-plugin --harness claude-code
 
 # Compile canonical tools into a Hermes MCP server and config entry
 prism compile ./my-plugin --harness hermes
+
+# Compile Grok agents, skills, hooks, and canonical tools into a generated Grok plugin bundle
+prism compile ./my-plugin --harness grok
 
 # Compile into a project-local OpenCode root for a business/app repo
 prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
@@ -594,6 +601,15 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Emits canonical `tools/*.tool.ts` as a generated MCP stdio server at `<hermes-root>/prism/mcp/prism_generated_<source-plugin>/server.mjs`
 - Patches `<hermes-root>/config.yaml` with a compiler-owned `mcp_servers.prism-generated-<source-plugin>` entry using `bun <server.mjs>`
 - Fails closed for compiled agents and hooks; profiles, SOUL, and native Hermes Python plugins are intentionally out of scope
+
+#### Grok Build
+
+- Writes one generated plugin bundle per compiled source plugin under `<grok-root>/plugins/prism-generated-<source-plugin>/`
+- Writes compiled agents into the generated plugin's `agents/<name>.md` with Grok frontmatter overrides from `targets.grok`
+- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server plus plugin-local `.mcp.json`
+- Emits `hooks/hooks.json` and bundled hook wrappers using Grok hook event names and Grok deny output for blocking `tool.before` hooks
+- Does not install commands or patch `config.toml` in PR1
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 
@@ -677,7 +693,7 @@ Install targeting lives in `plugin.json` and nowhere else.
     "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"],
     "agents": ["claude-code", "opencode"],
     "skills": ["coding-harness", "claw-harness"],
-    "skillspaces": ["opencode", "claude-code"]
+    "skillspaces": ["opencode", "claude-code", "grok"]
   }
 }
 ```
@@ -687,11 +703,13 @@ Install targeting lives in `plugin.json` and nowhere else.
 - `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `gemini-cli`, `amp-code`, `cursor`, `factory-droid`
 - `claw-harness` → `openclaw`, `hermes`
 
+Grok Build is deliberately not included in `coding-harness` in PR1. Use explicit `grok` targets until native command discovery and preset behavior are validated.
+
 ### Rules to remember
 
 - `plugin.json` is the only targeting source for install planning.
 - There are no file-level targets for rules, commands, agents, or skills.
-- Use explicit harness IDs when a preset would expand to an unsupported surface (for example, `commands` cannot target `amp-code` or `openclaw`).
+- Use explicit harness IDs when a preset would expand to an unsupported surface (for example, `commands` cannot target `amp-code`, `grok`, or `openclaw`).
 - If a plugin contains an artifact type, `targets.<artifact>` must declare where that artifact installs.
 
 ## Harness Overlays

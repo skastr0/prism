@@ -163,7 +163,9 @@ Completion audit:
 
 Review dispatch:
 
-- Dispatch after commit using `grok --agent requirements-tracer` or `grok --agent reviewer`.
+- `grok --agent requirements-tracer` reviewed commit `85727bc` and returned verdict `pass`.
+- `grok --agent reviewer` reviewed commit `85727bc` and returned `request_changes` for two stale Claude capability claims in docs touched by this glyph.
+- Resolution: corrected `AGENTS.md` to state Claude Code emits generated plugin bundles with bundled MCP servers, and corrected `docs/skillspaces.md` to state Claude Code and Grok emit resolved skill names into generated agent frontmatter.
 
 ## Verified Grok Facts
 

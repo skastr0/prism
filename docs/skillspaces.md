@@ -42,4 +42,4 @@ export default defineTrait({
 });
 ```
 
-The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Grok emits resolved skill names into generated agent frontmatter. Claude Code currently has no per-agent skill permission surface, so permission-only skill access fails closed for Claude Code.
+The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Claude Code and Grok emit resolved skill names into generated agent frontmatter; runtime enforcement semantics remain target-specific.

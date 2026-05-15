@@ -453,7 +453,7 @@ defineAgent({
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins, and Grok supports them through a compiler-owned Grok plugin bundle with a bundled MCP server. Claude Code currently does not have an equivalent generated-tool runtime in prism: it can receive native `allowed-tools` frontmatter from toolspaces, but compiling an agent that binds canonical synthetic tools to Claude Code fails closed instead of emitting non-executable prose.
+Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code and Grok support them through compiler-owned plugin bundles with bundled MCP servers.
 
 ### Canonical tools vs harness-native plugins
 
@@ -588,11 +588,11 @@ prism compile ./my-plugin --harness claude-code --dry-run
 
 #### Claude Code
 
-- Writes `<claude-root>/agents/<name>.md` for each compiled agent with Claude-style YAML frontmatter
+- Writes compiled agents into the generated plugin's `agents/<name>.md` with Claude-style YAML frontmatter
 - Supports `description`, `model`, `temperature`, `top_p`, and `allowed-tools` from compile output
-- Writes `<claude-root>/skills/<orbit-name>/SKILL.md` for each concrete orbit instance
-- Does **not** emit generated plugins or synthetic contract tools
-- Fails closed when the composed agent surface contains canonical tool bindings, because those bindings require an executable generated-tool runtime
+- Writes one generated plugin bundle per compiled source plugin under `<claude-root>/plugins/prism-generated-<source-plugin>/`
+- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server plus plugin-local `.mcp.json` when agents bind canonical tools
 
 #### Hermes
 

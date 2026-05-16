@@ -1399,6 +1399,306 @@ const resolveOrbitAssignedAgent = (
     return yield* resolveAgentCapabilities(agent, reg);
   });
 
+type PhaseOrbitReferenceResolution = "orbit" | "agent" | undefined;
+
+const phaseReferenceKinds = (phase: OrbitPhase): string[] =>
+  [
+    phase.orbit ? "orbit" : undefined,
+    phase.orbit_binding ? "orbit_binding" : undefined,
+    phase.agents.length > 0 ? "agents" : undefined,
+  ].filter((kind): kind is string => kind !== undefined);
+
+const validatePhaseReferenceShape = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+): OrbitValidationError | undefined => {
+  const referenceKinds = phaseReferenceKinds(phase);
+  if (referenceKinds.length <= 1) return undefined;
+
+  return orbitError(
+    orbit,
+    `phases[${phaseIndex}]`,
+    `phase '${phase.name}' declares multiple references (${referenceKinds.join(", ")}); use only one of orbit, orbit_binding, or agents`,
+  );
+};
+
+const resolvePhaseOrbitReference = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  registry: PluginRegistry,
+): Effect.Effect<PhaseOrbitReferenceResolution, CompileError> =>
+  Effect.gen(function* () {
+    if (!phase.orbit) return undefined;
+
+    const reg = yield* resolveRefToRegistry(phase.orbit, registry, orbit.sourcePath);
+    const name = parseNamedRef(phase.orbit).name;
+    const referencedOrbit = reg.orbits.get(name);
+
+    if (referencedOrbit) {
+      if (referencedOrbit.parameters.length > 0) {
+        return yield* Effect.fail(
+          orbitError(
+            orbit,
+            `phases[${phaseIndex}].orbit`,
+            `phase '${phase.name}' references parameterized orbit '${phase.orbit}' without bindings; use orbit_binding instead`,
+          ),
+        );
+      }
+      return "orbit";
+    }
+
+    if (!reg.agents.has(name)) {
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].orbit`,
+          `phase '${phase.name}' references unknown orbit or agent '${phase.orbit}'`,
+        ),
+      );
+    }
+
+    return "agent";
+  });
+
+const validatePhaseOrbitBinding = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  registry: PluginRegistry,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    if (!phase.orbit_binding) return;
+
+    const reg = yield* resolveRefToRegistry(
+      phase.orbit_binding.orbit,
+      registry,
+      orbit.sourcePath,
+    );
+    const name = parseNamedRef(phase.orbit_binding.orbit).name;
+    const referencedOrbit = reg.orbits.get(name);
+
+    if (!referencedOrbit) {
+      const message = reg.agents.has(name)
+        ? `phase '${phase.name}' uses orbit_binding for '${phase.orbit_binding.orbit}', but that reference resolves to an agent`
+        : `phase '${phase.name}' references unknown orbit '${phase.orbit_binding.orbit}'`;
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].orbit_binding`,
+          message,
+        ),
+      );
+    }
+
+    const providedBindings = phase.orbit_binding.bindings ?? {};
+    const targetParameters = orbitParameterMap(referencedOrbit);
+
+    const unknownBindings = Object.keys(providedBindings).filter(
+      (bindingName) => !targetParameters.has(bindingName),
+    );
+    if (unknownBindings.length > 0) {
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].orbit_binding.bindings`,
+          `phase '${phase.name}' passes unknown binding(s) to '${phase.orbit_binding.orbit}': ${unknownBindings.join(", ")}`,
+        ),
+      );
+    }
+
+    const missingRequired = referencedOrbit.parameters
+      .filter((parameter) => parameterIsRequired(parameter))
+      .map((parameter) => parameter.name)
+      .filter((bindingName) => !hasBinding(providedBindings, bindingName));
+    if (missingRequired.length > 0) {
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].orbit_binding.bindings`,
+          `phase '${phase.name}' is missing required binding(s) for '${phase.orbit_binding.orbit}': ${missingRequired.join(", ")}`,
+        ),
+      );
+    }
+  });
+
+const resolvePhaseAssignedAgents = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  registry: PluginRegistry,
+): Effect.Effect<ResolvedAgentCapabilities[], CompileError> =>
+  Effect.gen(function* () {
+    const assignedAgentCapabilities: ResolvedAgentCapabilities[] = [];
+    const assignedAgentIds = new Set<string>();
+
+    for (const [agentIndex, agentRef] of phase.agents.entries()) {
+      const agentCapabilities = yield* resolveOrbitAssignedAgent(
+        orbit,
+        phaseIndex,
+        agentIndex,
+        agentRef,
+        registry,
+      );
+      const agentId = `${agentCapabilities.agent.name}:${agentCapabilities.agent.sourcePath}`;
+      if (assignedAgentIds.has(agentId)) {
+        return yield* Effect.fail(
+          orbitError(
+            orbit,
+            `phases[${phaseIndex}].agents[${agentIndex}]`,
+            `phase '${phase.name}' assigns duplicate agent '${agentRef}'`,
+          ),
+        );
+      }
+      assignedAgentIds.add(agentId);
+      assignedAgentCapabilities.push(agentCapabilities);
+    }
+
+    return assignedAgentCapabilities;
+  });
+
+const validatePhaseRequiresAssignedAgents = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+): OrbitValidationError | undefined => {
+  if (phase.requires.length === 0 || phase.agents.length > 0) return undefined;
+
+  return orbitError(
+    orbit,
+    `phases[${phaseIndex}].requires`,
+    `phase '${phase.name}' declares trait requirements but assigns no agents`,
+  );
+};
+
+const validatePhaseRequirement = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  requirementIndex: number,
+  assignedAgentCapabilities: ReadonlyArray<ResolvedAgentCapabilities>,
+  registry: PluginRegistry,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    const requirement = phase.requires[requirementIndex]!;
+    const min = requirement.min ?? 1;
+    if (!Number.isInteger(min) || min < 1) {
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].requires[${requirementIndex}].min`,
+          "min must be an integer greater than or equal to 1",
+        ),
+      );
+    }
+
+    if (requirement.all.length === 0) {
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].requires[${requirementIndex}].all`,
+          "trait requirement must include at least one trait",
+        ),
+      );
+    }
+
+    const requiredTraitIds = new Set<string>();
+    for (const [traitIndex, traitRef] of requirement.all.entries()) {
+      const traitId = yield* resolveOrbitRequiredTraitId(
+        orbit,
+        `phases[${phaseIndex}].requires[${requirementIndex}].all[${traitIndex}]`,
+        traitRef,
+        registry,
+      );
+      requiredTraitIds.add(traitId);
+    }
+
+    const satisfiedCount = assignedAgentCapabilities.filter((agentCapabilities) =>
+      [...requiredTraitIds].every((traitId) =>
+        agentCapabilities.canonicalTraitIds.includes(traitId),
+      ),
+    ).length;
+
+    if (satisfiedCount < min) {
+      return yield* Effect.fail(
+        orbitError(
+          orbit,
+          `phases[${phaseIndex}].requires[${requirementIndex}]`,
+          `phase '${phase.name}' requires at least ${min} assigned agent(s) with all traits [${[...requiredTraitIds].join(", ")}], but only ${satisfiedCount} match`,
+        ),
+      );
+    }
+  });
+
+const validatePhaseRequirements = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  assignedAgentCapabilities: ReadonlyArray<ResolvedAgentCapabilities>,
+  registry: PluginRegistry,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    for (const requirementIndex of phase.requires.keys()) {
+      yield* validatePhaseRequirement(
+        orbit,
+        phase,
+        phaseIndex,
+        requirementIndex,
+        assignedAgentCapabilities,
+        registry,
+      );
+    }
+  });
+
+const validateOrbitPhase = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  registry: PluginRegistry,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    const referenceShapeError = validatePhaseReferenceShape(orbit, phase, phaseIndex);
+    if (referenceShapeError) {
+      return yield* Effect.fail(referenceShapeError);
+    }
+
+    const orbitReference = yield* resolvePhaseOrbitReference(
+      orbit,
+      phase,
+      phaseIndex,
+      registry,
+    );
+    if (orbitReference === "orbit") return;
+
+    yield* validatePhaseOrbitBinding(orbit, phase, phaseIndex, registry);
+
+    const missingAgentsError = validatePhaseRequiresAssignedAgents(
+      orbit,
+      phase,
+      phaseIndex,
+    );
+    if (missingAgentsError) {
+      return yield* Effect.fail(missingAgentsError);
+    }
+
+    if (phase.agents.length === 0) return;
+
+    const assignedAgentCapabilities = yield* resolvePhaseAssignedAgents(
+      orbit,
+      phase,
+      phaseIndex,
+      registry,
+    );
+    yield* validatePhaseRequirements(
+      orbit,
+      phase,
+      phaseIndex,
+      assignedAgentCapabilities,
+      registry,
+    );
+  });
+
 const phaseAssignedLocalAgents = (
   orbit: Orbit,
   registry: PluginRegistry,
@@ -1582,189 +1882,6 @@ export const validateOrbit = (
     }
 
     for (const [index, phase] of orbit.phases.entries()) {
-      const referenceKinds = [
-        phase.orbit ? "orbit" : undefined,
-        phase.orbit_binding ? "orbit_binding" : undefined,
-        phase.agents.length > 0 ? "agents" : undefined,
-      ].filter((kind): kind is string => kind !== undefined);
-
-      if (referenceKinds.length > 1) {
-        return yield* Effect.fail(
-          orbitError(
-            orbit,
-            `phases[${index}]`,
-            `phase '${phase.name}' declares multiple references (${referenceKinds.join(", ")}); use only one of orbit, orbit_binding, or agents`,
-          ),
-        );
-      }
-
-      if (phase.orbit) {
-        const reg = yield* resolveRefToRegistry(phase.orbit, registry, orbit.sourcePath);
-        const name = parseNamedRef(phase.orbit).name;
-        const referencedOrbit = reg.orbits.get(name);
-
-        if (referencedOrbit) {
-          if (referencedOrbit.parameters.length > 0) {
-            return yield* Effect.fail(
-              orbitError(
-                orbit,
-                `phases[${index}].orbit`,
-                `phase '${phase.name}' references parameterized orbit '${phase.orbit}' without bindings; use orbit_binding instead`,
-              ),
-            );
-          }
-          continue;
-        }
-
-        if (!reg.agents.has(name)) {
-          return yield* Effect.fail(
-            orbitError(
-              orbit,
-              `phases[${index}].orbit`,
-              `phase '${phase.name}' references unknown orbit or agent '${phase.orbit}'`,
-            ),
-          );
-        }
-      }
-
-      if (phase.orbit_binding) {
-        const reg = yield* resolveRefToRegistry(
-          phase.orbit_binding.orbit,
-          registry,
-          orbit.sourcePath,
-        );
-        const name = parseNamedRef(phase.orbit_binding.orbit).name;
-        const referencedOrbit = reg.orbits.get(name);
-
-        if (!referencedOrbit) {
-          const message = reg.agents.has(name)
-            ? `phase '${phase.name}' uses orbit_binding for '${phase.orbit_binding.orbit}', but that reference resolves to an agent`
-            : `phase '${phase.name}' references unknown orbit '${phase.orbit_binding.orbit}'`;
-          return yield* Effect.fail(
-            orbitError(
-              orbit,
-              `phases[${index}].orbit_binding`,
-              message,
-            ),
-          );
-        }
-
-        const providedBindings = phase.orbit_binding.bindings ?? {};
-        const targetParameters = orbitParameterMap(referencedOrbit);
-
-        const unknownBindings = Object.keys(providedBindings).filter(
-          (bindingName) => !targetParameters.has(bindingName),
-        );
-        if (unknownBindings.length > 0) {
-          return yield* Effect.fail(
-            orbitError(
-              orbit,
-              `phases[${index}].orbit_binding.bindings`,
-              `phase '${phase.name}' passes unknown binding(s) to '${phase.orbit_binding.orbit}': ${unknownBindings.join(", ")}`,
-            ),
-          );
-        }
-
-        const missingRequired = referencedOrbit.parameters
-          .filter((parameter) => parameterIsRequired(parameter))
-          .map((parameter) => parameter.name)
-          .filter((bindingName) => !hasBinding(providedBindings, bindingName));
-        if (missingRequired.length > 0) {
-          return yield* Effect.fail(
-            orbitError(
-              orbit,
-              `phases[${index}].orbit_binding.bindings`,
-              `phase '${phase.name}' is missing required binding(s) for '${phase.orbit_binding.orbit}': ${missingRequired.join(", ")}`,
-            ),
-          );
-        }
-      }
-
-      if (phase.requires.length > 0 && phase.agents.length === 0) {
-        return yield* Effect.fail(
-          orbitError(
-            orbit,
-            `phases[${index}].requires`,
-            `phase '${phase.name}' declares trait requirements but assigns no agents`,
-          ),
-        );
-      }
-
-      if (phase.agents.length > 0) {
-        const assignedAgentCapabilities: ResolvedAgentCapabilities[] = [];
-        const assignedAgentIds = new Set<string>();
-
-        for (const [agentIndex, agentRef] of phase.agents.entries()) {
-          const agentCapabilities = yield* resolveOrbitAssignedAgent(
-            orbit,
-            index,
-            agentIndex,
-            agentRef,
-            registry,
-          );
-          const agentId = `${agentCapabilities.agent.name}:${agentCapabilities.agent.sourcePath}`;
-          if (assignedAgentIds.has(agentId)) {
-            return yield* Effect.fail(
-              orbitError(
-                orbit,
-                `phases[${index}].agents[${agentIndex}]`,
-                `phase '${phase.name}' assigns duplicate agent '${agentRef}'`,
-              ),
-            );
-          }
-          assignedAgentIds.add(agentId);
-          assignedAgentCapabilities.push(agentCapabilities);
-        }
-
-        for (const [requirementIndex, requirement] of phase.requires.entries()) {
-          const min = requirement.min ?? 1;
-          if (!Number.isInteger(min) || min < 1) {
-            return yield* Effect.fail(
-              orbitError(
-                orbit,
-                `phases[${index}].requires[${requirementIndex}].min`,
-                "min must be an integer greater than or equal to 1",
-              ),
-            );
-          }
-
-          if (requirement.all.length === 0) {
-            return yield* Effect.fail(
-              orbitError(
-                orbit,
-                `phases[${index}].requires[${requirementIndex}].all`,
-                "trait requirement must include at least one trait",
-              ),
-            );
-          }
-
-          const requiredTraitIds = new Set<string>();
-          for (const [traitIndex, traitRef] of requirement.all.entries()) {
-            const traitId = yield* resolveOrbitRequiredTraitId(
-              orbit,
-              `phases[${index}].requires[${requirementIndex}].all[${traitIndex}]`,
-              traitRef,
-              registry,
-            );
-            requiredTraitIds.add(traitId);
-          }
-
-          const satisfiedCount = assignedAgentCapabilities.filter((agentCapabilities) =>
-            [...requiredTraitIds].every((traitId) =>
-              agentCapabilities.canonicalTraitIds.includes(traitId),
-            ),
-          ).length;
-
-          if (satisfiedCount < min) {
-            return yield* Effect.fail(
-              orbitError(
-                orbit,
-                `phases[${index}].requires[${requirementIndex}]`,
-                `phase '${phase.name}' requires at least ${min} assigned agent(s) with all traits [${[...requiredTraitIds].join(", ")}], but only ${satisfiedCount} match`,
-              ),
-            );
-          }
-        }
-      }
+      yield* validateOrbitPhase(orbit, phase, index, registry);
     }
   });

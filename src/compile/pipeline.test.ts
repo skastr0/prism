@@ -8,6 +8,15 @@ import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
 import { readLockfile } from "./lockfile.js";
 import { compilePluginForTarget } from "./pipeline.js";
+import { emptyRegistry, type PluginRegistry } from "./registry.js";
+import { validateOrbit } from "./resolve.js";
+import {
+  Agent,
+  Orbit,
+  Trait,
+  type NormalizedOrbitPhase,
+  type OrbitParameter,
+} from "./sources.js";
 import { createCanonicalCompileFixture } from "./test-fixtures.js";
 import {
   formatManifestTargets,
@@ -119,6 +128,102 @@ const visibleSkillsForPermission = (
   skills
     .filter((skill) => skillPermissionAction(permission, skill) !== "deny")
     .sort((left, right) => left.localeCompare(right));
+
+const emptyAccess = { tools: [], toolGroups: [], skills: [] };
+
+const createValidationTrait = (name: string): Trait =>
+  new Trait({
+    name,
+    sourcePath: `/tmp/${name}.trait.ts`,
+    instructions: [],
+    access: emptyAccess,
+    tools: {},
+    inject: { skills: [] },
+    require: { tools: [], skills: [] },
+  });
+
+const createValidationAgent = (
+  name: string,
+  traits: ReadonlyArray<string> = [],
+  sourcePath = `/tmp/${name}.agent.ts`,
+): Agent =>
+  new Agent({
+    name,
+    sourcePath,
+    description: `${name} agent`,
+    identity: "identity",
+    traits: traits.map((ref) => ({ ref, tools: {} })),
+    access: emptyAccess,
+    skills: [],
+    targets: {},
+  });
+
+const createValidationOrbit = (options: {
+  readonly name?: string;
+  readonly parameters?: ReadonlyArray<OrbitParameter>;
+  readonly phase?: Partial<NormalizedOrbitPhase>;
+}): Orbit =>
+  new Orbit({
+    name: options.name ?? "parent",
+    sourcePath: `/tmp/${options.name ?? "parent"}.orbit.ts`,
+    description: `${options.name ?? "parent"} orbit`,
+    parameters: options.parameters ?? [],
+    phases: [
+      {
+        name: "Validate phase",
+        agents: [],
+        requires: [],
+        ...options.phase,
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+const createOrbitValidationRegistry = (): PluginRegistry => {
+  const registry = emptyRegistry("/tmp/orbit-validation", "orbit-validation", "0.1.0");
+  registry.traits.set("reviewable", createValidationTrait("reviewable"));
+  registry.traits.set("self-assessing", createValidationTrait("self-assessing"));
+  registry.agents.set("builder", createValidationAgent("builder", ["self-assessing"]));
+  registry.agents.set("reviewer", createValidationAgent("reviewer", ["reviewable"]));
+  const depRegistry = emptyRegistry("/tmp/orbit-validation-dep", "orbit-validation-dep", "0.1.0");
+  depRegistry.traits.set("self-assessing", createValidationTrait("self-assessing"));
+  depRegistry.agents.set(
+    "builder",
+    createValidationAgent(
+      "builder",
+      ["self-assessing"],
+      registry.agents.get("builder")!.sourcePath,
+    ),
+  );
+  registry.deps.set("alias", depRegistry);
+  registry.orbits.set("concrete", createValidationOrbit({ name: "concrete" }));
+  registry.orbits.set(
+    "template",
+    createValidationOrbit({
+      name: "template",
+      parameters: [
+        { name: "required" },
+        { name: "optional", required: false },
+      ],
+    }),
+  );
+  return registry;
+};
+
+const expectOrbitValidationFailure = async (
+  orbit: Orbit,
+  registry: PluginRegistry,
+): Promise<Extract<CompileError, { readonly _tag: "OrbitValidationError" }>> => {
+  const exit = await Effect.runPromiseExit(validateOrbit(orbit, registry));
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("OrbitValidationError");
+  if (failure._tag !== "OrbitValidationError") {
+    throw new Error("Expected OrbitValidationError");
+  }
+  return failure;
+};
 
 const createCanonicalLanguageFixture = async (options?: {
   invalidOrbit?: boolean;
@@ -1269,6 +1374,154 @@ test("orbit validation fails when assigned agents do not satisfy requirements", 
     expect(failure.message).toContain("reviewable");
     expect(failure.message).toContain("only 0 match");
   }
+});
+
+test("validateOrbit rejects direct parameterized orbit references", async () => {
+  const registry = createOrbitValidationRegistry();
+  const orbit = createValidationOrbit({
+    phase: { orbit: "template" },
+  });
+
+  const failure = await expectOrbitValidationFailure(orbit, registry);
+
+  expect(failure.field).toBe("phases[0].orbit");
+  expect(failure.message).toContain("references parameterized orbit 'template'");
+  expect(failure.message).toContain("use orbit_binding instead");
+});
+
+test("validateOrbit accepts direct concrete orbit references without checking phase-local requirements", async () => {
+  const registry = createOrbitValidationRegistry();
+  const orbit = createValidationOrbit({
+    phase: { orbit: "concrete", requires: [{ all: ["missing-trait"], min: 0 }] },
+  });
+
+  await Effect.runPromise(validateOrbit(orbit, registry));
+});
+
+test("validateOrbit validates orbit_binding target and parameter contracts", async () => {
+  const cases: Array<{
+    readonly phase: Partial<NormalizedOrbitPhase>;
+    readonly field: string;
+    readonly message: string;
+  }> = [
+    {
+      phase: { orbit_binding: { orbit: "builder", bindings: { required: "x" } } },
+      field: "phases[0].orbit_binding",
+      message: "resolves to an agent",
+    },
+    {
+      phase: { orbit_binding: { orbit: "missing", bindings: { required: "x" } } },
+      field: "phases[0].orbit_binding",
+      message: "references unknown orbit 'missing'",
+    },
+    {
+      phase: { orbit_binding: { orbit: "template", bindings: { extra: "x" } } },
+      field: "phases[0].orbit_binding.bindings",
+      message: "passes unknown binding(s) to 'template': extra",
+    },
+    {
+      phase: { orbit_binding: { orbit: "template", bindings: {} } },
+      field: "phases[0].orbit_binding.bindings",
+      message: "is missing required binding(s) for 'template': required",
+    },
+  ];
+
+  for (const current of cases) {
+    const registry = createOrbitValidationRegistry();
+    const orbit = createValidationOrbit({ phase: current.phase });
+
+    const failure = await expectOrbitValidationFailure(orbit, registry);
+
+    expect(failure.field).toBe(current.field);
+    expect(failure.message).toContain(current.message);
+  }
+});
+
+test("validateOrbit preserves phase reference and requirement failure ordering", async () => {
+  const cases: Array<{
+    readonly phase: Partial<NormalizedOrbitPhase>;
+    readonly field: string;
+    readonly message: string;
+  }> = [
+    {
+      phase: { orbit: "concrete", agents: ["builder"] },
+      field: "phases[0]",
+      message: "declares multiple references",
+    },
+    {
+      phase: { agents: ["missing"] },
+      field: "phases[0].agents[0]",
+      message: "references unknown agent 'missing'",
+    },
+    {
+      phase: { agents: ["builder", "builder"] },
+      field: "phases[0].agents[1]",
+      message: "assigns duplicate agent 'builder'",
+    },
+    {
+      phase: { agents: ["builder", "alias:builder"] },
+      field: "phases[0].agents[1]",
+      message: "assigns duplicate agent 'alias:builder'",
+    },
+    {
+      phase: { requires: [{ all: ["reviewable"] }] },
+      field: "phases[0].requires",
+      message: "declares trait requirements but assigns no agents",
+    },
+    {
+      phase: { orbit: "builder", requires: [{ all: ["reviewable"] }] },
+      field: "phases[0].requires",
+      message: "declares trait requirements but assigns no agents",
+    },
+    {
+      phase: { agents: ["builder"], requires: [{ all: ["reviewable"], min: 0 }] },
+      field: "phases[0].requires[0].min",
+      message: "min must be an integer greater than or equal to 1",
+    },
+    {
+      phase: { agents: ["builder"], requires: [{ all: [], min: 0 }] },
+      field: "phases[0].requires[0].min",
+      message: "min must be an integer greater than or equal to 1",
+    },
+    {
+      phase: { agents: ["builder"], requires: [{ all: ["missing-trait"], min: 0 }] },
+      field: "phases[0].requires[0].min",
+      message: "min must be an integer greater than or equal to 1",
+    },
+    {
+      phase: { agents: ["builder"], requires: [{ all: [] }] },
+      field: "phases[0].requires[0].all",
+      message: "trait requirement must include at least one trait",
+    },
+    {
+      phase: { agents: ["builder"], requires: [{ all: ["missing-trait"] }] },
+      field: "phases[0].requires[0].all[0]",
+      message: "references unknown trait 'missing-trait'",
+    },
+  ];
+
+  for (const current of cases) {
+    const registry = createOrbitValidationRegistry();
+    const orbit = createValidationOrbit({ phase: current.phase });
+
+    const failure = await expectOrbitValidationFailure(orbit, registry);
+
+    expect(failure.field).toBe(current.field);
+    expect(failure.message).toContain(current.message);
+  }
+});
+
+test("validateOrbit rejects template placeholders inside references before resolution", async () => {
+  const registry = createOrbitValidationRegistry();
+  const orbit = createValidationOrbit({
+    parameters: [{ name: "Agent" }],
+    phase: { agents: ["${Agent}"] },
+  });
+
+  const failure = await expectOrbitValidationFailure(orbit, registry);
+
+  expect(failure.field).toBe("phases[0].agents[0]");
+  expect(failure.message).toBe("reference names cannot contain template placeholders");
 });
 
 test("orbit orchestrator validation fails when the orchestrator agent does not exist", async () => {

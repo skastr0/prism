@@ -70,7 +70,41 @@ const extractStringAnnotation = (
   return annotation._tag === "Some" ? annotation.value : undefined;
 };
 
+type SchemaPropertySignature = SchemaAST.TypeLiteral["propertySignatures"][number];
+
+const firstStringAnnotation = (
+  ast: SchemaAST.AST,
+  annotationIds: readonly symbol[],
+): string | undefined => {
+  for (const annotationId of annotationIds) {
+    const annotation = extractStringAnnotation(ast, annotationId);
+    if (annotation !== undefined) return annotation;
+  }
+  return undefined;
+};
+
 const astToToolSchema = (ast: SchemaAST.AST): ZodNode => {
+  const primitiveNode = primitiveAstToToolSchema(ast);
+  if (primitiveNode) return primitiveNode;
+
+  switch (ast._tag) {
+    case "Union":
+      return unionAstToToolSchema(ast);
+    case "TupleType":
+      return tupleAstToArraySchema(ast);
+    case "TypeLiteral":
+      return typeLiteralAstToObjectSchema(ast, [SchemaAST.DescriptionAnnotationId]);
+    case "Refinement":
+    case "Transformation":
+      return astToToolSchema(ast.from);
+    case "Suspend":
+      return astToToolSchema(ast.f());
+    default:
+      throw unsupportedAstError(ast);
+  }
+};
+
+const primitiveAstToToolSchema = (ast: SchemaAST.AST): ZodNode | undefined => {
   switch (ast._tag) {
     case "StringKeyword":
       return tool.schema.string();
@@ -82,59 +116,75 @@ const astToToolSchema = (ast: SchemaAST.AST): ZodNode => {
       return tool.schema.object({}).catchall(tool.schema.unknown());
     case "Literal":
       return tool.schema.literal(ast.literal as string | number | boolean);
-    case "Union": {
-      // Treat union of literals as enum.
-      const allLiterals = ast.types.every((t) => t._tag === "Literal");
-      if (allLiterals) {
-        const values = ast.types.map((t) => (t as SchemaAST.Literal).literal) as ReadonlyArray<
-          string
-        >;
-        return tool.schema.enum(values as [string, ...string[]]);
-      }
-      // Optional fields produce Union([T, UndefinedKeyword]). Strip the
-      // undefined and recurse on the remaining type. The `.optional()` call
-      // happens at the PropertySignature level in TypeLiteral / toolArgsFromSchema.
-      const nonUndefined = ast.types.filter((t) => t._tag !== "UndefinedKeyword");
-      if (nonUndefined.length === 1) {
-        return astToToolSchema(nonUndefined[0]!);
-      }
-      // Union of multiple non-undefined types (e.g. string | number) — unsupported.
-      throw new Error(
-        `schema-bridge: only unions of literals or optional-wrapped types are supported, got ${ast.types
-          .map((t) => t._tag)
-          .join(" | ")}`,
-      );
-    }
-    case "TupleType": {
-      // Effect represents arrays as TupleType with zero elements and one rest.
-      if (ast.elements.length === 0 && ast.rest.length === 1) {
-        return tool.schema.array(astToToolSchema(ast.rest[0]!.type));
-      }
-      throw new Error("schema-bridge: only simple arrays are supported (TupleType with single rest)");
-    }
-    case "TypeLiteral": {
-      const shape: Record<string, ZodNode> = {};
-      for (const prop of ast.propertySignatures) {
-        let node = astToToolSchema(prop.type);
-        const desc = extractStringAnnotation(prop.type, SchemaAST.DescriptionAnnotationId);
-        if (desc) node = node.describe(desc);
-        if (prop.isOptional) node = node.optional();
-        shape[String(prop.name)] = node;
-      }
-      return tool.schema.object(shape);
-    }
-    case "Refinement":
-      // Brand + pattern refinements: unwrap to the underlying type but keep the description.
-      return astToToolSchema(ast.from);
-    case "Transformation":
-      // Schema.brand() / other transformations: unwrap to the readable surface.
-      return astToToolSchema(ast.from);
-    case "Suspend":
-      return astToToolSchema(ast.f());
     default:
-      throw new Error(`schema-bridge: unsupported AST tag: ${ast._tag}`);
+      return undefined;
   }
 };
+
+const unionAstToToolSchema = (ast: SchemaAST.Union): ZodNode => {
+  if (isLiteralUnion(ast)) return literalUnionAstToEnumSchema(ast);
+
+  const optionalInner = optionalUnionInnerType(ast);
+  if (optionalInner) return astToToolSchema(optionalInner);
+
+  throw unsupportedUnionError(ast);
+};
+
+const isLiteralUnion = (ast: SchemaAST.Union): boolean =>
+  ast.types.every((type) => type._tag === "Literal");
+
+const literalUnionAstToEnumSchema = (ast: SchemaAST.Union): ZodNode => {
+  const values = ast.types.map((type) => (type as SchemaAST.Literal).literal) as ReadonlyArray<
+    string
+  >;
+  return tool.schema.enum(values as [string, ...string[]]);
+};
+
+const optionalUnionInnerType = (
+  ast: SchemaAST.Union,
+): SchemaAST.AST | undefined => {
+  const nonUndefined = ast.types.filter((type) => type._tag !== "UndefinedKeyword");
+  return nonUndefined.length === 1 ? nonUndefined[0] : undefined;
+};
+
+const tupleAstToArraySchema = (ast: SchemaAST.TupleType): ZodNode => {
+  if (ast.elements.length === 0 && ast.rest.length === 1) {
+    return tool.schema.array(astToToolSchema(ast.rest[0]!.type));
+  }
+  throw new Error("schema-bridge: only simple arrays are supported (TupleType with single rest)");
+};
+
+const typeLiteralAstToObjectSchema = (
+  ast: SchemaAST.TypeLiteral,
+  annotationIds: readonly symbol[],
+): ZodNode => {
+  const shape: Record<string, ZodNode> = {};
+  for (const prop of ast.propertySignatures) {
+    shape[String(prop.name)] = propertySignatureToToolSchema(prop, annotationIds);
+  }
+  return tool.schema.object(shape);
+};
+
+const propertySignatureToToolSchema = (
+  prop: SchemaPropertySignature,
+  annotationIds: readonly symbol[],
+): ZodNode => {
+  let node = astToToolSchema(prop.type);
+  const desc = firstStringAnnotation(prop.type, annotationIds);
+  if (desc) node = node.describe(desc);
+  if (prop.isOptional) node = node.optional();
+  return node;
+};
+
+const unsupportedUnionError = (ast: SchemaAST.Union): Error =>
+  new Error(
+    `schema-bridge: only unions of literals or optional-wrapped types are supported, got ${ast.types
+      .map((type) => type._tag)
+      .join(" | ")}`,
+  );
+
+const unsupportedAstError = (ast: SchemaAST.AST): Error =>
+  new Error(`schema-bridge: unsupported AST tag: ${ast._tag}`);
 
 /**
  * Convert a top-level Schema.Struct to the args record opencode expects.
@@ -152,13 +202,10 @@ export const toolArgsFromSchema = (
   }
   const result: Record<string, ZodNode> = {};
   for (const prop of ast.propertySignatures) {
-    let node = astToToolSchema(prop.type);
-    const desc =
-      extractStringAnnotation(prop.type, SchemaAST.DescriptionAnnotationId) ??
-      extractStringAnnotation(prop.type, SchemaAST.TitleAnnotationId);
-    if (desc) node = node.describe(desc);
-    if (prop.isOptional) node = node.optional();
-    result[String(prop.name)] = node;
+    result[String(prop.name)] = propertySignatureToToolSchema(prop, [
+      SchemaAST.DescriptionAnnotationId,
+      SchemaAST.TitleAnnotationId,
+    ]);
   }
   return result;
 };

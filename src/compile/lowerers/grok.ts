@@ -5,16 +5,11 @@
  * <grok-root>/plugins/prism-generated-<source-plugin>/.
  */
 
-import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
-import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
+import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
@@ -22,6 +17,7 @@ import {
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import {
   exists,
   listDirRecursive,
@@ -29,10 +25,16 @@ import {
 } from "../../fs.js";
 import type { HarnessScope } from "../../types.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
-import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
-import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { LowerOperation } from "./opencode.js";
-import { executeStandardLowering, normalizeBundleSegment, yamlScalar } from "./shared.js";
+import {
+  bundleGeneratedHookWrapper,
+  executeStandardLowering,
+  matcherForResolvedToolHook,
+  normalizeBundleSegment,
+  planGeneratedPluginFilePruning,
+  renderStandardOrbitSkill,
+  yamlScalar,
+} from "./shared.js";
 
 const TARGET_ID = "grok" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -76,28 +78,6 @@ const stringArray = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
-
-const bindingFromToolSource = (
-  pluginName: string,
-  sourcePath: string,
-): ResolvedContractBinding => {
-  const toolName = basename(sourcePath, ".tool.ts");
-  return {
-    kind: "permission",
-    logicalName: toolName,
-    toolPluginName: pluginName,
-    toolName,
-    toolSourcePath: sourcePath,
-  };
-};
-
-const bindingsFromCanonicalTools = (
-  pluginName: string,
-  tools: ReadonlyArray<CanonicalTool>,
-): ReadonlyArray<ResolvedContractBinding> =>
-  tools
-    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
 
 const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
   ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
@@ -208,31 +188,6 @@ const renderAgentMarkdown = (
   return `${serializeFrontmatter(composeAgentFrontmatter(agent))}\n\n${agent.body}\n`;
 };
 
-const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
-
-const renderOrbitSkill = (
-  orbit: Orbit,
-  sourcePluginName: string,
-  registry: PluginRegistry | undefined,
-): string => {
-  const lines: string[] = [
-    serializeFrontmatter({ name: orbit.name, description: orbit.description }),
-    "",
-    orbitSkillOwnerMarker(sourcePluginName),
-    "",
-  ];
-  if (registry) {
-    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
-  } else {
-    lines.push(`# ${orbit.name}`, "", orbit.description, "");
-    if (orbit.body.trim().length > 0) {
-      lines.push(orbit.body.trim(), "");
-    }
-  }
-  return lines.join("\n");
-};
-
 const grokNativeHookEvent = (event: Hook["event"]): string => {
   switch (event) {
     case "tool.before":
@@ -245,8 +200,6 @@ const grokNativeHookEvent = (event: Hook["event"]): string => {
       return "SessionEnd";
   }
 };
-
-const regexEscape = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 
 const grokMcpToolNameForBinding = (
   sourcePluginName: string,
@@ -268,21 +221,6 @@ const collectHookBindings = (
     if (binding.contract) byRef.set(binding.contract.name, mcpName);
   }
   return byRef;
-};
-
-const matcherForHook = (
-  match: ResolvedHookMatch,
-  canonicalToolNames: ReadonlyMap<string, string>,
-): string | undefined => {
-  const tool = match.tool;
-  if (!tool) return undefined;
-  if (tool.kind === "any") return ".*";
-  if (tool.kind === "native-tools") {
-    if (tool.names.length === 0) return undefined;
-    if (tool.names.length === 1) return tool.names[0]!;
-    return `^(?:${tool.names.map(regexEscape).join("|")})$`;
-  }
-  return canonicalToolNames.get(tool.ref) ?? tool.ref;
 };
 
 const renderHooksJson = async (
@@ -310,7 +248,7 @@ const renderHooksJson = async (
     };
     if (registry) {
       const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, registry, TARGET_ID));
-      const matcher = matcherForHook(resolved, canonicalToolNames);
+      const matcher = matcherForResolvedToolHook(resolved, canonicalToolNames);
       if (matcher) entry.matcher = matcher;
     }
     (groupedHooks[event] ??= []).push(entry);
@@ -395,22 +333,12 @@ if (${JSON.stringify(hook.event)} === "tool.before" && result.decision === "bloc
 `;
 
 const bundleHookWrapper = async (hook: Hook): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "prism-grok-hook-"));
-
-  try {
-    const entry = join(tempRoot, "hook-entry.ts");
-    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
-    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
-    await nodeWriteFile(entry, renderHookWrapperEntry(hook, hookRuntimePath));
-
-    const outdir = join(tempRoot, "dist");
-    await buildHookWrapperWithBun(entry, outdir, `Grok '${hook.name}'`);
-
-    const built = await readFile(join(outdir, "wrapper.mjs"));
-    return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true });
-  }
+  return bundleGeneratedHookWrapper({
+    hook,
+    tempPrefix: "prism-grok-hook-",
+    buildLabel: `Grok '${hook.name}'`,
+    renderEntry: renderHookWrapperEntry,
+  });
 };
 
 const writeReason = async (target: string, content: string): Promise<Reason> => {
@@ -514,26 +442,6 @@ const planHooks = async (
   }
 };
 
-const planPruning = async (
-  target: GrokLowerTarget,
-  desiredRelativePaths: ReadonlySet<string>,
-): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const existingFiles = await listDirRecursive(generatedPluginRoot(target));
-
-  for (const relativePath of existingFiles.sort((left, right) => left.localeCompare(right))) {
-    if (desiredRelativePaths.has(relativePath)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: generatedPath(target, relativePath),
-      targetType: "file",
-      reason: "stale",
-    });
-  }
-
-  return operations;
-};
-
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
   const desiredRelativePaths = new Set<string>();
@@ -578,7 +486,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       desiredRelativePaths,
       input.target,
       `skills/${orbit.name}/SKILL.md`,
-      renderOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
+      renderStandardOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
 
@@ -596,7 +504,13 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
 
   await planMcpServer(input, operations, desiredRelativePaths);
   await planHooks(input, operations, desiredRelativePaths);
-  operations.push(...(await planPruning(input.target, desiredRelativePaths)));
+  operations.push(
+    ...(await planGeneratedPluginFilePruning({
+      root: generatedPluginRoot(input.target),
+      desiredRelativePaths,
+      resolveTarget: (relativePath) => generatedPath(input.target, relativePath),
+    })),
+  );
 
   return operations;
 };

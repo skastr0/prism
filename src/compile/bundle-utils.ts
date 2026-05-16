@@ -15,6 +15,27 @@ export const NODE_BUILTIN_EXTERNALS = [
 export const BARE_IMPORT_PATTERN =
   /(\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(\s*)(["'])([^"'.][^"']*)\2/g;
 
+export const RELATIVE_IMPORT_PATTERN =
+  /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
+
+export const collectRelativeImportSpecifiers = (source: string): string[] => {
+  const specifiers: string[] = [];
+  for (const match of source.matchAll(RELATIVE_IMPORT_PATTERN)) {
+    const specifier = match[1] ?? match[2];
+    if (specifier) specifiers.push(specifier);
+  }
+  return specifiers;
+};
+
+export const packageNameFromSpecifier = (specifier: string): string => {
+  if (specifier.startsWith("@")) {
+    const [scope, name] = specifier.split("/");
+    return scope && name ? `${scope}/${name}` : specifier;
+  }
+
+  return specifier.split("/")[0] ?? specifier;
+};
+
 export const rewriteBareImportsForBundle = (
   source: string,
   replacements: ReadonlyMap<string, string>,
@@ -34,15 +55,6 @@ export const rewriteBareEffectImportsForBundle = (source: string): string =>
     source,
     new Map([["effect", effectBundleImportPath()]]),
   );
-
-const packageNameFromSpecifier = (specifier: string): string => {
-  if (specifier.startsWith("@")) {
-    const [scope, name] = specifier.split("/");
-    return scope && name ? `${scope}/${name}` : specifier;
-  }
-
-  return specifier.split("/")[0] ?? specifier;
-};
 
 const readPluginRuntimeDependencies = async (
   pluginRoot?: string,

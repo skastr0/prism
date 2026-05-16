@@ -7,14 +7,11 @@
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { Effect } from "effect";
 import matter from "gray-matter";
 import { type ComposedAgent } from "../compose.js";
-import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
+import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -26,6 +23,7 @@ import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
+import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
 import {
@@ -36,6 +34,8 @@ import {
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  regexEscape,
+  renderStandardOrbitSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
 } from "./shared.js";
 
@@ -80,35 +80,10 @@ const extensionRoot = (target: GeminiCliLowerTarget): string =>
 const extensionRelativePath = (target: GeminiCliLowerTarget, path: string): string =>
   relative(extensionRoot(target), path).replace(/\\/g, "/");
 
-const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
-
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
 const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
   [...new Set(values.filter((value) => value.length > 0))].sort((left, right) => left.localeCompare(right));
-
-const bindingFromToolSource = (
-  pluginName: string,
-  sourcePath: string,
-): ResolvedContractBinding => {
-  const toolName = basename(sourcePath, ".tool.ts");
-  return {
-    kind: "permission",
-    logicalName: toolName,
-    toolPluginName: pluginName,
-    toolName,
-    toolSourcePath: sourcePath,
-  };
-};
-
-const bindingsFromCanonicalTools = (
-  pluginName: string,
-  tools: ReadonlyArray<CanonicalTool>,
-): ReadonlyArray<ResolvedContractBinding> =>
-  tools
-    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
 
 const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
   ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
@@ -167,27 +142,6 @@ const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLo
 
 const renderGeminiAgentMarkdown = (agent: ComposedAgent, target: GeminiCliLowerTarget): string =>
   `${serializeFrontmatter(composeGeminiAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
-
-const renderGeminiOrbitSkillMarkdown = (
-  orbit: Orbit,
-  sourcePluginName: string,
-  registry: PluginRegistry | undefined,
-): string => {
-  const lines: string[] = [];
-  lines.push(serializeFrontmatter({ name: orbit.name, description: orbit.description }));
-  lines.push("");
-  lines.push(orbitSkillOwnerMarker(sourcePluginName));
-  lines.push("");
-  if (registry) {
-    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
-  } else {
-    lines.push(`# ${orbit.name}`, "", orbit.description, "");
-    if (orbit.body.trim().length > 0) {
-      lines.push(orbit.body.trim(), "");
-    }
-  }
-  return lines.join("\n");
-};
 
 const targetIncludesGemini = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
@@ -295,8 +249,6 @@ const collectHookBindings = (
   }
   return byRef;
 };
-
-const regexEscape = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 
 const geminiMcpToolNameForBinding = (
   sourcePluginName: string,
@@ -536,7 +488,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     await pushWrite(
       operations,
       target,
-      renderGeminiOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
+      renderStandardOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
 

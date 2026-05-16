@@ -1,18 +1,15 @@
 /** Hermes Agent lowerer. */
 
-import { basename, dirname, join } from "node:path";
-import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
+import { dirname, join } from "node:path";
+import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import {
   generateMcpServerBundle,
   mcpServerArtifactRelativePath,
 } from "../mcp-bundle.js";
 import type { ComposedAgent } from "../compose.js";
-import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
   exists,
@@ -24,7 +21,8 @@ import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
   normalizeBundleSegment,
-  serializeSimpleFrontmatter as serializeFrontmatter,
+  prismOwnerMarker,
+  renderGeneratedOrbitSkill,
   yamlScalar,
 } from "./shared.js";
 
@@ -73,7 +71,7 @@ const configPath = (target: HermesLowerTarget): string =>
   join(target.root, "config.yaml");
 
 const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:hermes-orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
+  prismOwnerMarker("hermes-orbit-skill", sourcePluginName);
 
 const writeReason = async (target: string, content: string): Promise<Reason> => {
   if (!(await exists(target))) return "new";
@@ -102,48 +100,18 @@ const artifactTargetsHermes = (
   artifact: AnyArtifactType,
 ): boolean => targetIncludesHermes(registry?.targets[artifact]);
 
-const bindingFromToolSource = (
-  pluginName: string,
-  sourcePath: string,
-): ResolvedContractBinding => {
-  const toolName = basename(sourcePath, ".tool.ts");
-  return {
-    kind: "permission",
-    logicalName: toolName,
-    toolPluginName: pluginName,
-    toolName,
-    toolSourcePath: sourcePath,
-  };
-};
-
-const bindingsFromCanonicalTools = (
-  pluginName: string,
-  tools: ReadonlyArray<CanonicalTool>,
-): ReadonlyArray<ResolvedContractBinding> =>
-  tools
-    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
-
 const renderHermesOrbitSkillMarkdown = (
   orbit: Orbit,
   sourcePluginName: string,
   registry: PluginRegistry | undefined,
-): string => {
-  const lines: string[] = [];
-  lines.push(
-    serializeFrontmatter({ name: orbit.name, description: orbit.description }),
-    "",
-    orbitSkillOwnerMarker(sourcePluginName),
-    "",
-  );
-  if (registry) {
-    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
-  } else {
-    lines.push(`# ${orbit.name}`, "", orbit.description, "");
-    if (orbit.body.trim().length > 0) lines.push(orbit.body.trim(), "");
-  }
-  return `${lines.join("\n").trimEnd()}\n`;
-};
+): string =>
+  renderGeneratedOrbitSkill({
+    orbit,
+    sourcePluginName,
+    registry,
+    ownerKind: "hermes-orbit-skill",
+    trailingNewline: true,
+  });
 
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,

@@ -2,13 +2,10 @@
 
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
+import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
   generateMcpServerBundle,
@@ -20,6 +17,7 @@ import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
   exists,
@@ -27,7 +25,12 @@ import {
 } from "../../fs.js";
 import type { HarnessScope, PluginArtifactType, PluginTargetId } from "../../types.js";
 import type { LowerOperation } from "./opencode.js";
-import { executeStandardLowering, normalizeBundleSegment } from "./shared.js";
+import {
+  executeStandardLowering,
+  normalizeBundleSegment,
+  regexEscape,
+  renderStandardOrbitSkill,
+} from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
 const GENERATED_SERVER_PREFIX = "prism-generated";
@@ -189,28 +192,6 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
     agent.toolBindings.map((binding) => mcpToolNameForBinding(sourcePluginName, binding)),
   );
 
-const bindingFromToolSource = (
-  pluginName: string,
-  sourcePath: string,
-): ResolvedContractBinding => {
-  const toolName = basename(sourcePath, ".tool.ts");
-  return {
-    kind: "permission",
-    logicalName: toolName,
-    toolPluginName: pluginName,
-    toolName,
-    toolSourcePath: sourcePath,
-  };
-};
-
-const bindingsFromCanonicalTools = (
-  pluginName: string,
-  tools: ReadonlyArray<CanonicalTool>,
-): ReadonlyArray<ResolvedContractBinding> =>
-  tools
-    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
-
 const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
   ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
   ...input.agents.flatMap((agent) => agent.toolBindings),
@@ -261,34 +242,6 @@ const renderAgentToml = (
   }
 
   return `${lines.join("\n")}\n`;
-};
-
-const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:orbit-skill owner=${quote(sourcePluginName)} -->`;
-
-const renderOrbitSkill = (
-  orbit: Orbit,
-  sourcePluginName: string,
-  registry: PluginRegistry | undefined,
-): string => {
-  const lines: string[] = [
-    "---",
-    `name: ${quote(orbit.name)}`,
-    `description: ${quote(orbit.description)}`,
-    "---",
-    "",
-    orbitSkillOwnerMarker(sourcePluginName),
-    "",
-  ];
-  if (registry) {
-    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
-  } else {
-    lines.push(`# ${orbit.name}`, "", orbit.description, "");
-    if (orbit.body.trim().length > 0) {
-      lines.push(orbit.body.trim(), "");
-    }
-  }
-  return lines.join("\n");
 };
 
 const renderRules = async (input: LowerInput): Promise<string | undefined> => {
@@ -354,8 +307,6 @@ const hookMatcher = (
   if (tool.names.length === 1) return regexEscape(tool.names[0]!);
   return tool.names.map(regexEscape).join("|");
 };
-
-const regexEscape = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 
 const renderHookWrapperEntry = (hook: Hook, nativeEvent: string, hookRuntimePath: string): string => `import { Effect } from ${quote(effectBundleImportPath())};
 import hook from ${quote(hook.sourcePath.replace(/\\/g, "/"))};
@@ -647,7 +598,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     await pushWrite(
       operations,
       join(input.target.root, "skills", orbit.name, "SKILL.md"),
-      renderOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
+      renderStandardOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
       "write-md",
     );
 

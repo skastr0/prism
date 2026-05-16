@@ -30,31 +30,38 @@
 
 import { mkdir, mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
+import { dirname, extname, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
-import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
+import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { CanonicalTool, Contract, Hook, Orbit } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
 import {
+  collectRelativeImportSpecifiers,
   NODE_BUILTIN_EXTERNALS,
   rewriteBareEffectImportsForBundle,
   rewriteBareImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
 } from "../bundle-utils.js";
 import {
+  generatedOwnerToolName,
+  generatedToolNameForBinding,
   generatedToolNamespace,
   normalizeGeneratedPluginName,
-  sanitizeGeneratedToolSegment,
   sourceIsInside,
 } from "../generated-plugin.js";
 import { opencodePluginBundleImportPath } from "../runtime-deps.js";
+import {
+  bindingFromToolSource,
+  bindingsFromCanonicalTools,
+} from "../tool-bindings.js";
+import {
+  prismOwnerMarker,
+  renderGeneratedOrbitSkill,
+} from "./shared.js";
 import {
   backupFile,
   readFile,
@@ -103,27 +110,9 @@ const orbitSkillRelativePath = (name: string): string =>
 const opencodeJsonPath = (target: OpenCodeLowerTarget): string =>
   join(target.root, "opencode.json");
 
-const syntheticToolName = (
-  sourcePluginName: string,
-  contractName: string,
-): string =>
-  `${generatedToolNamespace(sourcePluginName)}_${sanitizeGeneratedToolSegment(contractName, "tool")}`;
+const ownerToolName = generatedOwnerToolName;
 
-const ownerToolName = (toolPluginName: string, toolName: string): string =>
-  `${generatedToolNamespace(toolPluginName)}_${sanitizeGeneratedToolSegment(toolName, "tool")}`;
-
-const runtimeToolName = (
-  sourcePluginName: string,
-  binding: ComposedAgent["toolBindings"][number],
-): string => {
-  if (binding.kind === "permission") {
-    return ownerToolName(binding.toolPluginName, binding.toolName);
-  }
-  if (!binding.contract) {
-    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-  }
-  return syntheticToolName(sourcePluginName, binding.contract.name);
-};
+const runtimeToolName = generatedToolNameForBinding;
 
 const generatedPluginIdForName = (pluginName: string): string =>
   `${GENERATED_PLUGIN_PREFIX}-${normalizeGeneratedPluginName(pluginName)}`;
@@ -471,41 +460,12 @@ const normalizePermissionBlockForWrite = (
 // ---------------------------------------------------------------------------
 
 const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
+  prismOwnerMarker("orbit-skill", sourcePluginName);
 
 const isOwnedOrbitSkill = (
   content: string,
   sourcePluginName: string
 ): boolean => content.includes(orbitSkillOwnerMarker(sourcePluginName));
-
-const renderOrbitSkill = (
-  orbit: Orbit,
-  sourcePluginName: string,
-  registry: PluginRegistry | undefined,
-): string => {
-  const lines: string[] = [];
-  lines.push(
-    serializeFrontmatter(
-      { name: orbit.name, description: orbit.description },
-      {},
-    ),
-  );
-  lines.push("");
-  lines.push(orbitSkillOwnerMarker(sourcePluginName));
-  lines.push("");
-  if (registry) {
-    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
-  } else {
-    // Defensive fallback: emit the raw description and body so the file is
-    // still meaningful even when no registry is wired in (test harnesses).
-    lines.push(`# ${orbit.name}`, "", orbit.description, "");
-    if (orbit.body.trim().length > 0) {
-      lines.push(orbit.body.trim(), "");
-    }
-  }
-
-  return lines.join("\n");
-};
 
 // ---------------------------------------------------------------------------
 // Generated plugin emission
@@ -694,9 +654,6 @@ const planOrbitSkillPruning = async (
   return operations;
 };
 
-const SOURCE_IMPORT_PATTERN =
-  /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
-
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
 const relativeModulePath = (fromFile: string, toFileWithoutExtension: string): string => {
@@ -717,15 +674,6 @@ const resolveTsImportCandidate = async (
     if (await fileExists(candidate)) return candidate;
   }
   return undefined;
-};
-
-const collectRelativeImportSpecifiers = (source: string): string[] => {
-  const specifiers: string[] = [];
-  for (const match of source.matchAll(SOURCE_IMPORT_PATTERN)) {
-    const specifier = match[1] ?? match[2];
-    if (specifier) specifiers.push(specifier);
-  }
-  return specifiers;
 };
 
 const resolveMirrorImport = async (options: {
@@ -1367,28 +1315,6 @@ const getSchemaBridgeSource = async (): Promise<string> => {
 const pluginRootFromToolSource = (toolSourcePath: string): string =>
   dirname(dirname(toolSourcePath));
 
-const bindingFromToolSource = (
-  pluginName: string,
-  sourcePath: string,
-): ComposedAgent["toolBindings"][number] => {
-  const toolName = basename(sourcePath, ".tool.ts");
-  return {
-    kind: "permission",
-    logicalName: toolName,
-    toolPluginName: pluginName,
-    toolName,
-    toolSourcePath: sourcePath,
-  };
-};
-
-const bindingsFromCanonicalTools = (
-  pluginName: string,
-  tools: ReadonlyArray<CanonicalTool>,
-): ReadonlyArray<ComposedAgent["toolBindings"][number]> =>
-  tools
-    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
-
 const bindingsFromPluginToolFiles = async (
   pluginName: string,
   pluginRoot: string,
@@ -1816,11 +1742,14 @@ export const planLowering = async (
   for (const orbit of input.orbits) {
     const target = orbitSkillMdPath(input.target, orbit.name);
     desiredOrbitSkillFiles.add(orbitSkillRelativePath(orbit.name));
-    const desired = renderOrbitSkill(
+    const desired = renderGeneratedOrbitSkill({
       orbit,
-      input.target.sourcePluginName,
-      input.registry,
-    );
+      sourcePluginName: input.target.sourcePluginName,
+      registry: input.registry,
+      ownerKind: "orbit-skill",
+      trailingNewline: false,
+      renderFrontmatter: (values) => serializeFrontmatter(values, {}),
+    });
     let reason: "new" | "changed" | "unchanged";
     if (await fileExists(target)) {
       const current = await readFile(target);

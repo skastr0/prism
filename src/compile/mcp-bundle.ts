@@ -1,19 +1,20 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, posix, relative, resolve } from "node:path";
+import { dirname, extname, join, posix, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { Contract } from "./sources.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import {
+  collectRelativeImportSpecifiers,
   NODE_BUILTIN_EXTERNALS,
   rewriteBareEffectImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
 } from "./bundle-utils.js";
 import { effectBundleImportPath } from "./runtime-deps.js";
 import {
-  generatedToolNamespace,
+  generatedToolNameForBinding,
   normalizeGeneratedPluginName,
   sanitizeGeneratedToolSegment,
   sourceIsInside,
@@ -81,29 +82,12 @@ export interface AmpPluginBundle {
   readonly toolNames: ReadonlyArray<string>;
 }
 
-const SOURCE_IMPORT_PATTERN =
-  /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']|import\s*\(\s*["'](\.[^"']+)["']\s*\)/g;
-
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
-
-const ownerToolName = (toolPluginName: string, toolName: string): string =>
-  `${generatedToolNamespace(toolPluginName)}_${sanitizeGeneratedToolSegment(toolName, "tool")}`;
-
-const syntheticToolName = (sourcePluginName: string, contractName: string): string =>
-  `${generatedToolNamespace(sourcePluginName)}_${sanitizeGeneratedToolSegment(contractName, "tool")}`;
 
 export const mcpToolNameForBinding = (
   sourcePluginName: string,
   binding: ResolvedContractBinding,
-): string => {
-  if (binding.kind === "permission") {
-    return ownerToolName(binding.toolPluginName, binding.toolName);
-  }
-  if (!binding.contract) {
-    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-  }
-  return syntheticToolName(sourcePluginName, binding.contract.name);
-};
+): string => generatedToolNameForBinding(sourcePluginName, binding);
 
 export const ampPluginToolNameForBinding = mcpToolNameForBinding;
 
@@ -130,15 +114,6 @@ const resolveTsImportCandidate = async (
     if (await fileExists(candidate)) return candidate;
   }
   return undefined;
-};
-
-const collectRelativeImportSpecifiers = (source: string): string[] => {
-  const specifiers: string[] = [];
-  for (const match of source.matchAll(SOURCE_IMPORT_PATTERN)) {
-    const specifier = match[1] ?? match[2];
-    if (specifier) specifiers.push(specifier);
-  }
-  return specifiers;
 };
 
 const resolveMirrorImport = async (options: {

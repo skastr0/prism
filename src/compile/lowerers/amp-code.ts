@@ -1,11 +1,8 @@
 /** Amp Code lowerer. */
 
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { type ComposedAgent } from "../compose.js";
-import {
-  renderDerivedOrbitPhaseReferences,
-  renderDerivedOrbitSkillBody,
-} from "../derived-orbit-skill.js";
+import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import {
   ampPluginToolNameForBinding,
   generateAmpPluginBundle,
@@ -13,6 +10,10 @@ import {
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import {
+  bindingFromToolSource,
+  bindingsFromCanonicalTools,
+} from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
   exists,
@@ -23,6 +24,8 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  prismOwnerMarker,
+  renderGeneratedOrbitSkill,
   normalizeBundleSegment,
   serializeSimpleFrontmatter as serializeFrontmatter,
 } from "./shared.js";
@@ -80,7 +83,7 @@ const agentSkillOwnerMarker = (sourcePluginName: string): string =>
   `<!-- prism:amp-agent-skill owner=${JSON.stringify(sourcePluginName)} -->`;
 
 const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:amp-orbit-skill owner=${JSON.stringify(sourcePluginName)} -->`;
+  prismOwnerMarker("amp-orbit-skill", sourcePluginName);
 
 const writeReason = async (target: string, content: string): Promise<Reason> => {
   if (!(await exists(target))) return "new";
@@ -108,28 +111,6 @@ const artifactTargetsAmp = (
   registry: PluginRegistry | undefined,
   artifact: AnyArtifactType,
 ): boolean => targetIncludesAmp(registry?.targets[artifact]);
-
-const bindingFromToolSource = (
-  pluginName: string,
-  sourcePath: string,
-): ResolvedContractBinding => {
-  const toolName = basename(sourcePath, ".tool.ts");
-  return {
-    kind: "permission",
-    logicalName: toolName,
-    toolPluginName: pluginName,
-    toolName,
-    toolSourcePath: sourcePath,
-  };
-};
-
-const bindingsFromCanonicalTools = (
-  pluginName: string,
-  tools: ReadonlyArray<CanonicalTool>,
-): ReadonlyArray<ResolvedContractBinding> =>
-  tools
-    .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
-    .sort((left, right) => left.toolName.localeCompare(right.toolName));
 
 const uniqueBindings = (
   sourcePluginName: string,
@@ -221,22 +202,14 @@ const renderAmpOrbitSkillMarkdown = (
   orbit: Orbit,
   sourcePluginName: string,
   registry: PluginRegistry | undefined,
-): string => {
-  const lines: string[] = [];
-  lines.push(
-    serializeFrontmatter({ name: orbit.name, description: orbit.description }),
-    "",
-    orbitSkillOwnerMarker(sourcePluginName),
-    "",
-  );
-  if (registry) {
-    lines.push(renderDerivedOrbitSkillBody(orbit, registry));
-  } else {
-    lines.push(`# ${orbit.name}`, "", orbit.description, "");
-    if (orbit.body.trim().length > 0) lines.push(orbit.body.trim(), "");
-  }
-  return `${lines.join("\n").trimEnd()}\n`;
-};
+): string =>
+  renderGeneratedOrbitSkill({
+    orbit,
+    sourcePluginName,
+    registry,
+    ownerKind: "amp-orbit-skill",
+    trailingNewline: true,
+  });
 
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,

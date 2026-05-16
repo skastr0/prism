@@ -1137,6 +1137,11 @@ test("orbit phase validation succeeds when assigned agents satisfy requirements"
     join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
     "utf8",
   );
+  expect(
+    skill.startsWith(
+      "---\nname: delivery-contract\ndescription: Validate that work moves through the right trait-conforming agents\n---\n",
+    ),
+  ).toBe(true);
   expect(skill).toContain("### 1. Implement change — agent `builder`");
   expect(skill).toContain("### 3. Hand off work — agents `builder`, `reviewer`");
   // Derived skill renders trait protocols once, deduplicated across agents.

@@ -64,6 +64,7 @@ import {
   SourceParseError,
   type CompileError,
 } from "./errors.js";
+import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginManifestTargets } from "../types.js";
 
@@ -239,15 +240,6 @@ const toFileSpecifier = (path: string): string => pathToFileURL(path).href;
 
 const BARE_RUNTIME_IMPORT_PATTERN =
   /(\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?|\bimport\s*\(\s*)(["'])([^"'.][^"']*)\2/g;
-
-const packageNameFromSpecifier = (specifier: string): string => {
-  if (specifier.startsWith("@")) {
-    const [scope, name] = specifier.split("/");
-    return scope && name ? `${scope}/${name}` : specifier;
-  }
-
-  return specifier.split("/")[0] ?? specifier;
-};
 
 const readPluginRuntimeDependencyNames = async (pluginRoot: string): Promise<ReadonlySet<string>> => {
   try {

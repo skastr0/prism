@@ -5,6 +5,7 @@ import {
   type CanonicalTool,
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
+  type NormalizedTraitToolAttachment,
   type Trait,
 } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
@@ -41,6 +42,25 @@ export type TraitBindingValidationResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: ProtocolSurfaceError };
 
+type MaterializeTraitToolsOptions = {
+  readonly agentName: string;
+  readonly ownerPluginName: string;
+  readonly canonicalTraitId: string;
+  readonly trait: Trait;
+  readonly binding: NormalizedTraitBinding;
+  readonly registry: PluginRegistry;
+};
+
+type ResolvedToolRef = {
+  readonly tool: CanonicalTool;
+  readonly pluginName: string;
+  readonly registry: PluginRegistry;
+};
+
+type TraitToolAttachmentEntry = readonly [string, NormalizedTraitToolAttachment];
+
+type TraitToolSlotEntry = readonly [string, NormalizedTraitBindingToolSlot];
+
 const protocolError = (field: string, message: string): ProtocolSurfaceError => ({
   field,
   message,
@@ -60,7 +80,7 @@ const semanticNameSegment = (value: string, fallback: string): string => {
 const resolveToolRef = (
   ref: string,
   registry: PluginRegistry,
-): { tool: CanonicalTool; pluginName: string; registry: PluginRegistry } | undefined => {
+): ResolvedToolRef | undefined => {
   const parsed = parseNamedRef(ref);
   const owner = registryForRef(ref, registry);
   if (!owner) return undefined;
@@ -228,7 +248,7 @@ export const validateTraitBindingSlots = (
 
 const permissionBinding = (
   logicalName: string,
-  resolved: { tool: CanonicalTool; pluginName: string },
+  resolved: ResolvedToolRef,
 ): ToolPermissionBinding => {
   const toolName = basename(resolved.tool.sourcePath, ".tool.ts");
   return {
@@ -240,84 +260,145 @@ const permissionBinding = (
   };
 };
 
-export const materializeTraitTools = (options: {
-  readonly agentName: string;
-  readonly ownerPluginName: string;
-  readonly canonicalTraitId: string;
-  readonly trait: Trait;
-  readonly binding: NormalizedTraitBinding;
-  readonly registry: PluginRegistry;
-}): ReadonlyArray<MaterializedTraitTool> | ProtocolSurfaceError => {
+const sortedTraitToolAttachments = (trait: Trait): ReadonlyArray<TraitToolAttachmentEntry> =>
+  Object.entries(trait.tools).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+
+const resolveTraitToolAttachment = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+  attachment: NormalizedTraitToolAttachment,
+): ResolvedToolRef | ProtocolSurfaceError => {
+  const resolved = resolveToolRef(attachment.ref, options.registry);
+  if (resolved) return resolved;
+
+  return protocolError(
+    `traits.${options.trait.name}.tools.${logicalName}.ref`,
+    `references unknown tool '${attachment.ref}'`,
+  );
+};
+
+const collectFilledSlotEntries = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+): ReadonlyArray<TraitToolSlotEntry> =>
+  Object.entries(options.binding.tools[logicalName]?.slots ?? {});
+
+const validateDeclaredSlots = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+  resolved: ResolvedToolRef,
+  filledSlotEntries: ReadonlyArray<TraitToolSlotEntry>,
+): ProtocolSurfaceError | undefined => {
+  const unknownSlots = filledSlotEntries
+    .map(([slotName]) => slotName)
+    .filter((slotName) => !Object.prototype.hasOwnProperty.call(resolved.tool.slots, slotName));
+  if (unknownSlots.length === 0) return undefined;
+
+  return protocolError(
+    `traits.${options.trait.name}.tools.${logicalName}.slots`,
+    `fills undeclared tool slot(s): ${unknownSlots.join(", ")}`,
+  );
+};
+
+const validateSlotSchemas = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+  filledSlotEntries: ReadonlyArray<TraitToolSlotEntry>,
+): ProtocolSurfaceError | undefined => {
+  for (const [slotName, slot] of filledSlotEntries) {
+    if (!Schema.isSchema(slot.schema)) {
+      return protocolError(
+        `traits.${options.trait.name}.tools.${logicalName}.slots.${slotName}`,
+        "must resolve to an Effect Schema",
+      );
+    }
+  }
+
+  return undefined;
+};
+
+const validateFilledSlots = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+  resolved: ResolvedToolRef,
+  filledSlotEntries: ReadonlyArray<TraitToolSlotEntry>,
+): ProtocolSurfaceError | undefined =>
+  validateDeclaredSlots(options, logicalName, resolved, filledSlotEntries) ??
+  validateSlotSchemas(options, logicalName, filledSlotEntries);
+
+const syntheticToolBinding = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+  resolved: ResolvedToolRef,
+): SyntheticToolBinding | ProtocolSurfaceError => {
+  const filledSlots = options.binding.tools[logicalName]?.slots ?? {};
+  const toolName = basename(resolved.tool.sourcePath, ".tool.ts");
+  const contractSource = renderSlotWrapperContractSource({
+    description: resolved.tool.description,
+    contractPluginName: options.ownerPluginName,
+    toolPluginName: resolved.pluginName,
+    toolName,
+    slots: filledSlots,
+    registry: options.registry,
+  });
+  if (typeof contractSource !== "string") return contractSource;
+
+  const contractName = bindingSemanticName(logicalName, filledSlots);
+
+  return {
+    kind: "synthetic",
+    logicalName,
+    contract: new Contract({
+      name: contractName,
+      sourcePath: `${options.trait.sourcePath}#${logicalName}`,
+      pluginName: options.ownerPluginName,
+      generatedFiles: [
+        {
+          relativePath: `contracts/${contractName}.contract.ts`,
+          content: contractSource,
+        },
+      ],
+    }),
+    toolPluginName: resolved.pluginName,
+    toolName,
+    toolSourcePath: resolved.tool.sourcePath,
+  };
+};
+
+const materializeTraitToolAttachment = (
+  options: MaterializeTraitToolsOptions,
+  logicalName: string,
+  attachment: NormalizedTraitToolAttachment,
+): MaterializedTraitTool | ProtocolSurfaceError => {
+  const resolved = resolveTraitToolAttachment(options, logicalName, attachment);
+  if ("field" in resolved) return resolved;
+
+  const filledSlotEntries = collectFilledSlotEntries(options, logicalName);
+  if (filledSlotEntries.length === 0) {
+    return permissionBinding(logicalName, resolved);
+  }
+
+  const slotError = validateFilledSlots(options, logicalName, resolved, filledSlotEntries);
+  if (slotError) return slotError;
+
+  return syntheticToolBinding(options, logicalName, resolved);
+};
+
+const isProtocolSurfaceError = (
+  result: MaterializedTraitTool | ProtocolSurfaceError,
+): result is ProtocolSurfaceError => "field" in result;
+
+export const materializeTraitTools = (
+  options: MaterializeTraitToolsOptions,
+): ReadonlyArray<MaterializedTraitTool> | ProtocolSurfaceError => {
   const materialized: MaterializedTraitTool[] = [];
 
-  for (const [logicalName, attachment] of Object.entries(options.trait.tools).sort(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    const resolved = resolveToolRef(attachment.ref, options.registry);
-    if (!resolved) {
-      return protocolError(
-        `traits.${options.trait.name}.tools.${logicalName}.ref`,
-        `references unknown tool '${attachment.ref}'`,
-      );
-    }
-
-    const filledSlots = options.binding.tools[logicalName]?.slots ?? {};
-    const filledSlotEntries = Object.entries(filledSlots);
-    if (filledSlotEntries.length === 0) {
-      materialized.push(permissionBinding(logicalName, resolved));
-      continue;
-    }
-
-    const unknownSlots = filledSlotEntries
-      .map(([slotName]) => slotName)
-      .filter((slotName) => !Object.prototype.hasOwnProperty.call(resolved.tool.slots, slotName));
-    if (unknownSlots.length > 0) {
-      return protocolError(
-        `traits.${options.trait.name}.tools.${logicalName}.slots`,
-        `fills undeclared tool slot(s): ${unknownSlots.join(", ")}`,
-      );
-    }
-
-    for (const [slotName, slot] of filledSlotEntries) {
-      if (!Schema.isSchema(slot.schema)) {
-        return protocolError(
-          `traits.${options.trait.name}.tools.${logicalName}.slots.${slotName}`,
-          "must resolve to an Effect Schema",
-        );
-      }
-    }
-
-    const toolName = basename(resolved.tool.sourcePath, ".tool.ts");
-    const contractSource = renderSlotWrapperContractSource({
-      description: resolved.tool.description,
-      contractPluginName: options.ownerPluginName,
-      toolPluginName: resolved.pluginName,
-      toolName,
-      slots: filledSlots,
-      registry: options.registry,
-    });
-    if (typeof contractSource !== "string") return contractSource;
-
-    const contractName = bindingSemanticName(logicalName, filledSlots);
-
-    materialized.push({
-      kind: "synthetic",
-      logicalName,
-      contract: new Contract({
-        name: contractName,
-        sourcePath: `${options.trait.sourcePath}#${logicalName}`,
-        pluginName: options.ownerPluginName,
-        generatedFiles: [
-          {
-            relativePath: `contracts/${contractName}.contract.ts`,
-            content: contractSource,
-          },
-        ],
-      }),
-      toolPluginName: resolved.pluginName,
-      toolName,
-      toolSourcePath: resolved.tool.sourcePath,
-    });
+  for (const [logicalName, attachment] of sortedTraitToolAttachments(options.trait)) {
+    const result = materializeTraitToolAttachment(options, logicalName, attachment);
+    if (isProtocolSurfaceError(result)) return result;
+    materialized.push(result);
   }
 
   return materialized;

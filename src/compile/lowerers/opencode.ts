@@ -30,7 +30,7 @@
 
 import { mkdir, mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
@@ -46,7 +46,9 @@ import {
   rewriteBareEffectImportsForBundle,
   rewriteBareImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
+  resolveImportedSourcePath,
   resolveTsImportCandidate,
+  stripToolAuthoringHelpers,
 } from "../bundle-utils.js";
 import {
   generatedOwnerToolName,
@@ -61,11 +63,13 @@ import {
   bindingsFromCanonicalTools,
 } from "../tool-bindings.js";
 import {
+  nativeHookEventName,
   prismOwnerMarker,
   renderGeneratedOrbitSkill,
 } from "./shared.js";
 import {
   backupFile,
+  exists as fileExists,
   readFile,
   writeFile,
   listDirRecursive,
@@ -401,16 +405,6 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
   if (keysA.length !== keysB.length) return false;
   if (keysA.some((k, i) => k !== keysB[i])) return false;
   return keysA.every((k) => deepEqual(ao[k], bo[k]));
-};
-
-const fileExists = async (path: string): Promise<boolean> => {
-  const fs = await import("node:fs/promises");
-  try {
-    await fs.access(path);
-    return true;
-  } catch {
-    return false;
-  }
 };
 
 const readJson = async <T>(path: string): Promise<T> => {
@@ -914,15 +908,6 @@ const normalizeMirroredPluginSource = async (
     .replace(/\bschemaSlot\s*\(/g, "(");
 };
 
-const resolveImportedSourcePath = (
-  sourcePath: string,
-  source: string,
-): string => {
-  const absolute = resolve(dirname(sourcePath), source);
-  if (extname(absolute)) return absolute;
-  return `${absolute}.ts`;
-};
-
 const findSourcePlugin = (
   sourcePath: string,
   pluginRoots: ReadonlyMap<string, string>,
@@ -975,30 +960,6 @@ const rewriteGeneratedPluginImportsForBundle = (
       return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
     },
   );
-
-const stripToolAuthoringHelpers = (source: string): string => {
-  return source.replace(
-    /^\s*import\s+\{([^}]+)\}\s+from\s+["'][^"']+["'];\s*\n/gm,
-    (match, specifiers: string) => {
-      const kept = specifiers
-        .split(",")
-        .map((specifier) => specifier.trim())
-        .filter(Boolean)
-        .filter((specifier) => {
-          const importedName = specifier
-            .replace(/\s+as\s+.*$/u, "")
-            .trim();
-          return importedName !== "defineTool" && importedName !== "schemaSlot";
-        });
-      if (kept.length === specifiers.split(",").map((s) => s.trim()).filter(Boolean).length) {
-        return match;
-      }
-      return kept.length > 0
-        ? match.replace(`{${specifiers}}`, `{ ${kept.join(", ")} }`)
-        : "";
-    },
-  );
-};
 
 const hookAuthoringBridgeImportFor = (currentGeneratedPath: string): string =>
   relativeModulePath(currentGeneratedPath, "runtime/hook-authoring-bridge");
@@ -1111,18 +1072,13 @@ interface HookRegistration {
   readonly matcher?: ResolvedHookMatch;
 }
 
-const opencodeNativeHookEvent = (event: Hook["event"]): OpenCodeNativeHookEvent | undefined => {
-  switch (event) {
-    case "tool.before":
-      return "tool.execute.before";
-    case "tool.after":
-      return "tool.execute.after";
-    case "session.start":
-      return "session.status";
-    case "session.end":
-      return "session.status";
-  }
-};
+const opencodeNativeHookEvent = (event: Hook["event"]): OpenCodeNativeHookEvent =>
+  nativeHookEventName<OpenCodeNativeHookEvent>(event, {
+    toolBefore: "tool.execute.before",
+    toolAfter: "tool.execute.after",
+    sessionStart: "session.status",
+    sessionEnd: "session.status",
+  });
 
 const renderHookMatcher = (registration: HookRegistration, sourcePluginName: string): string => {
   const tool = registration.matcher?.tool;

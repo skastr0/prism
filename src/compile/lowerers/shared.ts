@@ -20,6 +20,21 @@ import type { PluginRegistry } from "../registry.js";
 import type { Hook, Orbit } from "../sources.js";
 import type { LowerOperation } from "./opencode.js";
 
+export const uniqueSorted = (
+  values: ReadonlyArray<string>,
+  options?: { readonly dropEmpty?: boolean },
+): string[] =>
+  [
+    ...new Set(
+      options?.dropEmpty ? values.filter((value) => value.length > 0) : values,
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+
+export const stringArray = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+
 export const normalizeBundleSegment = (value: string, fallback = "plugin"): string => {
   const normalized = value
     .trim()
@@ -120,6 +135,35 @@ export const matcherForResolvedToolHook = (
   }
   return canonicalToolNames.get(tool.ref) ?? tool.ref;
 };
+
+export const nativeHookEventName = <Name extends string>(
+  event: Hook["event"],
+  names: {
+    readonly toolBefore: Name;
+    readonly toolAfter: Name;
+    readonly sessionStart: Name;
+    readonly sessionEnd: Name;
+  },
+): Name => {
+  switch (event) {
+    case "tool.before":
+      return names.toolBefore;
+    case "tool.after":
+      return names.toolAfter;
+    case "session.start":
+      return names.sessionStart;
+    case "session.end":
+      return names.sessionEnd;
+  }
+};
+
+export const prePostSessionNativeHookEvent = (event: Hook["event"]): string =>
+  nativeHookEventName(event, {
+    toolBefore: "PreToolUse",
+    toolAfter: "PostToolUse",
+    sessionStart: "SessionStart",
+    sessionEnd: "SessionEnd",
+  });
 
 export const bundleGeneratedHookWrapper = async (options: {
   readonly hook: Hook;

@@ -17,7 +17,10 @@ import {
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
-import { bindingsFromCanonicalTools } from "../tool-bindings.js";
+import {
+  collectBindingNameMap,
+  mcpBindingsForAgentsAndTools,
+} from "../tool-bindings.js";
 import { listDirRecursive, readFile } from "../../fs.js";
 import { resolveManifestTargets } from "../../manifest.js";
 import type { HarnessScope, PluginTargetId } from "../../types.js";
@@ -31,7 +34,10 @@ import {
   normalizeBundleSegment,
   planGeneratedPluginHooks,
   planGeneratedPluginFilePruning,
+  prePostSessionNativeHookEvent,
   renderStandardOrbitSkill,
+  stringArray,
+  uniqueSorted,
   yamlScalar,
 } from "./shared.js";
 
@@ -66,19 +72,6 @@ const generatedPath = (target: ClaudeCodeLowerTarget, relativePath: string): str
   join(generatedPluginRoot(target), ...relativePath.split("/"));
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
-
-const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
-  [...new Set(values)].sort((left, right) => left.localeCompare(right));
-
-const stringArray = (value: unknown): string[] =>
-  Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
-
-const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
-  ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
-  ...input.agents.flatMap((agent) => agent.toolBindings),
-];
 
 const serializeFrontmatter = (values: Record<string, unknown>): string => {
   const lines = ["---"];
@@ -200,40 +193,13 @@ const renderAgentMarkdown = (
   return `${serializeFrontmatter(composeAgentFrontmatter(agent, target))}\n\n${agent.body}${diagnostics}\n`;
 };
 
-const claudeNativeHookEvent = (event: Hook["event"]): string => {
-  switch (event) {
-    case "tool.before":
-      return "PreToolUse";
-    case "tool.after":
-      return "PostToolUse";
-    case "session.start":
-      return "SessionStart";
-    case "session.end":
-      return "SessionEnd";
-  }
-};
+const claudeNativeHookEvent = prePostSessionNativeHookEvent;
 
 const claudeMcpPermissionNameForBinding = (
   sourcePluginName: string,
   pluginId: string,
   binding: ResolvedContractBinding,
 ): string => `mcp__${pluginId}__${mcpToolNameForBinding(sourcePluginName, binding)}`;
-
-const collectHookBindings = (
-  sourcePluginName: string,
-  pluginId: string,
-  bindings: ReadonlyArray<ResolvedContractBinding>,
-): ReadonlyMap<string, string> => {
-  const byRef = new Map<string, string>();
-  for (const binding of bindings) {
-    const mcpName = claudeMcpPermissionNameForBinding(sourcePluginName, pluginId, binding);
-    byRef.set(binding.logicalName, mcpName);
-    byRef.set(binding.toolName, mcpName);
-    byRef.set(`${binding.toolPluginName}:${binding.toolName}`, mcpName);
-    if (binding.contract) byRef.set(binding.contract.name, mcpName);
-  }
-  return byRef;
-};
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
@@ -242,10 +208,10 @@ const renderHooksJson = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
-  const canonicalToolNames = collectHookBindings(
-    target.sourcePluginName,
-    generatedPluginId(target),
+  const pluginId = generatedPluginId(target);
+  const canonicalToolNames = collectBindingNameMap(
     bindings,
+    (binding) => claudeMcpPermissionNameForBinding(target.sourcePluginName, pluginId, binding),
   );
 
   for (const hook of hooks) {
@@ -387,7 +353,11 @@ const planMcpServer = async (
   operations: LowerOperation[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  const bindings = mcpBindingsForInput(input);
+  const bindings = mcpBindingsForAgentsAndTools(
+    input.target.sourcePluginName,
+    input.tools,
+    input.agents,
+  );
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {
@@ -505,7 +475,11 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       input.hooks ?? [],
       input.registry,
       input.target,
-      mcpBindingsForInput(input),
+      mcpBindingsForAgentsAndTools(
+        input.target.sourcePluginName,
+        input.tools,
+        input.agents,
+      ),
     ),
     bundleHookWrapper,
     resolveTarget,

@@ -23,7 +23,10 @@ import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
-import { bindingsFromCanonicalTools } from "../tool-bindings.js";
+import {
+  collectBindingNameMap,
+  mcpBindingsForAgentsAndTools,
+} from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
 import {
@@ -34,10 +37,12 @@ import {
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  nativeHookEventName,
   pushWriteOperation as pushWrite,
   regexEscape,
   renderStandardOrbitSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
+  uniqueSorted,
 } from "./shared.js";
 
 const TARGET_ID = "gemini-cli" as const;
@@ -81,14 +86,6 @@ const extensionRelativePath = (target: GeminiCliLowerTarget, path: string): stri
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
-const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
-  [...new Set(values.filter((value) => value.length > 0))].sort((left, right) => left.localeCompare(right));
-
-const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
-  ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
-  ...input.agents.flatMap((agent) => agent.toolBindings),
-];
-
 const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLowerTarget): Record<string, unknown> => {
   const frontmatter: Record<string, unknown> = {
     name: agent.name,
@@ -111,10 +108,10 @@ const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLo
     ...agent.toolBindings.map((binding) =>
       geminiMcpToolNameForBinding(target.sourcePluginName, serverName, binding),
     ),
-  ]);
+  ], { dropEmpty: true });
   if (tools.length > 0) frontmatter.tools = tools;
 
-  const skills = uniqueSorted(agent.allowedSkills);
+  const skills = uniqueSorted(agent.allowedSkills, { dropEmpty: true });
   if (skills.length > 0) frontmatter.skills = skills;
 
   return frontmatter;
@@ -214,22 +211,6 @@ const copyTargetedCommandArtifacts = async (
   }
 };
 
-const collectHookBindings = (
-  sourcePluginName: string,
-  serverName: string,
-  bindings: ReadonlyArray<ResolvedContractBinding>,
-): ReadonlyMap<string, string> => {
-  const byRef = new Map<string, string>();
-  for (const binding of bindings) {
-    const mcpName = geminiMcpToolNameForBinding(sourcePluginName, serverName, binding);
-    byRef.set(binding.logicalName, mcpName);
-    byRef.set(binding.toolName, mcpName);
-    byRef.set(`${binding.toolPluginName}:${binding.toolName}`, mcpName);
-    if (binding.contract) byRef.set(binding.contract.name, mcpName);
-  }
-  return byRef;
-};
-
 const geminiMcpToolNameForBinding = (
   sourcePluginName: string,
   serverName: string,
@@ -251,18 +232,13 @@ const matcherForHook = (
   return canonicalToolNames.get(tool.ref) ?? tool.ref;
 };
 
-const geminiHookEvent = (event: Hook["event"]): string => {
-  switch (event) {
-    case "tool.before":
-      return "BeforeTool";
-    case "tool.after":
-      return "AfterTool";
-    case "session.start":
-      return "SessionStart";
-    case "session.end":
-      return "SessionEnd";
-  }
-};
+const geminiHookEvent = (event: Hook["event"]): string =>
+  nativeHookEventName(event, {
+    toolBefore: "BeforeTool",
+    toolAfter: "AfterTool",
+    sessionStart: "SessionStart",
+    sessionEnd: "SessionEnd",
+  });
 
 const renderHookWrapperEntry = (hookSourcePath: string, event: Hook["event"], nativeEvent: string, hookRuntimePath: string): string => `
 import { Effect } from ${JSON.stringify(effectBundleImportPath())};
@@ -361,10 +337,14 @@ const planHooks = async (
   if (hooks.length === 0 || !input.registry || !artifactTargetsGemini(input.registry, "hooks")) return;
 
   const serverName = extensionIdForPlugin(input.target.sourcePluginName);
-  const canonicalToolNames = collectHookBindings(
-    input.target.sourcePluginName,
-    serverName,
-    mcpBindingsForInput(input),
+  const canonicalToolNames = collectBindingNameMap(
+    mcpBindingsForAgentsAndTools(
+      input.target.sourcePluginName,
+      input.tools,
+      input.agents,
+    ),
+    (binding) =>
+      geminiMcpToolNameForBinding(input.target.sourcePluginName, serverName, binding),
   );
   const byEvent: Record<string, unknown[]> = {};
   for (const hook of hooks) {
@@ -398,7 +378,11 @@ const planMcpBundle = async (
   operations: LowerOperation[],
   desired: Set<string>,
 ): Promise<Record<string, unknown>> => {
-  const bindings = mcpBindingsForInput(input);
+  const bindings = mcpBindingsForAgentsAndTools(
+    input.target.sourcePluginName,
+    input.tools,
+    input.agents,
+  );
   if (bindings.length === 0) return {};
 
   const extensionId = extensionIdForPlugin(input.target.sourcePluginName);

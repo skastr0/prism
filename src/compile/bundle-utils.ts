@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { builtinModules, createRequire } from "node:module";
-import { extname, join, posix } from "node:path";
+import { dirname, extname, join, posix, resolve } from "node:path";
 import { effectBundleImportPath } from "./runtime-deps.js";
 
 export const NODE_BUILTIN_EXTERNALS = [
@@ -45,6 +45,29 @@ export const relativeModulePath = (
   if (!rel.startsWith(".")) rel = `./${rel}`;
   return rel;
 };
+
+export const resolveImportedSourcePath = (sourcePath: string, source: string): string => {
+  const absolute = resolve(dirname(sourcePath), source);
+  if (extname(absolute)) return absolute;
+  return `${absolute}.ts`;
+};
+
+export const stripToolAuthoringHelpers = (source: string): string =>
+  source.replace(
+    /^\s*import\s+\{([^}]+)\}\s+from\s+["'][^"']+["'];\s*\n/gm,
+    (match, specifiers: string) => {
+      const original = specifiers
+        .split(",")
+        .map((specifier) => specifier.trim())
+        .filter(Boolean);
+      const kept = original.filter((specifier) => {
+        const importedName = specifier.replace(/\s+as\s+.*$/u, "").trim();
+        return importedName !== "defineTool" && importedName !== "schemaSlot";
+      });
+      if (kept.length === original.length) return match;
+      return kept.length > 0 ? match.replace(`{${specifiers}}`, `{ ${kept.join(", ")} }`) : "";
+    },
+  );
 
 export const resolveTsImportCandidate = async (
   absoluteWithoutQuery: string,

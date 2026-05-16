@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { Contract } from "./sources.js";
@@ -12,7 +12,9 @@ import {
   relativeModulePath,
   rewriteBareEffectImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
+  resolveImportedSourcePath,
   resolveTsImportCandidate,
+  stripToolAuthoringHelpers,
 } from "./bundle-utils.js";
 import { effectBundleImportPath } from "./runtime-deps.js";
 import {
@@ -312,12 +314,6 @@ const findSourcePlugin = (
   return first ? { pluginName: first[0], pluginRoot: first[1] } : undefined;
 };
 
-const resolveImportedSourcePath = (sourcePath: string, source: string): string => {
-  const absolute = resolve(dirname(sourcePath), source);
-  if (extname(absolute)) return absolute;
-  return `${absolute}.ts`;
-};
-
 const rewriteCrossPluginRelativeImports = (options: {
   readonly pluginName: string;
   readonly pluginRoot?: string;
@@ -346,20 +342,6 @@ const rewriteCrossPluginRelativeImports = (options: {
     },
   );
 };
-
-const stripToolAuthoringHelpers = (source: string): string =>
-  source.replace(
-    /^\s*import\s+\{([^}]+)\}\s+from\s+["'][^"']+["'];\s*\n/gm,
-    (match, specifiers: string) => {
-      const original = specifiers.split(",").map((specifier) => specifier.trim()).filter(Boolean);
-      const kept = original.filter((specifier) => {
-        const importedName = specifier.replace(/\s+as\s+.*$/u, "").trim();
-        return importedName !== "defineTool" && importedName !== "schemaSlot";
-      });
-      if (kept.length === original.length) return match;
-      return kept.length > 0 ? match.replace(`{${specifiers}}`, `{ ${kept.join(", ")} }`) : "";
-    },
-  );
 
 const rewriteGeneratedPluginImportsForStandaloneBundle = (
   source: string,

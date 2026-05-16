@@ -16,22 +16,21 @@ const bundledEffectEntrypoint = (): string | undefined =>
 const bundledOpenCodePluginEntrypoint = (): string | undefined =>
   bundledEntrypoint(PRISM_OPENCODE_PLUGIN_ENTRYPOINT);
 
-export const effectBundleImportPath = (): string => {
+const resolveBundleImportPath = (
+  specifier: string,
+  fallbackImportPath: () => string | undefined,
+): string => {
   try {
-    return fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/");
+    return fileURLToPath(import.meta.resolve(specifier)).replace(/\\/g, "/");
   } catch (error) {
-    const fallback = bundledEffectEntrypoint();
+    const fallback = fallbackImportPath();
     if (fallback) return fallback;
     throw error;
   }
 };
 
-export const opencodePluginBundleImportPath = (): string => {
-  try {
-    return fileURLToPath(import.meta.resolve("@opencode-ai/plugin")).replace(/\\/g, "/");
-  } catch (error) {
-    const fallback = bundledOpenCodePluginEntrypoint();
-    if (fallback) return fallback;
-    throw error;
-  }
-};
+export const effectBundleImportPath = (): string =>
+  resolveBundleImportPath("effect", bundledEffectEntrypoint);
+
+export const opencodePluginBundleImportPath = (): string =>
+  resolveBundleImportPath("@opencode-ai/plugin", bundledOpenCodePluginEntrypoint);

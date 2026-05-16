@@ -17,7 +17,10 @@ import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
-import { bindingsFromCanonicalTools } from "../tool-bindings.js";
+import {
+  collectBindingNameMap,
+  mcpBindingsForAgentsAndTools,
+} from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
   exists,
@@ -27,10 +30,12 @@ import type { HarnessScope, PluginArtifactType, PluginTargetId } from "../../typ
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  nativeHookEventName,
   normalizeBundleSegment,
   pushWriteOperation as pushWrite,
   regexEscape,
   renderStandardOrbitSkill,
+  uniqueSorted,
 } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
@@ -80,9 +85,6 @@ const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
 
 const tomlDottedArrayTable = (segments: ReadonlyArray<string>): string =>
   `[[${segments.map((segment) => quote(segment)).join(".")}]]`;
-
-const uniqueSorted = (values: ReadonlyArray<string>): string[] =>
-  [...new Set(values)].sort((left, right) => left.localeCompare(right));
 
 const isTomlTableHeader = (line: string): boolean => /^\s*\[.*\]\s*(?:#.*)?$/u.test(line);
 
@@ -171,11 +173,6 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
     agent.toolBindings.map((binding) => mcpToolNameForBinding(sourcePluginName, binding)),
   );
 
-const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> => [
-  ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
-  ...input.agents.flatMap((agent) => agent.toolBindings),
-];
-
 const renderAgentToml = (
   agent: ComposedAgent,
   target: CodexCliLowerTarget,
@@ -244,35 +241,21 @@ const renderRules = async (input: LowerInput): Promise<string | undefined> => {
   return `${chunks.join("\n\n")}\n`;
 };
 
-const codexNativeHookEvent = (event: Hook["event"]): string => {
-  switch (event) {
-    case "tool.before":
-      return "PreToolUse";
-    case "tool.after":
-      return "PostToolUse";
-    case "session.start":
-      return "SessionStart";
-    case "session.end":
-      return "Stop";
-  }
-};
+const codexNativeHookEvent = (event: Hook["event"]): string =>
+  nativeHookEventName(event, {
+    toolBefore: "PreToolUse",
+    toolAfter: "PostToolUse",
+    sessionStart: "SessionStart",
+    sessionEnd: "Stop",
+  });
 
 const collectCanonicalToolNames = (
   sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
-): Map<string, string> => {
-  const names = new Map<string, string>();
-
-  for (const binding of bindings) {
-    const mcpName = mcpToolNameForBinding(sourcePluginName, binding);
-    names.set(binding.logicalName, mcpName);
-    names.set(binding.toolName, mcpName);
-    names.set(`${binding.toolPluginName}:${binding.toolName}`, mcpName);
-    if (binding.contract) names.set(binding.contract.name, mcpName);
-  }
-
-  return names;
-};
+): ReadonlyMap<string, string> =>
+  collectBindingNameMap(bindings, (binding) =>
+    mcpToolNameForBinding(sourcePluginName, binding),
+  );
 
 const hookMatcher = (
   nativeEvent: string,
@@ -389,7 +372,11 @@ const planHooks = async (
 
   const canonicalToolNames = collectCanonicalToolNames(
     input.target.sourcePluginName,
-    mcpBindingsForInput(input),
+    mcpBindingsForAgentsAndTools(
+      input.target.sourcePluginName,
+      input.tools,
+      input.agents,
+    ),
   );
   const plannedHooks: PlannedHook[] = [];
 
@@ -516,7 +503,11 @@ const planMcpServer = async (
   input: LowerInput,
   operations: LowerOperation[],
 ): Promise<{ mcpServerName?: string; mcpBundlePath?: string; toolNames: string[] }> => {
-  const bindings = mcpBindingsForInput(input);
+  const bindings = mcpBindingsForAgentsAndTools(
+    input.target.sourcePluginName,
+    input.tools,
+    input.agents,
+  );
   if (bindings.length === 0) return { toolNames: [] };
 
   const mcpServerName = generatedServerName(input.target.sourcePluginName);

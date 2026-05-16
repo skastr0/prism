@@ -46,6 +46,7 @@ import {
   rewriteBareEffectImportsForBundle,
   rewriteBareImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
+  rewriteGeneratedPluginBundleImports,
   resolveImportedSourcePath,
   resolveTsImportCandidate,
   stripToolAuthoringHelpers,
@@ -141,9 +142,6 @@ const generatedPluginEntryForName = (
   pathToFileURL(
     join(generatedPluginRootForName(target, pluginName), "dist", "server.mjs")
   ).href;
-
-const generatedPluginEntry = (target: OpenCodeLowerTarget): string =>
-  generatedPluginEntryForName(target, target.sourcePluginName);
 
 const staleGeneratedPluginSourceEntryForName = (
   target: OpenCodeLowerTarget,
@@ -884,7 +882,7 @@ const normalizeMirroredPluginSource = async (
     importPluginRoots: options.importPluginRoots,
   });
 
-  const withStandaloneImports = rewriteGeneratedPluginImportsForBundle(
+  const withStandaloneImports = rewriteGeneratedPluginBundleImports(
     withRewrittenImports,
     currentGeneratedPath,
   );
@@ -948,18 +946,6 @@ const rewriteCrossPluginRelativeImports = (options: {
     },
   );
 };
-
-const rewriteGeneratedPluginImportsForBundle = (
-  source: string,
-  currentGeneratedPath: string,
-): string =>
-  source.replace(
-    /(["'])\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/prism-generated-[^"']+\/src\/plugins\/([^/]+)\/([^"']+)\1/g,
-    (_match, quote: string, pluginName: string, modulePath: string) => {
-      const targetGeneratedPath = `plugins/${pluginName}/${modulePath.replace(/\.ts$/u, "")}`;
-      return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
-    },
-  );
 
 const hookAuthoringBridgeImportFor = (currentGeneratedPath: string): string =>
   relativeModulePath(currentGeneratedPath, "runtime/hook-authoring-bridge");
@@ -1628,7 +1614,10 @@ export const planLowering = async (
   );
   const desiredOrbitSkillFiles = new Set<string>();
   const ownedGeneratedPluginId = generatedPluginId(input.target);
-  const ownedGeneratedPluginEntry = generatedPluginEntry(input.target);
+  const ownedGeneratedPluginEntry = generatedPluginEntryForName(
+    input.target,
+    input.target.sourcePluginName,
+  );
 
   // ---- Per-agent markdown
   for (const agent of input.agents) {

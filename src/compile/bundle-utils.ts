@@ -69,6 +69,18 @@ export const stripToolAuthoringHelpers = (source: string): string =>
     },
   );
 
+export const rewriteGeneratedPluginBundleImports = (
+  source: string,
+  currentGeneratedPath: string,
+): string =>
+  source.replace(
+    /(["'])\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/prism-generated-[^"']+\/src\/plugins\/([^/]+)\/([^"']+)\1/g,
+    (_match, quote: string, pluginName: string, modulePath: string) => {
+      const targetGeneratedPath = `plugins/${pluginName}/${modulePath.replace(/\.ts$/u, "")}`;
+      return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
+    },
+  );
+
 export const resolveTsImportCandidate = async (
   absoluteWithoutQuery: string,
   fileExists: (path: string) => Promise<boolean>,

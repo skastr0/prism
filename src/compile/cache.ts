@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ComposedAgent } from "./compose.js";
-import { normalizeRelativePath } from "./paths.js";
+import { compareByStringKeys, normalizeRelativePath } from "./paths.js";
 import { parseNamedRef, parseSpaceItemRef, registryForRef } from "./refs.js";
 import type {
   Agent,
@@ -104,11 +104,10 @@ const stableValue = (value: unknown): unknown => {
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
 
-const compareInputFiles = (left: CacheInputFile, right: CacheInputFile): number => {
-  const pluginOrder = left.plugin.localeCompare(right.plugin);
-  if (pluginOrder !== 0) return pluginOrder;
-  return left.path.localeCompare(right.path);
-};
+const compareInputFiles = compareByStringKeys<CacheInputFile>(
+  (file) => file.plugin,
+  (file) => file.path,
+);
 
 const getContextShape = (options: CacheContext) => ({
   cacheFormatVersion: CACHE_FORMAT_VERSION,

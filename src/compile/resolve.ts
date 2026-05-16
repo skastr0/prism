@@ -900,30 +900,47 @@ const instantiateTemplateString = (
   return error ?? next;
 };
 
+const instantiateOptionalTemplateString = (
+  orbit: Orbit,
+  field: string,
+  value: string | undefined,
+  bindings: BindingMap,
+): string | undefined | OrbitValidationError =>
+  value === undefined
+    ? undefined
+    : instantiateTemplateString(orbit, field, value, bindings);
+
 const instantiateOrbitPhase = (
   orbit: Orbit,
   phase: OrbitPhase,
   index: number,
   bindings: BindingMap,
 ): OrbitPhase | OrbitValidationError => {
-  const instantiate = (field: string, value: string | undefined) => {
-    if (value === undefined) return undefined;
-    return instantiateTemplateString(orbit, field, value, bindings);
-  };
-
-  const nextName = instantiate(`phases[${index}].name`, phase.name);
+  const nextName = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].name`,
+    phase.name,
+    bindings,
+  );
   if (nextName instanceof OrbitValidationError) return nextName;
 
-  const nextOrbit = instantiate(`phases[${index}].orbit`, phase.orbit);
+  const nextOrbit = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].orbit`,
+    phase.orbit,
+    bindings,
+  );
   if (nextOrbit instanceof OrbitValidationError) return nextOrbit;
 
   let orbitBinding = phase.orbit_binding;
   if (phase.orbit_binding?.bindings) {
     const nextBindings: Record<string, string> = {};
     for (const [bindingName, bindingValue] of Object.entries(phase.orbit_binding.bindings)) {
-      const nextValue = instantiate(
+      const nextValue = instantiateOptionalTemplateString(
+        orbit,
         `phases[${index}].orbit_binding.bindings.${bindingName}`,
         bindingValue,
+        bindings,
       );
       if (nextValue instanceof OrbitValidationError) return nextValue;
       if (nextValue !== undefined) {
@@ -940,7 +957,12 @@ const instantiateOrbitPhase = (
   const nextNotes: Record<string, string> = {};
   if (phase.notes) {
     for (const [noteName, noteValue] of Object.entries(phase.notes)) {
-      const nextValue = instantiate(`phases[${index}].notes.${noteName}`, noteValue);
+      const nextValue = instantiateOptionalTemplateString(
+        orbit,
+        `phases[${index}].notes.${noteName}`,
+        noteValue,
+        bindings,
+      );
       if (nextValue instanceof OrbitValidationError) return nextValue;
       if (nextValue !== undefined) {
         nextNotes[noteName] = nextValue;
@@ -948,22 +970,36 @@ const instantiateOrbitPhase = (
     }
   }
 
-  const nextTelos = instantiate(`phases[${index}].telos`, phase.telos);
+  const nextTelos = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].telos`,
+    phase.telos,
+    bindings,
+  );
   if (nextTelos instanceof OrbitValidationError) return nextTelos;
 
-  const nextRealWorldChange = instantiate(
+  const nextRealWorldChange = instantiateOptionalTemplateString(
+    orbit,
     `phases[${index}].real_world_change`,
     phase.real_world_change,
+    bindings,
   );
   if (nextRealWorldChange instanceof OrbitValidationError) return nextRealWorldChange;
 
-  const nextColdPickupTest = instantiate(
+  const nextColdPickupTest = instantiateOptionalTemplateString(
+    orbit,
     `phases[${index}].cold_pickup_test`,
     phase.cold_pickup_test,
+    bindings,
   );
   if (nextColdPickupTest instanceof OrbitValidationError) return nextColdPickupTest;
 
-  const nextBody = instantiate(`phases[${index}].body`, phase.body);
+  const nextBody = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].body`,
+    phase.body,
+    bindings,
+  );
   if (nextBody instanceof OrbitValidationError) return nextBody;
 
   return {
@@ -1013,18 +1049,28 @@ const instantiateOrbitCheckpoint = (
   index: number,
   bindings: BindingMap,
 ): OrbitPulsarCheckpoint | OrbitValidationError => {
-  const instantiate = (field: string, value: string | undefined) => {
-    if (value === undefined) return undefined;
-    return instantiateTemplateString(orbit, field, value, bindings);
-  };
-
-  const after = instantiate(`pulsar_checkpoints[${index}].after`, checkpoint.after);
+  const after = instantiateOptionalTemplateString(
+    orbit,
+    `pulsar_checkpoints[${index}].after`,
+    checkpoint.after,
+    bindings,
+  );
   if (after instanceof OrbitValidationError) return after;
 
-  const before = instantiate(`pulsar_checkpoints[${index}].before`, checkpoint.before);
+  const before = instantiateOptionalTemplateString(
+    orbit,
+    `pulsar_checkpoints[${index}].before`,
+    checkpoint.before,
+    bindings,
+  );
   if (before instanceof OrbitValidationError) return before;
 
-  const note = instantiate(`pulsar_checkpoints[${index}].note`, checkpoint.note);
+  const note = instantiateOptionalTemplateString(
+    orbit,
+    `pulsar_checkpoints[${index}].note`,
+    checkpoint.note,
+    bindings,
+  );
   if (note instanceof OrbitValidationError) return note;
 
   return { after, before, note };
@@ -1036,10 +1082,12 @@ const instantiateOrbitDefinitionEntry = (
   role: OrbitDefinitionEntry,
   bindings: BindingMap,
 ): OrbitDefinitionEntry | OrbitValidationError => {
-  const instantiate = (field: string, value: string) =>
-    instantiateTemplateString(orbit, field, value, bindings);
-
-  const purpose = instantiate(`definitions.${definitionName}.purpose`, role.purpose);
+  const purpose = instantiateTemplateString(
+    orbit,
+    `definitions.${definitionName}.purpose`,
+    role.purpose,
+    bindings,
+  );
   if (purpose instanceof OrbitValidationError) return purpose;
 
   const lists: Partial<Record<"contains" | "boundaries" | "avoid", string[]>> = {};
@@ -1048,9 +1096,11 @@ const instantiateOrbitDefinitionEntry = (
     if (!values) continue;
     const nextValues: string[] = [];
     for (const [index, value] of values.entries()) {
-      const nextValue = instantiate(
+      const nextValue = instantiateTemplateString(
+        orbit,
         `definitions.${definitionName}.${listName}[${index}]`,
         value,
+        bindings,
       );
       if (nextValue instanceof OrbitValidationError) return nextValue;
       nextValues.push(nextValue);

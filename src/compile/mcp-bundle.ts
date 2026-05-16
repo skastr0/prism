@@ -12,6 +12,7 @@ import {
   relativeModulePath,
   rewriteBareEffectImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
+  rewriteGeneratedPluginBundleImports,
   resolveImportedSourcePath,
   resolveTsImportCandidate,
   stripToolAuthoringHelpers,
@@ -343,18 +344,6 @@ const rewriteCrossPluginRelativeImports = (options: {
   );
 };
 
-const rewriteGeneratedPluginImportsForStandaloneBundle = (
-  source: string,
-  currentGeneratedPath: string,
-): string =>
-  source.replace(
-    /(["'])\.\.\/\.\.\/\.\.\/\.\.\/\.\.\/prism-generated-[^"']+\/src\/plugins\/([^/]+)\/([^"']+)\1/g,
-    (_match, quote: string, pluginName: string, modulePath: string) => {
-      const targetGeneratedPath = `plugins/${pluginName}/${modulePath}`;
-      return `${quote}${relativeModulePath(currentGeneratedPath, targetGeneratedPath)}${quote}`;
-    },
-  );
-
 const normalizeMirroredPluginSource = async (options: {
   readonly pluginName: string;
   readonly pluginRoot?: string;
@@ -372,7 +361,7 @@ const normalizeMirroredPluginSource = async (options: {
     currentGeneratedPath,
     importPluginRoots: options.importPluginRoots,
   });
-  const withStandaloneImports = rewriteGeneratedPluginImportsForStandaloneBundle(
+  const withStandaloneImports = rewriteGeneratedPluginBundleImports(
     withCrossPluginImports,
     currentGeneratedPath,
   );
@@ -459,6 +448,18 @@ const describeMcpAdapterSpec = (spec: McpAdapterSpec): string => {
 const safeIdentifier = (value: string): string =>
   value.replace(/[^a-zA-Z0-9_$]/g, "_").replace(/^[^a-zA-Z_$]/, "_$&");
 
+const SCHEMA_ANNOTATION_HELPERS = `const extractStringAnnotation = (
+  ast: SchemaAST.AST,
+  annotationId: symbol,
+): string | undefined => {
+  const annotation = SchemaAST.getAnnotation<string>(annotationId)(ast);
+  return annotation._tag === "Some" ? annotation.value : undefined;
+};
+
+const extractDescriptionOrTitle = (ast: SchemaAST.AST): string | undefined =>
+  extractStringAnnotation(ast, SchemaAST.DescriptionAnnotationId) ??
+  extractStringAnnotation(ast, SchemaAST.TitleAnnotationId);`;
+
 const renderMcpServerEntry = (options: {
   readonly serverName: string;
   readonly version: string;
@@ -503,15 +504,7 @@ interface ToolRuntimeContext {
   repoRoot?: string;
 }
 
-const extractDescription = (ast: SchemaAST.AST): string | undefined => {
-  const desc = SchemaAST.getAnnotation<string>(SchemaAST.DescriptionAnnotationId)(ast);
-  return desc._tag === "Some" ? desc.value : undefined;
-};
-
-const extractTitle = (ast: SchemaAST.AST): string | undefined => {
-  const title = SchemaAST.getAnnotation<string>(SchemaAST.TitleAnnotationId)(ast);
-  return title._tag === "Some" ? title.value : undefined;
-};
+${SCHEMA_ANNOTATION_HELPERS}
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -554,7 +547,7 @@ const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema => {
       const required: string[] = [];
       for (const prop of ast.propertySignatures) {
         const property = astToJsonSchema(prop.type);
-        const description = extractDescription(prop.type) ?? extractTitle(prop.type);
+        const description = extractDescriptionOrTitle(prop.type);
         if (description) property.description = description;
         const name = String(prop.name);
         properties[name] = property;
@@ -800,15 +793,7 @@ interface ToolRuntimeContext {
   repoRoot?: string;
 }
 
-const extractDescription = (ast: SchemaAST.AST): string | undefined => {
-  const desc = SchemaAST.getAnnotation<string>(SchemaAST.DescriptionAnnotationId)(ast);
-  return desc._tag === "Some" ? desc.value : undefined;
-};
-
-const extractTitle = (ast: SchemaAST.AST): string | undefined => {
-  const title = SchemaAST.getAnnotation<string>(SchemaAST.TitleAnnotationId)(ast);
-  return title._tag === "Some" ? title.value : undefined;
-};
+${SCHEMA_ANNOTATION_HELPERS}
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
@@ -851,7 +836,7 @@ const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema => {
       const required: string[] = [];
       for (const prop of ast.propertySignatures) {
         const property = astToJsonSchema(prop.type);
-        const description = extractDescription(prop.type) ?? extractTitle(prop.type);
+        const description = extractDescriptionOrTitle(prop.type);
         if (description) property.description = description;
         const name = String(prop.name);
         properties[name] = property;

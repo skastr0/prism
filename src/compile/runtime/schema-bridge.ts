@@ -20,12 +20,10 @@
 import { tool } from "@opencode-ai/plugin";
 import { Schema, SchemaAST } from "effect";
 
-// Opencode's tool.schema returns a family of Zod types whose concrete
-// shapes differ per builder (ZodString, ZodNumber, ...). For the bridge,
-// we work in the general `any`-space — the runtime correctness is what
-// matters; static typing here would just force ceremony.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ZodNode = any;
+type ZodNode = Parameters<(typeof tool.schema)["array"]>[0] & {
+  describe(description: string): ZodNode;
+  optional(): ZodNode;
+};
 
 export interface ToolRuntimeCost {
   inputTokens?: number;
@@ -64,14 +62,12 @@ export interface ToolRuntimeContext {
   repoRoot?: string;
 }
 
-const extractDescription = (ast: SchemaAST.AST): string | undefined => {
-  const desc = SchemaAST.getAnnotation<string>(SchemaAST.DescriptionAnnotationId)(ast);
-  return desc._tag === "Some" ? desc.value : undefined;
-};
-
-const extractTitle = (ast: SchemaAST.AST): string | undefined => {
-  const t = SchemaAST.getAnnotation<string>(SchemaAST.TitleAnnotationId)(ast);
-  return t._tag === "Some" ? t.value : undefined;
+const extractStringAnnotation = (
+  ast: SchemaAST.AST,
+  annotationId: symbol,
+): string | undefined => {
+  const annotation = SchemaAST.getAnnotation<string>(annotationId)(ast);
+  return annotation._tag === "Some" ? annotation.value : undefined;
 };
 
 const astToToolSchema = (ast: SchemaAST.AST): ZodNode => {
@@ -120,7 +116,7 @@ const astToToolSchema = (ast: SchemaAST.AST): ZodNode => {
       const shape: Record<string, ZodNode> = {};
       for (const prop of ast.propertySignatures) {
         let node = astToToolSchema(prop.type);
-        const desc = extractDescription(prop.type);
+        const desc = extractStringAnnotation(prop.type, SchemaAST.DescriptionAnnotationId);
         if (desc) node = node.describe(desc);
         if (prop.isOptional) node = node.optional();
         shape[String(prop.name)] = node;
@@ -157,7 +153,9 @@ export const toolArgsFromSchema = (
   const result: Record<string, ZodNode> = {};
   for (const prop of ast.propertySignatures) {
     let node = astToToolSchema(prop.type);
-    const desc = extractDescription(prop.type) ?? extractTitle(prop.type);
+    const desc =
+      extractStringAnnotation(prop.type, SchemaAST.DescriptionAnnotationId) ??
+      extractStringAnnotation(prop.type, SchemaAST.TitleAnnotationId);
     if (desc) node = node.describe(desc);
     if (prop.isOptional) node = node.optional();
     result[String(prop.name)] = node;

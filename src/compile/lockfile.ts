@@ -10,7 +10,7 @@
 import { join } from "node:path";
 import type { PluginRegistry } from "./registry.js";
 import { computeContentHash, computeStableHash } from "./cache.js";
-import { normalizeRelativePath } from "./paths.js";
+import { compareByStringKeys, normalizeRelativePath } from "./paths.js";
 import { exists, readFile, writeFile } from "../fs.js";
 
 export interface LockfileSource {
@@ -132,11 +132,10 @@ export const writeLockfile = async (
     });
   }
 
-  entries.sort((left, right) => {
-    const pathOrder = left.sourcePath.localeCompare(right.sourcePath);
-    if (pathOrder !== 0) return pathOrder;
-    return left.name.localeCompare(right.name);
-  });
+  entries.sort(compareByStringKeys<LockfileEntry>(
+    (entry) => entry.sourcePath,
+    (entry) => entry.name,
+  ));
 
   const path = getLockfilePath(pluginPath);
   const comparable = {

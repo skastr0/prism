@@ -1184,6 +1184,218 @@ const loadTraits = (
     return map;
   });
 
+type AgentDefinitionInput = typeof AgentSchema.Type;
+type AgentTraitInput = NonNullable<AgentDefinitionInput["traits"]>[number];
+type AgentTraitBindingInput = Extract<
+  AgentTraitInput,
+  { readonly kind: "trait-binding" }
+>;
+type AgentTraitBindingToolInput =
+  NonNullable<AgentTraitBindingInput["tools"]>[string];
+type NormalizedAgentTraitTools = Record<
+  string,
+  { slots: Record<string, NormalizedTraitBindingToolSlot> }
+>;
+
+const agentSourceParseError = (
+  sourcePath: string,
+  message: string,
+): SourceParseError =>
+  new SourceParseError({
+    sourcePath,
+    kind: "agent",
+    message,
+  });
+
+const decodeAgentDefinition = (
+  sourcePath: string,
+  raw: unknown,
+): AgentDefinitionInput | SourceParseError => {
+  const result = Schema.decodeUnknownEither(AgentSchema, STRICT_PARSE_OPTIONS)(raw);
+  if (result._tag === "Right") return result.right;
+
+  return agentSourceParseError(sourcePath, result.left.message);
+};
+
+const validateAgentFileName = (
+  sourcePath: string,
+  parsed: AgentDefinitionInput,
+): AgentNameMismatchError | undefined => {
+  const fileName = basename(sourcePath);
+  const fileStem = stripSuffix(fileName, [AGENT_SUFFIX_TS]);
+  if (parsed.name === fileStem) return undefined;
+
+  return new AgentNameMismatchError({
+    sourcePath,
+    fileStem,
+    agentName: parsed.name,
+  });
+};
+
+const isAgentTraitBinding = (
+  trait: AgentTraitInput,
+): trait is AgentTraitBindingInput =>
+  typeof trait !== "string" && trait.kind !== "trait-ref";
+
+const agentTraitRefInput = (
+  trait: AgentTraitInput,
+): Parameters<typeof normalizeTraitRefInput>[1] =>
+  isAgentTraitBinding(trait) ? trait.trait : trait;
+
+const normalizeAgentTraitRef = (
+  sourcePath: string,
+  index: number,
+  trait: AgentTraitInput,
+): string | SourceParseError => {
+  const normalized = normalizeTraitRefInput(
+    `traits[${index}]`,
+    agentTraitRefInput(trait),
+  );
+  if (typeof normalized === "string") return normalized;
+
+  return agentSourceParseError(
+    sourcePath,
+    `${normalized.field}: ${normalized.message}`,
+  );
+};
+
+const normalizeAgentTraitToolSlots = (
+  sourcePath: string,
+  traitIndex: number,
+  logicalName: string,
+  toolBinding: AgentTraitBindingToolInput,
+  sourceSlots: Map<string, SchemaSymbolSource>,
+): Record<string, NormalizedTraitBindingToolSlot> | SourceParseError => {
+  const normalizedSlots: Record<string, NormalizedTraitBindingToolSlot> = {};
+
+  for (const [slotName, schema] of Object.entries(toolBinding.slots ?? {})) {
+    const field = `traits[${traitIndex}].tools.${logicalName}.slots.${slotName}`;
+    if (!isEffectSchema(schema)) {
+      return agentSourceParseError(
+        sourcePath,
+        `${field}: must be an Effect Schema`,
+      );
+    }
+
+    const source = sourceSlots.get(slotName);
+    if (!source) {
+      return agentSourceParseError(
+        sourcePath,
+        (
+          `${field}: ` +
+          "must be an imported schema identifier; inline Effect Schema expressions are not supported"
+        ),
+      );
+    }
+    normalizedSlots[slotName] = { schema, source };
+  }
+
+  return normalizedSlots;
+};
+
+const normalizeAgentTraitTools = (
+  sourcePath: string,
+  traitIndex: number,
+  trait: AgentTraitBindingInput,
+  sourceTools: Map<string, Map<string, SchemaSymbolSource>>,
+): NormalizedAgentTraitTools | SourceParseError => {
+  const tools: NormalizedAgentTraitTools = {};
+
+  for (const [logicalName, toolBinding] of Object.entries(trait.tools ?? {})) {
+    const normalizedSlots = normalizeAgentTraitToolSlots(
+      sourcePath,
+      traitIndex,
+      logicalName,
+      toolBinding,
+      sourceTools.get(logicalName) ?? new Map(),
+    );
+    if (normalizedSlots instanceof SourceParseError) return normalizedSlots;
+
+    tools[logicalName] = { slots: normalizedSlots };
+  }
+
+  return tools;
+};
+
+const normalizeAgentTraits = (
+  sourcePath: string,
+  traitsInput: AgentDefinitionInput["traits"],
+  bindingToolSlotSources: BindingToolSlotSources,
+): NormalizedTraitBinding[] | SourceParseError => {
+  const traits: NormalizedTraitBinding[] = [];
+
+  for (const [index, trait] of (traitsInput ?? []).entries()) {
+    const normalized = normalizeAgentTraitRef(sourcePath, index, trait);
+    if (normalized instanceof SourceParseError) return normalized;
+
+    const tools = isAgentTraitBinding(trait)
+      ? normalizeAgentTraitTools(
+          sourcePath,
+          index,
+          trait,
+          bindingToolSlotSources.get(index) ?? new Map(),
+        )
+      : {};
+    if (tools instanceof SourceParseError) return tools;
+
+    traits.push({ ref: normalized, tools });
+  }
+
+  return traits;
+};
+
+const normalizeAgentModel = (
+  sourcePath: string,
+  modelInput: AgentDefinitionInput["model"],
+): string | undefined | SourceParseError => {
+  const model = modelInput
+    ? normalizeModelProfileRefInput("model", modelInput)
+    : undefined;
+  if (!model) return undefined;
+
+  if (typeof model !== "string") {
+    return agentSourceParseError(
+      sourcePath,
+      `${model.field}: ${model.message}`,
+    );
+  }
+
+  if (!model.includes("/")) {
+    return forbiddenFieldError(
+      sourcePath,
+      "agent",
+      "model",
+      "must reference a canonical model profile (<modelspace>/<name> or modelProfileRef(...))",
+    );
+  }
+
+  return model;
+};
+
+const buildAgent = (
+  sourcePath: string,
+  parsed: AgentDefinitionInput,
+  parts: {
+    readonly traits: NormalizedTraitBinding[];
+    readonly model?: string;
+    readonly access: NormalizedAccess;
+    readonly skills: string[];
+  },
+): Agent =>
+  new Agent({
+    name: parsed.name,
+    sourcePath,
+    description: parsed.description,
+    identity: parsed.identity,
+    personality: parsed.personality,
+    ...(parts.model ? { model: parts.model } : {}),
+    traits: parts.traits,
+    access: parts.access,
+    skills: parts.skills,
+    color: parsed.color,
+    targets: parsed.targets ?? {},
+  });
+
 const parseAgentModule = (
   sourcePath: string,
   raw: unknown,
@@ -1191,133 +1403,30 @@ const parseAgentModule = (
   Effect.gen(function* () {
     const sourceText = yield* readText(sourcePath, "agent");
     const bindingToolSlotSources = collectBindingToolSlotSources(sourcePath, sourceText);
-    const result = Schema.decodeUnknownEither(AgentSchema, STRICT_PARSE_OPTIONS)(raw);
-    if (result._tag === "Left") {
-      return yield* Effect.fail(
-        new SourceParseError({
-          sourcePath,
-          kind: "agent",
-          message: result.left.message,
-        }),
-      );
-    }
 
-    const parsed = result.right;
-    const fileName = basename(sourcePath);
-    const fileStem = stripSuffix(fileName, [AGENT_SUFFIX_TS]);
+    const parsed = decodeAgentDefinition(sourcePath, raw);
+    if (parsed instanceof SourceParseError) return yield* Effect.fail(parsed);
 
-    if (parsed.name !== fileStem) {
-      return yield* Effect.fail(
-        new AgentNameMismatchError({
-          sourcePath,
-          fileStem,
-          agentName: parsed.name,
-        }),
-      );
-    }
+    const nameMismatch = validateAgentFileName(sourcePath, parsed);
+    if (nameMismatch) return yield* Effect.fail(nameMismatch);
 
-    const traits: NormalizedTraitBinding[] = [];
-    for (const [index, trait] of (parsed.traits ?? []).entries()) {
-      const traitRef =
-        typeof trait === "string" || trait.kind === "trait-ref"
-          ? trait
-          : trait.trait;
-      const normalized = normalizeTraitRefInput(`traits[${index}]`, traitRef);
-      if (typeof normalized !== "string") {
-        return yield* Effect.fail(
-          new SourceParseError({
-            sourcePath,
-            kind: "agent",
-            message: `${normalized.field}: ${normalized.message}`,
-          }),
-        );
-      }
-      const tools: Record<string, { slots: Record<string, NormalizedTraitBindingToolSlot> }> = {};
-      if (typeof trait !== "string" && trait.kind !== "trait-ref") {
-        const sourceTools = bindingToolSlotSources.get(index) ?? new Map();
-        for (const [logicalName, toolBinding] of Object.entries(trait.tools ?? {})) {
-          const normalizedSlots: Record<string, NormalizedTraitBindingToolSlot> = {};
-          const sourceSlots = sourceTools.get(logicalName) ?? new Map();
-          for (const [slotName, schema] of Object.entries(toolBinding.slots ?? {})) {
-            if (!isEffectSchema(schema)) {
-              return yield* Effect.fail(
-                new SourceParseError({
-                  sourcePath,
-                  kind: "agent",
-                  message: `traits[${index}].tools.${logicalName}.slots.${slotName}: must be an Effect Schema`,
-                }),
-              );
-            }
-            const source = sourceSlots.get(slotName);
-            if (!source) {
-              return yield* Effect.fail(
-                new SourceParseError({
-                  sourcePath,
-                  kind: "agent",
-                  message:
-                    `traits[${index}].tools.${logicalName}.slots.${slotName}: ` +
-                    "must be an imported schema identifier; inline Effect Schema expressions are not supported",
-                }),
-              );
-            }
-            normalizedSlots[slotName] = { schema, source };
-          }
-          tools[logicalName] = { slots: normalizedSlots };
-        }
-      }
-      traits.push({
-        ref: normalized,
-        tools,
-      });
-    }
+    const traits = normalizeAgentTraits(
+      sourcePath,
+      parsed.traits,
+      bindingToolSlotSources,
+    );
+    if (traits instanceof SourceParseError) return yield* Effect.fail(traits);
 
-    const model = parsed.model
-      ? normalizeModelProfileRefInput("model", parsed.model)
-      : undefined;
-    if (model && typeof model !== "string") {
-      return yield* Effect.fail(
-        new SourceParseError({
-          sourcePath,
-          kind: "agent",
-          message: `${model.field}: ${model.message}`,
-        }),
-      );
-    }
-
-    if (model && !model.includes("/")) {
-      return yield* Effect.fail(
-        forbiddenFieldError(
-          sourcePath,
-          "agent",
-          "model",
-          "must reference a canonical model profile (<modelspace>/<name> or modelProfileRef(...))",
-        ),
-      );
-    }
+    const model = normalizeAgentModel(sourcePath, parsed.model);
+    if (model instanceof SourceParseError) return yield* Effect.fail(model);
 
     const access = normalizeAccess(sourcePath, "agent", "access", parsed.access);
-    if (access instanceof SourceParseError) {
-      return yield* Effect.fail(access);
-    }
+    if (access instanceof SourceParseError) return yield* Effect.fail(access);
 
     const skills = normalizeSkillRefs(sourcePath, "agent", "skills", parsed.skills);
-    if (skills instanceof SourceParseError) {
-      return yield* Effect.fail(skills);
-    }
+    if (skills instanceof SourceParseError) return yield* Effect.fail(skills);
 
-    return new Agent({
-      name: parsed.name,
-      sourcePath,
-      description: parsed.description,
-      identity: parsed.identity,
-      personality: parsed.personality,
-      ...(model ? { model } : {}),
-      traits,
-      access,
-      skills,
-      color: parsed.color,
-      targets: parsed.targets ?? {},
-    });
+    return buildAgent(sourcePath, parsed, { traits, model, access, skills });
   });
 
 const parseAgent = (sourcePath: string): Effect.Effect<Agent, CompileError> =>

@@ -261,6 +261,42 @@ const orbitSourceWithPhase = (phaseSource: string): string => `export default {
 };
 `;
 
+const createAgentLoadFixture = async (agentSource: string): Promise<{
+  readonly pluginRoot: string;
+  readonly sourcePath: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "agent-normalization-demo");
+  const sourcePath = join(pluginRoot, "agents", "worker.agent.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "agent-normalization-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(sourcePath, agentSource);
+
+  return { pluginRoot, sourcePath };
+};
+
 const expectOrbitSourceParseFailure = async (
   orbitSource: string,
 ): Promise<{
@@ -1944,6 +1980,155 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
   const bundle = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
   expect(bundle).toContain("submit_review__review_findings_slot");
   expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
+});
+
+test("loadPlugin preserves agent normalization failure order", async () => {
+  const cases: ReadonlyArray<{
+    readonly agentSource: string;
+    readonly message: string;
+  }> = [
+    {
+      agentSource: `export default {
+  name: "not-worker",
+  description: "Worker",
+  identity: "worker",
+  traits: [{ kind: "trait-ref", name: "" }],
+};
+`,
+      message: "AgentNameMismatchError:not-worker",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: [{ kind: "trait-ref", name: "" }],
+  model: "raw-model",
+};
+`,
+      message: "traits[0]: reference object must include a non-empty 'name'",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: [
+    {
+      kind: "trait-binding",
+      trait: { kind: "trait-ref", name: "" },
+      tools: {
+        submit_review: {
+          slots: { verdict: 42 },
+        },
+      },
+    },
+  ],
+  model: "raw-model",
+};
+`,
+      message: "traits[0]: reference object must include a non-empty 'name'",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: [
+    {
+      kind: "trait-binding",
+      trait: "reviewable",
+      tools: {
+        submit_review: {
+          slots: { verdict: 42 },
+        },
+      },
+    },
+  ],
+  model: "raw-model",
+};
+`,
+      message:
+        "traits[0].tools.submit_review.slots.verdict: must be an Effect Schema",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  model: { kind: "model-profile-ref", modelspace: "", name: "reviewer" },
+  access: {
+    tools: [{ kind: "tool-ref", toolspace: "", name: "shell" }],
+  },
+};
+`,
+      message:
+        "model: model profile ref object must include a non-empty 'modelspace'",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  model: "raw-model",
+  access: {
+    tools: [{ kind: "tool-ref", toolspace: "", name: "shell" }],
+  },
+};
+`,
+      message:
+        "model: must reference a canonical model profile (<modelspace>/<name> or modelProfileRef(...))",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  access: {
+    tools: [{ kind: "tool-ref", toolspace: "", name: "shell" }],
+  },
+  skills: ["testing"],
+};
+`,
+      message:
+        "access.tools[0]: tool ref object must include a non-empty 'toolspace'",
+    },
+    {
+      agentSource: `export default {
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  skills: ["testing"],
+};
+`,
+      message:
+        "skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
+    },
+  ];
+
+  for (const current of cases) {
+    const { pluginRoot, sourcePath } = await createAgentLoadFixture(current.agentSource);
+    const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+    const failure = getFailure(exit);
+
+    if (current.message.startsWith("AgentNameMismatchError:")) {
+      expect(failure._tag).toBe("AgentNameMismatchError");
+      if (failure._tag === "AgentNameMismatchError") {
+        expect(failure.sourcePath).toBe(sourcePath);
+        expect(failure.agentName).toBe(
+          current.message.slice("AgentNameMismatchError:".length),
+        );
+      }
+      continue;
+    }
+
+    expect(failure._tag).toBe("SourceParseError");
+    if (failure._tag === "SourceParseError") {
+      expect(failure.kind).toBe("agent");
+      expect(failure.sourcePath).toBe(sourcePath);
+      expect(failure.message).toBe(current.message);
+    }
+  }
 });
 
 test("compilePluginForTarget emits a Gemini extension bundle", async () => {

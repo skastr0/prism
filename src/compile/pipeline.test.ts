@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { Cause, Effect, Option } from "effect";
 import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
+import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
@@ -223,6 +224,58 @@ const expectOrbitValidationFailure = async (
     throw new Error("Expected OrbitValidationError");
   }
   return failure;
+};
+
+const createOrbitLoadFixture = async (orbitSource: string): Promise<string> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "orbit-normalization-demo");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "orbit-normalization-demo",
+        version: "0.1.0",
+        targets: {
+          orbits: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "orbits", "phase-normalization.orbit.ts"),
+    orbitSource,
+  );
+
+  return pluginRoot;
+};
+
+const orbitSourceWithPhase = (phaseSource: string): string => `export default {
+  name: "phase-normalization",
+  description: "Phase normalization parser fixture",
+  phases: [
+    ${phaseSource},
+  ],
+};
+`;
+
+const expectOrbitSourceParseFailure = async (
+  orbitSource: string,
+): Promise<{
+  readonly failure: Extract<CompileError, { readonly _tag: "SourceParseError" }>;
+  readonly sourcePath: string;
+}> => {
+  const pluginRoot = await createOrbitLoadFixture(orbitSource);
+  const sourcePath = join(pluginRoot, "orbits", "phase-normalization.orbit.ts");
+  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("SourceParseError");
+  if (failure._tag !== "SourceParseError") {
+    throw new Error("Expected SourceParseError");
+  }
+  return { failure, sourcePath };
 };
 
 const createCanonicalLanguageFixture = async (options?: {
@@ -1373,6 +1426,140 @@ test("orbit validation fails when assigned agents do not satisfy requirements", 
     expect(failure.field).toBe("phases[1].requires[0]");
     expect(failure.message).toContain("reviewable");
     expect(failure.message).toContain("only 0 match");
+  }
+});
+
+test("loadPlugin normalizes orbit phase references requirements and metadata", async () => {
+  const pluginRoot = await createOrbitLoadFixture(
+    `import { agentRef, defineOrbit, orbitRef, traitRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "phase-normalization",
+  description: "Phase normalization parser fixture",
+  phases: [
+    {
+      name: "Singular agent",
+      agent: agentRef("builder"),
+      requires: [{ all: [traitRef("self-assessing"), traitRef("reviewable")], min: 2 }],
+      notes: { Input: "scope", Done: "handoff" },
+      telos: "Build the change",
+      real_world_change: "User can finish the workflow",
+      cold_pickup_test: "A fresh agent sees the next step",
+      body: "Long phase body",
+    },
+    {
+      name: "Bound template",
+      orbit_binding: {
+        orbit: orbitRef("template"),
+        bindings: { required: "value" },
+      },
+    },
+    {
+      name: "Empty plural alias",
+      agents: [],
+      agent: agentRef("reviewer"),
+    },
+  ],
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const orbit = registry.orbits.get("phase-normalization");
+
+  expect(orbit).toBeDefined();
+  const [singularAgent, boundTemplate, emptyPluralAlias] = orbit?.phases ?? [];
+
+  expect(singularAgent).toEqual({
+    name: "Singular agent",
+    agent: "builder",
+    agents: ["builder"],
+    requires: [{ all: ["self-assessing", "reviewable"], min: 2 }],
+    notes: { Input: "scope", Done: "handoff" },
+    telos: "Build the change",
+    real_world_change: "User can finish the workflow",
+    cold_pickup_test: "A fresh agent sees the next step",
+    body: "Long phase body",
+  });
+  expect(boundTemplate).toEqual({
+    name: "Bound template",
+    orbit_binding: { orbit: "template", bindings: { required: "value" } },
+    agents: [],
+    requires: [],
+    notes: undefined,
+  });
+  expect(Object.hasOwn(boundTemplate ?? {}, "notes")).toBe(true);
+  expect(Object.hasOwn(boundTemplate?.orbit_binding ?? {}, "bindings")).toBe(true);
+  expect(Object.keys(singularAgent?.notes ?? {})).toEqual(["Input", "Done"]);
+  expect(emptyPluralAlias).toEqual({
+    name: "Empty plural alias",
+    agent: "reviewer",
+    agents: [],
+    requires: [],
+    notes: undefined,
+  });
+});
+
+test("loadPlugin reports SourceParseError paths for invalid orbit phase refs", async () => {
+  const cases: Array<{
+    readonly phase: string;
+    readonly message: string;
+  }> = [
+    {
+      phase: `{ name: "Invalid orbit", orbit: { kind: "orbit-ref", name: "" } }`,
+      message:
+        "phases[0].orbit: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Invalid binding", orbit_binding: { orbit: { kind: "orbit-ref", name: "" } } }`,
+      message:
+        "phases[0].orbit_binding.orbit: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Duplicate aliases", agent: "builder", agents: ["reviewer"] }`,
+      message:
+        "phase 1 ('Duplicate aliases') declares multiple agent assignment aliases (agents, agent); use only one of agent or agents",
+    },
+    {
+      phase: `{ name: "Invalid plural", agents: [{ kind: "agent-ref", name: "" }] }`,
+      message:
+        "phases[0].agents[0]: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Invalid singular through raw agents", agent: { kind: "agent-ref", name: "" } }`,
+      message:
+        "phases[0].agents[0]: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Invalid raw singular and requirement", agent: { kind: "agent-ref", name: "" }, requires: [{ all: [{ kind: "trait-ref", name: "" }] }] }`,
+      message:
+        "phases[0].agents[0]: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Invalid singular field", agents: [], agent: { kind: "agent-ref", name: "" } }`,
+      message:
+        "phases[0].agent: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Invalid singular and requirement", agents: [], agent: { kind: "agent-ref", name: "" }, requires: [{ all: [{ kind: "trait-ref", name: "" }] }] }`,
+      message:
+        "phases[0].requires[0].all[0]: reference object must include a non-empty 'name'",
+    },
+    {
+      phase: `{ name: "Invalid requirement", requires: [{ all: [{ kind: "trait-ref", name: "" }] }] }`,
+      message:
+        "phases[0].requires[0].all[0]: reference object must include a non-empty 'name'",
+    },
+  ];
+
+  for (const current of cases) {
+    const { failure, sourcePath } = await expectOrbitSourceParseFailure(
+      orbitSourceWithPhase(current.phase),
+    );
+
+    expect(failure.kind).toBe("orbit");
+    expect(failure.sourcePath).toBe(sourcePath);
+    expect(failure.message).toBe(current.message);
   }
 });
 

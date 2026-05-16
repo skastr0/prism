@@ -1574,78 +1574,141 @@ const loadSkills = (
     return map;
   });
 
-const normalizeOrbitPhase = (
+type NormalizedPhaseOrbitBinding = {
+  readonly orbit: string;
+  readonly bindings?: Record<string, string>;
+};
+
+type NormalizedPhaseRequirement = {
+  readonly all: string[];
+  readonly min?: number;
+};
+
+type NormalizedPhaseAgents = {
+  readonly agents: string[];
+};
+
+const orbitSourceParseError = (
+  sourcePath: string,
+  field: string,
+  message: string,
+): SourceParseError =>
+  new SourceParseError({
+    sourcePath,
+    kind: "orbit",
+    message: `${field}: ${message}`,
+  });
+
+const normalizePhaseNamedRef = <TRef>(
+  sourcePath: string,
+  field: string,
+  value: TRef,
+  normalize: (
+    field: string,
+    value: TRef,
+  ) => string | { readonly field: string; readonly message: string },
+): string | SourceParseError => {
+  const normalized = normalize(field, value);
+  if (typeof normalized === "string") return normalized;
+
+  return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
+};
+
+const normalizePhaseOrbitRef = (
   sourcePath: string,
   phase: OrbitDefinition["phases"][number],
   index: number,
-): NormalizedOrbitPhase | SourceParseError => {
-  const orbit = phase.orbit
-    ? normalizeOrbitRefInput(`phases[${index}].orbit`, phase.orbit)
-    : undefined;
-  if (orbit && typeof orbit !== "string") {
-    return new SourceParseError({
-      sourcePath,
-      kind: "orbit",
-      message: `${orbit.field}: ${orbit.message}`,
-    });
+): string | undefined | SourceParseError => {
+  if (!phase.orbit) return undefined;
+
+  return normalizePhaseNamedRef(
+    sourcePath,
+    `phases[${index}].orbit`,
+    phase.orbit,
+    normalizeOrbitRefInput,
+  );
+};
+
+const normalizePhaseOrbitBinding = (
+  sourcePath: string,
+  phase: OrbitDefinition["phases"][number],
+  index: number,
+): NormalizedPhaseOrbitBinding | undefined | SourceParseError => {
+  if (!phase.orbit_binding) return undefined;
+
+  const normalized = normalizeOrbitRefInput(
+    `phases[${index}].orbit_binding.orbit`,
+    phase.orbit_binding.orbit,
+  );
+  if (typeof normalized !== "string") {
+    return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
   }
 
-  let orbitBinding:
-    | { orbit: string; bindings?: Record<string, string> }
-    | undefined;
-  if (phase.orbit_binding) {
-    const normalized = normalizeOrbitRefInput(
-      `phases[${index}].orbit_binding.orbit`,
-      phase.orbit_binding.orbit,
-    );
-    if (typeof normalized !== "string") {
-      return new SourceParseError({
-        sourcePath,
-        kind: "orbit",
-        message: `${normalized.field}: ${normalized.message}`,
-      });
-    }
-    orbitBinding = {
-      orbit: normalized,
-      ...(phase.orbit_binding.bindings
-        ? { bindings: { ...phase.orbit_binding.bindings } }
-        : {}),
-    };
-  }
+  return {
+    orbit: normalized,
+    ...(phase.orbit_binding.bindings
+      ? { bindings: { ...phase.orbit_binding.bindings } }
+      : {}),
+  };
+};
 
-  const aliasSources = [
+const phaseAgentAliasSources = (
+  phase: OrbitDefinition["phases"][number],
+): string[] =>
+  [
     phase.agents && phase.agents.length > 0 ? "agents" : undefined,
     phase.agent ? "agent" : undefined,
   ].filter((value): value is string => value !== undefined);
 
-  const uniqueAliases = [...new Set(aliasSources)];
-  if (uniqueAliases.length > 1) {
-    return new SourceParseError({
-        sourcePath,
-        kind: "orbit",
-        message: `phase ${index + 1} ('${phase.name}') declares multiple agent assignment aliases (${uniqueAliases.join(", ")}); use only one of agent or agents`,
-      });
-  }
-
+const normalizePhaseRawAgents = (
+  sourcePath: string,
+  phase: OrbitDefinition["phases"][number],
+  index: number,
+): string[] | SourceParseError => {
   const rawAgents = phase.agents ?? (phase.agent ? [phase.agent] : undefined) ?? [];
-
   const agents: string[] = [];
+
   for (const [agentIndex, agent] of rawAgents.entries()) {
     const normalized = normalizeAgentRefInput(
       `phases[${index}].agents[${agentIndex}]`,
       agent,
     );
     if (typeof normalized !== "string") {
-      return new SourceParseError({
-        sourcePath,
-        kind: "orbit",
-        message: `${normalized.field}: ${normalized.message}`,
-      });
+      return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
     }
     agents.push(normalized);
   }
 
-  const requires: Array<{ all: string[]; min?: number }> = [];
+  return agents;
+};
+
+const normalizePhaseAgents = (
+  sourcePath: string,
+  phase: OrbitDefinition["phases"][number],
+  index: number,
+): NormalizedPhaseAgents | SourceParseError => {
+  const uniqueAliases = [...new Set(phaseAgentAliasSources(phase))];
+  if (uniqueAliases.length > 1) {
+    return new SourceParseError({
+      sourcePath,
+      kind: "orbit",
+      message: `phase ${index + 1} ('${phase.name}') declares multiple agent assignment aliases (${uniqueAliases.join(", ")}); use only one of agent or agents`,
+    });
+  }
+
+  const agents = normalizePhaseRawAgents(sourcePath, phase, index);
+  if (agents instanceof SourceParseError) return agents;
+
+  return { agents };
+};
+
+const normalizePhaseRequirements = (
+  sourcePath: string,
+  phase: OrbitDefinition["phases"][number],
+  index: number,
+): NormalizedPhaseRequirement[] | SourceParseError => {
+  const requires: NormalizedPhaseRequirement[] = [];
+
   for (const [requirementIndex, requirement] of (phase.requires ?? []).entries()) {
     const all: string[] = [];
     for (const [traitIndex, trait] of requirement.all.entries()) {
@@ -1654,11 +1717,7 @@ const normalizeOrbitPhase = (
         trait,
       );
       if (typeof normalized !== "string") {
-        return new SourceParseError({
-          sourcePath,
-          kind: "orbit",
-          message: `${normalized.field}: ${normalized.message}`,
-        });
+        return orbitSourceParseError(sourcePath, normalized.field, normalized.message);
       }
       all.push(normalized);
     }
@@ -1666,26 +1725,42 @@ const normalizeOrbitPhase = (
     requires.push({ all, ...(requirement.min !== undefined ? { min: requirement.min } : {}) });
   }
 
-  const singularAgent = phase.agent;
-  let normalizedSingularAgent: string | undefined;
-  if (singularAgent) {
-    const normalized = normalizeAgentRefInput(`phases[${index}].agent`, singularAgent);
-    if (typeof normalized !== "string") {
-      return new SourceParseError({
+  return requires;
+};
+
+const normalizeOrbitPhase = (
+  sourcePath: string,
+  phase: OrbitDefinition["phases"][number],
+  index: number,
+): NormalizedOrbitPhase | SourceParseError => {
+  const orbit = normalizePhaseOrbitRef(sourcePath, phase, index);
+  if (orbit instanceof SourceParseError) return orbit;
+
+  const orbitBinding = normalizePhaseOrbitBinding(sourcePath, phase, index);
+  if (orbitBinding instanceof SourceParseError) return orbitBinding;
+
+  const phaseAgents = normalizePhaseAgents(sourcePath, phase, index);
+  if (phaseAgents instanceof SourceParseError) return phaseAgents;
+
+  const requires = normalizePhaseRequirements(sourcePath, phase, index);
+  if (requires instanceof SourceParseError) return requires;
+
+  const singularAgent = phase.agent
+    ? normalizePhaseNamedRef(
         sourcePath,
-        kind: "orbit",
-        message: `${normalized.field}: ${normalized.message}`,
-      });
-    }
-    normalizedSingularAgent = normalized;
-  }
+        `phases[${index}].agent`,
+        phase.agent,
+        normalizeAgentRefInput,
+      )
+    : undefined;
+  if (singularAgent instanceof SourceParseError) return singularAgent;
 
   return {
     name: phase.name,
     ...(orbit ? { orbit } : {}),
     ...(orbitBinding ? { orbit_binding: orbitBinding } : {}),
-    ...(normalizedSingularAgent ? { agent: normalizedSingularAgent } : {}),
-    agents,
+    ...(singularAgent ? { agent: singularAgent } : {}),
+    agents: phaseAgents.agents,
     requires,
     notes: phase.notes,
     ...(phase.telos !== undefined ? { telos: phase.telos } : {}),

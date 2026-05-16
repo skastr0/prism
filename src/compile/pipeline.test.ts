@@ -3558,6 +3558,7 @@ test("plain skill strings fail closed in agent and trait source fields", async (
   const cases: ReadonlyArray<{
     label: string;
     expectedKind: "agent" | "trait";
+    expectedMessage?: string;
     agentSource?: string;
     traitSource?: string;
   }> = [
@@ -3592,6 +3593,8 @@ export default defineAgent({
     {
       label: "trait.access.skills",
       expectedKind: "trait",
+      expectedMessage:
+        "access.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
       traitSource: `import { defineTrait } from "prism";
 
 export default defineTrait({
@@ -3606,6 +3609,8 @@ export default defineTrait({
     {
       label: "trait.inject.skills",
       expectedKind: "trait",
+      expectedMessage:
+        "inject.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
       traitSource: `import { defineTrait } from "prism";
 
 export default defineTrait({
@@ -3620,6 +3625,8 @@ export default defineTrait({
     {
       label: "trait.require.skills",
       expectedKind: "trait",
+      expectedMessage:
+        "require.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
       traitSource: `import { defineTrait } from "prism";
 
 export default defineTrait({
@@ -3694,8 +3701,57 @@ export default defineAgent({
     expect(failure._tag).toBe("SourceParseError");
     if (failure._tag === "SourceParseError") {
       expect(failure.kind).toBe(item.expectedKind);
-      expect(failure.message).toContain("plain skill strings are not allowed");
+      if (item.expectedMessage) {
+        expect(failure.message).toBe(item.expectedMessage);
+      } else {
+        expect(failure.message).toContain("plain skill strings are not allowed");
+      }
     }
+  }
+});
+
+test("trait parser rejects empty canonical tool refs with exact diagnostic", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "empty-trait-tool-ref");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "empty-trait-tool-ref",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const traitPath = join(pluginRoot, "traits", "reviewable.trait.ts");
+  await writeText(
+    traitPath,
+    `import { defineTrait } from "prism";
+
+export default defineTrait({
+  name: "reviewable",
+  description: "Review capability",
+  tools: {
+    submit_review: { ref: "   " },
+  },
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("SourceParseError");
+  if (failure._tag === "SourceParseError") {
+    expect(failure.kind).toBe("trait");
+    expect(failure.sourcePath).toBe(traitPath);
+    expect(failure.message).toBe(
+      "tools.submit_review.ref: must be a non-empty canonical tool reference",
+    );
   }
 });
 

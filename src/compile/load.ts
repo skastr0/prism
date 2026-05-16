@@ -1083,9 +1083,58 @@ const loadPersonalities = (
     return map;
   });
 
-const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
+type TraitDefinitionInput = typeof TraitSchema.Type;
+
+const normalizeTraitTools = (
+  sourcePath: string,
+  toolsInput: TraitDefinitionInput["tools"],
+): Record<string, Trait["tools"][string]> | SourceParseError => {
+  const tools: Record<string, Trait["tools"][string]> = {};
+  for (const [toolName, tool] of Object.entries(toolsInput ?? {})) {
+    if (!tool.ref || typeof tool.ref !== "string" || tool.ref.trim().length === 0) {
+      return new SourceParseError({
+        sourcePath,
+        kind: "trait",
+        message: `tools.${toolName}.ref: must be a non-empty canonical tool reference`,
+      });
+    }
+
+    const attachment: Record<string, unknown> = { ref: tool.ref };
+
+    tools[toolName] = attachment as Trait["tools"][string];
+  }
+  return tools;
+};
+
+const buildTrait = (
+  sourcePath: string,
+  parsed: TraitDefinitionInput,
+  access: NormalizedAccess,
+  tools: Record<string, Trait["tools"][string]>,
+  injectedSkills: string[],
+  requiredSkills: string[],
+): Trait =>
+  new Trait({
+    name: parsed.name,
+    sourcePath,
+    description: parsed.description,
+    instructions: normalizeTraitInstructions(parsed.instructions),
+    access,
+    tools,
+    inject: {
+      skills: injectedSkills,
+    },
+    require: {
+      tools: parsed.require?.tools ?? [],
+      skills: requiredSkills,
+    },
+  });
+
+const parseTraitDefinition = (
+  sourcePath: string,
+  raw: unknown,
+): Effect.Effect<Trait, CompileError> =>
   Effect.gen(function* () {
-    const raw = yield* importTsModule<unknown>(sourcePath, "trait");
     const result = Schema.decodeUnknownEither(TraitSchema, STRICT_PARSE_OPTIONS)(raw);
     if (result._tag === "Left") {
       return yield* Effect.fail(
@@ -1097,33 +1146,23 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       );
     }
 
-    const access = normalizeAccess(sourcePath, "trait", "access", result.right.access);
+    const parsed = result.right;
+
+    const access = normalizeAccess(sourcePath, "trait", "access", parsed.access);
     if (access instanceof SourceParseError) {
       return yield* Effect.fail(access);
     }
 
-    const tools: Record<string, Trait["tools"][string]> = {};
-    for (const [toolName, tool] of Object.entries(result.right.tools ?? {})) {
-      if (!tool.ref || typeof tool.ref !== "string" || tool.ref.trim().length === 0) {
-        return yield* Effect.fail(
-          new SourceParseError({
-            sourcePath,
-            kind: "trait",
-            message: `tools.${toolName}.ref: must be a non-empty canonical tool reference`,
-          }),
-        );
-      }
-
-      const attachment: Record<string, unknown> = { ref: tool.ref };
-
-      tools[toolName] = attachment as Trait["tools"][string];
+    const tools = normalizeTraitTools(sourcePath, parsed.tools);
+    if (tools instanceof SourceParseError) {
+      return yield* Effect.fail(tools);
     }
 
     const injectedSkills = normalizeSkillRefs(
       sourcePath,
       "trait",
       "inject.skills",
-      result.right.inject?.skills,
+      parsed.inject?.skills,
     );
     if (injectedSkills instanceof SourceParseError) {
       return yield* Effect.fail(injectedSkills);
@@ -1133,27 +1172,20 @@ const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
       sourcePath,
       "trait",
       "require.skills",
-      result.right.require?.skills,
+      parsed.require?.skills,
     );
     if (requiredSkills instanceof SourceParseError) {
       return yield* Effect.fail(requiredSkills);
     }
 
-    return new Trait({
-      name: result.right.name,
-      sourcePath,
-      description: result.right.description,
-      instructions: normalizeTraitInstructions(result.right.instructions),
-      access,
-      tools,
-      inject: {
-        skills: injectedSkills,
-      },
-      require: {
-        tools: result.right.require?.tools ?? [],
-        skills: requiredSkills,
-      },
-    });
+    return buildTrait(sourcePath, parsed, access, tools, injectedSkills, requiredSkills);
+  });
+
+const parseTrait = (sourcePath: string): Effect.Effect<Trait, CompileError> =>
+  Effect.gen(function* () {
+    const raw = yield* importTsModule<unknown>(sourcePath, "trait");
+
+    return yield* parseTraitDefinition(sourcePath, raw);
   });
 
 const loadTraits = (

@@ -436,140 +436,158 @@ export async function readManifest(pluginPath: string): Promise<PluginManifest> 
   return manifest;
 }
 
-/**
- * Validate manifest structure
- */
-async function validateManifest(
-  manifest: unknown,
+const manifestTargetKeys = (): string[] => [
+  ...PLUGIN_ARTIFACT_TYPES,
+  ...COMPILE_ARTIFACT_TYPES,
+];
+
+const throwManifestValidationErrors = (
   pluginPath: string,
-  pluginName?: string
-): Promise<void> {
+  pluginName: string | undefined,
+  errors: string[]
+): void => {
+  if (errors.length === 0) return;
+  throw new PluginManifestError(pluginPath, "Manifest validation failed", errors, {
+    pluginName,
+  });
+};
+
+function validateManifestStructure(manifest: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  const validTargetKeys = [...PLUGIN_ARTIFACT_TYPES, ...COMPILE_ARTIFACT_TYPES];
+  const validTargetKeys = manifestTargetKeys();
   const targetKeyList = validTargetKeys.join(", ");
 
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new PluginManifestError(pluginPath, "Invalid manifest: must be an object", [], {
-      pluginName,
-    });
-  }
-
-  const m = manifest as Record<string, unknown>;
-
-  if (typeof m.name !== "string" || m.name.length === 0) {
+  if (typeof manifest.name !== "string" || manifest.name.length === 0) {
     errors.push(`'name' is required`);
   }
 
-  if (typeof m.version !== "string" || m.version.length === 0) {
+  if (typeof manifest.version !== "string" || manifest.version.length === 0) {
     errors.push(`'version' is required`);
   }
 
-  if (!("targets" in m)) {
+  if (!("targets" in manifest)) {
     errors.push(
       `'targets' is required and must be an object keyed by artifact type (${targetKeyList})`
     );
-  } else if (!m.targets || typeof m.targets !== "object" || Array.isArray(m.targets)) {
+    return errors;
+  }
+
+  if (!manifest.targets || typeof manifest.targets !== "object" || Array.isArray(manifest.targets)) {
     errors.push(
       `'targets' must be an object keyed by artifact type (${targetKeyList})`
     );
-  } else {
-    const targets = m.targets as Record<string, unknown>;
+    return errors;
+  }
 
-    for (const key of Object.keys(targets)) {
-      if (!validTargetKeys.includes(key as typeof validTargetKeys[number])) {
-        errors.push(
-          `Unknown targets key '${key}'. Expected one of: ${targetKeyList}`
-        );
-      }
-    }
+  errors.push(...validateTargetDeclarations(manifest.targets as Record<string, unknown>));
+  return errors;
+}
 
-    for (const artifact of PLUGIN_ARTIFACT_TYPES) {
-      const declaredTargets = targets[artifact];
+function validateTargetDeclarations(targets: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const validTargetKeys = manifestTargetKeys();
+  const targetKeyList = validTargetKeys.join(", ");
 
-      if (declaredTargets === undefined) {
-        continue;
-      }
-
-      if (!Array.isArray(declaredTargets)) {
-        errors.push(`targets.${artifact} must be an array of harness IDs and/or preset IDs`);
-        continue;
-      }
-
-      if (declaredTargets.length === 0) {
-        errors.push(`targets.${artifact} must not be empty`);
-        continue;
-      }
-
-      for (const target of declaredTargets) {
-        if (!isPluginTargetId(target)) {
-          errors.push(
-            `targets.${artifact} contains unknown target '${String(target)}'`
-          );
-        }
-      }
-    }
-
-    for (const artifact of COMPILE_ARTIFACT_TYPES) {
-      const declaredTargets = targets[artifact];
-
-      if (declaredTargets === undefined) {
-        continue;
-      }
-
-      if (!Array.isArray(declaredTargets)) {
-        errors.push(`targets.${artifact} must be an array of harness IDs and/or preset IDs`);
-        continue;
-      }
-
-      if (declaredTargets.length === 0) {
-        errors.push(`targets.${artifact} must not be empty`);
-        continue;
-      }
-
-      for (const target of declaredTargets) {
-        if (!isPluginTargetId(target)) {
-          errors.push(`targets.${artifact} contains unknown target '${String(target)}'`);
-        }
-      }
-
-      const unsupportedCompileTargets = resolveManifestTargets(
-        declaredTargets as PluginTargetId[]
-      ).filter(
-        (harnessId) =>
-          !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId),
-      );
-
-      if (unsupportedCompileTargets.length > 0) {
-        errors.push(
-          `targets.${artifact} resolves to unsupported compile harnesses: ${unsupportedCompileTargets.join(", ")}`
-        );
-      }
+  for (const key of Object.keys(targets)) {
+    if (!validTargetKeys.includes(key)) {
+      errors.push(`Unknown targets key '${key}'. Expected one of: ${targetKeyList}`);
     }
   }
 
-  if (errors.length > 0) {
-    throw new PluginManifestError(pluginPath, "Manifest validation failed", errors, {
-      pluginName,
-    });
+  for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+    validateDeclaredTargetList(targets, artifact, errors);
   }
 
-  const typedManifest = manifest as PluginManifest;
+  for (const artifact of COMPILE_ARTIFACT_TYPES) {
+    const declaredTargets = validateDeclaredTargetList(targets, artifact, errors);
+    if (declaredTargets) {
+      validateCompileTargetSupport(artifact, declaredTargets, errors);
+    }
+  }
+
+  return errors;
+}
+
+function validateDeclaredTargetList(
+  targets: Record<string, unknown>,
+  artifact: PluginArtifactType | CompileArtifactType,
+  errors: string[]
+): unknown[] | undefined {
+  const declaredTargets = targets[artifact];
+  if (declaredTargets === undefined) return undefined;
+
+  if (!Array.isArray(declaredTargets)) {
+    errors.push(`targets.${artifact} must be an array of harness IDs and/or preset IDs`);
+    return undefined;
+  }
+
+  if (declaredTargets.length === 0) {
+    errors.push(`targets.${artifact} must not be empty`);
+    return undefined;
+  }
+
+  for (const target of declaredTargets) {
+    if (!isPluginTargetId(target)) {
+      errors.push(`targets.${artifact} contains unknown target '${String(target)}'`);
+    }
+  }
+
+  return declaredTargets;
+}
+
+function validateCompileTargetSupport(
+  artifact: CompileArtifactType,
+  declaredTargets: unknown[],
+  errors: string[]
+): void {
+  const unsupportedCompileTargets = resolveManifestTargets(
+    declaredTargets as PluginTargetId[]
+  ).filter(
+    (harnessId) =>
+      !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId),
+  );
+
+  if (unsupportedCompileTargets.length > 0) {
+    errors.push(
+      `targets.${artifact} resolves to unsupported compile harnesses: ${unsupportedCompileTargets.join(", ")}`
+    );
+  }
+}
+
+async function validateManifestLayout(
+  pluginPath: string,
+  typedManifest: PluginManifest
+): Promise<string[]> {
+  const errors: string[] = [];
   const presentArtifacts = await getPresentArtifacts(pluginPath);
   errors.push(...await validateNoFileLevelInstallTargets(pluginPath));
   errors.push(...await validateNoSourceMarkdownAgents(pluginPath));
   errors.push(...await validateHarnessOverlays(pluginPath, typedManifest));
+  errors.push(...validatePresentArtifactTargets(typedManifest, presentArtifacts));
+  errors.push(...validatePluginArtifactTargetSupport(typedManifest));
+  return errors;
+}
 
+function validatePresentArtifactTargets(
+  manifest: PluginManifest,
+  presentArtifacts: PluginArtifactType[]
+): string[] {
+  const errors: string[] = [];
   for (const artifact of presentArtifacts) {
-    const declaredTargets = typedManifest.targets[artifact];
+    const declaredTargets = manifest.targets[artifact];
     if (!declaredTargets || declaredTargets.length === 0) {
       errors.push(
         `Plugin contains ${artifact} artifacts, but plugin.json targets.${artifact} is missing or empty`
       );
     }
   }
+  return errors;
+}
 
+function validatePluginArtifactTargetSupport(manifest: PluginManifest): string[] {
+  const errors: string[] = [];
   for (const artifact of PLUGIN_ARTIFACT_TYPES) {
-    const declaredTargets = typedManifest.targets[artifact];
+    const declaredTargets = manifest.targets[artifact];
     if (!declaredTargets || declaredTargets.length === 0) {
       continue;
     }
@@ -589,12 +607,28 @@ async function validateManifest(
       );
     }
   }
+  return errors;
+}
 
-  if (errors.length > 0) {
-    throw new PluginManifestError(pluginPath, "Manifest validation failed", errors, {
+/**
+ * Validate manifest structure
+ */
+async function validateManifest(
+  manifest: unknown,
+  pluginPath: string,
+  pluginName?: string
+): Promise<void> {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new PluginManifestError(pluginPath, "Invalid manifest: must be an object", [], {
       pluginName,
     });
   }
+
+  const structuralErrors = validateManifestStructure(manifest as Record<string, unknown>);
+  throwManifestValidationErrors(pluginPath, pluginName, structuralErrors);
+
+  const layoutErrors = await validateManifestLayout(pluginPath, manifest as PluginManifest);
+  throwManifestValidationErrors(pluginPath, pluginName, layoutErrors);
 }
 
 export function resolveManifestTargets(targets: readonly PluginTargetId[]): HarnessId[] {

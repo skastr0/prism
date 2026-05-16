@@ -235,6 +235,68 @@ You are a reviewer.
   expect(result.stderr).toContain("Source markdown agents are not supported");
 });
 
+test("validate rejects file-level install targets in shared and overlay artifacts", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "file-level-targets");
+  await mkdir(join(pluginRoot, "rules", "global"), { recursive: true });
+  await mkdir(join(pluginRoot, "skills", "testing"), { recursive: true });
+  await mkdir(join(pluginRoot, "harness", "opencode", "commands"), { recursive: true });
+  await mkdir(join(pluginRoot, "harness", "opencode", "skills", "debugging"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "file-level-targets",
+        version: "0.1.0",
+        targets: {
+          rules: ["opencode"],
+          commands: ["opencode"],
+          skills: ["opencode"],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    join(pluginRoot, "rules", "global", "standards.md"),
+    "---\ntargets: [opencode]\n---\n\n# Standards\n",
+  );
+  await writeFile(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\ntargets: [opencode]\n---\n\n# Testing\n",
+  );
+  await writeFile(
+    join(pluginRoot, "harness", "opencode", "commands", "review.md"),
+    "---\ntargets: [opencode]\n---\n\n# Review\n",
+  );
+  await writeFile(
+    join(pluginRoot, "harness", "opencode", "skills", "debugging", "SKILL.md"),
+    "---\nname: debugging\ndescription: Debugging guidance\ntargets: [opencode]\n---\n\n# Debugging\n",
+  );
+  await writeFile(
+    join(pluginRoot, "harness", "opencode", "skills", "debugging", "notes.md"),
+    "---\ntargets: [opencode]\n---\n\nIgnored support file.\n",
+  );
+
+  const result = await runCli(["validate", pluginRoot], {});
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain(
+    "File-level install targets are not supported in rules/global/standards.md. Move install scope to plugin.json targets.rules",
+  );
+  expect(result.stderr).toContain(
+    "File-level install targets are not supported in skills/testing/SKILL.md. Move install scope to plugin.json targets.skills",
+  );
+  expect(result.stderr).toContain(
+    "File-level install targets are not supported in harness/opencode/commands/review.md. Move install scope to plugin.json targets.commands",
+  );
+  expect(result.stderr).toContain(
+    "File-level install targets are not supported in harness/opencode/skills/debugging/SKILL.md. Move install scope to plugin.json targets.skills",
+  );
+  expect(result.stderr).not.toContain("notes.md. Move install scope");
+});
+
 test("validate rejects agent targets for harnesses without compile lowerers", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "unsupported-agent-target");

@@ -265,26 +265,14 @@ async function pluginHasArtifactFiles(
 }
 
 async function validateNoFileLevelInstallTargets(pluginPath: string): Promise<string[]> {
+  return [
+    ...await validateSharedFileLevelInstallTargets(pluginPath),
+    ...await validateHarnessFileLevelInstallTargets(pluginPath),
+  ];
+}
+
+async function validateSharedFileLevelInstallTargets(pluginPath: string): Promise<string[]> {
   const errors: string[] = [];
-
-  const checkMarkdownFrontmatter = async (
-    filePath: string,
-    artifact: PluginArtifactType,
-    displayPath: string
-  ): Promise<void> => {
-    const raw = await readFile(filePath);
-    if (!raw.startsWith("---")) {
-      return;
-    }
-
-    const { data } = matter(raw);
-    if (data && typeof data === "object" && !Array.isArray(data) && "targets" in data) {
-      errors.push(
-        `File-level install targets are not supported in ${displayPath}. Move install scope to plugin.json targets.${artifact}`
-      );
-    }
-  };
-
   for (const artifact of ["rules", "commands", "agents"] as const) {
     const artifactRoot = join(pluginPath, artifact);
     const files = await listDirRecursive(artifactRoot);
@@ -293,7 +281,8 @@ async function validateNoFileLevelInstallTargets(pluginPath: string): Promise<st
         continue;
       }
 
-      await checkMarkdownFrontmatter(
+      await pushFileLevelInstallTargetError(
+        errors,
         join(artifactRoot, relativePath),
         artifact,
         `${artifact}/${relativePath}`
@@ -308,37 +297,75 @@ async function validateNoFileLevelInstallTargets(pluginPath: string): Promise<st
       continue;
     }
 
-    await checkMarkdownFrontmatter(
+    await pushFileLevelInstallTargetError(
+      errors,
       join(skillsRoot, relativePath),
       "skills",
       `skills/${relativePath}`
     );
   }
 
+  return errors;
+}
+
+async function validateHarnessFileLevelInstallTargets(pluginPath: string): Promise<string[]> {
+  const errors: string[] = [];
   const harnessRoot = join(pluginPath, HARNESS_ROOT);
   const harnessFiles = await listDirRecursive(harnessRoot);
   for (const relativePath of harnessFiles) {
-    const [harnessId, artifact, ...rest] = relativePath.split("/");
-    if (!harnessId || !artifact || rest.length === 0 || !isPluginArtifactType(artifact)) {
-      continue;
-    }
-
-    const isMarkdownArtifact =
-      (artifact === "rules" || artifact === "commands" || artifact === "agents") &&
-      relativePath.endsWith(".md");
-    const isSkillEntryPoint = artifact === "skills" && relativePath.endsWith("SKILL.md");
-    if (!isMarkdownArtifact && !isSkillEntryPoint) {
-      continue;
-    }
-
-    await checkMarkdownFrontmatter(
+    const candidate = harnessInstallTargetCandidate(relativePath);
+    if (!candidate) continue;
+    await pushFileLevelInstallTargetError(
+      errors,
       join(harnessRoot, relativePath),
-      artifact,
-      `${HARNESS_ROOT}/${relativePath}`
+      candidate.artifact,
+      candidate.displayPath
     );
   }
 
   return errors;
+}
+
+async function pushFileLevelInstallTargetError(
+  errors: string[],
+  filePath: string,
+  artifact: PluginArtifactType,
+  displayPath: string
+): Promise<void> {
+  if (!(await hasFileLevelInstallTargets(filePath))) return;
+  errors.push(
+    `File-level install targets are not supported in ${displayPath}. Move install scope to plugin.json targets.${artifact}`
+  );
+}
+
+async function hasFileLevelInstallTargets(filePath: string): Promise<boolean> {
+  const raw = await readFile(filePath);
+  if (!raw.startsWith("---")) return false;
+
+  const { data } = matter(raw);
+  return data !== null && typeof data === "object" && !Array.isArray(data) && "targets" in data;
+}
+
+function harnessInstallTargetCandidate(
+  relativePath: string
+): { artifact: PluginArtifactType; displayPath: string } | undefined {
+  const [harnessId, artifact, ...rest] = relativePath.split("/");
+  if (!harnessId || !artifact || rest.length === 0 || !isPluginArtifactType(artifact)) {
+    return undefined;
+  }
+  if (!isFileLevelInstallTargetEntry(artifact, relativePath)) return undefined;
+  return { artifact, displayPath: `${HARNESS_ROOT}/${relativePath}` };
+}
+
+function isFileLevelInstallTargetEntry(
+  artifact: PluginArtifactType,
+  relativePath: string
+): boolean {
+  if (artifact === "skills") return relativePath.endsWith("SKILL.md");
+  return (
+    (artifact === "rules" || artifact === "commands" || artifact === "agents") &&
+    relativePath.endsWith(".md")
+  );
 }
 
 async function validateNoSourceMarkdownAgents(pluginPath: string): Promise<string[]> {

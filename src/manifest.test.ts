@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SKILL_VALIDATION } from "./types.js";
-import { validateSkill } from "./manifest.js";
+import { PluginManifestError, readManifest, validateSkill } from "./manifest.js";
 
 const tempRoots: string[] = [];
 
@@ -22,6 +22,40 @@ const createSkillDir = async (name = "testing"): Promise<string> => {
 
 const writeSkill = async (skillPath: string, content: string): Promise<void> => {
   await writeFile(join(skillPath, "SKILL.md"), content);
+};
+
+const writeText = async (path: string, content: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+};
+
+const createPluginWithManifest = async (
+  name: string,
+  targets: Record<string, string[]>,
+): Promise<string> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, name);
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({ name, version: "0.1.0", targets }, null, 2)}\n`,
+  );
+  return pluginRoot;
+};
+
+const expectManifestValidationDetails = async (
+  pluginRoot: string,
+  expectedDetails: string[],
+): Promise<void> => {
+  try {
+    await readManifest(pluginRoot);
+    throw new Error("expected manifest validation to fail");
+  } catch (error) {
+    expect(error).toBeInstanceOf(PluginManifestError);
+    if (!(error instanceof PluginManifestError)) throw error;
+    for (const detail of expectedDetails) {
+      expect(error.details).toContain(detail);
+    }
+  }
 };
 
 afterEach(async () => {
@@ -196,4 +230,98 @@ test("validateSkill warns when body exceeds recommended length", async () => {
   ]);
   expect(result.skillName).toBe("long-skill");
   expect(result.skillPath).toBe(skillPath);
+});
+
+test("readManifest rejects file-level targets in shared install artifacts", async () => {
+  const pluginRoot = await createPluginWithManifest("shared-file-targets", {
+    rules: ["opencode"],
+    commands: ["opencode"],
+    agents: ["opencode"],
+    skills: ["opencode"],
+  });
+  await writeText(
+    join(pluginRoot, "rules", "global", "standards.md"),
+    "---\ntargets: [opencode]\n---\n\n# Standards\n",
+  );
+  await writeText(
+    join(pluginRoot, "commands", "review.md"),
+    "---\ntargets: [opencode]\n---\n\n# Review\n",
+  );
+  await writeText(
+    join(pluginRoot, "agents", "reviewer.md"),
+    "---\ntargets: [opencode]\n---\n\n# Reviewer\n",
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\ntargets: [opencode]\n---\n\n# Testing\n",
+  );
+
+  try {
+    await readManifest(pluginRoot);
+    throw new Error("expected manifest validation to fail");
+  } catch (error) {
+    expect(error).toBeInstanceOf(PluginManifestError);
+    if (!(error instanceof PluginManifestError)) throw error;
+    expect(error.details).toEqual([
+      "File-level install targets are not supported in rules/global/standards.md. Move install scope to plugin.json targets.rules",
+      "File-level install targets are not supported in commands/review.md. Move install scope to plugin.json targets.commands",
+      "File-level install targets are not supported in agents/reviewer.md. Move install scope to plugin.json targets.agents",
+      "File-level install targets are not supported in skills/testing/SKILL.md. Move install scope to plugin.json targets.skills",
+      "Source markdown agents are not supported at agents/reviewer.md. Author agents as agents/*.agent.ts and let harness lowerers generate markdown output.",
+    ]);
+  }
+});
+
+test("readManifest rejects file-level targets in harness overlay entrypoints", async () => {
+  const pluginRoot = await createPluginWithManifest("overlay-file-targets", {
+    commands: ["opencode"],
+    skills: ["opencode"],
+  });
+  await writeText(
+    join(pluginRoot, "harness", "opencode", "commands", "review.md"),
+    "---\ntargets: [opencode]\n---\n\n# Review\n",
+  );
+  await writeText(
+    join(pluginRoot, "harness", "opencode", "skills", "debugging", "SKILL.md"),
+    "---\nname: debugging\ndescription: Debugging guidance\ntargets: [opencode]\n---\n\n# Debugging\n",
+  );
+
+  await expectManifestValidationDetails(pluginRoot, [
+    "File-level install targets are not supported in harness/opencode/commands/review.md. Move install scope to plugin.json targets.commands",
+    "File-level install targets are not supported in harness/opencode/skills/debugging/SKILL.md. Move install scope to plugin.json targets.skills",
+  ]);
+});
+
+test("readManifest ignores skill support markdown file-level targets", async () => {
+  const pluginRoot = await createPluginWithManifest("support-file-targets", {
+    skills: ["opencode"],
+  });
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "notes.md"),
+    "---\ntargets: [opencode]\n---\n\nIgnored support file.\n",
+  );
+  await writeText(
+    join(pluginRoot, "harness", "opencode", "skills", "testing", "notes.md"),
+    "---\ntargets: [opencode]\n---\n\nIgnored overlay support file.\n",
+  );
+
+  const manifest = await readManifest(pluginRoot);
+
+  expect(manifest.name).toBe("support-file-targets");
+});
+
+test("readManifest reports invalid YAML while checking file-level targets", async () => {
+  const pluginRoot = await createPluginWithManifest("invalid-file-target-yaml", {
+    commands: ["opencode"],
+  });
+  await writeText(
+    join(pluginRoot, "commands", "review.md"),
+    "---\ntargets: [unterminated\n---\n\n# Review\n",
+  );
+
+  await expect(readManifest(pluginRoot)).rejects.toThrow("unexpected end of the stream");
 });

@@ -112,62 +112,73 @@ const serializeFrontmatter = (values: Record<string, unknown>): string => {
   return lines.join("\n");
 };
 
-const composeAgentFrontmatter = (agent: ComposedAgent): Record<string, unknown> => {
-  const override = agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
-  const model = agent.model ?? {};
-  const tools = uniqueSorted([
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+
+const numberValue = (value: unknown): number | undefined =>
+  typeof value === "number" ? value : undefined;
+
+const booleanValue = (value: unknown): boolean | undefined =>
+  typeof value === "boolean" ? value : undefined;
+
+const firstDefined = <T>(...values: Array<T | undefined>): T | undefined =>
+  values.find((value) => value !== undefined);
+
+const grokOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> | undefined =>
+  agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
+
+const composeGrokTools = (
+  agent: ComposedAgent,
+  override: Record<string, unknown> | undefined,
+): string[] =>
+  uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
     ...agent.allowedTools,
   ]);
 
+const composeGrokDisallowedTools = (
+  override: Record<string, unknown> | undefined,
+): string[] => [
+  ...stringArray(override?.disallowedTools),
+  ...stringArray(override?.["disallowed-tools"]),
+];
+
+const composeGrokPermissionMode = (
+  override: Record<string, unknown> | undefined,
+): string | undefined =>
+  firstDefined(
+    stringValue(override?.permission_mode),
+    stringValue(override?.permissionMode),
+  );
+
+const composeGrokEffort = (
+  override: Record<string, unknown> | undefined,
+  model: Record<string, unknown>,
+): string | undefined =>
+  firstDefined(
+    stringValue(override?.effort),
+    stringValue(model.effort),
+    stringValue(model.variant),
+  );
+
+const composeAgentFrontmatter = (agent: ComposedAgent): Record<string, unknown> => {
+  const override = grokOverrideForAgent(agent);
+  const model = agent.model ?? {};
+
   return {
     name: agent.name,
-    description: typeof override?.description === "string" ? override.description : agent.description,
-    model:
-      typeof override?.model === "string"
-        ? override.model
-        : typeof model.model === "string"
-          ? model.model
-          : undefined,
-    prompt_mode:
-      typeof override?.prompt_mode === "string" ? override.prompt_mode : undefined,
-    permission_mode:
-      typeof override?.permission_mode === "string"
-        ? override.permission_mode
-        : typeof override?.permissionMode === "string"
-          ? override.permissionMode
-          : undefined,
-    agents_md: typeof override?.agents_md === "boolean" ? override.agents_md : undefined,
-    effort:
-      typeof override?.effort === "string"
-        ? override.effort
-        : typeof model.effort === "string"
-          ? model.effort
-          : typeof model.variant === "string"
-            ? model.variant
-            : undefined,
-    reasoning_effort:
-      typeof override?.reasoning_effort === "string"
-        ? override.reasoning_effort
-        : undefined,
-    temperature:
-      typeof override?.temperature === "number"
-        ? override.temperature
-        : typeof model.temperature === "number"
-          ? model.temperature
-          : undefined,
-    top_p:
-      typeof override?.top_p === "number"
-        ? override.top_p
-        : typeof model.top_p === "number"
-          ? model.top_p
-          : undefined,
-    tools,
-    disallowedTools: [
-      ...stringArray(override?.disallowedTools),
-      ...stringArray(override?.["disallowed-tools"]),
-    ],
+    description: stringValue(override?.description) ?? agent.description,
+    model: firstDefined(stringValue(override?.model), stringValue(model.model)),
+    prompt_mode: stringValue(override?.prompt_mode),
+    permission_mode: composeGrokPermissionMode(override),
+    agents_md: booleanValue(override?.agents_md),
+    effort: composeGrokEffort(override, model),
+    reasoning_effort: stringValue(override?.reasoning_effort),
+    temperature: firstDefined(numberValue(override?.temperature), numberValue(model.temperature)),
+    top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
+    tools: composeGrokTools(agent, override),
+    disallowedTools: composeGrokDisallowedTools(override),
     skills: uniqueSorted(agent.allowedSkills),
   };
 };

@@ -197,9 +197,15 @@ export default defineTool({
           "grok": {
             description: "Grok plugin reviewer",
             model: "grok-code-fast-1",
+            prompt_mode: "compact",
+            permission_mode: "acceptEdits",
+            permissionMode: "ignored-camel-fallback",
+            agents_md: false,
             tools: ["read_file"],
             "allowed-tools": ["run_terminal_cmd"],
             disallowedTools: ["web_fetch"],
+            "disallowed-tools": ["web_search"],
+            reasoning_effort: "medium",
             mcpServers: {},
           },
         },
@@ -215,6 +221,24 @@ export default defineTool({
             toolSourcePath: toolPath,
           },
         ],
+      },
+      {
+        name: "fallback",
+        description: "Exercises Grok fallback frontmatter",
+        body: "# Fallback\n\nUse fallback frontmatter values.",
+        color: undefined,
+        model: { variant: "balanced" },
+        targetOverride: {
+          "grok": {
+            permissionMode: "auto",
+            agents_md: true,
+            "disallowed-tools": ["legacy_shell"],
+          },
+        },
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [],
       },
     ],
     orbits: [],
@@ -245,7 +269,12 @@ export default defineTool({
   );
   expect(agent?.content).toContain('description: "Grok plugin reviewer"');
   expect(agent?.content).toContain('model: "grok-code-fast-1"');
+  expect(agent?.content).toContain('prompt_mode: "compact"');
+  expect(agent?.content).toContain('permission_mode: "acceptEdits"');
+  expect(agent?.content).not.toContain("ignored-camel-fallback");
+  expect(agent?.content).toContain("agents_md: false");
   expect(agent?.content).toContain('effort: "high"');
+  expect(agent?.content).toContain('reasoning_effort: "medium"');
   expect(agent?.content).toContain("temperature: 0.1");
   expect(agent?.content).toContain("top_p: 0.7");
   expect(agent?.content).not.toContain("mcp__");
@@ -253,10 +282,17 @@ export default defineTool({
   expect(agent?.content).toContain('- "grep_search"');
   expect(agent?.content).toContain('- "read_file"');
   expect(agent?.content).toContain('- "run_terminal_cmd"');
-  expect(agent?.content).toContain('disallowedTools:\n  - "web_fetch"');
+  expect(agent?.content).toContain('disallowedTools:\n  - "web_fetch"\n  - "web_search"');
   expect(agent?.content).toContain('skills:\n  - "testing"');
   expect(agent?.content).not.toContain("Prism Claude Plugin Diagnostics");
   expect(agent?.content).not.toContain("mcpServers");
+
+  const fallbackAgent = findContentOperation(operations, join("agents", "fallback.md"));
+  expect(fallbackAgent?.content).toContain('description: "Exercises Grok fallback frontmatter"');
+  expect(fallbackAgent?.content).toContain('permission_mode: "auto"');
+  expect(fallbackAgent?.content).toContain("agents_md: true");
+  expect(fallbackAgent?.content).toContain('effort: "balanced"');
+  expect(fallbackAgent?.content).toContain('disallowedTools:\n  - "legacy_shell"');
 
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
@@ -305,6 +341,95 @@ export default defineTool({
     decision: "deny",
     reason: "blocked",
   });
+});
+
+test("grok lowerer preserves frontmatter precedence and omission rules", async () => {
+  const root = await createTempRoot();
+  const operations = await planLowering({
+    agents: [
+      {
+        name: "frontmatter-precedence",
+        description: "Base frontmatter description",
+        body: "# Frontmatter\n\nExercise Grok frontmatter precedence.",
+        color: undefined,
+        model: { model: "model-fallback", temperature: 0, top_p: 0 },
+        targetOverride: {
+          grok: {
+            description: "Override frontmatter description",
+            permission_mode: "acceptEdits",
+            permissionMode: "auto",
+            agents_md: false,
+            reasoning_effort: "high",
+            tools: ["run_terminal_cmd", "read_file", 42],
+            "allowed-tools": ["read_file", "grep_search", false],
+            disallowedTools: ["web_fetch", 99],
+            "disallowed-tools": ["web_fetch", "web_search", null],
+          },
+        },
+        skills: ["direct-skill"],
+        allowedSkills: ["zeta", "alpha", "alpha"],
+        allowedTools: ["grep_search", "list_files"],
+        toolBindings: [],
+      },
+      {
+        name: "frontmatter-omission",
+        description: "Omission description",
+        body: "# Omission\n\nExercise omitted Grok frontmatter values.",
+        color: undefined,
+        model: { model: 123, effort: false, variant: null, reasoning_effort: "ignored" },
+        targetOverride: { grok: {} },
+        skills: ["direct-skill"],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [],
+      },
+    ],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "project",
+      root: join(root, ".grok"),
+      sourcePluginName: "frontmatter-fixture",
+      sourcePluginVersion: "0.1.0",
+    },
+  });
+
+  const precedenceAgent = findContentOperation(
+    operations,
+    join("agents", "frontmatter-precedence.md"),
+  );
+  expect(precedenceAgent?.content).toContain('name: "frontmatter-precedence"');
+  expect(precedenceAgent?.content).toContain('description: "Override frontmatter description"');
+  expect(precedenceAgent?.content).toContain('model: "model-fallback"');
+  expect(precedenceAgent?.content).toContain('permission_mode: "acceptEdits"');
+  expect(precedenceAgent?.content).not.toContain('permission_mode: "auto"');
+  expect(precedenceAgent?.content).toContain("agents_md: false");
+  expect(precedenceAgent?.content).toContain('reasoning_effort: "high"');
+  expect(precedenceAgent?.content).toContain("temperature: 0");
+  expect(precedenceAgent?.content).toContain("top_p: 0");
+  expect(precedenceAgent?.content).toContain(
+    'tools:\n  - "grep_search"\n  - "list_files"\n  - "read_file"\n  - "run_terminal_cmd"',
+  );
+  expect(precedenceAgent?.content).toContain(
+    'disallowedTools:\n  - "web_fetch"\n  - "web_fetch"\n  - "web_search"',
+  );
+  expect(precedenceAgent?.content).toContain('skills:\n  - "alpha"\n  - "zeta"');
+  expect(precedenceAgent?.content).not.toContain("direct-skill");
+
+  const omissionAgent = findContentOperation(
+    operations,
+    join("agents", "frontmatter-omission.md"),
+  );
+  expect(omissionAgent?.content).toContain('name: "frontmatter-omission"');
+  expect(omissionAgent?.content).toContain('description: "Omission description"');
+  expect(omissionAgent?.content).not.toContain("\nmodel:");
+  expect(omissionAgent?.content).not.toContain("\nprompt_mode:");
+  expect(omissionAgent?.content).not.toContain("\npermission_mode:");
+  expect(omissionAgent?.content).not.toContain("\nreasoning_effort:");
+  expect(omissionAgent?.content).not.toContain("\ntools:");
+  expect(omissionAgent?.content).not.toContain("\nskills:");
+  expect(omissionAgent?.content).not.toContain("direct-skill");
 });
 
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {

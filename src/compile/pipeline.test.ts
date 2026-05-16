@@ -10,11 +10,14 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
-import { resolveAgentCapabilities, validateOrbit } from "./resolve.js";
+import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
 import {
   Agent,
   CanonicalTool,
+  Identity,
   Orbit,
+  Personality,
+  Skill,
   Trait,
   type NormalizedAccess,
   type NormalizedOrbitPhase,
@@ -167,6 +170,7 @@ const createCapabilityTrait = (options: {
   readonly tools?: Record<string, { ref: string }>;
   readonly injectSkills?: string[];
   readonly requireTools?: string[];
+  readonly requireSkills?: string[];
 }): Trait =>
   new Trait({
     name: options.name,
@@ -175,11 +179,16 @@ const createCapabilityTrait = (options: {
     access: options.access ?? emptyAccess,
     tools: options.tools ?? {},
     inject: { skills: options.injectSkills ?? [] },
-    require: { tools: options.requireTools ?? [], skills: [] },
+    require: {
+      tools: options.requireTools ?? [],
+      skills: options.requireSkills ?? [],
+    },
   });
 
 const createCapabilityAgent = (options: {
   readonly name?: string;
+  readonly identity?: string;
+  readonly personality?: string;
   readonly traits?: string[];
   readonly access?: NormalizedAccess;
   readonly skills?: string[];
@@ -188,7 +197,8 @@ const createCapabilityAgent = (options: {
     name: options.name ?? "worker",
     sourcePath: `/tmp/${options.name ?? "worker"}.agent.ts`,
     description: "Capability worker",
-    identity: "identity",
+    identity: options.identity ?? "identity",
+    ...(options.personality ? { personality: options.personality } : {}),
     traits: (options.traits ?? []).map((ref) => ({ ref, tools: {} })),
     access: options.access ?? emptyAccess,
     skills: options.skills ?? [],
@@ -207,6 +217,35 @@ const createCapabilityTool = (name: string): CanonicalTool =>
       return {};
     },
   });
+
+const createResolveAgentRegistry = (): PluginRegistry => {
+  const registry = emptyRegistry(
+    "/tmp/resolve-agent-demo",
+    "resolve-agent-demo",
+    "0.1.0",
+    {},
+    { skills: ["opencode"] },
+  );
+  registry.identities.set(
+    "identity",
+    new Identity({
+      name: "identity",
+      sourcePath: "/tmp/identity.identity.md",
+      description: "Identity description",
+      body: "# Identity",
+    }),
+  );
+  registry.personalities.set(
+    "steady",
+    new Personality({
+      name: "steady",
+      sourcePath: "/tmp/steady.personality.md",
+      description: "Steady personality",
+      body: "# Steady",
+    }),
+  );
+  return registry;
+};
 
 const createValidationOrbit = (options: {
   readonly name?: string;
@@ -1385,6 +1424,74 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(
     reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
   ).toBeUndefined();
+});
+
+test("resolveAgent reports missing identity and personality references", async () => {
+  const missingIdentityRegistry = createResolveAgentRegistry();
+  missingIdentityRegistry.identities.clear();
+
+  const missingIdentityExit = await Effect.runPromiseExit(
+    resolveAgent(
+      createCapabilityAgent({ identity: "missing-identity" }),
+      missingIdentityRegistry,
+      "opencode",
+    ),
+  );
+  const missingIdentityFailure = getFailure(missingIdentityExit);
+  expect(missingIdentityFailure._tag).toBe("UnknownReferenceError");
+  if (missingIdentityFailure._tag === "UnknownReferenceError") {
+    expect(missingIdentityFailure.field).toBe("identity");
+    expect(missingIdentityFailure.referenceName).toBe("missing-identity");
+  }
+
+  const missingPersonalityRegistry = createResolveAgentRegistry();
+  const missingPersonalityExit = await Effect.runPromiseExit(
+    resolveAgent(
+      createCapabilityAgent({ personality: "missing-personality" }),
+      missingPersonalityRegistry,
+      "opencode",
+    ),
+  );
+  const missingPersonalityFailure = getFailure(missingPersonalityExit);
+  expect(missingPersonalityFailure._tag).toBe("UnknownReferenceError");
+  if (missingPersonalityFailure._tag === "UnknownReferenceError") {
+    expect(missingPersonalityFailure.field).toBe("personality");
+    expect(missingPersonalityFailure.referenceName).toBe("missing-personality");
+  }
+});
+
+test("resolveAgent fails when trait required skills are not allowed", async () => {
+  const registry = createResolveAgentRegistry();
+  registry.skills.set(
+    "reviewing",
+    new Skill({
+      name: "reviewing",
+      sourcePath: "/tmp/skills/reviewing/SKILL.md",
+    }),
+  );
+  registry.traits.set(
+    "requires-reviewing",
+    createCapabilityTrait({
+      name: "requires-reviewing",
+      requireSkills: ["reviewing"],
+    }),
+  );
+
+  const exit = await Effect.runPromiseExit(
+    resolveAgent(
+      createCapabilityAgent({ traits: ["requires-reviewing"] }),
+      registry,
+      "opencode",
+    ),
+  );
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("AgentValidationError");
+  if (failure._tag === "AgentValidationError") {
+    expect(failure.field).toBe("traits");
+    expect(failure.message).toBe(
+      "trait 'resolve-agent-demo:requires-reviewing' requires missing skills: reviewing",
+    );
+  }
 });
 
 test("resolveAgentCapabilities merges trait grants and sorts capability output", async () => {

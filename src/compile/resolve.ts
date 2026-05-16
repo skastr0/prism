@@ -1342,11 +1342,20 @@ const instantiateOrbitDefinitions = (
   };
 };
 
-export const resolveAgent = (
+type ResolvedAgentSkillSurface = {
+  readonly skills: ReadonlyArray<string>;
+  readonly allowedSkills: ReadonlyArray<string>;
+};
+
+type ResolvedAgentTargetSurface = ResolvedAgentSkillSurface & {
+  readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
+  readonly allowedTools: ReadonlyArray<string>;
+};
+
+const resolveAgentIdentity = (
   agent: Agent,
   registry: PluginRegistry,
-  target: string,
-): Effect.Effect<ResolvedAgent, CompileError> =>
+): Effect.Effect<Identity, CompileError> =>
   Effect.gen(function* () {
     const identityReg = yield* resolveRefToRegistry(agent.identity, registry, agent.sourcePath);
     const identityName = parseNamedRef(agent.identity).name;
@@ -1362,30 +1371,50 @@ export const resolveAgent = (
       );
     }
 
-    let personality: Personality | undefined;
-    if (agent.personality) {
-      const reg = yield* resolveRefToRegistry(agent.personality, registry, agent.sourcePath);
-      const name = parseNamedRef(agent.personality).name;
-      personality = reg.personalities.get(name);
-      if (!personality) {
-        return yield* Effect.fail(
-          new UnknownReferenceError({
-            agentName: agent.name,
-            sourcePath: agent.sourcePath,
-            field: "personality",
-            referenceName: agent.personality,
-          }),
-        );
-      }
+    return identity;
+  });
+
+const resolveAgentPersonality = (
+  agent: Agent,
+  registry: PluginRegistry,
+): Effect.Effect<Personality | undefined, CompileError> =>
+  Effect.gen(function* () {
+    if (!agent.personality) return undefined;
+
+    const reg = yield* resolveRefToRegistry(agent.personality, registry, agent.sourcePath);
+    const name = parseNamedRef(agent.personality).name;
+    const personality = reg.personalities.get(name);
+    if (!personality) {
+      return yield* Effect.fail(
+        new UnknownReferenceError({
+          agentName: agent.name,
+          sourcePath: agent.sourcePath,
+          field: "personality",
+          referenceName: agent.personality,
+        }),
+      );
     }
 
-    let resolvedModel: Record<string, unknown> | undefined;
-    if (agent.model) {
-      resolvedModel = yield* resolveModelProfile(agent, agent.model, registry, target);
-    }
+    return personality;
+  });
 
-    const capabilities = yield* resolveAgentCapabilities(agent, registry);
-    const resolvedDependencySkills = yield* resolveSkillsForTarget(
+const resolveAgentModel = (
+  agent: Agent,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<Record<string, unknown> | undefined, CompileError> =>
+  agent.model
+    ? resolveModelProfile(agent, agent.model, registry, target)
+    : Effect.succeed(undefined);
+
+const resolveAgentSkillSurface = (
+  agent: Agent,
+  capabilities: ResolvedAgentCapabilities,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<ResolvedAgentSkillSurface, CompileError> =>
+  Effect.gen(function* () {
+    const skills = yield* resolveSkillsForTarget(
       agent,
       capabilities.skills,
       registry,
@@ -1398,28 +1427,35 @@ export const resolveAgent = (
       target,
     );
     const allowedSkills = [...new Set([
-      ...resolvedDependencySkills,
+      ...skills,
       ...resolvedAccessSkills,
     ])].sort((left, right) => left.localeCompare(right));
 
-    const toolBindings: ResolvedContractBinding[] = capabilities.toolRefs.map(
-      ({ kind, logicalName, contract, toolPluginName, toolName, toolSourcePath }) => ({
-        kind,
-        logicalName,
-        contract,
-        toolPluginName,
-        toolName,
-        toolSourcePath,
-      }),
-    );
+    return { skills, allowedSkills };
+  });
 
-    const allowedTools = yield* resolveAccessToolsForTarget(
-      agent,
-      capabilities.access,
-      registry,
-      target,
-    );
+const materializeResolvedContractBindings = (
+  toolRefs: ReadonlyArray<ResolvedToolReference>,
+): ResolvedContractBinding[] =>
+  toolRefs.map(
+    ({ kind, logicalName, contract, toolPluginName, toolName, toolSourcePath }) => ({
+      kind,
+      logicalName,
+      contract,
+      toolPluginName,
+      toolName,
+      toolSourcePath,
+    }),
+  );
 
+const validateTraitRequiredSkillsForTarget = (
+  agent: Agent,
+  capabilities: ResolvedAgentCapabilities,
+  allowedSkills: ReadonlyArray<string>,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
     const availableSkillNames = new Set(allowedSkills);
     for (const resolvedTrait of capabilities.traits) {
       const requiredSkills = yield* resolveSkillsForTarget(
@@ -1441,19 +1477,89 @@ export const resolveAgent = (
         ),
       );
     }
+  });
+
+const resolveAgentTargetSurface = (
+  agent: Agent,
+  capabilities: ResolvedAgentCapabilities,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<ResolvedAgentTargetSurface, CompileError> =>
+  Effect.gen(function* () {
+    const skillSurface = yield* resolveAgentSkillSurface(
+      agent,
+      capabilities,
+      registry,
+      target,
+    );
+    const toolBindings = materializeResolvedContractBindings(capabilities.toolRefs);
+    const allowedTools = yield* resolveAccessToolsForTarget(
+      agent,
+      capabilities.access,
+      registry,
+      target,
+    );
+
+    yield* validateTraitRequiredSkillsForTarget(
+      agent,
+      capabilities,
+      skillSurface.allowedSkills,
+      registry,
+      target,
+    );
 
     return {
+      ...skillSurface,
+      toolBindings,
+      allowedTools,
+    };
+  });
+
+const buildResolvedAgent = (
+  agent: Agent,
+  identity: Identity,
+  personality: Personality | undefined,
+  resolvedModel: Record<string, unknown> | undefined,
+  capabilities: ResolvedAgentCapabilities,
+  targetSurface: ResolvedAgentTargetSurface,
+): ResolvedAgent => ({
+  agent,
+  identity,
+  personality,
+  resolvedModel,
+  traits: capabilities.traits,
+  canonicalTraitIds: capabilities.canonicalTraitIds,
+  skills: targetSurface.skills,
+  allowedSkills: targetSurface.allowedSkills,
+  toolBindings: targetSurface.toolBindings,
+  allowedTools: targetSurface.allowedTools,
+});
+
+export const resolveAgent = (
+  agent: Agent,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<ResolvedAgent, CompileError> =>
+  Effect.gen(function* () {
+    const identity = yield* resolveAgentIdentity(agent, registry);
+    const personality = yield* resolveAgentPersonality(agent, registry);
+    const resolvedModel = yield* resolveAgentModel(agent, registry, target);
+    const capabilities = yield* resolveAgentCapabilities(agent, registry);
+    const targetSurface = yield* resolveAgentTargetSurface(
+      agent,
+      capabilities,
+      registry,
+      target,
+    );
+
+    return buildResolvedAgent(
       agent,
       identity,
       personality,
       resolvedModel,
-      traits: capabilities.traits,
-      canonicalTraitIds: capabilities.canonicalTraitIds,
-      skills: resolvedDependencySkills,
-      allowedSkills,
-      toolBindings,
-      allowedTools,
-    };
+      capabilities,
+      targetSurface,
+    );
   });
 
 export const instantiateOrbit = (

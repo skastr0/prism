@@ -5347,6 +5347,225 @@ test("orbit phase fields participate in template instantiation", async () => {
   );
 });
 
+test("orbit phase template instantiation preserves references bindings and notes", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "phase-shape-template",
+    sourcePath: "/tmp/phase-shape-template.orbit.ts",
+    description: "Phase shape template",
+    parameters: [{ name: "domain", required: true }],
+    phases: [
+      {
+        name: "${domain} build",
+        orbit_binding: {
+          orbit: "template",
+          bindings: { required: "${domain}" },
+        },
+        agent: "builder",
+        agents: ["builder"],
+        requires: [{ all: ["reviewable"], min: 1 }],
+        notes: { Input: "${domain} input", Done: "${domain} complete" },
+        telos: "Build ${domain}.",
+      },
+      {
+        name: "empty shape",
+        orbit_binding: { orbit: "template", bindings: {} },
+        agents: [],
+        requires: [],
+        notes: {},
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+  const instantiated = await Effect.runPromise(
+    instantiateOrbit(orbit, { domain: "Forge" }),
+  );
+
+  expect(instantiated.phases[0]).toEqual({
+    name: "Forge build",
+    orbit_binding: { orbit: "template", bindings: { required: "Forge" } },
+    agent: "builder",
+    agents: ["builder"],
+    requires: [{ all: ["reviewable"], min: 1 }],
+    notes: { Input: "Forge input", Done: "Forge complete" },
+    telos: "Build Forge.",
+  });
+  expect(instantiated.phases[1]).toEqual({
+    name: "empty shape",
+    orbit_binding: { orbit: "template" },
+    agents: [],
+    requires: [],
+  });
+  expect(Object.hasOwn(instantiated.phases[1] ?? {}, "notes")).toBe(false);
+});
+
+test("orbit phase template instantiation reports missing phase binding field", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "phase-missing-binding-template",
+    sourcePath: "/tmp/phase-missing-binding-template.orbit.ts",
+    description: "Phase missing binding template",
+    parameters: [{ name: "domain", required: false }],
+    phases: [
+      {
+        name: "plain phase",
+        agents: [],
+        requires: [],
+        notes: { Input: "${domain} input" },
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+  const exit = await Effect.runPromiseExit(instantiateOrbit(orbit, {}));
+  const failure = getFailure(exit);
+
+  expect(failure._tag).toBe("OrbitValidationError");
+  if (failure._tag === "OrbitValidationError") {
+    expect(failure.field).toBe("phases[0].notes.Input");
+    expect(failure.message).toBe(
+      "missing binding 'domain' required by template string",
+    );
+  }
+});
+
+test("orbit phase template instantiation preserves missing binding order", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const cases: Array<{
+    readonly phase: NormalizedOrbitPhase;
+    readonly field: string;
+  }> = [
+    {
+      phase: {
+        name: "${missingName}",
+        orbit: "${missingOrbit}",
+        orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
+        agents: [],
+        requires: [],
+        notes: { Input: "${missingNote}" },
+        telos: "${missingTelos}",
+      },
+      field: "phases[0].name",
+    },
+    {
+      phase: {
+        name: "plain",
+        orbit: "${missingOrbit}",
+        orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
+        agents: [],
+        requires: [],
+        notes: { Input: "${missingNote}" },
+      },
+      field: "phases[0].orbit",
+    },
+    {
+      phase: {
+        name: "plain",
+        orbit: "target",
+        orbit_binding: { orbit: "template", bindings: { required: "${missingBinding}" } },
+        agents: [],
+        requires: [],
+        notes: { Input: "${missingNote}" },
+      },
+      field: "phases[0].orbit_binding.bindings.required",
+    },
+    {
+      phase: {
+        name: "plain",
+        orbit_binding: { orbit: "template", bindings: { required: "value" } },
+        agents: [],
+        requires: [],
+        notes: { Input: "${missingNote}" },
+        telos: "${missingTelos}",
+      },
+      field: "phases[0].notes.Input",
+    },
+    {
+      phase: {
+        name: "plain",
+        agents: [],
+        requires: [],
+        telos: "${missingTelos}",
+        real_world_change: "${missingChange}",
+      },
+      field: "phases[0].telos",
+    },
+    {
+      phase: {
+        name: "plain",
+        agents: [],
+        requires: [],
+        telos: "value",
+        real_world_change: "${missingChange}",
+        cold_pickup_test: "${missingPickup}",
+      },
+      field: "phases[0].real_world_change",
+    },
+    {
+      phase: {
+        name: "plain",
+        agents: [],
+        requires: [],
+        real_world_change: "value",
+        cold_pickup_test: "${missingPickup}",
+        body: "${missingBody}",
+      },
+      field: "phases[0].cold_pickup_test",
+    },
+    {
+      phase: {
+        name: "plain",
+        agents: [],
+        requires: [],
+        cold_pickup_test: "value",
+        body: "${missingBody}",
+      },
+      field: "phases[0].body",
+    },
+  ];
+
+  for (const current of cases) {
+    const orbit = new Orbit({
+      name: "phase-order-template",
+      sourcePath: "/tmp/phase-order-template.orbit.ts",
+      description: "Phase order template",
+      parameters: [
+        { name: "missingName", required: false },
+        { name: "missingOrbit", required: false },
+        { name: "missingBinding", required: false },
+        { name: "missingNote", required: false },
+        { name: "missingTelos", required: false },
+        { name: "missingChange", required: false },
+        { name: "missingPickup", required: false },
+        { name: "missingBody", required: false },
+      ],
+      phases: [current.phase],
+      tool_permissions: [],
+      pulsar_checkpoints: [],
+      body: "",
+    });
+
+    const failure = getFailure(await Effect.runPromiseExit(instantiateOrbit(orbit, {})));
+
+    expect(failure._tag).toBe("OrbitValidationError");
+    if (failure._tag === "OrbitValidationError") {
+      expect(failure.field).toBe(current.field);
+      expect(failure.message).toContain("missing binding");
+    }
+  }
+});
+
 test("derived orbit skill renders parametric stub for parameterized orbit templates", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 

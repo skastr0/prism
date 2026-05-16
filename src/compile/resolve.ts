@@ -1025,12 +1025,30 @@ const instantiateOptionalTemplateString = (
     ? undefined
     : instantiateTemplateString(orbit, field, value, bindings);
 
-const instantiateOrbitPhase = (
+type InstantiatedPhaseReferences = {
+  readonly name: string;
+  readonly orbit?: string;
+};
+
+type InstantiatedPhaseDetails = {
+  readonly telos?: string;
+  readonly real_world_change?: string;
+  readonly cold_pickup_test?: string;
+  readonly body?: string;
+};
+
+type ClonedPhaseAssignments = {
+  readonly agent?: OrbitPhase["agent"];
+  readonly agents: OrbitPhase["agents"];
+  readonly requires: OrbitPhase["requires"];
+};
+
+const instantiatePhaseReferences = (
   orbit: Orbit,
   phase: OrbitPhase,
   index: number,
   bindings: BindingMap,
-): OrbitPhase | OrbitValidationError => {
+): InstantiatedPhaseReferences | OrbitValidationError => {
   const nextName = instantiateOptionalTemplateString(
     orbit,
     `phases[${index}].name`,
@@ -1047,6 +1065,18 @@ const instantiateOrbitPhase = (
   );
   if (nextOrbit instanceof OrbitValidationError) return nextOrbit;
 
+  return {
+    name: nextName!,
+    ...(nextOrbit ? { orbit: nextOrbit } : {}),
+  };
+};
+
+const instantiatePhaseOrbitBinding = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  index: number,
+  bindings: BindingMap,
+): OrbitPhase["orbit_binding"] | OrbitValidationError => {
   let orbitBinding = phase.orbit_binding;
   if (phase.orbit_binding?.bindings) {
     const nextBindings: Record<string, string> = {};
@@ -1069,6 +1099,15 @@ const instantiateOrbitPhase = (
     };
   }
 
+  return orbitBinding;
+};
+
+const instantiatePhaseNotes = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  index: number,
+  bindings: BindingMap,
+): Record<string, string> | OrbitValidationError => {
   const nextNotes: Record<string, string> = {};
   if (phase.notes) {
     for (const [noteName, noteValue] of Object.entries(phase.notes)) {
@@ -1085,6 +1124,15 @@ const instantiateOrbitPhase = (
     }
   }
 
+  return nextNotes;
+};
+
+const instantiatePhaseDetails = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  index: number,
+  bindings: BindingMap,
+): InstantiatedPhaseDetails | OrbitValidationError => {
   const nextTelos = instantiateOptionalTemplateString(
     orbit,
     `phases[${index}].telos`,
@@ -1118,16 +1166,6 @@ const instantiateOrbitPhase = (
   if (nextBody instanceof OrbitValidationError) return nextBody;
 
   return {
-    name: nextName!,
-    ...(nextOrbit ? { orbit: nextOrbit } : {}),
-    ...(orbitBinding ? { orbit_binding: orbitBinding } : {}),
-    ...(phase.agent ? { agent: phase.agent } : {}),
-    agents: [...phase.agents],
-    requires: phase.requires.map((requirement) => ({
-      all: [...requirement.all],
-      ...(requirement.min !== undefined ? { min: requirement.min } : {}),
-    })),
-    ...(Object.keys(nextNotes).length > 0 ? { notes: nextNotes } : {}),
     ...(nextTelos !== undefined ? { telos: nextTelos } : {}),
     ...(nextRealWorldChange !== undefined
       ? { real_world_change: nextRealWorldChange }
@@ -1137,6 +1175,59 @@ const instantiateOrbitPhase = (
       : {}),
     ...(nextBody !== undefined ? { body: nextBody } : {}),
   };
+};
+
+const clonePhaseAssignments = (phase: OrbitPhase): ClonedPhaseAssignments => ({
+  ...(phase.agent ? { agent: phase.agent } : {}),
+  agents: [...phase.agents],
+  requires: phase.requires.map((requirement) => ({
+    all: [...requirement.all],
+    ...(requirement.min !== undefined ? { min: requirement.min } : {}),
+  })),
+});
+
+const buildInstantiatedOrbitPhase = (options: {
+  readonly references: InstantiatedPhaseReferences;
+  readonly orbitBinding: OrbitPhase["orbit_binding"];
+  readonly assignments: ClonedPhaseAssignments;
+  readonly notes: Record<string, string>;
+  readonly details: InstantiatedPhaseDetails;
+}): OrbitPhase => ({
+  name: options.references.name,
+  ...(options.references.orbit ? { orbit: options.references.orbit } : {}),
+  ...(options.orbitBinding ? { orbit_binding: options.orbitBinding } : {}),
+  ...(options.assignments.agent ? { agent: options.assignments.agent } : {}),
+  agents: options.assignments.agents,
+  requires: options.assignments.requires,
+  ...(Object.keys(options.notes).length > 0 ? { notes: options.notes } : {}),
+  ...options.details,
+});
+
+const instantiateOrbitPhase = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  index: number,
+  bindings: BindingMap,
+): OrbitPhase | OrbitValidationError => {
+  const references = instantiatePhaseReferences(orbit, phase, index, bindings);
+  if (references instanceof OrbitValidationError) return references;
+
+  const orbitBinding = instantiatePhaseOrbitBinding(orbit, phase, index, bindings);
+  if (orbitBinding instanceof OrbitValidationError) return orbitBinding;
+
+  const notes = instantiatePhaseNotes(orbit, phase, index, bindings);
+  if (notes instanceof OrbitValidationError) return notes;
+
+  const details = instantiatePhaseDetails(orbit, phase, index, bindings);
+  if (details instanceof OrbitValidationError) return details;
+
+  return buildInstantiatedOrbitPhase({
+    references,
+    orbitBinding,
+    assignments: clonePhaseAssignments(phase),
+    notes,
+    details,
+  });
 };
 
 const cloneOrbitToolPermissions = (orbit: Orbit): Orbit["tool_permissions"] =>

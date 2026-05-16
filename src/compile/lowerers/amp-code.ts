@@ -353,7 +353,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
 
   if ((input.hooks?.length ?? 0) > 0) {
     throw new Error(
-      "Amp hook lowering is not implemented yet; Amp SDK supports lifecycle/tool events, but Prism currently lowers Amp tools and skills only.",
+      "Amp lowerer received hooks after target capability validation; this indicates a compiler planning bug.",
     );
   }
 

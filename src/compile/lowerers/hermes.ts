@@ -356,12 +356,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
 
   if (input.agents.length > 0) {
     throw new Error(
-      "Hermes lowering currently supports skills and generated MCP tools only; profile/SOUL agent lowering is intentionally out of scope.",
+      "Hermes lowerer received agents after target capability validation; this indicates a compiler planning bug.",
     );
   }
   if ((input.hooks?.length ?? 0) > 0) {
     throw new Error(
-      "Hermes hook lowering is not implemented; use a native Hermes plugin when hook callbacks are required.",
+      "Hermes lowerer received hooks after target capability validation; this indicates a compiler planning bug.",
     );
   }
 

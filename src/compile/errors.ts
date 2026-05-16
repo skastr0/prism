@@ -91,7 +91,12 @@ export class UnsupportedTargetCapabilityError extends Schema.TaggedError<Unsuppo
   "UnsupportedTargetCapabilityError",
   {
     target: Schema.String,
-    capability: Schema.Literal("generated-canonical-tools", "skill-permissions"),
+    capability: Schema.Literal(
+      "compiled-agents",
+      "generated-canonical-tools",
+      "hooks",
+      "skill-permissions",
+    ),
     message: Schema.String,
   },
 ) {}

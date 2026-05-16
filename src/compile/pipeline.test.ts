@@ -1669,9 +1669,11 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
   expect(serverSource).toContain('"tool.execute.after"');
   expect(serverSource).toContain('"opencode_hook_demo_submit_work"');
   expect(serverSource).not.toContain("/Projects/prism/src/compile/sources.ts");
-  expect(serverSource).toContain('"session.created"');
+  expect(serverSource).toContain('"session.status"');
+  expect(serverSource).toContain('"busy"');
   expect(serverSource).toContain('"session.start"');
-  expect(serverSource).toContain('"session.deleted"');
+  expect(serverSource).toContain('"idle"');
+  expect(serverSource).toContain('"session.idle"');
   expect(serverSource).toContain('"session.end"');
   expect(serverSource).toContain("decodeNativeHookPayloadForEvent");
   expect(serverSource).toContain("decodeHookResultForEvent");
@@ -1932,6 +1934,58 @@ export default defineTool({
   expect(source).not.toContain("defineTool");
 });
 
+test("compilePluginForTarget rejects Amp hooks at the capability boundary", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-hook-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-hook-demo",
+        version: "0.1.0",
+        targets: {
+          hooks: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-start",
+  event: hookEvent.sessionStart,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
+  if (failure._tag === "UnsupportedTargetCapabilityError") {
+    expect(failure.capability).toBe("hooks");
+    expect(failure.message).toContain("does not support Prism hook lowering");
+  }
+});
+
 test("compilePluginForTarget lowers Hermes skills and canonical tools into MCP config", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "hermes-tool-demo");
@@ -2025,6 +2079,108 @@ export default defineTool({
     expect(configWrite.content).toContain('command: "bun"');
     expect(configWrite.content).toContain(JSON.stringify(serverPath));
     expect(configWrite.content).toContain("hermes_tool_demo_echo");
+  }
+});
+
+test("compilePluginForTarget rejects Hermes agents and hooks at the capability boundary", async () => {
+  const root = await createTempRoot();
+  const agentPluginRoot = join(root, "hermes-agent-demo");
+  const hookPluginRoot = join(root, "hermes-hook-demo");
+
+  await writeText(
+    join(agentPluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "hermes-agent-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["hermes"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(agentPluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(agentPluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Hermes worker",
+  identity: "worker",
+});
+`,
+  );
+
+  const agentExit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: agentPluginRoot,
+      target: "hermes",
+      scope: "global",
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const agentFailure = getFailure(agentExit);
+  expect(agentFailure._tag).toBe("UnsupportedTargetCapabilityError");
+  if (agentFailure._tag === "UnsupportedTargetCapabilityError") {
+    expect(agentFailure.capability).toBe("compiled-agents");
+    expect(agentFailure.message).toContain("does not support compiled Prism agents");
+  }
+
+  await writeText(
+    join(hookPluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "hermes-hook-demo",
+        version: "0.1.0",
+        targets: {
+          hooks: ["hermes"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(hookPluginRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-start",
+  event: hookEvent.sessionStart,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
+  const hookExit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: hookPluginRoot,
+      target: "hermes",
+      scope: "global",
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const hookFailure = getFailure(hookExit);
+  expect(hookFailure._tag).toBe("UnsupportedTargetCapabilityError");
+  if (hookFailure._tag === "UnsupportedTargetCapabilityError") {
+    expect(hookFailure.capability).toBe("hooks");
+    expect(hookFailure.message).toContain("does not support Prism hook lowering");
   }
 });
 

@@ -326,6 +326,46 @@ const assertTargetSupportsGeneratedCanonicalTools = (
   );
 };
 
+const assertTargetSupportsAgents = (
+  target: string,
+  hasTargetedAgents: boolean,
+): Effect.Effect<void, CompileError> => {
+  const capabilities = getCompileTargetCapabilities(target);
+  if (!hasTargetedAgents || capabilities.agents === "supported") {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new UnsupportedTargetCapabilityError({
+      target,
+      capability: "compiled-agents",
+      message:
+        `${target} does not support compiled Prism agents. ` +
+        `Use target-specific skills or another compile target with a generated agent surface.`,
+    }),
+  );
+};
+
+const assertTargetSupportsHooks = (
+  target: string,
+  hasTargetedHooks: boolean,
+): Effect.Effect<void, CompileError> => {
+  const capabilities = getCompileTargetCapabilities(target);
+  if (!hasTargetedHooks || capabilities.hooks === "supported") {
+    return Effect.void;
+  }
+
+  return Effect.fail(
+    new UnsupportedTargetCapabilityError({
+      target,
+      capability: "hooks",
+      message:
+        `${target} does not support Prism hook lowering. ` +
+        `Use a native ${target} plugin for hook callbacks or choose a compile target with hook support.`,
+    }),
+  );
+};
+
 const assertTargetSupportsSkillPermissions = (
   target: string,
   agents: ReadonlyArray<ComposedAgent>,
@@ -433,6 +473,8 @@ export const compilePluginForTarget = (
       targetsHooks ||
       targetsRules ||
       targetsCommands;
+    yield* assertTargetSupportsAgents(options.target, targetsAgents);
+    yield* assertTargetSupportsHooks(options.target, targetsHooks);
 
     const composed: ComposedAgent[] = [];
     const built: string[] = [];

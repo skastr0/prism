@@ -859,92 +859,166 @@ const collectTemplateParameters = (value: string): ReadonlyArray<string> => {
   return [...seen];
 };
 
-const visitOrbitStrings = (
-  orbit: Orbit,
-  visit: (field: string, value: string) => OrbitValidationError | undefined,
-): OrbitValidationError | undefined => {
-  const topLevelFields: Array<[string, string | undefined]> = [
-    ["description", orbit.description],
-    ["produces", orbit.produces],
-    ["evolution", orbit.evolution],
-    ["body", orbit.body],
-  ];
+type OrbitStringVisitor = (
+  field: string,
+  value: string,
+) => OrbitValidationError | undefined;
 
-  for (const [field, value] of topLevelFields) {
+type OrbitStringField = readonly [field: string, value: string | undefined];
+
+const visitStringFields = (
+  fields: ReadonlyArray<OrbitStringField>,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  for (const [field, value] of fields) {
     if (!value) continue;
     const error = visit(field, value);
     if (error) return error;
   }
+  return undefined;
+};
 
-  if (orbit.definitions) {
-    for (const [definitionName, role] of Object.entries(orbit.definitions)) {
-      if (!role) continue;
-      const purposeError = visit(`definitions.${definitionName}.purpose`, role.purpose);
-      if (purposeError) return purposeError;
-      for (const listName of ["contains", "boundaries", "avoid"] as const) {
-        const values = role[listName] ?? [];
-        for (const [index, value] of values.entries()) {
-          const error = visit(`definitions.${definitionName}.${listName}[${index}]`, value);
-          if (error) return error;
-        }
+const visitOrbitTopLevelStrings = (
+  orbit: Orbit,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined =>
+  visitStringFields(
+    [
+      ["description", orbit.description],
+      ["produces", orbit.produces],
+      ["evolution", orbit.evolution],
+      ["body", orbit.body],
+    ],
+    visit,
+  );
+
+const visitOrbitDefinitionStrings = (
+  orbit: Orbit,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  if (!orbit.definitions) return undefined;
+
+  for (const [definitionName, role] of Object.entries(orbit.definitions)) {
+    if (!role) continue;
+    const purposeError = visit(`definitions.${definitionName}.purpose`, role.purpose);
+    if (purposeError) return purposeError;
+
+    for (const listName of ["contains", "boundaries", "avoid"] as const) {
+      const values = role[listName] ?? [];
+      for (const [index, value] of values.entries()) {
+        const error = visit(`definitions.${definitionName}.${listName}[${index}]`, value);
+        if (error) return error;
       }
     }
   }
 
+  return undefined;
+};
+
+const orbitPhaseStringFields = (
+  phase: Orbit["phases"][number],
+  index: number,
+): ReadonlyArray<OrbitStringField> => [
+  [`phases[${index}].name`, phase.name],
+  [`phases[${index}].orbit`, phase.orbit],
+  [`phases[${index}].orbit_binding.orbit`, phase.orbit_binding?.orbit],
+  [`phases[${index}].agent`, phase.agent],
+  [`phases[${index}].telos`, phase.telos],
+  [`phases[${index}].real_world_change`, phase.real_world_change],
+  [`phases[${index}].cold_pickup_test`, phase.cold_pickup_test],
+  [`phases[${index}].body`, phase.body],
+];
+
+const visitOrbitPhaseBindingStrings = (
+  phase: Orbit["phases"][number],
+  index: number,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  if (!phase.orbit_binding?.bindings) return undefined;
+
+  for (const [bindingName, bindingValue] of Object.entries(
+    phase.orbit_binding.bindings,
+  )) {
+    const error = visit(
+      `phases[${index}].orbit_binding.bindings.${bindingName}`,
+      bindingValue,
+    );
+    if (error) return error;
+  }
+
+  return undefined;
+};
+
+const visitOrbitPhaseNotes = (
+  phase: Orbit["phases"][number],
+  index: number,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  if (!phase.notes) return undefined;
+
+  for (const [noteName, noteValue] of Object.entries(phase.notes)) {
+    const error = visit(`phases[${index}].notes.${noteName}`, noteValue);
+    if (error) return error;
+  }
+
+  return undefined;
+};
+
+const visitOrbitPhaseAgentRefs = (
+  phase: Orbit["phases"][number],
+  index: number,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  for (const [agentIndex, agentRef] of phase.agents.entries()) {
+    const error = visit(`phases[${index}].agents[${agentIndex}]`, agentRef);
+    if (error) return error;
+  }
+  return undefined;
+};
+
+const visitOrbitPhaseRequirementRefs = (
+  phase: Orbit["phases"][number],
+  index: number,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  for (const [requirementIndex, requirement] of phase.requires.entries()) {
+    for (const [traitIndex, traitRef] of requirement.all.entries()) {
+      const error = visit(
+        `phases[${index}].requires[${requirementIndex}].all[${traitIndex}]`,
+        traitRef,
+      );
+      if (error) return error;
+    }
+  }
+  return undefined;
+};
+
+const visitOrbitPhaseStrings = (
+  phase: Orbit["phases"][number],
+  index: number,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  return (
+    visitStringFields(orbitPhaseStringFields(phase, index), visit) ??
+    visitOrbitPhaseBindingStrings(phase, index, visit) ??
+    visitOrbitPhaseNotes(phase, index, visit) ??
+    visitOrbitPhaseAgentRefs(phase, index, visit) ??
+    visitOrbitPhaseRequirementRefs(phase, index, visit)
+  );
+};
+
+const visitOrbitStrings = (
+  orbit: Orbit,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  const headerError =
+    visitOrbitTopLevelStrings(orbit, visit) ??
+    visitOrbitDefinitionStrings(orbit, visit);
+  if (headerError) return headerError;
+
   for (const [index, phase] of orbit.phases.entries()) {
-    const phaseFields: Array<[string, string | undefined]> = [
-      [`phases[${index}].name`, phase.name],
-      [`phases[${index}].orbit`, phase.orbit],
-      [
-        `phases[${index}].orbit_binding.orbit`,
-        phase.orbit_binding?.orbit,
-      ],
-      [`phases[${index}].agent`, phase.agent],
-      [`phases[${index}].telos`, phase.telos],
-      [`phases[${index}].real_world_change`, phase.real_world_change],
-      [`phases[${index}].cold_pickup_test`, phase.cold_pickup_test],
-      [`phases[${index}].body`, phase.body],
-    ];
-
-    for (const [field, value] of phaseFields) {
-      if (!value) continue;
-      const error = visit(field, value);
-      if (error) return error;
-    }
-
-    if (phase.orbit_binding?.bindings) {
-      for (const [bindingName, bindingValue] of Object.entries(
-        phase.orbit_binding.bindings,
-      )) {
-        const error = visit(
-          `phases[${index}].orbit_binding.bindings.${bindingName}`,
-          bindingValue,
-        );
-        if (error) return error;
-      }
-    }
-
-    if (phase.notes) {
-      for (const [noteName, noteValue] of Object.entries(phase.notes)) {
-        const error = visit(`phases[${index}].notes.${noteName}`, noteValue);
-        if (error) return error;
-      }
-    }
-
-    for (const [agentIndex, agentRef] of phase.agents.entries()) {
-      const error = visit(`phases[${index}].agents[${agentIndex}]`, agentRef);
-      if (error) return error;
-    }
-
-    for (const [requirementIndex, requirement] of phase.requires.entries()) {
-      for (const [traitIndex, traitRef] of requirement.all.entries()) {
-        const error = visit(
-          `phases[${index}].requires[${requirementIndex}].all[${traitIndex}]`,
-          traitRef,
-        );
-        if (error) return error;
-      }
-    }
+    const error = visitOrbitPhaseStrings(phase, index, visit);
+    if (error) return error;
   }
 
   return undefined;

@@ -340,6 +340,46 @@ test("generated Oxlint rule rejects trait-owned slots and tool input/output repl
   ]);
 });
 
+test("install requires --project when project scope is requested", async () => {
+  const result = await runCli(
+    ["install", ".", "--harness", "opencode", "--scope", "project"],
+    {}
+  );
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toContain("Project-local scope requires --project <path>");
+});
+
+test("install dry-run compiles targeted plugin with project scope", async () => {
+  const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
+  const pluginRoot = join(monorepoRoot, "trait-orbit-contracts");
+
+  const result = await runCli(
+    [
+      "install",
+      pluginRoot,
+      "--harness",
+      "opencode",
+      "--scope",
+      "project",
+      "--project",
+      projectRoot,
+      "--dry-run",
+    ],
+    { HOME: homeRoot }
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Installing plugin: canonical-compile-fixture");
+  expect(result.stdout).toContain("Matching requested harnesses: opencode");
+  expect(result.stdout).toContain("Compile output scope: project");
+  expect(result.stdout).toContain("Compile (opencode, project)");
+  expect(result.stdout).toContain("Dry run - operations that would be performed");
+  expect(
+    await pathExists(join(projectRoot, ".opencode", "agents", "builder.md"))
+  ).toBe(false);
+});
+
 test("install-all requires --project when project scope is requested", async () => {
   const { monorepoRoot, homeRoot } = await createInstallAllFixture();
 

@@ -60,132 +60,7 @@ program
   .option("--dry-run", "Preview operations without executing", false)
   .action(async (pluginPath: string, options) => {
     try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      const harnesses = resolveRequestedHarnesses(options);
-
-      // Read manifest to show info
-      const manifest = await readManifest(pluginPath);
-
-      console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-      printPluginRefreshContext({
-        manifest,
-        harnesses,
-        scope: options.scope,
-        projectPath: options.project,
-      });
-
-      // Validate plugin before installation (unless --no-validate)
-      if (options.validate !== false) {
-        const shouldValidateSkills = harnesses.some((harnessId) =>
-          manifestTargetsArtifact(manifest, "skills", harnessId)
-        );
-        const shouldValidateAgents = harnesses.some((harnessId) =>
-          manifestTargetsArtifact(manifest, "agents", harnessId)
-        );
-        const skillResults = shouldValidateSkills
-          ? await validatePluginSkills(pluginPath)
-          : [];
-        const agentResults = shouldValidateAgents
-          ? await validatePluginAgents(pluginPath)
-          : [];
-        const hasSkillErrors = skillResults.some((r) => !r.valid);
-        const hasAgentErrors = agentResults.some((r) => !r.valid);
-
-        if (hasSkillErrors || hasAgentErrors) {
-          console.log("\n❌ Plugin validation failed:\n");
-
-          if (hasSkillErrors) {
-            console.log("   Skills:");
-            for (const result of skillResults) {
-              if (!result.valid) {
-                console.log(`      ${result.skillName || "(unknown skill)"}:`);
-                for (const error of result.errors) {
-                  console.log(`         • ${error}`);
-                }
-              }
-            }
-          }
-
-          if (hasAgentErrors) {
-            console.log("   Agents:");
-            for (const result of agentResults) {
-              if (!result.valid) {
-                console.log(`      ${result.agentName || "(unknown agent)"}:`);
-                for (const error of result.errors) {
-                  console.log(`         • ${error}`);
-                }
-              }
-            }
-          }
-
-          console.log("\nUse --no-validate to skip validation.");
-          process.exit(1);
-        }
-      }
-
-      const compilePhase = await runCompilePhaseForPlugin({
-        pluginPath,
-        manifest,
-        harnesses,
-        scope: options.scope,
-        projectPath: options.project,
-        dryRun: options.dryRun,
-        backup: options.backup,
-      });
-      if (!compilePhase.success) {
-        process.exit(1);
-      }
-      const compileBackups = compilePhase.backups;
-
-      // Plan installation
-      const operations = await planInstallation({
-        pluginPath,
-        harnesses: harnesses as HarnessId[],
-        projectPath: options.project,
-        overwrite: options.overwrite,
-        backup: options.backup,
-        dryRun: options.dryRun,
-      });
-
-      if (options.dryRun) {
-        console.log("\n🔍 Dry run - operations that would be performed:\n");
-        printOperations(operations);
-        return;
-      }
-
-      // Execute installation
-      const result = await install({
-        pluginPath,
-        harnesses: harnesses as HarnessId[],
-        projectPath: options.project,
-        overwrite: options.overwrite,
-        backup: options.backup,
-        dryRun: false,
-      });
-
-      // Print results
-      if (result.operations.length > 0) {
-        console.log("\n📋 Install:\n");
-        printOperations(result.operations);
-      }
-
-      const allBackups = [...compileBackups, ...result.backups];
-      if (allBackups.length > 0) {
-        console.log("\n💾 Backups created:");
-        for (const backup of allBackups) {
-          console.log(`   ${backup}`);
-        }
-      }
-
-      if (result.errors.length > 0) {
-        console.log("\n❌ Errors:");
-        for (const error of result.errors) {
-          console.log(`   ${error.operation.target}: ${error.message}`);
-        }
-        process.exit(1);
-      }
-
-      console.log("\n✅ Done!");
+      await runInstallCommand(pluginPath, options);
     } catch (error) {
       printCliError(error, "Error");
       process.exit(1);
@@ -496,6 +371,28 @@ type LoadedPlugin = {
   manifest: PluginManifest;
 };
 
+type InstallCommandOptions = {
+  all?: boolean;
+  harness?: string;
+  project?: string;
+  scope: HarnessScope;
+  overwrite?: boolean;
+  backup?: boolean;
+  validate?: boolean;
+  dryRun?: boolean;
+};
+
+type NormalizedInstallOptions = InstallCommandOptions & {
+  overwrite: boolean;
+  backup: boolean;
+  dryRun: boolean;
+};
+
+type InstallCommandContext = LoadedPlugin & {
+  harnesses: HarnessId[];
+  options: NormalizedInstallOptions;
+};
+
 type InvalidPluginManifest = {
   pluginPath: string;
   error: unknown;
@@ -526,6 +423,158 @@ type InstallAllRefreshOptions = {
   backup: boolean;
   overwrite: boolean;
 };
+
+async function runInstallCommand(
+  pluginPath: string,
+  rawOptions: InstallCommandOptions
+): Promise<void> {
+  const context = await loadInstallCommandContext(pluginPath, rawOptions);
+
+  if (context.options.validate !== false) {
+    const validation = await collectTargetedValidationResults(context);
+    if (
+      !printPluginValidationResult(validation.skillResults, validation.agentResults, {
+        header: "\n❌ Plugin validation failed:\n",
+        labelIndent: "   ",
+        itemIndent: "      ",
+        errorIndent: "         ",
+      })
+    ) {
+      console.log("\nUse --no-validate to skip validation.");
+      process.exit(1);
+    }
+  }
+
+  const compilePhase = await runCompilePhaseForPlugin({
+    pluginPath: context.pluginPath,
+    manifest: context.manifest,
+    harnesses: context.harnesses,
+    scope: context.options.scope,
+    projectPath: context.options.project,
+    dryRun: context.options.dryRun,
+    backup: context.options.backup,
+  });
+  if (!compilePhase.success) {
+    process.exit(1);
+  }
+
+  await planOrRunInstallCommand(context, compilePhase.backups);
+}
+
+async function loadInstallCommandContext(
+  pluginPath: string,
+  rawOptions: InstallCommandOptions
+): Promise<InstallCommandContext> {
+  const options = normalizeInstallCommandOptions(rawOptions);
+  assertProjectPathForProjectScope(options.scope, options.project);
+  const harnesses = resolveRequestedHarnesses(options);
+  const manifest = await readManifest(pluginPath);
+
+  console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
+  printPluginRefreshContext({
+    manifest,
+    harnesses,
+    scope: options.scope,
+    projectPath: options.project,
+  });
+
+  return { pluginPath, manifest, harnesses, options };
+}
+
+function normalizeInstallCommandOptions(
+  options: InstallCommandOptions
+): NormalizedInstallOptions {
+  return {
+    ...options,
+    overwrite: options.overwrite ?? false,
+    backup: options.backup ?? false,
+    dryRun: options.dryRun ?? false,
+  };
+}
+
+async function collectTargetedValidationResults(context: InstallCommandContext): Promise<{
+  skillResults: PluginValidationResult[];
+  agentResults: PluginValidationResult[];
+}> {
+  const shouldValidateSkills = context.harnesses.some((harnessId) =>
+    manifestTargetsArtifact(context.manifest, "skills", harnessId)
+  );
+  const shouldValidateAgents = context.harnesses.some((harnessId) =>
+    manifestTargetsArtifact(context.manifest, "agents", harnessId)
+  );
+
+  return {
+    skillResults: shouldValidateSkills
+      ? await validatePluginSkills(context.pluginPath)
+      : [],
+    agentResults: shouldValidateAgents
+      ? await validatePluginAgents(context.pluginPath)
+      : [],
+  };
+}
+
+async function planOrRunInstallCommand(
+  context: InstallCommandContext,
+  compileBackups: string[]
+): Promise<void> {
+  const operations = await planInstallation({
+    pluginPath: context.pluginPath,
+    harnesses: context.harnesses,
+    projectPath: context.options.project,
+    overwrite: context.options.overwrite,
+    backup: context.options.backup,
+    dryRun: context.options.dryRun,
+  });
+
+  if (context.options.dryRun) {
+    console.log("\n🔍 Dry run - operations that would be performed:\n");
+    printOperations(operations);
+    return;
+  }
+
+  const result = await install({
+    pluginPath: context.pluginPath,
+    harnesses: context.harnesses,
+    projectPath: context.options.project,
+    overwrite: context.options.overwrite,
+    backup: context.options.backup,
+    dryRun: false,
+  });
+
+  printInstallCommandResult(result.operations, result.backups, result.errors, compileBackups);
+  if (result.errors.length > 0) {
+    process.exit(1);
+  }
+
+  console.log("\n✅ Done!");
+}
+
+function printInstallCommandResult(
+  operations: FileOperation[],
+  backups: string[],
+  errors: Array<{ operation: FileOperation; message: string }>,
+  compileBackups: string[]
+): void {
+  if (operations.length > 0) {
+    console.log("\n📋 Install:\n");
+    printOperations(operations);
+  }
+
+  const allBackups = [...compileBackups, ...backups];
+  if (allBackups.length > 0) {
+    console.log("\n💾 Backups created:");
+    for (const backup of allBackups) {
+      console.log(`   ${backup}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    console.log("\n❌ Errors:");
+    for (const error of errors) {
+      console.log(`   ${error.operation.target}: ${error.message}`);
+    }
+  }
+}
 
 async function requireInstallAllDirectory(expandedDir: string): Promise<void> {
   if (await exists(expandedDir)) return;
@@ -678,19 +727,30 @@ async function validatePluginBeforeRefresh(
 
 function printPluginValidationResult(
   skillResults: PluginValidationResult[],
-  agentResults: PluginValidationResult[]
+  agentResults: PluginValidationResult[],
+  style: {
+    header: string;
+    labelIndent: string;
+    itemIndent: string;
+    errorIndent: string;
+  } = {
+    header: "\n   ❌ Validation failed:\n",
+    labelIndent: "      ",
+    itemIndent: "         ",
+    errorIndent: "            ",
+  }
 ): boolean {
   const hasSkillErrors = skillResults.some((result) => !result.valid);
   const hasAgentErrors = agentResults.some((result) => !result.valid);
   if (!hasSkillErrors && !hasAgentErrors) return true;
 
-  console.log("\n   ❌ Validation failed:\n");
+  console.log(style.header);
 
   if (hasSkillErrors) {
-    printValidationFailures("Skills", skillResults, "skillName");
+    printValidationFailures("Skills", skillResults, "skillName", style);
   }
   if (hasAgentErrors) {
-    printValidationFailures("Agents", agentResults, "agentName");
+    printValidationFailures("Agents", agentResults, "agentName", style);
   }
 
   return false;
@@ -699,15 +759,21 @@ function printPluginValidationResult(
 function printValidationFailures(
   label: string,
   results: PluginValidationResult[],
-  nameKey: "skillName" | "agentName"
+  nameKey: "skillName" | "agentName",
+  style: {
+    labelIndent: string;
+    itemIndent: string;
+    errorIndent: string;
+  }
 ): void {
-  console.log(`      ${label}:`);
+  console.log(`${style.labelIndent}${label}:`);
+  const fallbackName = `(unknown ${label.slice(0, -1).toLowerCase()})`;
   for (const result of results) {
     if (result.valid) continue;
 
-    console.log(`         ${result[nameKey] || `(unknown ${label.slice(0, -1).toLowerCase()})`}:`);
+    console.log(`${style.itemIndent}${result[nameKey] || fallbackName}:`);
     for (const error of result.errors) {
-      console.log(`            • ${error}`);
+      console.log(`${style.errorIndent}• ${error}`);
     }
   }
 }

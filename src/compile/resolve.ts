@@ -628,96 +628,112 @@ const resolveAccessToolsForTarget = (
     return [...concrete].sort((left, right) => left.localeCompare(right));
   });
 
-const resolveSkillRefForTarget = (
+const unknownSkillReference = (
+  agent: Agent,
+  referenceName: string,
+): UnknownReferenceError =>
+  new UnknownReferenceError({
+    agentName: agent.name,
+    sourcePath: agent.sourcePath,
+    field: "skill",
+    referenceName,
+  });
+
+const missingSkillTarget = (
+  agent: Agent,
+  referenceName: string,
+  target: string,
+): MissingTargetResolutionError =>
+  new MissingTargetResolutionError({
+    agentName: agent.name,
+    referenceKind: "skill",
+    referenceName,
+    target,
+  });
+
+const resolveValidatedSkillName = (
+  agent: Agent,
+  referenceName: string,
+  target: string,
+  concreteName: string,
+): Effect.Effect<string, CompileError> =>
+  Effect.gen(function* () {
+    const invalidSkillName = validateConcreteSkillName(
+      agent,
+      referenceName,
+      target,
+      concreteName,
+    );
+    if (invalidSkillName) {
+      return yield* Effect.fail(invalidSkillName);
+    }
+
+    return concreteName;
+  });
+
+const resolveSkillspaceSkillRefForTarget = (
+  agent: Agent,
+  skillRef: string,
+  parsed: NonNullable<ReturnType<typeof parseSpaceItemRef>>,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<string, CompileError> =>
+  Effect.gen(function* () {
+    const reg = yield* resolveRefToRegistry(skillRef, registry, agent.sourcePath);
+    const skillspace = reg.skillspaces.get(parsed.space);
+    if (!skillspace) {
+      return yield* Effect.fail(unknownSkillReference(agent, skillRef));
+    }
+
+    const skill = skillspace.skills[parsed.name];
+    if (!skill) {
+      return yield* Effect.fail(unknownSkillReference(agent, skillRef));
+    }
+
+    const concrete = skill.targets[target];
+    if (!concrete) {
+      return yield* Effect.fail(missingSkillTarget(agent, skillRef, target));
+    }
+
+    return yield* resolveValidatedSkillName(
+      agent,
+      skillRef,
+      target,
+      concrete.name,
+    );
+  });
+
+const resolveManagedSkillRefForTarget = (
   agent: Agent,
   skillRef: string,
   registry: PluginRegistry,
   target: string,
 ): Effect.Effect<string, CompileError> =>
   Effect.gen(function* () {
-    const parsed = parseSpaceItemRef(skillRef, "/");
-    if (parsed) {
-      const reg = yield* resolveRefToRegistry(skillRef, registry, agent.sourcePath);
-      const skillspace = reg.skillspaces.get(parsed.space);
-      if (!skillspace) {
-        return yield* Effect.fail(
-          new UnknownReferenceError({
-            agentName: agent.name,
-            sourcePath: agent.sourcePath,
-            field: "skill",
-            referenceName: skillRef,
-          }),
-        );
-      }
-
-      const skill = skillspace.skills[parsed.name];
-      if (!skill) {
-        return yield* Effect.fail(
-          new UnknownReferenceError({
-            agentName: agent.name,
-            sourcePath: agent.sourcePath,
-            field: "skill",
-            referenceName: skillRef,
-          }),
-        );
-      }
-
-      const concrete = skill.targets[target];
-      if (!concrete) {
-        return yield* Effect.fail(
-          new MissingTargetResolutionError({
-            agentName: agent.name,
-            referenceKind: "skill",
-            referenceName: skillRef,
-            target,
-          }),
-        );
-      }
-
-      const invalidSkillName = validateConcreteSkillName(
-        agent,
-        skillRef,
-        target,
-        concrete.name,
-      );
-      if (invalidSkillName) {
-        return yield* Effect.fail(invalidSkillName);
-      }
-
-      return concrete.name;
-    }
-
     const reg = yield* resolveRefToRegistry(skillRef, registry, agent.sourcePath);
     const name = parseNamedRef(skillRef).name;
     if (!reg.skills.has(name)) {
-      return yield* Effect.fail(
-        new UnknownReferenceError({
-          agentName: agent.name,
-          sourcePath: agent.sourcePath,
-          field: "skill",
-          referenceName: skillRef,
-        }),
-      );
+      return yield* Effect.fail(unknownSkillReference(agent, skillRef));
     }
 
     if (!registryTargetsSkillForHarness(reg, target)) {
-      return yield* Effect.fail(
-        new MissingTargetResolutionError({
-          agentName: agent.name,
-          referenceKind: "skill",
-          referenceName: skillRef,
-          target,
-        }),
-      );
+      return yield* Effect.fail(missingSkillTarget(agent, skillRef, target));
     }
 
-    const invalidSkillName = validateConcreteSkillName(agent, skillRef, target, name);
-    if (invalidSkillName) {
-      return yield* Effect.fail(invalidSkillName);
-    }
-
-    return name;
+    return yield* resolveValidatedSkillName(agent, skillRef, target, name);
   });
+
+const resolveSkillRefForTarget = (
+  agent: Agent,
+  skillRef: string,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<string, CompileError> => {
+  const parsed = parseSpaceItemRef(skillRef, "/");
+  return parsed
+    ? resolveSkillspaceSkillRefForTarget(agent, skillRef, parsed, registry, target)
+    : resolveManagedSkillRefForTarget(agent, skillRef, registry, target);
+};
 
 const resolveSkillsForTarget = (
   agent: Agent,

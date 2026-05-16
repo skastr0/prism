@@ -533,10 +533,13 @@ const planMcpServer = async (
   };
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const mcp = await planMcpServer(input, operations);
-  const agentMcpServer = mcp.mcpServerName && mcp.mcpBundlePath
+type PlannedMcpServer = Awaited<ReturnType<typeof planMcpServer>>;
+
+const agentMcpServerConfig = (
+  input: LowerInput,
+  mcp: PlannedMcpServer,
+): AgentMcpServerConfig | undefined =>
+  mcp.mcpServerName && mcp.mcpBundlePath
     ? {
         name: mcp.mcpServerName,
         bundlePath: mcp.mcpBundlePath,
@@ -544,6 +547,11 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       }
     : undefined;
 
+const planAgentWrites = async (
+  input: LowerInput,
+  operations: LowerOperation[],
+  agentMcpServer?: AgentMcpServerConfig,
+): Promise<void> => {
   for (const agent of input.agents) {
     await pushWrite(
       operations,
@@ -552,18 +560,28 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       "write-md",
     );
   }
+};
 
-  if (artifactTargetsCodex(input.registry, "skills")) {
-    for (const skill of input.skills ?? []) {
-      await pushWrite(
-        operations,
-        join(input.target.root, "skills", skill.name, "SKILL.md"),
-        await readFile(skill.sourcePath),
-        "write-md",
-      );
-    }
+const planManagedSkillWrites = async (
+  input: LowerInput,
+  operations: LowerOperation[],
+): Promise<void> => {
+  if (!artifactTargetsCodex(input.registry, "skills")) return;
+
+  for (const skill of input.skills ?? []) {
+    await pushWrite(
+      operations,
+      join(input.target.root, "skills", skill.name, "SKILL.md"),
+      await readFile(skill.sourcePath),
+      "write-md",
+    );
   }
+};
 
+const planOrbitWrites = async (
+  input: LowerInput,
+  operations: LowerOperation[],
+): Promise<void> => {
   for (const orbit of input.orbits) {
     await pushWrite(
       operations,
@@ -587,13 +605,24 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       );
     }
   }
+};
 
+const planRulesWrite = async (
+  input: LowerInput,
+  operations: LowerOperation[],
+): Promise<void> => {
   const rules = await renderRules(input);
   if (rules) {
     await pushWrite(operations, join(input.target.root, "AGENTS.md"), rules, "write-md");
   }
+};
 
-  const hooks = await planHooks(input, operations);
+const planConfigWrite = async (
+  input: LowerInput,
+  operations: LowerOperation[],
+  mcp: PlannedMcpServer,
+  hooks: ReadonlyArray<PlannedHook>,
+): Promise<void> => {
   const configTarget = join(input.target.root, "config.toml");
   const currentConfig = (await exists(configTarget)) ? await readFile(configTarget) : "";
   const migratedConfig = renderConfigWithHookFeature(currentConfig, hooks.length > 0);
@@ -611,6 +640,18 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     replaceManagedBlock(migratedConfig, input.target.sourcePluginName, managedBlock),
     "write-plugin-file",
   );
+};
+
+export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+  const operations: LowerOperation[] = [];
+  const mcp = await planMcpServer(input, operations);
+
+  await planAgentWrites(input, operations, agentMcpServerConfig(input, mcp));
+  await planManagedSkillWrites(input, operations);
+  await planOrbitWrites(input, operations);
+  await planRulesWrite(input, operations);
+  const hooks = await planHooks(input, operations);
+  await planConfigWrite(input, operations, mcp, hooks);
 
   return operations;
 };

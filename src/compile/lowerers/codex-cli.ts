@@ -13,6 +13,7 @@ import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
+  bindingsFromCanonicalTools,
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
@@ -434,13 +435,18 @@ const renderManagedConfigBlock = (options: {
 const planMcpServer = async (
   input: LowerInput,
   operations: LowerOperation[],
-): Promise<{ mcpServerName?: string; mcpBundlePath?: string; toolNames: string[] }> => {
+): Promise<{
+  mcpServerName?: string;
+  mcpBundlePath?: string;
+  toolNames: string[];
+  globalToolNames: string[];
+}> => {
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  if (bindings.length === 0) return { toolNames: [] };
+  if (bindings.length === 0) return { toolNames: [], globalToolNames: [] };
 
   const mcpServerName = generatedServerName(input.target.sourcePluginName);
   const bundle = await generateMcpServerBundle({
@@ -462,6 +468,11 @@ const planMcpServer = async (
     mcpServerName,
     mcpBundlePath: bundle.relativePath,
     toolNames: uniqueSorted(bundle.toolNames),
+    globalToolNames: uniqueSorted(
+      bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map((binding) =>
+        mcpToolNameForBinding(input.target.sourcePluginName, binding),
+      ),
+    ),
   };
 };
 
@@ -559,9 +570,9 @@ const planConfigWrite = async (
   const currentConfig = (await exists(configTarget)) ? await readFile(configTarget) : "";
   const migratedConfig = renderConfigWithHookFeature(currentConfig, hooks.length > 0);
   const managedBlock = renderManagedConfigBlock({
-    mcpServerName: mcp.mcpServerName,
-    mcpBundlePath: mcp.mcpBundlePath,
-    enabledTools: mcp.toolNames,
+    mcpServerName: mcp.globalToolNames.length > 0 ? mcp.mcpServerName : undefined,
+    mcpBundlePath: mcp.globalToolNames.length > 0 ? mcp.mcpBundlePath : undefined,
+    enabledTools: mcp.globalToolNames,
     root: input.target.root,
     hooks,
   });

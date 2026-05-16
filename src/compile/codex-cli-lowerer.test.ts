@@ -281,10 +281,10 @@ export default defineTool({
   expect(configToml?.content).not.toContain("codex_hooks");
   expect(configToml?.content).not.toContain("stale = true");
   expect(configToml?.content).toContain("# --- prism codex-cli begin: codex-mcp-fixture ---");
-  expect(configToml?.content).toContain('command = "bun"');
-  expect(configToml?.content).toContain('args = ["mcp/prism_generated_codex_mcp_fixture/server.mjs"]');
-  expect(configToml?.content).toContain('default_tools_approval_mode = "approve"');
-  expect(configToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
+  expect(configToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
+  expect(configToml?.content).not.toContain('args = ["mcp/prism_generated_codex_mcp_fixture/server.mjs"]');
+  expect(configToml?.content).not.toContain('default_tools_approval_mode = "approve"');
+  expect(configToml?.content).not.toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');
   expect(configToml?.content).toContain('[["hooks"."PostToolUse"]]');
   expect(configToml?.content).toContain('[["hooks"."Stop"]]');

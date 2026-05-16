@@ -258,6 +258,81 @@ test("validate rejects agent targets for harnesses without compile lowerers", as
   expect(result.stderr).toContain("targets.agents resolves to unsupported compile harnesses");
 });
 
+test("validate summarizes warnings when not verbose", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "skill-warning-summary");
+  await mkdir(join(pluginRoot, "skills", "testing"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "skill-warning-summary",
+        version: "0.1.0",
+        targets: { skills: ["codex-cli"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: renamed-testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+
+  const result = await runCli(["validate", pluginRoot], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("✅ renamed-testing");
+  expect(result.stdout).toContain("Plugin is valid (run with --verbose to see warnings)");
+  expect(result.stdout).not.toContain(
+    "Skill name 'renamed-testing' does not match directory name 'testing'",
+  );
+});
+
+test("validate --verbose prints warnings", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "skill-warning-verbose");
+  await mkdir(join(pluginRoot, "skills", "testing"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "skill-warning-verbose",
+        version: "0.1.0",
+        targets: { skills: ["codex-cli"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: renamed-testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+
+  const result = await runCli(["validate", pluginRoot, "--verbose"], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("✅ renamed-testing");
+  expect(result.stdout).toContain(
+    "Skill name 'renamed-testing' does not match directory name 'testing'",
+  );
+  expect(result.stdout).toContain("✅ Plugin is valid");
+  expect(result.stdout).not.toContain("run with --verbose");
+});
+
 test("generated Oxlint rule rejects inline Schema slot fills but allows imported schemas", async () => {
   const invalidBinding = callExpression(identifier("bindTrait"), [
     literal("submittable"),

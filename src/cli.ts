@@ -279,92 +279,133 @@ program
   .option("-v, --verbose", "Show detailed validation output")
   .action(async (pluginPath: string, options: { verbose?: boolean }) => {
     try {
-      let hasErrors = false;
-      let hasWarnings = false;
-
-      // Validate manifest
-      const manifest = await readManifest(pluginPath);
-      console.log(`\n📦 Plugin: ${manifest.name} v${manifest.version}`);
-      console.log(`   Description: ${manifest.description || "(none)"}`);
-      console.log(`   Targets: ${formatManifestTargets(manifest)}`);
-
-      // Validate skills (if any)
-      const skillResults = await validatePluginSkills(pluginPath);
-
-      if (skillResults.length > 0) {
-        console.log(`\n🎯 Skills validation:`);
-
-        for (const result of skillResults) {
-          const skillName = result.skillName || "(unknown)";
-
-          if (result.valid) {
-            console.log(`   ✅ ${skillName}`);
-            if (options.verbose && result.warnings.length > 0) {
-              for (const warning of result.warnings) {
-                console.log(`      ⚠️  ${warning}`);
-              }
-              hasWarnings = true;
-            }
-          } else {
-            console.log(`   ❌ ${skillName}`);
-            for (const error of result.errors) {
-              console.log(`      • ${error}`);
-            }
-            hasErrors = true;
-          }
-
-          if (result.warnings.length > 0 && !options.verbose) {
-            hasWarnings = true;
-          }
-        }
-      }
-
-      // Validate agents (if any)
-      const agentResults = await validatePluginAgents(pluginPath);
-
-      if (agentResults.length > 0) {
-        console.log(`\n🤖 Agents validation:`);
-
-        for (const result of agentResults) {
-          const agentName = result.agentName || "(unknown)";
-
-          if (result.valid) {
-            console.log(`   ✅ ${agentName}`);
-            if (options.verbose && result.warnings.length > 0) {
-              for (const warning of result.warnings) {
-                console.log(`      ⚠️  ${warning}`);
-              }
-              hasWarnings = true;
-            }
-          } else {
-            console.log(`   ❌ ${agentName}`);
-            for (const error of result.errors) {
-              console.log(`      • ${error}`);
-            }
-            hasErrors = true;
-          }
-
-          if (result.warnings.length > 0 && !options.verbose) {
-            hasWarnings = true;
-          }
-        }
-      }
-
-      // Summary
-      console.log();
-      if (hasErrors) {
-        console.log("❌ Validation failed with errors");
-        process.exit(1);
-      } else if (hasWarnings && !options.verbose) {
-        console.log("✅ Plugin is valid (run with --verbose to see warnings)");
-      } else {
-        console.log("✅ Plugin is valid");
-      }
+      await runValidateCommand(pluginPath, options);
     } catch (error) {
       printCliError(error, "Invalid plugin");
       process.exit(1);
     }
   });
+
+type ValidateCommandOptions = {
+  verbose?: boolean;
+};
+
+type ValidationStatus = {
+  hasErrors: boolean;
+  hasWarnings: boolean;
+};
+
+async function runValidateCommand(
+  pluginPath: string,
+  options: ValidateCommandOptions
+): Promise<void> {
+  const manifest = await readManifest(pluginPath);
+  printValidateManifestSummary(manifest);
+
+  const skillStatus = printValidateGroup(
+    "\n🎯 Skills validation",
+    await validatePluginSkills(pluginPath),
+    "skillName",
+    "(unknown)",
+    options
+  );
+  const agentStatus = printValidateGroup(
+    "\n🤖 Agents validation",
+    await validatePluginAgents(pluginPath),
+    "agentName",
+    "(unknown)",
+    options
+  );
+
+  finishValidateCommand(mergeValidationStatus(skillStatus, agentStatus), options);
+}
+
+function printValidateManifestSummary(manifest: PluginManifest): void {
+  console.log(`\n📦 Plugin: ${manifest.name} v${manifest.version}`);
+  console.log(`   Description: ${manifest.description || "(none)"}`);
+  console.log(`   Targets: ${formatManifestTargets(manifest)}`);
+}
+
+function emptyValidationStatus(): ValidationStatus {
+  return { hasErrors: false, hasWarnings: false };
+}
+
+function mergeValidationStatus(
+  left: ValidationStatus,
+  right: ValidationStatus
+): ValidationStatus {
+  return {
+    hasErrors: left.hasErrors || right.hasErrors,
+    hasWarnings: left.hasWarnings || right.hasWarnings,
+  };
+}
+
+function printValidateGroup<NameKey extends "skillName" | "agentName">(
+  label: string,
+  results: Array<PluginValidationResult & Partial<Record<NameKey, string>>>,
+  nameKey: NameKey,
+  fallbackName: string,
+  options: ValidateCommandOptions
+): ValidationStatus {
+  if (results.length === 0) return emptyValidationStatus();
+
+  console.log(`${label}:`);
+  return results
+    .map((result) => printValidateItem(result, nameKey, fallbackName, options))
+    .reduce(mergeValidationStatus, emptyValidationStatus());
+}
+
+function printValidateItem<NameKey extends "skillName" | "agentName">(
+  result: PluginValidationResult & Partial<Record<NameKey, string>>,
+  nameKey: NameKey,
+  fallbackName: string,
+  options: ValidateCommandOptions
+): ValidationStatus {
+  const itemName = result[nameKey] || fallbackName;
+
+  if (result.valid) {
+    console.log(`   ✅ ${itemName}`);
+    return printValidateWarnings(result.warnings, options);
+  }
+
+  console.log(`   ❌ ${itemName}`);
+  for (const error of result.errors) {
+    console.log(`      • ${error}`);
+  }
+  return {
+    hasErrors: true,
+    hasWarnings: result.warnings.length > 0 && !options.verbose,
+  };
+}
+
+function printValidateWarnings(
+  warnings: string[],
+  options: ValidateCommandOptions
+): ValidationStatus {
+  if (options.verbose && warnings.length > 0) {
+    for (const warning of warnings) {
+      console.log(`      ⚠️  ${warning}`);
+    }
+    return { hasErrors: false, hasWarnings: true };
+  }
+
+  return { hasErrors: false, hasWarnings: warnings.length > 0 };
+}
+
+function finishValidateCommand(
+  status: ValidationStatus,
+  options: ValidateCommandOptions
+): void {
+  console.log();
+  if (status.hasErrors) {
+    console.log("❌ Validation failed with errors");
+    process.exit(1);
+  } else if (status.hasWarnings && !options.verbose) {
+    console.log("✅ Plugin is valid (run with --verbose to see warnings)");
+  } else {
+    console.log("✅ Plugin is valid");
+  }
+}
 
 type LoadedPlugin = {
   pluginPath: string;
@@ -409,6 +450,7 @@ type PluginRefreshResult = {
 
 type PluginValidationResult = {
   valid: boolean;
+  warnings: string[];
   skillName?: string;
   agentName?: string;
   errors: string[];

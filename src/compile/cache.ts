@@ -6,8 +6,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import type { ComposedAgent } from "./compose.js";
+import { normalizeRelativePath } from "./paths.js";
 import { parseNamedRef, parseSpaceItemRef, registryForRef } from "./refs.js";
 import type {
   Agent,
@@ -102,11 +103,6 @@ const stableValue = (value: unknown): unknown => {
 };
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
-
-const normalizeRelativePath = (from: string, to: string): string => {
-  const path = relative(from, to).replace(/\\/g, "/");
-  return path.length > 0 ? path : ".";
-};
 
 const compareInputFiles = (left: CacheInputFile, right: CacheInputFile): number => {
   const pluginOrder = left.plugin.localeCompare(right.plugin);

@@ -7,9 +7,10 @@
  * - Content hashes of all resolved source files
  */
 
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import type { PluginRegistry } from "./registry.js";
 import { computeContentHash, computeStableHash } from "./cache.js";
+import { normalizeRelativePath } from "./paths.js";
 import { exists, readFile, writeFile } from "../fs.js";
 
 export interface LockfileSource {
@@ -35,11 +36,6 @@ export interface PrismLock {
 }
 
 const LOCKFILE_NAME = "prism.lock";
-
-const normalizeRelativePath = (from: string, to: string): string => {
-  const path = relative(from, to).replace(/\\/g, "/");
-  return path.length > 0 ? path : ".";
-};
 
 const comparableLockShape = (lock: PrismLock | Omit<PrismLock, "generatedAt">) => ({
   version: lock.version,

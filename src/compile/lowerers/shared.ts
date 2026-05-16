@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   backupFile,
+  exists,
   listDirRecursive,
   readFile,
   removeDir,
@@ -191,4 +192,93 @@ export const executeStandardLowering = async (
   }
 
   return { backups };
+};
+
+export type LowerWriteKind = "write-md" | "write-plugin-file";
+
+export const writeReason = async (
+  target: string,
+  content: string,
+): Promise<"new" | "changed" | "unchanged"> => {
+  if (!(await exists(target))) return "new";
+  return (await readFile(target)) === content ? "unchanged" : "changed";
+};
+
+export const pushWriteOperation = async (
+  operations: LowerOperation[],
+  target: string,
+  content: string,
+  kind: LowerWriteKind = "write-plugin-file",
+): Promise<void> => {
+  operations.push({
+    kind,
+    target,
+    content,
+    reason: await writeReason(target, content),
+  });
+};
+
+export const pushGeneratedPluginWrite = async (options: {
+  readonly operations: LowerOperation[];
+  readonly desiredRelativePaths: Set<string>;
+  readonly relativePath: string;
+  readonly target: string;
+  readonly content: string;
+  readonly kind?: LowerWriteKind;
+}): Promise<void> => {
+  options.desiredRelativePaths.add(options.relativePath);
+  await pushWriteOperation(
+    options.operations,
+    options.target,
+    options.content,
+    options.kind,
+  );
+};
+
+export const createGeneratedPluginWritePusher =
+  <Target>(resolveTarget: (target: Target, relativePath: string) => string) =>
+  async (
+    operations: LowerOperation[],
+    desiredRelativePaths: Set<string>,
+    target: Target,
+    relativePath: string,
+    content: string,
+    kind: LowerWriteKind = "write-plugin-file",
+  ): Promise<void> => {
+    await pushGeneratedPluginWrite({
+      operations,
+      desiredRelativePaths,
+      relativePath,
+      target: resolveTarget(target, relativePath),
+      content,
+      kind,
+    });
+  };
+
+export const planGeneratedPluginHooks = async (options: {
+  readonly operations: LowerOperation[];
+  readonly desiredRelativePaths: Set<string>;
+  readonly hooks: ReadonlyArray<Hook>;
+  readonly hooksJson: string;
+  readonly bundleHookWrapper: (hook: Hook) => Promise<string>;
+  readonly resolveTarget: (relativePath: string) => string;
+}): Promise<void> => {
+  await pushGeneratedPluginWrite({
+    operations: options.operations,
+    desiredRelativePaths: options.desiredRelativePaths,
+    relativePath: "hooks/hooks.json",
+    target: options.resolveTarget("hooks/hooks.json"),
+    content: options.hooksJson,
+  });
+
+  for (const hook of options.hooks) {
+    const relativePath = `hooks/${hook.name}.mjs`;
+    await pushGeneratedPluginWrite({
+      operations: options.operations,
+      desiredRelativePaths: options.desiredRelativePaths,
+      relativePath,
+      target: options.resolveTarget(relativePath),
+      content: await options.bundleHookWrapper(hook),
+    });
+  }
 };

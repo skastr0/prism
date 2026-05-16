@@ -18,19 +18,17 @@ import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { bindingsFromCanonicalTools } from "../tool-bindings.js";
-import {
-  exists,
-  listDirRecursive,
-  readFile,
-} from "../../fs.js";
+import { listDirRecursive, readFile } from "../../fs.js";
 import type { HarnessScope } from "../../types.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import type { LowerOperation } from "./opencode.js";
 import {
   bundleGeneratedHookWrapper,
+  createGeneratedPluginWritePusher,
   executeStandardLowering,
   matcherForResolvedToolHook,
   normalizeBundleSegment,
+  planGeneratedPluginHooks,
   planGeneratedPluginFilePruning,
   renderStandardOrbitSkill,
   yamlScalar,
@@ -56,9 +54,6 @@ export interface LowerInput {
   readonly registry?: PluginRegistry;
   readonly target: GrokLowerTarget;
 }
-
-type Reason = "new" | "changed" | "unchanged";
-type WriteOperationKind = "write-md" | "write-plugin-file";
 
 const generatedPluginId = (target: GrokLowerTarget): string =>
   `${GENERATED_PLUGIN_PREFIX}-${normalizeBundleSegment(target.sourcePluginName)}`;
@@ -341,29 +336,7 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
   });
 };
 
-const writeReason = async (target: string, content: string): Promise<Reason> => {
-  if (!(await exists(target))) return "new";
-  return (await readFile(target)) === content ? "unchanged" : "changed";
-};
-
-const pushWrite = async (
-  operations: LowerOperation[],
-  desiredRelativePaths: Set<string>,
-  target: GrokLowerTarget,
-  relativePath: string,
-  content: string,
-  kind: WriteOperationKind = "write-plugin-file",
-): Promise<void> => {
-  desiredRelativePaths.add(relativePath);
-
-  const absolutePath = generatedPath(target, relativePath);
-  operations.push({
-    kind,
-    target: absolutePath,
-    content,
-    reason: await writeReason(absolutePath, content),
-  });
-};
+const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
 const planMcpServer = async (
   input: LowerInput,
@@ -414,32 +387,6 @@ const planMcpServer = async (
       },
     }),
   );
-};
-
-const planHooks = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  desiredRelativePaths: Set<string>,
-): Promise<void> => {
-  const hooks = input.hooks ?? [];
-
-  await pushWrite(
-    operations,
-    desiredRelativePaths,
-    input.target,
-    "hooks/hooks.json",
-    await renderHooksJson(hooks, input.registry, input.target, mcpBindingsForInput(input)),
-  );
-
-  for (const hook of hooks) {
-    await pushWrite(
-      operations,
-      desiredRelativePaths,
-      input.target,
-      `hooks/${hook.name}.mjs`,
-      await bundleHookWrapper(hook),
-    );
-  }
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
@@ -503,12 +450,26 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   }
 
   await planMcpServer(input, operations, desiredRelativePaths);
-  await planHooks(input, operations, desiredRelativePaths);
+  const resolveTarget = (relativePath: string): string =>
+    generatedPath(input.target, relativePath);
+  await planGeneratedPluginHooks({
+    operations,
+    desiredRelativePaths,
+    hooks: input.hooks ?? [],
+    hooksJson: await renderHooksJson(
+      input.hooks ?? [],
+      input.registry,
+      input.target,
+      mcpBindingsForInput(input),
+    ),
+    bundleHookWrapper,
+    resolveTarget,
+  });
   operations.push(
     ...(await planGeneratedPluginFilePruning({
       root: generatedPluginRoot(input.target),
       desiredRelativePaths,
-      resolveTarget: (relativePath) => generatedPath(input.target, relativePath),
+      resolveTarget,
     })),
   );
 

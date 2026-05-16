@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { builtinModules, createRequire } from "node:module";
-import { join } from "node:path";
+import { extname, join, posix } from "node:path";
 import { effectBundleImportPath } from "./runtime-deps.js";
 
 export const NODE_BUILTIN_EXTERNALS = [
@@ -34,6 +34,30 @@ export const packageNameFromSpecifier = (specifier: string): string => {
   }
 
   return specifier.split("/")[0] ?? specifier;
+};
+
+export const relativeModulePath = (
+  fromFile: string,
+  toFileWithoutExtension: string,
+): string => {
+  const fromDir = posix.dirname(fromFile);
+  let rel = posix.relative(fromDir, toFileWithoutExtension);
+  if (!rel.startsWith(".")) rel = `./${rel}`;
+  return rel;
+};
+
+export const resolveTsImportCandidate = async (
+  absoluteWithoutQuery: string,
+  fileExists: (path: string) => Promise<boolean>,
+): Promise<string | undefined> => {
+  const candidates = extname(absoluteWithoutQuery)
+    ? [absoluteWithoutQuery]
+    : [`${absoluteWithoutQuery}.ts`, join(absoluteWithoutQuery, "index.ts")];
+
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+  return undefined;
 };
 
 export const rewriteBareImportsForBundle = (

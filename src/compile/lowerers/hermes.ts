@@ -22,6 +22,7 @@ import {
   executeStandardLowering,
   normalizeBundleSegment,
   prismOwnerMarker,
+  pushWriteOperation as pushWrite,
   renderGeneratedOrbitSkill,
   yamlScalar,
 } from "./shared.js";
@@ -47,8 +48,6 @@ export interface LowerInput {
   readonly target: HermesLowerTarget;
 }
 
-type Reason = "new" | "changed" | "unchanged";
-
 const generatedServerName = (pluginName: string): string =>
   `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
 
@@ -72,25 +71,6 @@ const configPath = (target: HermesLowerTarget): string =>
 
 const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
   prismOwnerMarker("hermes-orbit-skill", sourcePluginName);
-
-const writeReason = async (target: string, content: string): Promise<Reason> => {
-  if (!(await exists(target))) return "new";
-  return (await readFile(target)) === content ? "unchanged" : "changed";
-};
-
-const pushWrite = async (
-  operations: LowerOperation[],
-  target: string,
-  content: string,
-  kind: "write-md" | "write-plugin-file" = "write-plugin-file",
-): Promise<void> => {
-  operations.push({
-    kind,
-    target,
-    content,
-    reason: await writeReason(target, content),
-  });
-};
 
 const targetIncludesHermes = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);

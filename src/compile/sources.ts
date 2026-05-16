@@ -492,29 +492,28 @@ const normalizeNamedRefParts = (
   return value.plugin ? `${value.plugin}:${value.name}` : value.name;
 };
 
-export const normalizeTraitRefInput = (
+const normalizeDirectNamedRefInput = (
   field: string,
-  value: TraitRefInput,
+  value: string | typeof NamedRefObjectSchema.Type,
 ): string | RefNormalizationError =>
   typeof value === "string"
     ? normalizeNamedRefParts(field, value)
     : normalizeNamedRefParts(field, { plugin: value.plugin, name: value.name });
+
+export const normalizeTraitRefInput = (
+  field: string,
+  value: TraitRefInput,
+): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
 
 export const normalizeAgentRefInput = (
   field: string,
   value: AgentRefInput,
-): string | RefNormalizationError =>
-  typeof value === "string"
-    ? normalizeNamedRefParts(field, value)
-    : normalizeNamedRefParts(field, { plugin: value.plugin, name: value.name });
+): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
 
 export const normalizeOrbitRefInput = (
   field: string,
   value: OrbitRefInput,
-): string | RefNormalizationError =>
-  typeof value === "string"
-    ? normalizeNamedRefParts(field, value)
-    : normalizeNamedRefParts(field, { plugin: value.plugin, name: value.name });
+): string | RefNormalizationError => normalizeDirectNamedRefInput(field, value);
 
 export const normalizeToolRefInput = (
   field: string,

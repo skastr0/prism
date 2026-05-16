@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, posix, relative, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { Contract } from "./sources.js";
@@ -9,8 +9,10 @@ import type { ResolvedContractBinding } from "./resolve.js";
 import {
   collectRelativeImportSpecifiers,
   NODE_BUILTIN_EXTERNALS,
+  relativeModulePath,
   rewriteBareEffectImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
+  resolveTsImportCandidate,
 } from "./bundle-utils.js";
 import { effectBundleImportPath } from "./runtime-deps.js";
 import {
@@ -103,19 +105,6 @@ const fileExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const resolveTsImportCandidate = async (
-  absoluteWithoutQuery: string,
-): Promise<string | undefined> => {
-  const candidates = extname(absoluteWithoutQuery)
-    ? [absoluteWithoutQuery]
-    : [`${absoluteWithoutQuery}.ts`, join(absoluteWithoutQuery, "index.ts")];
-
-  for (const candidate of candidates) {
-    if (await fileExists(candidate)) return candidate;
-  }
-  return undefined;
-};
-
 const resolveMirrorImport = async (options: {
   readonly pluginRoot: string;
   readonly file: MirrorFile;
@@ -124,7 +113,7 @@ const resolveMirrorImport = async (options: {
   const basePath = options.file.sourcePath
     ? dirname(options.file.sourcePath)
     : dirname(join(options.pluginRoot, options.file.relativePath));
-  const resolved = await resolveTsImportCandidate(resolve(basePath, options.specifier));
+  const resolved = await resolveTsImportCandidate(resolve(basePath, options.specifier), fileExists);
   if (!resolved || !sourceIsInside(resolved, options.pluginRoot)) return undefined;
 
   return {
@@ -227,7 +216,7 @@ const collectMirrorsForBindings = async (
         : dirname(join(state.pluginRoot, file.relativePath));
 
       for (const specifier of collectRelativeImportSpecifiers(source)) {
-        const resolved = await resolveTsImportCandidate(resolve(basePath, specifier));
+        const resolved = await resolveTsImportCandidate(resolve(basePath, specifier), fileExists);
         if (!resolved) continue;
         const owner = findSourcePlugin(resolved, pluginRoots);
         if (!owner || owner.pluginName === pluginName) continue;
@@ -327,13 +316,6 @@ const resolveImportedSourcePath = (sourcePath: string, source: string): string =
   const absolute = resolve(dirname(sourcePath), source);
   if (extname(absolute)) return absolute;
   return `${absolute}.ts`;
-};
-
-const relativeModulePath = (fromFile: string, toFileWithoutExtension: string): string => {
-  const fromDir = posix.dirname(fromFile);
-  let rel = posix.relative(fromDir, toFileWithoutExtension);
-  if (!rel.startsWith(".")) rel = `./${rel}`;
-  return rel;
 };
 
 const rewriteCrossPluginRelativeImports = (options: {

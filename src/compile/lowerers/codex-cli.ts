@@ -28,6 +28,7 @@ import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
   normalizeBundleSegment,
+  pushWriteOperation as pushWrite,
   regexEscape,
   renderStandardOrbitSkill,
 } from "./shared.js";
@@ -52,9 +53,6 @@ export interface LowerInput {
   readonly registry?: PluginRegistry;
   readonly target: CodexCliLowerTarget;
 }
-
-type Reason = "new" | "changed" | "unchanged";
-type WriteOperationKind = "write-md" | "write-plugin-file";
 
 interface PlannedHook {
   readonly hook: Hook;
@@ -107,25 +105,6 @@ const artifactTargetsCodex = (
   registry: PluginRegistry | undefined,
   artifact: PluginArtifactType,
 ): boolean => manifestTargetsCodex(registry?.targets[artifact]);
-
-const writeReason = async (target: string, content: string): Promise<Reason> => {
-  if (!(await exists(target))) return "new";
-  return (await readFile(target)) === content ? "unchanged" : "changed";
-};
-
-const pushWrite = async (
-  operations: LowerOperation[],
-  target: string,
-  content: string,
-  kind: WriteOperationKind = "write-plugin-file",
-): Promise<void> => {
-  operations.push({
-    kind,
-    target,
-    content,
-    reason: await writeReason(target, content),
-  });
-};
 
 const renderTomlScalar = (key: string, value: unknown): string | undefined => {
   if (typeof value === "string") return `${key} = ${quote(value)}`;

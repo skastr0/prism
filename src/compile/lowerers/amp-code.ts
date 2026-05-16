@@ -25,6 +25,7 @@ import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
   prismOwnerMarker,
+  pushWriteOperation as pushWrite,
   renderGeneratedOrbitSkill,
   normalizeBundleSegment,
   serializeSimpleFrontmatter as serializeFrontmatter,
@@ -50,8 +51,6 @@ export interface LowerInput {
   readonly registry?: PluginRegistry;
   readonly target: AmpCodeLowerTarget;
 }
-
-type Reason = "new" | "changed" | "unchanged";
 
 const generatedPluginId = (pluginName: string): string =>
   `${GENERATED_PLUGIN_PREFIX}-${normalizeBundleSegment(pluginName)}`;
@@ -84,25 +83,6 @@ const agentSkillOwnerMarker = (sourcePluginName: string): string =>
 
 const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
   prismOwnerMarker("amp-orbit-skill", sourcePluginName);
-
-const writeReason = async (target: string, content: string): Promise<Reason> => {
-  if (!(await exists(target))) return "new";
-  return (await readFile(target)) === content ? "unchanged" : "changed";
-};
-
-const pushWrite = async (
-  operations: LowerOperation[],
-  target: string,
-  content: string,
-  kind: "write-md" | "write-plugin-file" = "write-plugin-file",
-): Promise<void> => {
-  operations.push({
-    kind,
-    target,
-    content,
-    reason: await writeReason(target, content),
-  });
-};
 
 const targetIncludesAmp = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);

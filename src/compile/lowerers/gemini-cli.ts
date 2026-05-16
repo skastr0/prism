@@ -34,6 +34,7 @@ import {
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  pushWriteOperation as pushWrite,
   regexEscape,
   renderStandardOrbitSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
@@ -58,8 +59,6 @@ export interface LowerInput {
   readonly registry?: PluginRegistry;
   readonly target: GeminiCliLowerTarget;
 }
-
-type Reason = "new" | "changed" | "unchanged";
 
 const normalizeBundleSegment = (value: string, fallback = "plugin"): string => {
   const normalized = value
@@ -89,25 +88,6 @@ const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractB
   ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
   ...input.agents.flatMap((agent) => agent.toolBindings),
 ];
-
-const writeReason = async (target: string, content: string): Promise<Reason> => {
-  if (!(await exists(target))) return "new";
-  return (await readFile(target)) === content ? "unchanged" : "changed";
-};
-
-const pushWrite = async (
-  operations: LowerOperation[],
-  target: string,
-  content: string,
-  kind: "write-md" | "write-plugin-file" = "write-plugin-file",
-): Promise<void> => {
-  operations.push({
-    kind,
-    target,
-    content,
-    reason: await writeReason(target, content),
-  });
-};
 
 const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLowerTarget): Record<string, unknown> => {
   const frontmatter: Record<string, unknown> = {

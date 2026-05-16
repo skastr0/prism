@@ -12,6 +12,12 @@ import {
   rewriteBarePluginDependencyImportsForBundle,
 } from "./bundle-utils.js";
 import { effectBundleImportPath } from "./runtime-deps.js";
+import {
+  generatedToolNamespace,
+  normalizeGeneratedPluginName,
+  sanitizeGeneratedToolSegment,
+  sourceIsInside,
+} from "./generated-plugin.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,33 +86,11 @@ const SOURCE_IMPORT_PATTERN =
 
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
-const normalizeGeneratedPluginName = (pluginName: string): string => {
-  const normalized = pluginName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "");
-
-  return normalized.length > 0 ? normalized : "plugin";
-};
-
-const sanitizeToolSegment = (value: string, fallback: string): string => {
-  const normalized = value
-    .trim()
-    .replace(/[^a-zA-Z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-
-  return normalized.length > 0 ? normalized : fallback;
-};
-
-const toolNamespace = (pluginName: string): string =>
-  sanitizeToolSegment(normalizeGeneratedPluginName(pluginName), "plugin");
-
 const ownerToolName = (toolPluginName: string, toolName: string): string =>
-  `${toolNamespace(toolPluginName)}_${sanitizeToolSegment(toolName, "tool")}`;
+  `${generatedToolNamespace(toolPluginName)}_${sanitizeGeneratedToolSegment(toolName, "tool")}`;
 
 const syntheticToolName = (sourcePluginName: string, contractName: string): string =>
-  `${toolNamespace(sourcePluginName)}_${sanitizeToolSegment(contractName, "tool")}`;
+  `${generatedToolNamespace(sourcePluginName)}_${sanitizeGeneratedToolSegment(contractName, "tool")}`;
 
 export const mcpToolNameForBinding = (
   sourcePluginName: string,
@@ -124,7 +108,7 @@ export const mcpToolNameForBinding = (
 export const ampPluginToolNameForBinding = mcpToolNameForBinding;
 
 export const mcpServerArtifactRelativePath = (bundleId: string): string =>
-  `mcp/${sanitizeToolSegment(bundleId, "tools")}/server.mjs`;
+  `mcp/${sanitizeGeneratedToolSegment(bundleId, "tools")}/server.mjs`;
 
 const fileExists = async (path: string): Promise<boolean> => {
   try {
@@ -146,11 +130,6 @@ const resolveTsImportCandidate = async (
     if (await fileExists(candidate)) return candidate;
   }
   return undefined;
-};
-
-const sourceIsInside = (sourcePath: string, root: string): boolean => {
-  const rel = relative(root, sourcePath);
-  return rel.length === 0 || (!rel.startsWith("..") && !rel.startsWith("/"));
 };
 
 const collectRelativeImportSpecifiers = (source: string): string[] => {

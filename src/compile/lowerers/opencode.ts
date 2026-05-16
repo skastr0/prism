@@ -48,6 +48,12 @@ import {
   rewriteBareImportsForBundle,
   rewriteBarePluginDependencyImportsForBundle,
 } from "../bundle-utils.js";
+import {
+  generatedToolNamespace,
+  normalizeGeneratedPluginName,
+  sanitizeGeneratedToolSegment,
+  sourceIsInside,
+} from "../generated-plugin.js";
 import { opencodePluginBundleImportPath } from "../runtime-deps.js";
 import {
   backupFile,
@@ -97,42 +103,14 @@ const orbitSkillRelativePath = (name: string): string =>
 const opencodeJsonPath = (target: OpenCodeLowerTarget): string =>
   join(target.root, "opencode.json");
 
-const normalizeGeneratedPluginSourcePluginName = (pluginName: string): string => {
-  const normalized = pluginName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "");
-
-  return normalized.length > 0 ? normalized : "plugin";
-};
-
-const sanitizeSyntheticToolSegment = (
-  value: string,
-  fallback: string
-): string => {
-  const normalized = value
-    .trim()
-    .replace(/[^a-zA-Z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-
-  return normalized.length > 0 ? normalized : fallback;
-};
-
-const syntheticToolNamespace = (sourcePluginName: string): string =>
-  sanitizeSyntheticToolSegment(
-    normalizeGeneratedPluginSourcePluginName(sourcePluginName),
-    "plugin"
-  );
-
 const syntheticToolName = (
   sourcePluginName: string,
   contractName: string,
 ): string =>
-  `${syntheticToolNamespace(sourcePluginName)}_${sanitizeSyntheticToolSegment(contractName, "tool")}`;
+  `${generatedToolNamespace(sourcePluginName)}_${sanitizeGeneratedToolSegment(contractName, "tool")}`;
 
 const ownerToolName = (toolPluginName: string, toolName: string): string =>
-  `${syntheticToolNamespace(toolPluginName)}_${sanitizeSyntheticToolSegment(toolName, "tool")}`;
+  `${generatedToolNamespace(toolPluginName)}_${sanitizeGeneratedToolSegment(toolName, "tool")}`;
 
 const runtimeToolName = (
   sourcePluginName: string,
@@ -148,7 +126,7 @@ const runtimeToolName = (
 };
 
 const generatedPluginIdForName = (pluginName: string): string =>
-  `${GENERATED_PLUGIN_PREFIX}-${normalizeGeneratedPluginSourcePluginName(pluginName)}`;
+  `${GENERATED_PLUGIN_PREFIX}-${normalizeGeneratedPluginName(pluginName)}`;
 
 const generatedPluginId = (target: OpenCodeLowerTarget): string =>
   generatedPluginIdForName(target.sourcePluginName);
@@ -206,7 +184,7 @@ const isStaleGeneratedPluginEntry = (
 };
 
 const generatedToolDenyPatternForName = (pluginName: string): string =>
-  `${syntheticToolNamespace(pluginName)}_*`;
+  `${generatedToolNamespace(pluginName)}_*`;
 
 const rewriteGeneratedOpenCodeRuntimeImportsForBundle = (source: string): string =>
   rewriteBareImportsForBundle(
@@ -759,7 +737,7 @@ const resolveMirrorImport = async (options: {
     ? dirname(options.file.sourcePath)
     : dirname(join(options.pluginRoot, options.file.relativePath));
   const resolved = await resolveTsImportCandidate(resolve(basePath, options.specifier));
-  if (!resolved || !sourceIsInsidePlugin(resolved, options.pluginRoot)) {
+  if (!resolved || !sourceIsInside(resolved, options.pluginRoot)) {
     return undefined;
   }
 
@@ -1006,11 +984,6 @@ const normalizeMirroredPluginSource = async (
     .replace(/\bschemaSlot\s*\(/g, "(");
 };
 
-const sourceIsInsidePlugin = (sourcePath: string, pluginRoot: string): boolean => {
-  const rel = relative(pluginRoot, sourcePath);
-  return rel.length === 0 || (!rel.startsWith("..") && !rel.startsWith("/"));
-};
-
 const resolveImportedSourcePath = (
   sourcePath: string,
   source: string,
@@ -1025,7 +998,7 @@ const findSourcePlugin = (
   pluginRoots: ReadonlyMap<string, string>,
 ): { pluginName: string; pluginRoot: string } | undefined => {
   const matches = [...pluginRoots.entries()]
-    .filter(([, pluginRoot]) => sourceIsInsidePlugin(sourcePath, pluginRoot))
+    .filter(([, pluginRoot]) => sourceIsInside(sourcePath, pluginRoot))
     .sort((left, right) => right[1].length - left[1].length);
   const first = matches[0];
   if (!first) return undefined;

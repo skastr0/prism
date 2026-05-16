@@ -9,6 +9,7 @@ import {
 } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { parseNamedRef, registryForRef } from "./refs.js";
+import { normalizeGeneratedPluginName, sourceIsInside } from "./generated-plugin.js";
 
 export interface ProtocolSurfaceError {
   readonly field: string;
@@ -68,16 +69,6 @@ const resolveToolRef = (
   return { tool, pluginName: owner.pluginName, registry: owner };
 };
 
-const normalizeGeneratedPluginName = (pluginName: string): string => {
-  const normalized = pluginName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "");
-
-  return normalized.length > 0 ? normalized : "plugin";
-};
-
 const externalGeneratedPluginModulePath = (
   pluginName: string,
   modulePath: string,
@@ -103,11 +94,6 @@ const toolImportPath = (
     toolPluginName,
     `tools/${toolName}.tool`,
   );
-
-const sourceIsInside = (sourcePath: string, pluginPath: string): boolean => {
-  const rel = relative(pluginPath, sourcePath);
-  return rel.length === 0 || (!rel.startsWith("..") && !rel.startsWith("/"));
-};
 
 const registries = function* (registry: PluginRegistry): Generator<PluginRegistry> {
   yield registry;

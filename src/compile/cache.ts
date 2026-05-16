@@ -86,6 +86,32 @@ interface CacheMissingSource {
 
 type CacheSourceDescriptor = CacheResolvedSource | CacheMissingSource;
 
+type CacheTraitDescriptor = {
+  readonly ref: string;
+  readonly binding: Agent["traits"][number];
+  readonly source: CacheSourceDescriptor;
+  readonly trait: Trait | undefined;
+  readonly tools: ReadonlyArray<CacheSourceDescriptor>;
+};
+
+type CacheModelPeer = {
+  readonly name: string;
+  readonly sourcePath: string;
+};
+
+type AgentCacheReferences = {
+  readonly identity: CacheSourceDescriptor;
+  readonly personality: CacheSourceDescriptor | undefined;
+  readonly model: CacheSourceDescriptor | undefined;
+  readonly modelPeers: ReadonlyArray<CacheModelPeer>;
+  readonly traits: ReadonlyArray<CacheTraitDescriptor>;
+  readonly access: ReturnType<typeof collectAccessRefs>;
+  readonly skillRefs: ReadonlyArray<string>;
+  readonly toolspaces: ReadonlyArray<CacheSourceDescriptor>;
+  readonly skillspaces: ReadonlyArray<CacheSourceDescriptor>;
+  readonly managedSkills: ReadonlyArray<CacheSourceDescriptor>;
+};
+
 const stableValue = (value: unknown): unknown => {
   if (value instanceof Array) {
     return value.map((item) => stableValue(item));
@@ -185,15 +211,7 @@ const resolveSpaceDescriptor = async <T extends SourceLike>(
 const collectTraitDescriptors = async (
   agent: Agent,
   registry: PluginRegistry,
-): Promise<
-  ReadonlyArray<{
-    ref: string;
-    binding: Agent["traits"][number];
-    source: CacheSourceDescriptor;
-    trait: Trait | undefined;
-    tools: ReadonlyArray<CacheSourceDescriptor>;
-  }>
-> =>
+): Promise<ReadonlyArray<CacheTraitDescriptor>> =>
   Promise.all(
     agent.traits.map(async (binding) => {
       const source = await resolveSourceDescriptor(binding.ref, registry, (owner) => owner.traits);
@@ -293,23 +311,11 @@ export const computeStableHash = (value: unknown): string =>
 export const computeContextHash = (options: CacheContext): string =>
   computeStableHash(getContextShape(options));
 
-export const computeAgentCacheDescriptor = async (
+const collectModelPeers = (
   agent: Agent,
   registry: PluginRegistry,
-  options: CacheContext,
-): Promise<AgentCacheDescriptor> => {
-  const agentInput = await readHashedSource(agent, registry);
-  const inputs = new Map<string, CacheInputFile>();
-  inputs.set(`${agentInput.plugin}:${agentInput.path}`, agentInput);
-
-  const identity = await resolveSourceDescriptor(agent.identity, registry, (owner) => owner.identities);
-  const personality = agent.personality
-    ? await resolveSourceDescriptor(agent.personality, registry, (owner) => owner.personalities)
-    : undefined;
-  const model = agent.model
-    ? await resolveSpaceDescriptor(agent.model, registry, "/", (owner) => owner.modelspaces)
-    : undefined;
-  const modelPeers = agent.model
+): ReadonlyArray<CacheModelPeer> =>
+  agent.model
     ? [...registry.agents.values()]
         .filter((candidate) => candidate.model === agent.model)
         .map((candidate) => ({
@@ -320,11 +326,12 @@ export const computeAgentCacheDescriptor = async (
           `${left.name}:${left.sourcePath}`.localeCompare(`${right.name}:${right.sourcePath}`),
         )
     : [];
-  const traits = await collectTraitDescriptors(agent, registry);
-  const access = collectAccessRefs(agent, traits);
-  const skillRefs = collectSkillRefs(agent, traits);
 
-  const toolspaces = await Promise.all([
+const resolveToolspaceDescriptors = async (
+  access: ReturnType<typeof collectAccessRefs>,
+  registry: PluginRegistry,
+): Promise<ReadonlyArray<CacheSourceDescriptor>> =>
+  Promise.all([
     ...access.tools.map((toolRef) =>
       resolveSpaceDescriptor(toolRef, registry, "/", (owner) => owner.toolspaces),
     ),
@@ -332,14 +339,24 @@ export const computeAgentCacheDescriptor = async (
       resolveSpaceDescriptor(toolGroupRef, registry, "#", (owner) => owner.toolspaces),
     ),
   ]);
-  const skillspaces = await Promise.all(
+
+const resolveSkillspaceDescriptors = async (
+  skillRefs: ReadonlyArray<string>,
+  registry: PluginRegistry,
+): Promise<ReadonlyArray<CacheSourceDescriptor>> =>
+  Promise.all(
     skillRefs
       .filter((skillRef) => parseSpaceItemRef(skillRef, "/"))
       .map((skillRef) =>
         resolveSpaceDescriptor(skillRef, registry, "/", (owner) => owner.skillspaces),
       ),
   );
-  const managedSkills = await Promise.all(
+
+const resolveManagedSkillDescriptors = async (
+  skillRefs: ReadonlyArray<string>,
+  registry: PluginRegistry,
+): Promise<ReadonlyArray<CacheSourceDescriptor>> =>
+  Promise.all(
     skillRefs
       .filter((skillRef) => !parseSpaceItemRef(skillRef, "/"))
       .map((skillRef) =>
@@ -347,47 +364,113 @@ export const computeAgentCacheDescriptor = async (
       ),
   );
 
-  for (const descriptor of [
+const resolveAgentCacheReferences = async (
+  agent: Agent,
+  registry: PluginRegistry,
+): Promise<AgentCacheReferences> => {
+  const identity = await resolveSourceDescriptor(agent.identity, registry, (owner) => owner.identities);
+  const personality = agent.personality
+    ? await resolveSourceDescriptor(agent.personality, registry, (owner) => owner.personalities)
+    : undefined;
+  const model = agent.model
+    ? await resolveSpaceDescriptor(agent.model, registry, "/", (owner) => owner.modelspaces)
+    : undefined;
+  const modelPeers = collectModelPeers(agent, registry);
+  const traits = await collectTraitDescriptors(agent, registry);
+  const access = collectAccessRefs(agent, traits);
+  const skillRefs = collectSkillRefs(agent, traits);
+
+  return {
     identity,
     personality,
     model,
-    ...traits.map((item) => item.source),
-    ...traits.flatMap((item) => item.tools),
-    ...toolspaces,
-    ...skillspaces,
-    ...managedSkills,
-  ]) {
-    if (!descriptor || "missing" in descriptor) continue;
-    inputs.set(`${descriptor.plugin}:${descriptor.path}`, {
-      plugin: descriptor.plugin,
-      path: descriptor.path,
-      contentHash: descriptor.contentHash,
-    });
+    modelPeers,
+    traits,
+    access,
+    skillRefs,
+    toolspaces: await resolveToolspaceDescriptors(access, registry),
+    skillspaces: await resolveSkillspaceDescriptors(skillRefs, registry),
+    managedSkills: await resolveManagedSkillDescriptors(skillRefs, registry),
+  };
+};
+
+const addInputForDescriptor = (
+  inputs: Map<string, CacheInputFile>,
+  descriptor: CacheSourceDescriptor | undefined,
+): void => {
+  if (!descriptor || "missing" in descriptor) return;
+  inputs.set(`${descriptor.plugin}:${descriptor.path}`, {
+    plugin: descriptor.plugin,
+    path: descriptor.path,
+    contentHash: descriptor.contentHash,
+  });
+};
+
+const collectReferenceDescriptors = (
+  references: AgentCacheReferences,
+): ReadonlyArray<CacheSourceDescriptor | undefined> => [
+  references.identity,
+  references.personality,
+  references.model,
+  ...references.traits.map((item) => item.source),
+  ...references.traits.flatMap((item) => item.tools),
+  ...references.toolspaces,
+  ...references.skillspaces,
+  ...references.managedSkills,
+];
+
+const collectAgentCacheInputs = (
+  agentInput: CacheInputFile,
+  references: AgentCacheReferences,
+): ReadonlyArray<CacheInputFile> => {
+  const inputs = new Map<string, CacheInputFile>();
+  inputs.set(`${agentInput.plugin}:${agentInput.path}`, agentInput);
+
+  for (const descriptor of collectReferenceDescriptors(references)) {
+    addInputForDescriptor(inputs, descriptor);
   }
 
-  const sourceFingerprint = {
-    agent: agentInput,
-    references: {
-      identity,
-      personality,
-      model,
-      modelPeers,
-      traits: traits.map(({ ref, binding, source, tools }) => ({ ref, binding, source, tools })),
-      access,
-      toolspaces,
-      skillspaces,
-      managedSkills,
-    },
-  };
+  return [...inputs.values()].sort(compareInputFiles);
+};
 
-  const sourceHash = computeStableHash(sourceFingerprint);
+const agentSourceFingerprint = (
+  agentInput: CacheInputFile,
+  references: AgentCacheReferences,
+): unknown => ({
+  agent: agentInput,
+  references: {
+    identity: references.identity,
+    personality: references.personality,
+    model: references.model,
+    modelPeers: references.modelPeers,
+    traits: references.traits.map(({ ref, binding, source, tools }) => ({
+      ref,
+      binding,
+      source,
+      tools,
+    })),
+    access: references.access,
+    toolspaces: references.toolspaces,
+    skillspaces: references.skillspaces,
+    managedSkills: references.managedSkills,
+  },
+});
+
+export const computeAgentCacheDescriptor = async (
+  agent: Agent,
+  registry: PluginRegistry,
+  options: CacheContext,
+): Promise<AgentCacheDescriptor> => {
+  const agentInput = await readHashedSource(agent, registry);
+  const references = await resolveAgentCacheReferences(agent, registry);
+  const sourceHash = computeStableHash(agentSourceFingerprint(agentInput, references));
   const contextHash = computeContextHash(options);
 
   return {
     key: computeCacheKey(sourceHash, options),
     sourceHash,
     contextHash,
-    inputs: [...inputs.values()].sort(compareInputFiles),
+    inputs: collectAgentCacheInputs(agentInput, references),
   };
 };
 

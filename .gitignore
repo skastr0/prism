@@ -9,5 +9,6 @@ dist/
 .firecrawl-cli/
 
 .pulsar/cache/
+.pulsar/time-series/
 .pulsar/score-*.json
 .pulsar/*.draft.json

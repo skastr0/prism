@@ -1,18 +1,8 @@
 import { Effect } from "effect";
 import type { Hook, NormalizedHookToolMatcher } from "./sources.js";
-import { SourceParseError, UnknownDependencyError, type CompileError } from "./errors.js";
+import { SourceParseError, type CompileError } from "./errors.js";
 import type { PluginRegistry } from "./registry.js";
-
-interface ParsedNamedRef {
-  readonly pluginPrefix: string | undefined;
-  readonly name: string;
-}
-
-interface ParsedSpaceItemRef {
-  readonly pluginPrefix: string | undefined;
-  readonly space: string;
-  readonly name: string;
-}
+import { parseSpaceItemRef, resolveRefToRegistry } from "./refs.js";
 
 export type ResolvedHookToolMatcher =
   | { readonly kind: "any" }
@@ -22,50 +12,6 @@ export type ResolvedHookToolMatcher =
 export interface ResolvedHookMatch {
   readonly tool?: ResolvedHookToolMatcher;
 }
-
-const parseNamedRef = (ref: string): ParsedNamedRef => {
-  const colon = ref.indexOf(":");
-  if (colon === -1) return { pluginPrefix: undefined, name: ref };
-  return {
-    pluginPrefix: ref.slice(0, colon),
-    name: ref.slice(colon + 1),
-  };
-};
-
-const parseSpaceItemRef = (
-  ref: string,
-  separator: "/" | "#",
-): ParsedSpaceItemRef | undefined => {
-  const parsed = parseNamedRef(ref);
-  const split = parsed.name.indexOf(separator);
-  if (split === -1) return undefined;
-  const space = parsed.name.slice(0, split);
-  const name = parsed.name.slice(split + 1);
-  if (!space || !name) return undefined;
-  return { pluginPrefix: parsed.pluginPrefix, space, name };
-};
-
-const resolveRefToRegistry = (
-  ref: string,
-  registry: PluginRegistry,
-  sourcePath: string,
-): Effect.Effect<PluginRegistry, CompileError> =>
-  Effect.gen(function* () {
-    const parsed = parseNamedRef(ref);
-    if (!parsed.pluginPrefix) return registry;
-    const dep = registry.deps.get(parsed.pluginPrefix);
-    if (!dep) {
-      return yield* Effect.fail(
-        new UnknownDependencyError({
-          sourcePath,
-          referenceName: ref,
-          depPrefix: parsed.pluginPrefix,
-          declaredDeps: [...registry.deps.keys()],
-        }),
-      );
-    }
-    return dep;
-  });
 
 const hookParseError = (
   hook: Hook,

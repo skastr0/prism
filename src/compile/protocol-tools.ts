@@ -8,6 +8,7 @@ import {
   type Trait,
 } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
+import { parseNamedRef, registryForRef } from "./refs.js";
 
 export interface ProtocolSurfaceError {
   readonly field: string;
@@ -55,18 +56,12 @@ const semanticNameSegment = (value: string, fallback: string): string => {
   return normalized.length > 0 ? normalized : fallback;
 };
 
-const parseNamedRef = (ref: string): { pluginPrefix: string | undefined; name: string } => {
-  const colon = ref.indexOf(":");
-  if (colon === -1) return { pluginPrefix: undefined, name: ref };
-  return { pluginPrefix: ref.slice(0, colon), name: ref.slice(colon + 1) };
-};
-
 const resolveToolRef = (
   ref: string,
   registry: PluginRegistry,
 ): { tool: CanonicalTool; pluginName: string; registry: PluginRegistry } | undefined => {
   const parsed = parseNamedRef(ref);
-  const owner = parsed.pluginPrefix ? registry.deps.get(parsed.pluginPrefix) : registry;
+  const owner = registryForRef(ref, registry);
   if (!owner) return undefined;
   const tool = owner.tools.get(parsed.name);
   if (!tool) return undefined;

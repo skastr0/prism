@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import { join, relative } from "node:path";
 import type { ComposedAgent } from "./compose.js";
+import { parseNamedRef, parseSpaceItemRef, registryForRef } from "./refs.js";
 import type {
   Agent,
   CanonicalTool,
@@ -70,17 +71,6 @@ export interface CacheEntry {
   readonly timestamp: string;
 }
 
-interface ParsedNamedRef {
-  readonly pluginPrefix: string | undefined;
-  readonly name: string;
-}
-
-interface ParsedSpaceItemRef {
-  readonly pluginPrefix: string | undefined;
-  readonly space: string;
-  readonly name: string;
-}
-
 interface CacheResolvedSource {
   readonly ref: string;
   readonly plugin: string;
@@ -113,31 +103,6 @@ const stableValue = (value: unknown): unknown => {
 
 const stableStringify = (value: unknown): string => JSON.stringify(stableValue(value));
 
-const parseNamedRef = (ref: string): ParsedNamedRef => {
-  const colon = ref.indexOf(":");
-  if (colon === -1) {
-    return { pluginPrefix: undefined, name: ref };
-  }
-
-  return {
-    pluginPrefix: ref.slice(0, colon),
-    name: ref.slice(colon + 1),
-  };
-};
-
-const parseSpaceItemRef = (
-  ref: string,
-  separator: "/" | "#",
-): ParsedSpaceItemRef | undefined => {
-  const parsed = parseNamedRef(ref);
-  const split = parsed.name.indexOf(separator);
-  if (split === -1) return undefined;
-  const space = parsed.name.slice(0, split);
-  const name = parsed.name.slice(split + 1);
-  if (space.length === 0 || name.length === 0) return undefined;
-  return { pluginPrefix: parsed.pluginPrefix, space, name };
-};
-
 const normalizeRelativePath = (from: string, to: string): string => {
   const path = relative(from, to).replace(/\\/g, "/");
   return path.length > 0 ? path : ".";
@@ -156,15 +121,6 @@ const getContextShape = (options: CacheContext) => ({
   scope: options.scope,
 });
 
-const resolveRegistryForRef = (
-  ref: string,
-  registry: PluginRegistry,
-): PluginRegistry | undefined => {
-  const parsed = parseNamedRef(ref);
-  if (!parsed.pluginPrefix) return registry;
-  return registry.deps.get(parsed.pluginPrefix);
-};
-
 const readHashedSource = async (
   source: SourceLike,
   owner: PluginRegistry,
@@ -182,7 +138,7 @@ const resolveSourceDescriptor = async <T extends SourceLike>(
   registry: PluginRegistry,
   select: (owner: PluginRegistry) => Map<string, T>,
 ): Promise<CacheSourceDescriptor> => {
-  const owner = resolveRegistryForRef(ref, registry);
+  const owner = registryForRef(ref, registry);
   if (!owner) {
     return { ref, missing: true };
   }
@@ -246,7 +202,7 @@ const collectTraitDescriptors = async (
   Promise.all(
     agent.traits.map(async (binding) => {
       const source = await resolveSourceDescriptor(binding.ref, registry, (owner) => owner.traits);
-      const owner = resolveRegistryForRef(binding.ref, registry);
+      const owner = registryForRef(binding.ref, registry);
       const trait = owner?.traits.get(parseNamedRef(binding.ref).name);
       const toolDescriptors: CacheSourceDescriptor[] = [];
       if (trait) {

@@ -22,15 +22,12 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
-  backupFile,
   exists,
   readFile,
-  removeDir,
-  removeFile,
-  writeFile,
 } from "../../fs.js";
 import type { HarnessScope, PluginArtifactType, PluginTargetId } from "../../types.js";
 import type { LowerOperation } from "./opencode.js";
+import { executeStandardLowering, normalizeBundleSegment } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
 const GENERATED_SERVER_PREFIX = "prism-generated";
@@ -73,16 +70,6 @@ const quote = (value: string): string => JSON.stringify(value);
 
 const tomlArray = (values: ReadonlyArray<string>): string =>
   `[${values.map((value) => quote(value)).join(", ")}]`;
-
-const normalizeBundleSegment = (value: string, fallback = "plugin"): string => {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "");
-
-  return normalized.length > 0 ? normalized : fallback;
-};
 
 const generatedServerName = (pluginName: string): string =>
   `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
@@ -707,30 +694,4 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   return operations;
 };
 
-export const executeLowering = async (
-  operations: LowerOperation[],
-  options: { backup: boolean; dryRun: boolean },
-): Promise<{ backups: string[] }> => {
-  const backups: string[] = [];
-  if (options.dryRun) return { backups };
-
-  for (const operation of operations) {
-    if (operation.reason === "unchanged") continue;
-
-    if (operation.kind === "write-md" || operation.kind === "write-plugin-file") {
-      if (options.backup && operation.kind === "write-md") {
-        const backup = await backupFile(operation.target);
-        if (backup) backups.push(backup);
-      }
-      await writeFile(operation.target, operation.content);
-      continue;
-    }
-
-    if (operation.kind === "prune-plugin-path") {
-      if (operation.targetType === "dir") await removeDir(operation.target);
-      else await removeFile(operation.target);
-    }
-  }
-
-  return { backups };
-};
+export const executeLowering = executeStandardLowering;

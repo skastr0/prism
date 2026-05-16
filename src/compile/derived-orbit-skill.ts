@@ -13,6 +13,7 @@
  */
 
 import { composeOrbitPhaseReference } from "./compose.js";
+import { parseNamedRef, registryForRef } from "./refs.js";
 import type {
   Agent,
   CanonicalTool,
@@ -23,20 +24,6 @@ import type {
   Trait,
 } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
-
-interface ParsedRef {
-  readonly pluginPrefix: string | undefined;
-  readonly name: string;
-}
-
-const parseNamedRef = (ref: string): ParsedRef => {
-  const colon = ref.indexOf(":");
-  if (colon === -1) return { pluginPrefix: undefined, name: ref };
-  return {
-    pluginPrefix: ref.slice(0, colon),
-    name: ref.slice(colon + 1),
-  };
-};
 
 const parseToolRef = (
   ref: string,
@@ -55,9 +42,7 @@ const lookupRegistry = (
   ref: string,
   current: PluginRegistry,
 ): PluginRegistry | undefined => {
-  const parsed = parseNamedRef(ref);
-  if (!parsed.pluginPrefix) return current;
-  return current.deps.get(parsed.pluginPrefix);
+  return registryForRef(ref, current);
 };
 
 const lookupAgent = (

@@ -23,19 +23,16 @@ import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  backupFile,
   exists,
   listDirRecursive,
   readFile,
-  removeDir,
-  removeFile,
-  writeFile,
 } from "../../fs.js";
 import type { HarnessScope } from "../../types.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
 import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { LowerOperation } from "./opencode.js";
+import { executeStandardLowering, normalizeBundleSegment, yamlScalar } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -60,16 +57,6 @@ export interface LowerInput {
 
 type Reason = "new" | "changed" | "unchanged";
 type WriteOperationKind = "write-md" | "write-plugin-file";
-
-const normalizeBundleSegment = (value: string, fallback = "plugin"): string => {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "");
-
-  return normalized.length > 0 ? normalized : fallback;
-};
 
 const generatedPluginId = (target: GrokLowerTarget): string =>
   `${GENERATED_PLUGIN_PREFIX}-${normalizeBundleSegment(target.sourcePluginName)}`;
@@ -116,9 +103,6 @@ const mcpBindingsForInput = (input: LowerInput): ReadonlyArray<ResolvedContractB
   ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []),
   ...input.agents.flatMap((agent) => agent.toolBindings),
 ];
-
-const yamlScalar = (value: string | number | boolean): string =>
-  typeof value === "string" ? JSON.stringify(value) : String(value);
 
 const serializeFrontmatter = (values: Record<string, unknown>): string => {
   const lines = ["---"];
@@ -617,30 +601,4 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   return operations;
 };
 
-export const executeLowering = async (
-  operations: LowerOperation[],
-  options: { backup: boolean; dryRun: boolean },
-): Promise<{ backups: string[] }> => {
-  const backups: string[] = [];
-  if (options.dryRun) return { backups };
-
-  for (const operation of operations) {
-    if (operation.reason === "unchanged") continue;
-
-    if (operation.kind === "write-md" || operation.kind === "write-plugin-file") {
-      if (options.backup && operation.kind === "write-md") {
-        const backup = await backupFile(operation.target);
-        if (backup) backups.push(backup);
-      }
-      await writeFile(operation.target, operation.content);
-      continue;
-    }
-
-    if (operation.kind === "prune-plugin-path") {
-      if (operation.targetType === "dir") await removeDir(operation.target);
-      else await removeFile(operation.target);
-    }
-  }
-
-  return { backups };
-};
+export const executeLowering = executeStandardLowering;

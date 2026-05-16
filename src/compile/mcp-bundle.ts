@@ -684,6 +684,18 @@ if (process.env.PRISM_MCP_VALIDATE === "1") {
 type RpcFraming = "content-length" | "newline";
 
 let responseFraming: RpcFraming = "content-length";
+let exiting = false;
+
+const exitSoon = (code = 0): void => {
+  if (exiting) return;
+  exiting = true;
+  process.exitCode = code;
+  process.stdin.pause();
+  setTimeout(() => process.exit(code), 0).unref?.();
+};
+
+process.on("SIGTERM", () => exitSoon(0));
+process.on("SIGINT", () => exitSoon(0));
 
 const writeMessage = (message: unknown): void => {
   const payload = JSON.stringify(message);
@@ -754,7 +766,10 @@ const handleMessage = async (message: JsonRpcMessage): Promise<void> => {
     }
     case "shutdown":
       rpcResult(id, null);
-      process.exitCode = 0;
+      exitSoon(0);
+      return;
+    case "notifications/exit":
+      exitSoon(0);
       return;
     default:
       rpcError(id, -32601, \`Method not found: \${message.method}\`);
@@ -806,6 +821,8 @@ process.stdin.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
   drainBuffer();
 });
+process.stdin.on("end", () => exitSoon(0));
+process.stdin.on("close", () => exitSoon(0));
 process.stdin.resume();`;
 
 const AMP_TOOL_FACTORY_RUNTIME = `const runtimeContext = (): ToolRuntimeContext => ({

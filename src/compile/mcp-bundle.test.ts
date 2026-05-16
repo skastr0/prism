@@ -203,6 +203,21 @@ const encodeRpc = (message: unknown, framing: RpcFraming = "content-length"): st
   return `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
 };
 
+const waitForChildClose = (
+  child: ChildProcessWithoutNullStreams,
+): Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }> =>
+  new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error("timed out waiting for child process to exit"));
+    }, 5_000);
+
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
+
 class RpcClient {
   private nextId = 1;
   private buffer = Buffer.alloc(0);
@@ -228,6 +243,10 @@ class RpcClient {
         resolve(value);
       });
     });
+  }
+
+  notify(method: string, params?: unknown): void {
+    this.child.stdin.write(encodeRpc({ jsonrpc: "2.0", method, params }, this.framing));
   }
 
   private drain(): void {
@@ -396,6 +415,78 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
   } finally {
     child.kill();
   }
+});
+
+test("MCP bundle exits after shutdown request", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const client = new RpcClient(child);
+
+  const shutdown = await client.request("shutdown");
+  expect(shutdown.result).toBeNull();
+
+  const exit = await waitForChildClose(child);
+  expect(exit.code).toBe(0);
+  expect(exit.signal).toBeNull();
+});
+
+test("MCP bundle exits after exit notification", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const client = new RpcClient(child);
+  client.notify("notifications/exit");
+
+  const exit = await waitForChildClose(child);
+  expect(exit.code).toBe(0);
+  expect(exit.signal).toBeNull();
 });
 
 test("MCP bundle generation supports unknown object payload schemas", async () => {

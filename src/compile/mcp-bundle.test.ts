@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { compilePluginForTarget } from "./pipeline.js";
 import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "./mcp-bundle.js";
+import { Contract } from "./sources.js";
 
 const tempRoots: string[] = [];
 
@@ -510,4 +511,114 @@ test("MCP bundle generation rejects non-identical tool-name collisions", async (
   ).rejects.toThrow(
     /MCP tool name collision for 'collision_fixture_read_file'.*read-file.*read_file/,
   );
+});
+
+test("MCP bundle generation rejects generated contract mirror collisions", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "mirror-demo");
+  const sourcePath = join(pluginRoot, "traits", "review.trait.ts");
+  const toolPath = join(pluginRoot, "tools", "submit.tool.ts");
+  const generatedPath = "contracts/submit.contract.ts";
+  const firstContract = new Contract({
+    name: "submit-a",
+    sourcePath,
+    pluginName: "mirror-demo",
+    generatedFiles: [
+      { relativePath: generatedPath, content: "export const value = 1;\n" },
+    ],
+  });
+  const secondContract = new Contract({
+    name: "submit-b",
+    sourcePath,
+    pluginName: "mirror-demo",
+    generatedFiles: [
+      { relativePath: generatedPath, content: "export const value = 2;\n" },
+    ],
+  });
+
+  await expect(
+    generateMcpServerBundle({
+      sourcePluginName: "mirror-demo",
+      sourcePluginRoot: pluginRoot,
+      serverName: "prism-mcp-mirror-demo",
+      bindings: [
+        {
+          kind: "synthetic",
+          logicalName: "submitA",
+          contract: firstContract,
+          toolPluginName: "mirror-demo",
+          toolName: "submit-a",
+          toolSourcePath: toolPath,
+        },
+        {
+          kind: "synthetic",
+          logicalName: "submitB",
+          contract: secondContract,
+          toolPluginName: "mirror-demo",
+          toolName: "submit-b",
+          toolSourcePath: toolPath,
+        },
+      ],
+    }),
+  ).rejects.toThrow(
+    "generated contract name collision at mirror-demo:contracts/submit.contract.ts",
+  );
+});
+
+test("MCP bundle generation uses sourcePluginRoot for source-owned synthetic contracts", async () => {
+  const root = await createTempRoot();
+  const hostRoot = join(root, "host");
+  const dependencyRoot = join(root, "dependency");
+  const contract = new Contract({
+    name: "submit",
+    sourcePath: join(dependencyRoot, "traits", "review.trait.ts"),
+    pluginName: "host",
+    generatedFiles: [
+      {
+        relativePath: "contracts/submit.contract.ts",
+        content: `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { Details } from "../schemas/details.ts";
+
+export const description = "Submit a source-owned synthetic contract";
+export const input = Schema.Struct({ details: Details });
+export const output = Schema.Struct({ ok: Schema.Boolean });
+export async function handle() {
+  return { ok: true };
+}
+`,
+      },
+    ],
+  });
+
+  await writeText(
+    join(hostRoot, "schemas", "details.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export const Details = Schema.Struct({
+  verdict: Schema.Literal("approve"),
+});
+`,
+  );
+  await writeText(
+    join(dependencyRoot, "tools", "submit.tool.ts"),
+    "export default {};\n",
+  );
+
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "host",
+    sourcePluginRoot: hostRoot,
+    serverName: "prism-mcp-host",
+    bindings: [
+      {
+        kind: "synthetic",
+        logicalName: "submit",
+        contract,
+        toolPluginName: "dependency",
+        toolName: "submit",
+        toolSourcePath: join(dependencyRoot, "tools", "submit.tool.ts"),
+      },
+    ],
+  });
+
+  expect(bundle.toolNames).toEqual(["host_submit"]);
 });

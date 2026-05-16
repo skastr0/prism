@@ -161,139 +161,207 @@ const pluginRootFromContractSource = (contractSourcePath: string): string => {
   return dirname(dirname(sourcePath));
 };
 
-const collectMirrorsForBindings = async (
-  bindings: ReadonlyArray<ResolvedContractBinding>,
-  sourcePluginName?: string,
-  sourcePluginRoot?: string,
-  dependencyPluginRoots: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]> = [],
-): Promise<PluginMirror[]> => {
-  const byPlugin = new Map<string, { pluginRoot: string; entries: Map<string, MirrorFile> }>();
-  const generatedFiles = new Map<string, Map<string, string>>();
+interface PluginMirrorCollectionState {
+  readonly byPlugin: Map<
+    string,
+    { pluginRoot: string; entries: Map<string, MirrorFile> }
+  >;
+  readonly generatedFiles: Map<string, Map<string, string>>;
+}
 
+const createPluginMirrorCollectionState = (
+  dependencyPluginRoots: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]>,
+): PluginMirrorCollectionState => {
+  const byPlugin = new Map<string, { pluginRoot: string; entries: Map<string, MirrorFile> }>();
   for (const [pluginName, pluginRoot] of dependencyPluginRoots instanceof Map
     ? dependencyPluginRoots.entries()
     : dependencyPluginRoots) {
     byPlugin.set(pluginName, { pluginRoot, entries: new Map() });
   }
+  return { byPlugin, generatedFiles: new Map() };
+};
 
-  const ensurePlugin = (pluginName: string, pluginRoot: string): Map<string, MirrorFile> => {
-    const current = byPlugin.get(pluginName) ?? {
-      pluginRoot,
-      entries: new Map<string, MirrorFile>(),
-    };
-    byPlugin.set(pluginName, current);
-    return current.entries;
+const ensureMirrorPluginEntries = (
+  state: PluginMirrorCollectionState,
+  pluginName: string,
+  pluginRoot: string,
+): Map<string, MirrorFile> => {
+  const current = state.byPlugin.get(pluginName) ?? {
+    pluginRoot,
+    entries: new Map<string, MirrorFile>(),
   };
+  state.byPlugin.set(pluginName, current);
+  return current.entries;
+};
 
-  const addGeneratedFiles = (contract: Contract): void => {
-    if (!contract.generatedFiles || contract.generatedFiles.length === 0) return;
-    const files = generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
-    for (const file of contract.generatedFiles) {
-      const existing = files.get(file.relativePath);
-      if (existing && existing !== file.content) {
-        throw new Error(
-          `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
-        );
-      }
-      files.set(file.relativePath, file.content);
+const addGeneratedContractFiles = (
+  state: PluginMirrorCollectionState,
+  contract: Contract,
+): void => {
+  if (!contract.generatedFiles || contract.generatedFiles.length === 0) return;
+  const files = state.generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
+  for (const file of contract.generatedFiles) {
+    const existing = files.get(file.relativePath);
+    if (existing && existing !== file.content) {
+      throw new Error(
+        `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
+      );
     }
-    generatedFiles.set(contract.pluginName, files);
-  };
+    files.set(file.relativePath, file.content);
+  }
+  state.generatedFiles.set(contract.pluginName, files);
+};
 
-  const addCrossPluginRuntimeClosures = async (): Promise<void> => {
-    const pluginRoots = new Map(
-      [...byPlugin.entries()].map(([pluginName, state]) => [pluginName, state.pluginRoot] as const),
-    );
-    const queue: Array<{ pluginName: string; file: MirrorFile }> = [];
-    for (const [pluginName, state] of byPlugin) {
-      for (const file of state.entries.values()) queue.push({ pluginName, file });
-    }
+const contractPluginRootForBinding = (
+  contract: Contract,
+  sourcePluginName?: string,
+  sourcePluginRoot?: string,
+): string =>
+  contract.pluginName === sourcePluginName && sourcePluginRoot
+    ? sourcePluginRoot
+    : pluginRootFromContractSource(contract.sourcePath);
 
-    for (let index = 0; index < queue.length; index++) {
-      const { pluginName, file } = queue[index]!;
-      const state = byPlugin.get(pluginName);
-      if (!state) continue;
-      const source = file.content ?? (file.sourcePath ? await readFile(file.sourcePath, "utf8") : "");
-      const basePath = file.sourcePath
-        ? dirname(file.sourcePath)
-        : dirname(join(state.pluginRoot, file.relativePath));
-
-      for (const specifier of collectRelativeImportSpecifiers(source)) {
-        const resolved = await resolveTsImportCandidate(resolve(basePath, specifier), fileExists);
-        if (!resolved) continue;
-        const owner = findSourcePlugin(resolved, pluginRoots);
-        if (!owner || owner.pluginName === pluginName) continue;
-
-        const ownerState = byPlugin.get(owner.pluginName);
-        if (!ownerState) continue;
-        const relativePath = normalizeRelativePath(relative(owner.pluginRoot, resolved));
-        if (ownerState.entries.has(relativePath)) continue;
-        const imported: MirrorFile = { relativePath, sourcePath: resolved };
-        ownerState.entries.set(relativePath, imported);
-        queue.push({ pluginName: owner.pluginName, file: imported });
-      }
-    }
-  };
-
-  for (const binding of bindings) {
-    const toolRoot = pluginRootFromToolSource(binding.toolSourcePath);
-    ensurePlugin(binding.toolPluginName, toolRoot).set(`tools/${binding.toolName}.tool.ts`, {
+const registerBindingMirrorInputs = (
+  state: PluginMirrorCollectionState,
+  binding: ResolvedContractBinding,
+  sourcePluginName?: string,
+  sourcePluginRoot?: string,
+): void => {
+  const toolRoot = pluginRootFromToolSource(binding.toolSourcePath);
+  ensureMirrorPluginEntries(state, binding.toolPluginName, toolRoot).set(
+    `tools/${binding.toolName}.tool.ts`,
+    {
       relativePath: `tools/${binding.toolName}.tool.ts`,
       sourcePath: binding.toolSourcePath,
-    });
+    },
+  );
 
-    if (binding.kind === "synthetic") {
-      if (!binding.contract) {
-        throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-      }
-      // Prefer the host plugin's root when the contract is attributed to it.
-      // contract.sourcePath traces back to the trait file's location, which
-      // may live in a *different* plugin from the contract's owning plugin
-      // (e.g. cross-plugin trait + slot binding). Falling back to deriving
-      // from contract.sourcePath would map the host plugin to the trait
-      // plugin's root, which is wrong.
-      const contractPluginRoot =
-        binding.contract.pluginName === sourcePluginName && sourcePluginRoot
-          ? sourcePluginRoot
-          : pluginRootFromContractSource(binding.contract.sourcePath);
-      ensurePlugin(binding.contract.pluginName, contractPluginRoot);
-      addGeneratedFiles(binding.contract);
-    }
+  if (binding.kind !== "synthetic") return;
+  if (!binding.contract) {
+    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
   }
 
-  const mirrors: PluginMirror[] = [];
-  for (const [pluginName, state] of byPlugin) {
-    const generated = generatedFiles.get(pluginName);
-    if (generated) {
-      for (const [relativePath, content] of generated) {
-        state.entries.set(relativePath, { relativePath, content });
-      }
+  // Prefer the host plugin's root when the contract is attributed to it.
+  // contract.sourcePath traces back to the trait file's location, which
+  // may live in a *different* plugin from the contract's owning plugin
+  // (e.g. cross-plugin trait + slot binding). Falling back to deriving
+  // from contract.sourcePath would map the host plugin to the trait
+  // plugin's root, which is wrong.
+  ensureMirrorPluginEntries(
+    state,
+    binding.contract.pluginName,
+    contractPluginRootForBinding(binding.contract, sourcePluginName, sourcePluginRoot),
+  );
+  addGeneratedContractFiles(state, binding.contract);
+};
+
+const registerBindingsMirrorInputs = (
+  state: PluginMirrorCollectionState,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+  sourcePluginName?: string,
+  sourcePluginRoot?: string,
+): void => {
+  for (const binding of bindings) {
+    registerBindingMirrorInputs(state, binding, sourcePluginName, sourcePluginRoot);
+  }
+};
+
+const applyGeneratedFilesToMirrorEntries = (
+  state: PluginMirrorCollectionState,
+): void => {
+  for (const [pluginName, generated] of state.generatedFiles) {
+    const plugin = state.byPlugin.get(pluginName);
+    if (!plugin) continue;
+    for (const [relativePath, content] of generated) {
+      plugin.entries.set(relativePath, { relativePath, content });
     }
   }
+};
 
-  for (const [, state] of byPlugin) {
-    const samePluginClosure = await collectMirrorRuntimeClosure(
-      state.pluginRoot,
-      [...state.entries.values()],
+const expandSamePluginRuntimeClosures = async (
+  state: PluginMirrorCollectionState,
+): Promise<void> => {
+  for (const [, plugin] of state.byPlugin) {
+    const closure = await collectMirrorRuntimeClosure(
+      plugin.pluginRoot,
+      [...plugin.entries.values()],
     );
-    state.entries.clear();
-    for (const file of samePluginClosure) {
-      state.entries.set(file.relativePath, file);
-    }
+    plugin.entries.clear();
+    for (const file of closure) plugin.entries.set(file.relativePath, file);
+  }
+};
+
+const collectCrossPluginRuntimeClosure = async (
+  state: PluginMirrorCollectionState,
+): Promise<void> => {
+  const pluginRoots = new Map(
+    [...state.byPlugin.entries()].map(
+      ([pluginName, plugin]) => [pluginName, plugin.pluginRoot] as const,
+    ),
+  );
+  const queue: Array<{ pluginName: string; file: MirrorFile }> = [];
+  for (const [pluginName, plugin] of state.byPlugin) {
+    for (const file of plugin.entries.values()) queue.push({ pluginName, file });
   }
 
-  await addCrossPluginRuntimeClosures();
+  for (let index = 0; index < queue.length; index++) {
+    const { pluginName, file } = queue[index]!;
+    const plugin = state.byPlugin.get(pluginName);
+    if (!plugin) continue;
+    const source = file.content ?? (file.sourcePath ? await readFile(file.sourcePath, "utf8") : "");
+    const basePath = file.sourcePath
+      ? dirname(file.sourcePath)
+      : dirname(join(plugin.pluginRoot, file.relativePath));
 
-  for (const [pluginName, state] of byPlugin) {
-    if (state.entries.size === 0) continue;
+    for (const specifier of collectRelativeImportSpecifiers(source)) {
+      await addCrossPluginMirrorImport(
+        state,
+        pluginName,
+        basePath,
+        specifier,
+        pluginRoots,
+        queue,
+      );
+    }
+  }
+};
+
+const addCrossPluginMirrorImport = async (
+  state: PluginMirrorCollectionState,
+  pluginName: string,
+  basePath: string,
+  specifier: string,
+  pluginRoots: ReadonlyMap<string, string>,
+  queue: Array<{ pluginName: string; file: MirrorFile }>,
+): Promise<void> => {
+  const resolved = await resolveTsImportCandidate(resolve(basePath, specifier), fileExists);
+  if (!resolved) return;
+  const owner = findSourcePlugin(resolved, pluginRoots);
+  if (!owner || owner.pluginName === pluginName) return;
+
+  const ownerState = state.byPlugin.get(owner.pluginName);
+  if (!ownerState) return;
+  const relativePath = normalizeRelativePath(relative(owner.pluginRoot, resolved));
+  if (ownerState.entries.has(relativePath)) return;
+  const imported: MirrorFile = { relativePath, sourcePath: resolved };
+  ownerState.entries.set(relativePath, imported);
+  queue.push({ pluginName: owner.pluginName, file: imported });
+};
+
+const buildPluginMirrorsFromState = async (
+  state: PluginMirrorCollectionState,
+): Promise<PluginMirror[]> => {
+  const mirrors: PluginMirror[] = [];
+  for (const [pluginName, plugin] of state.byPlugin) {
+    if (plugin.entries.size === 0) continue;
     mirrors.push({
       pluginName,
-      pluginRoot: state.pluginRoot,
-      files: await collectMirrorRuntimeClosure(state.pluginRoot, [...state.entries.values()]),
+      pluginRoot: plugin.pluginRoot,
+      files: await collectMirrorRuntimeClosure(plugin.pluginRoot, [...plugin.entries.values()]),
     });
   }
 
-  for (const [pluginName, files] of generatedFiles) {
+  for (const [pluginName, files] of state.generatedFiles) {
     if (mirrors.some((mirror) => mirror.pluginName === pluginName)) continue;
     mirrors.push({
       pluginName,
@@ -302,6 +370,20 @@ const collectMirrorsForBindings = async (
   }
 
   return mirrors.sort((left, right) => left.pluginName.localeCompare(right.pluginName));
+};
+
+const collectMirrorsForBindings = async (
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+  sourcePluginName?: string,
+  sourcePluginRoot?: string,
+  dependencyPluginRoots: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]> = [],
+): Promise<PluginMirror[]> => {
+  const state = createPluginMirrorCollectionState(dependencyPluginRoots);
+  registerBindingsMirrorInputs(state, bindings, sourcePluginName, sourcePluginRoot);
+  applyGeneratedFilesToMirrorEntries(state);
+  await expandSamePluginRuntimeClosures(state);
+  await collectCrossPluginRuntimeClosure(state);
+  return buildPluginMirrorsFromState(state);
 };
 
 const findSourcePlugin = (

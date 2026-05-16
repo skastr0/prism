@@ -15,6 +15,7 @@ import {
   ensureDir,
 } from "./fs.js";
 import {
+  type ArtifactSourceFile,
   collectArtifactSourceFiles,
   getHarnessFrontmatter,
   manifestTargetsArtifact,
@@ -248,6 +249,107 @@ async function getSelectedSkillValidation(
   return validations;
 }
 
+type RuleSourceGroups = {
+  readonly globalFiles: ArtifactSourceFile[];
+  readonly projectFiles: ArtifactSourceFile[];
+};
+
+const isRuleSourceFile = (
+  file: ArtifactSourceFile,
+  root: "global" | "project"
+): boolean =>
+  file.relativePath.startsWith(`${root}/`) && file.relativePath.endsWith(".md");
+
+async function collectRuleSourceGroups(
+  pluginPath: string,
+  harnessId: HarnessId
+): Promise<RuleSourceGroups> {
+  const files = await collectArtifactSourceFiles(pluginPath, "rules", harnessId);
+  return {
+    globalFiles: files.filter((file) => isRuleSourceFile(file, "global")),
+    projectFiles: files.filter((file) => isRuleSourceFile(file, "project")),
+  };
+}
+
+async function planAppendRuleOperation(
+  file: ArtifactSourceFile,
+  targetPath: string,
+  harnessId: HarnessId
+): Promise<FileOperation> {
+  const appendStatus = await checkAppendStatus(file.sourcePath, targetPath, harnessId);
+  if (appendStatus === "identical") {
+    return {
+      type: "skip",
+      source: file.sourcePath,
+      target: targetPath,
+      harness: harnessId,
+      artifact: "rules",
+      reason: "Content already exists and is identical",
+    };
+  }
+
+  return {
+    type: "append",
+    source: file.sourcePath,
+    target: targetPath,
+    harness: harnessId,
+    artifact: "rules",
+    reason: appendStatus === "changed" ? "Updating existing section" : undefined,
+  };
+}
+
+function getProjectRuleTargetPath(
+  harness: HarnessConfig,
+  rulesFile: string,
+  expandedProjectPath: string,
+  relativeFile: string
+): string {
+  if (harness.rulesDir && harness.projectConfigPath) {
+    return join(
+      expandedProjectPath,
+      harness.projectConfigPath,
+      harness.rulesDir,
+      relativeFile.replace(
+        ".md",
+        harness.configFormat === "mdc" ? ".mdc" : ".md"
+      )
+    );
+  }
+
+  if (harness.projectConfigPath) {
+    return join(expandedProjectPath, rulesFile);
+  }
+
+  return join(expandPath(harness.globalConfigPath), rulesFile);
+}
+
+async function planProjectRuleOperation(
+  file: ArtifactSourceFile,
+  harness: HarnessConfig,
+  rulesFile: string,
+  expandedProjectPath: string
+): Promise<FileOperation> {
+  const relativeFile = file.relativePath.slice("project/".length);
+  const targetPath = getProjectRuleTargetPath(
+    harness,
+    rulesFile,
+    expandedProjectPath,
+    relativeFile
+  );
+
+  if (harness.rulesDir) {
+    return {
+      type: "copy",
+      source: file.sourcePath,
+      target: targetPath,
+      harness: harness.id,
+      artifact: "rules",
+    };
+  }
+
+  return planAppendRuleOperation(file, targetPath, harness.id);
+}
+
 /**
  * Plan rules file installation
  */
@@ -262,94 +364,24 @@ async function planRulesInstallation(
     return operations;
   }
 
-  const files = await collectArtifactSourceFiles(pluginPath, "rules", harness.id);
-  const globalFiles = files.filter((file) =>
-    file.relativePath.startsWith("global/") && file.relativePath.endsWith(".md")
-  );
-  const projectFiles = files.filter((file) =>
-    file.relativePath.startsWith("project/") && file.relativePath.endsWith(".md")
+  const rulesFile = harness.rulesFile;
+  const { globalFiles, projectFiles } = await collectRuleSourceGroups(
+    pluginPath,
+    harness.id
   );
 
+  const globalTargetPath = join(expandPath(harness.globalConfigPath), rulesFile);
   for (const file of globalFiles) {
-    const targetPath = join(expandPath(harness.globalConfigPath), harness.rulesFile);
-
-    const appendStatus = await checkAppendStatus(file.sourcePath, targetPath, harness.id);
-    if (appendStatus === "identical") {
-      operations.push({
-        type: "skip",
-        source: file.sourcePath,
-        target: targetPath,
-        harness: harness.id,
-        artifact: "rules",
-        reason: "Content already exists and is identical",
-      });
-      continue;
-    }
-
-    operations.push({
-      type: "append",
-      source: file.sourcePath,
-      target: targetPath,
-      harness: harness.id,
-      artifact: "rules",
-      reason: appendStatus === "changed" ? "Updating existing section" : undefined,
-    });
+    operations.push(await planAppendRuleOperation(file, globalTargetPath, harness.id));
   }
 
   if (projectPath) {
     const expandedProjectPath = expandPath(projectPath);
 
     for (const file of projectFiles) {
-      const relativeFile = file.relativePath.slice("project/".length);
-
-      let targetPath: string;
-      if (harness.rulesDir && harness.projectConfigPath) {
-        targetPath = join(
-          expandedProjectPath,
-          harness.projectConfigPath,
-          harness.rulesDir,
-          relativeFile.replace(
-            ".md",
-            harness.configFormat === "mdc" ? ".mdc" : ".md"
-          )
-        );
-      } else if (harness.projectConfigPath) {
-        targetPath = join(expandedProjectPath, harness.rulesFile);
-      } else {
-        targetPath = join(expandPath(harness.globalConfigPath), harness.rulesFile);
-      }
-
-      if (harness.rulesDir) {
-        operations.push({
-          type: "copy",
-          source: file.sourcePath,
-          target: targetPath,
-          harness: harness.id,
-          artifact: "rules",
-        });
-      } else {
-        const appendStatus = await checkAppendStatus(file.sourcePath, targetPath, harness.id);
-        if (appendStatus === "identical") {
-          operations.push({
-            type: "skip",
-            source: file.sourcePath,
-            target: targetPath,
-            harness: harness.id,
-            artifact: "rules",
-            reason: "Content already exists and is identical",
-          });
-          continue;
-        }
-
-        operations.push({
-          type: "append",
-          source: file.sourcePath,
-          target: targetPath,
-          harness: harness.id,
-          artifact: "rules",
-          reason: appendStatus === "changed" ? "Updating existing section" : undefined,
-        });
-      }
+      operations.push(
+        await planProjectRuleOperation(file, harness, rulesFile, expandedProjectPath)
+      );
     }
   }
 

@@ -38,6 +38,7 @@ const TARGET_PRESETS = {
     "amp-code",
     "cursor",
     "factory-droid",
+    "grok",
   ],
   "claw-harness": ["openclaw", "hermes"],
 } as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
@@ -396,6 +397,14 @@ function harnessSupportsArtifact(harnessId: HarnessId, artifact: PluginArtifactT
   }
 }
 
+function targetSupportsPluginArtifact(harnessId: HarnessId, artifact: PluginArtifactType): boolean {
+  if (artifact === "agents") {
+    return (COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId);
+  }
+
+  return harnessSupportsArtifact(harnessId, artifact);
+}
+
 /**
  * Read and validate plugin manifest
  */
@@ -565,15 +574,12 @@ async function validateManifest(
       continue;
     }
 
-    const unsupportedAgents = resolveManifestTargets(declaredTargets).filter((harnessId) => {
-      if (artifact === "agents") {
-        return !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId);
-      }
-      return !harnessSupportsArtifact(harnessId, artifact);
-    });
+    const unsupportedTargets = declaredTargets
+      .filter((target): target is HarnessId => !isTargetPresetId(target))
+      .filter((harnessId) => !targetSupportsPluginArtifact(harnessId, artifact));
 
-    if (unsupportedAgents.length > 0) {
-      const unsupportedList = unsupportedAgents
+    if (unsupportedTargets.length > 0) {
+      const unsupportedList = unsupportedTargets
         .map((harnessId) => `${harnessId} (${getHarness(harnessId).name})`)
         .join(", ");
       errors.push(
@@ -596,10 +602,32 @@ export function resolveManifestTargets(targets: readonly PluginTargetId[]): Harn
 
   for (const target of targets) {
     if (isTargetPresetId(target)) {
-        for (const harnessId of TARGET_PRESETS[target]) {
+      for (const harnessId of TARGET_PRESETS[target]) {
+        resolvedTargets.add(harnessId);
+      }
+      continue;
+    }
+
+    resolvedTargets.add(target);
+  }
+
+  return [...resolvedTargets];
+}
+
+export function resolveManifestTargetsForArtifact(
+  targets: readonly PluginTargetId[],
+  artifact: PluginArtifactType
+): HarnessId[] {
+  const resolvedTargets = new Set<HarnessId>();
+
+  for (const target of targets) {
+    if (isTargetPresetId(target)) {
+      for (const harnessId of TARGET_PRESETS[target]) {
+        if (targetSupportsPluginArtifact(harnessId, artifact)) {
           resolvedTargets.add(harnessId);
         }
-        continue;
+      }
+      continue;
     }
 
     resolvedTargets.add(target);
@@ -612,7 +640,7 @@ export function getManifestArtifactTargets(
   manifest: PluginManifest,
   artifact: PluginArtifactType
 ): HarnessId[] {
-  return resolveManifestTargets(manifest.targets[artifact] ?? []);
+  return resolveManifestTargetsForArtifact(manifest.targets[artifact] ?? [], artifact);
 }
 
 /**

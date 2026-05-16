@@ -14,7 +14,7 @@ This plan replaces the initial "copy Claude lowerer and patch config.toml" appro
 - Emit a native Grok plugin bundle under `.grok/plugins/prism-generated-*`.
 - Reuse Claude-compatible plugin layout where Grok explicitly supports it.
 - Do not patch `config.toml` in PR1 unless a smoke test proves plugin `.mcp.json` is insufficient.
-- Do not add Grok to the `coding-harness` preset in PR1 because Grok's native user command directory is not documented yet.
+- PR1 did not add Grok to the `coding-harness` preset because Grok's native user command directory was not documented yet; PR2 adds it with artifact-aware preset filtering.
 - Use Effect where Prism already uses it: compile validation, hook matching, generated wrapper decoding, and runtime boundaries. Do not refactor lowerers into full Effect services as part of this change.
 
 ## Forge Glyphs
@@ -85,7 +85,7 @@ Acceptance:
 - Claude-specific MCP permission names are not blindly used in Grok agent frontmatter.
 - Commands remain out of scope until Grok command discovery is verified.
 - `config.toml` is not patched in PR1.
-- `coding-harness` preset is not expanded to include Grok in PR1.
+- `coding-harness` preset was not expanded to include Grok in PR1; PR2 adds it with artifact-aware filtering.
 - Typecheck and relevant tests pass.
 
 Validation:
@@ -129,7 +129,7 @@ Scope:
 Acceptance:
 
 - Supported harness documentation includes Grok.
-- Docs state that Grok is explicit-target-only in PR1, not part of `coding-harness`.
+- Docs state that PR2 adds Grok to `coding-harness` with artifact-aware preset filtering.
 - Docs state install-phase commands are deferred until native command roots are verified.
 - Docs state generated Grok compile output is plugin-bundled under `.grok/plugins/prism-generated-*`.
 - Completion audit maps each explicit requirement to evidence.
@@ -158,7 +158,7 @@ Completion audit:
 - Native `.grok` output: satisfied by generated plugin root `<grok-root>/plugins/prism-generated-<source-plugin>/`.
 - Agents/skills/orbits/hooks/MCP bundle: satisfied by lowerer planning and `src/compile/grok-lowerer.test.ts`.
 - Pipeline integration: satisfied by `src/compile/pipeline.test.ts` `compilePluginForTarget lowers Grok plugin-bundle surfaces`.
-- Command/config preset restraint: satisfied by `supportsCommands: false`, no `coding-harness` expansion, and docs marking commands/config as follow-up.
+- Command/config restraint: PR1 was satisfied by `supportsCommands: false` and no `coding-harness` expansion; PR2 keeps `supportsCommands: false` and filters unsupported command preset members.
 - Code quality gates: TypeScript and Quartz clean; Pulsar residual debt documented above.
 
 Review dispatch:
@@ -262,14 +262,14 @@ Excluded from PR1:
 - Marketplace source injection.
 - Native Grok marketplace publishing.
 - A dedicated `prism grok` CLI command.
-- Adding `grok` to `coding-harness`.
+- Install-phase Grok command support.
 - Refactoring Claude and Grok shared lowerer helpers.
 
-## Why `coding-harness` Is Deferred
+## Why `coding-harness` Was Deferred In PR1
 
 The initial plan proposed adding `grok` to the `coding-harness` preset immediately.
 
-Do not do that in PR1.
+PR2 now does this with artifact-aware preset filtering.
 
 Reason:
 
@@ -278,7 +278,7 @@ Reason:
 - Grok native user commands are not documented as `~/.grok/commands/`.
 - Existing manifests using `targets.commands: ["coding-harness"]` would either become invalid if Grok commands are unsupported or start writing to an unverified path if `commandsDir: "commands/"` is guessed.
 
-PR1 should require explicit Grok targeting:
+PR1 required explicit Grok targeting:
 
 ```json
 {
@@ -293,7 +293,7 @@ PR1 should require explicit Grok targeting:
 }
 ```
 
-After native command discovery is verified, add `grok` to `coding-harness` in a follow-up.
+The follow-up adds `grok` to `coding-harness` while keeping install-phase Grok commands unsupported. `targets.commands: ["coding-harness"]` remains valid because preset-expanded unsupported command targets are filtered out; direct `targets.commands: ["grok"]` remains invalid.
 
 ## Harness Registration
 
@@ -367,7 +367,7 @@ Notes:
 
 Add `grok` to `COMPILE_SUPPORTED_HARNESSES`.
 
-Do not add `grok` to `TARGET_PRESETS["coding-harness"]` in PR1.
+Add `grok` to `TARGET_PRESETS["coding-harness"]` in PR2, paired with artifact-aware preset filtering so unsupported install-phase command targets do not poison the preset.
 
 Add `grok` to the `harnessKeys` list in `getHarnessFrontmatter` so harness-specific `grok:` blocks are removed from the base frontmatter before reconstruction.
 
@@ -766,7 +766,7 @@ Update `AGENTS.md`:
 - Explain that Grok compile output is plugin-bundled under `.grok/plugins/prism-generated-*`.
 - Explain that Grok supports rules through `AGENTS.md`.
 - Explain that install-phase commands are deferred until native command roots are verified.
-- Explain that Grok is explicit target-only in PR1 and is not yet part of `coding-harness`.
+- Explain that Grok is included in `coding-harness` through artifact-aware preset expansion.
 
 Update `README.md` if it has the same supported harness table.
 
@@ -774,15 +774,14 @@ Update `README.md` if it has the same supported harness table.
 
 ### Phase 2: Preset and Commands
 
-Add Grok to `coding-harness` only after:
+Grok is added to `coding-harness` with this outcome:
 
-- Native command installation path is documented or verified.
 - Existing plugins using `targets.commands: ["coding-harness"]` remain valid.
-- `supportsCommands` can be set truthfully.
+- `supportsCommands` remains false until native command installation is documented or verified.
 
 Possible outcomes:
 
-- If `~/.grok/commands/` works, set `commandsDir: "commands/"` and add Grok to preset.
+- If `~/.grok/commands/` works, set `commandsDir: "commands/"` so Grok also receives install-phase command artifacts through the existing preset.
 - If only `~/.agents/commands/` works, add a harness capability or installer special case instead of pretending it is under `.grok`.
 - If only plugin-bundled commands work, keep install-phase commands unsupported but document compile/plugin command support.
 

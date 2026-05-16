@@ -11,6 +11,7 @@ import { compilePluginForTarget } from "./pipeline.js";
 import { createCanonicalCompileFixture } from "./test-fixtures.js";
 import {
   formatManifestTargets,
+  getManifestArtifactTargets,
   manifestHasCompileTargets,
   readManifest,
   resolveManifestTargets,
@@ -878,6 +879,60 @@ export default defineSkillspace({
 
 test("claw-harness preset targets OpenClaw and Hermes", () => {
   expect(resolveManifestTargets(["claw-harness"])).toEqual(["openclaw", "hermes"]);
+});
+
+test("coding-harness preset includes Grok", () => {
+  expect(resolveManifestTargets(["coding-harness"])).toContain("grok");
+});
+
+test("artifact target resolution filters unsupported preset members", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "preset-filter-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "preset-filter-demo",
+        version: "0.1.0",
+        targets: {
+          commands: ["coding-harness"],
+          rules: ["coding-harness"],
+          skills: ["coding-harness"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const manifest = await readManifest(pluginRoot);
+
+  expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
+  expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
+  expect(getManifestArtifactTargets(manifest, "skills")).toContain("grok");
+});
+
+test("direct unsupported Grok command targets are rejected", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "direct-grok-command-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "direct-grok-command-demo",
+        version: "0.1.0",
+        targets: {
+          commands: ["grok"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await expect(readManifest(pluginRoot)).rejects.toThrow(
+    "targets.commands resolves to unsupported harnesses for commands: grok (Grok Build)",
+  );
 });
 
 test("opencode model pools distribute same-profile agents by stable peer order", async () => {

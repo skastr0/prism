@@ -33,7 +33,7 @@ OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/open
 
 Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
 
-Grok Build support is explicit-target-only in PR1 and is not part of the `coding-harness` preset yet. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml` in PR1.
+Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
 
 ## Tech Stack
 
@@ -700,16 +700,16 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `gemini-cli`, `amp-code`, `cursor`, `factory-droid`
+- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `gemini-cli`, `amp-code`, `cursor`, `factory-droid`, `grok`
 - `claw-harness` → `openclaw`, `hermes`
 
-Grok Build is deliberately not included in `coding-harness` in PR1. Use explicit `grok` targets until native command discovery and preset behavior are validated.
+Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism.
 
 ### Rules to remember
 
 - `plugin.json` is the only targeting source for install planning.
 - There are no file-level targets for rules, commands, agents, or skills.
-- Use explicit harness IDs when a preset would expand to an unsupported surface (for example, `commands` cannot target `amp-code`, `grok`, or `openclaw`).
+- Preset-expanded install targets are filtered by artifact capability; direct unsupported harness IDs still fail validation.
 - If a plugin contains an artifact type, `targets.<artifact>` must declare where that artifact installs.
 
 ## Harness Overlays

@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,6 +45,31 @@ const findContentOperation = (
     (operation): operation is ContentOperation =>
       isContentOperation(operation) && operation.target.endsWith(suffix),
   );
+
+const runGeneratedHookWrapper = (
+  wrapperPath: string,
+  payload: unknown,
+): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> =>
+  new Promise((resolve, reject) => {
+    const child = spawn("node", [wrapperPath], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ exitCode: code ?? 0, stdout, stderr });
+    });
+
+    child.stdin.end(JSON.stringify(payload));
+  });
 
 afterEach(async () => {
   await Promise.all(
@@ -128,6 +154,35 @@ export default defineHook({
   );
 
   await writeText(
+    join(pluginRoot, "hooks", "audit-shell-after.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-shell-after",
+  description: "Audit shell command responses",
+  event: hookEvent.toolAfter,
+  match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
+  handle: (event) => Effect.succeed(event.tool.output?.ok ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "session-ended.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-ended",
+  description: "Observe session end",
+  event: hookEvent.sessionEnd,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
+  await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 import { defineTool } from ${JSON.stringify(prismImportPath)};
@@ -146,7 +201,11 @@ export default defineTool({
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const hook = registry.hooks.get("audit-shell");
+  const afterHook = registry.hooks.get("audit-shell-after");
+  const sessionEndHook = registry.hooks.get("session-ended");
   if (!hook) throw new Error("expected audit-shell hook");
+  if (!afterHook) throw new Error("expected audit-shell-after hook");
+  if (!sessionEndHook) throw new Error("expected session-ended hook");
 
   const operations = await planLowering({
     agents: [
@@ -174,7 +233,7 @@ export default defineTool({
     orbits: [],
     tools: [],
     skills: [...registry.skills.values()],
-    hooks: [hook],
+    hooks: [hook, afterHook, sessionEndHook],
     registry,
     target: {
       scope: "project",
@@ -227,6 +286,8 @@ export default defineTool({
   expect(configToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(configToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');
+  expect(configToml?.content).toContain('[["hooks"."PostToolUse"]]');
+  expect(configToml?.content).toContain('[["hooks"."Stop"]]');
   expect(configToml?.content).toContain('matcher = "shell\\\\.command"');
   expect(configToml?.content).toContain('statusMessage = "prism hook audit-shell"');
 
@@ -235,6 +296,33 @@ export default defineTool({
   expect(hookWrapper?.content).toContain("native payload");
   expect(hookWrapper?.content).toContain("validation failed");
   expect(hookWrapper?.content).toContain("result");
+  expect(hookWrapper?.content).toContain('harness: "codex-cli"');
+  expect(hookWrapper?.content).toContain("input?.cwd");
+  expect(hookWrapper?.content).toContain("console.error");
+  if (!hookWrapper) throw new Error("expected audit-shell wrapper");
+  await writeText(hookWrapper.target, hookWrapper.content);
+  const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
+    tool: { name: "shell.command", input: { block: true } },
+    cwd: pluginRoot,
+  });
+  expect(blocked.exitCode).toBe(2);
+  expect(blocked.stdout).toBe("");
+  expect(blocked.stderr).toContain("blocked");
+
+  const afterHookWrapper = findContentOperation(
+    operations,
+    join("hooks", "audit-shell-after.mjs"),
+  );
+  if (!afterHookWrapper) throw new Error("expected audit-shell-after wrapper");
+  await writeText(afterHookWrapper.target, afterHookWrapper.content);
+  const afterResult = await runGeneratedHookWrapper(afterHookWrapper.target, {
+    tool: { name: "shell.command", input: {} },
+    tool_response: { ok: true },
+    cwd: pluginRoot,
+  });
+  expect(afterResult.exitCode).toBe(0);
+  expect(afterResult.stdout).toBe("");
+  expect(afterResult.stderr).toBe("");
 });
 
 test("codex-cli lowerer fails closed for unsupported model config keys", async () => {

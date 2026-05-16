@@ -1,7 +1,5 @@
 /** Codex CLI lowerer. */
 
-import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
@@ -12,9 +10,6 @@ import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
-import { effectBundleImportPath } from "../runtime-deps.js";
-import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
-import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
@@ -29,11 +24,13 @@ import {
 import type { HarnessScope, PluginArtifactType, PluginTargetId } from "../../types.js";
 import type { LowerOperation } from "./opencode.js";
 import {
+  bundleGeneratedHookWrapper,
   executeStandardLowering,
   nativeHookEventName,
   normalizeBundleSegment,
   pushWriteOperation as pushWrite,
   regexEscape,
+  renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
   uniqueSorted,
 } from "./shared.js";
@@ -270,97 +267,32 @@ const hookMatcher = (
   return tool.names.map(regexEscape).join("|");
 };
 
-const renderHookWrapperEntry = (hook: Hook, nativeEvent: string, hookRuntimePath: string): string => `import { Effect } from ${quote(effectBundleImportPath())};
-import hook from ${quote(hook.sourcePath.replace(/\\/g, "/"))};
-import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${quote(hookRuntimePath.replace(/\\/g, "/"))};
-
-const parseInput = async () => {
-  let source = "";
-  for await (const chunk of process.stdin) source += chunk;
-  return source.trim().length > 0 ? JSON.parse(source) : {};
-};
-
-const nativeToolName = (input) =>
-  input?.tool?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
-
-const nativeToolInput = (input) =>
-  input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.input ?? input?.args ?? input?.arguments ?? {};
-
-const nativeSession = (input) => {
-  const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
-  const transcriptPath = input?.session?.transcriptPath ?? input?.transcriptPath ?? input?.transcript_path;
-  if (id === undefined && transcriptPath === undefined) return undefined;
-  return {
-    id: id === undefined ? undefined : String(id),
-    transcriptPath: transcriptPath === undefined ? undefined : String(transcriptPath),
-  };
-};
-
-const normalizePayload = (input) => {
-  const target = { harness: "codex-cli", nativeEvent: ${quote(nativeEvent)} };
-
-  switch (${quote(hook.event)}) {
-    case "tool.before":
-      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input) }, cwd: input?.cwd, session: nativeSession(input) };
-    case "tool.after":
-      return {
-        target,
-        tool: {
-          name: String(nativeToolName(input)),
-          input: nativeToolInput(input),
-          output: input?.tool?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output ?? input?.result,
-          success: input?.tool?.success ?? input?.success,
-        },
-        cwd: input?.cwd,
-        session: nativeSession(input),
-      };
-    case "session.start":
-      return { target, cwd: input?.cwd, session: nativeSession(input) ?? { id: "codex-cli" } };
-    case "session.end":
-      return { target, cwd: input?.cwd, session: nativeSession(input) ?? { id: "codex-cli" }, reason: input?.reason };
-  }
-};
-
-const unwrapDecode = (decoded, label) => {
-  if (decoded && decoded._tag === "Right") return decoded.right;
-  throw new Error("prism hook " + label + " validation failed");
-};
-
-const toPromise = (value) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
-
-const payload = unwrapDecode(
-  decodeNativeHookPayloadForEvent(${quote(hook.event)}, normalizePayload(await parseInput())),
-  "native payload",
-);
-const rawResult = await toPromise(hook.handle(payload));
-const result = unwrapDecode(
-  decodeHookResultForEvent(${quote(hook.event)}, rawResult ?? { decision: "continue" }),
-  "result",
-);
-
-if (${quote(hook.event)} === "tool.before" && result.decision === "block") {
-  console.error(result.message);
-  process.exit(2);
-}
-`;
+const renderHookWrapperEntry = (
+  hook: Hook,
+  nativeEvent: string,
+  hookRuntimePath: string,
+): string =>
+  renderPrePostSessionHookWrapperEntry({
+    hook,
+    hookRuntimePath,
+    harness: TARGET_ID,
+    nativeEvent,
+    cwdExpression: "input?.cwd",
+    fallbackSessionId: TARGET_ID,
+    toolAfterOutputExpression:
+      "input?.tool?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output ?? input?.result",
+    blockDecisionSource: `  console.error(result.message);
+  process.exit(2);`,
+  });
 
 const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "prism-codex-hook-"));
-
-  try {
-    const entry = join(tempRoot, "hook-entry.ts");
-    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
-    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
-    await nodeWriteFile(entry, renderHookWrapperEntry(hook, nativeEvent, hookRuntimePath));
-
-    const outdir = join(tempRoot, "dist");
-    await buildHookWrapperWithBun(entry, outdir, `Codex '${hook.name}'`);
-
-    const built = await readFile(join(outdir, "wrapper.mjs"));
-    return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true });
-  }
+  return bundleGeneratedHookWrapper({
+    hook,
+    tempPrefix: "prism-codex-hook-",
+    buildLabel: `Codex '${hook.name}'`,
+    renderEntry: (currentHook, hookRuntimePath) =>
+      renderHookWrapperEntry(currentHook, nativeEvent, hookRuntimePath),
+  });
 };
 
 const planHooks = async (

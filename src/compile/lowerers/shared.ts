@@ -205,6 +205,7 @@ const renderHookWrapperNormalizePayload = (options: {
   readonly nativeEvent: string;
   readonly cwdExpression: string;
   readonly fallbackSessionId: string;
+  readonly toolAfterOutputExpression?: string;
 }): string => `const normalizePayload = (input) => {
   const target = { harness: ${JSON.stringify(options.harness)}, nativeEvent: ${JSON.stringify(options.nativeEvent)} };
   const cwd = ${options.cwdExpression};
@@ -218,7 +219,7 @@ const renderHookWrapperNormalizePayload = (options: {
         tool: {
           name: String(nativeToolName(input)),
           input: nativeToolInput(input),
-          output: input?.tool?.output ?? input?.toolOutput ?? input?.tool_output ?? input?.output,
+          output: ${options.toolAfterOutputExpression ?? "input?.tool?.output ?? input?.toolOutput ?? input?.tool_output ?? input?.output"},
           success: input?.tool?.success ?? input?.success,
         },
         cwd,
@@ -264,6 +265,7 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
   readonly nativeEvent: string;
   readonly cwdExpression: string;
   readonly fallbackSessionId: string;
+  readonly toolAfterOutputExpression?: string;
   readonly blockDecisionSource: string;
 }): string =>
   [
@@ -275,6 +277,7 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
       nativeEvent: options.nativeEvent,
       cwdExpression: options.cwdExpression,
       fallbackSessionId: options.fallbackSessionId,
+      toolAfterOutputExpression: options.toolAfterOutputExpression,
     }),
     renderHookWrapperExecution(options.hook.event),
     renderHookWrapperBlockHandling(options.hook.event, options.blockDecisionSource),

@@ -170,7 +170,23 @@ export const prePostSessionNativeHookEvent = (event: Hook["event"]): string =>
     sessionEnd: "SessionEnd",
   });
 
-const HOOK_WRAPPER_INPUT_HELPERS = `const parseInput = async () => {
+const DEFAULT_HOOK_WRAPPER_TOOL_INPUT_EXPRESSION =
+  "input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.input ?? input?.args ?? input?.arguments ?? {}";
+
+const DEFAULT_HOOK_WRAPPER_SESSION_SOURCE = `const nativeSession = (input) => {
+  const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
+  const transcriptPath = input?.session?.transcriptPath ?? input?.transcriptPath ?? input?.transcript_path;
+  if (id === undefined && transcriptPath === undefined) return undefined;
+  return {
+    id: id === undefined ? undefined : String(id),
+    transcriptPath: transcriptPath === undefined ? undefined : String(transcriptPath),
+  };
+};`;
+
+const renderHookWrapperInputHelpers = (options?: {
+  readonly nativeToolInputExpression?: string;
+  readonly nativeSessionSource?: string;
+}): string => `const parseInput = async () => {
   let source = "";
   for await (const chunk of process.stdin) source += chunk;
   return source.trim().length > 0 ? JSON.parse(source) : {};
@@ -180,17 +196,9 @@ const nativeToolName = (input) =>
   input?.tool?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
 
 const nativeToolInput = (input) =>
-  input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.input ?? input?.args ?? input?.arguments ?? {};
+  ${options?.nativeToolInputExpression ?? DEFAULT_HOOK_WRAPPER_TOOL_INPUT_EXPRESSION};
 
-const nativeSession = (input) => {
-  const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
-  const transcriptPath = input?.session?.transcriptPath ?? input?.transcriptPath ?? input?.transcript_path;
-  if (id === undefined && transcriptPath === undefined) return undefined;
-  return {
-    id: id === undefined ? undefined : String(id),
-    transcriptPath: transcriptPath === undefined ? undefined : String(transcriptPath),
-  };
-};`;
+${options?.nativeSessionSource ?? DEFAULT_HOOK_WRAPPER_SESSION_SOURCE}`;
 
 const renderHookWrapperImports = (
   hook: Hook,
@@ -266,11 +274,17 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
   readonly cwdExpression: string;
   readonly fallbackSessionId: string;
   readonly toolAfterOutputExpression?: string;
-  readonly blockDecisionSource: string;
+  readonly nativeToolInputExpression?: string;
+  readonly nativeSessionSource?: string;
+  readonly blockDecisionSource?: string;
+  readonly resultHandlingSource?: string;
 }): string =>
   [
     renderHookWrapperImports(options.hook, options.hookRuntimePath),
-    HOOK_WRAPPER_INPUT_HELPERS,
+    renderHookWrapperInputHelpers({
+      nativeToolInputExpression: options.nativeToolInputExpression,
+      nativeSessionSource: options.nativeSessionSource,
+    }),
     renderHookWrapperNormalizePayload({
       event: options.hook.event,
       harness: options.harness,
@@ -280,7 +294,10 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
       toolAfterOutputExpression: options.toolAfterOutputExpression,
     }),
     renderHookWrapperExecution(options.hook.event),
-    renderHookWrapperBlockHandling(options.hook.event, options.blockDecisionSource),
+    options.resultHandlingSource
+      ?? (options.blockDecisionSource
+        ? renderHookWrapperBlockHandling(options.hook.event, options.blockDecisionSource)
+        : ""),
     "",
   ].join("\n\n");
 

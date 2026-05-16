@@ -5,8 +5,6 @@
  * <gemini-root>/extensions/prism-generated-<source-plugin>/.
  */
 
-import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { Effect } from "effect";
 import matter from "gray-matter";
@@ -17,9 +15,6 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
-import { effectBundleImportPath } from "../runtime-deps.js";
-import { GENERATED_HOOK_RUNTIME } from "../hook-runtime-bundle.js";
-import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -36,9 +31,11 @@ import {
 } from "../../fs.js";
 import type { LowerOperation } from "./opencode.js";
 import {
+  bundleGeneratedHookWrapper,
   executeStandardLowering,
   nativeHookEventName,
   pushWriteOperation as pushWrite,
+  renderPrePostSessionHookWrapperEntry,
   regexEscape,
   renderStandardOrbitSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
@@ -240,54 +237,18 @@ const geminiHookEvent = (event: Hook["event"]): string =>
     sessionEnd: "SessionEnd",
   });
 
-const renderHookWrapperEntry = (hookSourcePath: string, event: Hook["event"], nativeEvent: string, hookRuntimePath: string): string => `
-import { Effect } from ${JSON.stringify(effectBundleImportPath())};
-import hook from ${JSON.stringify(hookSourcePath.replace(/\\/g, "/"))};
-import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookRuntimePath.replace(/\\/g, "/"))};
+const GEMINI_HOOK_TOOL_INPUT_EXPRESSION =
+  "input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.args ?? input?.arguments ?? {}";
 
-const readStdin = async () => {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf8");
-};
+const GEMINI_HOOK_TOOL_AFTER_OUTPUT_EXPRESSION =
+  "input?.tool?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output";
 
-const parseInput = async () => {
-  const raw = (await readStdin()).trim();
-  if (!raw) return {};
-  return JSON.parse(raw);
-};
-
-const nativeToolName = (input) =>
-  input?.tool?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
-
-const nativeToolInput = (input) =>
-  input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.args ?? input?.arguments ?? {};
-
-const session = (input) => {
+const GEMINI_HOOK_SESSION_SOURCE = `const nativeSession = (input) => {
   const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
   return id === undefined ? undefined : { id: String(id) };
-};
+};`;
 
-const normalizePayload = (input) => {
-  const target = { harness: "gemini-cli", nativeEvent: ${JSON.stringify(nativeEvent)} };
-  const cwd = input?.cwd ?? input?.workspace?.cwd;
-  switch (${JSON.stringify(event)}) {
-    case "tool.before":
-      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input) }, cwd, session: session(input) };
-    case "tool.after":
-      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input), output: input?.tool?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output, success: input?.tool?.success ?? input?.success }, cwd, session: session(input) };
-    case "session.start":
-      return { target, cwd, session: session(input) ?? { id: "gemini-cli" } };
-    case "session.end":
-      return { target, cwd, session: session(input) ?? { id: "gemini-cli" }, reason: input?.reason };
-  }
-};
-
-const unwrapDecode = (decoded, label) => {
-  if (decoded && decoded._tag === "Right") return decoded.right;
-  throw new Error("prism hook " + label + " validation failed");
-};
-
+const renderGeminiHookResultHandling = (nativeEvent: string): string => `
 const toGeminiHookOutput = (nativeEvent, result) => {
   if (result.decision === "block") {
     return {
@@ -304,29 +265,34 @@ const toGeminiHookOutput = (nativeEvent, result) => {
   };
 };
 
-const toPromise = (value) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
+process.stdout.write(JSON.stringify(toGeminiHookOutput(${JSON.stringify(nativeEvent)}, result)));`;
 
-const payload = unwrapDecode(decodeNativeHookPayloadForEvent(${JSON.stringify(event)}, normalizePayload(await parseInput())), "native payload");
-const rawResult = await toPromise(hook.handle(payload));
-const result = unwrapDecode(decodeHookResultForEvent(${JSON.stringify(event)}, rawResult ?? { decision: "continue" }), "result");
-process.stdout.write(JSON.stringify(toGeminiHookOutput(${JSON.stringify(nativeEvent)}, result)));
-`;
+const renderGeminiHookWrapperEntry = (
+  hook: Hook,
+  nativeEvent: string,
+  hookRuntimePath: string,
+): string =>
+  renderPrePostSessionHookWrapperEntry({
+    hook,
+    hookRuntimePath,
+    harness: TARGET_ID,
+    nativeEvent,
+    cwdExpression: "input?.cwd ?? input?.workspace?.cwd",
+    fallbackSessionId: TARGET_ID,
+    nativeToolInputExpression: GEMINI_HOOK_TOOL_INPUT_EXPRESSION,
+    nativeSessionSource: GEMINI_HOOK_SESSION_SOURCE,
+    toolAfterOutputExpression: GEMINI_HOOK_TOOL_AFTER_OUTPUT_EXPRESSION,
+    resultHandlingSource: renderGeminiHookResultHandling(nativeEvent),
+  });
 
-const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "prism-gemini-hook-"));
-  try {
-    const entry = join(tempRoot, "hook-entry.ts");
-    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
-    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
-    await nodeWriteFile(entry, renderHookWrapperEntry(hook.sourcePath, hook.event, nativeEvent, hookRuntimePath));
-    const outdir = join(tempRoot, "dist");
-    await buildHookWrapperWithBun(entry, outdir, `Gemini '${hook.name}'`);
-    const built = await readFile(join(outdir, "wrapper.mjs"));
-    return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true });
-  }
-};
+const bundleHookWrapper = (hook: Hook, nativeEvent: string): Promise<string> =>
+  bundleGeneratedHookWrapper({
+    hook,
+    tempPrefix: "prism-gemini-hook-",
+    buildLabel: `Gemini '${hook.name}'`,
+    renderEntry: (entryHook, hookRuntimePath) =>
+      renderGeminiHookWrapperEntry(entryHook, nativeEvent, hookRuntimePath),
+  });
 
 const planHooks = async (
   input: LowerInput,

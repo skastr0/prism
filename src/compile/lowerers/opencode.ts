@@ -1997,112 +1997,184 @@ export const planLowering = async (
 // Execution
 // ---------------------------------------------------------------------------
 
+type OpenCodeJsonPatchOperation = Extract<
+  LowerOperation,
+  | { readonly kind: "patch-json" }
+  | { readonly kind: "patch-opencode-plugins" }
+  | { readonly kind: "patch-opencode-permission" }
+>;
+
+type ExecuteLoweringOptions = {
+  readonly backup: boolean;
+  readonly dryRun: boolean;
+};
+
+const isOpenCodeJsonPatchOperation = (
+  operation: LowerOperation,
+): operation is OpenCodeJsonPatchOperation =>
+  operation.kind === "patch-json" ||
+  operation.kind === "patch-opencode-plugins" ||
+  operation.kind === "patch-opencode-permission";
+
+const shouldApplyLowerOperation = (operation: LowerOperation): boolean =>
+  operation.reason !== "unchanged";
+
+const collectOpenCodeJsonPatchOperations = (
+  operations: ReadonlyArray<LowerOperation>,
+): OpenCodeJsonPatchOperation[] =>
+  operations.filter(
+    (operation): operation is OpenCodeJsonPatchOperation =>
+      shouldApplyLowerOperation(operation) && isOpenCodeJsonPatchOperation(operation),
+  );
+
+const executeWriteOperation = async (
+  operation: Extract<LowerOperation, { readonly kind: "write-md" | "write-plugin-file" }>,
+  options: ExecuteLoweringOptions,
+  backups: string[],
+): Promise<void> => {
+  if (options.backup && operation.kind === "write-md") {
+    const backup = await backupFile(operation.target);
+    if (backup) backups.push(backup);
+  }
+  await writeFile(operation.target, operation.content);
+};
+
+const executePruneOperation = async (
+  operation: Extract<LowerOperation, { readonly kind: "prune-plugin-path" }>,
+): Promise<void> => {
+  if (operation.targetType === "dir") {
+    await removeDir(operation.target);
+  } else {
+    await removeFile(operation.target);
+  }
+};
+
+const executeNonJsonLoweringOperations = async (
+  operations: ReadonlyArray<LowerOperation>,
+  options: ExecuteLoweringOptions,
+  backups: string[],
+): Promise<void> => {
+  for (const operation of operations) {
+    if (!shouldApplyLowerOperation(operation)) continue;
+    if (isOpenCodeJsonPatchOperation(operation)) continue;
+
+    if (operation.kind === "write-md" || operation.kind === "write-plugin-file") {
+      await executeWriteOperation(operation, options, backups);
+      continue;
+    }
+
+    if (operation.kind === "prune-plugin-path") {
+      await executePruneOperation(operation);
+    }
+  }
+};
+
+const readOpenCodeConfigForWrite = async (
+  jsonTarget: string,
+): Promise<Record<string, unknown>> =>
+  (await fileExists(jsonTarget)) ? await readJson<Record<string, unknown>>(jsonTarget) : {};
+
+const agentConfigMapForWrite = (
+  config: Record<string, unknown>,
+): Record<string, unknown> =>
+  (config.agent as Record<string, unknown> | undefined) || {};
+
+const applyOpenCodePluginPatch = (
+  config: Record<string, unknown>,
+  operation: Extract<LowerOperation, { readonly kind: "patch-opencode-plugins" }>,
+): void => {
+  const hadPluginKey = Object.prototype.hasOwnProperty.call(config, "plugin");
+  const plugins = Array.isArray(config.plugin) ? [...(config.plugin as unknown[])] : [];
+
+  if (operation.desiredPresent) {
+    if (!plugins.includes(operation.pluginEntry)) {
+      plugins.push(operation.pluginEntry);
+    }
+  } else {
+    const nextPlugins = plugins.filter(
+      (pluginEntry) => pluginEntry !== operation.pluginEntry,
+    );
+    plugins.length = 0;
+    plugins.push(...nextPlugins);
+  }
+
+  if (plugins.length > 0 || hadPluginKey) {
+    config.plugin = plugins;
+  } else {
+    delete config.plugin;
+  }
+};
+
+const applyOpenCodePermissionPatch = (
+  config: Record<string, unknown>,
+  operation: Extract<LowerOperation, { readonly kind: "patch-opencode-permission" }>,
+): void => {
+  const permissions = normalizePermissionBlockForWrite(config);
+  if (operation.desiredAction === undefined) {
+    delete permissions[operation.permissionKey];
+  } else {
+    permissions[operation.permissionKey] = operation.desiredAction;
+  }
+
+  if (Object.keys(permissions).length > 0) {
+    config.permission = permissions;
+  } else {
+    delete config.permission;
+  }
+};
+
+const applyOpenCodeJsonPatchOperation = (
+  config: Record<string, unknown>,
+  agentsMap: Record<string, unknown>,
+  operation: OpenCodeJsonPatchOperation,
+): void => {
+  if (operation.kind === "patch-json") {
+    agentsMap[operation.agentName] = operation.nextBlock;
+  } else if (operation.kind === "patch-opencode-plugins") {
+    applyOpenCodePluginPatch(config, operation);
+  } else {
+    applyOpenCodePermissionPatch(config, operation);
+  }
+};
+
+const executeOpenCodeJsonPatchOperations = async (
+  operations: ReadonlyArray<OpenCodeJsonPatchOperation>,
+  options: ExecuteLoweringOptions,
+  backups: string[],
+): Promise<void> => {
+  if (operations.length === 0) return;
+
+  const jsonTarget = operations[0]!.target;
+  if (options.backup) {
+    const backup = await backupFile(jsonTarget);
+    if (backup) backups.push(backup);
+  }
+
+  const config = await readOpenCodeConfigForWrite(jsonTarget);
+  const agentsMap = agentConfigMapForWrite(config);
+
+  for (const operation of operations) {
+    applyOpenCodeJsonPatchOperation(config, agentsMap, operation);
+  }
+  config.agent = agentsMap;
+
+  const serialized = JSON.stringify(config, null, 2) + "\n";
+  await writeFile(jsonTarget, serialized);
+};
+
 export const executeLowering = async (
   operations: LowerOperation[],
-  options: { backup: boolean; dryRun: boolean }
+  options: ExecuteLoweringOptions,
 ): Promise<{ backups: string[] }> => {
   const backups: string[] = [];
   if (options.dryRun) return { backups };
 
-  // Apply non-JSON operations first, JSON last so we aggregate agent + plugin
-  // patches into a single read-modify-write-of opencode.json.
-
-  for (const op of operations) {
-    if (op.reason === "unchanged") continue;
-    if (
-      op.kind === "patch-json" ||
-      op.kind === "patch-opencode-plugins" ||
-      op.kind === "patch-opencode-permission"
-    ) continue;
-
-    if (op.kind === "write-md" || op.kind === "write-plugin-file") {
-      if (options.backup && op.kind === "write-md") {
-        const b = await backupFile(op.target);
-        if (b) backups.push(b);
-      }
-      await writeFile(op.target, op.content);
-      continue;
-    }
-
-    if (op.kind === "prune-plugin-path") {
-      if (op.targetType === "dir") {
-        await removeDir(op.target);
-      } else {
-        await removeFile(op.target);
-      }
-      continue;
-    }
-  }
-
-  // Aggregate all JSON patches into one write.
-  const jsonOps = operations.filter(
-    (op) =>
-      (op.kind === "patch-json" ||
-        op.kind === "patch-opencode-plugins" ||
-        op.kind === "patch-opencode-permission") &&
-      op.reason !== "unchanged"
+  await executeNonJsonLoweringOperations(operations, options, backups);
+  await executeOpenCodeJsonPatchOperations(
+    collectOpenCodeJsonPatchOperations(operations),
+    options,
+    backups,
   );
-  if (jsonOps.length > 0) {
-    const jsonTarget = jsonOps[0]!.target;
-    if (options.backup) {
-      const b = await backupFile(jsonTarget);
-      if (b) backups.push(b);
-    }
-
-    let config: Record<string, unknown> = {};
-    if (await fileExists(jsonTarget)) {
-      config = await readJson<Record<string, unknown>>(jsonTarget);
-    }
-
-    const agentsMap =
-      (config.agent as Record<string, unknown> | undefined) || {};
-
-    for (const op of jsonOps) {
-      if (op.kind === "patch-json") {
-        agentsMap[op.agentName] = op.nextBlock;
-      } else if (op.kind === "patch-opencode-plugins") {
-        const hadPluginKey = Object.prototype.hasOwnProperty.call(config, "plugin");
-        const plugins = Array.isArray(config.plugin)
-          ? [...(config.plugin as unknown[])]
-          : [];
-
-        if (op.desiredPresent) {
-          if (!plugins.includes(op.pluginEntry)) {
-            plugins.push(op.pluginEntry);
-          }
-        } else {
-          const nextPlugins = plugins.filter(
-            (pluginEntry) => pluginEntry !== op.pluginEntry
-          );
-          plugins.length = 0;
-          plugins.push(...nextPlugins);
-        }
-
-        if (plugins.length > 0 || hadPluginKey) {
-          config.plugin = plugins;
-        } else {
-          delete config.plugin;
-        }
-      } else if (op.kind === "patch-opencode-permission") {
-        const permissions = normalizePermissionBlockForWrite(config);
-        if (op.desiredAction === undefined) {
-          delete permissions[op.permissionKey];
-        } else {
-          permissions[op.permissionKey] = op.desiredAction;
-        }
-
-        if (Object.keys(permissions).length > 0) {
-          config.permission = permissions;
-        } else {
-          delete config.permission;
-        }
-      }
-    }
-    config.agent = agentsMap;
-
-    const serialized = JSON.stringify(config, null, 2) + "\n";
-    await writeFile(jsonTarget, serialized);
-  }
 
   return { backups };
 };

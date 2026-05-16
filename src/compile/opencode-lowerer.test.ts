@@ -2,7 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { executeLowering, type LowerOperation } from "./lowerers/opencode.js";
+import type { ComposedAgent } from "./compose.js";
+import { executeLowering, planLowering, type LowerOperation } from "./lowerers/opencode.js";
+import type { ResolvedContractBinding } from "./resolve.js";
+import { Contract } from "./sources.js";
 
 const tempRoots: string[] = [];
 
@@ -28,6 +31,21 @@ const writeText = async (path: string, content: string): Promise<void> => {
 
 const readJson = async <T>(path: string): Promise<T> =>
   JSON.parse(await readFile(path, "utf8")) as T;
+
+const createComposedAgent = (
+  toolBindings: ReadonlyArray<ResolvedContractBinding>,
+): ComposedAgent => ({
+  name: "worker",
+  description: "Worker agent",
+  body: "# Worker\n",
+  color: undefined,
+  model: undefined,
+  targetOverride: {},
+  skills: [],
+  allowedSkills: [],
+  toolBindings,
+  allowedTools: [],
+});
 
 afterEach(async () => {
   await Promise.all(
@@ -310,4 +328,59 @@ test("opencode executeLowering deletes absent empty plugin keys and normalizes s
     },
     agent: {},
   });
+});
+
+test("opencode planLowering reports generated contract mirror collisions", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".opencode");
+  const pluginRoot = join(root, "mirror-demo");
+  const sourcePath = join(pluginRoot, "tools", "submit.tool.ts");
+  const generatedPath = "contracts/submit.contract.ts";
+
+  const firstContract = new Contract({
+    name: "submit-a",
+    sourcePath,
+    pluginName: "mirror-demo",
+    generatedFiles: [{ relativePath: generatedPath, content: "export const value = 1;\n" }],
+  });
+  const secondContract = new Contract({
+    name: "submit-b",
+    sourcePath,
+    pluginName: "mirror-demo",
+    generatedFiles: [{ relativePath: generatedPath, content: "export const value = 2;\n" }],
+  });
+
+  await expect(
+    planLowering({
+      agents: [
+        createComposedAgent([
+          {
+            kind: "synthetic",
+            logicalName: "submitA",
+            contract: firstContract,
+            toolPluginName: "mirror-demo",
+            toolName: "submit-a",
+            toolSourcePath: sourcePath,
+          },
+          {
+            kind: "synthetic",
+            logicalName: "submitB",
+            contract: secondContract,
+            toolPluginName: "mirror-demo",
+            toolName: "submit-b",
+            toolSourcePath: sourcePath,
+          },
+        ]),
+      ],
+      orbits: [],
+      tools: [],
+      target: {
+        scope: "project",
+        root: outputRoot,
+        sourcePluginName: "mirror-demo",
+      },
+    }),
+  ).rejects.toThrow(
+    "generated contract name collision at mirror-demo:contracts/submit.contract.ts",
+  );
 });

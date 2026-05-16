@@ -714,109 +714,202 @@ const collectTsFilesInSubdirs = async (
   return files;
 };
 
-const planPluginMirrors = async (
+interface PluginMirrorPlanningState {
+  readonly rootsByPlugin: Map<string, { pluginRoot: string }>;
+  readonly generatedFilesByPlugin: Map<string, Map<string, string>>;
+  readonly entryFilesByPlugin: Map<string, Map<string, MirrorFile>>;
+}
+
+const createPluginMirrorPlanningState = (): PluginMirrorPlanningState => ({
+  rootsByPlugin: new Map(),
+  generatedFilesByPlugin: new Map(),
+  entryFilesByPlugin: new Map(),
+});
+
+const addMirrorEntryFile = (
+  state: PluginMirrorPlanningState,
+  pluginName: string,
+  file: MirrorFile,
+): void => {
+  const pluginFiles =
+    state.entryFilesByPlugin.get(pluginName) ?? new Map<string, MirrorFile>();
+  pluginFiles.set(file.relativePath, file);
+  state.entryFilesByPlugin.set(pluginName, pluginFiles);
+};
+
+const addGeneratedMirrorFile = (
+  state: PluginMirrorPlanningState,
+  contract: Contract,
+  file: { readonly relativePath: string; readonly content: string },
+): void => {
+  const pluginFiles =
+    state.generatedFilesByPlugin.get(contract.pluginName) ?? new Map<string, string>();
+  const existing = pluginFiles.get(file.relativePath);
+  if (existing && existing !== file.content) {
+    throw new Error(
+      `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
+    );
+  }
+  pluginFiles.set(file.relativePath, file.content);
+  state.generatedFilesByPlugin.set(contract.pluginName, pluginFiles);
+};
+
+const contractPluginRoot = (
+  sourcePluginName: string,
+  contract: Contract,
+  sourcePluginRoot?: string,
+): string =>
+  contract.pluginName === sourcePluginName && sourcePluginRoot
+    ? sourcePluginRoot
+    : dirname(dirname(contract.sourcePath));
+
+const ensureMirrorPluginRoot = (
+  state: PluginMirrorPlanningState,
+  pluginName: string,
+  pluginRoot: string,
+): void => {
+  if (!state.rootsByPlugin.has(pluginName)) {
+    state.rootsByPlugin.set(pluginName, { pluginRoot });
+  }
+};
+
+const registerContractMirrorInputs = (
+  state: PluginMirrorPlanningState,
+  sourcePluginName: string,
+  contract: Contract,
+  sourcePluginRoot?: string,
+): void => {
+  for (const file of contract.generatedFiles ?? []) {
+    addGeneratedMirrorFile(state, contract, file);
+  }
+
+  // Prefer the host plugin's root when the contract is attributed to it.
+  // contract.sourcePath traces back to the trait file's location, which
+  // may live in a *different* plugin from the contract's owning plugin
+  // (e.g. cross-plugin trait + slot binding). Using contract.sourcePath
+  // unconditionally would map the host plugin to the trait plugin's root.
+  ensureMirrorPluginRoot(
+    state,
+    contract.pluginName,
+    contractPluginRoot(sourcePluginName, contract, sourcePluginRoot),
+  );
+};
+
+const registerContractsMirrorInputs = (
+  state: PluginMirrorPlanningState,
   sourcePluginName: string,
   bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
-  hookRegistrations: ReadonlyArray<HookRegistration> = [],
   sourcePluginRoot?: string,
-): Promise<PluginMirror[]> => {
-  const byPlugin = new Map<string, { pluginRoot: string }>();
-  const generatedFiles = new Map<string, Map<string, string>>();
-  const entryFiles = new Map<string, Map<string, MirrorFile>>();
-
-  const addEntryFile = (pluginName: string, file: MirrorFile): void => {
-    const pluginFiles = entryFiles.get(pluginName) ?? new Map<string, MirrorFile>();
-    pluginFiles.set(file.relativePath, file);
-    entryFiles.set(pluginName, pluginFiles);
-  };
-
+): void => {
   const contracts = bindings
     .map((binding) => binding.contract)
     .filter((contract): contract is Contract => contract !== undefined);
   for (const contract of contracts) {
-    if (contract.generatedFiles && contract.generatedFiles.length > 0) {
-      const pluginFiles = generatedFiles.get(contract.pluginName) ?? new Map<string, string>();
-      for (const file of contract.generatedFiles) {
-        const existing = pluginFiles.get(file.relativePath);
-        if (existing && existing !== file.content) {
-          throw new Error(
-            `generated contract name collision at ${contract.pluginName}:${file.relativePath}`,
-          );
-        }
-        pluginFiles.set(file.relativePath, file.content);
-      }
-      generatedFiles.set(contract.pluginName, pluginFiles);
-    }
+    registerContractMirrorInputs(state, sourcePluginName, contract, sourcePluginRoot);
+  }
+};
 
-    if (!byPlugin.has(contract.pluginName)) {
-      // Prefer the host plugin's root when the contract is attributed to it.
-      // contract.sourcePath traces back to the trait file's location, which
-      // may live in a *different* plugin from the contract's owning plugin
-      // (e.g. cross-plugin trait + slot binding). Using contract.sourcePath
-      // unconditionally would map the host plugin to the trait plugin's root.
-      const pluginRoot =
-        contract.pluginName === sourcePluginName && sourcePluginRoot
-          ? sourcePluginRoot
-          : dirname(dirname(contract.sourcePath));
-      byPlugin.set(contract.pluginName, { pluginRoot });
+const registerSyntheticBindingMirrorEntry = (
+  state: PluginMirrorPlanningState,
+  binding: ComposedAgent["toolBindings"][number],
+): void => {
+  if (binding.kind !== "synthetic") return;
+  if (!binding.contract) {
+    throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
+  }
+  if (binding.toolPluginName !== binding.contract.pluginName) return;
+
+  addMirrorEntryFile(state, binding.contract.pluginName, {
+    relativePath: `tools/${binding.toolName}.tool.ts`,
+    sourcePath: binding.toolSourcePath,
+  });
+};
+
+const registerSourceBindingMirrorEntry = (
+  state: PluginMirrorPlanningState,
+  sourcePluginName: string,
+  binding: ComposedAgent["toolBindings"][number],
+): void => {
+  if (binding.kind === "synthetic") return;
+  if (binding.toolPluginName !== sourcePluginName) return;
+
+  const toolsDir = dirname(binding.toolSourcePath);
+  ensureMirrorPluginRoot(state, binding.toolPluginName, dirname(toolsDir));
+  addMirrorEntryFile(state, binding.toolPluginName, {
+    relativePath: `tools/${binding.toolName}.tool.ts`,
+    sourcePath: binding.toolSourcePath,
+  });
+};
+
+const registerBindingMirrorEntries = (
+  state: PluginMirrorPlanningState,
+  sourcePluginName: string,
+  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+): void => {
+  for (const binding of bindings) {
+    if (binding.kind === "synthetic") {
+      registerSyntheticBindingMirrorEntry(state, binding);
+    } else {
+      registerSourceBindingMirrorEntry(state, sourcePluginName, binding);
     }
   }
+};
 
-    for (const binding of bindings) {
-      if (binding.kind === "synthetic") {
-        if (!binding.contract) {
-          throw new Error(`synthetic tool binding '${binding.logicalName}' is missing a contract`);
-        }
-        if (binding.toolPluginName === binding.contract.pluginName) {
-          addEntryFile(binding.contract.pluginName, {
-            relativePath: `tools/${binding.toolName}.tool.ts`,
-            sourcePath: binding.toolSourcePath,
-          });
-        }
-        continue;
-      }
-    if (binding.toolPluginName !== sourcePluginName) {
-      continue;
-    }
-    if (!byPlugin.has(binding.toolPluginName)) {
-      const toolsDir = dirname(binding.toolSourcePath);
-      const pluginRoot = dirname(toolsDir);
-      byPlugin.set(binding.toolPluginName, { pluginRoot });
-    }
-    addEntryFile(binding.toolPluginName, {
-      relativePath: `tools/${binding.toolName}.tool.ts`,
-      sourcePath: binding.toolSourcePath,
+const registerHookMirrorEntries = (
+  state: PluginMirrorPlanningState,
+  sourcePluginName: string,
+  hookRegistrations: ReadonlyArray<HookRegistration>,
+  sourcePluginRoot?: string,
+): void => {
+  if (hookRegistrations.length === 0 || !sourcePluginRoot) return;
+
+  ensureMirrorPluginRoot(state, sourcePluginName, sourcePluginRoot);
+  for (const registration of hookRegistrations) {
+    addMirrorEntryFile(state, sourcePluginName, {
+      relativePath: normalizeRelativePath(
+        relative(sourcePluginRoot, registration.hook.sourcePath),
+      ),
+      sourcePath: registration.hook.sourcePath,
     });
   }
+};
 
-  if (hookRegistrations.length > 0 && sourcePluginRoot) {
-    if (!byPlugin.has(sourcePluginName)) byPlugin.set(sourcePluginName, { pluginRoot: sourcePluginRoot });
-    for (const registration of hookRegistrations) {
-      addEntryFile(sourcePluginName, {
-        relativePath: relative(sourcePluginRoot, registration.hook.sourcePath).replace(/\\/g, "/"),
-        sourcePath: registration.hook.sourcePath,
-      });
-    }
+const mirrorFilesForPlugin = (
+  state: PluginMirrorPlanningState,
+  pluginName: string,
+): Map<string, MirrorFile> => {
+  const files = new Map(state.entryFilesByPlugin.get(pluginName) ?? []);
+  for (const [relativePath, content] of state.generatedFilesByPlugin.get(pluginName) ?? []) {
+    files.set(relativePath, { relativePath, content });
   }
+  return files;
+};
 
+const buildRuntimeClosureMirrors = async (
+  state: PluginMirrorPlanningState,
+): Promise<PluginMirror[]> => {
   const mirrors: PluginMirror[] = [];
-  for (const [pluginName, { pluginRoot }] of byPlugin) {
-    const files = new Map(entryFiles.get(pluginName) ?? []);
-    const generated = generatedFiles.get(pluginName);
-    if (generated) {
-      for (const [relativePath, content] of generated) {
-        files.set(relativePath, { relativePath, content });
-      }
-    }
+  for (const [pluginName, { pluginRoot }] of state.rootsByPlugin) {
     mirrors.push({
       pluginName,
       pluginRoot,
-      files: await collectMirrorRuntimeClosure(pluginRoot, [...files.values()]),
+      files: await collectMirrorRuntimeClosure(
+        pluginRoot,
+        [...mirrorFilesForPlugin(state, pluginName).values()],
+      ),
     });
   }
+  return mirrors;
+};
 
-  for (const [pluginName, files] of generatedFiles) {
-    if (mirrors.some((mirror) => mirror.pluginName === pluginName)) continue;
+const buildGeneratedOnlyMirrors = (
+  state: PluginMirrorPlanningState,
+  runtimeMirrors: ReadonlyArray<PluginMirror>,
+): PluginMirror[] => {
+  const mirroredPlugins = new Set(runtimeMirrors.map((mirror) => mirror.pluginName));
+  const mirrors: PluginMirror[] = [];
+  for (const [pluginName, files] of state.generatedFilesByPlugin) {
+    if (mirroredPlugins.has(pluginName)) continue;
     mirrors.push({
       pluginName,
       files: [...files.entries()].map(([relativePath, content]) => ({
@@ -825,8 +918,30 @@ const planPluginMirrors = async (
       })),
     });
   }
-
   return mirrors;
+};
+
+const buildPluginMirrors = async (
+  state: PluginMirrorPlanningState,
+): Promise<PluginMirror[]> => {
+  const runtimeMirrors = await buildRuntimeClosureMirrors(state);
+  return [
+    ...runtimeMirrors,
+    ...buildGeneratedOnlyMirrors(state, runtimeMirrors),
+  ];
+};
+
+const planPluginMirrors = async (
+  sourcePluginName: string,
+  bindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>,
+  hookRegistrations: ReadonlyArray<HookRegistration> = [],
+  sourcePluginRoot?: string,
+): Promise<PluginMirror[]> => {
+  const state = createPluginMirrorPlanningState();
+  registerContractsMirrorInputs(state, sourcePluginName, bindings, sourcePluginRoot);
+  registerBindingMirrorEntries(state, sourcePluginName, bindings);
+  registerHookMirrorEntries(state, sourcePluginName, hookRegistrations, sourcePluginRoot);
+  return buildPluginMirrors(state);
 };
 
 const planAdaptersForBindings = (

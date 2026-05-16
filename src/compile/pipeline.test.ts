@@ -4941,6 +4941,12 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
       join(pluginRootPath, "skills", "delivery-contract", "SKILL.md"),
     ),
   ).toBe(true);
+  const deliveryOrbitSkill = await readFile(
+    join(pluginRootPath, "skills", "delivery-contract", "SKILL.md"),
+    "utf8",
+  );
+  expect(deliveryOrbitSkill).not.toContain("## Orchestrator");
+  expect(deliveryOrbitSkill).not.toContain("create_glyph");
   expect(
     await pathExists(
       join(pluginRootPath, "orbits", "delivery-contract.md"),

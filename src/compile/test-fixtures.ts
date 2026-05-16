@@ -626,31 +626,39 @@ const writeFixtureAgents = async (
   await writeSecurityReviewerAgent(paths);
 };
 
-const writeDeliveryOrbit = async (
+const deliveryReviewAgentRefs = (options: CanonicalCompileFixtureOptions): string =>
+  (options.invalidOrbit ? ["builder"] : ["reviewer"])
+    .map((agent) => `agentRef(${JSON.stringify(agent)})`)
+    .join(", ");
+
+const deliveryOrbitOrchestratorAgent = (
+  options: CanonicalCompileFixtureOptions,
+): string => options.invalidOrbitPermissionAgent ? "ghost-orchestrator" : "builder";
+
+const deliveryOrbitOrchestratorBlock = (
   paths: CanonicalFixturePaths,
   options: CanonicalCompileFixtureOptions,
-): Promise<void> => {
-  const { pluginRoot, withCanonicalToolBindings } = paths;
-  const reviewAgents = options.invalidOrbit ? ["builder"] : ["reviewer"];
-  const orchestratorAgent = options.invalidOrbitPermissionAgent
-    ? "ghost-orchestrator"
-    : "builder";
-  const orbitOrchestrator = withCanonicalToolBindings
-    ? `,
+): string => {
+  if (!paths.withCanonicalToolBindings) return "";
+  return `,
   orchestrator: {
-    agent: agentRef(${JSON.stringify(orchestratorAgent)}),
+    agent: agentRef(${JSON.stringify(deliveryOrbitOrchestratorAgent(options))}),
     tools: [
       {
         ref: "protocol-core:create_glyph",
         as: "create_glyph",
       },
     ],
-  }`
-    : "";
+  }`;
+};
 
-  await writeText(
-    join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+const deliveryOrbitSource = (
+  paths: CanonicalFixturePaths,
+  options: CanonicalCompileFixtureOptions,
+): string => {
+  const reviewAgents = deliveryReviewAgentRefs(options);
+
+  return `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineOrbit({
   name: "delivery-contract",
@@ -671,7 +679,7 @@ export default defineOrbit({
     },
     {
       name: "Review change",
-      agents: [${reviewAgents.map((agent) => `agentRef(${JSON.stringify(agent)})`).join(", ")}],
+      agents: [${reviewAgents}],
       requires: [
         {
           all: [traitRef("reviewable"), traitRef("self-assessing")],
@@ -696,10 +704,19 @@ export default defineOrbit({
         "Done": "Work has been handed off cleanly",
       },
     },
-  ]${orbitOrchestrator},
+  ]${deliveryOrbitOrchestratorBlock(paths, options)},
   body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
 });
-`
+`;
+};
+
+const writeDeliveryOrbit = async (
+  paths: CanonicalFixturePaths,
+  options: CanonicalCompileFixtureOptions,
+): Promise<void> => {
+  await writeText(
+    join(paths.pluginRoot, "orbits", "delivery-contract.orbit.ts"),
+    deliveryOrbitSource(paths, options),
   );
 };
 

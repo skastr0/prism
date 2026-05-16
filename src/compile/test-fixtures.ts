@@ -251,74 +251,81 @@ export const ProtocolReviewEvidence = Schema.Struct({
   );
 };
 
-const writeLocalTools = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
-  await writeText(
-    join(pluginRoot, "tools", "submit-work.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+interface LocalAcknowledgingToolSpec {
+  readonly name: "submit-work" | "commit-work" | "submit-review";
+  readonly description: string;
+  readonly reviewSlot?: boolean;
+}
 
-export default defineTool({
-  name: "submit-work",
-  description: "Submit completed work",
-  input: Schema.Struct({
-    summary: Schema.String,
-  }),
-  output: Schema.Struct({
-    acknowledged: Schema.Boolean,
-  }),
-  async handle(input, context) {
-    return { acknowledged: true };
-  },
-});
-`
-  );
+const localToolImport = (reviewSlot: boolean): string =>
+  reviewSlot
+    ? `import { defineTool, schemaSlot } from ${JSON.stringify(prismImportPath)};`
+    : `import { defineTool } from ${JSON.stringify(prismImportPath)};`;
 
-  await writeText(
-    join(pluginRoot, "tools", "commit-work.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "commit-work",
-  description: "Commit validated implementation work",
-  input: Schema.Struct({
-    summary: Schema.String,
-  }),
-  output: Schema.Struct({
-    acknowledged: Schema.Boolean,
-  }),
-  async handle(input, context) {
-    return { acknowledged: true };
-  },
-});
-`
-  );
-
-  await writeText(
-    join(pluginRoot, "tools", "submit-review.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool, schemaSlot } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "submit-review",
-  description: "Submit review findings",
-  input: Schema.Struct({
-    summary: Schema.String,
-  }),
-  output: Schema.Struct({
-    acknowledged: Schema.Boolean,
-  }),
-  slots: {
+const localToolSlotsBlock = (spec: LocalAcknowledgingToolSpec): string =>
+  spec.reviewSlot
+    ? `  slots: {
     verdict: schemaSlot({
       description: "Agent-specific review fields",
     }),
   },
-  async handle(input, context) {
+`
+    : "";
+
+const localAcknowledgingToolSource = (spec: LocalAcknowledgingToolSpec): string => `import { Schema } from ${JSON.stringify(effectImportPath)};
+${localToolImport(spec.reviewSlot ?? false)}
+
+export default defineTool({
+  name: ${JSON.stringify(spec.name)},
+  description: ${JSON.stringify(spec.description)},
+  input: Schema.Struct({
+    summary: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+  }),
+${localToolSlotsBlock(spec)}  async handle(input, context) {
     return { acknowledged: true };
   },
 });
-`
+`;
+
+const writeLocalTool = async (
+  pluginRoot: string,
+  spec: LocalAcknowledgingToolSpec,
+): Promise<void> => {
+  await writeText(
+    join(pluginRoot, "tools", `${spec.name}.tool.ts`),
+    localAcknowledgingToolSource(spec),
   );
+};
+
+const writeSubmitWorkTool = async (pluginRoot: string): Promise<void> => {
+  await writeLocalTool(pluginRoot, {
+    name: "submit-work",
+    description: "Submit completed work",
+  });
+};
+
+const writeCommitWorkTool = async (pluginRoot: string): Promise<void> => {
+  await writeLocalTool(pluginRoot, {
+    name: "commit-work",
+    description: "Commit validated implementation work",
+  });
+};
+
+const writeSubmitReviewTool = async (pluginRoot: string): Promise<void> => {
+  await writeLocalTool(pluginRoot, {
+    name: "submit-review",
+    description: "Submit review findings",
+    reviewSlot: true,
+  });
+};
+
+const writeLocalTools = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
+  await writeSubmitWorkTool(pluginRoot);
+  await writeCommitWorkTool(pluginRoot);
+  await writeSubmitReviewTool(pluginRoot);
 };
 
 const writeProtocolTools = async ({ protocolRoot }: CanonicalFixturePaths): Promise<void> => {

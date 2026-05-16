@@ -1143,6 +1143,43 @@ test("readManifest accepts canonical compile target keys", async () => {
   });
 });
 
+test("canonical fixture writes local tool sources with review-only slot", async () => {
+  const { pluginRoot } = await createCanonicalLanguageFixture();
+
+  const submitWork = await readFile(
+    join(pluginRoot, "tools", "submit-work.tool.ts"),
+    "utf8",
+  );
+  const commitWork = await readFile(
+    join(pluginRoot, "tools", "commit-work.tool.ts"),
+    "utf8",
+  );
+  const submitReview = await readFile(
+    join(pluginRoot, "tools", "submit-review.tool.ts"),
+    "utf8",
+  );
+
+  expect(submitWork).toContain('name: "submit-work"');
+  expect(submitWork).toContain('description: "Submit completed work"');
+  expect(commitWork).toContain('name: "commit-work"');
+  expect(commitWork).toContain(
+    'description: "Commit validated implementation work"',
+  );
+  expect(submitReview).toContain('name: "submit-review"');
+  expect(submitReview).toContain('description: "Submit review findings"');
+
+  for (const source of [submitWork, commitWork, submitReview]) {
+    expect(source).toContain("summary: Schema.String");
+    expect(source).toContain("acknowledged: Schema.Boolean");
+  }
+  expect(submitWork).not.toContain("schemaSlot");
+  expect(commitWork).not.toContain("schemaSlot");
+  expect(submitReview).toContain("schemaSlot");
+  expect(submitReview).toContain(
+    'description: "Agent-specific review fields"',
+  );
+});
+
 test("readManifest treats skillspaces as compile artifacts", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");

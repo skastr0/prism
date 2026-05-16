@@ -1044,119 +1044,188 @@ export async function validateSkill(
   skillPath: string,
   skillDirName?: string
 ): Promise<SkillValidationResult> {
-  const errors: string[] = [];
-  const warnings: string[] = [];
   const expandedPath = expandPath(skillPath);
   const skillMdPath = join(expandedPath, "SKILL.md");
 
-  // Check SKILL.md exists
-  if (!(await exists(skillMdPath))) {
-    return {
-      valid: false,
-      errors: ["SKILL.md not found"],
-      warnings: [],
-      skillPath: expandedPath,
-    };
-  }
+  const parsed = await loadSkillValidationSource(skillMdPath, expandedPath);
+  if ("result" in parsed) return parsed.result;
 
-  // Parse the file
-  let frontmatter: Record<string, unknown>;
-  let content: string;
-  let lineCount: number;
+  const diagnostics = collectSkillValidationDiagnostics(
+    parsed.frontmatter,
+    parsed.lineCount,
+    skillDirName,
+  );
+
+  return buildSkillValidationResult(expandedPath, parsed.frontmatter, diagnostics);
+}
+
+type ParsedSkillValidationSource = {
+  readonly frontmatter: Record<string, unknown>;
+  readonly lineCount: number;
+};
+
+type SkillValidationSourceLoadResult =
+  | ParsedSkillValidationSource
+  | { readonly result: SkillValidationResult };
+
+type SkillValidationDiagnostics = {
+  readonly errors: string[];
+  readonly warnings: string[];
+};
+
+const failedSkillValidation = (
+  skillPath: string,
+  errors: string[],
+): SkillValidationResult => ({
+  valid: false,
+  errors,
+  warnings: [],
+  skillPath,
+});
+
+async function loadSkillValidationSource(
+  skillMdPath: string,
+  expandedPath: string,
+): Promise<SkillValidationSourceLoadResult> {
+  if (!(await exists(skillMdPath))) {
+    return { result: failedSkillValidation(expandedPath, ["SKILL.md not found"]) };
+  }
 
   try {
-    const raw = await readFile(skillMdPath);
-
-    // Check frontmatter format
-    if (!raw.startsWith("---")) {
-      return {
-        valid: false,
-        errors: ["No YAML frontmatter found (file must start with ---)"],
-        warnings: [],
-        skillPath: expandedPath,
-      };
-    }
-
-    const { data, content: parsedContent } = matter(raw);
-
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      return {
-        valid: false,
-        errors: ["Frontmatter must be a YAML dictionary"],
-        warnings: [],
-        skillPath: expandedPath,
-      };
-    }
-
-    frontmatter = data as Record<string, unknown>;
-    content = parsedContent.trim();
-    lineCount = content.split("\n").length;
+    return parseSkillValidationSource(await readFile(skillMdPath), expandedPath);
   } catch (error) {
     return {
-      valid: false,
-      errors: [
+      result: failedSkillValidation(expandedPath, [
         `Invalid YAML in frontmatter: ${error instanceof Error ? error.message : String(error)}`,
-      ],
-      warnings: [],
-      skillPath: expandedPath,
+      ]),
+    };
+  }
+}
+
+function parseSkillValidationSource(
+  raw: string,
+  expandedPath: string,
+): SkillValidationSourceLoadResult {
+  if (!raw.startsWith("---")) {
+    return {
+      result: failedSkillValidation(expandedPath, [
+        "No YAML frontmatter found (file must start with ---)",
+      ]),
     };
   }
 
-  // Validate frontmatter keys (whitelist)
+  const { data, content: parsedContent } = matter(raw);
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return {
+      result: failedSkillValidation(expandedPath, [
+        "Frontmatter must be a YAML dictionary",
+      ]),
+    };
+  }
+
+  const content = parsedContent.trim();
+  return {
+    frontmatter: data as Record<string, unknown>,
+    lineCount: content.split("\n").length,
+  };
+}
+
+function collectSkillValidationDiagnostics(
+  frontmatter: Record<string, unknown>,
+  lineCount: number,
+  skillDirName?: string,
+): SkillValidationDiagnostics {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
   const keysResult = validateSkillFrontmatterKeys(frontmatter);
   if (!keysResult.valid && keysResult.error) {
     errors.push(keysResult.error);
   }
 
-  // Validate required field: name
-  if (!("name" in frontmatter)) {
-    errors.push("Missing 'name' in frontmatter");
-  } else {
-    const nameResult = validateSkillName(frontmatter.name);
-    if (!nameResult.valid && nameResult.error) {
-      errors.push(nameResult.error);
-    }
+  validateSkillRequiredFields(frontmatter, skillDirName, errors, warnings);
 
-    // Check name matches directory name (if provided)
-    if (
-      skillDirName &&
-      typeof frontmatter.name === "string" &&
-      frontmatter.name !== skillDirName
-    ) {
-      warnings.push(
-        `Skill name '${frontmatter.name}' does not match directory name '${skillDirName}'`
-      );
-    }
-  }
-
-  // Validate required field: description
-  if (!("description" in frontmatter)) {
-    errors.push("Missing 'description' in frontmatter");
-  } else {
-    const descResult = validateSkillDescription(frontmatter.description);
-    if (!descResult.valid && descResult.error) {
-      errors.push(descResult.error);
-    }
-  }
-
-  // Validate optional fields
   const optionalResult = validateSkillOptionalFields(frontmatter);
   errors.push(...optionalResult.errors);
   warnings.push(...optionalResult.warnings);
 
-  // Check body length (warning only)
-  if (lineCount > SKILL_VALIDATION.RECOMMENDED_BODY_MAX_LINES) {
-    warnings.push(
-      `SKILL.md body is ${lineCount} lines (recommended max: ${SKILL_VALIDATION.RECOMMENDED_BODY_MAX_LINES}). Consider splitting into reference files.`
-    );
+  addSkillBodyLengthWarning(lineCount, warnings);
+
+  return { errors, warnings };
+}
+
+function validateSkillRequiredFields(
+  frontmatter: Record<string, unknown>,
+  skillDirName: string | undefined,
+  errors: string[],
+  warnings: string[],
+): void {
+  validateSkillRequiredName(frontmatter, skillDirName, errors, warnings);
+  validateSkillRequiredDescription(frontmatter, errors);
+}
+
+function validateSkillRequiredName(
+  frontmatter: Record<string, unknown>,
+  skillDirName: string | undefined,
+  errors: string[],
+  warnings: string[],
+): void {
+  if (!("name" in frontmatter)) {
+    errors.push("Missing 'name' in frontmatter");
+    return;
   }
 
+  const nameResult = validateSkillName(frontmatter.name);
+  if (!nameResult.valid && nameResult.error) {
+    errors.push(nameResult.error);
+  }
+
+  if (
+    skillDirName &&
+    typeof frontmatter.name === "string" &&
+    frontmatter.name !== skillDirName
+  ) {
+    warnings.push(
+      `Skill name '${frontmatter.name}' does not match directory name '${skillDirName}'`,
+    );
+  }
+}
+
+function validateSkillRequiredDescription(
+  frontmatter: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (!("description" in frontmatter)) {
+    errors.push("Missing 'description' in frontmatter");
+    return;
+  }
+
+  const descResult = validateSkillDescription(frontmatter.description);
+  if (!descResult.valid && descResult.error) {
+    errors.push(descResult.error);
+  }
+}
+
+function addSkillBodyLengthWarning(lineCount: number, warnings: string[]): void {
+  if (lineCount > SKILL_VALIDATION.RECOMMENDED_BODY_MAX_LINES) {
+    warnings.push(
+      `SKILL.md body is ${lineCount} lines (recommended max: ${SKILL_VALIDATION.RECOMMENDED_BODY_MAX_LINES}). Consider splitting into reference files.`,
+    );
+  }
+}
+
+function buildSkillValidationResult(
+  skillPath: string,
+  frontmatter: Record<string, unknown>,
+  diagnostics: SkillValidationDiagnostics,
+): SkillValidationResult {
   return {
-    valid: errors.length === 0,
-    errors,
-    warnings,
+    valid: diagnostics.errors.length === 0,
+    errors: diagnostics.errors,
+    warnings: diagnostics.warnings,
     skillName: typeof frontmatter.name === "string" ? frontmatter.name : undefined,
-    skillPath: expandedPath,
+    skillPath,
   };
 }
 

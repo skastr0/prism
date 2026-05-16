@@ -1,0 +1,93 @@
+{
+  "id": "prism-ai-slop-defense-whole-repo",
+  "domain": "typescript",
+  "description": "Prism uses AI-assisted development but keeps generated-slop signals on whole-repo visibility so existing lowerer clone debt remains visible while stricter duplication, complexity, generic bloat, and unfinished-stub weights apply.",
+  "signal_overrides": {
+    "TS-SL-01": {
+      "weight": 1.7,
+      "config": {
+        "min_tokens": 8
+      }
+    },
+    "TS-SL-02": {
+      "weight": 1.55,
+      "config": {
+        "max_groups_analyzed": 8
+      }
+    },
+    "TS-SL-03": {
+      "weight": 1.5
+    },
+    "TS-SL-04": {
+      "weight": 1.7,
+      "config": {
+        "hard_gate_production": true
+      }
+    },
+    "TS-LD-01": {
+      "weight": 1.4,
+      "config": {
+        "max_complexity": 15
+      }
+    },
+    "TS-AB-03": {
+      "weight": 1.3
+    },
+    "TS-AB-05": {
+      "weight": 1.35
+    },
+    "TS-RP-01": {
+      "weight": 1.2,
+      "config": {
+        "min_churn": 1,
+        "min_complexity": 4,
+        "threshold_softness": 0.35
+      }
+    },
+    "SHARED-03": {
+      "weight": 1.15
+    }
+  },
+  "review_routing": {
+    "score_thresholds": {
+      "consolidation-reviewer": 0.82,
+      "simplicity-reviewer": 0.78
+    }
+  },
+  "provenance": [
+    {
+      "source": "preset",
+      "recorded_at": "2026-05-16T08:39:27.295Z",
+      "summary": "Applied preset ai-slop-defense",
+      "preset_id": "ai-slop-defense",
+      "evidence": [
+        {
+          "kind": "preset",
+          "summary": "Assume AI assistance is present and tighten the places where generative output most often drifts: duplication, complexity, generic bloat, and unfinished stubs. Best for teams that want AI-assisted mode to be explicit, visible in the vector, and enforced through normal preset mechanics rather than a hidden switch."
+        }
+      ]
+    },
+    {
+      "source": "manual",
+      "recorded_at": "2026-05-16T08:46:00.000Z",
+      "summary": "Removed modes.ai_assisted so generated-slop scoring remains whole-repo instead of changed-hunk-only; existing lowerer clone debt is legitimate Prism compiler debt rather than calibration noise.",
+      "evidence": [
+        {
+          "kind": "score-delta",
+          "summary": "With modes.ai_assisted active, generated-slop reported 1.000 because TS-SL-01 and TS-SL-02 analyzed only changed hunks; built-in/default whole-repo runs identified real lowerer duplication."
+        }
+      ]
+    },
+    {
+      "source": "manual",
+      "recorded_at": "2026-05-16T09:05:00.000Z",
+      "summary": "Deferred baseline and project-module activation intentionally: current hard gates pass without a baseline, and the suggested Effect project module needs package availability review before becoming repo policy.",
+      "evidence": [
+        {
+          "kind": "score-delta",
+          "summary": "pulsar calibrate suggest reports baseline.set and @skastr0/pulsar-project-module-effect as remaining suggestions; neither is required for this repo-local vector, conventions, and glossary calibration."
+        }
+      ]
+    }
+  ]
+}

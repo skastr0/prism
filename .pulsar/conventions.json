@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "extracted_at_sha": "a7d6994b659491a60ea6c4aae6db734c2a73aa35",
+  "boundaries": {
+    ".": {
+      "visibility": "public-api",
+      "allowed_imports": [
+        "@opencode-ai/plugin",
+        "commander",
+        "effect",
+        "gray-matter",
+        "typescript"
+      ]
+    }
+  },
+  "naming_conventions": {
+    "function": "camelCase",
+    "class": "PascalCase",
+    "interface": "PascalCase",
+    "type": "PascalCase",
+    "const": "camelCase | PascalCase | UPPER_SNAKE_CASE",
+    "enum": "PascalCase"
+  },
+  "architectural_rules": []
+}

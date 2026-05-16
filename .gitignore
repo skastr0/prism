@@ -7,3 +7,7 @@ dist/
 .atlas/
 .exa-cli/
 .firecrawl-cli/
+
+.pulsar/cache/
+.pulsar/score-*.json
+.pulsar/*.draft.json

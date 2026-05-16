@@ -1562,110 +1562,163 @@ export const resolveAgent = (
     );
   });
 
+type InstantiatedOrbitHeader = {
+  readonly description: string;
+  readonly produces: string | undefined;
+  readonly definitions: OrbitDefinitions | undefined;
+};
+
+type InstantiatedOrbitTail = {
+  readonly evolution: string | undefined;
+  readonly body: string;
+};
+
+const validateOrbitInstantiationBindings = (
+  orbit: Orbit,
+  bindings: BindingMap,
+): OrbitValidationError | undefined => {
+  const parameters = orbitParameterMap(orbit);
+  const unknownBindings = Object.keys(bindings).filter((name) => !parameters.has(name));
+  if (unknownBindings.length > 0) {
+    return orbitError(
+      orbit,
+      "bindings",
+      `received unknown binding(s): ${unknownBindings.join(", ")}`,
+    );
+  }
+
+  const missingRequired = orbit.parameters
+    .filter((parameter) => parameterIsRequired(parameter))
+    .map((parameter) => parameter.name)
+    .filter((name) => !hasBinding(bindings, name));
+  if (missingRequired.length > 0) {
+    return orbitError(
+      orbit,
+      "bindings",
+      `missing required binding(s): ${missingRequired.join(", ")}`,
+    );
+  }
+
+  return undefined;
+};
+
+const instantiateOrbitHeader = (
+  orbit: Orbit,
+  bindings: BindingMap,
+): InstantiatedOrbitHeader | OrbitValidationError => {
+  const description = instantiateTemplateString(
+    orbit,
+    "description",
+    orbit.description,
+    bindings,
+  );
+  if (description instanceof OrbitValidationError) return description;
+
+  const produces = orbit.produces
+    ? instantiateTemplateString(orbit, "produces", orbit.produces, bindings)
+    : undefined;
+  if (produces instanceof OrbitValidationError) return produces;
+
+  const definitions = instantiateOrbitDefinitions(orbit, bindings);
+  if (definitions instanceof OrbitValidationError) return definitions;
+
+  return { description, produces, definitions };
+};
+
+const instantiateOrbitPhases = (
+  orbit: Orbit,
+  bindings: BindingMap,
+): OrbitPhase[] | OrbitValidationError => {
+  const phases: OrbitPhase[] = [];
+  for (const [index, phase] of orbit.phases.entries()) {
+    const nextPhase = instantiateOrbitPhase(orbit, phase, index, bindings);
+    if (nextPhase instanceof OrbitValidationError) return nextPhase;
+    phases.push(nextPhase);
+  }
+  return phases;
+};
+
+const instantiateOrbitCheckpoints = (
+  orbit: Orbit,
+  bindings: BindingMap,
+): OrbitPulsarCheckpoint[] | OrbitValidationError => {
+  const checkpoints: OrbitPulsarCheckpoint[] = [];
+  for (const [index, checkpoint] of orbit.pulsar_checkpoints.entries()) {
+    const nextCheckpoint = instantiateOrbitCheckpoint(
+      orbit,
+      checkpoint,
+      index,
+      bindings,
+    );
+    if (nextCheckpoint instanceof OrbitValidationError) return nextCheckpoint;
+    checkpoints.push(nextCheckpoint);
+  }
+  return checkpoints;
+};
+
+const instantiateOrbitTail = (
+  orbit: Orbit,
+  bindings: BindingMap,
+): InstantiatedOrbitTail | OrbitValidationError => {
+  const evolution = orbit.evolution
+    ? instantiateTemplateString(orbit, "evolution", orbit.evolution, bindings)
+    : undefined;
+  if (evolution instanceof OrbitValidationError) return evolution;
+
+  const body = instantiateTemplateString(orbit, "body", orbit.body, bindings);
+  if (body instanceof OrbitValidationError) return body;
+
+  return { evolution, body };
+};
+
+const buildInstantiatedOrbit = (
+  orbit: Orbit,
+  header: InstantiatedOrbitHeader,
+  phases: OrbitPhase[],
+  checkpoints: OrbitPulsarCheckpoint[],
+  tail: InstantiatedOrbitTail,
+): Orbit => {
+  const clonedOrchestrator = cloneOrbitOrchestrator(orbit);
+
+  return new Orbit({
+    name: orbit.name,
+    sourcePath: orbit.sourcePath,
+    description: header.description,
+    produces: header.produces,
+    ...(header.definitions ? { definitions: header.definitions } : {}),
+    parameters: [],
+    phases,
+    ...(clonedOrchestrator ? { orchestrator: clonedOrchestrator } : {}),
+    tool_permissions: cloneOrbitToolPermissions(orbit),
+    pulsar_checkpoints: checkpoints,
+    evolution: tail.evolution,
+    body: tail.body,
+  });
+};
+
 export const instantiateOrbit = (
   orbit: Orbit,
   bindings: BindingMap = {},
 ): Effect.Effect<Orbit, CompileError> =>
   Effect.gen(function* () {
-    const parameters = orbitParameterMap(orbit);
-    const unknownBindings = Object.keys(bindings).filter((name) => !parameters.has(name));
-    if (unknownBindings.length > 0) {
-      return yield* Effect.fail(
-        orbitError(
-          orbit,
-          "bindings",
-          `received unknown binding(s): ${unknownBindings.join(", ")}`,
-        ),
-      );
+    const bindingError = validateOrbitInstantiationBindings(orbit, bindings);
+    if (bindingError) return yield* Effect.fail(bindingError);
+
+    const header = instantiateOrbitHeader(orbit, bindings);
+    if (header instanceof OrbitValidationError) return yield* Effect.fail(header);
+
+    const phases = instantiateOrbitPhases(orbit, bindings);
+    if (phases instanceof OrbitValidationError) return yield* Effect.fail(phases);
+
+    const checkpoints = instantiateOrbitCheckpoints(orbit, bindings);
+    if (checkpoints instanceof OrbitValidationError) {
+      return yield* Effect.fail(checkpoints);
     }
 
-    const missingRequired = orbit.parameters
-      .filter((parameter) => parameterIsRequired(parameter))
-      .map((parameter) => parameter.name)
-      .filter((name) => !hasBinding(bindings, name));
-    if (missingRequired.length > 0) {
-      return yield* Effect.fail(
-        orbitError(
-          orbit,
-          "bindings",
-          `missing required binding(s): ${missingRequired.join(", ")}`,
-        ),
-      );
-    }
+    const tail = instantiateOrbitTail(orbit, bindings);
+    if (tail instanceof OrbitValidationError) return yield* Effect.fail(tail);
 
-    const description = instantiateTemplateString(
-      orbit,
-      "description",
-      orbit.description,
-      bindings,
-    );
-    if (description instanceof OrbitValidationError) {
-      return yield* Effect.fail(description);
-    }
-
-    const produces = orbit.produces
-      ? instantiateTemplateString(orbit, "produces", orbit.produces, bindings)
-      : undefined;
-    if (produces instanceof OrbitValidationError) {
-      return yield* Effect.fail(produces);
-    }
-
-    const definitions = instantiateOrbitDefinitions(orbit, bindings);
-    if (definitions instanceof OrbitValidationError) {
-      return yield* Effect.fail(definitions);
-    }
-
-    const phases: OrbitPhase[] = [];
-    for (const [index, phase] of orbit.phases.entries()) {
-      const nextPhase = instantiateOrbitPhase(orbit, phase, index, bindings);
-      if (nextPhase instanceof OrbitValidationError) {
-        return yield* Effect.fail(nextPhase);
-      }
-      phases.push(nextPhase);
-    }
-
-    const tasteCheckpoints: OrbitPulsarCheckpoint[] = [];
-    for (const [index, checkpoint] of orbit.pulsar_checkpoints.entries()) {
-      const nextCheckpoint = instantiateOrbitCheckpoint(
-        orbit,
-        checkpoint,
-        index,
-        bindings,
-      );
-      if (nextCheckpoint instanceof OrbitValidationError) {
-        return yield* Effect.fail(nextCheckpoint);
-      }
-      tasteCheckpoints.push(nextCheckpoint);
-    }
-
-    const evolution = orbit.evolution
-      ? instantiateTemplateString(orbit, "evolution", orbit.evolution, bindings)
-      : undefined;
-    if (evolution instanceof OrbitValidationError) {
-      return yield* Effect.fail(evolution);
-    }
-
-    const body = instantiateTemplateString(orbit, "body", orbit.body, bindings);
-    if (body instanceof OrbitValidationError) {
-      return yield* Effect.fail(body);
-    }
-
-    const clonedOrchestrator = cloneOrbitOrchestrator(orbit);
-
-    return new Orbit({
-      name: orbit.name,
-      sourcePath: orbit.sourcePath,
-      description,
-      produces,
-      ...(definitions ? { definitions } : {}),
-      parameters: [],
-      phases,
-      ...(clonedOrchestrator ? { orchestrator: clonedOrchestrator } : {}),
-      tool_permissions: cloneOrbitToolPermissions(orbit),
-      pulsar_checkpoints: tasteCheckpoints,
-      evolution,
-      body,
-    });
+    return buildInstantiatedOrbit(orbit, header, phases, checkpoints, tail);
   });
 
 const resolveOrbitRequiredTraitId = (

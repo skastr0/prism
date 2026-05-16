@@ -5283,6 +5283,216 @@ test("orbit definitions participate in template instantiation", async () => {
   ]);
 });
 
+test("orbit instantiation reports top-level binding failures before templating", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "binding-template",
+    sourcePath: "/tmp/binding-template.orbit.ts",
+    description: "${required} template",
+    parameters: [
+      { name: "required", required: true },
+      { name: "second", required: true },
+    ],
+    phases: [],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "",
+  });
+
+  const unknownFailure = getFailure(
+    await Effect.runPromiseExit(instantiateOrbit(orbit, { extra: "value" })),
+  );
+  expect(unknownFailure._tag).toBe("OrbitValidationError");
+  if (unknownFailure._tag === "OrbitValidationError") {
+    expect(unknownFailure.field).toBe("bindings");
+    expect(unknownFailure.message).toBe("received unknown binding(s): extra");
+  }
+
+  const missingFailure = getFailure(await Effect.runPromiseExit(instantiateOrbit(orbit, {})));
+  expect(missingFailure._tag).toBe("OrbitValidationError");
+  if (missingFailure._tag === "OrbitValidationError") {
+    expect(missingFailure.field).toBe("bindings");
+    expect(missingFailure.message).toBe("missing required binding(s): required, second");
+  }
+});
+
+test("orbit instantiation builds complete concrete orbit shape", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const orbit = new Orbit({
+    name: "full-template",
+    sourcePath: "/tmp/full-template.orbit.ts",
+    description: "A ${domain} orbit",
+    produces: "${domain} artifact",
+    definitions: {
+      glyphs: { purpose: "${domain} glyphs preserve the work contract." },
+    },
+    parameters: [{ name: "domain", required: true }],
+    phases: [
+      {
+        name: "${domain} build",
+        agents: ["builder"],
+        requires: [],
+        notes: { Done: "${domain} complete" },
+        telos: "Build ${domain}.",
+      },
+    ],
+    orchestrator: {
+      agent: "builder",
+      tools: [{ ref: "submit-work", logicalName: "submit_work" }],
+    },
+    tool_permissions: [{ ref: "create-glyph", logicalName: "create_glyph" }],
+    pulsar_checkpoints: [
+      {
+        after: "${domain} build",
+        before: "${domain} review",
+        note: "${domain} checkpoint",
+      },
+    ],
+    evolution: "${domain} backlog",
+    body: "# ${domain}\n",
+  });
+
+  const instantiated = await Effect.runPromise(
+    instantiateOrbit(orbit, { domain: "Forge" }),
+  );
+
+  expect(instantiated.name).toBe("full-template");
+  expect(instantiated.sourcePath).toBe("/tmp/full-template.orbit.ts");
+  expect(instantiated.description).toBe("A Forge orbit");
+  expect(instantiated.produces).toBe("Forge artifact");
+  expect(instantiated.definitions?.glyphs?.purpose).toBe(
+    "Forge glyphs preserve the work contract.",
+  );
+  expect(instantiated.parameters).toEqual([]);
+  expect(instantiated.phases).toEqual([
+    {
+      name: "Forge build",
+      agents: ["builder"],
+      requires: [],
+      notes: { Done: "Forge complete" },
+      telos: "Build Forge.",
+    },
+  ]);
+  expect(instantiated.orchestrator).toEqual(orbit.orchestrator);
+  expect(instantiated.orchestrator).not.toBe(orbit.orchestrator);
+  expect(instantiated.orchestrator?.tools).not.toBe(orbit.orchestrator?.tools);
+  expect(instantiated.tool_permissions).toEqual(orbit.tool_permissions);
+  expect(instantiated.tool_permissions).not.toBe(orbit.tool_permissions);
+  expect(instantiated.pulsar_checkpoints).toEqual([
+    { after: "Forge build", before: "Forge review", note: "Forge checkpoint" },
+  ]);
+  expect(instantiated.evolution).toBe("Forge backlog");
+  expect(instantiated.body).toBe("# Forge\n");
+});
+
+test("orbit instantiation preserves top-level failure ordering", async () => {
+  const { instantiateOrbit } = await import("./resolve.js");
+  const { Orbit } = await import("./sources.js");
+
+  const cases: Array<{
+    readonly orbit: Orbit;
+    readonly field: string;
+  }> = [
+    {
+      orbit: new Orbit({
+        name: "description-missing-template",
+        sourcePath: "/tmp/description-missing-template.orbit.ts",
+        description: "${missingDescription}",
+        parameters: [{ name: "missingDescription", required: false }],
+        phases: [],
+        tool_permissions: [],
+        pulsar_checkpoints: [],
+        body: "",
+      }),
+      field: "description",
+    },
+    {
+      orbit: new Orbit({
+        name: "produces-missing-template",
+        sourcePath: "/tmp/produces-missing-template.orbit.ts",
+        description: "Produces template",
+        produces: "${missingProduces}",
+        parameters: [{ name: "missingProduces", required: false }],
+        phases: [],
+        tool_permissions: [],
+        pulsar_checkpoints: [],
+        body: "",
+      }),
+      field: "produces",
+    },
+    {
+      orbit: new Orbit({
+        name: "definitions-missing-template",
+        sourcePath: "/tmp/definitions-missing-template.orbit.ts",
+        description: "Definitions template",
+        definitions: {
+          glyphs: { purpose: "${missingDefinition}" },
+        },
+        parameters: [{ name: "missingDefinition", required: false }],
+        phases: [],
+        tool_permissions: [],
+        pulsar_checkpoints: [],
+        body: "",
+      }),
+      field: "definitions.glyphs.purpose",
+    },
+    {
+      orbit: new Orbit({
+        name: "checkpoint-missing-template",
+        sourcePath: "/tmp/checkpoint-missing-template.orbit.ts",
+        description: "Checkpoint template",
+        parameters: [{ name: "missingCheckpoint", required: false }],
+        phases: [],
+        tool_permissions: [],
+        pulsar_checkpoints: [{ after: "${missingCheckpoint}" }],
+        body: "",
+      }),
+      field: "pulsar_checkpoints[0].after",
+    },
+    {
+      orbit: new Orbit({
+        name: "evolution-missing-template",
+        sourcePath: "/tmp/evolution-missing-template.orbit.ts",
+        description: "Evolution template",
+        parameters: [{ name: "missingEvolution", required: false }],
+        phases: [],
+        tool_permissions: [],
+        pulsar_checkpoints: [],
+        evolution: "${missingEvolution}",
+        body: "",
+      }),
+      field: "evolution",
+    },
+    {
+      orbit: new Orbit({
+        name: "body-missing-template",
+        sourcePath: "/tmp/body-missing-template.orbit.ts",
+        description: "Body template",
+        parameters: [{ name: "missingBody", required: false }],
+        phases: [],
+        tool_permissions: [],
+        pulsar_checkpoints: [],
+        body: "${missingBody}",
+      }),
+      field: "body",
+    },
+  ];
+
+  for (const current of cases) {
+    const failure = getFailure(await Effect.runPromiseExit(instantiateOrbit(current.orbit, {})));
+
+    expect(failure._tag).toBe("OrbitValidationError");
+    if (failure._tag === "OrbitValidationError") {
+      expect(failure.field).toBe(current.field);
+      expect(failure.message).toContain("missing binding");
+    }
+  }
+});
+
 test("derived orbit skill renders per-phase telos, real-world change, and cold-pickup test", async () => {
   const { renderDerivedOrbitSkillBody } = await import("./derived-orbit-skill.js");
   const { Orbit } = await import("./sources.js");

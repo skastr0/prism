@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,6 +45,31 @@ const findContentOperation = (
     (operation): operation is ContentOperation =>
       isContentOperation(operation) && operation.target.endsWith(suffix),
   );
+
+const runGeneratedHookWrapper = (
+  wrapperPath: string,
+  payload: unknown,
+): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> =>
+  new Promise((resolve, reject) => {
+    const child = spawn("node", [wrapperPath], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ exitCode: code ?? 0, stdout, stderr });
+    });
+
+    child.stdin.end(JSON.stringify(payload));
+  });
 
 afterEach(async () => {
   await Promise.all(
@@ -267,6 +293,18 @@ export default defineTool({
   expect(hookWrapper?.content).toContain("result");
   expect(hookWrapper?.content).toContain('harness: "grok"');
   expect(hookWrapper?.content).toContain('decision: "deny"');
+  if (!hookWrapper) throw new Error("expected audit-shell wrapper");
+  await writeText(hookWrapper.target, hookWrapper.content);
+  const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
+    tool: { name: "run_terminal_cmd", input: { block: true } },
+    workspaceRoot: pluginRoot,
+  });
+  expect(blocked.exitCode).toBe(2);
+  expect(blocked.stderr).toBe("");
+  expect(JSON.parse(blocked.stdout.trim())).toEqual({
+    decision: "deny",
+    reason: "blocked",
+  });
 });
 
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {

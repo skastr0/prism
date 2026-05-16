@@ -23,7 +23,6 @@ import {
 import { listDirRecursive, readFile } from "../../fs.js";
 import { resolveManifestTargets } from "../../manifest.js";
 import type { HarnessScope, PluginTargetId } from "../../types.js";
-import { effectBundleImportPath } from "../runtime-deps.js";
 import type { LowerOperation } from "./opencode.js";
 import {
   bundleGeneratedHookWrapper,
@@ -39,6 +38,7 @@ import {
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
+  renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
   yamlScalar,
@@ -238,80 +238,17 @@ const renderHooksJson = async (
   return json({ hooks: groupedHooks });
 };
 
-const renderHookWrapperEntry = (hook: Hook, hookRuntimePath: string): string => `import { Effect } from ${JSON.stringify(effectBundleImportPath())};
-import hook from ${JSON.stringify(hook.sourcePath.replace(/\\/g, "/"))};
-import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookRuntimePath.replace(/\\/g, "/"))};
-
-const parseInput = async () => {
-  let source = "";
-  for await (const chunk of process.stdin) source += chunk;
-  return source.trim().length > 0 ? JSON.parse(source) : {};
-};
-
-const nativeToolName = (input) =>
-  input?.tool?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
-
-const nativeToolInput = (input) =>
-  input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.input ?? input?.args ?? input?.arguments ?? {};
-
-const nativeSession = (input) => {
-  const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
-  const transcriptPath = input?.session?.transcriptPath ?? input?.transcriptPath ?? input?.transcript_path;
-  if (id === undefined && transcriptPath === undefined) return undefined;
-  return {
-    id: id === undefined ? undefined : String(id),
-    transcriptPath: transcriptPath === undefined ? undefined : String(transcriptPath),
-  };
-};
-
-const normalizePayload = (input) => {
-  const target = { harness: "claude-code", nativeEvent: ${JSON.stringify(claudeNativeHookEvent(hook.event))} };
-  const cwd = input?.cwd ?? input?.workspace?.cwd;
-
-  switch (${JSON.stringify(hook.event)}) {
-    case "tool.before":
-      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input) }, cwd, session: nativeSession(input) };
-    case "tool.after":
-      return {
-        target,
-        tool: {
-          name: String(nativeToolName(input)),
-          input: nativeToolInput(input),
-          output: input?.tool?.output ?? input?.toolOutput ?? input?.tool_output ?? input?.output,
-          success: input?.tool?.success ?? input?.success,
-        },
-        cwd,
-        session: nativeSession(input),
-      };
-    case "session.start":
-      return { target, cwd, session: nativeSession(input) ?? { id: "claude-code" } };
-    case "session.end":
-      return { target, cwd, session: nativeSession(input) ?? { id: "claude-code" }, reason: input?.reason };
-  }
-};
-
-const unwrapDecode = (decoded, label) => {
-  if (decoded && decoded._tag === "Right") return decoded.right;
-  throw new Error("prism hook " + label + " validation failed");
-};
-
-const toPromise = (value) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
-
-const payload = unwrapDecode(
-  decodeNativeHookPayloadForEvent(${JSON.stringify(hook.event)}, normalizePayload(await parseInput())),
-  "native payload",
-);
-const rawResult = await toPromise(hook.handle(payload));
-const result = unwrapDecode(
-  decodeHookResultForEvent(${JSON.stringify(hook.event)}, rawResult ?? { decision: "continue" }),
-  "result",
-);
-
-if (${JSON.stringify(hook.event)} === "tool.before" && result.decision === "block") {
-  console.error(result.message);
-  process.exit(2);
-}
-`;
+const renderHookWrapperEntry = (hook: Hook, hookRuntimePath: string): string =>
+  renderPrePostSessionHookWrapperEntry({
+    hook,
+    hookRuntimePath,
+    harness: TARGET_ID,
+    nativeEvent: claudeNativeHookEvent(hook.event),
+    cwdExpression: "input?.cwd ?? input?.workspace?.cwd",
+    fallbackSessionId: TARGET_ID,
+    blockDecisionSource: `  console.error(result.message);
+  process.exit(2);`,
+  });
 
 const bundleHookWrapper = async (hook: Hook): Promise<string> => {
   return bundleGeneratedHookWrapper({

@@ -20,6 +20,7 @@ import { buildHookWrapperWithBun } from "../hook-wrapper-build.js";
 import type { ResolvedHookMatch } from "../hooks.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
+import { effectBundleImportPath } from "../runtime-deps.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { mcpBindingsForAgentsAndTools } from "../tool-bindings.js";
 import type { LowerOperation } from "./opencode.js";
@@ -168,6 +169,117 @@ export const prePostSessionNativeHookEvent = (event: Hook["event"]): string =>
     sessionStart: "SessionStart",
     sessionEnd: "SessionEnd",
   });
+
+const HOOK_WRAPPER_INPUT_HELPERS = `const parseInput = async () => {
+  let source = "";
+  for await (const chunk of process.stdin) source += chunk;
+  return source.trim().length > 0 ? JSON.parse(source) : {};
+};
+
+const nativeToolName = (input) =>
+  input?.tool?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
+
+const nativeToolInput = (input) =>
+  input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.input ?? input?.args ?? input?.arguments ?? {};
+
+const nativeSession = (input) => {
+  const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
+  const transcriptPath = input?.session?.transcriptPath ?? input?.transcriptPath ?? input?.transcript_path;
+  if (id === undefined && transcriptPath === undefined) return undefined;
+  return {
+    id: id === undefined ? undefined : String(id),
+    transcriptPath: transcriptPath === undefined ? undefined : String(transcriptPath),
+  };
+};`;
+
+const renderHookWrapperImports = (
+  hook: Hook,
+  hookRuntimePath: string,
+): string => `import { Effect } from ${JSON.stringify(effectBundleImportPath())};
+import hook from ${JSON.stringify(hook.sourcePath.replace(/\\/g, "/"))};
+import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookRuntimePath.replace(/\\/g, "/"))};`;
+
+const renderHookWrapperNormalizePayload = (options: {
+  readonly event: Hook["event"];
+  readonly harness: string;
+  readonly nativeEvent: string;
+  readonly cwdExpression: string;
+  readonly fallbackSessionId: string;
+}): string => `const normalizePayload = (input) => {
+  const target = { harness: ${JSON.stringify(options.harness)}, nativeEvent: ${JSON.stringify(options.nativeEvent)} };
+  const cwd = ${options.cwdExpression};
+
+  switch (${JSON.stringify(options.event)}) {
+    case "tool.before":
+      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input) }, cwd, session: nativeSession(input) };
+    case "tool.after":
+      return {
+        target,
+        tool: {
+          name: String(nativeToolName(input)),
+          input: nativeToolInput(input),
+          output: input?.tool?.output ?? input?.toolOutput ?? input?.tool_output ?? input?.output,
+          success: input?.tool?.success ?? input?.success,
+        },
+        cwd,
+        session: nativeSession(input),
+      };
+    case "session.start":
+      return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} } };
+    case "session.end":
+      return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, reason: input?.reason };
+  }
+};`;
+
+const renderHookWrapperExecution = (
+  event: Hook["event"],
+): string => `const unwrapDecode = (decoded, label) => {
+  if (decoded && decoded._tag === "Right") return decoded.right;
+  throw new Error("prism hook " + label + " validation failed");
+};
+
+const toPromise = (value) => Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
+
+const payload = unwrapDecode(
+  decodeNativeHookPayloadForEvent(${JSON.stringify(event)}, normalizePayload(await parseInput())),
+  "native payload",
+);
+const rawResult = await toPromise(hook.handle(payload));
+const result = unwrapDecode(
+  decodeHookResultForEvent(${JSON.stringify(event)}, rawResult ?? { decision: "continue" }),
+  "result",
+);`;
+
+const renderHookWrapperBlockHandling = (
+  event: Hook["event"],
+  blockDecisionSource: string,
+): string => `if (${JSON.stringify(event)} === "tool.before" && result.decision === "block") {
+${blockDecisionSource}
+}`;
+
+export const renderPrePostSessionHookWrapperEntry = (options: {
+  readonly hook: Hook;
+  readonly hookRuntimePath: string;
+  readonly harness: string;
+  readonly nativeEvent: string;
+  readonly cwdExpression: string;
+  readonly fallbackSessionId: string;
+  readonly blockDecisionSource: string;
+}): string =>
+  [
+    renderHookWrapperImports(options.hook, options.hookRuntimePath),
+    HOOK_WRAPPER_INPUT_HELPERS,
+    renderHookWrapperNormalizePayload({
+      event: options.hook.event,
+      harness: options.harness,
+      nativeEvent: options.nativeEvent,
+      cwdExpression: options.cwdExpression,
+      fallbackSessionId: options.fallbackSessionId,
+    }),
+    renderHookWrapperExecution(options.hook.event),
+    renderHookWrapperBlockHandling(options.hook.event, options.blockDecisionSource),
+    "",
+  ].join("\n\n");
 
 export const bundleGeneratedHookWrapper = async (options: {
   readonly hook: Hook;

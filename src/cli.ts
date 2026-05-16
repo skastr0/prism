@@ -17,14 +17,13 @@ import {
   manifestTargetsHarness,
   manifestTargetsArtifact,
 } from "./manifest.js";
-import { ensureDir, exists, expandPath, writeFile } from "./fs.js";
+import { exists, expandPath } from "./fs.js";
 import { HARNESS_SCOPES } from "./types.js";
 import type {
   FileOperation,
   HarnessId,
   HarnessScope,
   PluginManifest,
-  PluginManifestTargets,
 } from "./types.js";
 import { basename, join } from "node:path";
 import {
@@ -33,13 +32,7 @@ import {
 } from "./compile/pipeline.js";
 import { formatCompileError, type CompileError } from "./compile/errors.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
-import {
-  prismOxlintPluginJs,
-  createTypescriptPackageJson,
-  oxlintConfigJson,
-  oxfmtConfigJson,
-  typescriptTsconfigJson,
-} from "./init-templates.js";
+import { createPluginScaffold } from "./plugin-scaffold.js";
 
 const program = new Command();
 
@@ -220,264 +213,38 @@ program
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
       const harnesses = resolveRequestedHarnesses(options);
-
       const expandedDir = expandPath(directory);
 
-      // Check directory exists
-      if (!(await exists(expandedDir))) {
-        console.error(`Directory not found: ${expandedDir}`);
-        process.exit(1);
-      }
+      await requireInstallAllDirectory(expandedDir);
+      const pluginPaths = await discoverPluginPaths(expandedDir);
+      if (!printInstallAllDiscovery(expandedDir, pluginPaths)) return;
 
-      // Discover plugins (shallow scan - only first level directories)
-      const { readdir } = await import("node:fs/promises");
-      const entries = await readdir(expandedDir, { withFileTypes: true });
-      const pluginPaths: string[] = [];
+      const { validPlugins, invalidPlugins } = await loadPluginManifests(pluginPaths);
+      printInstallAllManifestResults(validPlugins, invalidPlugins);
 
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const potentialPluginPath = join(expandedDir, entry.name);
-          const manifestPath = join(potentialPluginPath, "plugin.json");
-          if (await exists(manifestPath)) {
-            pluginPaths.push(potentialPluginPath);
-          }
-        }
-      }
+      const results = await refreshValidPlugins(validPlugins, {
+        harnesses,
+        scope: options.scope,
+        projectPath: options.project,
+        validate: options.validate,
+        dryRun: options.dryRun,
+        backup: options.backup,
+        overwrite: options.overwrite,
+      });
 
-      if (pluginPaths.length === 0) {
-        console.log(`\n📂 No plugins found in ${expandedDir}`);
-        console.log("   (Looking for directories containing plugin.json)");
-        return;
-      }
+      const hasFailures = printInstallAllSummary({
+        pluginPaths,
+        validPlugins,
+        invalidPlugins,
+        results,
+      });
 
-      console.log(`\n📂 Found ${pluginPaths.length} plugin(s) in ${expandedDir}:`);
-
-      const validPlugins: { pluginPath: string; manifest: PluginManifest }[] = [];
-      const invalidPlugins: { pluginPath: string; error: unknown }[] = [];
-
-      for (const pluginPath of pluginPaths) {
-        try {
-          const manifest = await readManifest(pluginPath);
-          validPlugins.push({ pluginPath, manifest });
-        } catch (error) {
-          invalidPlugins.push({ pluginPath, error });
-        }
-      }
-
-      if (validPlugins.length > 0) {
-        console.log("\n✅ Valid plugin manifests:");
-        for (const { manifest } of validPlugins) {
-          console.log(`   • ${manifest.name} v${manifest.version}`);
-        }
-      }
-
-      if (invalidPlugins.length > 0) {
-        console.log("\n❌ Invalid plugin manifests:\n");
-        for (const { pluginPath, error } of invalidPlugins) {
-          console.log(indentBlock(formatManifestLoadError(pluginPath, error, { bullet: true }), "   "));
-          console.log();
-        }
-      }
-
-      console.log();
-
-      // Track results across all plugins
-      const results: {
-        pluginPath: string;
-        name: string;
-        success: boolean;
-        operations: FileOperation[];
-        errors: string[];
-        backups: string[];
-      }[] = [];
-
-      // Process each plugin
-      for (const { pluginPath, manifest } of validPlugins) {
-        console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-        printPluginRefreshContext({
-          manifest,
-          harnesses,
-          scope: options.scope,
-          projectPath: options.project,
-          indent: "   ",
-        });
-
-        // Validate plugin before installation (unless --no-validate)
-        if (options.validate !== false) {
-          const shouldValidateSkills = harnesses.some((harnessId) =>
-            manifestTargetsArtifact(manifest, "skills", harnessId)
-          );
-          const shouldValidateAgents = harnesses.some((harnessId) =>
-            manifestTargetsArtifact(manifest, "agents", harnessId)
-          );
-          const skillResults = shouldValidateSkills
-            ? await validatePluginSkills(pluginPath)
-            : [];
-          const agentResults = shouldValidateAgents
-            ? await validatePluginAgents(pluginPath)
-            : [];
-          const hasSkillErrors = skillResults.some((r) => !r.valid);
-          const hasAgentErrors = agentResults.some((r) => !r.valid);
-
-          if (hasSkillErrors || hasAgentErrors) {
-            console.log("\n   ❌ Validation failed:\n");
-
-            if (hasSkillErrors) {
-              console.log("      Skills:");
-              for (const result of skillResults) {
-                if (!result.valid) {
-                  console.log(`         ${result.skillName || "(unknown skill)"}:`);
-                  for (const error of result.errors) {
-                    console.log(`            • ${error}`);
-                  }
-                }
-              }
-            }
-
-            if (hasAgentErrors) {
-              console.log("      Agents:");
-              for (const result of agentResults) {
-                if (!result.valid) {
-                  console.log(`         ${result.agentName || "(unknown agent)"}:`);
-                  for (const error of result.errors) {
-                    console.log(`            • ${error}`);
-                  }
-                }
-              }
-            }
-
-            results.push({
-              pluginPath,
-              name: manifest.name,
-              success: false,
-              operations: [],
-              errors: ["Validation failed"],
-              backups: [],
-            });
-            continue;
-          }
-        }
-
-        const compilePhase = await runCompilePhaseForPlugin({
-          pluginPath,
-          manifest,
-          harnesses,
-          scope: options.scope,
-          projectPath: options.project,
-          dryRun: options.dryRun,
-          backup: options.backup,
-        });
-
-        if (!compilePhase.success) {
-          results.push({
-            pluginPath,
-            name: manifest.name,
-            success: false,
-            operations: [],
-            errors: [compilePhase.error],
-            backups: compilePhase.backups,
-          });
-          continue;
-        }
-
-        const compileBackups = compilePhase.backups;
-
-        // Plan installation
-        const operations = await planInstallation({
-          pluginPath,
-          harnesses: harnesses as HarnessId[],
-          projectPath: options.project,
-          overwrite: options.overwrite,
-          backup: options.backup,
-          dryRun: options.dryRun,
-        });
-
-        if (options.dryRun) {
-          console.log("\n   🔍 Operations that would be performed:\n");
-          printOperations(operations, "      ");
-          results.push({
-            pluginPath,
-            name: manifest.name,
-            success: true,
-            operations,
-            errors: [],
-            backups: compileBackups,
-          });
-          continue;
-        }
-
-        // Execute installation
-        const result = await install({
-          pluginPath,
-          harnesses: harnesses as HarnessId[],
-          projectPath: options.project,
-          overwrite: options.overwrite,
-          backup: options.backup,
-          dryRun: false,
-        });
-
-        results.push({
-          pluginPath,
-          name: manifest.name,
-          success: result.success,
-          operations: result.operations,
-          errors: result.errors.map((e) => `${e.operation.target}: ${e.message}`),
-          backups: [...compileBackups, ...result.backups],
-        });
-
-        // Print results for this plugin
-        if (result.operations.length > 0) {
-          console.log("\n   📋 Installation results:\n");
-          printOperations(result.operations, "      ");
-        }
-
-        if (compileBackups.length + result.backups.length > 0) {
-          console.log("\n   💾 Backups created:");
-          for (const backup of [...compileBackups, ...result.backups]) {
-            console.log(`      ${backup}`);
-          }
-        }
-
-        if (result.errors.length > 0) {
-          console.log("\n   ❌ Errors:");
-          for (const error of result.errors) {
-            console.log(`      ${error.operation.target}: ${error.message}`);
-          }
-        }
-      }
-
-      // Print summary
-      const successCount = results.filter((r) => r.success).length;
-      const failCount = results.filter((r) => !r.success).length;
-
-      console.log("\n" + "─".repeat(60));
-      console.log("\n📊 Summary:");
-      console.log(`   Total discovered plugins: ${pluginPaths.length}`);
-      console.log(`   Valid manifests: ${validPlugins.length}`);
-      if (invalidPlugins.length > 0) {
-        console.log(`   Invalid manifests: ${invalidPlugins.length}`);
-      }
-      console.log(`   Successful refreshes: ${successCount}`);
-      if (failCount > 0) {
-        console.log(`   Failed refreshes: ${failCount}`);
-        for (const r of results.filter((r) => !r.success)) {
-          console.log(`      • ${r.name}: ${r.errors.join(", ")}`);
-        }
-      }
-
-      if (invalidPlugins.length > 0) {
-        console.log("   Invalid plugin manifests:");
-        for (const { pluginPath, error } of invalidPlugins) {
-          console.log(`      • ${getManifestErrorLabel(pluginPath, error)}`);
-        }
-      }
-
-      if (failCount > 0 || invalidPlugins.length > 0) {
+      if (hasFailures) {
         console.log("\n⚠️  Some plugins failed validation, compile, or install");
         process.exit(1);
-      } else {
-        console.log("\n✅ All plugin refreshes completed successfully!");
       }
+
+      console.log("\n✅ All plugin refreshes completed successfully!");
     } catch (error) {
       printCliError(error, "Error");
       process.exit(1);
@@ -505,214 +272,14 @@ program
       console.log(`\n📦 Creating plugin: ${name}`);
       console.log(`   Directory: ${targetDir}\n`);
 
-      // Create directory structure
-      await ensureDir(targetDir);
-      await ensureDir(join(targetDir, "rules", "global"));
-      await ensureDir(join(targetDir, "rules", "project"));
-      await ensureDir(join(targetDir, "commands"));
-      await ensureDir(join(targetDir, "agents"));
-      if (options.withAgent) {
-        await ensureDir(join(targetDir, "identities"));
-      }
-
-      // Create plugin.json
-      const manifestTargets: PluginManifestTargets = {};
-      if (!options.minimal) {
-        manifestTargets.rules = ["coding-harness"];
-        manifestTargets.commands = [
-          "claude-code",
-          "opencode",
-          "codex-cli",
-          "gemini-cli",
-          "cursor",
-          "factory-droid",
-        ];
-      }
-      if (options.withAgent) {
-        manifestTargets.agents = ["claude-code", "opencode"];
-      }
-      if (options.withSkill) {
-        manifestTargets.skills = ["coding-harness", "claw-harness"];
-      }
-
-      const manifest = {
+      const { created } = await createPluginScaffold({
         name,
-        version: "0.1.0",
-        description: `${name} plugin for AI coding harnesses`,
-        targets: manifestTargets,
-      };
-      await writeFile(
-        join(targetDir, "plugin.json"),
-        JSON.stringify(manifest, null, 2)
-      );
-
-      const created: string[] = ["plugin.json"];
-
-      if (!options.minimal && options.typescript) {
-        await writeFile(join(targetDir, "package.json"), createTypescriptPackageJson(name));
-        await writeFile(join(targetDir, "tsconfig.json"), typescriptTsconfigJson);
-        await writeFile(join(targetDir, ".oxlintrc.json"), oxlintConfigJson);
-        await writeFile(join(targetDir, ".oxfmtrc.json"), oxfmtConfigJson);
-        await writeFile(join(targetDir, "prism-oxlint-plugin.js"), prismOxlintPluginJs);
-        created.push(
-          "package.json",
-          "tsconfig.json",
-          ".oxlintrc.json",
-          ".oxfmtrc.json",
-          "prism-oxlint-plugin.js"
-        );
-      }
-
-      if (!options.minimal) {
-        // Create example global rule
-        const exampleRule = `---
-description: Example coding guidelines
-# No file-level targets. Install targeting lives in plugin.json -> targets.rules
----
-
-# Coding Guidelines
-
-- Write clean, readable code
-- Add comments for complex logic
-- Follow project conventions
-`;
-        await writeFile(join(targetDir, "rules", "global", "example.md"), exampleRule);
-        created.push("rules/global/example.md");
-
-        // Create example command with proper argument usage
-        const exampleCommand = `---
-description: Run tests with coverage
-# No file-level targets. Install targeting lives in plugin.json -> targets.commands
-
-# Agent-specific overrides:
-# claude-code:
-#   allowed-tools: [Bash]
-# opencode:
-#   mode: subagent
----
-
-# Run Tests
-
-**Test configuration:** $ARGUMENTS
-
-Run the test suite with coverage reporting.
-
-## Arguments
-
-- \`$ARGUMENTS\` - The full test configuration or filter string provided by the user
-
-## Usage Examples
-
-\`\`\`bash
-/test                           # Run all tests
-/test src/utils                 # Run tests matching pattern
-/test src/utils --watch         # Pattern with flag
-\`\`\`
-
-## Instructions
-
-1. Run tests using the provided configuration: $ARGUMENTS
-2. If the configuration is empty, run all tests
-3. Generate coverage report
-4. Highlight failures with clear explanations
-`;
-        await writeFile(join(targetDir, "commands", "test.md"), exampleCommand);
-        created.push("commands/test.md");
-      }
-
-      // Create example agent if requested
-      if (options.withAgent) {
-        const exampleIdentity = `---
-description: Code reviewer identity for the example agent
----
-
-# Reviewer
-
-You are a code review specialist. Your role is to:
-
-1. Review code for potential bugs and issues
-2. Check for security vulnerabilities
-3. Suggest performance improvements
-4. Ensure code follows best practices
-5. Verify proper error handling
-
-When reviewing:
-
-- Be constructive and specific
-- Provide examples of improvements
-- Prioritize issues by severity
-- Acknowledge good patterns you see
-
-You have READ-ONLY access. Do not modify files directly.
-`;
-        const exampleAgent = `import { defineAgent } from "prism";
-
-export default defineAgent({
-  name: "reviewer",
-  description: "Code reviewer that focuses on best practices",
-  identity: "reviewer",
-  targets: {
-    opencode: {
-      mode: "subagent",
-      model: "anthropic/claude-sonnet-4-20250514",
-      temperature: 0.1,
-      tools: {
-        write: false,
-        edit: false,
-      },
-    },
-    "claude-code": {
-      model: "sonnet",
-    },
-  },
-});
-`;
-        await writeFile(join(targetDir, "identities", "reviewer.identity.md"), exampleIdentity);
-        await writeFile(join(targetDir, "agents", "reviewer.agent.ts"), exampleAgent);
-        created.push("identities/reviewer.identity.md");
-        created.push("agents/reviewer.agent.ts");
-      }
-
-      // Create example skill if requested
-      if (options.withSkill) {
-        await ensureDir(join(targetDir, "skills", "example-skill", "scripts"));
-        await ensureDir(join(targetDir, "skills", "example-skill", "assets"));
-
-        const skillMd = `---
-name: example-skill
-description: Use this skill when users need help with [specific task or workflow]. Be explicit about when it should and should not trigger.
-# compatibility: Requires Python 3.11+ for optional helper scripts
----
-
-# Example Skill
-
-A minimal skill scaffold showing progressive disclosure and eval-friendly instructions.
-
-## Use This Skill For
-
-- [Primary task the skill should handle]
-- [Closely related task that should still trigger the skill]
-
-## Do Not Use This Skill For
-
-- [Nearby task that looks similar but needs a different skill]
-- [Simple one-off request that does not need the full workflow]
-
-## Workflow
-
-1. Inspect the input and confirm the requested outcome.
-2. Follow the documented process for the task.
-3. Verify the final output before returning it.
-
-## Resources Policy
-
-- Add deterministic helpers to \`scripts/\` when instructions alone are not enough.
-- Put reusable templates, sample inputs, or brand assets in \`assets/\`.
-- Add reference markdown only when it is real skill material loaded intentionally through progressive disclosure; do not add placeholder docs.
-`;
-        await writeFile(join(targetDir, "skills", "example-skill", "SKILL.md"), skillMd);
-        created.push("skills/example-skill/SKILL.md");
-      }
+        targetDir,
+        minimal: options.minimal,
+        typescript: options.typescript,
+        withAgent: options.withAgent,
+        withSkill: options.withSkill,
+      });
 
       console.log("Created:");
       for (const file of created) {
@@ -923,6 +490,366 @@ program
       process.exit(1);
     }
   });
+
+type LoadedPlugin = {
+  pluginPath: string;
+  manifest: PluginManifest;
+};
+
+type InvalidPluginManifest = {
+  pluginPath: string;
+  error: unknown;
+};
+
+type PluginRefreshResult = {
+  pluginPath: string;
+  name: string;
+  success: boolean;
+  operations: FileOperation[];
+  errors: string[];
+  backups: string[];
+};
+
+type PluginValidationResult = {
+  valid: boolean;
+  skillName?: string;
+  agentName?: string;
+  errors: string[];
+};
+
+type InstallAllRefreshOptions = {
+  harnesses: HarnessId[];
+  scope: HarnessScope;
+  projectPath?: string;
+  validate?: boolean;
+  dryRun: boolean;
+  backup: boolean;
+  overwrite: boolean;
+};
+
+async function requireInstallAllDirectory(expandedDir: string): Promise<void> {
+  if (await exists(expandedDir)) return;
+
+  console.error(`Directory not found: ${expandedDir}`);
+  process.exit(1);
+}
+
+async function discoverPluginPaths(expandedDir: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(expandedDir, { withFileTypes: true });
+  const pluginPaths: string[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+
+    const potentialPluginPath = join(expandedDir, entry.name);
+    const manifestPath = join(potentialPluginPath, "plugin.json");
+    if (await exists(manifestPath)) {
+      pluginPaths.push(potentialPluginPath);
+    }
+  }
+
+  return pluginPaths;
+}
+
+function printInstallAllDiscovery(
+  expandedDir: string,
+  pluginPaths: string[]
+): boolean {
+  if (pluginPaths.length === 0) {
+    console.log(`\n📂 No plugins found in ${expandedDir}`);
+    console.log("   (Looking for directories containing plugin.json)");
+    return false;
+  }
+
+  console.log(`\n📂 Found ${pluginPaths.length} plugin(s) in ${expandedDir}:`);
+  return true;
+}
+
+async function loadPluginManifests(pluginPaths: string[]): Promise<{
+  validPlugins: LoadedPlugin[];
+  invalidPlugins: InvalidPluginManifest[];
+}> {
+  const validPlugins: LoadedPlugin[] = [];
+  const invalidPlugins: InvalidPluginManifest[] = [];
+
+  for (const pluginPath of pluginPaths) {
+    try {
+      const manifest = await readManifest(pluginPath);
+      validPlugins.push({ pluginPath, manifest });
+    } catch (error) {
+      invalidPlugins.push({ pluginPath, error });
+    }
+  }
+
+  return { validPlugins, invalidPlugins };
+}
+
+function printInstallAllManifestResults(
+  validPlugins: LoadedPlugin[],
+  invalidPlugins: InvalidPluginManifest[]
+): void {
+  if (validPlugins.length > 0) {
+    console.log("\n✅ Valid plugin manifests:");
+    for (const { manifest } of validPlugins) {
+      console.log(`   • ${manifest.name} v${manifest.version}`);
+    }
+  }
+
+  if (invalidPlugins.length > 0) {
+    console.log("\n❌ Invalid plugin manifests:\n");
+    for (const { pluginPath, error } of invalidPlugins) {
+      console.log(indentBlock(formatManifestLoadError(pluginPath, error, { bullet: true }), "   "));
+      console.log();
+    }
+  }
+
+  console.log();
+}
+
+async function refreshValidPlugins(
+  validPlugins: LoadedPlugin[],
+  options: InstallAllRefreshOptions
+): Promise<PluginRefreshResult[]> {
+  const results: PluginRefreshResult[] = [];
+
+  for (const plugin of validPlugins) {
+    results.push(await refreshDiscoveredPlugin(plugin, options));
+  }
+
+  return results;
+}
+
+async function refreshDiscoveredPlugin(
+  plugin: LoadedPlugin,
+  options: InstallAllRefreshOptions
+): Promise<PluginRefreshResult> {
+  console.log(`\n📦 Installing plugin: ${plugin.manifest.name} v${plugin.manifest.version}`);
+  printPluginRefreshContext({
+    manifest: plugin.manifest,
+    harnesses: options.harnesses,
+    scope: options.scope,
+    projectPath: options.projectPath,
+    indent: "   ",
+  });
+
+  if (!(await validatePluginBeforeRefresh(plugin, options))) {
+    return failedPluginRefresh(plugin, "Validation failed", []);
+  }
+
+  const compilePhase = await runCompilePhaseForPlugin({
+    pluginPath: plugin.pluginPath,
+    manifest: plugin.manifest,
+    harnesses: options.harnesses,
+    scope: options.scope,
+    projectPath: options.projectPath,
+    dryRun: options.dryRun,
+    backup: options.backup,
+  });
+
+  if (!compilePhase.success) {
+    return failedPluginRefresh(plugin, compilePhase.error, compilePhase.backups);
+  }
+
+  return planOrRunPluginInstall(plugin, options, compilePhase.backups);
+}
+
+async function validatePluginBeforeRefresh(
+  plugin: LoadedPlugin,
+  options: InstallAllRefreshOptions
+): Promise<boolean> {
+  if (options.validate === false) return true;
+
+  const shouldValidateSkills = options.harnesses.some((harnessId) =>
+    manifestTargetsArtifact(plugin.manifest, "skills", harnessId)
+  );
+  const shouldValidateAgents = options.harnesses.some((harnessId) =>
+    manifestTargetsArtifact(plugin.manifest, "agents", harnessId)
+  );
+  const skillResults = shouldValidateSkills
+    ? await validatePluginSkills(plugin.pluginPath)
+    : [];
+  const agentResults = shouldValidateAgents
+    ? await validatePluginAgents(plugin.pluginPath)
+    : [];
+
+  return printPluginValidationResult(skillResults, agentResults);
+}
+
+function printPluginValidationResult(
+  skillResults: PluginValidationResult[],
+  agentResults: PluginValidationResult[]
+): boolean {
+  const hasSkillErrors = skillResults.some((result) => !result.valid);
+  const hasAgentErrors = agentResults.some((result) => !result.valid);
+  if (!hasSkillErrors && !hasAgentErrors) return true;
+
+  console.log("\n   ❌ Validation failed:\n");
+
+  if (hasSkillErrors) {
+    printValidationFailures("Skills", skillResults, "skillName");
+  }
+  if (hasAgentErrors) {
+    printValidationFailures("Agents", agentResults, "agentName");
+  }
+
+  return false;
+}
+
+function printValidationFailures(
+  label: string,
+  results: PluginValidationResult[],
+  nameKey: "skillName" | "agentName"
+): void {
+  console.log(`      ${label}:`);
+  for (const result of results) {
+    if (result.valid) continue;
+
+    console.log(`         ${result[nameKey] || `(unknown ${label.slice(0, -1).toLowerCase()})`}:`);
+    for (const error of result.errors) {
+      console.log(`            • ${error}`);
+    }
+  }
+}
+
+async function planOrRunPluginInstall(
+  plugin: LoadedPlugin,
+  options: InstallAllRefreshOptions,
+  compileBackups: string[]
+): Promise<PluginRefreshResult> {
+  const operations = await planInstallation({
+    pluginPath: plugin.pluginPath,
+    harnesses: options.harnesses,
+    projectPath: options.projectPath,
+    overwrite: options.overwrite,
+    backup: options.backup,
+    dryRun: options.dryRun,
+  });
+
+  if (options.dryRun) {
+    console.log("\n   🔍 Operations that would be performed:\n");
+    printOperations(operations, "      ");
+    return successfulPluginRefresh(plugin, operations, compileBackups);
+  }
+
+  const result = await install({
+    pluginPath: plugin.pluginPath,
+    harnesses: options.harnesses,
+    projectPath: options.projectPath,
+    overwrite: options.overwrite,
+    backup: options.backup,
+    dryRun: false,
+  });
+
+  printPluginInstallResult(result.operations, result.backups, result.errors, compileBackups);
+  return {
+    pluginPath: plugin.pluginPath,
+    name: plugin.manifest.name,
+    success: result.success,
+    operations: result.operations,
+    errors: result.errors.map((error) => `${error.operation.target}: ${error.message}`),
+    backups: [...compileBackups, ...result.backups],
+  };
+}
+
+function printPluginInstallResult(
+  operations: FileOperation[],
+  backups: string[],
+  errors: Array<{ operation: FileOperation; message: string }>,
+  compileBackups: string[]
+): void {
+  if (operations.length > 0) {
+    console.log("\n   📋 Installation results:\n");
+    printOperations(operations, "      ");
+  }
+
+  if (compileBackups.length + backups.length > 0) {
+    console.log("\n   💾 Backups created:");
+    for (const backup of [...compileBackups, ...backups]) {
+      console.log(`      ${backup}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    console.log("\n   ❌ Errors:");
+    for (const error of errors) {
+      console.log(`      ${error.operation.target}: ${error.message}`);
+    }
+  }
+}
+
+function failedPluginRefresh(
+  plugin: LoadedPlugin,
+  error: string,
+  backups: string[]
+): PluginRefreshResult {
+  return {
+    pluginPath: plugin.pluginPath,
+    name: plugin.manifest.name,
+    success: false,
+    operations: [],
+    errors: [error],
+    backups,
+  };
+}
+
+function successfulPluginRefresh(
+  plugin: LoadedPlugin,
+  operations: FileOperation[],
+  backups: string[]
+): PluginRefreshResult {
+  return {
+    pluginPath: plugin.pluginPath,
+    name: plugin.manifest.name,
+    success: true,
+    operations,
+    errors: [],
+    backups,
+  };
+}
+
+function printInstallAllSummary(options: {
+  pluginPaths: string[];
+  validPlugins: LoadedPlugin[];
+  invalidPlugins: InvalidPluginManifest[];
+  results: PluginRefreshResult[];
+}): boolean {
+  const successCount = options.results.filter((result) => result.success).length;
+  const failedResults = options.results.filter((result) => !result.success);
+
+  console.log("\n" + "─".repeat(60));
+  console.log("\n📊 Summary:");
+  console.log(`   Total discovered plugins: ${options.pluginPaths.length}`);
+  console.log(`   Valid manifests: ${options.validPlugins.length}`);
+  if (options.invalidPlugins.length > 0) {
+    console.log(`   Invalid manifests: ${options.invalidPlugins.length}`);
+  }
+  console.log(`   Successful refreshes: ${successCount}`);
+  printFailedRefreshSummary(failedResults);
+  printInvalidManifestSummary(options.invalidPlugins);
+
+  return failedResults.length > 0 || options.invalidPlugins.length > 0;
+}
+
+function printFailedRefreshSummary(results: PluginRefreshResult[]): void {
+  if (results.length === 0) return;
+
+  console.log(`   Failed refreshes: ${results.length}`);
+  for (const result of results) {
+    console.log(`      • ${result.name}: ${result.errors.join(", ")}`);
+  }
+}
+
+function printInvalidManifestSummary(
+  invalidPlugins: InvalidPluginManifest[]
+): void {
+  if (invalidPlugins.length === 0) return;
+
+  console.log("   Invalid plugin manifests:");
+  for (const { pluginPath, error } of invalidPlugins) {
+    console.log(`      • ${getManifestErrorLabel(pluginPath, error)}`);
+  }
+}
 
 /**
  * Print operations in a readable format

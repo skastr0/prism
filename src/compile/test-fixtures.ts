@@ -12,12 +12,7 @@ const effectImportPath = join(
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
-const writeText = async (path: string, content: string): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content);
-};
-
-export const createCanonicalCompileFixture = async (options: {
+interface CanonicalCompileFixtureOptions {
   pluginRoot: string;
   projectRoot: string;
   invalidOrbit?: boolean;
@@ -26,68 +21,74 @@ export const createCanonicalCompileFixture = async (options: {
   undeclaredSlot?: boolean;
   mixedTraitRefsBeforeSlotBinding?: boolean;
   withCanonicalToolBindings?: boolean;
-}): Promise<{ pluginRoot: string; projectRoot: string }> => {
-  const { pluginRoot, projectRoot } = options;
-  const withCanonicalToolBindings = options.withCanonicalToolBindings ?? true;
-  const coreRoot = join(pluginRoot, "deps", "agent-core");
-  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
-  await mkdir(projectRoot, { recursive: true });
+}
 
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "canonical-compile-fixture",
-        version: "0.1.0",
-        deps: {
-          "agent-core": "./deps/agent-core",
-          "protocol-core": "./deps/protocol-core",
-        },
-        targets: {
-          agents: ["opencode", "claude-code"],
-          orbits: ["opencode", "claude-code"],
-          tools: ["opencode", "claude-code"],
-          toolspaces: ["opencode", "claude-code"],
-          modelspaces: ["opencode", "claude-code"],
-        },
-      },
-      null,
-      2
-    )}\n`
-  );
+interface CanonicalFixturePaths {
+  pluginRoot: string;
+  projectRoot: string;
+  coreRoot: string;
+  protocolRoot: string;
+  withCanonicalToolBindings: boolean;
+}
 
-  await writeText(
-    join(coreRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "agent-core",
-        version: "0.1.0",
-        targets: {
-          toolspaces: ["opencode", "claude-code"],
-          modelspaces: ["opencode", "claude-code"],
-          skillspaces: ["opencode", "claude-code"],
-        },
-      },
-      null,
-      2
-    )}\n`
-  );
+const writeText = async (path: string, content: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+};
 
-  await writeText(
-    join(protocolRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "protocol-core",
-        version: "0.1.0",
-        targets: {
-          tools: ["opencode", "claude-code"],
-        },
-      },
-      null,
-      2
-    )}\n`
-  );
+const writeJsonFixture = async (path: string, value: unknown): Promise<void> => {
+  await writeText(path, `${JSON.stringify(value, null, 2)}\n`);
+};
 
+const fixturePaths = (options: CanonicalCompileFixtureOptions): CanonicalFixturePaths => ({
+  pluginRoot: options.pluginRoot,
+  projectRoot: options.projectRoot,
+  coreRoot: join(options.pluginRoot, "deps", "agent-core"),
+  protocolRoot: join(options.pluginRoot, "deps", "protocol-core"),
+  withCanonicalToolBindings: options.withCanonicalToolBindings ?? true,
+});
+
+const writeFixtureManifests = async ({
+  pluginRoot,
+  coreRoot,
+  protocolRoot,
+}: CanonicalFixturePaths): Promise<void> => {
+  await writeJsonFixture(join(pluginRoot, "plugin.json"), {
+    name: "canonical-compile-fixture",
+    version: "0.1.0",
+    deps: {
+      "agent-core": "./deps/agent-core",
+      "protocol-core": "./deps/protocol-core",
+    },
+    targets: {
+      agents: ["opencode", "claude-code"],
+      orbits: ["opencode", "claude-code"],
+      tools: ["opencode", "claude-code"],
+      toolspaces: ["opencode", "claude-code"],
+      modelspaces: ["opencode", "claude-code"],
+    },
+  });
+
+  await writeJsonFixture(join(coreRoot, "plugin.json"), {
+    name: "agent-core",
+    version: "0.1.0",
+    targets: {
+      toolspaces: ["opencode", "claude-code"],
+      modelspaces: ["opencode", "claude-code"],
+      skillspaces: ["opencode", "claude-code"],
+    },
+  });
+
+  await writeJsonFixture(join(protocolRoot, "plugin.json"), {
+    name: "protocol-core",
+    version: "0.1.0",
+    targets: {
+      tools: ["opencode", "claude-code"],
+    },
+  });
+};
+
+const writeWorkspaceToolspace = async ({ coreRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(coreRoot, "toolspaces", "workspace-tools.toolspace.ts"),
     `import { defineToolspace, toolRef } from ${JSON.stringify(prismImportPath)};
@@ -130,7 +131,9 @@ export default defineToolspace({
 });
 `
   );
+};
 
+const writeDefaultModelspace = async ({ coreRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(coreRoot, "modelspaces", "default-models.modelspace.ts"),
     `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
@@ -181,7 +184,36 @@ export default defineModelspace({
 });
 `
   );
+};
 
+const writeCoreSkillspace = async ({ coreRoot }: CanonicalFixturePaths): Promise<void> => {
+  await writeText(
+    join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
+    `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineSkillspace({
+  name: "core-skills",
+  description: "Harness-native core skill names",
+  skills: {
+    testing: {
+      targets: {
+        opencode: { name: "testing" },
+        "claude-code": { name: "testing" },
+      },
+    },
+  },
+});
+`
+  );
+};
+
+const writeFixtureSpaces = async (paths: CanonicalFixturePaths): Promise<void> => {
+  await writeWorkspaceToolspace(paths);
+  await writeDefaultModelspace(paths);
+  await writeCoreSkillspace(paths);
+};
+
+const writeFixtureIdentities = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "identities", "builder.identity.md"),
     `---
@@ -205,7 +237,9 @@ description: Review specialist for canonical compile tests
 You assess completed work and report whether it is ready to ship.
 `
   );
+};
 
+const writeProtocolSchema = async ({ protocolRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(protocolRoot, "schemas", "review-evidence.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
@@ -215,7 +249,9 @@ export const ProtocolReviewEvidence = Schema.Struct({
 });
 `
   );
+};
 
+const writeLocalTools = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
@@ -232,52 +268,6 @@ export default defineTool({
   }),
   async handle(input, context) {
     return { acknowledged: true };
-  },
-});
-`
-  );
-
-  await writeText(
-    join(protocolRoot, "tools", "external-submit.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "external-submit",
-  description: "Submit completed work through an external protocol plugin",
-  input: Schema.Struct({
-    summary: Schema.String,
-  }),
-  output: Schema.Struct({
-    acknowledged: Schema.Boolean,
-  }),
-  async handle(input, context) {
-    return { acknowledged: true };
-  },
-});
-`
-  );
-
-  await writeText(
-    join(protocolRoot, "tools", "create_glyph.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "create_glyph",
-  description: "Create a protocol-owned glyph",
-  input: Schema.Struct({
-    board: Schema.Literal("project-alpha", "project-beta"),
-    id: Schema.String,
-    title: Schema.String,
-  }),
-  output: Schema.Struct({
-    acknowledged: Schema.Boolean,
-    board: Schema.Literal("project-alpha", "project-beta"),
-    id: Schema.String,
-  }),
-  async handle(input, context) {
-    return { acknowledged: true, board: input.board, id: input.id };
   },
 });
 `
@@ -329,7 +319,65 @@ export default defineTool({
 });
 `
   );
+};
 
+const writeProtocolTools = async ({ protocolRoot }: CanonicalFixturePaths): Promise<void> => {
+  await writeText(
+    join(protocolRoot, "tools", "external-submit.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "external-submit",
+  description: "Submit completed work through an external protocol plugin",
+  input: Schema.Struct({
+    summary: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true };
+  },
+});
+`
+  );
+
+  await writeText(
+    join(protocolRoot, "tools", "create_glyph.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "create_glyph",
+  description: "Create a protocol-owned glyph",
+  input: Schema.Struct({
+    board: Schema.Literal("project-alpha", "project-beta"),
+    id: Schema.String,
+    title: Schema.String,
+  }),
+  output: Schema.Struct({
+    acknowledged: Schema.Boolean,
+    board: Schema.Literal("project-alpha", "project-beta"),
+    id: Schema.String,
+  }),
+  async handle(input, context) {
+    return { acknowledged: true, board: input.board, id: input.id };
+  },
+});
+`
+  );
+};
+
+const writeFixtureTools = async (paths: CanonicalFixturePaths): Promise<void> => {
+  await writeLocalTools(paths);
+  await writeProtocolTools(paths);
+};
+
+const writeSubmissionTraits = async ({
+  pluginRoot,
+  withCanonicalToolBindings,
+}: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
     `import { defineTrait } from ${JSON.stringify(prismImportPath)};
@@ -369,24 +417,12 @@ export default defineTrait({
 });
 `
   );
+};
 
-  await writeText(
-    join(pluginRoot, "schemas", "review-slots.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { ProtocolReviewEvidence } from "../deps/protocol-core/schemas/review-evidence.ts";
-
-export const ReviewFindingsSlot = Schema.Struct({
-  verdict: Schema.Literal("approve", "request_changes"),
-  evidence: Schema.optional(ProtocolReviewEvidence),
-});
-
-export const SecurityReviewSlot = Schema.Struct({
-  severity: Schema.Literal("low", "medium", "high"),
-  findings: Schema.Array(Schema.String),
-});
-`
-  );
-
+const writeReviewTraits = async ({
+  pluginRoot,
+  withCanonicalToolBindings,
+}: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "traits", "reviewable.trait.ts"),
     `import { defineTrait, toolGroupRef } from ${JSON.stringify(prismImportPath)};
@@ -423,26 +459,34 @@ export default defineTrait({
 });
 `
   );
+};
 
+const writeReviewSlotSchema = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
-    join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
-    `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
+    join(pluginRoot, "schemas", "review-slots.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { ProtocolReviewEvidence } from "../deps/protocol-core/schemas/review-evidence.ts";
 
-export default defineSkillspace({
-  name: "core-skills",
-  description: "Harness-native core skill names",
-  skills: {
-    testing: {
-      targets: {
-        opencode: { name: "testing" },
-        "claude-code": { name: "testing" },
-      },
-    },
-  },
+export const ReviewFindingsSlot = Schema.Struct({
+  verdict: Schema.Literal("approve", "request_changes"),
+  evidence: Schema.optional(ProtocolReviewEvidence),
+});
+
+export const SecurityReviewSlot = Schema.Struct({
+  severity: Schema.Literal("low", "medium", "high"),
+  findings: Schema.Array(Schema.String),
 });
 `
   );
+};
 
+const writeFixtureTraits = async (paths: CanonicalFixturePaths): Promise<void> => {
+  await writeSubmissionTraits(paths);
+  await writeReviewSlotSchema(paths);
+  await writeReviewTraits(paths);
+};
+
+const writeBuilderAgent = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
     `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef, toolRef } from ${JSON.stringify(prismImportPath)};
@@ -473,7 +517,13 @@ export default defineAgent({
 });
 `
   );
+};
 
+const writeReviewerAgent = async (
+  paths: CanonicalFixturePaths,
+  options: CanonicalCompileFixtureOptions,
+): Promise<void> => {
+  const { pluginRoot, withCanonicalToolBindings } = paths;
   const reviewerSlotReference = options.inlineSlotSchema
     ? `Schema.Struct({
               verdict: Schema.Literal("approve", "request_changes"),
@@ -524,7 +574,12 @@ export default defineAgent({
 });
 `
   );
+};
 
+const writeSecurityReviewerAgent = async ({
+  pluginRoot,
+  withCanonicalToolBindings,
+}: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "agents", "security-reviewer.agent.ts"),
     `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(prismImportPath)};
@@ -560,12 +615,26 @@ export default defineAgent({
 });
 `
   );
+};
 
+const writeFixtureAgents = async (
+  paths: CanonicalFixturePaths,
+  options: CanonicalCompileFixtureOptions,
+): Promise<void> => {
+  await writeBuilderAgent(paths);
+  await writeReviewerAgent(paths, options);
+  await writeSecurityReviewerAgent(paths);
+};
+
+const writeDeliveryOrbit = async (
+  paths: CanonicalFixturePaths,
+  options: CanonicalCompileFixtureOptions,
+): Promise<void> => {
+  const { pluginRoot, withCanonicalToolBindings } = paths;
   const reviewAgents = options.invalidOrbit ? ["builder"] : ["reviewer"];
   const orchestratorAgent = options.invalidOrbitPermissionAgent
     ? "ghost-orchestrator"
     : "builder";
-
   const orbitOrchestrator = withCanonicalToolBindings
     ? `,
   orchestrator: {
@@ -632,6 +701,22 @@ export default defineOrbit({
 });
 `
   );
+};
 
-  return { pluginRoot, projectRoot };
+export const createCanonicalCompileFixture = async (
+  options: CanonicalCompileFixtureOptions,
+): Promise<{ pluginRoot: string; projectRoot: string }> => {
+  const paths = fixturePaths(options);
+  await mkdir(paths.projectRoot, { recursive: true });
+
+  await writeFixtureManifests(paths);
+  await writeFixtureSpaces(paths);
+  await writeFixtureIdentities(paths);
+  await writeProtocolSchema(paths);
+  await writeFixtureTools(paths);
+  await writeFixtureTraits(paths);
+  await writeFixtureAgents(paths, options);
+  await writeDeliveryOrbit(paths, options);
+
+  return { pluginRoot: paths.pluginRoot, projectRoot: paths.projectRoot };
 };

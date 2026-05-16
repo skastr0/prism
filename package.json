@@ -17,16 +17,14 @@
     "verify": "bun run typecheck && bun run build"
   },
   "dependencies": {
-    "@effect/platform": "^0.96.0",
-    "@effect/platform-bun": "^0.89.0",
+    "@opencode-ai/plugin": "^1.4.14",
     "commander": "^13.1.0",
     "effect": "^3.21.1",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "typescript": "^5.8.3"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.4.14",
-    "@types/bun": "^1.2.14",
-    "typescript": "^5.8.3"
+    "@types/bun": "^1.2.14"
   },
   "license": "MIT",
   "repository": {

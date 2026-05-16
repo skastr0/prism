@@ -241,17 +241,32 @@ const resolveTraitReference = (
     };
   });
 
-export const resolveAgentCapabilities = (
+type ResolvedTraitSet = {
+  readonly traits: ResolvedTrait[];
+  readonly canonicalIds: Set<string>;
+};
+
+type MaterializedTraitToolWithOwner = MaterializedTraitTool & {
+  readonly traitId: string;
+};
+
+type AgentAccessAccumulator = {
+  readonly tools: Set<string>;
+  readonly toolGroups: Set<string>;
+  readonly skills: Set<string>;
+};
+
+const resolveAgentTraits = (
   agent: Agent,
   registry: PluginRegistry,
-): Effect.Effect<ResolvedAgentCapabilities, CompileError> =>
+): Effect.Effect<ResolvedTraitSet, CompileError> =>
   Effect.gen(function* () {
-    const resolvedTraits: ResolvedTrait[] = [];
-    const canonicalTraitIds = new Set<string>();
+    const traits: ResolvedTrait[] = [];
+    const canonicalIds = new Set<string>();
 
     for (const [index, binding] of agent.traits.entries()) {
       const resolvedTrait = yield* resolveTraitReference(agent, binding, registry);
-      if (canonicalTraitIds.has(resolvedTrait.canonicalId)) {
+      if (canonicalIds.has(resolvedTrait.canonicalId)) {
         return yield* Effect.fail(
           agentError(
             agent,
@@ -260,126 +275,226 @@ export const resolveAgentCapabilities = (
           ),
         );
       }
-      canonicalTraitIds.add(resolvedTrait.canonicalId);
-      resolvedTraits.push(resolvedTrait);
+      canonicalIds.add(resolvedTrait.canonicalId);
+      traits.push(resolvedTrait);
     }
 
-    const finalToolRefs = new Map<string, MaterializedTraitTool & { traitId: string }>();
-    const accessTools = new Set(agent.access.tools);
-    const accessToolGroups = new Set(agent.access.toolGroups);
-    const accessSkills = new Set(agent.access.skills);
+    return { traits, canonicalIds };
+  });
 
-    for (const resolvedTrait of resolvedTraits) {
-      for (const skill of resolvedTrait.trait.inject.skills) {
-        accessSkills.add(skill);
-      }
+const createAccessAccumulator = (agent: Agent): AgentAccessAccumulator => ({
+  tools: new Set(agent.access.tools),
+  toolGroups: new Set(agent.access.toolGroups),
+  skills: new Set(agent.access.skills),
+});
 
-      for (const toolRef of resolvedTrait.trait.access.tools) {
-        accessTools.add(toolRef);
-      }
-      for (const toolGroupRef of resolvedTrait.trait.access.toolGroups) {
-        accessToolGroups.add(toolGroupRef);
-      }
-      for (const skill of resolvedTrait.trait.access.skills) {
-        accessSkills.add(skill);
-      }
+const mergeTraitAccess = (
+  access: AgentAccessAccumulator,
+  trait: Trait,
+): void => {
+  for (const skill of trait.inject.skills) {
+    access.skills.add(skill);
+  }
+  for (const toolRef of trait.access.tools) {
+    access.tools.add(toolRef);
+  }
+  for (const toolGroupRef of trait.access.toolGroups) {
+    access.toolGroups.add(toolGroupRef);
+  }
+  for (const skill of trait.access.skills) {
+    access.skills.add(skill);
+  }
+};
 
-      const materializedTraitTools = materializeTraitTools({
-        agentName: agent.name,
-        ownerPluginName: registry.pluginName,
-        canonicalTraitId: resolvedTrait.canonicalId,
-        trait: resolvedTrait.trait,
-        binding: resolvedTrait.binding,
-        registry,
-      });
-      if (!(materializedTraitTools instanceof Array)) {
-        return yield* Effect.fail(
-          agentError(
-            agent,
-            "traits",
-            `trait '${resolvedTrait.canonicalId}' ${materializedTraitTools.message}`,
-          ),
-        );
-      }
+const traitToolBindingsMatch = (
+  existing: MaterializedTraitToolWithOwner,
+  next: MaterializedTraitTool,
+): boolean =>
+  existing.kind === next.kind &&
+  existing.toolPluginName === next.toolPluginName &&
+  existing.toolName === next.toolName &&
+  existing.contract?.pluginName === next.contract?.pluginName &&
+  existing.contract?.name === next.contract?.name;
 
-      for (const materialized of materializedTraitTools) {
-        const {
-          logicalName,
-          kind,
-          contract,
-          toolPluginName,
-          toolName,
-        } = materialized;
-        const existing = finalToolRefs.get(logicalName);
-        if (!existing) {
-          finalToolRefs.set(logicalName, {
-            ...materialized,
-            traitId: resolvedTrait.canonicalId,
-          });
-          continue;
-        }
+const addTraitToolBinding = (
+  agent: Agent,
+  finalToolRefs: Map<string, MaterializedTraitToolWithOwner>,
+  resolvedTrait: ResolvedTrait,
+  materialized: MaterializedTraitTool,
+): AgentValidationError | undefined => {
+  const existing = finalToolRefs.get(materialized.logicalName);
+  if (!existing) {
+    finalToolRefs.set(materialized.logicalName, {
+      ...materialized,
+      traitId: resolvedTrait.canonicalId,
+    });
+    return undefined;
+  }
 
-        if (
-          existing.kind !== kind ||
-          existing.toolPluginName !== toolPluginName ||
-          existing.toolName !== toolName ||
-          existing.contract?.pluginName !== contract?.pluginName ||
-          existing.contract?.name !== contract?.name
-        ) {
-          return yield* Effect.fail(
-            agentError(
-              agent,
-              "traits",
-              `traits '${existing.traitId}' and '${resolvedTrait.canonicalId}' define conflicting tool bindings for '${logicalName}'`,
-            ),
-          );
-        }
-      }
-    }
+  if (traitToolBindingsMatch(existing, materialized)) {
+    return undefined;
+  }
 
-    const availableToolNames = new Set(finalToolRefs.keys());
-    for (const resolvedTrait of resolvedTraits) {
-      const missingTools = resolvedTrait.trait.require.tools.filter(
-        (logicalName) => !availableToolNames.has(logicalName),
-      );
-      if (missingTools.length === 0) continue;
+  return agentError(
+    agent,
+    "traits",
+    `traits '${existing.traitId}' and '${resolvedTrait.canonicalId}' define conflicting tool bindings for '${materialized.logicalName}'`,
+  );
+};
 
-      const missingParts = [
-        missingTools.length > 0 ? `tools: ${missingTools.join(", ")}` : undefined,
-      ].filter((part): part is string => part !== undefined);
-
-      return yield* Effect.fail(
-        agentError(
-          agent,
-          "traits",
-          `trait '${resolvedTrait.canonicalId}' requires missing ${missingParts.join("; ")}`,
-        ),
-      );
-    }
-
-    return {
+const mergeTraitTools = (
+  agent: Agent,
+  registry: PluginRegistry,
+  finalToolRefs: Map<string, MaterializedTraitToolWithOwner>,
+  resolvedTrait: ResolvedTrait,
+): AgentValidationError | undefined => {
+  const materializedTraitTools = materializeTraitTools({
+    agentName: agent.name,
+    ownerPluginName: registry.pluginName,
+    canonicalTraitId: resolvedTrait.canonicalId,
+    trait: resolvedTrait.trait,
+    binding: resolvedTrait.binding,
+    registry,
+  });
+  if (!(materializedTraitTools instanceof Array)) {
+    return agentError(
       agent,
-      traits: resolvedTraits,
-      canonicalTraitIds: [...canonicalTraitIds].sort((left, right) =>
-        left.localeCompare(right),
-      ),
-      skills: [...agent.skills],
-      toolRefs: [...finalToolRefs.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([logicalName, resolved]) => ({
-          logicalName,
-          kind: resolved.kind,
-          contract: resolved.contract,
-          toolPluginName: resolved.toolPluginName,
-          toolName: resolved.toolName,
-          toolSourcePath: resolved.toolSourcePath,
-        })),
-      access: {
-        tools: [...accessTools].sort((left, right) => left.localeCompare(right)),
-        toolGroups: [...accessToolGroups].sort((left, right) => left.localeCompare(right)),
-        skills: [...accessSkills].sort((left, right) => left.localeCompare(right)),
-      },
-    };
+      "traits",
+      `trait '${resolvedTrait.canonicalId}' ${materializedTraitTools.message}`,
+    );
+  }
+
+  for (const materialized of materializedTraitTools) {
+    const error = addTraitToolBinding(
+      agent,
+      finalToolRefs,
+      resolvedTrait,
+      materialized,
+    );
+    if (error) return error;
+  }
+
+  return undefined;
+};
+
+const collectTraitAccessGrants = (
+  agent: Agent,
+  resolvedTraits: ReadonlyArray<ResolvedTrait>,
+): AgentAccessAccumulator => {
+  const access = createAccessAccumulator(agent);
+  for (const resolvedTrait of resolvedTraits) {
+    mergeTraitAccess(access, resolvedTrait.trait);
+  }
+
+  return access;
+};
+
+const materializeAndMergeTraitTools = (
+  agent: Agent,
+  registry: PluginRegistry,
+  resolvedTraits: ReadonlyArray<ResolvedTrait>,
+): Map<string, MaterializedTraitToolWithOwner> | AgentValidationError => {
+  const toolRefs = new Map<string, MaterializedTraitToolWithOwner>();
+
+  for (const resolvedTrait of resolvedTraits) {
+    const error = mergeTraitTools(agent, registry, toolRefs, resolvedTrait);
+    if (error) return error;
+  }
+
+  return toolRefs;
+};
+
+const validateRequiredTraitTools = (
+  agent: Agent,
+  resolvedTraits: ReadonlyArray<ResolvedTrait>,
+  finalToolRefs: ReadonlyMap<string, MaterializedTraitToolWithOwner>,
+): AgentValidationError | undefined => {
+  const availableToolNames = new Set(finalToolRefs.keys());
+  for (const resolvedTrait of resolvedTraits) {
+    const missingTools = resolvedTrait.trait.require.tools.filter(
+      (logicalName) => !availableToolNames.has(logicalName),
+    );
+    if (missingTools.length === 0) continue;
+
+    const missingParts = [
+      missingTools.length > 0 ? `tools: ${missingTools.join(", ")}` : undefined,
+    ].filter((part): part is string => part !== undefined);
+
+    return agentError(
+      agent,
+      "traits",
+      `trait '${resolvedTrait.canonicalId}' requires missing ${missingParts.join("; ")}`,
+    );
+  }
+
+  return undefined;
+};
+
+const sortedToolRefs = (
+  finalToolRefs: ReadonlyMap<string, MaterializedTraitToolWithOwner>,
+): ResolvedToolReference[] =>
+  [...finalToolRefs.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([logicalName, resolved]) => ({
+      logicalName,
+      kind: resolved.kind,
+      contract: resolved.contract,
+      toolPluginName: resolved.toolPluginName,
+      toolName: resolved.toolName,
+      toolSourcePath: resolved.toolSourcePath,
+    }));
+
+const buildResolvedAgentCapabilities = (
+  agent: Agent,
+  resolvedTraits: ResolvedTraitSet,
+  grants: {
+    readonly access: AgentAccessAccumulator;
+    readonly toolRefs: ReadonlyMap<string, MaterializedTraitToolWithOwner>;
+  },
+): ResolvedAgentCapabilities => ({
+  agent,
+  traits: resolvedTraits.traits,
+  canonicalTraitIds: [...resolvedTraits.canonicalIds].sort((left, right) =>
+    left.localeCompare(right),
+  ),
+  skills: [...agent.skills],
+  toolRefs: sortedToolRefs(grants.toolRefs),
+  access: {
+    tools: [...grants.access.tools].sort((left, right) => left.localeCompare(right)),
+    toolGroups: [...grants.access.toolGroups].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+    skills: [...grants.access.skills].sort((left, right) =>
+      left.localeCompare(right),
+    ),
+  },
+});
+
+export const resolveAgentCapabilities = (
+  agent: Agent,
+  registry: PluginRegistry,
+): Effect.Effect<ResolvedAgentCapabilities, CompileError> =>
+  Effect.gen(function* () {
+    const resolvedTraits = yield* resolveAgentTraits(agent, registry);
+
+    const access = collectTraitAccessGrants(agent, resolvedTraits.traits);
+    const toolRefs = materializeAndMergeTraitTools(
+      agent,
+      registry,
+      resolvedTraits.traits,
+    );
+    if (toolRefs instanceof AgentValidationError) {
+      return yield* Effect.fail(toolRefs);
+    }
+
+    const requirementError = validateRequiredTraitTools(
+      agent,
+      resolvedTraits.traits,
+      toolRefs,
+    );
+    if (requirementError) return yield* Effect.fail(requirementError);
+
+    return buildResolvedAgentCapabilities(agent, resolvedTraits, { access, toolRefs });
   });
 
 const resolveToolRefForTarget = (

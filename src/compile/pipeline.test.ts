@@ -3,18 +3,20 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Cause, Effect, Option } from "effect";
+import { Cause, Effect, Option, Schema } from "effect";
 import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
-import { validateOrbit } from "./resolve.js";
+import { resolveAgentCapabilities, validateOrbit } from "./resolve.js";
 import {
   Agent,
+  CanonicalTool,
   Orbit,
   Trait,
+  type NormalizedAccess,
   type NormalizedOrbitPhase,
   type OrbitParameter,
 } from "./sources.js";
@@ -157,6 +159,53 @@ const createValidationAgent = (
     access: emptyAccess,
     skills: [],
     targets: {},
+  });
+
+const createCapabilityTrait = (options: {
+  readonly name: string;
+  readonly access?: NormalizedAccess;
+  readonly tools?: Record<string, { ref: string }>;
+  readonly injectSkills?: string[];
+  readonly requireTools?: string[];
+}): Trait =>
+  new Trait({
+    name: options.name,
+    sourcePath: `/tmp/${options.name}.trait.ts`,
+    instructions: [],
+    access: options.access ?? emptyAccess,
+    tools: options.tools ?? {},
+    inject: { skills: options.injectSkills ?? [] },
+    require: { tools: options.requireTools ?? [], skills: [] },
+  });
+
+const createCapabilityAgent = (options: {
+  readonly name?: string;
+  readonly traits?: string[];
+  readonly access?: NormalizedAccess;
+  readonly skills?: string[];
+}): Agent =>
+  new Agent({
+    name: options.name ?? "worker",
+    sourcePath: `/tmp/${options.name ?? "worker"}.agent.ts`,
+    description: "Capability worker",
+    identity: "identity",
+    traits: (options.traits ?? []).map((ref) => ({ ref, tools: {} })),
+    access: options.access ?? emptyAccess,
+    skills: options.skills ?? [],
+    targets: {},
+  });
+
+const createCapabilityTool = (name: string): CanonicalTool =>
+  new CanonicalTool({
+    name,
+    sourcePath: `/tmp/${name}.tool.ts`,
+    description: `${name} tool`,
+    input: Schema.Struct({}),
+    output: Schema.Struct({}),
+    slots: {},
+    async handle() {
+      return {};
+    },
   });
 
 const createValidationOrbit = (options: {
@@ -1336,6 +1385,182 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(
     reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
   ).toBeUndefined();
+});
+
+test("resolveAgentCapabilities merges trait grants and sorts capability output", async () => {
+  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
+  registry.tools.set("submit-work", createCapabilityTool("submit-work"));
+  registry.traits.set(
+    "zeta",
+    createCapabilityTrait({
+      name: "zeta",
+      access: {
+        tools: ["workspace/zeta"],
+        toolGroups: ["workspace/group-zeta"],
+        skills: ["skill-zeta"],
+      },
+      injectSkills: ["skill-injected"],
+      tools: { submit_work: { ref: "submit-work" } },
+    }),
+  );
+  registry.traits.set(
+    "alpha",
+    createCapabilityTrait({
+      name: "alpha",
+      requireTools: ["submit_work"],
+    }),
+  );
+  const agent = createCapabilityAgent({
+    traits: ["alpha", "zeta"],
+    access: {
+      tools: ["workspace/native"],
+      toolGroups: ["workspace/group-native"],
+      skills: ["skill-native"],
+    },
+    skills: ["direct-z", "direct-a"],
+  });
+
+  const capabilities = await Effect.runPromise(
+    resolveAgentCapabilities(agent, registry),
+  );
+
+  expect(capabilities.traits.map((trait) => trait.canonicalId)).toEqual([
+    "capability-demo:alpha",
+    "capability-demo:zeta",
+  ]);
+  expect(capabilities.canonicalTraitIds).toEqual([
+    "capability-demo:alpha",
+    "capability-demo:zeta",
+  ]);
+  expect(capabilities.skills).toEqual(["direct-z", "direct-a"]);
+  expect(capabilities.access).toEqual({
+    tools: ["workspace/native", "workspace/zeta"],
+    toolGroups: ["workspace/group-native", "workspace/group-zeta"],
+    skills: ["skill-injected", "skill-native", "skill-zeta"],
+  });
+  expect(capabilities.toolRefs).toEqual([
+    {
+      logicalName: "submit_work",
+      kind: "permission",
+      toolPluginName: "capability-demo",
+      toolName: "submit-work",
+      toolSourcePath: "/tmp/submit-work.tool.ts",
+    },
+  ]);
+});
+
+test("resolveAgentCapabilities preserves trait duplicate and requirement failures", async () => {
+  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
+  registry.traits.set("alpha", createCapabilityTrait({ name: "alpha" }));
+  registry.traits.set(
+    "needs-tool",
+    createCapabilityTrait({
+      name: "needs-tool",
+      requireTools: ["submit_work"],
+    }),
+  );
+
+  const duplicateExit = await Effect.runPromiseExit(
+    resolveAgentCapabilities(
+      createCapabilityAgent({ traits: ["alpha", "alpha"] }),
+      registry,
+    ),
+  );
+  const duplicateFailure = getFailure(duplicateExit);
+  expect(duplicateFailure._tag).toBe("AgentValidationError");
+  if (duplicateFailure._tag === "AgentValidationError") {
+    expect(duplicateFailure.field).toBe("traits[1]");
+    expect(duplicateFailure.message).toBe(
+      "declares duplicate trait 'capability-demo:alpha'",
+    );
+  }
+
+  const missingExit = await Effect.runPromiseExit(
+    resolveAgentCapabilities(
+      createCapabilityAgent({ traits: ["needs-tool"] }),
+      registry,
+    ),
+  );
+  const missingFailure = getFailure(missingExit);
+  expect(missingFailure._tag).toBe("AgentValidationError");
+  if (missingFailure._tag === "AgentValidationError") {
+    expect(missingFailure.field).toBe("traits");
+    expect(missingFailure.message).toBe(
+      "trait 'capability-demo:needs-tool' requires missing tools: submit_work",
+    );
+  }
+});
+
+test("resolveAgentCapabilities accepts identical logical tool bindings", async () => {
+  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
+  registry.tools.set("submit-work", createCapabilityTool("submit-work"));
+  registry.traits.set(
+    "left",
+    createCapabilityTrait({
+      name: "left",
+      tools: { submit_work: { ref: "submit-work" } },
+    }),
+  );
+  registry.traits.set(
+    "right",
+    createCapabilityTrait({
+      name: "right",
+      tools: { submit_work: { ref: "submit-work" } },
+    }),
+  );
+
+  const capabilities = await Effect.runPromise(
+    resolveAgentCapabilities(
+      createCapabilityAgent({ traits: ["left", "right"] }),
+      registry,
+    ),
+  );
+
+  expect(capabilities.toolRefs).toEqual([
+    {
+      logicalName: "submit_work",
+      kind: "permission",
+      toolPluginName: "capability-demo",
+      toolName: "submit-work",
+      toolSourcePath: "/tmp/submit-work.tool.ts",
+    },
+  ]);
+});
+
+test("resolveAgentCapabilities rejects conflicting logical tool bindings", async () => {
+  const registry = emptyRegistry("/tmp/capability-demo", "capability-demo", "0.1.0");
+  registry.tools.set("left-tool", createCapabilityTool("left-tool"));
+  registry.tools.set("right-tool", createCapabilityTool("right-tool"));
+  registry.traits.set(
+    "left",
+    createCapabilityTrait({
+      name: "left",
+      tools: { submit_work: { ref: "left-tool" } },
+    }),
+  );
+  registry.traits.set(
+    "right",
+    createCapabilityTrait({
+      name: "right",
+      tools: { submit_work: { ref: "right-tool" } },
+    }),
+  );
+
+  const exit = await Effect.runPromiseExit(
+    resolveAgentCapabilities(
+      createCapabilityAgent({ traits: ["left", "right"] }),
+      registry,
+    ),
+  );
+  const failure = getFailure(exit);
+
+  expect(failure._tag).toBe("AgentValidationError");
+  if (failure._tag === "AgentValidationError") {
+    expect(failure.field).toBe("traits");
+    expect(failure.message).toBe(
+      "traits 'capability-demo:left' and 'capability-demo:right' define conflicting tool bindings for 'submit_work'",
+    );
+  }
 });
 
 test("compilePluginForTarget dry-run leaves lowerer outputs cache and lockfile untouched", async () => {

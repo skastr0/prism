@@ -34,6 +34,31 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
+const directoryExists = async (path: string): Promise<boolean> => {
+  try {
+    await readdir(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readDirectoryTextFiles = async (
+  path: string,
+): Promise<Record<string, string>> => {
+  const entries = (await readdir(path)).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  return Object.fromEntries(
+    await Promise.all(
+      entries.map(async (entry) => [
+        entry,
+        await readFile(join(path, entry), "utf8"),
+      ]),
+    ),
+  );
+};
+
 const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
   pathToFileURL(
     join(projectRoot, ".opencode", "plugins", pluginId, "dist", "server.mjs"),
@@ -1117,6 +1142,54 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(
     reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
   ).toBeUndefined();
+});
+
+test("compilePluginForTarget dry-run leaves lowerer outputs cache and lockfile untouched", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  expect(result.operations.length).toBeGreaterThan(0);
+  expect(result.backups).toEqual([]);
+  expect(result.lockfilePath).toBeNull();
+  expect(await pathExists(join(pluginRoot, "prism.lock"))).toBe(false);
+  expect(await directoryExists(join(pluginRoot, "dist", ".prism-cache"))).toBe(false);
+  expect(
+    await pathExists(join(projectRoot, ".opencode", "agents", "builder.md")),
+  ).toBe(false);
+  expect(await directoryExists(join(projectRoot, ".opencode", "plugins"))).toBe(
+    false,
+  );
+});
+
+test("compilePluginForTarget does not persist cache or lockfile after lowering failure", async () => {
+  const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+  await writeText(join(projectRoot, ".opencode", "agents"), "not a directory\n");
+
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "opencode",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+        backup: false,
+      }),
+    ),
+  ).rejects.toThrow();
+
+  expect(await pathExists(join(pluginRoot, "prism.lock"))).toBe(false);
+  expect(await directoryExists(join(pluginRoot, "dist", ".prism-cache"))).toBe(false);
 });
 
 test("orbit phase validation succeeds when assigned agents satisfy requirements", async () => {
@@ -2326,6 +2399,13 @@ export default defineAgent({
   expect(lockfile?.entries[0]?.sources.map((source) => source.path).sort()).toContain(
     "skillspaces/external-skills.skillspace.ts",
   );
+  const cacheDir = join(pluginRoot, "dist", ".prism-cache");
+  const cacheAfterFirstCompile = await readDirectoryTextFiles(cacheDir);
+  const lockfileAfterFirstCompile = await readFile(
+    join(pluginRoot, "prism.lock"),
+    "utf8",
+  );
+  expect(Object.keys(cacheAfterFirstCompile)).toHaveLength(1);
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
@@ -2339,6 +2419,10 @@ export default defineAgent({
   );
   expect(warmCompile.built).toEqual([]);
   expect(warmCompile.fromCache).toEqual(["worker"]);
+  expect(await readDirectoryTextFiles(cacheDir)).toEqual(cacheAfterFirstCompile);
+  expect(await readFile(join(pluginRoot, "prism.lock"), "utf8")).toBe(
+    lockfileAfterFirstCompile,
+  );
 
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),

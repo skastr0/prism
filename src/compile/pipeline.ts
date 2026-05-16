@@ -92,6 +92,38 @@ interface LowererModule {
   ) => Promise<{ backups: string[] }>;
 }
 
+interface CompileTargetContext {
+  readonly targetId: HarnessId;
+  readonly lowerer: LowererModule;
+  readonly outputRoot: string;
+  readonly cacheDir: string;
+  readonly useCache: boolean;
+}
+
+interface TargetSurfaceSelection {
+  readonly agents: boolean;
+  readonly orbits: boolean;
+  readonly tools: boolean;
+  readonly skills: boolean;
+  readonly hooks: boolean;
+  readonly rules: boolean;
+  readonly commands: boolean;
+  readonly hasLowerableArtifacts: boolean;
+}
+
+interface AgentCompositionResult {
+  readonly composed: ComposedAgent[];
+  readonly built: string[];
+  readonly fromCache: string[];
+  readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
+}
+
+interface TargetArtifacts {
+  readonly tools: CanonicalTool[];
+  readonly skills: Skill[];
+  readonly hooks: Hook[];
+}
+
 export interface CompileOptions {
   readonly pluginPath: string;
   readonly target: string;
@@ -405,9 +437,9 @@ const assertTargetSupportsSkillPermissions = (
   );
 };
 
-export const compilePluginForTarget = (
-  options: CompileOptions
-): Effect.Effect<CompileResult, CompileError> =>
+const resolveCompileTargetContext = (
+  options: CompileOptions,
+): Effect.Effect<CompileTargetContext, CompileError> =>
   Effect.gen(function* () {
     if (!(SUPPORTED_TARGETS as readonly string[]).includes(options.target)) {
       return yield* Effect.fail(
@@ -454,47 +486,70 @@ export const compilePluginForTarget = (
       );
     }
 
-    const cacheDir = getCacheDir(options.pluginPath);
-    const useCache = !options.dryRun;
-    const registry = yield* loadPlugin(options.pluginPath);
-    const targetId = options.target as HarnessId;
-    const targetsAgents = registryTargetsHarness(registry, "agents", targetId);
-    const targetsOrbits = registryTargetsHarness(registry, "orbits", targetId);
-    const targetsTools = registryTargetsHarness(registry, "tools", targetId);
-    const targetsSkills = registryTargetsHarness(registry, "skills", targetId);
-    const targetsHooks = registryTargetsHarness(registry, "hooks", targetId);
-    const targetsRules = registryTargetsHarness(registry, "rules", targetId);
-    const targetsCommands = registryTargetsHarness(registry, "commands", targetId);
-    const hasLowerableArtifacts =
-      targetsAgents ||
-      targetsOrbits ||
-      targetsTools ||
-      targetsSkills ||
-      targetsHooks ||
-      targetsRules ||
-      targetsCommands;
-    yield* assertTargetSupportsAgents(options.target, targetsAgents);
-    yield* assertTargetSupportsHooks(options.target, targetsHooks);
+    return {
+      targetId: options.target as HarnessId,
+      lowerer,
+      outputRoot,
+      cacheDir: getCacheDir(options.pluginPath),
+      useCache: !options.dryRun,
+    };
+  });
 
+const selectTargetSurfaces = (
+  registry: PluginRegistry,
+  targetId: HarnessId,
+): TargetSurfaceSelection => {
+  const agents = registryTargetsHarness(registry, "agents", targetId);
+  const orbits = registryTargetsHarness(registry, "orbits", targetId);
+  const tools = registryTargetsHarness(registry, "tools", targetId);
+  const skills = registryTargetsHarness(registry, "skills", targetId);
+  const hooks = registryTargetsHarness(registry, "hooks", targetId);
+  const rules = registryTargetsHarness(registry, "rules", targetId);
+  const commands = registryTargetsHarness(registry, "commands", targetId);
+
+  return {
+    agents,
+    orbits,
+    tools,
+    skills,
+    hooks,
+    rules,
+    commands,
+    hasLowerableArtifacts:
+      agents || orbits || tools || skills || hooks || rules || commands,
+  };
+};
+
+const composeTargetAgents = (options: {
+  readonly registry: PluginRegistry;
+  readonly target: string;
+  readonly scope: HarnessScope;
+  readonly cacheDir: string;
+  readonly useCache: boolean;
+  readonly targetsAgents: boolean;
+}): Effect.Effect<AgentCompositionResult, CompileError> =>
+  Effect.gen(function* () {
     const composed: ComposedAgent[] = [];
     const built: string[] = [];
     const fromCache: string[] = [];
     const cacheDescriptors = new Map<string, AgentCacheDescriptor>();
+    if (!options.targetsAgents) {
+      return { composed, built, fromCache, cacheDescriptors };
+    }
 
-    for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) =>
+    for (const [, agent] of [...options.registry.agents.entries()].sort(([a], [b]) =>
       a.localeCompare(b)
     )) {
-      if (!targetsAgents) break;
       const descriptor = yield* Effect.promise(() =>
-        computeAgentCacheDescriptor(agent, registry, {
+        computeAgentCacheDescriptor(agent, options.registry, {
           target: options.target,
           scope: options.scope,
         })
       );
       cacheDescriptors.set(agent.name, descriptor);
 
-      const cached = useCache
-        ? yield* Effect.promise(() => readCacheEntry(cacheDir, descriptor.key))
+      const cached = options.useCache
+        ? yield* Effect.promise(() => readCacheEntry(options.cacheDir, descriptor.key))
         : null;
 
       if (
@@ -507,35 +562,57 @@ export const compilePluginForTarget = (
         continue;
       }
 
-      const resolved = yield* resolveAgent(agent, registry, options.target);
+      const resolved = yield* resolveAgent(agent, options.registry, options.target);
       composed.push(composeAgent(resolved));
       built.push(agent.name);
     }
 
-    // Validate orbit sources, then lower only concrete instances.
+    return { composed, built, fromCache, cacheDescriptors };
+  });
+
+const prepareTargetOrbits = (
+  registry: PluginRegistry,
+  targetsOrbits: boolean,
+): Effect.Effect<Orbit[], CompileError> =>
+  Effect.gen(function* () {
     const orbits: Orbit[] = [];
+    if (!targetsOrbits) return orbits;
+
     for (const [, orbit] of [...registry.orbits.entries()].sort(
       ([a], [b]) => a.localeCompare(b)
     )) {
-      if (!targetsOrbits) break;
       yield* validateOrbit(orbit, registry);
       if (orbit.parameters.length > 0) continue;
       orbits.push(yield* instantiateOrbit(orbit));
     }
 
-    const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
+    return orbits;
+  });
+
+const applyOrbitGrantsAndAssertCapabilities = (options: {
+  readonly target: string;
+  readonly targetId: HarnessId;
+  readonly registry: PluginRegistry;
+  readonly composed: ReadonlyArray<ComposedAgent>;
+  readonly orbits: ReadonlyArray<Orbit>;
+}): Effect.Effect<ComposedAgent[], CompileError> =>
+  Effect.gen(function* () {
+    const orbitToolPermissions = yield* resolveOrbitToolPermissions(
+      options.orbits,
+      options.registry,
+    );
     const orbitSkillPermissions =
       getCompileTargetCapabilities(options.target).skillPermissions === "supported"
-        ? resolveOrbitSkillPermissions(orbits, registry)
+        ? resolveOrbitSkillPermissions(options.orbits, options.registry)
         : new Map<string, ReadonlyArray<string>>();
     const composedWithOrbitTools = applyOrbitToolPermissions(
-      composed,
+      options.composed,
       orbitToolPermissions,
     );
     yield* assertAgentToolBindingsAreTargeted(
       composedWithOrbitTools,
-      registry,
-      targetId,
+      options.registry,
+      options.targetId,
     );
     const composedForLowering = applyOrbitSkillPermissions(
       composedWithOrbitTools,
@@ -550,82 +627,169 @@ export const compilePluginForTarget = (
       composedForLowering,
     );
 
-    const targetTools = targetsTools
-      ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
-      : [];
-    const targetSkills = targetsSkills
-      ? [...registry.skills.values()].sort((left, right) => left.name.localeCompare(right.name))
-      : [];
-    const targetHooks = targetsHooks
-      ? [...registry.hooks.values()].sort((left, right) => left.name.localeCompare(right.name))
-      : [];
+    return composedForLowering;
+  });
 
-    const allOps = hasLowerableArtifacts
-      ? yield* Effect.promise(() =>
-          lowerer.planLowering({
-            agents: composedForLowering,
-            orbits,
-            tools: targetTools,
-            skills: targetSkills,
-            hooks: targetHooks,
-            registry,
-            target: {
-              scope: options.scope,
-              root: outputRoot,
-              sourcePluginName: registry.pluginName,
-              sourcePluginVersion: registry.pluginVersion,
-              sourcePluginPath: registry.pluginPath,
-            },
-          })
-        )
-      : [];
+const selectTargetArtifacts = (
+  registry: PluginRegistry,
+  surfaces: TargetSurfaceSelection,
+): TargetArtifacts => ({
+  tools: surfaces.tools
+    ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
+    : [],
+  skills: surfaces.skills
+    ? [...registry.skills.values()].sort((left, right) => left.name.localeCompare(right.name))
+    : [],
+  hooks: surfaces.hooks
+    ? [...registry.hooks.values()].sort((left, right) => left.name.localeCompare(right.name))
+    : [],
+});
 
-    let backups: string[] = [];
-    if (!options.dryRun) {
-      const result = yield* Effect.promise(() =>
-        lowerer.executeLowering(allOps, { backup: options.backup, dryRun: false })
+const planTargetLowering = (options: {
+  readonly lowerer: LowererModule;
+  readonly surfaces: TargetSurfaceSelection;
+  readonly agents: ReadonlyArray<ComposedAgent>;
+  readonly orbits: ReadonlyArray<Orbit>;
+  readonly artifacts: TargetArtifacts;
+  readonly registry: PluginRegistry;
+  readonly scope: HarnessScope;
+  readonly outputRoot: string;
+}): Effect.Effect<LowerOperation[], CompileError> => {
+  if (!options.surfaces.hasLowerableArtifacts) {
+    return Effect.succeed([]);
+  }
+
+  return Effect.promise(() =>
+    options.lowerer.planLowering({
+      agents: options.agents,
+      orbits: options.orbits,
+      tools: options.artifacts.tools,
+      skills: options.artifacts.skills,
+      hooks: options.artifacts.hooks,
+      registry: options.registry,
+      target: {
+        scope: options.scope,
+        root: options.outputRoot,
+        sourcePluginName: options.registry.pluginName,
+        sourcePluginVersion: options.registry.pluginVersion,
+        sourcePluginPath: options.registry.pluginPath,
+      },
+    })
+  );
+};
+
+const executeTargetLowering = (
+  lowerer: LowererModule,
+  operations: ReadonlyArray<LowerOperation>,
+  options: Pick<CompileOptions, "backup" | "dryRun">,
+): Effect.Effect<string[], CompileError> => {
+  if (options.dryRun) return Effect.succeed([]);
+
+  return Effect.gen(function* () {
+    const result = yield* Effect.promise(() =>
+      lowerer.executeLowering([...operations], { backup: options.backup, dryRun: false })
+    );
+    return result.backups;
+  });
+};
+
+const persistCompileOutputs = (options: {
+  readonly pluginPath: string;
+  readonly registry: PluginRegistry;
+  readonly useCache: boolean;
+  readonly cacheDir: string;
+  readonly composed: ReadonlyArray<ComposedAgent>;
+  readonly built: ReadonlyArray<string>;
+  readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
+  readonly operations: ReadonlyArray<LowerOperation>;
+}): Effect.Effect<string | null, CompileError> =>
+  Effect.gen(function* () {
+    if (!options.useCache) return null;
+
+    const builtSet = new Set(options.built);
+
+    for (const agent of options.composed) {
+      if (!builtSet.has(agent.name)) continue;
+      const descriptor = options.cacheDescriptors.get(agent.name);
+      if (!descriptor) continue;
+
+      yield* Effect.promise(() =>
+        writeCacheEntry(options.cacheDir, {
+          key: descriptor.key,
+          sourceHash: descriptor.sourceHash,
+          contextHash: descriptor.contextHash,
+          composed: agent,
+          outputs: collectCacheOutputs(agent.name, options.operations),
+          timestamp: new Date().toISOString(),
+        })
       );
-      backups = result.backups;
     }
 
-    let lockfilePath: string | null = null;
-    if (useCache) {
-      const builtSet = new Set(built);
+    return yield* Effect.promise(() =>
+      writeLockfile(options.pluginPath, options.registry)
+    );
+  });
 
-      for (const agent of composed) {
-        if (!builtSet.has(agent.name)) continue;
-        const descriptor = cacheDescriptors.get(agent.name);
-        if (!descriptor) continue;
+export const compilePluginForTarget = (
+  options: CompileOptions
+): Effect.Effect<CompileResult, CompileError> =>
+  Effect.gen(function* () {
+    const context = yield* resolveCompileTargetContext(options);
+    const registry = yield* loadPlugin(options.pluginPath);
+    const surfaces = selectTargetSurfaces(registry, context.targetId);
+    yield* assertTargetSupportsAgents(options.target, surfaces.agents);
+    yield* assertTargetSupportsHooks(options.target, surfaces.hooks);
 
-        yield* Effect.promise(() =>
-          writeCacheEntry(cacheDir, {
-            key: descriptor.key,
-            sourceHash: descriptor.sourceHash,
-            contextHash: descriptor.contextHash,
-            composed: agent,
-            outputs: collectCacheOutputs(agent.name, allOps),
-            timestamp: new Date().toISOString(),
-          })
-        );
-      }
-
-      lockfilePath = yield* Effect.promise(() =>
-        writeLockfile(options.pluginPath, registry)
-      );
-    }
+    const agentResult = yield* composeTargetAgents({
+      registry,
+      target: options.target,
+      scope: options.scope,
+      cacheDir: context.cacheDir,
+      useCache: context.useCache,
+      targetsAgents: surfaces.agents,
+    });
+    const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
+    const composedForLowering = yield* applyOrbitGrantsAndAssertCapabilities({
+      target: options.target,
+      targetId: context.targetId,
+      registry,
+      composed: agentResult.composed,
+      orbits,
+    });
+    const allOps = yield* planTargetLowering({
+      lowerer: context.lowerer,
+      surfaces,
+      agents: composedForLowering,
+      orbits,
+      artifacts: selectTargetArtifacts(registry, surfaces),
+      registry,
+      scope: options.scope,
+      outputRoot: context.outputRoot,
+    });
+    const backups = yield* executeTargetLowering(context.lowerer, allOps, options);
+    const lockfilePath = yield* persistCompileOutputs({
+      pluginPath: options.pluginPath,
+      registry,
+      useCache: context.useCache,
+      cacheDir: context.cacheDir,
+      composed: agentResult.composed,
+      built: agentResult.built,
+      cacheDescriptors: agentResult.cacheDescriptors,
+      operations: allOps,
+    });
 
     return {
       target: options.target,
       scope: options.scope,
-      outputRoot,
-      cacheDir,
+      outputRoot: context.outputRoot,
+      cacheDir: context.cacheDir,
       lockfilePath,
       composed: composedForLowering,
       orbits,
       operations: allOps,
       backups,
-      built,
-      fromCache,
+      built: agentResult.built,
+      fromCache: agentResult.fromCache,
     };
   });
 

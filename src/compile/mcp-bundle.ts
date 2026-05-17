@@ -57,6 +57,14 @@ type McpAdapterSpec =
       readonly contractRelativePath: string;
     };
 
+export type McpServerBundleTransport = "stdio" | "streamable-http";
+
+export interface McpHttpServerOptions {
+  readonly host?: string;
+  readonly port?: number;
+  readonly tokenEnv?: string;
+}
+
 export interface McpServerBundleOptions {
   readonly sourcePluginName: string;
   readonly sourcePluginRoot?: string;
@@ -64,6 +72,8 @@ export interface McpServerBundleOptions {
   readonly serverName: string;
   readonly version?: string;
   readonly bundleId?: string;
+  readonly transport?: McpServerBundleTransport;
+  readonly http?: McpHttpServerOptions;
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
 }
 
@@ -561,7 +571,7 @@ interface ToolRuntimeContext {
 }`;
 
 const MCP_JSON_RPC_TYPES = `type JsonRpcId = string | number | null;
-type JsonRpcMessage = { jsonrpc?: string; id?: JsonRpcId; method?: string; params?: any };`;
+type JsonRpcMessage = { jsonrpc?: string; id?: JsonRpcId; method?: string; params?: any; result?: any; error?: any };`;
 
 const SCHEMA_BRIDGE_RUNTIME = `${SCHEMA_ANNOTATION_HELPERS}
 
@@ -642,11 +652,53 @@ const inputJsonSchemaFromEffectSchema = (schema: Schema.Schema.AnyNoContext): Js
 const decodeWithSchema = <A>(schema: Schema.Schema<A, unknown, never>, raw: unknown): A =>
   Schema.decodeUnknownSync(schema)(raw);`;
 
-const MCP_TOOL_FACTORY_RUNTIME = `const runtimeContext = (): ToolRuntimeContext => ({
-  sessionID: process.env.PRISM_MCP_SESSION_ID ?? "mcp-stdio",
-  agent: process.env.PRISM_MCP_AGENT ?? "mcp-client",
+const MCP_TOOL_FACTORY_RUNTIME = `const resolveWorkingDirectory = (): string => {
+  const configured = process.env.PRISM_MCP_WORKING_DIRECTORY;
+  if (configured && configured !== process.cwd()) {
+    try {
+      process.chdir(configured);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(\`prism MCP: failed to change working directory to '\${configured}': \${message}\`);
+    }
+  }
+  return process.cwd();
+};
+
+const prismWorkingDirectory = resolveWorkingDirectory();
+const prismRepoRoot = process.env.PRISM_MCP_REPO_ROOT ?? prismWorkingDirectory;
+const configuredToolTimeoutMs = Number(process.env.PRISM_MCP_TOOL_TIMEOUT_MS ?? "120000");
+const prismToolTimeoutMs = Number.isFinite(configuredToolTimeoutMs) && configuredToolTimeoutMs > 0
+  ? configuredToolTimeoutMs
+  : 120000;
+
+const withToolTimeout = async <A>(name: string, operation: Promise<A>): Promise<A> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<A>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(\`MCP tool '\${name}' timed out after \${prismToolTimeoutMs}ms\`));
+        }, prismToolTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+};
+
+interface ToolCallRuntimeContext {
+  sessionID?: string;
+  agent?: string;
+}
+
+const runtimeContext = (callContext: ToolCallRuntimeContext = {}): ToolRuntimeContext => ({
+  sessionID: callContext.sessionID ?? process.env.PRISM_MCP_SESSION_ID ?? "mcp-stdio",
+  agent: callContext.agent ?? process.env.PRISM_MCP_AGENT ?? "mcp-client",
   timestamp: new Date().toISOString(),
-  workingDirectory: process.cwd(),
+  workingDirectory: prismWorkingDirectory,
+  repoRoot: prismRepoRoot,
 });
 
 const createTool = (name: string, surface: ToolSurface) => {
@@ -661,14 +713,19 @@ const createTool = (name: string, surface: ToolSurface) => {
     throw new Error(\`MCP tool '\${name}' has unsupported Input/input schema: \${errorMessage(error)}\`);
   }
 
+  const runTool = async (rawArgs: unknown, callContext?: ToolCallRuntimeContext): Promise<string> => {
+    const input = decodeWithSchema(inputSchema as Schema.Schema<unknown, unknown, never>, rawArgs ?? {});
+    const output = await surface.handle(input, runtimeContext(callContext));
+    const validatedOutput = decodeWithSchema(outputSchema as Schema.Schema<unknown, unknown, never>, output);
+    return JSON.stringify(validatedOutput, null, 2);
+  };
+
   return {
     description: surface.description ?? "",
     inputSchema: inputJsonSchema,
-    async call(rawArgs: unknown): Promise<string> {
-      const input = decodeWithSchema(inputSchema as Schema.Schema<unknown, unknown, never>, rawArgs ?? {});
-      const output = await surface.handle(input, runtimeContext());
-      const validatedOutput = decodeWithSchema(outputSchema as Schema.Schema<unknown, unknown, never>, output);
-      return JSON.stringify(validatedOutput, null, 2);
+    run: runTool,
+    async call(rawArgs: unknown, callContext?: ToolCallRuntimeContext): Promise<string> {
+      return await withToolTimeout(name, runTool(rawArgs, callContext));
     },
   };
 };`;
@@ -825,6 +882,340 @@ process.stdin.on("end", () => exitSoon(0));
 process.stdin.on("close", () => exitSoon(0));
 process.stdin.resume();`;
 
+const MCP_HTTP_RUNTIME = `const tools = {
+__PRISM_TOOL_ENTRIES__
+};
+
+if (process.env.PRISM_MCP_VALIDATE === "1") {
+  process.exit(0);
+}
+
+const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? __PRISM_HTTP_HOST__;
+const isLoopbackBindHost = (value: string): boolean =>
+  value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
+if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
+  throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
+}
+const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? __PRISM_HTTP_PORT__);
+const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
+const httpTokenEnvName = __PRISM_HTTP_TOKEN_ENV__;
+const httpToken = process.env[httpTokenEnvName] ?? process.env.PRISM_MCP_HTTP_TOKEN;
+if (!httpToken) {
+  throw new Error(\`Prism MCP Streamable HTTP server requires token env '\${httpTokenEnvName}'\`);
+}
+const supportedProtocolVersions = new Set(["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]);
+interface HttpSessionState {
+  updatedAt: number;
+}
+
+const configuredMaxSessions = Number(process.env.PRISM_MCP_MAX_SESSIONS ?? "128");
+const maxSessions = Number.isFinite(configuredMaxSessions) && configuredMaxSessions > 0
+  ? configuredMaxSessions
+  : 128;
+const configuredSessionTtlMs = Number(process.env.PRISM_MCP_SESSION_TTL_MS ?? "3600000");
+const sessionTtlMs = Number.isFinite(configuredSessionTtlMs) && configuredSessionTtlMs > 0
+  ? configuredSessionTtlMs
+  : 3600000;
+const configuredMaxRequestBytes = Number(process.env.PRISM_MCP_MAX_REQUEST_BYTES ?? "1048576");
+const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes > 0
+  ? configuredMaxRequestBytes
+  : 1048576;
+const sessions = new Map<string, HttpSessionState>();
+const configuredMaxConcurrentToolCalls = Number(process.env.PRISM_MCP_MAX_CONCURRENT_CALLS ?? "16");
+const maxConcurrentToolCalls = Number.isFinite(configuredMaxConcurrentToolCalls) && configuredMaxConcurrentToolCalls > 0
+  ? configuredMaxConcurrentToolCalls
+  : 16;
+let activeToolCalls = 0;
+
+const withToolConcurrency = async <A>(name: string, operation: () => Promise<A>): Promise<A> => {
+  if (activeToolCalls >= maxConcurrentToolCalls) {
+    throw new Error(\`MCP tool '\${name}' rejected because \${activeToolCalls} tool call(s) are already running\`);
+  }
+  activeToolCalls += 1;
+  let operationPromise: Promise<A>;
+  try {
+    operationPromise = operation();
+  } catch (error) {
+    activeToolCalls -= 1;
+    throw error;
+  }
+  operationPromise.then(
+    () => { activeToolCalls -= 1; },
+    () => { activeToolCalls -= 1; },
+  );
+  return await withToolTimeout(name, operationPromise);
+};
+
+const responseHeaders = (extra?: HeadersInit): Headers => {
+  const headers = new Headers(extra);
+  headers.set("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id");
+  headers.set("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
+  headers.set("Access-Control-Allow-Origin", "null");
+  headers.set("Cache-Control", "no-store");
+  return headers;
+};
+
+const jsonResponse = (body: unknown, init: ResponseInit = {}): Response => {
+  const headers = responseHeaders(init.headers);
+  headers.set("content-type", "application/json");
+  return new Response(JSON.stringify(body), { ...init, headers });
+};
+
+const emptyResponse = (status: number, init: ResponseInit = {}): Response =>
+  new Response(null, { ...init, status, headers: responseHeaders(init.headers) });
+
+const rpcResultMessage = (id: JsonRpcId | undefined, result: unknown): JsonRpcMessage | undefined =>
+  id === undefined ? undefined : { jsonrpc: "2.0", id, result };
+
+const rpcErrorMessage = (id: JsonRpcId | undefined, code: number, message: string): JsonRpcMessage | undefined =>
+  id === undefined ? undefined : { jsonrpc: "2.0", id, error: { code, message } } as JsonRpcMessage;
+
+const isInitializeRequest = (message: JsonRpcMessage): boolean =>
+  message.method === "initialize";
+
+const pruneExpiredSessions = (): void => {
+  const now = Date.now();
+  for (const [sessionID, session] of sessions) {
+    if (now - session.updatedAt > sessionTtlMs) {
+      sessions.delete(sessionID);
+    }
+  }
+};
+
+const touchSession = (sessionID: string): void => {
+  sessions.set(sessionID, { updatedAt: Date.now() });
+};
+
+const isAllowedHostHeader = (value: string | null): boolean => {
+  if (!value) return false;
+  const lower = value.toLowerCase();
+  const configured = httpHost.toLowerCase();
+  return (
+    lower === "localhost" ||
+    lower.startsWith("localhost:") ||
+    lower === "127.0.0.1" ||
+    lower.startsWith("127.0.0.1:") ||
+    lower === "[::1]" ||
+    lower.startsWith("[::1]:") ||
+    lower === configured ||
+    lower.startsWith(configured + ":")
+  );
+};
+
+const isAllowedOrigin = (value: string | null): boolean => {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      isAllowedHostHeader(url.host)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const authorize = (request: Request): Response | undefined => {
+  if (!isAllowedHostHeader(request.headers.get("host"))) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden host" }, id: null }, { status: 403 });
+  }
+  if (!isAllowedOrigin(request.headers.get("origin"))) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden origin" }, id: null }, { status: 403 });
+  }
+  if (httpToken) {
+    const expected = \`Bearer \${httpToken}\`;
+    if (request.headers.get("authorization") !== expected) {
+      return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 });
+    }
+  }
+  return undefined;
+};
+
+const validateProtocolVersion = (request: Request): Response | undefined => {
+  const version = request.headers.get("mcp-protocol-version");
+  if (!version || !supportedProtocolVersions.has(version)) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or unsupported MCP-Protocol-Version" }, id: null }, { status: 400 });
+  }
+  return undefined;
+};
+
+const handleRpcMessage = async (
+  message: JsonRpcMessage,
+  sessionID: string,
+): Promise<JsonRpcMessage | undefined> => {
+  const id = message.id;
+  if (!message.method) {
+    return rpcErrorMessage(id, -32600, "Invalid JSON-RPC request: missing method");
+  }
+
+  switch (message.method) {
+    case "initialize":
+      return rpcResultMessage(id, {
+        protocolVersion: message.params?.protocolVersion ?? "2025-11-25",
+        capabilities: { tools: {} },
+        serverInfo: { name: __PRISM_SERVER_NAME__, version: __PRISM_SERVER_VERSION__ },
+      });
+    case "notifications/initialized":
+      return undefined;
+    case "ping":
+      return rpcResultMessage(id, {});
+    case "tools/list":
+      return rpcResultMessage(id, {
+        tools: Object.entries(tools).map(([name, tool]) => ({
+          name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      });
+    case "tools/call": {
+      const name = message.params?.name;
+      if (typeof name !== "string" || !(name in tools)) {
+        return rpcErrorMessage(id, -32602, \`Unknown tool: \${String(name)}\`);
+      }
+      try {
+        const text = await withToolConcurrency(name, () =>
+          tools[name as keyof typeof tools].run(message.params?.arguments ?? {}, {
+            sessionID,
+            agent: requestAgentName(message),
+          }),
+        );
+        return rpcResultMessage(id, { content: [{ type: "text", text }] });
+      } catch (error) {
+        return rpcResultMessage(id, { isError: true, content: [{ type: "text", text: errorMessage(error) }] });
+      }
+    }
+    case "shutdown":
+      sessions.delete(sessionID);
+      return rpcResultMessage(id, null);
+    case "notifications/exit":
+      sessions.delete(sessionID);
+      return undefined;
+    default:
+      return rpcErrorMessage(id, -32601, \`Method not found: \${message.method}\`);
+  }
+};
+
+const requestAgentName = (message: JsonRpcMessage): string => {
+  const clientName = message.params?.clientInfo?.name;
+  return typeof clientName === "string" && clientName.length > 0
+    ? clientName
+    : "mcp-http-client";
+};
+
+const readLimitedRequestBody = async (request: Request): Promise<string> => {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null && Number(contentLength) > maxRequestBytes) {
+    throw new Error(\`Request body exceeds \${maxRequestBytes} bytes\`);
+  }
+
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.byteLength;
+    if (totalBytes > maxRequestBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The client may already have closed the body stream.
+      }
+      throw new Error(\`Request body exceeds \${maxRequestBytes} bytes\`);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+};
+
+const readJsonMessage = async (request: Request): Promise<JsonRpcMessage> => {
+  const text = await readLimitedRequestBody(request);
+
+  const raw = JSON.parse(text);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Request body must be a single JSON-RPC object");
+  }
+  return raw as JsonRpcMessage;
+};
+
+const handlePost = async (request: Request): Promise<Response> => {
+  let message: JsonRpcMessage;
+  try {
+    message = await readJsonMessage(request);
+  } catch (error) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32700, message: errorMessage(error) }, id: null }, { status: 400 });
+  }
+
+  let sessionID = request.headers.get("mcp-session-id") ?? undefined;
+  const headers = responseHeaders();
+  pruneExpiredSessions();
+
+  if (isInitializeRequest(message)) {
+    if (sessions.size >= maxSessions) {
+      return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "MCP session limit reached" }, id: message.id ?? null }, { status: 429 });
+    }
+    sessionID = crypto.randomUUID();
+    touchSession(sessionID);
+    headers.set("MCP-Session-Id", sessionID);
+  } else if (!sessionID || !sessions.has(sessionID)) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: message.id ?? null }, { status: sessionID ? 404 : 400 });
+  } else {
+    touchSession(sessionID);
+  }
+
+  const response = await handleRpcMessage(message, sessionID);
+  if (!response) return emptyResponse(202, { headers });
+  headers.set("content-type", "application/json");
+  return new Response(JSON.stringify(response), { status: 200, headers });
+};
+
+const handleDelete = (request: Request): Response => {
+  const sessionID = request.headers.get("mcp-session-id") ?? undefined;
+  pruneExpiredSessions();
+  if (!sessionID || !sessions.has(sessionID)) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 });
+  }
+  sessions.delete(sessionID);
+  return emptyResponse(202);
+};
+
+const server = Bun.serve({
+  hostname: httpHost,
+  port: httpPort,
+  fetch: async (request) => {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return emptyResponse(204);
+    if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 });
+
+    const denied = authorize(request);
+    if (denied) return denied;
+
+    if (request.method === "POST" || request.method === "DELETE") {
+      const invalidProtocol = validateProtocolVersion(request);
+      if (invalidProtocol) return invalidProtocol;
+    }
+
+    if (request.method === "POST") return await handlePost(request);
+    if (request.method === "DELETE") return handleDelete(request);
+    if (request.method === "GET") {
+      return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "SSE stream is not supported by this generated Prism MCP server" }, id: null }, { status: 405 });
+    }
+    return jsonResponse({ error: "method not allowed" }, { status: 405 });
+  },
+});
+
+const stopServer = (): void => {
+  server.stop(true);
+  process.exit(0);
+};
+
+process.on("SIGTERM", stopServer);
+process.on("SIGINT", stopServer);
+
+console.error(\`prism MCP Streamable HTTP server listening on http://\${server.hostname}:\${server.port}\${httpPath}\`);`;
+
 const AMP_TOOL_FACTORY_RUNTIME = `const runtimeContext = (): ToolRuntimeContext => ({
   sessionID: "amp-plugin",
   agent: "amp",
@@ -929,6 +1320,21 @@ const renderMcpRpcRuntime = (options: {
     __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
   });
 
+const renderMcpHttpRuntime = (options: {
+  readonly serverName: string;
+  readonly version: string;
+  readonly toolEntries: string;
+  readonly http?: McpHttpServerOptions;
+}): string =>
+  replaceTemplateTokens(MCP_HTTP_RUNTIME, {
+    __PRISM_TOOL_ENTRIES__: options.toolEntries,
+    __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+    __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
+    __PRISM_HTTP_HOST__: JSON.stringify(options.http?.host ?? "127.0.0.1"),
+    __PRISM_HTTP_PORT__: JSON.stringify(String(options.http?.port ?? 0)),
+    __PRISM_HTTP_TOKEN_ENV__: JSON.stringify(options.http?.tokenEnv ?? "PRISM_MCP_HTTP_TOKEN"),
+  });
+
 const renderAmpToolRegistrationRuntime = (toolEntries: string): string =>
   replaceTemplateTokens(AMP_TOOL_FACTORY_RUNTIME, {
     __PRISM_TOOL_ENTRIES__: toolEntries,
@@ -938,28 +1344,39 @@ const renderMcpServerEntry = (options: {
   readonly serverName: string;
   readonly version: string;
   readonly specs: ReadonlyArray<McpAdapterSpec>;
+  readonly transport: McpServerBundleTransport;
+  readonly http?: McpHttpServerOptions;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
     (spec, ident) =>
       `  ${JSON.stringify(spec.mcpName)}: createTool(${JSON.stringify(spec.mcpName)}, ${ident} as ToolSurface),`,
   );
+  const runtime =
+    options.transport === "streamable-http"
+      ? renderMcpHttpRuntime({
+          serverName: options.serverName,
+          version: options.version,
+          toolEntries: entries,
+          http: options.http,
+        })
+      : renderMcpRpcRuntime({
+          serverName: options.serverName,
+          version: options.version,
+          toolEntries: entries,
+        });
 
   return joinGeneratedSections([
     `#!/usr/bin/env bun
 // GENERATED by prism — do not edit.
-// Standalone MCP stdio server for compiled canonical tool bindings.`,
+// Standalone MCP ${options.transport} server for compiled canonical tool bindings.`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     imports,
     MCP_JSON_RPC_TYPES,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),
     MCP_TOOL_FACTORY_RUNTIME,
-    renderMcpRpcRuntime({
-      serverName: options.serverName,
-      version: options.version,
-      toolEntries: entries,
-    }),
+    runtime,
   ]);
 };
 
@@ -1087,6 +1504,8 @@ export const generateMcpServerBundle = async (
       serverName: options.serverName,
       version,
       specs,
+      transport: options.transport ?? "stdio",
+      http: options.http,
     });
     const entryPath = await writeTempBundleSources({
       tempRoot,

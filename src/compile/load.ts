@@ -66,7 +66,7 @@ import {
 } from "./errors.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
-import type { PluginManifestTargets } from "../types.js";
+import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
 
 const listDir = (path: string): Effect.Effect<string[]> =>
   Effect.tryPromise({
@@ -2220,6 +2220,7 @@ interface PluginManifest {
   version: string;
   deps: Record<string, string>;
   targets: PluginManifestTargets;
+  runtime: PluginRuntimeConfig;
 }
 
 const readPluginManifest = (
@@ -2291,7 +2292,21 @@ const readPluginManifest = (
         ? (rawTargets as PluginManifestTargets)
         : {};
 
-    return { name, version, deps, targets };
+    const rawRuntime = data.runtime;
+    let runtime: PluginRuntimeConfig = {};
+    if (rawRuntime !== undefined) {
+      if (rawRuntime === null || typeof rawRuntime !== "object" || Array.isArray(rawRuntime)) {
+        return yield* Effect.fail(
+          new PluginManifestError({
+            pluginPath,
+            message: "plugin.json 'runtime' must be an object",
+          }),
+        );
+      }
+      runtime = rawRuntime as PluginRuntimeConfig;
+    }
+
+    return { name, version, deps, targets, runtime };
   });
 
 const parseCanonicalTool = (sourcePath: string): Effect.Effect<CanonicalTool, CompileError> =>
@@ -2375,6 +2390,7 @@ const loadPluginArtifacts = (
   pluginVersion: string,
   dependencyPaths: Record<string, string>,
   targets: PluginManifestTargets,
+  runtime: PluginRuntimeConfig,
 ): Effect.Effect<PluginRegistry, CompileError> =>
   Effect.gen(function* () {
     const registry = emptyRegistry(
@@ -2383,6 +2399,7 @@ const loadPluginArtifacts = (
       pluginVersion,
       dependencyPaths,
       targets,
+      runtime,
     );
     registry.identities = yield* loadIdentities(pluginPath);
     registry.personalities = yield* loadPersonalities(pluginPath);
@@ -2436,6 +2453,7 @@ const loadPluginWithDeps = (
       manifest.version,
       resolvedDeps,
       manifest.targets,
+      manifest.runtime,
     );
 
     const nextStack = [...stack, canonical];

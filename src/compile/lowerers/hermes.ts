@@ -5,6 +5,7 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import {
   generateMcpServerBundle,
   mcpServerArtifactRelativePath,
+  type McpServerBundleTransport,
 } from "../mcp-bundle.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
@@ -140,6 +141,45 @@ const planGeneratedOrbitSkillPruning = async (
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+interface HermesMcpRuntime {
+  readonly transport: McpServerBundleTransport;
+  readonly host: string;
+  readonly port?: number;
+  readonly tokenEnv: string;
+}
+
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+
+const numberValue = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) ? value : undefined;
+
+const isLoopbackHost = (host: string): boolean =>
+  host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+
+const hermesMcpRuntime = (registry: PluginRegistry | undefined): HermesMcpRuntime => {
+  const configured = registry?.runtime.mcp?.hermes;
+  const transport = configured?.transport === "streamable-http" ? "streamable-http" : "stdio";
+  const host = stringValue(configured?.host) ?? "127.0.0.1";
+  const tokenEnv = stringValue(configured?.tokenEnv) ?? "PRISM_MCP_TOKEN";
+  const port = numberValue(configured?.port);
+
+  if (transport === "streamable-http") {
+    if (port === undefined || port <= 0 || port > 65535) {
+      throw new Error(
+        "Hermes Streamable HTTP MCP transport requires plugin.json runtime.mcp.hermes.port to be an integer from 1 to 65535.",
+      );
+    }
+    if (!isLoopbackHost(host)) {
+      throw new Error(
+        "Hermes Streamable HTTP MCP transport requires plugin.json runtime.mcp.hermes.host to be a loopback host.",
+      );
+    }
+  }
+
+  return { transport, host, ...(port !== undefined ? { port } : {}), tokenEnv };
+};
+
 const isTopLevelKey = (line: string): boolean =>
   /^[A-Za-z0-9_.-]+:\s*(?:#.*)?$/.test(line) ||
   /^[A-Za-z0-9_.-]+:\s+\S/.test(line);
@@ -166,23 +206,59 @@ const findTopLevelBlock = (
 const renderHermesMcpServerYaml = (options: {
   readonly serverName: string;
   readonly serverPath: string;
+  readonly workingDirectory: string;
+  readonly runtime: HermesMcpRuntime;
   readonly toolNames: ReadonlyArray<string>;
-}): string[] => [
-  `  ${options.serverName}:`,
-  `    command: "bun"`,
-  `    args:`,
-  `      - ${yamlScalar(options.serverPath)}`,
-  `    enabled: true`,
-  `    tools:`,
-  `      include:`,
-  ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
-];
+}): string[] => {
+  if (options.runtime.transport === "streamable-http") {
+    const url = `http://${options.runtime.host}:${options.runtime.port!}/mcp`;
+    return [
+      `  ${options.serverName}:`,
+      `    url: ${yamlScalar(url)}`,
+      `    connect_timeout: 10`,
+      `    timeout: 120`,
+      `    enabled: true`,
+      `    sampling:`,
+      `      enabled: false`,
+      `    headers:`,
+      `      Authorization: ${yamlScalar(`Bearer \${${options.runtime.tokenEnv}}`)}`,
+      `    tools:`,
+      `      include:`,
+      ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
+    ];
+  }
+
+  const bunCommand = /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath)
+    ? process.execPath
+    : "bun";
+
+  return [
+    `  ${options.serverName}:`,
+    `    command: ${yamlScalar(bunCommand)}`,
+    `    args:`,
+    `      - ${yamlScalar(options.serverPath)}`,
+    `    connect_timeout: 10`,
+    `    timeout: 120`,
+    `    enabled: true`,
+    `    sampling:`,
+    `      enabled: false`,
+    `    env:`,
+    `      PRISM_MCP_SERVER_NAME: ${yamlScalar(options.serverName)}`,
+    `      PRISM_MCP_WORKING_DIRECTORY: ${yamlScalar(options.workingDirectory)}`,
+    `      PRISM_MCP_REPO_ROOT: ${yamlScalar(options.workingDirectory)}`,
+    `    tools:`,
+    `      include:`,
+    ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
+  ];
+};
 
 const replaceHermesMcpServerBlock = (
   currentConfig: string,
   options: {
     readonly serverName: string;
     readonly serverPath: string;
+    readonly workingDirectory: string;
+    readonly runtime: HermesMcpRuntime;
     readonly toolNames: ReadonlyArray<string>;
   },
 ): string => {
@@ -242,6 +318,7 @@ const planMcpServer = async (
   const serverName = generatedServerName(input.target.sourcePluginName);
   const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
   const serverFile = generatedMcpServerFile(input.target);
+  const runtime = hermesMcpRuntime(input.registry);
 
   if (bindings.length === 0) {
     if (await exists(generatedMcpServerRoot(input.target))) {
@@ -262,6 +339,14 @@ const planMcpServer = async (
     serverName,
     version: input.target.sourcePluginVersion,
     bundleId: serverName,
+    transport: runtime.transport,
+    http: runtime.transport === "streamable-http"
+      ? {
+          host: runtime.host,
+          port: runtime.port,
+          tokenEnv: runtime.tokenEnv,
+        }
+      : undefined,
     bindings,
   });
 
@@ -317,6 +402,8 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   const nextConfig = replaceHermesMcpServerBlock(currentConfig, {
     serverName: mcp.serverName,
     serverPath: generatedMcpServerFile(input.target),
+    workingDirectory: input.target.root,
+    runtime: hermesMcpRuntime(input.registry),
     toolNames: mcp.toolNames,
   });
   if (nextConfig !== currentConfig) {

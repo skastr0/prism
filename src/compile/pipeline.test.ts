@@ -3146,12 +3146,170 @@ export default defineTool({
   );
   expect(configWrite?.kind).toBe("write-plugin-file");
   if (configWrite?.kind === "write-plugin-file") {
+    const expectedBunCommand = /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath)
+      ? process.execPath
+      : "bun";
+
     expect(configWrite.content).toContain("mcp_servers:");
     expect(configWrite.content).toContain("prism-generated-hermes-tool-demo:");
-    expect(configWrite.content).toContain('command: "bun"');
+    expect(configWrite.content).toContain(`command: ${JSON.stringify(expectedBunCommand)}`);
     expect(configWrite.content).toContain(JSON.stringify(serverPath));
+    expect(configWrite.content).toContain("connect_timeout: 10");
+    expect(configWrite.content).toContain("timeout: 120");
+    expect(configWrite.content).toContain("sampling:");
+    expect(configWrite.content).toContain("enabled: false");
+    expect(configWrite.content).toContain("PRISM_MCP_WORKING_DIRECTORY");
+    expect(configWrite.content).toContain(`PRISM_MCP_REPO_ROOT: ${JSON.stringify(hermesRoot)}`);
     expect(configWrite.content).toContain("hermes_tool_demo_echo");
   }
+});
+
+test("compilePluginForTarget can lower Hermes canonical tools as Streamable HTTP MCP", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "hermes-http-demo");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "hermes-http-demo",
+        version: "0.1.0",
+        targets: {
+          tools: ["hermes"],
+        },
+        runtime: {
+          mcp: {
+            hermes: {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: 38463,
+              tokenEnv: "PRISM_MCP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo through Hermes Streamable HTTP MCP.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      dryRun: true,
+      backup: false,
+    }),
+  );
+
+  const hermesRoot = join(homedir(), ".hermes/");
+  const serverPath = join(
+    hermesRoot,
+    "prism",
+    "mcp",
+    "prism_generated_hermes_http_demo",
+    "server.mjs",
+  );
+  const serverWrite = result.operations.find(
+    (operation) => operation.kind === "write-plugin-file" && operation.target === serverPath,
+  );
+  expect(serverWrite?.kind).toBe("write-plugin-file");
+  if (serverWrite?.kind === "write-plugin-file") {
+    expect(serverWrite.content).toContain("Bun.serve");
+    expect(serverWrite.content).toContain("PRISM_MCP_TOKEN");
+    expect(serverWrite.content).toContain("hermes_http_demo_echo");
+  }
+
+  const configWrite = result.operations.find(
+    (operation) =>
+      operation.kind === "write-plugin-file" &&
+      operation.target === join(hermesRoot, "config.yaml"),
+  );
+  expect(configWrite?.kind).toBe("write-plugin-file");
+  if (configWrite?.kind === "write-plugin-file") {
+    expect(configWrite.content).toContain("prism-generated-hermes-http-demo:");
+    expect(configWrite.content).toContain('url: "http://127.0.0.1:38463/mcp"');
+    expect(configWrite.content).toContain('Authorization: "Bearer ${PRISM_MCP_TOKEN}"');
+    expect(configWrite.content).toContain("sampling:");
+    expect(configWrite.content).toContain("enabled: false");
+    expect(configWrite.content).toContain("hermes_http_demo_echo");
+    expect(configWrite.content).not.toContain("prism-generated-hermes-http-demo:\n    command:");
+  }
+});
+
+test("compilePluginForTarget rejects non-loopback Hermes Streamable HTTP hosts", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "hermes-http-host-demo");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "hermes-http-host-demo",
+        version: "0.1.0",
+        targets: {
+          tools: ["hermes"],
+        },
+        runtime: {
+          mcp: {
+            hermes: {
+              transport: "streamable-http",
+              host: "0.0.0.0",
+              port: 38463,
+              tokenEnv: "PRISM_MCP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo through Hermes Streamable HTTP MCP.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        dryRun: true,
+        backup: false,
+      }),
+    ),
+  ).rejects.toThrow("loopback host");
 });
 
 test("compilePluginForTarget rejects Hermes agents and hooks at the capability boundary", async () => {

@@ -19,7 +19,7 @@ import {
   Toolspace,
   Trait,
 } from "./sources.js";
-import type { PluginManifestTargets } from "../types.js";
+import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
 
 export interface PluginRegistry {
   pluginPath: string;
@@ -27,6 +27,7 @@ export interface PluginRegistry {
   pluginVersion: string;
   dependencyPaths: Record<string, string>;
   targets: PluginManifestTargets;
+  runtime: PluginRuntimeConfig;
   identities: Map<string, Identity>;
   personalities: Map<string, Personality>;
   toolspaces: Map<string, Toolspace>;
@@ -47,12 +48,14 @@ export const emptyRegistry = (
   pluginVersion: string,
   dependencyPaths: Record<string, string> = {},
   targets: PluginManifestTargets = {},
+  runtime: PluginRuntimeConfig = {},
 ): PluginRegistry => ({
   pluginPath,
   pluginName,
   pluginVersion,
   dependencyPaths,
   targets,
+  runtime,
   identities: new Map(),
   personalities: new Map(),
   toolspaces: new Map(),

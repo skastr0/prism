@@ -78,6 +78,19 @@ export type PluginManifestTargets = Partial<
   Record<AnyArtifactType, PluginTargetId[]>
 >;
 
+export type PrismMcpTransport = "stdio" | "streamable-http";
+
+export interface PluginRuntimeMcpHarnessConfig {
+  transport?: PrismMcpTransport;
+  host?: string;
+  port?: number;
+  tokenEnv?: string;
+}
+
+export interface PluginRuntimeConfig {
+  mcp?: Partial<Record<HarnessId, PluginRuntimeMcpHarnessConfig>>;
+}
+
 // Plugin manifest (plugin.json)
 export interface PluginManifest {
   name: string;
@@ -89,6 +102,9 @@ export interface PluginManifest {
 
   // Cross-plugin deps (localPath only in v1)
   deps?: Record<string, string>;
+
+  // Runtime lowering configuration for generated artifacts.
+  runtime?: PluginRuntimeConfig;
 
   // Project patterns for project-specific rules
   projects?: Record<string, ProjectConfig>;

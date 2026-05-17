@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -31,6 +32,7 @@ import {
   readManifest,
   resolveManifestTargets,
 } from "../manifest.js";
+import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 
 const tempRoots: string[] = [];
 
@@ -121,6 +123,90 @@ const effectImportPath = join(
 ).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+
+const withEnv = <A>(name: string, value: string, run: () => Promise<A>): Promise<A> => {
+  const previous = process.env[name];
+  process.env[name] = value;
+  return run().finally(() => {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  });
+};
+
+const getFreePort = (host: string): Promise<number> =>
+  new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("failed to allocate port"));
+        return;
+      }
+      const { port } = address;
+      server.close(() => resolvePort(port));
+    });
+  });
+
+const createHermesHttpToolPlugin = async (options?: {
+  readonly pluginName?: string;
+  readonly tokenEnv?: string;
+  readonly transport?: "stdio" | "streamable-http";
+  readonly port?: number;
+}): Promise<{ readonly pluginRoot: string; readonly hermesRoot: string }> => {
+  const root = await createTempRoot();
+  const pluginName = options?.pluginName ?? "hermes-http-demo";
+  const pluginRoot = join(root, pluginName);
+  const hermesRoot = join(root, "hermes-root");
+  await mkdir(hermesRoot, { recursive: true });
+  const runtime = options?.transport === "stdio"
+    ? undefined
+    : {
+        mcp: {
+          hermes: {
+            transport: "streamable-http",
+            host: "127.0.0.1",
+            port: options?.port ?? 38463,
+            tokenEnv: options?.tokenEnv ?? "PRISM_MCP_TOKEN",
+          },
+        },
+      };
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: pluginName,
+        version: "0.1.0",
+        targets: {
+          tools: ["hermes"],
+        },
+        ...(runtime ? { runtime } : {}),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo through Hermes MCP.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+
+  return { pluginRoot, hermesRoot };
+};
 
 const skillPermissionAction = (
   permission: Record<string, string>,
@@ -3252,6 +3338,236 @@ export default defineTool({
     expect(configWrite.content).toContain("hermes_http_demo_echo");
     expect(configWrite.content).not.toContain("prism-generated-hermes-http-demo:\n    command:");
   }
+});
+
+test("compilePluginForTarget gates Hermes HTTP config writes on MCP daemon lifecycle", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_GATE_TOKEN";
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName: "hermes-http-gate-demo",
+    tokenEnv,
+    port,
+  });
+
+  await withEnv(tokenEnv, "test-token", async () => {
+    await expect(
+      Effect.runPromise(
+        compilePluginForTarget({
+          pluginPath: pluginRoot,
+          target: "hermes",
+          scope: "global",
+          root: hermesRoot,
+          dryRun: false,
+          backup: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      `Run: prism mcp serve ${pluginRoot} --harness hermes --scope global --root ${hermesRoot} --port ${port} --token-env ${tokenEnv}`,
+    );
+
+    expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
+    expect(
+      await pathExists(
+        join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_gate_demo", "server.mjs"),
+      ),
+    ).toBe(false);
+  });
+});
+
+test("compilePluginForTarget does not write Hermes HTTP config before lifecycle serve succeeds", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_MISSING_TOKEN";
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName: "hermes-http-serve-order-demo",
+    tokenEnv,
+    port,
+  });
+
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        root: hermesRoot,
+        dryRun: false,
+        backup: false,
+        mcpLifecycle: "serve",
+      }),
+    ),
+  ).rejects.toThrow(`Missing required MCP token environment variable '${tokenEnv}'`);
+
+  expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
+  expect(
+    await pathExists(
+      join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_serve_order_demo", "server.mjs"),
+    ),
+  ).toBe(false);
+});
+
+test("compilePluginForTarget verifies a running Hermes HTTP MCP daemon before config write", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_VERIFY_TOKEN";
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName: "hermes-http-verify-demo",
+    tokenEnv,
+    port,
+  });
+
+  await withEnv(tokenEnv, "test-token", async () => {
+    await serveMcp({
+      pluginPath: pluginRoot,
+      harness: "hermes",
+      scope: "global",
+      root: hermesRoot,
+      tokenEnv,
+    });
+    try {
+      const result = await Effect.runPromise(
+        compilePluginForTarget({
+          pluginPath: pluginRoot,
+          target: "hermes",
+          scope: "global",
+          root: hermesRoot,
+          dryRun: false,
+          backup: false,
+          mcpLifecycle: "verify",
+        }),
+      );
+
+      expect(result.outputRoot).toBe(hermesRoot);
+      const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+      expect(config).toContain("prism-generated-hermes-http-verify-demo:");
+      expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
+    } finally {
+      await stopMcp({
+        pluginPath: pluginRoot,
+        harness: "hermes",
+        scope: "global",
+        root: hermesRoot,
+        tokenEnv,
+      }).catch(() => undefined);
+    }
+  });
+});
+
+test("compilePluginForTarget rejects stale Hermes HTTP daemons before config write", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_STALE_TOKEN";
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName: "hermes-http-stale-demo",
+    tokenEnv,
+    port,
+  });
+
+  await withEnv(tokenEnv, "test-token", async () => {
+    await serveMcp({
+      pluginPath: pluginRoot,
+      harness: "hermes",
+      scope: "global",
+      root: hermesRoot,
+      tokenEnv,
+    });
+    try {
+      await writeText(
+        join(pluginRoot, "tools", "echo.tool.ts"),
+        (await readFile(join(pluginRoot, "tools", "echo.tool.ts"), "utf8")).replace(
+          "Echo through Hermes MCP.",
+          "Echo through changed Hermes MCP.",
+        ),
+      );
+
+      await expect(
+        Effect.runPromise(
+          compilePluginForTarget({
+            pluginPath: pluginRoot,
+            target: "hermes",
+            scope: "global",
+            root: hermesRoot,
+            dryRun: false,
+            backup: false,
+            mcpLifecycle: "verify",
+          }),
+        ),
+      ).rejects.toThrow(/stale-build/);
+
+      expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
+    } finally {
+      await stopMcp({
+        pluginPath: pluginRoot,
+        harness: "hermes",
+        scope: "global",
+        root: hermesRoot,
+        tokenEnv,
+      }).catch(() => undefined);
+    }
+  });
+});
+
+test("compilePluginForTarget can start Hermes HTTP MCP before config write", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_SERVE_TOKEN";
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName: "hermes-http-serve-demo",
+    tokenEnv,
+    port,
+  });
+
+  await withEnv(tokenEnv, "test-token", async () => {
+    try {
+      const result = await Effect.runPromise(
+        compilePluginForTarget({
+          pluginPath: pluginRoot,
+          target: "hermes",
+          scope: "global",
+          root: hermesRoot,
+          dryRun: false,
+          backup: false,
+          mcpLifecycle: "serve",
+        }),
+      );
+
+      expect(result.outputRoot).toBe(hermesRoot);
+      expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(true);
+      expect(
+        await pathExists(
+          join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_serve_demo", "runtime.json"),
+        ),
+      ).toBe(true);
+    } finally {
+      await stopMcp({
+        pluginPath: pluginRoot,
+        harness: "hermes",
+        scope: "global",
+        root: hermesRoot,
+        tokenEnv,
+      }).catch(() => undefined);
+    }
+  });
+});
+
+test("compilePluginForTarget leaves Hermes stdio MCP fallback ungated", async () => {
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName: "hermes-stdio-gate-demo",
+    transport: "stdio",
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      root: hermesRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+
+  expect(result.outputRoot).toBe(hermesRoot);
+  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+  expect(config).toContain("prism-generated-hermes-stdio-gate-demo:");
+  expect(config).toContain("command:");
+  expect(config).not.toContain("url:");
 });
 
 test("compilePluginForTarget rejects non-loopback Hermes Streamable HTTP hosts", async () => {

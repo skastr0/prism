@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,6 +62,22 @@ const runCli = async (
 
   return { exitCode, stdout, stderr };
 };
+
+const getFreePort = (host: string): Promise<number> =>
+  new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close();
+        reject(new Error("failed to allocate port"));
+        return;
+      }
+      const { port } = address;
+      server.close(() => resolvePort(port));
+    });
+  });
 
 type JsonObject = Record<string, unknown>;
 
@@ -152,7 +169,11 @@ const createInstallAllFixture = async (): Promise<{
   return { monorepoRoot, projectRoot, homeRoot };
 };
 
-const createCliMcpFixture = async (): Promise<{
+const createCliMcpFixture = async (options?: {
+  readonly streamableHttp?: boolean;
+  readonly port?: number;
+  readonly tokenEnv?: string;
+}): Promise<{
   pluginRoot: string;
   hermesRoot: string;
 }> => {
@@ -169,6 +190,20 @@ const createCliMcpFixture = async (): Promise<{
         name: "cli-hermes-tools",
         version: "0.1.0",
         targets: { tools: ["hermes"] },
+        ...(options?.streamableHttp
+          ? {
+              runtime: {
+                mcp: {
+                  hermes: {
+                    transport: "streamable-http",
+                    host: "127.0.0.1",
+                    port: options.port,
+                    tokenEnv: options.tokenEnv ?? "PRISM_MCP_CLI_TEST_TOKEN",
+                  },
+                },
+              },
+            }
+          : {}),
       },
       null,
       2,
@@ -303,6 +338,55 @@ test("mcp serve/status/stop manages a Hermes daemon under an override root", asy
     await runCli(["mcp", "stop", ...common], env).catch(() => undefined);
   }
 }, 15_000);
+
+test("install propagates Hermes HTTP MCP lifecycle gate", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_CLI_INSTALL_GATE_TOKEN";
+  const { pluginRoot, hermesRoot } = await createCliMcpFixture({
+    streamableHttp: true,
+    port,
+    tokenEnv,
+  });
+  const env = { [tokenEnv]: "test-token" };
+  const common = [
+    "install",
+    pluginRoot,
+    "--harness",
+    "hermes",
+    "--compile-root",
+    hermesRoot,
+    "--no-validate",
+  ];
+
+  const missing = await runCli(common, env);
+  expect(missing.exitCode).toBe(1);
+  expect(missing.stdout).toContain("refusing to write url config");
+  expect(missing.stdout).toContain(
+    `Run: prism mcp serve ${pluginRoot} --harness hermes --scope global --root ${hermesRoot} --port ${port} --token-env ${tokenEnv}`,
+  );
+  expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(true);
+  expect(await readFile(join(hermesRoot, "config.yaml"), "utf8")).toBe("existing: true\n");
+
+  const served = await runCli([...common, "--mcp-lifecycle", "serve"], env);
+  try {
+    expect(served.exitCode).toBe(0);
+    expect(served.stdout).toContain("Compile (hermes, global)");
+    const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+    expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
+  } finally {
+    await runCli([
+      "mcp",
+      "stop",
+      pluginRoot,
+      "--harness",
+      "hermes",
+      "--root",
+      hermesRoot,
+      "--token-env",
+      tokenEnv,
+    ], env).catch(() => undefined);
+  }
+}, 20_000);
 
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {
   const root = await createTempRoot();

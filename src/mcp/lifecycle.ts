@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, readdir, readFile, readlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -57,6 +57,7 @@ export interface McpServeOptions extends McpLifecycleCommonOptions {
 
 export interface McpStatusOptions extends McpLifecycleCommonOptions {
   readonly tokenEnv?: string;
+  readonly expectedServerSha256?: string;
 }
 
 export interface McpStopOptions extends McpLifecycleCommonOptions {
@@ -342,6 +343,24 @@ const writeServerBundle = async (
 ): Promise<void> => {
   await mkdir(dirname(descriptor.serverPath), { recursive: true });
   await writeFile(descriptor.serverPath, content);
+};
+
+const snapshotServerBundle = async (
+  descriptor: McpRuntimeDescriptor,
+): Promise<string | undefined> =>
+  (await fileExists(descriptor.serverPath))
+    ? await readFile(descriptor.serverPath, "utf8")
+    : undefined;
+
+const restoreServerBundle = async (
+  descriptor: McpRuntimeDescriptor,
+  previousContent: string | undefined,
+): Promise<void> => {
+  if (previousContent === undefined) {
+    await rm(descriptor.serverPath, { force: true });
+    return;
+  }
+  await writeServerBundle(descriptor, previousContent);
 };
 
 const currentServerHash = async (descriptor: McpRuntimeDescriptor): Promise<string | undefined> =>
@@ -811,6 +830,7 @@ const statusWithExpectedBundle = async (options: McpStatusOptions): Promise<McpS
   return classifyStatus({
     descriptor,
     metadata,
+    expectedServerSha256: options.expectedServerSha256,
     tokenEnv: options.tokenEnv ?? runtimeHarnessConfig(registry).tokenEnv,
   });
 };
@@ -919,20 +939,28 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
     }
   }
 
-  await writeServerBundle(descriptor, bundle.content);
-
   if (!(await isPortAvailable(host, selectedPort))) {
     throw new Error(`Port ${selectedPort} on ${host} is already in use.`);
   }
 
+  const previousServerContent = await snapshotServerBundle(descriptor);
+  await writeServerBundle(descriptor, bundle.content);
+
   if (options.foreground) {
-    const child = spawnServerProcess(prepared, { foreground: true });
+    let child: ChildProcess;
+    try {
+      child = spawnServerProcess(prepared, { foreground: true });
+    } catch (error) {
+      await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
+      throw error;
+    }
     await waitForHealth(
       prepared,
       child.pid!,
       options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
-    ).catch((error) => {
+    ).catch(async (error) => {
       child.kill("SIGTERM");
+      await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
       throw error;
     });
     const exit = await waitForChildExit(child);
@@ -942,7 +970,13 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
     return { state: "foreground-exited", descriptor };
   }
 
-  const pid = spawnDaemon(prepared);
+  let pid: number;
+  try {
+    pid = spawnDaemon(prepared);
+  } catch (error) {
+    await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
+    throw error;
+  }
   let health: McpRuntimeHealth;
   try {
     health = await waitForHealth(
@@ -952,6 +986,7 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
     );
   } catch (error) {
     await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS).catch(() => undefined);
+    await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
     throw error;
   }
   const metadata = metadataForPreparedServer(prepared, pid, health);
@@ -960,6 +995,7 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
   } catch (error) {
     try {
       await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
+      await restoreServerBundle(descriptor, previousServerContent);
     } catch (cleanupError) {
       throw new Error(
         `Failed to write MCP runtime metadata and failed to stop daemon pid ${pid}: ${

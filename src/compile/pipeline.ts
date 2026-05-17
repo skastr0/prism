@@ -8,6 +8,7 @@
 import { Effect } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
+import { expandPath } from "../fs.js";
 import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
@@ -53,6 +54,7 @@ import {
   UnsupportedTargetCapabilityError,
   UnknownTargetError,
   AgentValidationError,
+  PluginManifestError,
   type CompileError,
 } from "./errors.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
@@ -69,6 +71,8 @@ import {
   type AgentCacheDescriptor,
 } from "./cache.js";
 import { writeLockfile } from "./lockfile.js";
+import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
+import { sha256Hex } from "../mcp/runtime-metadata.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -129,9 +133,13 @@ export interface CompileOptions {
   readonly target: string;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
+  readonly root?: string;
   readonly dryRun: boolean;
   readonly backup: boolean;
+  readonly mcpLifecycle?: CompileMcpLifecycleMode;
 }
+
+export type CompileMcpLifecycleMode = "none" | "verify" | "serve";
 
 export interface CompileResult {
   readonly target: string;
@@ -476,6 +484,15 @@ const resolveCompileTargetContext = (
       options.scope,
       options.projectPath
     );
+    if (options.root) {
+      return {
+        targetId: options.target as HarnessId,
+        lowerer,
+        outputRoot: expandPath(options.root),
+        cacheDir: getCacheDir(options.pluginPath),
+        useCache: !options.dryRun,
+      };
+    }
     if (!outputRoot) {
       return yield* Effect.fail(
         new InvalidTargetScopeError({
@@ -494,6 +511,112 @@ const resolveCompileTargetContext = (
       useCache: !options.dryRun,
     };
   });
+
+const isHermesStreamableHttpRuntime = (registry: PluginRegistry): boolean =>
+  registry.runtime.mcp?.hermes?.transport === "streamable-http";
+
+const shellQuote = (value: string): string =>
+  /^[A-Za-z0-9_./:=@+-]+$/u.test(value)
+    ? value
+    : `'${value.replace(/'/g, "'\\''")}'`;
+
+const renderHermesMcpServeCommand = (options: {
+  readonly pluginPath: string;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly root?: string;
+  readonly registry: PluginRegistry;
+}): string => {
+  const configured = options.registry.runtime.mcp?.hermes;
+  return [
+    "prism",
+    "mcp",
+    "serve",
+    shellQuote(options.pluginPath),
+    "--harness",
+    "hermes",
+    "--scope",
+    options.scope,
+    ...(options.projectPath ? ["--project", shellQuote(options.projectPath)] : []),
+    ...(options.root ? ["--root", shellQuote(options.root)] : []),
+    ...(configured?.port ? ["--port", String(configured.port)] : []),
+    ...(configured?.tokenEnv ? ["--token-env", shellQuote(configured.tokenEnv)] : []),
+  ].join(" ");
+};
+
+const findHermesMcpServerSha256 = (
+  operations: ReadonlyArray<LowerOperation>,
+): string | undefined => {
+  const serverWrite = operations.find((operation) =>
+    operation.kind === "write-plugin-file" &&
+    /[/\\]prism[/\\]mcp[/\\][^/\\]+[/\\]server\.mjs$/u.test(operation.target)
+  );
+  return serverWrite?.kind === "write-plugin-file" ? sha256Hex(serverWrite.content) : undefined;
+};
+
+const assertHermesHttpMcpLifecycleGate = (options: {
+  readonly compileOptions: CompileOptions;
+  readonly registry: PluginRegistry;
+  readonly targetId: HarnessId;
+  readonly outputRoot: string;
+  readonly artifacts: TargetArtifacts;
+  readonly operations: ReadonlyArray<LowerOperation>;
+}): Effect.Effect<void, CompileError> => {
+  if (
+    options.compileOptions.dryRun ||
+    options.targetId !== "hermes" ||
+    !isHermesStreamableHttpRuntime(options.registry) ||
+    options.artifacts.tools.length === 0
+  ) {
+    return Effect.void;
+  }
+
+  const mode = options.compileOptions.mcpLifecycle ?? "none";
+  const serveCommand = renderHermesMcpServeCommand({
+    pluginPath: options.compileOptions.pluginPath,
+    scope: options.compileOptions.scope,
+    projectPath: options.compileOptions.projectPath,
+    root: options.compileOptions.root,
+    registry: options.registry,
+  });
+  const expectedServerSha256 = findHermesMcpServerSha256(options.operations);
+
+  return Effect.tryPromise({
+    try: async () => {
+      if (mode === "serve") {
+        await serveMcp({
+          pluginPath: options.compileOptions.pluginPath,
+          harness: "hermes",
+          scope: options.compileOptions.scope,
+          projectPath: options.compileOptions.projectPath,
+          root: options.outputRoot,
+        });
+      }
+
+      const status = await getMcpStatus({
+        pluginPath: options.compileOptions.pluginPath,
+        harness: "hermes",
+        scope: options.compileOptions.scope,
+        projectPath: options.compileOptions.projectPath,
+        root: options.outputRoot,
+        expectedServerSha256,
+      });
+      if (status.state === "running") return;
+
+      throw new Error(
+        `Hermes Streamable HTTP MCP daemon '${status.descriptor.serverName}' is ${status.state}; ` +
+          `refusing to write url config that may point to nothing. ` +
+          `Run: ${serveCommand}` +
+          (mode === "none" ? `\nOr rerun compile/install with --mcp-lifecycle serve.` : ""),
+      );
+    },
+    catch: (error) =>
+      new PluginManifestError({
+        pluginPath: options.compileOptions.pluginPath,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+  });
+};
 
 const selectTargetSurfaces = (
   registry: PluginRegistry,
@@ -756,15 +879,24 @@ export const compilePluginForTarget = (
       composed: agentResult.composed,
       orbits,
     });
+    const artifacts = selectTargetArtifacts(registry, surfaces);
     const allOps = yield* planTargetLowering({
       lowerer: context.lowerer,
       surfaces,
       agents: composedForLowering,
       orbits,
-      artifacts: selectTargetArtifacts(registry, surfaces),
+      artifacts,
       registry,
       scope: options.scope,
       outputRoot: context.outputRoot,
+    });
+    yield* assertHermesHttpMcpLifecycleGate({
+      compileOptions: options,
+      registry,
+      targetId: context.targetId,
+      outputRoot: context.outputRoot,
+      artifacts,
+      operations: allOps,
     });
     const backups = yield* executeTargetLowering(context.lowerer, allOps, options);
     const lockfilePath = yield* persistCompileOutputs({

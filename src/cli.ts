@@ -29,6 +29,7 @@ import { basename, join } from "node:path";
 import {
   compilePluginForTarget,
   formatOperations,
+  type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
 import { formatCompileError, type CompileError } from "./compile/errors.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
@@ -70,6 +71,13 @@ program
   .option("--backup", "Create .bak backups before overwriting files")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
+  .option("--compile-root <path>", "Override compile output root")
+  .option(
+    "--mcp-lifecycle <mode>",
+    "Hermes HTTP MCP lifecycle behavior during compile (none|verify|serve)",
+    parseMcpLifecycleMode,
+    "none"
+  )
   .action(async (pluginPath: string, options) => {
     try {
       await runInstallCommand(pluginPath, options);
@@ -96,6 +104,13 @@ program
   .option("--backup", "Create .bak backups before overwriting files")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
+  .option("--compile-root <path>", "Override compile output root")
+  .option(
+    "--mcp-lifecycle <mode>",
+    "Hermes HTTP MCP lifecycle behavior during compile (none|verify|serve)",
+    parseMcpLifecycleMode,
+    "none"
+  )
   .action(async (directory: string, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -113,6 +128,8 @@ program
         harnesses,
         scope: options.scope,
         projectPath: options.project,
+        compileRoot: options.compileRoot,
+        mcpLifecycle: options.mcpLifecycle,
         validate: options.validate,
         dryRun: options.dryRun,
         backup: options.backup,
@@ -201,6 +218,13 @@ program
   .option("--dry-run", "Preview operations without writing", false)
   .option("--clean", "Clear compile cache before compiling", false)
   .option("--backup", "Create .bak backups before overwriting files")
+  .option("--root <path>", "Override harness output root")
+  .option(
+    "--mcp-lifecycle <mode>",
+    "Hermes HTTP MCP lifecycle behavior (none|verify|serve)",
+    parseMcpLifecycleMode,
+    "none"
+  )
   .action(async (pluginPath: string, options) => {
     try {
       const expanded = expandPath(pluginPath);
@@ -221,8 +245,10 @@ program
         target: options.harness,
         scope: options.scope,
         projectPath: options.project,
+        root: options.root,
         dryRun: options.dryRun,
         backup: options.backup,
+        mcpLifecycle: options.mcpLifecycle,
       });
 
       const exit = await Effect.runPromiseExit(program);
@@ -589,6 +615,8 @@ type InstallCommandOptions = {
   backup?: boolean;
   validate?: boolean;
   dryRun?: boolean;
+  compileRoot?: string;
+  mcpLifecycle: CompileMcpLifecycleMode;
 };
 
 type NormalizedInstallOptions = InstallCommandOptions & {
@@ -628,6 +656,8 @@ type InstallAllRefreshOptions = {
   harnesses: HarnessId[];
   scope: HarnessScope;
   projectPath?: string;
+  compileRoot?: string;
+  mcpLifecycle: CompileMcpLifecycleMode;
   validate?: boolean;
   dryRun: boolean;
   backup: boolean;
@@ -661,6 +691,8 @@ async function runInstallCommand(
     harnesses: context.harnesses,
     scope: context.options.scope,
     projectPath: context.options.project,
+    compileRoot: context.options.compileRoot,
+    mcpLifecycle: context.options.mcpLifecycle,
     dryRun: context.options.dryRun,
     backup: context.options.backup,
   });
@@ -699,6 +731,7 @@ function normalizeInstallCommandOptions(
     overwrite: options.overwrite ?? false,
     backup: options.backup ?? false,
     dryRun: options.dryRun ?? false,
+    mcpLifecycle: options.mcpLifecycle ?? "none",
   };
 }
 
@@ -902,6 +935,8 @@ async function refreshDiscoveredPlugin(
     harnesses: options.harnesses,
     scope: options.scope,
     projectPath: options.projectPath,
+    compileRoot: options.compileRoot,
+    mcpLifecycle: options.mcpLifecycle,
     dryRun: options.dryRun,
     backup: options.backup,
   });
@@ -1234,6 +1269,8 @@ async function runCompilePhaseForPlugin(options: {
   harnesses: HarnessId[];
   scope: HarnessScope;
   projectPath?: string;
+  compileRoot?: string;
+  mcpLifecycle: CompileMcpLifecycleMode;
   dryRun: boolean;
   backup: boolean;
   indent?: string;
@@ -1253,8 +1290,10 @@ async function runCompilePhaseForPlugin(options: {
         target: harnessId,
         scope: options.scope,
         projectPath: options.projectPath,
+        root: options.compileRoot,
         dryRun: options.dryRun,
         backup: options.backup,
+        mcpLifecycle: options.mcpLifecycle,
       })
     );
 
@@ -1318,6 +1357,11 @@ function parseMcpPortSelection(value: string | undefined): McpPortSelection | un
   if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
 
   throw new InvalidArgumentError("--port must be 'auto' or an integer from 1 to 65535.");
+}
+
+function parseMcpLifecycleMode(value: string): CompileMcpLifecycleMode {
+  if (value === "none" || value === "verify" || value === "serve") return value;
+  throw new InvalidArgumentError("--mcp-lifecycle must be one of: none, verify, serve.");
 }
 
 function assertProjectPathForProjectScope(

@@ -391,7 +391,7 @@ Review dispatch:
 
 ### GLYPH-MCP-HTTP-05: Install-Time Lifecycle Gate
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -416,8 +416,28 @@ Acceptance:
 
 Validation:
 
-- Tests cover dry-run preview, missing daemon refusal, running daemon success,
-  and stdio fallback.
+- `bun run typecheck`
+- `bun test src/compile/pipeline.test.ts -t Hermes`
+- `bun test src/cli.test.ts -t "install propagates Hermes HTTP MCP lifecycle gate"`
+- `bun test src/cli.test.ts -t mcp`
+- `bun test src/mcp/lifecycle.test.ts`
+- `bun test src/mcp/runtime-metadata.test.ts`
+- `bun test src/compile/mcp-bundle.test.ts -t MCP`
+- `bun run build`
+- `git diff --check`
+
+Review dispatch:
+
+- `requirements-tracer` flagged that the recovery command omitted the compile
+  root override. Fixed by rendering `--root <compile-root>` in the exact
+  `prism mcp serve ...` command.
+- `security-reviewer` flagged stale daemon bypass and failed startup cleanup.
+  Fixed by comparing the running daemon against the newly planned server hash
+  before config writes, and by restoring/removing `server.mjs` if lifecycle
+  startup fails before metadata is recorded.
+- `verification-reviewer` flagged weak proof of the rendered command and
+  ordering. Added exact command assertions and a failed `--mcp-lifecycle serve`
+  regression proving config is not written before daemon startup succeeds.
 
 ### GLYPH-MCP-HTTP-06: Tower Opt-In Migration
 

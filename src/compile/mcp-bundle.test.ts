@@ -544,6 +544,8 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
   expect(bundle.content).toContain("PRISM_MCP_MAX_CONCURRENT_CALLS");
   expect(bundle.content).toContain("PRISM_MCP_MAX_SESSIONS");
   expect(bundle.content).toContain("PRISM_MCP_MAX_REQUEST_BYTES");
+  expect(bundle.content).toContain("PRISM_MCP_SERVER_SHA256");
+  expect(bundle.content).toContain("/healthz");
 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
@@ -552,12 +554,34 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     env: {
       ...process.env,
       PRISM_MCP_TOKEN: token,
+      PRISM_MCP_SERVER_SHA256: "f".repeat(64),
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
 
   try {
     await waitForHttpServer(port);
+
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+    expect(health.status).toBe(200);
+    const healthBody = await health.json();
+    expect(healthBody).toMatchObject({
+      schema: "prism.mcp-health.v1",
+      serverName: "prism-mcp-forge",
+      transport: "streamable-http",
+      pid: child.pid,
+      toolCount: 2,
+      serverSha256: "f".repeat(64),
+    });
+    expect(typeof healthBody.startedAt).toBe("string");
+    expect(Date.parse(healthBody.startedAt)).toBeGreaterThan(0);
+    expect(typeof healthBody.uptimeMs).toBe("number");
+    expect(healthBody.uptimeMs).toBeGreaterThanOrEqual(0);
 
     const unauthorized = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",

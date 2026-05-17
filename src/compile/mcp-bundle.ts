@@ -898,11 +898,14 @@ if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HT
 }
 const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? __PRISM_HTTP_PORT__);
 const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
+const httpHealthPath = process.env.PRISM_MCP_HTTP_HEALTH_PATH ?? "/healthz";
 const httpTokenEnvName = __PRISM_HTTP_TOKEN_ENV__;
 const httpToken = process.env[httpTokenEnvName] ?? process.env.PRISM_MCP_HTTP_TOKEN;
 if (!httpToken) {
   throw new Error(\`Prism MCP Streamable HTTP server requires token env '\${httpTokenEnvName}'\`);
 }
+const serverStartedAt = Date.now();
+const serverSha256 = process.env.PRISM_MCP_SERVER_SHA256;
 const supportedProtocolVersions = new Set(["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]);
 interface HttpSessionState {
   updatedAt: number;
@@ -1038,6 +1041,17 @@ const validateProtocolVersion = (request: Request): Response | undefined => {
   }
   return undefined;
 };
+
+const healthPayload = () => ({
+  schema: "prism.mcp-health.v1",
+  serverName: __PRISM_SERVER_NAME__,
+  transport: "streamable-http",
+  startedAt: new Date(serverStartedAt).toISOString(),
+  uptimeMs: Math.max(0, Date.now() - serverStartedAt),
+  pid: process.pid,
+  toolCount: Object.keys(tools).length,
+  ...(serverSha256 ? { serverSha256 } : {}),
+});
 
 const handleRpcMessage = async (
   message: JsonRpcMessage,
@@ -1187,6 +1201,12 @@ const server = Bun.serve({
   fetch: async (request) => {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return emptyResponse(204);
+    if (url.pathname === httpHealthPath) {
+      const denied = authorize(request);
+      if (denied) return denied;
+      if (request.method === "GET") return jsonResponse(healthPayload());
+      return jsonResponse({ error: "method not allowed" }, { status: 405 });
+    }
     if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 });
 
     const denied = authorize(request);

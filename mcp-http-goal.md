@@ -280,7 +280,7 @@ Review dispatch:
 
 ### GLYPH-MCP-HTTP-03: Runtime Metadata and Health Endpoint
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -306,10 +306,24 @@ Acceptance:
 
 Validation:
 
-- Unit tests for runtime metadata parser.
-- HTTP server test checks `/healthz`.
-- `git diff --check`.
-- Typecheck.
+- `bun test src/mcp/runtime-metadata.test.ts`
+- `bun test src/compile/mcp-bundle.test.ts -t MCP`
+- `bun test src/compile/pipeline.test.ts -t Hermes`
+- `bun run typecheck`
+- `bun run build`
+- `git diff --check`
+
+Review dispatch:
+
+- `requirements-tracer` returned no findings.
+- `verification-reviewer` first requested stronger coverage for health
+  `uptimeMs` / `startedAt`, unsupported metadata schemas, and missing token
+  hash staleness. Added tests.
+- `security-reviewer` flagged token-shaped metadata fields and PID-only
+  liveness. Fixed by validating `tokenEnv` as an env var name, rejecting URL
+  credentials / query / fragments, adding a typed health parser, and requiring
+  matching health data for Streamable HTTP freshness checks.
+- Security and verification re-reviews returned no findings.
 
 ### GLYPH-MCP-HTTP-04: `prism mcp serve/status/stop/restart`
 

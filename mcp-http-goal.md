@@ -1,7 +1,7 @@
 # Goal: Make Prism Generated MCPs Safe Under Hermes Agent Fan-Out
 
 Date: 2026-05-17
-Status: in progress
+Status: done
 Primary target harness: `hermes`
 
 ## Receipt
@@ -471,9 +471,13 @@ Validation:
 - Isolated temp-root lifecycle smoke:
   - `prism mcp serve ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
   - `prism mcp status ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
+  - `prism mcp restart ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
   - `prism compile ../prism-plugins/tower --harness hermes --root <tmp> --mcp-lifecycle verify`
   - HTTP MCP `initialize`, `tools/list`, and read-only `tower_list_glyphs`
     call succeeded through the generated server.
+  - Ten concurrent Tower HTTP MCP sessions called read-only Tower tools with
+    the same daemon pid before and after, and exactly one temp-root
+    `server.mjs` process existed.
   - Generated temp Hermes config used `url` plus
     `Authorization: Bearer ${PRISM_MCP_TOWER_TOKEN}` and no `command`.
   - `prism mcp stop ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
@@ -591,6 +595,65 @@ The refactor is complete when:
 - Reboot/restart instructions are documented.
 - Stdio remains available and tested for harnesses that need it.
 - No live user config is changed by dry-run or research commands.
+
+## Completion Audit
+
+Objective:
+
+- Make Prism-generated Tower MCP safe under Hermes fan-out.
+- Keep stdio compatibility for harnesses that still need it.
+- Move Tower's Hermes runtime to Prism-managed Streamable HTTP only after
+  daemon lifecycle and install-time safety gates exist.
+- Validate and review each implemented glyph, then commit the result.
+
+Prompt-to-artifact checklist:
+
+- `mcp-http-goal.md` exists and is the canonical refactor plan: this file.
+- Forge glyph tracking exists: GLYPH-MCP-HTTP-01 through 06 record intent,
+  scope, acceptance, validation, and review dispatches.
+- Each completed glyph has been committed:
+  - `01eae6c feat(mcp): add hermes streamable http runtime`
+  - `2417840 fix(tower): bound control request bodies`
+  - `40040f3 feat(mcp): record runtime health metadata`
+  - `c1b64d2 feat(mcp): add hermes daemon lifecycle`
+  - `a881c30 feat(mcp): gate hermes http config writes`
+  - `eeefc77 feat(tower): opt hermes into http mcp`
+  - `138a834 docs(mcp): record tower http migration`
+  - `1bc40b1 docs(tower): document hermes http restart flow`
+- Reviewers were dispatched for each implemented glyph. Recorded review notes
+  are under each glyph's `Review dispatch` section.
+- Tower can be opted into Hermes HTTP MCP without a `bun`/`mise` subprocess
+  storm: `../prism-plugins/tower/plugin.json` declares Hermes
+  `streamable-http` with loopback host, explicit port, and
+  `PRISM_MCP_TOWER_TOKEN`.
+- Hermes talks to Tower through `url`, not `command`: temp-root generated
+  `config.yaml` contained `url: "http://127.0.0.1:38463/mcp"` and no
+  `command`.
+- Prism starts exactly one Tower MCP daemon for the chosen scope: temp-root
+  `prism mcp serve` / `restart` produced one recorded daemon pid and one
+  matching temp-root `server.mjs` process.
+- Ten Hermes-like concurrent MCP sessions can call Tower tools without spawning
+  more generated servers: ten concurrent sessions called `tower_list_glyphs`,
+  health pid stayed `94681`, and process inspection found exactly one matching
+  temp-root `server.mjs`.
+- `prism mcp status` makes daemon state obvious: temp-root status reported
+  `running` with pid/url before stop and `stopped` after stop.
+- `prism mcp stop` cleans up safely: temp-root stop removed the recorded pid;
+  `ps -p <pid>` no longer found the process.
+- Reboot/restart instructions are documented:
+  `../prism-plugins/tower/skills/tower/SKILL.md` documents temp-root
+  `restart` validation and live post-reboot activation order.
+- Stdio remains available and tested for harnesses that need it: default
+  transport remains stdio unless plugin runtime opts into HTTP, and GLYPH-01 /
+  GLYPH-02 validation covers the stdio fallback and HTTP opt-in split.
+- No live user config was changed by research/dry-run commands: all non-dry-run
+  lifecycle validation used `--root <tmp>`; live Hermes compile was run only
+  with `--dry-run`.
+
+GLYPH-MCP-HTTP-07 and GLYPH-MCP-HTTP-08 remain explicit future extensions.
+They reduce process count further and expand HTTP support to additional
+harnesses, but they are not required for the current Hermes/Tower storm fix
+captured by the final success criteria above.
 
 ## Sources
 

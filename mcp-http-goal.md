@@ -327,7 +327,7 @@ Review dispatch:
 
 ### GLYPH-MCP-HTTP-04: `prism mcp serve/status/stop/restart`
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -355,6 +355,8 @@ Acceptance:
   port conflict states.
 - `stop` only stops the recorded Prism-owned daemon.
 - `restart` is equivalent to safe stop plus serve.
+- `stop` refuses forged or unproven ownership cases where the recorded pid
+  command or listening port does not match the generated server.
 - `--foreground` runs without daemonizing and does not write misleading pid
   metadata.
 - All commands are local-only and never mutate live Hermes config unless the
@@ -362,9 +364,30 @@ Acceptance:
 
 Validation:
 
-- CLI tests with temp plugin and temp runtime root.
-- Process-count test proves repeated `serve` does not create duplicate daemons.
-- Typecheck/build.
+- `bun test src/mcp/lifecycle.test.ts`
+- `bun test src/cli.test.ts -t mcp`
+- `bun test src/mcp/runtime-metadata.test.ts`
+- `bun test src/compile/mcp-bundle.test.ts -t MCP`
+- `bun test src/compile/pipeline.test.ts -t Hermes`
+- `bun run typecheck`
+- `bun run build`
+- `git diff --check`
+
+Review dispatch:
+
+- `requirements-tracer` flagged token-gated status/stop and stale daemon
+  cleanup. Fixed by checking local pid/build/listener ownership before health
+  auth and by allowing safe stop/restart for Prism-owned stale states.
+- `security-reviewer` flagged `runtime.json` health/token redirection and
+  PID-only stop ownership. Fixed by deriving health URLs, rejecting non-loopback
+  endpoints, checking the pid command shape, verifying the recorded pid owns
+  the listening port before sending bearer auth, and refusing unproven
+  ownership.
+- `verification-reviewer` flagged missing stop/restart branch coverage. Added
+  coverage for duplicate serve suppression, source drift, missing token stop,
+  stale pid recovery, stale build restart, missing server file stop,
+  port-conflict refusal/recovery, foreground metadata behavior, config
+  non-mutation, and forged metadata with zero attacker health hits.
 
 ### GLYPH-MCP-HTTP-05: Install-Time Lifecycle Gate
 

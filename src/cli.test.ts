@@ -8,6 +8,17 @@ import { prismOxlintPluginJs } from "./init-templates.js";
 
 const tempRoots: string[] = [];
 
+const effectImportPath = join(
+  process.cwd(),
+  "node_modules",
+  "effect",
+  "dist",
+  "esm",
+  "index.js",
+).replace(/\\/g, "/");
+
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-cli-"));
   tempRoots.push(root);
@@ -141,6 +152,48 @@ const createInstallAllFixture = async (): Promise<{
   return { monorepoRoot, projectRoot, homeRoot };
 };
 
+const createCliMcpFixture = async (): Promise<{
+  pluginRoot: string;
+  hermesRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cli-hermes-tools");
+  const hermesRoot = join(root, "hermes-root");
+  await mkdir(hermesRoot, { recursive: true });
+  await writeFile(join(hermesRoot, "config.yaml"), "existing: true\n");
+  await mkdir(pluginRoot, { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "cli-hermes-tools",
+        version: "0.1.0",
+        targets: { tools: ["hermes"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await mkdir(join(pluginRoot, "tools"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo through CLI lifecycle.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+  return { pluginRoot, hermesRoot };
+};
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
@@ -189,6 +242,67 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
 
   expect(await pathExists(join(pluginRoot, "README.md"))).toBe(false);
 });
+
+test("mcp serve/status/stop manages a Hermes daemon under an override root", async () => {
+  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
+  const env = { PRISM_MCP_CLI_TEST_TOKEN: "test-token" };
+  const common = [
+    pluginRoot,
+    "--harness",
+    "hermes",
+    "--root",
+    hermesRoot,
+    "--token-env",
+    "PRISM_MCP_CLI_TEST_TOKEN",
+  ];
+
+  const originalConfig = await readFile(join(hermesRoot, "config.yaml"), "utf8").catch(() => "");
+  const serve = await runCli(["mcp", "serve", ...common, "--port", "auto"], env);
+  try {
+    expect(serve.exitCode).toBe(0);
+    expect(serve.stdout).toContain("started prism-generated-cli-hermes-tools");
+
+    const status = await runCli(["mcp", "status", ...common], env);
+    expect(status.exitCode).toBe(0);
+    expect(status.stdout).toContain("running");
+    expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
+
+    const listStatus = await runCli([
+      "mcp",
+      "status",
+      "--harness",
+      "hermes",
+      "--root",
+      hermesRoot,
+      "--token-env",
+      "PRISM_MCP_CLI_TEST_TOKEN",
+    ], env);
+    expect(listStatus.exitCode).toBe(0);
+    expect(listStatus.stdout).toContain("running");
+    expect(listStatus.stdout).toContain("prism-generated-cli-hermes-tools");
+
+    const secondServe = await runCli(["mcp", "serve", ...common, "--port", "auto"], env);
+    expect(secondServe.exitCode).toBe(0);
+    expect(secondServe.stdout).toContain("already-running prism-generated-cli-hermes-tools");
+
+    const restart = await runCli(["mcp", "restart", ...common, "--port", "auto"], env);
+    expect(restart.exitCode).toBe(0);
+    expect(restart.stdout).toContain("started prism-generated-cli-hermes-tools");
+
+    const stop = await runCli(["mcp", "stop", ...common], env);
+    if (stop.exitCode !== 0) {
+      throw new Error(`mcp stop failed\nstdout:\n${stop.stdout}\nstderr:\n${stop.stderr}`);
+    }
+    expect(stop.stdout).toContain("stopped prism-generated-cli-hermes-tools");
+
+    const stopped = await runCli(["mcp", "status", ...common], env);
+    expect(stopped.exitCode).toBe(0);
+    expect(stopped.stdout).toContain("stopped");
+    expect(await readFile(join(hermesRoot, "config.yaml"), "utf8").catch(() => "")).toBe(originalConfig);
+  } finally {
+    await runCli(["mcp", "stop", ...common], env).catch(() => undefined);
+  }
+}, 15_000);
 
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {
   const root = await createTempRoot();

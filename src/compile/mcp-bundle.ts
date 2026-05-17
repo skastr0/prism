@@ -1500,6 +1500,9 @@ const validateBuiltAmpPluginBundle = async (builtPath: string): Promise<void> =>
 const normalizeBuiltAmpPluginBundle = (content: string): string =>
   content.replace(/^\/\/ .*prism-amp-plugin-[^\n]*\n/gm, "");
 
+const normalizeBuiltMcpServerBundle = (content: string): string =>
+  content.replace(/^\/\/ .*prism-mcp-bundle-[^\n]*\n/gm, "");
+
 export const generateMcpServerBundle = async (
   options: McpServerBundleOptions,
 ): Promise<McpServerBundle> => {
@@ -1553,7 +1556,7 @@ export const generateMcpServerBundle = async (
 
     const builtPath = join(outdir, "server.mjs");
     await validateBuiltMcpServerBundle(builtPath);
-    const content = await readFile(builtPath, "utf8");
+    const content = normalizeBuiltMcpServerBundle(await readFile(builtPath, "utf8"));
     return {
       relativePath: mcpServerArtifactRelativePath(bundleId),
       content: content.startsWith("#!") ? content : `#!/usr/bin/env bun\n${content}`,

@@ -33,6 +33,18 @@ import {
 import { formatCompileError, type CompileError } from "./compile/errors.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
+import {
+  formatMcpServeResult,
+  formatMcpStatus,
+  formatMcpStopResult,
+  getMcpStatus,
+  listMcpStatuses,
+  restartMcp,
+  serveMcp,
+  stopMcp,
+  type McpLifecycleHarness,
+  type McpPortSelection,
+} from "./mcp/lifecycle.js";
 
 const program = new Command();
 
@@ -250,6 +262,162 @@ program
       }
     } catch (error) {
       printCliError(error, "Compile error");
+      process.exit(1);
+    }
+  });
+
+const mcpCommand = program
+  .command("mcp")
+  .description("Manage Prism-generated MCP HTTP daemon lifecycle");
+
+mcpCommand
+  .command("serve <plugin-path>")
+  .description("Start a Prism-generated HTTP MCP daemon")
+  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
+  .option(
+    "--scope <scope>",
+    `Output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
+  .option("-p, --project <path>", "Project root when using --scope project")
+  .option("--root <path>", "Override harness root")
+  .option("--host <host>", "HTTP bind host")
+  .option("--port <port>", "HTTP port or 'auto'")
+  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .option("--foreground", "Run the generated server in the current process group", false)
+  .action(async (pluginPath: string, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const result = await serveMcp({
+        pluginPath,
+        harness: options.harness,
+        scope: options.scope,
+        projectPath: options.project,
+        root: options.root,
+        host: options.host,
+        port: parseMcpPortSelection(options.port),
+        tokenEnv: options.tokenEnv,
+        foreground: options.foreground,
+      });
+      console.log(formatMcpServeResult(result));
+    } catch (error) {
+      printCliError(error, "MCP serve error");
+      process.exit(1);
+    }
+  });
+
+mcpCommand
+  .command("status [plugin-path]")
+  .description("Show Prism-generated MCP daemon status")
+  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
+  .option(
+    "--scope <scope>",
+    `Output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
+  .option("-p, --project <path>", "Project root when using --scope project")
+  .option("--root <path>", "Override harness root")
+  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .action(async (pluginPath: string | undefined, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      if (pluginPath) {
+        const status = await getMcpStatus({
+          pluginPath,
+          harness: options.harness,
+          scope: options.scope,
+          projectPath: options.project,
+          root: options.root,
+          tokenEnv: options.tokenEnv,
+        });
+        console.log(formatMcpStatus(status));
+        return;
+      }
+
+      const statuses = await listMcpStatuses({
+        harness: options.harness,
+        scope: options.scope,
+        projectPath: options.project,
+        root: options.root,
+        tokenEnv: options.tokenEnv,
+      });
+      if (statuses.length === 0) {
+        console.log("stopped         (no Prism MCP runtime files found)");
+        return;
+      }
+      for (const status of statuses) {
+        console.log(formatMcpStatus(status));
+      }
+    } catch (error) {
+      printCliError(error, "MCP status error");
+      process.exit(1);
+    }
+  });
+
+mcpCommand
+  .command("stop <plugin-path>")
+  .description("Stop a Prism-owned MCP HTTP daemon")
+  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
+  .option(
+    "--scope <scope>",
+    `Output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
+  .option("-p, --project <path>", "Project root when using --scope project")
+  .option("--root <path>", "Override harness root")
+  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .action(async (pluginPath: string, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const result = await stopMcp({
+        pluginPath,
+        harness: options.harness,
+        scope: options.scope,
+        projectPath: options.project,
+        root: options.root,
+        tokenEnv: options.tokenEnv,
+      });
+      console.log(formatMcpStopResult(result));
+    } catch (error) {
+      printCliError(error, "MCP stop error");
+      process.exit(1);
+    }
+  });
+
+mcpCommand
+  .command("restart <plugin-path>")
+  .description("Restart a Prism-owned MCP HTTP daemon")
+  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
+  .option(
+    "--scope <scope>",
+    `Output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
+  .option("-p, --project <path>", "Project root when using --scope project")
+  .option("--root <path>", "Override harness root")
+  .option("--host <host>", "HTTP bind host")
+  .option("--port <port>", "HTTP port or 'auto'")
+  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .action(async (pluginPath: string, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const result = await restartMcp({
+        pluginPath,
+        harness: options.harness,
+        scope: options.scope,
+        projectPath: options.project,
+        root: options.root,
+        host: options.host,
+        port: parseMcpPortSelection(options.port),
+        tokenEnv: options.tokenEnv,
+      });
+      console.log(formatMcpServeResult(result));
+    } catch (error) {
+      printCliError(error, "MCP restart error");
       process.exit(1);
     }
   });
@@ -1135,6 +1303,21 @@ function parseHarnessScope(value: string): HarnessScope {
   throw new InvalidArgumentError(
     `Invalid scope '${value}'. Expected one of: ${HARNESS_SCOPES.join(", ")}`
   );
+}
+
+function parseMcpLifecycleHarness(value: string): McpLifecycleHarness {
+  if (value === "hermes") return value;
+  throw new InvalidArgumentError("Prism MCP lifecycle currently supports only 'hermes'.");
+}
+
+function parseMcpPortSelection(value: string | undefined): McpPortSelection | undefined {
+  if (value === undefined) return undefined;
+  if (value === "auto") return "auto";
+
+  const port = Number(value);
+  if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+
+  throw new InvalidArgumentError("--port must be 'auto' or an integer from 1 to 65535.");
 }
 
 function assertProjectPathForProjectScope(

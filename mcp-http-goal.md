@@ -441,7 +441,7 @@ Review dispatch:
 
 ### GLYPH-MCP-HTTP-06: Tower Opt-In Migration
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -465,11 +465,32 @@ Acceptance:
 
 Validation:
 
-- `prism mcp serve ../prism-plugins/tower --harness hermes --scope global`
-  in a controlled local test mode.
-- `prism mcp status ../prism-plugins/tower --harness hermes`.
-- `prism compile ../prism-plugins/tower --harness hermes --dry-run`.
-- Tower plugin typecheck.
+- `../prism-plugins: bun run typecheck`
+- `prism: bun run typecheck`
+- `prism: bun run dev -- compile ../prism-plugins/tower --harness hermes --dry-run`
+- Isolated temp-root lifecycle smoke:
+  - `prism mcp serve ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
+  - `prism mcp status ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
+  - `prism compile ../prism-plugins/tower --harness hermes --root <tmp> --mcp-lifecycle verify`
+  - HTTP MCP `initialize`, `tools/list`, and read-only `tower_list_glyphs`
+    call succeeded through the generated server.
+  - Generated temp Hermes config used `url` plus
+    `Authorization: Bearer ${PRISM_MCP_TOWER_TOKEN}` and no `command`.
+  - `prism mcp stop ../prism-plugins/tower --harness hermes --scope global --root <tmp>`
+    stopped the temp daemon; its recorded pid no longer existed.
+- `git diff --check` in both repos.
+
+Review dispatch:
+
+- `requirements-tracer` initially flagged Tower skill instructions that omitted
+  `--root`, making the validation snippet too easy to run against live Hermes.
+  Fixed by documenting a `TMP_HERMES_ROOT` validation flow and reserving root
+  omission for intentional live activation. Re-review returned no findings.
+- `security-reviewer` returned no blocking findings after the doc fix, clearing
+  process-storm, live-config-mutation, host/port/token, and cleanup risk.
+- `verification-reviewer` returned `pass` and independently confirmed temp-root
+  serve/status/compile, `tools/list`, a read-only Tower call, `url` config with
+  no `command`, and daemon cleanup.
 
 ### GLYPH-MCP-HTTP-07: Aggregate Server Per Scope
 

@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import type { PluginRegistry } from "./registry.js";
 import {
+  DEFAULT_MCP_CONNECT_TIMEOUT_MS,
+  DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
+} from "./mcp-policy.js";
+import {
   getMcpHttpTargetSupport,
   mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorizationTemplate,
@@ -36,6 +40,8 @@ test("MCP runtime defaults to stdio per target", () => {
     transport: "stdio",
     host: "127.0.0.1",
     tokenEnv: "PRISM_MCP_TOKEN",
+    connectTimeoutMs: DEFAULT_MCP_CONNECT_TIMEOUT_MS,
+    toolTimeoutMs: DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
   });
 });
 
@@ -48,6 +54,8 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
           host: "localhost",
           port: 38464,
           tokenEnv: "PRISM_MCP_CODEX_TOKEN",
+          connectTimeoutMs: 15_000,
+          toolTimeoutMs: 90_000,
         },
       },
     }),
@@ -61,6 +69,8 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
     host: "localhost",
     port: 38464,
     tokenEnv: "PRISM_MCP_CODEX_TOKEN",
+    connectTimeoutMs: 15_000,
+    toolTimeoutMs: 90_000,
   });
   expect(renderMcpHttpUrl(runtime)).toBe("http://localhost:38464/mcp");
   expect(renderMcpBearerAuthorizationTemplate(runtime.tokenEnv)).toBe(
@@ -68,6 +78,7 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
   );
   expect(mcpServerBundleRuntimeOptions(runtime)).toEqual({
     transport: "streamable-http",
+    toolTimeoutMs: 90_000,
     http: {
       host: "localhost",
       port: 38464,
@@ -130,6 +141,42 @@ test("MCP runtime rejects non-loopback HTTP hosts and invalid token env", () => 
       { requirePort: true },
     ),
   ).toThrow(/environment variable name/);
+});
+
+test("MCP runtime rejects invalid timeout config", () => {
+  expect(() =>
+    resolveMcpRuntime(
+      registry({
+        mcp: {
+          hermes: {
+            transport: "streamable-http",
+            host: "127.0.0.1",
+            port: 38463,
+            toolTimeoutMs: 0,
+          },
+        },
+      }),
+      "hermes",
+      { requirePort: true },
+    ),
+  ).toThrow(/toolTimeoutMs must be a positive integer/);
+
+  expect(() =>
+    resolveMcpRuntime(
+      registry({
+        mcp: {
+          hermes: {
+            transport: "streamable-http",
+            host: "127.0.0.1",
+            port: 38463,
+            connectTimeoutMs: 1.5,
+          },
+        },
+      }),
+      "hermes",
+      { requirePort: true },
+    ),
+  ).toThrow(/connectTimeoutMs must be a positive integer/);
 });
 
 test("MCP runtime daemon path is shared across HTTP-capable targets", () => {

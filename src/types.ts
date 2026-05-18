@@ -85,6 +85,8 @@ export interface PluginRuntimeMcpHarnessConfig {
   host?: string;
   port?: number;
   tokenEnv?: string;
+  connectTimeoutMs?: number;
+  toolTimeoutMs?: number;
 }
 
 export interface PluginRuntimeConfig {

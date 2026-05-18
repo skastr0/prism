@@ -57,7 +57,8 @@ The current local patches keep the stdio shape but reduce obvious blast radius:
   is running under Bun, avoiding a bare `bun` lookup through `PATH` and `mise`
   where possible.
 - Generated Hermes MCP entries include `connect_timeout`, `timeout`, and
-  `sampling.enabled: false`.
+  `sampling.enabled: false`, rendered from the central Prism MCP timeout
+  policy unless the plugin overrides `runtime.mcp.<harness>`.
 - Generated MCP server bundles honor `PRISM_MCP_WORKING_DIRECTORY` and
   `PRISM_MCP_REPO_ROOT`, so Hermes' lack of a stdio `cwd` option does not leave
   tool runtime context dependent on the gateway process cwd.
@@ -85,7 +86,9 @@ The supported opt-in shape is:
         "transport": "streamable-http",
         "host": "127.0.0.1",
         "port": 38463,
-        "tokenEnv": "PRISM_MCP_TOKEN"
+        "tokenEnv": "PRISM_MCP_TOKEN",
+        "connectTimeoutMs": 10000,
+        "toolTimeoutMs": 120000
       }
     }
   }

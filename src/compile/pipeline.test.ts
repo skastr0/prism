@@ -3271,6 +3271,8 @@ test("compilePluginForTarget can lower Hermes canonical tools as Streamable HTTP
               host: "127.0.0.1",
               port: 38463,
               tokenEnv: "PRISM_MCP_TOKEN",
+              connectTimeoutMs: 15_000,
+              toolTimeoutMs: 90_000,
             },
           },
         },
@@ -3322,6 +3324,7 @@ export default defineTool({
   if (serverWrite?.kind === "write-plugin-file") {
     expect(serverWrite.content).toContain("Bun.serve");
     expect(serverWrite.content).toContain("PRISM_MCP_TOKEN");
+    expect(serverWrite.content).toContain('PRISM_MCP_TOOL_TIMEOUT_MS ?? "90000"');
     expect(serverWrite.content).toContain("hermes_http_demo_echo");
   }
 
@@ -3334,6 +3337,8 @@ export default defineTool({
   if (configWrite?.kind === "write-plugin-file") {
     expect(configWrite.content).toContain("prism-generated-hermes-http-demo:");
     expect(configWrite.content).toContain('url: "http://127.0.0.1:38463/mcp"');
+    expect(configWrite.content).toContain("connect_timeout: 15");
+    expect(configWrite.content).toContain("timeout: 90");
     expect(configWrite.content).toContain('Authorization: "Bearer ${PRISM_MCP_TOKEN}"');
     expect(configWrite.content).toContain("sampling:");
     expect(configWrite.content).toContain("enabled: false");

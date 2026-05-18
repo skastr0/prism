@@ -360,6 +360,7 @@ const buildServerBundle = async (options: {
   readonly host: string;
   readonly port: number;
   readonly tokenEnv: string;
+  readonly toolTimeoutMs: number;
 }): Promise<{ readonly content: string; readonly serverSha256: string; readonly toolNames: ReadonlyArray<string> }> => {
   assertPluginTargetsMcpTools(options.registry, options.targetId);
   const bundle = await generateMcpServerBundle({
@@ -370,6 +371,7 @@ const buildServerBundle = async (options: {
     version: options.registry.pluginVersion,
     bundleId: options.descriptor.serverName,
     transport: "streamable-http",
+    toolTimeoutMs: options.toolTimeoutMs,
     http: {
       host: options.host,
       port: options.port,
@@ -1038,6 +1040,7 @@ const serveMcpResolved = async (
     host,
     port: selectedPort,
     tokenEnv,
+    toolTimeoutMs: configured.toolTimeoutMs,
   });
   const prepared: McpPreparedServer = {
     descriptor,

@@ -30,6 +30,7 @@ import {
   sanitizeGeneratedToolSegment,
   sourceIsInside,
 } from "./generated-plugin.js";
+import { DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS } from "./mcp-policy.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,6 +81,7 @@ export interface McpServerBundleOptions {
   readonly bundleId?: string;
   readonly transport?: McpServerBundleTransport;
   readonly http?: McpHttpServerOptions;
+  readonly toolTimeoutMs?: number;
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
 }
 
@@ -750,10 +752,10 @@ const MCP_TOOL_FACTORY_RUNTIME = `const resolveWorkingDirectory = (): string => 
 
 const prismWorkingDirectory = resolveWorkingDirectory();
 const prismRepoRoot = process.env.PRISM_MCP_REPO_ROOT ?? prismWorkingDirectory;
-const configuredToolTimeoutMs = Number(process.env.PRISM_MCP_TOOL_TIMEOUT_MS ?? "120000");
+const configuredToolTimeoutMs = Number(process.env.PRISM_MCP_TOOL_TIMEOUT_MS ?? "__PRISM_TOOL_TIMEOUT_MS__");
 const prismToolTimeoutMs = Number.isFinite(configuredToolTimeoutMs) && configuredToolTimeoutMs > 0
   ? configuredToolTimeoutMs
-  : 120000;
+  : __PRISM_TOOL_TIMEOUT_MS__;
 
 const abortError = (name: string, reason?: unknown): Error => {
   if (reason instanceof Error) return reason;
@@ -1382,6 +1384,7 @@ const renderMcpServerEntry = (options: {
   readonly specs: ReadonlyArray<McpAdapterSpec>;
   readonly transport: McpServerBundleTransport;
   readonly http?: McpHttpServerOptions;
+  readonly toolTimeoutMs: number;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
@@ -1414,7 +1417,9 @@ const renderMcpServerEntry = (options: {
     imports,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),
-    MCP_TOOL_FACTORY_RUNTIME,
+    replaceTemplateTokens(MCP_TOOL_FACTORY_RUNTIME, {
+      __PRISM_TOOL_TIMEOUT_MS__: String(options.toolTimeoutMs),
+    }),
     runtime,
   ]);
 };
@@ -1549,6 +1554,7 @@ export const generateMcpServerBundle = async (
       specs,
       transport: options.transport ?? "stdio",
       http: options.http,
+      toolTimeoutMs: options.toolTimeoutMs ?? DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
     });
     const entryPath = await writeTempBundleSources({
       tempRoot,

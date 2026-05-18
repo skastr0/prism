@@ -7,6 +7,10 @@ import {
   type McpHttpServerOptions,
   type McpServerBundleTransport,
 } from "./mcp-bundle.js";
+import {
+  DEFAULT_MCP_CONNECT_TIMEOUT_MS,
+  DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
+} from "./mcp-policy.js";
 import type { PluginRegistry } from "./registry.js";
 import { normalizeBundleSegment } from "./lowerers/shared.js";
 
@@ -29,6 +33,8 @@ export interface ResolvedMcpRuntime {
   readonly host: string;
   readonly port?: number;
   readonly tokenEnv: string;
+  readonly connectTimeoutMs: number;
+  readonly toolTimeoutMs: number;
 }
 
 export interface RuntimeMcpServerDescriptor {
@@ -40,6 +46,7 @@ export interface RuntimeMcpServerDescriptor {
 export interface McpServerBundleRuntimeOptions {
   readonly transport: McpServerBundleTransport;
   readonly http?: McpHttpServerOptions;
+  readonly toolTimeoutMs: number;
 }
 
 export const defaultMcpRuntimeRoot = (): string =>
@@ -112,6 +119,18 @@ const stringValue = (value: unknown): string | undefined =>
 const numberValue = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isInteger(value) ? value : undefined;
 
+const positiveIntegerConfigValue = (
+  value: unknown,
+  targetId: HarnessId,
+  field: "connectTimeoutMs" | "toolTimeoutMs",
+): number | undefined => {
+  if (value === undefined) return undefined;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  throw new Error(
+    `MCP runtime config plugin.json runtime.mcp.${targetId}.${field} must be a positive integer number of milliseconds.`,
+  );
+};
+
 export const isLoopbackMcpHost = (host: string): boolean =>
   host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 
@@ -140,6 +159,16 @@ export const resolveMcpRuntime = (
   const host = stringValue(configured?.host) ?? DEFAULT_HTTP_HOST;
   const tokenEnv = stringValue(configured?.tokenEnv) ?? DEFAULT_TOKEN_ENV;
   const port = numberValue(configured?.port);
+  const connectTimeoutMs = positiveIntegerConfigValue(
+    configured?.connectTimeoutMs,
+    targetId,
+    "connectTimeoutMs",
+  ) ?? DEFAULT_MCP_CONNECT_TIMEOUT_MS;
+  const toolTimeoutMs = positiveIntegerConfigValue(
+    configured?.toolTimeoutMs,
+    targetId,
+    "toolTimeoutMs",
+  ) ?? DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS;
 
   if (transport === "streamable-http") {
     assertMcpHttpTargetSupported(targetId, "config");
@@ -167,6 +196,8 @@ export const resolveMcpRuntime = (
     host,
     ...(port !== undefined ? { port } : {}),
     tokenEnv,
+    connectTimeoutMs,
+    toolTimeoutMs,
   };
 };
 
@@ -194,13 +225,14 @@ export const mcpServerBundleRuntimeOptions = (
   runtime.transport === "streamable-http"
     ? {
         transport: runtime.transport,
+        toolTimeoutMs: runtime.toolTimeoutMs,
         http: {
           host: runtime.host,
           ...(runtime.port !== undefined ? { port: runtime.port } : {}),
           tokenEnv: runtime.tokenEnv,
         },
       }
-    : { transport: "stdio" };
+    : { transport: "stdio", toolTimeoutMs: runtime.toolTimeoutMs };
 
 export const isStreamableHttpMcpRuntime = (
   registry: PluginRegistry,

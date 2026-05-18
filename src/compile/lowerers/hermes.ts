@@ -3,6 +3,7 @@
 import { dirname, join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { generateMcpServerBundle } from "../mcp-bundle.js";
+import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
 import {
   generatedMcpServerName,
   mcpServerBundleRuntimeOptions,
@@ -181,8 +182,8 @@ const renderHermesMcpServerYaml = (options: {
     return [
       `  ${options.serverName}:`,
       `    url: ${yamlScalar(renderMcpHttpUrl(options.runtime))}`,
-      `    connect_timeout: 10`,
-      `    timeout: 120`,
+      `    connect_timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.connectTimeoutMs)}`,
+      `    timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.toolTimeoutMs)}`,
       `    enabled: true`,
       `    sampling:`,
       `      enabled: false`,
@@ -206,8 +207,8 @@ const renderHermesMcpServerYaml = (options: {
     `    command: ${yamlScalar(bunCommand)}`,
     `    args:`,
     `      - ${yamlScalar(options.serverPath)}`,
-    `    connect_timeout: 10`,
-    `    timeout: 120`,
+    `    connect_timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.connectTimeoutMs)}`,
+    `    timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.toolTimeoutMs)}`,
     `    enabled: true`,
     `    sampling:`,
     `      enabled: false`,

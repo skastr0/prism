@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import type { PluginRegistry } from "./registry.js";
 import {
   getMcpHttpTargetSupport,
+  mcpServerBundleRuntimeOptions,
+  renderMcpBearerAuthorizationTemplate,
+  renderMcpHttpUrl,
   resolveMcpRuntime,
   runtimeMcpServerDescriptor,
 } from "./mcp-runtime.js";
@@ -37,27 +40,39 @@ test("MCP runtime defaults to stdio per target", () => {
 });
 
 test("MCP runtime validates supported Streamable HTTP target config", () => {
-  expect(
-    resolveMcpRuntime(
-      registry({
-        mcp: {
-          "codex-cli": {
-            transport: "streamable-http",
-            host: "localhost",
-            port: 38464,
-            tokenEnv: "PRISM_MCP_CODEX_TOKEN",
-          },
+  const runtime = resolveMcpRuntime(
+    registry({
+      mcp: {
+        "codex-cli": {
+          transport: "streamable-http",
+          host: "localhost",
+          port: 38464,
+          tokenEnv: "PRISM_MCP_CODEX_TOKEN",
         },
-      }),
-      "codex-cli",
-      { requirePort: true },
-    ),
-  ).toEqual({
+      },
+    }),
+    "codex-cli",
+    { requirePort: true },
+  );
+
+  expect(runtime).toEqual({
     targetId: "codex-cli",
     transport: "streamable-http",
     host: "localhost",
     port: 38464,
     tokenEnv: "PRISM_MCP_CODEX_TOKEN",
+  });
+  expect(renderMcpHttpUrl(runtime)).toBe("http://localhost:38464/mcp");
+  expect(renderMcpBearerAuthorizationTemplate(runtime.tokenEnv)).toBe(
+    "Bearer ${PRISM_MCP_CODEX_TOKEN}",
+  );
+  expect(mcpServerBundleRuntimeOptions(runtime)).toEqual({
+    transport: "streamable-http",
+    http: {
+      host: "localhost",
+      port: 38464,
+      tokenEnv: "PRISM_MCP_CODEX_TOKEN",
+    },
   });
 });
 

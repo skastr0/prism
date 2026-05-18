@@ -13,6 +13,13 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import {
+  mcpServerBundleRuntimeOptions,
+  renderMcpBearerAuthorizationTemplate,
+  renderMcpHttpUrl,
+  resolveMcpRuntime,
+  runtimeMcpServerDescriptor,
+} from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -38,6 +45,7 @@ import {
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
+  pushWriteOperation as pushRawWrite,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
@@ -298,6 +306,7 @@ const planMcpServer = async (
     input.tools,
     input.agents,
   );
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {
@@ -317,16 +326,26 @@ const planMcpServer = async (
     serverName: pluginId,
     version: input.target.sourcePluginVersion ?? "0.1.0",
     bundleId: pluginId,
+    ...mcpServerBundleRuntimeOptions(runtime),
     bindings,
   });
 
-  await pushWrite(
-    operations,
-    desiredRelativePaths,
-    input.target,
-    bundle.relativePath,
-    bundle.content,
-  );
+  if (runtime.transport === "streamable-http") {
+    await pushRawWrite(
+      operations,
+      runtimeMcpServerDescriptor(input.target.root, input.target.sourcePluginName).absolutePath,
+      bundle.content,
+    );
+  } else {
+    await pushWrite(
+      operations,
+      desiredRelativePaths,
+      input.target,
+      bundle.relativePath,
+      bundle.content,
+    );
+  }
+
   await pushWrite(
     operations,
     desiredRelativePaths,
@@ -334,10 +353,18 @@ const planMcpServer = async (
     ".mcp.json",
     json({
       mcpServers: {
-        [pluginId]: {
-          command: "bun",
-          args: [`\${CLAUDE_PLUGIN_ROOT}/${bundle.relativePath}`],
-        },
+        [pluginId]: runtime.transport === "streamable-http"
+          ? {
+              type: "http",
+              url: renderMcpHttpUrl(runtime),
+              headers: {
+                Authorization: renderMcpBearerAuthorizationTemplate(runtime.tokenEnv),
+              },
+            }
+          : {
+              command: "bun",
+              args: [`\${CLAUDE_PLUGIN_ROOT}/${bundle.relativePath}`],
+            },
       },
     }),
   );

@@ -743,7 +743,7 @@ Notes:
 
 ### GLYPH-MCP-HTTP-10: HTTP Config Renderers for URL-Capable Lowerers
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -773,9 +773,28 @@ Acceptance:
 
 Validation:
 
-- focused lowerer tests for each target.
+- `bun test src/compile/mcp-runtime.test.ts src/compile/codex-cli-lowerer.test.ts src/compile/claude-code-lowerer.test.ts src/compile/gemini-cli-lowerer.test.ts src/compile/grok-lowerer.test.ts`
+- `bun test src/compile/pipeline.test.ts -t "canonical tools|Codex|Claude|Gemini|Grok|Hermes"`
 - `bun run typecheck`
+- `bun run build`
+- `git diff --check`
 - `pulsar score .`
+
+Notes:
+
+- Hermes now uses the shared runtime resolver, URL renderer, bearer-header
+  template, generated server naming/path helper, and bundle transport options.
+- Codex CLI HTTP opt-in emits `url` plus `bearer_token_env_var` in both
+  agent-local MCP blocks and managed global config blocks. It writes the HTTP
+  server bundle to the shared lifecycle path under `<codex-root>/prism/mcp/`.
+- Claude Code HTTP opt-in emits plugin `.mcp.json` with `type: "http"`,
+  `url`, and env-expanded `Authorization` header. It writes the HTTP server
+  bundle to the shared lifecycle path under `<claude-root>/prism/mcp/`.
+- Gemini CLI and Grok Build fail closed for `streamable-http` runtime opt-in
+  until Prism can prove a safe bearer-token secret source for those targets.
+- Stdio remains the default and existing stdio lowerer tests remain passing.
+- Pulsar hard gate passed. Readiness remains under repo-wide churn pressure,
+  including lowerer churn called out by Pulsar.
 
 ### GLYPH-MCP-HTTP-11: Tower and Grok Agent HTTP Opt-In
 

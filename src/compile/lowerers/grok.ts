@@ -13,6 +13,7 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import { resolveMcpRuntime } from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -259,6 +260,7 @@ const planMcpServer = async (
   operations: LowerOperation[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
+  resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,

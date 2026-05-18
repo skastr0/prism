@@ -2,11 +2,16 @@
 
 import { dirname, join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { generateMcpServerBundle } from "../mcp-bundle.js";
 import {
-  generateMcpServerBundle,
-  mcpServerArtifactRelativePath,
-  type McpServerBundleTransport,
-} from "../mcp-bundle.js";
+  generatedMcpServerName,
+  mcpServerBundleRuntimeOptions,
+  renderMcpBearerAuthorizationTemplate,
+  renderMcpHttpUrl,
+  resolveMcpRuntime,
+  runtimeMcpServerDescriptor,
+  type ResolvedMcpRuntime,
+} from "../mcp-runtime.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -21,7 +26,6 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
-  normalizeBundleSegment,
   prismOwnerMarker,
   pushWriteOperation as pushWrite,
   renderGeneratedOrbitSkill,
@@ -29,7 +33,6 @@ import {
 } from "./shared.js";
 
 const TARGET_ID = "hermes" as const;
-const GENERATED_SERVER_PREFIX = "prism-generated";
 
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
@@ -49,20 +52,11 @@ export interface LowerInput {
   readonly target: HermesLowerTarget;
 }
 
-const generatedServerName = (pluginName: string): string =>
-  `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
-
-const hermesPrismRoot = (target: HermesLowerTarget): string =>
-  join(target.root, "prism");
-
 const hermesSkillsRoot = (target: HermesLowerTarget): string =>
   join(target.root, "skills");
 
 const generatedMcpServerFile = (target: HermesLowerTarget): string =>
-  join(
-    hermesPrismRoot(target),
-    ...mcpServerArtifactRelativePath(generatedServerName(target.sourcePluginName)).split("/"),
-  );
+  runtimeMcpServerDescriptor(target.root, target.sourcePluginName).absolutePath;
 
 const generatedMcpServerRoot = (target: HermesLowerTarget): string =>
   dirname(generatedMcpServerFile(target));
@@ -141,45 +135,6 @@ const planGeneratedOrbitSkillPruning = async (
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-interface HermesMcpRuntime {
-  readonly transport: McpServerBundleTransport;
-  readonly host: string;
-  readonly port?: number;
-  readonly tokenEnv: string;
-}
-
-const stringValue = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-
-const numberValue = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isInteger(value) ? value : undefined;
-
-const isLoopbackHost = (host: string): boolean =>
-  host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
-
-const hermesMcpRuntime = (registry: PluginRegistry | undefined): HermesMcpRuntime => {
-  const configured = registry?.runtime.mcp?.hermes;
-  const transport = configured?.transport === "streamable-http" ? "streamable-http" : "stdio";
-  const host = stringValue(configured?.host) ?? "127.0.0.1";
-  const tokenEnv = stringValue(configured?.tokenEnv) ?? "PRISM_MCP_TOKEN";
-  const port = numberValue(configured?.port);
-
-  if (transport === "streamable-http") {
-    if (port === undefined || port <= 0 || port > 65535) {
-      throw new Error(
-        "Hermes Streamable HTTP MCP transport requires plugin.json runtime.mcp.hermes.port to be an integer from 1 to 65535.",
-      );
-    }
-    if (!isLoopbackHost(host)) {
-      throw new Error(
-        "Hermes Streamable HTTP MCP transport requires plugin.json runtime.mcp.hermes.host to be a loopback host.",
-      );
-    }
-  }
-
-  return { transport, host, ...(port !== undefined ? { port } : {}), tokenEnv };
-};
-
 const isTopLevelKey = (line: string): boolean =>
   /^[A-Za-z0-9_.-]+:\s*(?:#.*)?$/.test(line) ||
   /^[A-Za-z0-9_.-]+:\s+\S/.test(line);
@@ -207,21 +162,20 @@ const renderHermesMcpServerYaml = (options: {
   readonly serverName: string;
   readonly serverPath: string;
   readonly workingDirectory: string;
-  readonly runtime: HermesMcpRuntime;
+  readonly runtime: ResolvedMcpRuntime;
   readonly toolNames: ReadonlyArray<string>;
 }): string[] => {
   if (options.runtime.transport === "streamable-http") {
-    const url = `http://${options.runtime.host}:${options.runtime.port!}/mcp`;
     return [
       `  ${options.serverName}:`,
-      `    url: ${yamlScalar(url)}`,
+      `    url: ${yamlScalar(renderMcpHttpUrl(options.runtime))}`,
       `    connect_timeout: 10`,
       `    timeout: 120`,
       `    enabled: true`,
       `    sampling:`,
       `      enabled: false`,
       `    headers:`,
-      `      Authorization: ${yamlScalar(`Bearer \${${options.runtime.tokenEnv}}`)}`,
+      `      Authorization: ${yamlScalar(renderMcpBearerAuthorizationTemplate(options.runtime.tokenEnv))}`,
       `    tools:`,
       `      include:`,
       ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
@@ -258,7 +212,7 @@ const replaceHermesMcpServerBlock = (
     readonly serverName: string;
     readonly serverPath: string;
     readonly workingDirectory: string;
-    readonly runtime: HermesMcpRuntime;
+    readonly runtime: ResolvedMcpRuntime;
     readonly toolNames: ReadonlyArray<string>;
   },
 ): string => {
@@ -315,10 +269,10 @@ const planMcpServer = async (
   input: LowerInput,
   operations: LowerOperation[],
 ): Promise<{ serverName: string; toolNames: ReadonlyArray<string> }> => {
-  const serverName = generatedServerName(input.target.sourcePluginName);
+  const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
   const serverFile = generatedMcpServerFile(input.target);
-  const runtime = hermesMcpRuntime(input.registry);
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
 
   if (bindings.length === 0) {
     if (await exists(generatedMcpServerRoot(input.target))) {
@@ -339,14 +293,7 @@ const planMcpServer = async (
     serverName,
     version: input.target.sourcePluginVersion,
     bundleId: serverName,
-    transport: runtime.transport,
-    http: runtime.transport === "streamable-http"
-      ? {
-          host: runtime.host,
-          port: runtime.port,
-          tokenEnv: runtime.tokenEnv,
-        }
-      : undefined,
+    ...mcpServerBundleRuntimeOptions(runtime),
     bindings,
   });
 
@@ -403,7 +350,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     serverName: mcp.serverName,
     serverPath: generatedMcpServerFile(input.target),
     workingDirectory: input.target.root,
-    runtime: hermesMcpRuntime(input.registry),
+    runtime: resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true }),
     toolNames: mcp.toolNames,
   });
   if (nextConfig !== currentConfig) {

@@ -325,6 +325,119 @@ export default defineTool({
   expect(afterResult.stderr).toBe("");
 });
 
+test("codex-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-http-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-http-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["codex-cli"],
+        },
+        runtime: {
+          mcp: {
+            "codex-cli": {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: 38464,
+              tokenEnv: "PRISM_MCP_CODEX_HTTP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo over HTTP",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const tool = registry.tools.get("echo");
+  if (!tool) throw new Error("expected echo tool");
+
+  const operations = await planLowering({
+    agents: [
+      {
+        name: "reviewer",
+        description: "Reviews through Codex HTTP MCP",
+        body: "# Reviewer",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [
+          {
+            kind: "permission",
+            logicalName: "echo",
+            toolPluginName: "codex-http-fixture",
+            toolName: "echo",
+            toolSourcePath: toolPath,
+          },
+        ],
+      },
+    ],
+    orbits: [],
+    tools: [tool],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "codex-http-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const agentToml = findContentOperation(operations, join("agents", "reviewer.toml"));
+  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
+  expect(agentToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(agentToml?.content).not.toContain('command = "bun"');
+  expect(agentToml?.content).not.toContain("args = ");
+  expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+
+  const configToml = findContentOperation(operations, "config.toml");
+  expect(configToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  expect(configToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
+  expect(configToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(configToml?.content).not.toContain('command = "bun"');
+  expect(configToml?.content).not.toContain("args = ");
+  expect(configToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+
+  const bundle = operations.find(
+    (operation): operation is ContentOperation =>
+      isContentOperation(operation) &&
+      operation.target === join(outputRoot, "prism", "mcp", "prism_generated_codex_http_fixture", "server.mjs"),
+  );
+  expect(bundle?.content).toContain("codex_http_fixture_echo");
+  expect(bundle?.content).toContain("PRISM_MCP_CODEX_HTTP_TOKEN");
+});
+
 test("codex-cli lowerer fails closed for unsupported model config keys", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".codex");

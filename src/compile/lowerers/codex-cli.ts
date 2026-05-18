@@ -9,6 +9,14 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import {
+  generatedMcpServerName,
+  mcpServerBundleRuntimeOptions,
+  renderMcpHttpUrl,
+  resolveMcpRuntime,
+  runtimeMcpServerDescriptor,
+  type ResolvedMcpRuntime,
+} from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -37,7 +45,6 @@ import {
 } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
-const GENERATED_SERVER_PREFIX = "prism-generated";
 
 export interface CodexCliLowerTarget {
   readonly scope: HarnessScope;
@@ -66,7 +73,8 @@ interface PlannedHook {
 
 interface AgentMcpServerConfig {
   readonly name: string;
-  readonly bundlePath: string;
+  readonly runtime: ResolvedMcpRuntime;
+  readonly bundlePath?: string;
   readonly root: string;
 }
 
@@ -74,9 +82,6 @@ const quote = (value: string): string => JSON.stringify(value);
 
 const tomlArray = (values: ReadonlyArray<string>): string =>
   `[${values.map((value) => quote(value)).join(", ")}]`;
-
-const generatedServerName = (pluginName: string): string =>
-  `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
 
 const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
   `[${segments.map((segment) => quote(segment)).join(".")}]`;
@@ -171,6 +176,38 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
     agent.toolBindings.map((binding) => mcpToolNameForBinding(sourcePluginName, binding)),
   );
 
+const renderCodexMcpServerToml = (options: {
+  readonly name: string;
+  readonly runtime: ResolvedMcpRuntime;
+  readonly bundlePath?: string;
+  readonly root: string;
+  readonly enabledTools: ReadonlyArray<string>;
+}): string[] => {
+  const transportLines = options.runtime.transport === "streamable-http"
+    ? [
+        `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
+        `bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`,
+      ]
+    : [
+        'command = "bun"',
+        `args = ${tomlArray([options.bundlePath ?? missingCodexMcpBundlePath()])}`,
+        `cwd = ${quote(options.root)}`,
+      ];
+
+  return [
+    tomlDottedTable(["mcp_servers", options.name]),
+    ...transportLines,
+    "enabled = true",
+    "required = false",
+    'default_tools_approval_mode = "approve"',
+    `enabled_tools = ${tomlArray(options.enabledTools)}`,
+  ];
+};
+
+const missingCodexMcpBundlePath = (): never => {
+  throw new Error("Codex stdio MCP config requires a generated bundle path.");
+};
+
 const renderAgentToml = (
   agent: ComposedAgent,
   target: CodexCliLowerTarget,
@@ -204,14 +241,10 @@ const renderAgentToml = (
   if (mcpServer && mcpToolNames.length > 0) {
     lines.push(
       "",
-      tomlDottedTable(["mcp_servers", mcpServer.name]),
-      'command = "bun"',
-      `args = ${tomlArray([mcpServer.bundlePath])}`,
-      `cwd = ${quote(mcpServer.root)}`,
-      "enabled = true",
-      "required = false",
-      'default_tools_approval_mode = "approve"',
-      `enabled_tools = ${tomlArray(mcpToolNames)}`,
+      ...renderCodexMcpServerToml({
+        ...mcpServer,
+        enabledTools: mcpToolNames,
+      }),
     );
   }
 
@@ -407,6 +440,7 @@ const renderConfigWithHookFeature = (current: string, enableHooks: boolean): str
 
 const renderManagedConfigBlock = (options: {
   readonly mcpServerName?: string;
+  readonly mcpRuntime?: ResolvedMcpRuntime;
   readonly mcpBundlePath?: string;
   readonly enabledTools: ReadonlyArray<string>;
   readonly root: string;
@@ -414,16 +448,15 @@ const renderManagedConfigBlock = (options: {
 }): string => {
   const lines: string[] = [];
 
-  if (options.mcpServerName && options.mcpBundlePath) {
+  if (options.mcpServerName && options.mcpRuntime) {
     lines.push(
-      tomlDottedTable(["mcp_servers", options.mcpServerName]),
-      'command = "bun"',
-      `args = ${tomlArray([options.mcpBundlePath])}`,
-      `cwd = ${quote(options.root)}`,
-      "enabled = true",
-      "required = false",
-      'default_tools_approval_mode = "approve"',
-      `enabled_tools = ${tomlArray(options.enabledTools)}`,
+      ...renderCodexMcpServerToml({
+        name: options.mcpServerName,
+        runtime: options.mcpRuntime,
+        bundlePath: options.mcpBundlePath,
+        root: options.root,
+        enabledTools: options.enabledTools,
+      }),
       "",
     );
   }
@@ -438,9 +471,11 @@ const planMcpServer = async (
 ): Promise<{
   mcpServerName?: string;
   mcpBundlePath?: string;
+  mcpRuntime?: ResolvedMcpRuntime;
   toolNames: string[];
   globalToolNames: string[];
 }> => {
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
@@ -448,25 +483,31 @@ const planMcpServer = async (
   );
   if (bindings.length === 0) return { toolNames: [], globalToolNames: [] };
 
-  const mcpServerName = generatedServerName(input.target.sourcePluginName);
+  const mcpServerName = generatedMcpServerName(input.target.sourcePluginName);
   const bundle = await generateMcpServerBundle({
     sourcePluginName: input.target.sourcePluginName,
     sourcePluginRoot: input.target.sourcePluginPath,
     serverName: mcpServerName,
     version: input.target.sourcePluginVersion,
     bundleId: mcpServerName,
+    ...mcpServerBundleRuntimeOptions(runtime),
     bindings,
   });
 
+  const serverTarget = runtime.transport === "streamable-http"
+    ? runtimeMcpServerDescriptor(input.target.root, input.target.sourcePluginName).absolutePath
+    : join(input.target.root, ...bundle.relativePath.split("/"));
+
   await pushWrite(
     operations,
-    join(input.target.root, ...bundle.relativePath.split("/")),
+    serverTarget,
     bundle.content,
   );
 
   return {
     mcpServerName,
-    mcpBundlePath: bundle.relativePath,
+    ...(runtime.transport === "stdio" ? { mcpBundlePath: bundle.relativePath } : {}),
+    mcpRuntime: runtime,
     toolNames: uniqueSorted(bundle.toolNames),
     globalToolNames: uniqueSorted(
       bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map((binding) =>
@@ -482,10 +523,11 @@ const agentMcpServerConfig = (
   input: LowerInput,
   mcp: PlannedMcpServer,
 ): AgentMcpServerConfig | undefined =>
-  mcp.mcpServerName && mcp.mcpBundlePath
+  mcp.mcpServerName && mcp.mcpRuntime
     ? {
         name: mcp.mcpServerName,
-        bundlePath: mcp.mcpBundlePath,
+        runtime: mcp.mcpRuntime,
+        ...(mcp.mcpBundlePath ? { bundlePath: mcp.mcpBundlePath } : {}),
         root: input.target.root,
       }
     : undefined;
@@ -571,6 +613,7 @@ const planConfigWrite = async (
   const migratedConfig = renderConfigWithHookFeature(currentConfig, hooks.length > 0);
   const managedBlock = renderManagedConfigBlock({
     mcpServerName: mcp.globalToolNames.length > 0 ? mcp.mcpServerName : undefined,
+    mcpRuntime: mcp.globalToolNames.length > 0 ? mcp.mcpRuntime : undefined,
     mcpBundlePath: mcp.globalToolNames.length > 0 ? mcp.mcpBundlePath : undefined,
     enabledTools: mcp.globalToolNames,
     root: input.target.root,

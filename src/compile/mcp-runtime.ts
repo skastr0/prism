@@ -1,7 +1,11 @@
 import { join } from "node:path";
 import { resolveManifestTargets } from "../manifest.js";
 import type { HarnessId, PluginRuntimeMcpHarnessConfig } from "../types.js";
-import { mcpServerArtifactRelativePath, type McpServerBundleTransport } from "./mcp-bundle.js";
+import {
+  mcpServerArtifactRelativePath,
+  type McpHttpServerOptions,
+  type McpServerBundleTransport,
+} from "./mcp-bundle.js";
 import type { PluginRegistry } from "./registry.js";
 import { normalizeBundleSegment } from "./lowerers/shared.js";
 
@@ -30,6 +34,11 @@ export interface RuntimeMcpServerDescriptor {
   readonly serverName: string;
   readonly relativePath: string;
   readonly absolutePath: string;
+}
+
+export interface McpServerBundleRuntimeOptions {
+  readonly transport: McpServerBundleTransport;
+  readonly http?: McpHttpServerOptions;
 }
 
 const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
@@ -158,6 +167,32 @@ export const resolveMcpRuntime = (
     tokenEnv,
   };
 };
+
+export const renderMcpHttpUrl = (runtime: ResolvedMcpRuntime): string => {
+  if (runtime.transport !== "streamable-http" || runtime.port === undefined) {
+    throw new Error(
+      `Streamable HTTP MCP transport for target '${runtime.targetId}' requires a resolved port before URL rendering.`,
+    );
+  }
+  return `http://${runtime.host}:${runtime.port}/mcp`;
+};
+
+export const renderMcpBearerAuthorizationTemplate = (tokenEnv: string): string =>
+  `Bearer \${${tokenEnv}}`;
+
+export const mcpServerBundleRuntimeOptions = (
+  runtime: ResolvedMcpRuntime,
+): McpServerBundleRuntimeOptions =>
+  runtime.transport === "streamable-http"
+    ? {
+        transport: runtime.transport,
+        http: {
+          host: runtime.host,
+          ...(runtime.port !== undefined ? { port: runtime.port } : {}),
+          tokenEnv: runtime.tokenEnv,
+        },
+      }
+    : { transport: "stdio" };
 
 export const isStreamableHttpMcpRuntime = (
   registry: PluginRegistry,

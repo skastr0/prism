@@ -432,6 +432,55 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(omissionAgent?.content).not.toContain("direct-skill");
 });
 
+test("grok lowerer fails closed for Streamable HTTP MCP opt-in", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".grok");
+  const pluginRoot = join(root, "grok-http-fixture");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "grok-http-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["grok"],
+        },
+        runtime: {
+          mcp: {
+            grok: {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: 38467,
+              tokenEnv: "PRISM_MCP_GROK_HTTP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  await expect(
+    planLowering({
+      agents: [],
+      orbits: [],
+      skills: [],
+      hooks: [],
+      registry,
+      target: {
+        scope: "project",
+        root: outputRoot,
+        sourcePluginName: "grok-http-fixture",
+        sourcePluginVersion: "0.1.0",
+        sourcePluginPath: pluginRoot,
+      },
+    }),
+  ).rejects.toThrow("Streamable HTTP MCP is not supported for target 'grok'");
+});
+
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");

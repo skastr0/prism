@@ -15,6 +15,7 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
+import { resolveMcpRuntime } from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -344,6 +345,7 @@ const planMcpBundle = async (
   operations: LowerOperation[],
   desired: Set<string>,
 ): Promise<Record<string, unknown>> => {
+  resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,

@@ -311,6 +311,113 @@ export default defineTool({
   expect(blocked.stderr).toContain("blocked");
 });
 
+test("claude-code lowerer emits Streamable HTTP MCP config when opted in", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".claude");
+  const pluginRoot = join(root, "claude-http-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "claude-http-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["claude-code"],
+        },
+        runtime: {
+          mcp: {
+            "claude-code": {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: 38465,
+              tokenEnv: "PRISM_MCP_CLAUDE_HTTP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo over HTTP",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const operations = await planLowering({
+    agents: [
+      {
+        name: "reviewer",
+        description: "Reviews through Claude HTTP MCP",
+        body: "# Reviewer",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [
+          {
+            kind: "permission",
+            logicalName: "echo",
+            toolPluginName: "claude-http-fixture",
+            toolName: "echo",
+            toolSourcePath: toolPath,
+          },
+        ],
+      },
+    ],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "claude-http-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const mcpConfig = findContentOperation(operations, ".mcp.json");
+  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, unknown>;
+  };
+  expect(parsed.mcpServers?.["prism-generated-claude-http-fixture"]).toEqual({
+    type: "http",
+    url: "http://127.0.0.1:38465/mcp",
+    headers: {
+      Authorization: "Bearer ${PRISM_MCP_CLAUDE_HTTP_TOKEN}",
+    },
+  });
+  expect(mcpConfig?.content).not.toContain('"command"');
+  expect(mcpConfig?.content).not.toContain('"args"');
+
+  const bundle = operations.find(
+    (operation): operation is ContentOperation =>
+      isContentOperation(operation) &&
+      operation.target === join(outputRoot, "prism", "mcp", "prism_generated_claude_http_fixture", "server.mjs"),
+  );
+  expect(bundle?.content).toContain("claude_http_fixture_echo");
+  expect(bundle?.content).toContain("PRISM_MCP_CLAUDE_HTTP_TOKEN");
+});
+
 test("claude-code lowerer fails closed when hook matcher has no Claude target mapping", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");

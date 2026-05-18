@@ -221,3 +221,52 @@ export default defineHook({
     hookSpecificOutput: { hookEventName: "AfterTool" },
   });
 });
+
+test("gemini-cli lowerer fails closed for Streamable HTTP MCP opt-in", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".gemini");
+  const pluginRoot = join(root, "gemini-http-fixture");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "gemini-http-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["gemini-cli"],
+        },
+        runtime: {
+          mcp: {
+            "gemini-cli": {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: 38466,
+              tokenEnv: "PRISM_MCP_GEMINI_HTTP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  await expect(
+    planLowering({
+      agents: [],
+      orbits: [],
+      tools: [],
+      hooks: [],
+      registry,
+      target: {
+        scope: "project",
+        root: outputRoot,
+        sourcePluginName: "gemini-http-fixture",
+        sourcePluginVersion: "0.1.0",
+        sourcePluginPath: pluginRoot,
+      },
+    }),
+  ).rejects.toThrow("Streamable HTTP MCP is not supported for target 'gemini-cli'");
+});

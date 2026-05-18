@@ -17,7 +17,13 @@ import {
   resolveTsImportCandidate,
   stripToolAuthoringHelpers,
 } from "./bundle-utils.js";
-import { effectBundleImportPath } from "./runtime-deps.js";
+import {
+  effectBundleImportPath,
+  mcpSdkMcpBundleImportPath,
+  mcpSdkStdioBundleImportPath,
+  mcpSdkWebStandardHttpBundleImportPath,
+  zodV4BundleImportPath,
+} from "./runtime-deps.js";
 import {
   generatedToolNameForBinding,
   normalizeGeneratedPluginName,
@@ -553,6 +559,7 @@ const extractDescriptionOrTitle = (ast: SchemaAST.AST): string | undefined =>
   extractStringAnnotation(ast, SchemaAST.TitleAnnotationId);`;
 
 const TOOL_SURFACE_RUNTIME_TYPES = `type JsonSchema = Record<string, any>;
+type ZodSchema = z.ZodType<any, any>;
 type ToolSurface = {
   description?: string;
   input?: Schema.Schema.AnyNoContext;
@@ -569,9 +576,6 @@ interface ToolRuntimeContext {
   workingDirectory?: string;
   repoRoot?: string;
 }`;
-
-const MCP_JSON_RPC_TYPES = `type JsonRpcId = string | number | null;
-type JsonRpcMessage = { jsonrpc?: string; id?: JsonRpcId; method?: string; params?: any; result?: any; error?: any };`;
 
 const SCHEMA_BRIDGE_RUNTIME = `${SCHEMA_ANNOTATION_HELPERS}
 
@@ -649,6 +653,70 @@ const inputJsonSchemaFromEffectSchema = (schema: Schema.Schema.AnyNoContext): Js
   return astToJsonSchema(schema.ast);
 };
 
+const literalToZod = (literal: string | number | boolean | null): ZodSchema =>
+  z.literal(literal);
+
+const unionToZod = (members: ZodSchema[]): ZodSchema => {
+  if (members.length === 0) return z.undefined();
+  if (members.length === 1) return members[0]!;
+  return z.union(members as [ZodSchema, ZodSchema, ...ZodSchema[]]);
+};
+
+const astToZodSchema = (ast: SchemaAST.AST): ZodSchema => {
+  switch (ast._tag) {
+    case "StringKeyword":
+      return z.string();
+    case "NumberKeyword":
+      return z.number();
+    case "BooleanKeyword":
+      return z.boolean();
+    case "UnknownKeyword":
+      return z.any();
+    case "UndefinedKeyword":
+      return z.undefined();
+    case "Literal":
+      return literalToZod(ast.literal as string | number | boolean | null);
+    case "Union": {
+      const nonUndefined = ast.types.filter((type) => type._tag !== "UndefinedKeyword");
+      return unionToZod(nonUndefined.map(astToZodSchema));
+    }
+    case "TupleType": {
+      if (ast.elements.length === 0 && ast.rest.length === 1) {
+        return z.array(astToZodSchema(ast.rest[0]!.type));
+      }
+      unsupportedAst(ast, "tuple elements=" + ast.elements.length + ", rest=" + ast.rest.length);
+    }
+    case "TypeLiteral": {
+      const properties: Record<string, ZodSchema> = {};
+      for (const prop of ast.propertySignatures) {
+        const description = extractDescriptionOrTitle(prop.type);
+        let property = astToZodSchema(prop.type);
+        if (description) property = property.describe(description);
+        properties[String(prop.name)] = prop.isOptional ? property.optional() : property;
+      }
+      return z.object(properties).strict();
+    }
+    case "Refinement":
+      return astToZodSchema(ast.from);
+    case "Transformation":
+      return astToZodSchema(ast.from);
+    case "Suspend":
+      return astToZodSchema(ast.f());
+    default:
+      unsupportedAst(ast);
+  }
+};
+
+const objectZodFromEffectSchema = (
+  schema: Schema.Schema.AnyNoContext,
+  topLevelName: "Input/input" | "Output/output",
+): ZodSchema => {
+  if (schema.ast._tag !== "TypeLiteral") {
+    unsupportedAst(schema.ast, "top-level " + topLevelName + " must be a Schema.Struct");
+  }
+  return astToZodSchema(schema.ast);
+};
+
 const decodeWithSchema = <A>(schema: Schema.Schema<A, unknown, never>, raw: unknown): A =>
   Schema.decodeUnknownSync(schema)(raw);`;
 
@@ -706,31 +774,45 @@ const createTool = (name: string, surface: ToolSurface) => {
   const outputSchema = surface.Output ?? surface.output;
   if (!inputSchema) throw new Error(\`MCP tool '\${name}' is missing an Input/input schema\`);
   if (!outputSchema) throw new Error(\`MCP tool '\${name}' is missing an Output/output schema\`);
-  let inputJsonSchema: JsonSchema;
+  let inputZodSchema: ZodSchema;
+  let outputZodSchema: ZodSchema;
   try {
-    inputJsonSchema = inputJsonSchemaFromEffectSchema(inputSchema);
+    inputJsonSchemaFromEffectSchema(inputSchema);
+    inputZodSchema = objectZodFromEffectSchema(inputSchema, "Input/input");
   } catch (error) {
     throw new Error(\`MCP tool '\${name}' has unsupported Input/input schema: \${errorMessage(error)}\`);
   }
+  try {
+    outputZodSchema = objectZodFromEffectSchema(outputSchema, "Output/output");
+  } catch (error) {
+    throw new Error(\`MCP tool '\${name}' has unsupported Output/output schema: \${errorMessage(error)}\`);
+  }
 
-  const runTool = async (rawArgs: unknown, callContext?: ToolCallRuntimeContext): Promise<string> => {
+  const runTool = async (
+    rawArgs: unknown,
+    callContext?: ToolCallRuntimeContext,
+  ): Promise<{ readonly text: string; readonly structuredContent: unknown }> => {
     const input = decodeWithSchema(inputSchema as Schema.Schema<unknown, unknown, never>, rawArgs ?? {});
     const output = await surface.handle(input, runtimeContext(callContext));
     const validatedOutput = decodeWithSchema(outputSchema as Schema.Schema<unknown, unknown, never>, output);
-    return JSON.stringify(validatedOutput, null, 2);
+    return {
+      text: JSON.stringify(validatedOutput, null, 2),
+      structuredContent: validatedOutput,
+    };
   };
 
   return {
     description: surface.description ?? "",
-    inputSchema: inputJsonSchema,
+    inputSchema: inputZodSchema,
+    outputSchema: outputZodSchema,
     run: runTool,
-    async call(rawArgs: unknown, callContext?: ToolCallRuntimeContext): Promise<string> {
+    async call(rawArgs: unknown, callContext?: ToolCallRuntimeContext) {
       return await withToolTimeout(name, runTool(rawArgs, callContext));
     },
   };
 };`;
 
-const MCP_RPC_RUNTIME = `const tools = {
+const MCP_SDK_SERVER_FACTORY_RUNTIME = `const tools = {
 __PRISM_TOOL_ENTRIES__
 };
 
@@ -738,192 +820,6 @@ if (process.env.PRISM_MCP_VALIDATE === "1") {
   process.exit(0);
 }
 
-type RpcFraming = "content-length" | "newline";
-
-let responseFraming: RpcFraming = "content-length";
-let exiting = false;
-
-const exitSoon = (code = 0): void => {
-  if (exiting) return;
-  exiting = true;
-  process.exitCode = code;
-  process.stdin.pause();
-  setTimeout(() => process.exit(code), 0).unref?.();
-};
-
-process.on("SIGTERM", () => exitSoon(0));
-process.on("SIGINT", () => exitSoon(0));
-
-const writeMessage = (message: unknown): void => {
-  const payload = JSON.stringify(message);
-  if (responseFraming === "newline") {
-    process.stdout.write(payload + "\\n");
-    return;
-  }
-
-  const bytes = Buffer.from(payload, "utf8");
-  process.stdout.write(
-    \`Content-Length: \${bytes.byteLength}\\r\\n\\r\\n\`,
-  );
-  process.stdout.write(bytes);
-};
-
-const rpcResult = (id: JsonRpcId | undefined, result: unknown): void => {
-  if (id === undefined) return;
-  writeMessage({ jsonrpc: "2.0", id, result });
-};
-
-const rpcError = (id: JsonRpcId | undefined, code: number, message: string): void => {
-  if (id === undefined) return;
-  writeMessage({ jsonrpc: "2.0", id, error: { code, message } });
-};
-
-const handleMessage = async (message: JsonRpcMessage): Promise<void> => {
-  const id = message.id;
-  if (!message.method) {
-    rpcError(id, -32600, "Invalid JSON-RPC request: missing method");
-    return;
-  }
-
-  switch (message.method) {
-    case "initialize":
-      rpcResult(id, {
-        protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
-        capabilities: { tools: {} },
-        serverInfo: { name: __PRISM_SERVER_NAME__, version: __PRISM_SERVER_VERSION__ },
-      });
-      return;
-    case "notifications/initialized":
-      return;
-    case "ping":
-      rpcResult(id, {});
-      return;
-    case "tools/list":
-      rpcResult(id, {
-        tools: Object.entries(tools).map(([name, tool]) => ({
-          name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
-      });
-      return;
-    case "tools/call": {
-      const name = message.params?.name;
-      if (typeof name !== "string" || !(name in tools)) {
-        rpcError(id, -32602, \`Unknown tool: \${String(name)}\`);
-        return;
-      }
-      try {
-        const text = await tools[name as keyof typeof tools].call(message.params?.arguments ?? {});
-        rpcResult(id, { content: [{ type: "text", text }] });
-      } catch (error) {
-        rpcResult(id, { isError: true, content: [{ type: "text", text: errorMessage(error) }] });
-      }
-      return;
-    }
-    case "shutdown":
-      rpcResult(id, null);
-      exitSoon(0);
-      return;
-    case "notifications/exit":
-      exitSoon(0);
-      return;
-    default:
-      rpcError(id, -32601, \`Method not found: \${message.method}\`);
-  }
-};
-
-let buffer = Buffer.alloc(0);
-const drainBuffer = (): void => {
-  while (true) {
-    const headerEnd = buffer.indexOf("\\r\\n\\r\\n");
-    if (headerEnd !== -1) {
-      const header = buffer.subarray(0, headerEnd).toString("utf8");
-      const lengthMatch = /content-length:\\s*(\\d+)/i.exec(header);
-      if (!lengthMatch) {
-        buffer = buffer.subarray(headerEnd + 4);
-        rpcError(null, -32700, "Missing Content-Length header");
-        continue;
-      }
-      const length = Number(lengthMatch[1]);
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + length;
-      if (buffer.byteLength < bodyEnd) return;
-      const body = buffer.subarray(bodyStart, bodyEnd).toString("utf8");
-      buffer = buffer.subarray(bodyEnd);
-      responseFraming = "content-length";
-      try {
-        void handleMessage(JSON.parse(body) as JsonRpcMessage);
-      } catch (error) {
-        rpcError(null, -32700, errorMessage(error));
-      }
-      continue;
-    }
-
-    const newlineEnd = buffer.indexOf("\\n");
-    if (newlineEnd === -1) return;
-    const line = buffer.subarray(0, newlineEnd).toString("utf8").trim();
-    buffer = buffer.subarray(newlineEnd + 1);
-    if (line.length === 0) continue;
-    responseFraming = "newline";
-    try {
-      void handleMessage(JSON.parse(line) as JsonRpcMessage);
-    } catch (error) {
-      rpcError(null, -32700, errorMessage(error));
-    }
-  }
-};
-
-process.stdin.on("data", (chunk) => {
-  buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
-  drainBuffer();
-});
-process.stdin.on("end", () => exitSoon(0));
-process.stdin.on("close", () => exitSoon(0));
-process.stdin.resume();`;
-
-const MCP_HTTP_RUNTIME = `const tools = {
-__PRISM_TOOL_ENTRIES__
-};
-
-if (process.env.PRISM_MCP_VALIDATE === "1") {
-  process.exit(0);
-}
-
-const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? __PRISM_HTTP_HOST__;
-const isLoopbackBindHost = (value: string): boolean =>
-  value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
-if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
-  throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
-}
-const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? __PRISM_HTTP_PORT__);
-const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
-const httpHealthPath = process.env.PRISM_MCP_HTTP_HEALTH_PATH ?? "/healthz";
-const httpTokenEnvName = __PRISM_HTTP_TOKEN_ENV__;
-const httpToken = process.env[httpTokenEnvName] ?? process.env.PRISM_MCP_HTTP_TOKEN;
-if (!httpToken) {
-  throw new Error(\`Prism MCP Streamable HTTP server requires token env '\${httpTokenEnvName}'\`);
-}
-const serverStartedAt = Date.now();
-const serverSha256 = process.env.PRISM_MCP_SERVER_SHA256;
-const supportedProtocolVersions = new Set(["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]);
-interface HttpSessionState {
-  updatedAt: number;
-}
-
-const configuredMaxSessions = Number(process.env.PRISM_MCP_MAX_SESSIONS ?? "128");
-const maxSessions = Number.isFinite(configuredMaxSessions) && configuredMaxSessions > 0
-  ? configuredMaxSessions
-  : 128;
-const configuredSessionTtlMs = Number(process.env.PRISM_MCP_SESSION_TTL_MS ?? "3600000");
-const sessionTtlMs = Number.isFinite(configuredSessionTtlMs) && configuredSessionTtlMs > 0
-  ? configuredSessionTtlMs
-  : 3600000;
-const configuredMaxRequestBytes = Number(process.env.PRISM_MCP_MAX_REQUEST_BYTES ?? "1048576");
-const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes > 0
-  ? configuredMaxRequestBytes
-  : 1048576;
-const sessions = new Map<string, HttpSessionState>();
 const configuredMaxConcurrentToolCalls = Number(process.env.PRISM_MCP_MAX_CONCURRENT_CALLS ?? "16");
 const maxConcurrentToolCalls = Number.isFinite(configuredMaxConcurrentToolCalls) && configuredMaxConcurrentToolCalls > 0
   ? configuredMaxConcurrentToolCalls
@@ -949,9 +845,104 @@ const withToolConcurrency = async <A>(name: string, operation: () => Promise<A>)
   return await withToolTimeout(name, operationPromise);
 };
 
+const registerPrismTools = (server: McpServer): void => {
+  for (const [name, tool] of Object.entries(tools)) {
+    server.registerTool(
+      name,
+      {
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        outputSchema: tool.outputSchema,
+      },
+      async (args: unknown, extra: any) => {
+        const result = await withToolConcurrency(name, () =>
+          tool.run(args, {
+            sessionID: extra?.sessionId,
+            agent: "mcp-client",
+          }),
+        );
+        return {
+          content: [{ type: "text", text: result.text }],
+          structuredContent: result.structuredContent,
+        };
+      },
+    );
+  }
+};
+
+const createPrismMcpServer = (): McpServer => {
+  const server = new McpServer({
+    name: __PRISM_SERVER_NAME__,
+    version: __PRISM_SERVER_VERSION__,
+  });
+  registerPrismTools(server);
+  return server;
+};`;
+
+const MCP_SDK_STDIO_RUNTIME = `const server = createPrismMcpServer();
+const transport = new StdioServerTransport();
+let exiting = false;
+
+const stopStdioServer = async (code = 0): Promise<void> => {
+  if (exiting) return;
+  exiting = true;
+  process.exitCode = code;
+  try {
+    await server.close();
+  } catch (error) {
+    console.error("prism MCP stdio server close failed:", errorMessage(error));
+  }
+  process.stdin.pause();
+  setTimeout(() => process.exit(code), 0).unref?.();
+};
+
+process.on("SIGTERM", () => void stopStdioServer(0));
+process.on("SIGINT", () => void stopStdioServer(0));
+process.stdin.on("end", () => void stopStdioServer(0));
+process.stdin.on("close", () => void stopStdioServer(0));
+
+await server.connect(transport);`;
+
+const MCP_SDK_HTTP_RUNTIME = `const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? __PRISM_HTTP_HOST__;
+const isLoopbackBindHost = (value: string): boolean =>
+  value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
+if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
+  throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
+}
+const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? __PRISM_HTTP_PORT__);
+const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
+const httpHealthPath = process.env.PRISM_MCP_HTTP_HEALTH_PATH ?? "/healthz";
+const httpTokenEnvName = __PRISM_HTTP_TOKEN_ENV__;
+const httpToken = process.env[httpTokenEnvName] ?? process.env.PRISM_MCP_HTTP_TOKEN;
+if (!httpToken) {
+  throw new Error(\`Prism MCP Streamable HTTP server requires token env '\${httpTokenEnvName}'\`);
+}
+const serverStartedAt = Date.now();
+const serverSha256 = process.env.PRISM_MCP_SERVER_SHA256;
+
+interface HttpSessionState {
+  server: McpServer;
+  transport: WebStandardStreamableHTTPServerTransport;
+  updatedAt: number;
+}
+
+const configuredMaxSessions = Number(process.env.PRISM_MCP_MAX_SESSIONS ?? "128");
+const maxSessions = Number.isFinite(configuredMaxSessions) && configuredMaxSessions > 0
+  ? configuredMaxSessions
+  : 128;
+const configuredSessionTtlMs = Number(process.env.PRISM_MCP_SESSION_TTL_MS ?? "3600000");
+const sessionTtlMs = Number.isFinite(configuredSessionTtlMs) && configuredSessionTtlMs > 0
+  ? configuredSessionTtlMs
+  : 3600000;
+const configuredMaxRequestBytes = Number(process.env.PRISM_MCP_MAX_REQUEST_BYTES ?? "1048576");
+const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes > 0
+  ? configuredMaxRequestBytes
+  : 1048576;
+const sessions = new Map<string, HttpSessionState>();
+
 const responseHeaders = (extra?: HeadersInit): Headers => {
   const headers = new Headers(extra);
-  headers.set("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id");
+  headers.set("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id, last-event-id");
   headers.set("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
   headers.set("Access-Control-Allow-Origin", "null");
   headers.set("Cache-Control", "no-store");
@@ -967,26 +958,43 @@ const jsonResponse = (body: unknown, init: ResponseInit = {}): Response => {
 const emptyResponse = (status: number, init: ResponseInit = {}): Response =>
   new Response(null, { ...init, status, headers: responseHeaders(init.headers) });
 
-const rpcResultMessage = (id: JsonRpcId | undefined, result: unknown): JsonRpcMessage | undefined =>
-  id === undefined ? undefined : { jsonrpc: "2.0", id, result };
+const attachResponseHeaders = (response: Response): Response => {
+  const headers = responseHeaders(response.headers);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+};
 
-const rpcErrorMessage = (id: JsonRpcId | undefined, code: number, message: string): JsonRpcMessage | undefined =>
-  id === undefined ? undefined : { jsonrpc: "2.0", id, error: { code, message } } as JsonRpcMessage;
-
-const isInitializeRequest = (message: JsonRpcMessage): boolean =>
-  message.method === "initialize";
-
-const pruneExpiredSessions = (): void => {
-  const now = Date.now();
-  for (const [sessionID, session] of sessions) {
-    if (now - session.updatedAt > sessionTtlMs) {
-      sessions.delete(sessionID);
-    }
+const closeSession = async (sessionID: string): Promise<void> => {
+  const session = sessions.get(sessionID);
+  if (!session) return;
+  sessions.delete(sessionID);
+  try {
+    await session.transport.close();
+  } catch {
+    // The SDK transport may already be closed by a DELETE request.
+  }
+  try {
+    await session.server.close();
+  } catch {
+    // The server connection may already be closed by transport cleanup.
   }
 };
 
+const pruneExpiredSessions = async (): Promise<void> => {
+  const now = Date.now();
+  const expired: string[] = [];
+  for (const [sessionID, session] of sessions) {
+    if (now - session.updatedAt > sessionTtlMs) expired.push(sessionID);
+  }
+  await Promise.all(expired.map(closeSession));
+};
+
 const touchSession = (sessionID: string): void => {
-  sessions.set(sessionID, { updatedAt: Date.now() });
+  const session = sessions.get(sessionID);
+  if (session) sessions.set(sessionID, { ...session, updatedAt: Date.now() });
 };
 
 const isAllowedHostHeader = (value: string | null): boolean => {
@@ -1025,19 +1033,9 @@ const authorize = (request: Request): Response | undefined => {
   if (!isAllowedOrigin(request.headers.get("origin"))) {
     return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden origin" }, id: null }, { status: 403 });
   }
-  if (httpToken) {
-    const expected = \`Bearer \${httpToken}\`;
-    if (request.headers.get("authorization") !== expected) {
-      return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 });
-    }
-  }
-  return undefined;
-};
-
-const validateProtocolVersion = (request: Request): Response | undefined => {
-  const version = request.headers.get("mcp-protocol-version");
-  if (!version || !supportedProtocolVersions.has(version)) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or unsupported MCP-Protocol-Version" }, id: null }, { status: 400 });
+  const expected = \`Bearer \${httpToken}\`;
+  if (request.headers.get("authorization") !== expected) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 });
   }
   return undefined;
 };
@@ -1052,69 +1050,6 @@ const healthPayload = () => ({
   toolCount: Object.keys(tools).length,
   ...(serverSha256 ? { serverSha256 } : {}),
 });
-
-const handleRpcMessage = async (
-  message: JsonRpcMessage,
-  sessionID: string,
-): Promise<JsonRpcMessage | undefined> => {
-  const id = message.id;
-  if (!message.method) {
-    return rpcErrorMessage(id, -32600, "Invalid JSON-RPC request: missing method");
-  }
-
-  switch (message.method) {
-    case "initialize":
-      return rpcResultMessage(id, {
-        protocolVersion: message.params?.protocolVersion ?? "2025-11-25",
-        capabilities: { tools: {} },
-        serverInfo: { name: __PRISM_SERVER_NAME__, version: __PRISM_SERVER_VERSION__ },
-      });
-    case "notifications/initialized":
-      return undefined;
-    case "ping":
-      return rpcResultMessage(id, {});
-    case "tools/list":
-      return rpcResultMessage(id, {
-        tools: Object.entries(tools).map(([name, tool]) => ({
-          name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
-      });
-    case "tools/call": {
-      const name = message.params?.name;
-      if (typeof name !== "string" || !(name in tools)) {
-        return rpcErrorMessage(id, -32602, \`Unknown tool: \${String(name)}\`);
-      }
-      try {
-        const text = await withToolConcurrency(name, () =>
-          tools[name as keyof typeof tools].run(message.params?.arguments ?? {}, {
-            sessionID,
-            agent: requestAgentName(message),
-          }),
-        );
-        return rpcResultMessage(id, { content: [{ type: "text", text }] });
-      } catch (error) {
-        return rpcResultMessage(id, { isError: true, content: [{ type: "text", text: errorMessage(error) }] });
-      }
-    }
-    case "shutdown":
-      sessions.delete(sessionID);
-      return rpcResultMessage(id, null);
-    case "notifications/exit":
-      sessions.delete(sessionID);
-      return undefined;
-    default:
-      return rpcErrorMessage(id, -32601, \`Method not found: \${message.method}\`);
-  }
-};
-
-const requestAgentName = (message: JsonRpcMessage): string => {
-  const clientName = message.params?.clientInfo?.name;
-  return typeof clientName === "string" && clientName.length > 0
-    ? clientName
-    : "mcp-http-client";
-};
 
 const readLimitedRequestBody = async (request: Request): Promise<string> => {
   const contentLength = request.headers.get("content-length");
@@ -1144,55 +1079,82 @@ const readLimitedRequestBody = async (request: Request): Promise<string> => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
-const readJsonMessage = async (request: Request): Promise<JsonRpcMessage> => {
+const readJsonBody = async (request: Request): Promise<unknown> => {
   const text = await readLimitedRequestBody(request);
+  if (text.trim().length === 0) return undefined;
+  return JSON.parse(text);
+};
 
-  const raw = JSON.parse(text);
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("Request body must be a single JSON-RPC object");
+const isInitializeJsonRpcRequest = (value: unknown): boolean =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  (value as { method?: unknown }).method === "initialize";
+
+const handleInitializePost = async (
+  request: Request,
+  parsedBody: unknown,
+): Promise<Response> => {
+  if (sessions.size >= maxSessions) {
+    const id = parsedBody && typeof parsedBody === "object" && "id" in parsedBody
+      ? (parsedBody as { id?: unknown }).id
+      : null;
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "MCP session limit reached" }, id: id ?? null }, { status: 429 });
   }
-  return raw as JsonRpcMessage;
+
+  const server = createPrismMcpServer();
+  let initializedSessionID: string | undefined;
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: () => crypto.randomUUID(),
+    enableJsonResponse: true,
+    onsessioninitialized: (sessionID) => {
+      initializedSessionID = sessionID;
+      sessions.set(sessionID, { server, transport, updatedAt: Date.now() });
+    },
+    onsessionclosed: (sessionID) => {
+      sessions.delete(sessionID);
+    },
+  });
+
+  await server.connect(transport);
+  const response = await transport.handleRequest(request, { parsedBody });
+  if (initializedSessionID) touchSession(initializedSessionID);
+  return attachResponseHeaders(response);
 };
 
 const handlePost = async (request: Request): Promise<Response> => {
-  let message: JsonRpcMessage;
+  let parsedBody: unknown;
   try {
-    message = await readJsonMessage(request);
+    parsedBody = await readJsonBody(request);
   } catch (error) {
     return jsonResponse({ jsonrpc: "2.0", error: { code: -32700, message: errorMessage(error) }, id: null }, { status: 400 });
   }
 
-  let sessionID = request.headers.get("mcp-session-id") ?? undefined;
-  const headers = responseHeaders();
-  pruneExpiredSessions();
+  await pruneExpiredSessions();
 
-  if (isInitializeRequest(message)) {
-    if (sessions.size >= maxSessions) {
-      return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "MCP session limit reached" }, id: message.id ?? null }, { status: 429 });
-    }
-    sessionID = crypto.randomUUID();
-    touchSession(sessionID);
-    headers.set("MCP-Session-Id", sessionID);
-  } else if (!sessionID || !sessions.has(sessionID)) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: message.id ?? null }, { status: sessionID ? 404 : 400 });
-  } else {
-    touchSession(sessionID);
+  if (isInitializeJsonRpcRequest(parsedBody)) {
+    return await handleInitializePost(request, parsedBody);
   }
 
-  const response = await handleRpcMessage(message, sessionID);
-  if (!response) return emptyResponse(202, { headers });
-  headers.set("content-type", "application/json");
-  return new Response(JSON.stringify(response), { status: 200, headers });
-};
-
-const handleDelete = (request: Request): Response => {
   const sessionID = request.headers.get("mcp-session-id") ?? undefined;
-  pruneExpiredSessions();
-  if (!sessionID || !sessions.has(sessionID)) {
+  const session = sessionID ? sessions.get(sessionID) : undefined;
+  if (!sessionID || !session) {
     return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 });
   }
-  sessions.delete(sessionID);
-  return emptyResponse(202);
+
+  touchSession(sessionID);
+  return attachResponseHeaders(await session.transport.handleRequest(request, { parsedBody }));
+};
+
+const handleSessionRequest = async (request: Request): Promise<Response> => {
+  const sessionID = request.headers.get("mcp-session-id") ?? undefined;
+  await pruneExpiredSessions();
+  const session = sessionID ? sessions.get(sessionID) : undefined;
+  if (!sessionID || !session) {
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 });
+  }
+  touchSession(sessionID);
+  return attachResponseHeaders(await session.transport.handleRequest(request));
 };
 
 const server = Bun.serve({
@@ -1212,27 +1174,20 @@ const server = Bun.serve({
     const denied = authorize(request);
     if (denied) return denied;
 
-    if (request.method === "POST" || request.method === "DELETE") {
-      const invalidProtocol = validateProtocolVersion(request);
-      if (invalidProtocol) return invalidProtocol;
-    }
-
     if (request.method === "POST") return await handlePost(request);
-    if (request.method === "DELETE") return handleDelete(request);
-    if (request.method === "GET") {
-      return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "SSE stream is not supported by this generated Prism MCP server" }, id: null }, { status: 405 });
-    }
+    if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
     return jsonResponse({ error: "method not allowed" }, { status: 405 });
   },
 });
 
-const stopServer = (): void => {
+const stopServer = async (): Promise<void> => {
+  await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
   process.exit(0);
 };
 
-process.on("SIGTERM", stopServer);
-process.on("SIGINT", stopServer);
+process.on("SIGTERM", () => void stopServer());
+process.on("SIGINT", () => void stopServer());
 
 console.error(\`prism MCP Streamable HTTP server listening on http://\${server.hostname}:\${server.port}\${httpPath}\`);`;
 
@@ -1334,11 +1289,14 @@ const renderMcpRpcRuntime = (options: {
   readonly version: string;
   readonly toolEntries: string;
 }): string =>
-  replaceTemplateTokens(MCP_RPC_RUNTIME, {
-    __PRISM_TOOL_ENTRIES__: options.toolEntries,
-    __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
-    __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
-  });
+  joinGeneratedSections([
+    replaceTemplateTokens(MCP_SDK_SERVER_FACTORY_RUNTIME, {
+      __PRISM_TOOL_ENTRIES__: options.toolEntries,
+      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+      __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
+    }),
+    MCP_SDK_STDIO_RUNTIME,
+  ]);
 
 const renderMcpHttpRuntime = (options: {
   readonly serverName: string;
@@ -1346,14 +1304,20 @@ const renderMcpHttpRuntime = (options: {
   readonly toolEntries: string;
   readonly http?: McpHttpServerOptions;
 }): string =>
-  replaceTemplateTokens(MCP_HTTP_RUNTIME, {
-    __PRISM_TOOL_ENTRIES__: options.toolEntries,
-    __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
-    __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
-    __PRISM_HTTP_HOST__: JSON.stringify(options.http?.host ?? "127.0.0.1"),
-    __PRISM_HTTP_PORT__: JSON.stringify(String(options.http?.port ?? 0)),
-    __PRISM_HTTP_TOKEN_ENV__: JSON.stringify(options.http?.tokenEnv ?? "PRISM_MCP_HTTP_TOKEN"),
-  });
+  joinGeneratedSections([
+    replaceTemplateTokens(MCP_SDK_SERVER_FACTORY_RUNTIME, {
+      __PRISM_TOOL_ENTRIES__: options.toolEntries,
+      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+      __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
+    }),
+    replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
+      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+      __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
+      __PRISM_HTTP_HOST__: JSON.stringify(options.http?.host ?? "127.0.0.1"),
+      __PRISM_HTTP_PORT__: JSON.stringify(String(options.http?.port ?? 0)),
+      __PRISM_HTTP_TOKEN_ENV__: JSON.stringify(options.http?.tokenEnv ?? "PRISM_MCP_HTTP_TOKEN"),
+    }),
+  ]);
 
 const renderAmpToolRegistrationRuntime = (toolEntries: string): string =>
   replaceTemplateTokens(AMP_TOOL_FACTORY_RUNTIME, {
@@ -1391,8 +1355,11 @@ const renderMcpServerEntry = (options: {
 // GENERATED by prism — do not edit.
 // Standalone MCP ${options.transport} server for compiled canonical tool bindings.`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
+    `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
+    `import { StdioServerTransport } from ${JSON.stringify(mcpSdkStdioBundleImportPath())};`,
+    `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,
+    `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     imports,
-    MCP_JSON_RPC_TYPES,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),
     MCP_TOOL_FACTORY_RUNTIME,
@@ -1416,6 +1383,7 @@ const renderAmpPluginEntry = (options: {
 // Amp plugin for compiled canonical tool bindings.
 // Source plugin: ${options.sourcePluginName} v${options.version}`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
+    `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     imports,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("amp-schema-bridge"),

@@ -994,9 +994,11 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
       await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
       throw error;
     }
+    // Bun, shims, and launchd can make the serving pid differ from the
+    // immediate child pid; startup identity is proven by token + server hash.
     await waitForHealth(
       prepared,
-      child.pid!,
+      undefined,
       options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
     ).catch(async (error) => {
       child.kill("SIGTERM");
@@ -1024,9 +1026,11 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
     throw error;
   }
   try {
+    // Bun, shims, and launchd can make the serving pid differ from the
+    // immediate child pid; metadata records the health pid after startup.
     health = await waitForHealth(
       prepared,
-      pid,
+      undefined,
       options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
     );
   } catch (error) {

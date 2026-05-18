@@ -308,6 +308,21 @@ const httpNotify = async (args: {
   });
 };
 
+const httpDeleteSession = async (args: {
+  readonly port: number;
+  readonly token: string;
+  readonly sessionId: string;
+}): Promise<Response> =>
+  fetch(`http://127.0.0.1:${args.port}/mcp`, {
+    method: "DELETE",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${args.token}`,
+      "mcp-session-id": args.sessionId,
+      "mcp-protocol-version": "2025-11-25",
+    },
+  });
+
 class RpcClient {
   private nextId = 1;
   private buffer = Buffer.alloc(0);
@@ -315,7 +330,7 @@ class RpcClient {
 
   constructor(
     private readonly child: ChildProcessWithoutNullStreams,
-    private readonly framing: RpcFraming = "content-length",
+    private readonly framing: RpcFraming = "newline",
   ) {
     child.stdout.on("data", (chunk) => {
       this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
@@ -598,7 +613,7 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "evil" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "evil", version: "0.1.0" } },
       origin: "http://evil.example",
     });
     expect(forbidden.response.status).toBe(403);
@@ -619,7 +634,7 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
     const firstSession = firstInit.response.headers.get("mcp-session-id");
     expect(firstInit.response.status).toBe(200);
@@ -630,7 +645,7 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b", version: "0.1.0" } },
     });
     const secondSession = secondInit.response.headers.get("mcp-session-id");
     expect(secondInit.response.status).toBe(200);
@@ -672,14 +687,12 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       Array.from({ length: 10 }, (_, index) => `AP-${index}`),
     );
 
-    const shutdown = await httpRpc({
+    const shutdown = await httpDeleteSession({
       port,
       token,
       sessionId: firstSession!,
-      method: "shutdown",
     });
-    expect(shutdown.response.status).toBe(200);
-    expect(shutdown.body.result).toBeNull();
+    expect([200, 202]).toContain(shutdown.status);
     const firstAfterShutdown = await httpRpc({
       port,
       token,
@@ -688,13 +701,12 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     });
     expect(firstAfterShutdown.response.status).toBe(404);
 
-    const exit = await httpNotify({
+    const exit = await httpDeleteSession({
       port,
       token,
       sessionId: secondSession!,
-      method: "notifications/exit",
     });
-    expect(exit.status).toBe(202);
+    expect([200, 202]).toContain(exit.status);
     const secondAfterExit = await httpRpc({
       port,
       token,
@@ -756,17 +768,25 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
     const sessionId = initialized.response.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
+    const secondInitialized = await httpRpc({
+      port,
+      token,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b", version: "0.1.0" } },
+    });
+    const secondSessionId = secondInitialized.response.headers.get("mcp-session-id");
+    expect(secondSessionId).toBeTruthy();
 
     const calls = await Promise.all(
       [0, 1].map((index) =>
         httpRpc({
           port,
           token,
-          sessionId: sessionId!,
+          sessionId: index === 0 ? sessionId! : secondSessionId!,
           method: "tools/call",
           params: {
             name: "orbit_core_create_glyph",
@@ -835,7 +855,7 @@ test("MCP bundle Streamable HTTP keeps concurrency slot until timed-out work set
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
     const sessionId = initialized.response.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
@@ -933,7 +953,7 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
     expect(first.response.status).toBe(200);
 
@@ -941,7 +961,7 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
       port,
       token,
       method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b" } },
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b", version: "0.1.0" } },
     });
     expect(second.response.status).toBe(429);
 
@@ -967,7 +987,7 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
   }
 });
 
-test("MCP bundle exits after shutdown request", async () => {
+test("MCP bundle stdio exits when stdin closes", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
@@ -994,17 +1014,14 @@ test("MCP bundle exits after shutdown request", async () => {
     cwd: projectRoot,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const client = new RpcClient(child);
-
-  const shutdown = await client.request("shutdown");
-  expect(shutdown.result).toBeNull();
+  child.stdin.end();
 
   const exit = await waitForChildClose(child);
   expect(exit.code).toBe(0);
   expect(exit.signal).toBeNull();
 });
 
-test("MCP bundle exits after exit notification", async () => {
+test("MCP bundle stdio exits on SIGTERM", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
@@ -1031,12 +1048,10 @@ test("MCP bundle exits after exit notification", async () => {
     cwd: projectRoot,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const client = new RpcClient(child);
-  client.notify("notifications/exit");
+  child.kill("SIGTERM");
 
   const exit = await waitForChildClose(child);
-  expect(exit.code).toBe(0);
-  expect(exit.signal).toBeNull();
+  expect(exit.code === 0 || exit.signal === "SIGTERM").toBe(true);
 });
 
 test("MCP bundle generation supports unknown object payload schemas", async () => {

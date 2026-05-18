@@ -652,7 +652,7 @@ const shouldUseLaunchAgent = (options: McpServeOptions): boolean =>
   options.foreground !== true &&
   options.launchAgent !== false &&
   process.env.PRISM_MCP_DISABLE_LAUNCHD !== "1" &&
-  options.root === undefined;
+  (options.root === undefined || resolve(expandPath(options.root)) === resolve(defaultMcpRuntimeRoot()));
 
 const startLaunchAgent = async (
   prepared: McpPreparedServer,

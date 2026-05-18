@@ -72,6 +72,7 @@ program
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .option("--compile-root <path>", "Override compile output root")
+  .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
@@ -105,6 +106,7 @@ program
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .option("--compile-root <path>", "Override compile output root")
+  .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
@@ -129,6 +131,7 @@ program
         scope: options.scope,
         projectPath: options.project,
         compileRoot: options.compileRoot,
+        mcpRoot: options.mcpRoot,
         mcpLifecycle: options.mcpLifecycle,
         validate: options.validate,
         dryRun: options.dryRun,
@@ -219,6 +222,7 @@ program
   .option("--clean", "Clear compile cache before compiling", false)
   .option("--backup", "Create .bak backups before overwriting files")
   .option("--root <path>", "Override harness output root")
+  .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior (none|verify|serve)",
@@ -246,6 +250,7 @@ program
         scope: options.scope,
         projectPath: options.project,
         root: options.root,
+        mcpRoot: options.mcpRoot,
         dryRun: options.dryRun,
         backup: options.backup,
         mcpLifecycle: options.mcpLifecycle,
@@ -616,6 +621,7 @@ type InstallCommandOptions = {
   validate?: boolean;
   dryRun?: boolean;
   compileRoot?: string;
+  mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
 };
 
@@ -657,6 +663,7 @@ type InstallAllRefreshOptions = {
   scope: HarnessScope;
   projectPath?: string;
   compileRoot?: string;
+  mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
   validate?: boolean;
   dryRun: boolean;
@@ -692,6 +699,7 @@ async function runInstallCommand(
     scope: context.options.scope,
     projectPath: context.options.project,
     compileRoot: context.options.compileRoot,
+    mcpRoot: context.options.mcpRoot,
     mcpLifecycle: context.options.mcpLifecycle,
     dryRun: context.options.dryRun,
     backup: context.options.backup,
@@ -936,6 +944,7 @@ async function refreshDiscoveredPlugin(
     scope: options.scope,
     projectPath: options.projectPath,
     compileRoot: options.compileRoot,
+    mcpRoot: options.mcpRoot,
     mcpLifecycle: options.mcpLifecycle,
     dryRun: options.dryRun,
     backup: options.backup,
@@ -1270,6 +1279,7 @@ async function runCompilePhaseForPlugin(options: {
   scope: HarnessScope;
   projectPath?: string;
   compileRoot?: string;
+  mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
   dryRun: boolean;
   backup: boolean;
@@ -1291,6 +1301,7 @@ async function runCompilePhaseForPlugin(options: {
         scope: options.scope,
         projectPath: options.projectPath,
         root: options.compileRoot,
+        mcpRoot: options.mcpRoot,
         dryRun: options.dryRun,
         backup: options.backup,
         mcpLifecycle: options.mcpLifecycle,

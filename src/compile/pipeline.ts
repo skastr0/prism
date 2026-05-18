@@ -144,6 +144,7 @@ export interface CompileOptions {
   readonly scope: HarnessScope;
   readonly projectPath?: string;
   readonly root?: string;
+  readonly mcpRoot?: string;
   readonly dryRun: boolean;
   readonly backup: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
@@ -496,11 +497,12 @@ const resolveCompileTargetContext = (
     );
     if (options.root) {
       const root = expandPath(options.root);
+      const mcpRuntimeRoot = options.mcpRoot ? expandPath(options.mcpRoot) : root;
       return {
         targetId: options.target as HarnessId,
         lowerer,
         outputRoot: root,
-        mcpRuntimeRoot: root,
+        mcpRuntimeRoot,
         cacheDir: getCacheDir(options.pluginPath),
         useCache: !options.dryRun,
       };
@@ -519,7 +521,7 @@ const resolveCompileTargetContext = (
       targetId: options.target as HarnessId,
       lowerer,
       outputRoot,
-      mcpRuntimeRoot: defaultMcpRuntimeRoot(),
+      mcpRuntimeRoot: options.mcpRoot ? expandPath(options.mcpRoot) : defaultMcpRuntimeRoot(),
       cacheDir: getCacheDir(options.pluginPath),
       useCache: !options.dryRun,
     };
@@ -570,6 +572,7 @@ const assertHttpMcpLifecycleGate = (options: {
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
   readonly outputRoot: string;
+  readonly mcpRuntimeRoot: string;
   readonly artifacts: TargetArtifacts;
   readonly operations: ReadonlyArray<LowerOperation>;
 }): Effect.Effect<void, CompileError> => {
@@ -587,7 +590,7 @@ const assertHttpMcpLifecycleGate = (options: {
     targetId: options.targetId,
     scope: options.compileOptions.scope,
     projectPath: options.compileOptions.projectPath,
-    root: options.compileOptions.root,
+    root: options.mcpRuntimeRoot,
     registry: options.registry,
   });
   const expectedServerSha256 = findMcpServerSha256(options.operations);
@@ -600,7 +603,7 @@ const assertHttpMcpLifecycleGate = (options: {
           harness: options.targetId,
           scope: options.compileOptions.scope,
           projectPath: options.compileOptions.projectPath,
-          root: options.compileOptions.root,
+          root: options.mcpRuntimeRoot,
         });
       }
 
@@ -609,7 +612,7 @@ const assertHttpMcpLifecycleGate = (options: {
         harness: options.targetId,
         scope: options.compileOptions.scope,
         projectPath: options.compileOptions.projectPath,
-        root: options.compileOptions.root,
+        root: options.mcpRuntimeRoot,
         expectedServerSha256,
       });
       if (status.state === "running") return;
@@ -950,6 +953,7 @@ export const compilePluginForTarget = (
       registry,
       targetId: context.targetId,
       outputRoot: context.outputRoot,
+      mcpRuntimeRoot: context.mcpRuntimeRoot,
       artifacts,
       operations: allOps,
     });

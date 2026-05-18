@@ -407,6 +407,8 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
+      mcpRuntimeRoot: outputRoot,
+      mcpBearerToken: "codex-static-token",
       sourcePluginName: "codex-http-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -416,7 +418,8 @@ export default defineTool({
   const agentToml = findContentOperation(operations, join("agents", "reviewer.toml"));
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(agentToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(agentToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
+  expect(agentToml?.content).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
@@ -424,7 +427,8 @@ export default defineTool({
   const configToml = findContentOperation(operations, "config.toml");
   expect(configToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(configToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(configToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(configToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
+  expect(configToml?.content).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
   expect(configToml?.content).not.toContain('command = "bun"');
   expect(configToml?.content).not.toContain("args = ");
   expect(configToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');

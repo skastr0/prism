@@ -81,19 +81,19 @@ test("MCP runtime fails closed for unsupported HTTP targets", () => {
     resolveMcpRuntime(
       registry({
         mcp: {
-          "gemini-cli": {
+          grok: {
             transport: "streamable-http",
             host: "127.0.0.1",
             port: 38465,
-            tokenEnv: "PRISM_MCP_GEMINI_TOKEN",
+            tokenEnv: "PRISM_MCP_GROK_TOKEN",
           },
         },
       }),
-      "gemini-cli",
+      "grok",
       { requirePort: true },
     ),
-  ).toThrow(/Streamable HTTP MCP is not supported for target 'gemini-cli'/);
-  expect(getMcpHttpTargetSupport("gemini-cli").reason).toContain("bearer-token auth");
+  ).toThrow(/Streamable HTTP MCP is not supported for target 'grok'/);
+  expect(getMcpHttpTargetSupport("grok").reason).toContain("not been verified");
 });
 
 test("MCP runtime rejects non-loopback HTTP hosts and invalid token env", () => {

@@ -2,10 +2,11 @@
 
 Date: 2026-05-17
 Status: done
-Primary target harness: `hermes`
+Primary target harness: shared Prism MCP runtime
 
 Phase 1 status: done.
 Phase 2 status: done.
+Phase 3 status: done.
 
 ## Receipt
 
@@ -924,6 +925,82 @@ prism compile ../prism-plugins/grok-agent --harness codex-cli --mcp-lifecycle ve
 prism mcp serve ../prism-plugins/grok-agent --harness claude-code --scope global
 prism compile ../prism-plugins/grok-agent --harness claude-code --mcp-lifecycle verify
 ```
+
+### GLYPH-MCP-HTTP-13: Trusted Local Token and Managed Shared Daemon
+
+Status: done
+
+Intent:
+
+- Make HTTP MCP low-maintenance for trusted local plugins.
+- Remove the operator requirement to export MCP bearer-token env vars.
+- Make one local Prism-owned server per generated MCP plugin serve every
+  opted-in harness config for that plugin.
+
+Scope:
+
+- Prism shared MCP runtime root and token store.
+- Install/compile lifecycle defaults and LaunchAgent-managed live daemons.
+- Hermes, Codex CLI, Claude Code, and Gemini CLI MCP HTTP lowerers.
+- Tower and Grok Agent runtime manifests.
+
+Acceptance:
+
+- Non-dry-run compile/install defaults to `--mcp-lifecycle serve`.
+- Prism stores/owns local tokens in `prism/tokens.json` under the MCP runtime
+  root (`~/.config/prism/tokens.json` by default).
+- Harness HTTP configs contain static `Authorization: Bearer <token>` headers
+  and do not require exported token env vars.
+- Generated HTTP server bundles live under the shared Prism runtime root for
+  live installs, not under each harness root.
+- macOS live installs create/update one user LaunchAgent per generated MCP
+  server; temp-root tests can still use direct child processes.
+- Tower uses one shared URL/port (`127.0.0.1:38463`) for Hermes, Codex CLI,
+  Claude Code, and Gemini CLI.
+- Grok Agent uses one shared URL/port (`127.0.0.1:38473`) for Hermes, Codex
+  CLI, Claude Code, and Gemini CLI.
+
+Validation plan:
+
+- `bun test src/mcp/lifecycle.test.ts`
+- `bun test src/compile/mcp-runtime.test.ts`
+- `bun test src/compile/pipeline.test.ts -t MCP`
+- `bun test src/compile/{claude-code,codex-cli,gemini-cli}-lowerer.test.ts -t HTTP`
+- `bun test src/cli.test.ts -t MCP`
+- `bun test src/compile/pipeline.test.ts`
+- `bun test src/compile/claude-code-lowerer.test.ts src/compile/codex-cli-lowerer.test.ts src/compile/gemini-cli-lowerer.test.ts src/compile/grok-lowerer.test.ts src/compile/mcp-runtime.test.ts src/mcp/lifecycle.test.ts src/cli.test.ts`
+- `bun run verify`
+- `pulsar score .`
+- `../prism-plugins: bun run typecheck`
+- `../prism-plugins: bun test tower/tests grok-agent/tests`
+- temp-root compile/install smoke for Tower and Grok Agent across opted-in
+  harnesses.
+
+Validation result:
+
+- All listed Prism tests passed.
+- `bun run verify` passed.
+- `../prism-plugins` typecheck and Tower/Grok Agent tests passed.
+- `git diff --check` passed in both repos.
+- `pulsar score .` hard gate passed in both repos; readiness remains red due
+  to existing churn/duplication pressure outside this glyph.
+- Temp-root smoke passed for Tower and Grok Agent on Hermes, Codex CLI, Claude
+  Code, and Gemini CLI. Each compile wrote a local token store and stopped its
+  temp daemon after verification.
+
+Live activation result:
+
+- Tower installed for Hermes, Codex CLI, Claude Code, and Gemini CLI.
+- Grok Agent installed for Hermes, Codex CLI, Claude Code, and Gemini CLI.
+- Live shared HTTP daemons are running:
+  - Tower: `http://127.0.0.1:38463/mcp`
+  - Grok Agent: `http://127.0.0.1:38473/mcp`
+- Live user LaunchAgents exist for both generated MCP servers.
+- Live token store exists at `~/.config/prism/tokens.json` with mode `0600`.
+- Existing stale harness-owned stdio Tower/Grok Agent server processes were
+  terminated after live configs were switched to HTTP; only the two shared
+  `~/.config/prism` Tower/Grok Agent daemons remained in the post-cleanup
+  process audit.
 
 ## Sources
 

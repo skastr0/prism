@@ -15,7 +15,7 @@ import {
 } from "../mcp-bundle.js";
 import {
   mcpServerBundleRuntimeOptions,
-  renderMcpBearerAuthorizationTemplate,
+  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   runtimeMcpServerDescriptor,
@@ -58,6 +58,8 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface ClaudeCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
+  readonly mcpRuntimeRoot?: string;
+  readonly mcpBearerToken?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -333,7 +335,10 @@ const planMcpServer = async (
   if (runtime.transport === "streamable-http") {
     await pushRawWrite(
       operations,
-      runtimeMcpServerDescriptor(input.target.root, input.target.sourcePluginName).absolutePath,
+      runtimeMcpServerDescriptor(
+        input.target.mcpRuntimeRoot ?? input.target.root,
+        input.target.sourcePluginName,
+      ).absolutePath,
       bundle.content,
     );
   } else {
@@ -358,7 +363,10 @@ const planMcpServer = async (
               type: "http",
               url: renderMcpHttpUrl(runtime),
               headers: {
-                Authorization: renderMcpBearerAuthorizationTemplate(runtime.tokenEnv),
+                Authorization: renderMcpBearerAuthorization({
+                  tokenEnv: runtime.tokenEnv,
+                  token: input.target.mcpBearerToken,
+                }),
               },
             }
           : {

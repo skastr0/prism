@@ -359,7 +359,7 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
   expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
 });
 
-test("install propagates Hermes HTTP MCP lifecycle gate", async () => {
+test("install serves Hermes HTTP MCP by default", async () => {
   const port = await getFreePort("127.0.0.1");
   const tokenEnv = "PRISM_MCP_CLI_INSTALL_GATE_TOKEN";
   const { pluginRoot, hermesRoot } = await createCliMcpFixture({
@@ -378,21 +378,13 @@ test("install propagates Hermes HTTP MCP lifecycle gate", async () => {
     "--no-validate",
   ];
 
-  const missing = await runCli(common, env);
-  expect(missing.exitCode).toBe(1);
-  expect(missing.stdout).toContain("refusing to write url config");
-  expect(missing.stdout).toContain(
-    `Run: prism mcp serve ${pluginRoot} --harness hermes --scope global --root ${hermesRoot} --port ${port} --token-env ${tokenEnv}`,
-  );
-  expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(true);
-  expect(await readFile(join(hermesRoot, "config.yaml"), "utf8")).toBe("existing: true\n");
-
-  const served = await runCli([...common, "--mcp-lifecycle", "serve"], env);
+  const served = await runCli(common, env);
   try {
     expect(served.exitCode).toBe(0);
     expect(served.stdout).toContain("Compile (hermes, global)");
     const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
     expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
+    expect(config).toContain('Authorization: "Bearer test-token"');
   } finally {
     await runCli([
       "mcp",

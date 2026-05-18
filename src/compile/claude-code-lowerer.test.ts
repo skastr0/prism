@@ -389,6 +389,8 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
+      mcpRuntimeRoot: outputRoot,
+      mcpBearerToken: "claude-static-token",
       sourcePluginName: "claude-http-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -403,7 +405,7 @@ export default defineTool({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
     headers: {
-      Authorization: "Bearer ${PRISM_MCP_CLAUDE_HTTP_TOKEN}",
+      Authorization: "Bearer claude-static-token",
     },
   });
   expect(mcpConfig?.content).not.toContain('"command"');

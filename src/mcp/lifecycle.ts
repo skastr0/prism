@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { Effect } from "effect";
-import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
+import { getHarness, harnessSupportsProjectScope } from "../harnesses.js";
 import { expandPath } from "../fs.js";
 import type { HarnessId, HarnessScope } from "../types.js";
 import { loadPlugin } from "../compile/load.js";
@@ -16,6 +16,7 @@ import {
   assertMcpHttpTargetSupported,
   assertMcpTokenEnvName,
   assertPluginTargetsMcpTools,
+  defaultMcpRuntimeRoot,
   generatedMcpServerName,
   isMcpTokenEnvName,
   isLoopbackMcpHost,
@@ -35,6 +36,12 @@ import {
   type McpRuntimeMetadata,
   type McpRuntimeStaleReason,
 } from "./runtime-metadata.js";
+import { ensureMcpToken, readMcpToken } from "./token-store.js";
+import {
+  installLaunchAgent,
+  launchAgentLabelForServer,
+  stopLaunchAgent,
+} from "./launchd.js";
 
 export type McpLifecycleHarness = HarnessId;
 export type McpPortSelection = "auto" | number;
@@ -52,6 +59,7 @@ export interface McpLifecycleCommonOptions {
   readonly harness: McpLifecycleHarness;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
+  /** Override the Prism MCP runtime root. Defaults to ~/.config. */
   readonly root?: string;
 }
 
@@ -60,6 +68,7 @@ export interface McpServeOptions extends McpLifecycleCommonOptions {
   readonly port?: McpPortSelection;
   readonly tokenEnv?: string;
   readonly foreground?: boolean;
+  readonly launchAgent?: boolean;
   readonly startupTimeoutMs?: number;
 }
 
@@ -147,13 +156,7 @@ const assertSupportedLifecycleTarget = (options: McpLifecycleCommonOptions): voi
 
 const resolveLifecycleHarnessRoot = (options: McpLifecycleCommonOptions): string => {
   if (options.root) return expandPath(options.root);
-
-  const harness = getHarness(options.harness);
-  const root = resolveHarnessRoot(harness, options.scope, options.projectPath);
-  if (!root) {
-    throw new Error(`Could not resolve ${options.harness} ${options.scope} harness root.`);
-  }
-  return root;
+  return defaultMcpRuntimeRoot();
 };
 
 const loadRegistry = async (pluginPath: string): Promise<PluginRegistry> =>
@@ -338,6 +341,22 @@ const readRuntimeMetadataIfPresent = async (
     : undefined;
 
 const tokenForEnv = (tokenEnv: string): string | undefined => process.env[tokenEnv];
+
+const resolveTokenForServer = async (options: {
+  readonly descriptor: McpRuntimeDescriptor;
+  readonly tokenEnv?: string;
+  readonly create: boolean;
+}): Promise<string | undefined> => {
+  const envToken = options.tokenEnv && isMcpTokenEnvName(options.tokenEnv)
+    ? tokenForEnv(options.tokenEnv)
+    : undefined;
+  if (options.create) {
+    return ensureMcpToken(options.descriptor.harnessRoot, options.descriptor.serverName, {
+      ...(envToken ? { preferredToken: envToken } : {}),
+    });
+  }
+  return envToken ?? readMcpToken(options.descriptor.harnessRoot, options.descriptor.serverName);
+};
 
 const fetchHealth = async (
   healthUrl: string | undefined,
@@ -540,6 +559,7 @@ const stoppedMetadata = (metadata: McpRuntimeMetadata): McpRuntimeMetadata => ({
 
 const daemonEnv = (prepared: McpPreparedServer): NodeJS.ProcessEnv => ({
   ...process.env,
+  [prepared.tokenEnv]: prepared.token,
   PRISM_MCP_SERVER_NAME: prepared.descriptor.serverName,
   PRISM_MCP_WORKING_DIRECTORY: prepared.descriptor.harnessRoot,
   PRISM_MCP_REPO_ROOT: prepared.descriptor.harnessRoot,
@@ -552,7 +572,7 @@ const daemonEnv = (prepared: McpPreparedServer): NodeJS.ProcessEnv => ({
 
 const waitForHealth = async (
   prepared: McpPreparedServer,
-  pid: number,
+  pid: number | undefined,
   timeoutMs: number,
 ): Promise<McpRuntimeHealth> => {
   const deadline = Date.now() + timeoutMs;
@@ -565,7 +585,7 @@ const waitForHealth = async (
       );
       if (
         health &&
-        health.pid === pid &&
+        (pid === undefined || health.pid === pid) &&
         health.serverName === prepared.descriptor.serverName &&
         health.serverSha256 === prepared.serverSha256
       ) {
@@ -614,11 +634,47 @@ const spawnDaemon = (prepared: McpPreparedServer): number => {
   return child.pid!;
 };
 
+const launchdEnvironment = (prepared: McpPreparedServer): Record<string, string> => ({
+  PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+  [prepared.tokenEnv]: prepared.token,
+  PRISM_MCP_SERVER_NAME: prepared.descriptor.serverName,
+  PRISM_MCP_WORKING_DIRECTORY: prepared.descriptor.harnessRoot,
+  PRISM_MCP_REPO_ROOT: prepared.descriptor.harnessRoot,
+  PRISM_MCP_HTTP_HOST: prepared.host,
+  PRISM_MCP_HTTP_PORT: String(prepared.port),
+  PRISM_MCP_HTTP_PATH: "/mcp",
+  PRISM_MCP_HTTP_HEALTH_PATH: "/healthz",
+  PRISM_MCP_SERVER_SHA256: prepared.serverSha256,
+});
+
+const shouldUseLaunchAgent = (options: McpServeOptions): boolean =>
+  process.platform === "darwin" &&
+  options.foreground !== true &&
+  options.launchAgent !== false &&
+  process.env.PRISM_MCP_DISABLE_LAUNCHD !== "1" &&
+  options.root === undefined;
+
+const startLaunchAgent = async (
+  prepared: McpPreparedServer,
+): Promise<void> => {
+  const label = launchAgentLabelForServer(prepared.descriptor.serverName);
+  const logRoot = join(prepared.descriptor.harnessRoot, "prism", "logs");
+  await installLaunchAgent({
+    label,
+    programArguments: [bunCommand(), prepared.descriptor.serverPath],
+    workingDirectory: prepared.descriptor.harnessRoot,
+    environment: launchdEnvironment(prepared),
+    standardOutPath: join(logRoot, `${prepared.descriptor.serverName}.out.log`),
+    standardErrorPath: join(logRoot, `${prepared.descriptor.serverName}.err.log`),
+  });
+};
+
 const classifyStatus = async (options: {
   readonly descriptor: McpRuntimeDescriptor;
   readonly metadata?: McpRuntimeMetadata;
   readonly expectedServerSha256?: string;
   readonly tokenEnv?: string;
+  readonly token?: string;
 }): Promise<McpStatusResult> => {
   const { descriptor, metadata } = options;
   if (!metadata) {
@@ -719,7 +775,7 @@ const classifyStatus = async (options: {
   }
 
   const tokenEnv = options.tokenEnv;
-  const token = tokenEnv && isMcpTokenEnvName(tokenEnv) ? tokenForEnv(tokenEnv) : undefined;
+  const token = options.token;
   if (!token) {
     return {
       state: "missing-token",
@@ -790,12 +846,19 @@ const preparedUrl = (metadata: McpRuntimeMetadata): string =>
 const statusWithExpectedBundle = async (options: McpStatusOptions): Promise<McpStatusResult> => {
   const { registry, descriptor } = await resolveLifecycleContext(options);
   const metadata = await readRuntimeMetadataIfPresent(descriptor);
+  const tokenEnv = options.tokenEnv ?? resolveMcpRuntime(registry, options.harness).tokenEnv;
+  const token = await resolveTokenForServer({
+    descriptor,
+    tokenEnv,
+    create: false,
+  });
 
   return classifyStatus({
     descriptor,
     metadata,
     expectedServerSha256: options.expectedServerSha256,
-    tokenEnv: options.tokenEnv ?? resolveMcpRuntime(registry, options.harness).tokenEnv,
+    tokenEnv,
+    token,
   });
 };
 
@@ -834,11 +897,18 @@ export const listMcpStatuses = async (
       serverPath,
       runtimePath,
     };
+    const tokenEnv = options.tokenEnv ?? metadata?.tokenEnv;
+    const token = await resolveTokenForServer({
+      descriptor,
+      tokenEnv,
+      create: false,
+    });
     statuses.push(await classifyStatus({
       descriptor,
       metadata,
       expectedServerSha256: await currentServerHash(descriptor),
-      tokenEnv: options.tokenEnv,
+      tokenEnv,
+      token,
     }));
   }
   return statuses;
@@ -857,9 +927,13 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
   const selectedPort = await resolvePort(portSelection, registry, options.harness, host);
   const tokenEnv = options.tokenEnv?.trim() || configured.tokenEnv;
   assertMcpTokenEnvName(tokenEnv);
-  const token = tokenForEnv(tokenEnv);
+  const token = await resolveTokenForServer({
+    descriptor,
+    tokenEnv,
+    create: true,
+  });
   if (!token) {
-    throw new Error(`Missing required MCP token environment variable '${tokenEnv}'.`);
+    throw new Error(`Missing required MCP bearer token for '${descriptor.serverName}'.`);
   }
   const bundle = await buildServerBundle({
     registry,
@@ -888,6 +962,7 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
       metadata: existing,
       expectedServerSha256: prepared.serverSha256,
       tokenEnv,
+      token,
     });
     if (status.state === "running") {
       return {
@@ -935,14 +1010,19 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
     return { state: "foreground-exited", descriptor };
   }
 
-  let pid: number;
+  let pid: number | undefined;
+  let health: McpRuntimeHealth;
+  const useLaunchAgent = shouldUseLaunchAgent(options);
   try {
-    pid = spawnDaemon(prepared);
+    if (useLaunchAgent) {
+      await startLaunchAgent(prepared);
+    } else {
+      pid = spawnDaemon(prepared);
+    }
   } catch (error) {
     await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
     throw error;
   }
-  let health: McpRuntimeHealth;
   try {
     health = await waitForHealth(
       prepared,
@@ -950,20 +1030,28 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
       options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
     );
   } catch (error) {
-    await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS).catch(() => undefined);
+    if (pid !== undefined) {
+      await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS).catch(() => undefined);
+    } else if (useLaunchAgent) {
+      await stopLaunchAgent(launchAgentLabelForServer(prepared.descriptor.serverName)).catch(() => undefined);
+    }
     await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
     throw error;
   }
-  const metadata = metadataForPreparedServer(prepared, pid, health);
+  const metadata = metadataForPreparedServer(prepared, health.pid, health);
   try {
     await writeMcpRuntimeMetadata(descriptor.runtimePath, metadata);
   } catch (error) {
     try {
-      await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
+      if (pid !== undefined) {
+        await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
+      } else if (useLaunchAgent) {
+        await stopLaunchAgent(launchAgentLabelForServer(prepared.descriptor.serverName));
+      }
       await restoreServerBundle(descriptor, previousServerContent);
     } catch (cleanupError) {
       throw new Error(
-        `Failed to write MCP runtime metadata and failed to stop daemon pid ${pid}: ${
+        `Failed to write MCP runtime metadata and failed to stop MCP daemon: ${
           cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
         }`,
       );
@@ -991,7 +1079,12 @@ export const stopMcp = async (options: McpStopOptions): Promise<McpStopResult> =
     throw new Error(`Refusing to stop MCP daemon in state '${status.state}': ${status.detail}`);
   }
 
-  await terminatePid(metadata.pid, "SIGTERM", options.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+  if (process.platform === "darwin") {
+    await stopLaunchAgent(launchAgentLabelForServer(status.descriptor.serverName)).catch(() => undefined);
+  }
+  if (pidIsRunning(metadata.pid)) {
+    await terminatePid(metadata.pid, "SIGTERM", options.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+  }
   const next = stoppedMetadata(metadata);
   await writeMcpRuntimeMetadata(status.descriptor.runtimePath, next);
   return { state: "stopped", descriptor: status.descriptor, metadata: next };

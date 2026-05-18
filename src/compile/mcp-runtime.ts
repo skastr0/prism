@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { resolveManifestTargets } from "../manifest.js";
 import type { HarnessId, PluginRuntimeMcpHarnessConfig } from "../types.js";
 import {
@@ -41,6 +42,9 @@ export interface McpServerBundleRuntimeOptions {
   readonly http?: McpHttpServerOptions;
 }
 
+export const defaultMcpRuntimeRoot = (): string =>
+  join(homedir(), ".config");
+
 const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
   hermes: {
     config: "supported",
@@ -55,10 +59,8 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
     lifecycle: "supported",
   },
   "gemini-cli": {
-    config: "unsupported",
-    lifecycle: "unsupported",
-    reason:
-      "Gemini CLI supports Streamable HTTP via httpUrl, but Prism cannot safely emit bearer-token auth until Gemini supports environment expansion or an equivalent secret source for HTTP headers.",
+    config: "supported",
+    lifecycle: "supported",
   },
   grok: {
     config: "unsupported",
@@ -179,6 +181,12 @@ export const renderMcpHttpUrl = (runtime: ResolvedMcpRuntime): string => {
 
 export const renderMcpBearerAuthorizationTemplate = (tokenEnv: string): string =>
   `Bearer \${${tokenEnv}}`;
+
+export const renderMcpBearerAuthorization = (options: {
+  readonly tokenEnv: string;
+  readonly token?: string;
+}): string =>
+  options.token ? `Bearer ${options.token}` : renderMcpBearerAuthorizationTemplate(options.tokenEnv);
 
 export const mcpServerBundleRuntimeOptions = (
   runtime: ResolvedMcpRuntime,

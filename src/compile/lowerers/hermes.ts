@@ -6,7 +6,7 @@ import { generateMcpServerBundle } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
   mcpServerBundleRuntimeOptions,
-  renderMcpBearerAuthorizationTemplate,
+  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   runtimeMcpServerDescriptor,
@@ -37,6 +37,8 @@ const TARGET_ID = "hermes" as const;
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
+  readonly mcpRuntimeRoot?: string;
+  readonly mcpBearerToken?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -55,11 +57,20 @@ export interface LowerInput {
 const hermesSkillsRoot = (target: HermesLowerTarget): string =>
   join(target.root, "skills");
 
-const generatedMcpServerFile = (target: HermesLowerTarget): string =>
-  runtimeMcpServerDescriptor(target.root, target.sourcePluginName).absolutePath;
+const generatedMcpServerFile = (
+  target: HermesLowerTarget,
+  runtime?: ResolvedMcpRuntime,
+): string =>
+  runtimeMcpServerDescriptor(
+    runtime?.transport === "streamable-http" ? target.mcpRuntimeRoot ?? target.root : target.root,
+    target.sourcePluginName,
+  ).absolutePath;
 
-const generatedMcpServerRoot = (target: HermesLowerTarget): string =>
-  dirname(generatedMcpServerFile(target));
+const generatedMcpServerRoot = (
+  target: HermesLowerTarget,
+  runtime?: ResolvedMcpRuntime,
+): string =>
+  dirname(generatedMcpServerFile(target, runtime));
 
 const configPath = (target: HermesLowerTarget): string =>
   join(target.root, "config.yaml");
@@ -163,6 +174,7 @@ const renderHermesMcpServerYaml = (options: {
   readonly serverPath: string;
   readonly workingDirectory: string;
   readonly runtime: ResolvedMcpRuntime;
+  readonly bearerToken?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): string[] => {
   if (options.runtime.transport === "streamable-http") {
@@ -174,8 +186,11 @@ const renderHermesMcpServerYaml = (options: {
       `    enabled: true`,
       `    sampling:`,
       `      enabled: false`,
-      `    headers:`,
-      `      Authorization: ${yamlScalar(renderMcpBearerAuthorizationTemplate(options.runtime.tokenEnv))}`,
+    `    headers:`,
+      `      Authorization: ${yamlScalar(renderMcpBearerAuthorization({
+        tokenEnv: options.runtime.tokenEnv,
+        token: options.bearerToken,
+      }))}`,
       `    tools:`,
       `      include:`,
       ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
@@ -213,6 +228,7 @@ const replaceHermesMcpServerBlock = (
     readonly serverPath: string;
     readonly workingDirectory: string;
     readonly runtime: ResolvedMcpRuntime;
+    readonly bearerToken?: string;
     readonly toolNames: ReadonlyArray<string>;
   },
 ): string => {
@@ -271,14 +287,14 @@ const planMcpServer = async (
 ): Promise<{ serverName: string; toolNames: ReadonlyArray<string> }> => {
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
-  const serverFile = generatedMcpServerFile(input.target);
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
+  const serverFile = generatedMcpServerFile(input.target, runtime);
 
   if (bindings.length === 0) {
-    if (await exists(generatedMcpServerRoot(input.target))) {
+    if (await exists(generatedMcpServerRoot(input.target, runtime))) {
       operations.push({
         kind: "prune-plugin-path",
-        target: generatedMcpServerRoot(input.target),
+        target: generatedMcpServerRoot(input.target, runtime),
         targetType: "dir",
         reason: "stale",
       });
@@ -343,14 +359,16 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   operations.push(...await planGeneratedOrbitSkillPruning(input.target, desiredGeneratedSkillFiles));
 
   const mcp = await planMcpServer(input, operations);
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const currentConfig = (await exists(configPath(input.target)))
     ? await readFile(configPath(input.target))
     : "";
   const nextConfig = replaceHermesMcpServerBlock(currentConfig, {
     serverName: mcp.serverName,
-    serverPath: generatedMcpServerFile(input.target),
+    serverPath: generatedMcpServerFile(input.target, runtime),
     workingDirectory: input.target.root,
-    runtime: resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true }),
+    runtime,
+    bearerToken: input.target.mcpBearerToken,
     toolNames: mcp.toolNames,
   });
   if (nextConfig !== currentConfig) {

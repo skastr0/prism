@@ -74,9 +74,12 @@ import { writeLockfile } from "./lockfile.js";
 import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
 import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
+  defaultMcpRuntimeRoot,
+  generatedMcpServerName,
   isStreamableHttpMcpRuntime,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
+import { ensureMcpToken } from "../mcp/token-store.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -89,6 +92,8 @@ interface LowererModule {
     readonly target: {
       readonly scope: HarnessScope;
       readonly root: string;
+      readonly mcpRuntimeRoot?: string;
+      readonly mcpBearerToken?: string;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
       readonly sourcePluginPath?: string;
@@ -104,6 +109,7 @@ interface CompileTargetContext {
   readonly targetId: HarnessId;
   readonly lowerer: LowererModule;
   readonly outputRoot: string;
+  readonly mcpRuntimeRoot: string;
   readonly cacheDir: string;
   readonly useCache: boolean;
 }
@@ -489,10 +495,12 @@ const resolveCompileTargetContext = (
       options.projectPath
     );
     if (options.root) {
+      const root = expandPath(options.root);
       return {
         targetId: options.target as HarnessId,
         lowerer,
-        outputRoot: expandPath(options.root),
+        outputRoot: root,
+        mcpRuntimeRoot: root,
         cacheDir: getCacheDir(options.pluginPath),
         useCache: !options.dryRun,
       };
@@ -511,6 +519,7 @@ const resolveCompileTargetContext = (
       targetId: options.target as HarnessId,
       lowerer,
       outputRoot,
+      mcpRuntimeRoot: defaultMcpRuntimeRoot(),
       cacheDir: getCacheDir(options.pluginPath),
       useCache: !options.dryRun,
     };
@@ -572,7 +581,7 @@ const assertHttpMcpLifecycleGate = (options: {
     return Effect.void;
   }
 
-  const mode = options.compileOptions.mcpLifecycle ?? "none";
+  const mode = options.compileOptions.mcpLifecycle ?? "serve";
   const serveCommand = renderMcpServeCommand({
     pluginPath: options.compileOptions.pluginPath,
     targetId: options.targetId,
@@ -591,7 +600,7 @@ const assertHttpMcpLifecycleGate = (options: {
           harness: options.targetId,
           scope: options.compileOptions.scope,
           projectPath: options.compileOptions.projectPath,
-          root: options.outputRoot,
+          root: options.compileOptions.root,
         });
       }
 
@@ -600,7 +609,7 @@ const assertHttpMcpLifecycleGate = (options: {
         harness: options.targetId,
         scope: options.compileOptions.scope,
         projectPath: options.compileOptions.projectPath,
-        root: options.outputRoot,
+        root: options.compileOptions.root,
         expectedServerSha256,
       });
       if (status.state === "running") return;
@@ -770,6 +779,38 @@ const selectTargetArtifacts = (
     : [],
 });
 
+const resolveCompileMcpBearerToken = (options: {
+  readonly registry: PluginRegistry;
+  readonly targetId: HarnessId;
+  readonly runtimeRoot: string;
+  readonly dryRun: boolean;
+}): Effect.Effect<string | undefined, CompileError> => {
+  if (
+    options.dryRun ||
+    !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
+    options.registry.tools.size === 0
+  ) {
+    return Effect.succeed(undefined);
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const runtime = resolveMcpRuntime(options.registry, options.targetId);
+      const preferredToken = process.env[runtime.tokenEnv];
+      return ensureMcpToken(
+        options.runtimeRoot,
+        generatedMcpServerName(options.registry.pluginName),
+        preferredToken ? { preferredToken } : {},
+      );
+    },
+    catch: (error) =>
+      new PluginManifestError({
+        pluginPath: options.registry.pluginPath,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+  });
+};
+
 const planTargetLowering = (options: {
   readonly lowerer: LowererModule;
   readonly surfaces: TargetSurfaceSelection;
@@ -779,6 +820,8 @@ const planTargetLowering = (options: {
   readonly registry: PluginRegistry;
   readonly scope: HarnessScope;
   readonly outputRoot: string;
+  readonly mcpRuntimeRoot: string;
+  readonly mcpBearerToken?: string;
 }): Effect.Effect<LowerOperation[], CompileError> => {
   if (!options.surfaces.hasLowerableArtifacts) {
     return Effect.succeed([]);
@@ -795,6 +838,8 @@ const planTargetLowering = (options: {
       target: {
         scope: options.scope,
         root: options.outputRoot,
+        mcpRuntimeRoot: options.mcpRuntimeRoot,
+        ...(options.mcpBearerToken ? { mcpBearerToken: options.mcpBearerToken } : {}),
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
         sourcePluginPath: options.registry.pluginPath,
@@ -882,6 +927,12 @@ export const compilePluginForTarget = (
       orbits,
     });
     const artifacts = selectTargetArtifacts(registry, surfaces);
+    const mcpBearerToken = yield* resolveCompileMcpBearerToken({
+      registry,
+      targetId: context.targetId,
+      runtimeRoot: context.mcpRuntimeRoot,
+      dryRun: options.dryRun,
+    });
     const allOps = yield* planTargetLowering({
       lowerer: context.lowerer,
       surfaces,
@@ -891,6 +942,8 @@ export const compilePluginForTarget = (
       registry,
       scope: options.scope,
       outputRoot: context.outputRoot,
+      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      ...(mcpBearerToken ? { mcpBearerToken } : {}),
     });
     yield* assertHttpMcpLifecycleGate({
       compileOptions: options,

@@ -222,10 +222,11 @@ export default defineHook({
   });
 });
 
-test("gemini-cli lowerer fails closed for Streamable HTTP MCP opt-in", async () => {
+test("gemini-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".gemini");
   const pluginRoot = join(root, "gemini-http-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
 
   await writeText(
     join(pluginRoot, "plugin.json"),
@@ -251,22 +252,57 @@ test("gemini-cli lowerer fails closed for Streamable HTTP MCP opt-in", async () 
       2,
     )}\n`,
   );
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo over Gemini HTTP",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  await expect(
-    planLowering({
-      agents: [],
-      orbits: [],
-      tools: [],
-      hooks: [],
-      registry,
-      target: {
-        scope: "project",
-        root: outputRoot,
-        sourcePluginName: "gemini-http-fixture",
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: pluginRoot,
-      },
-    }),
-  ).rejects.toThrow("Streamable HTTP MCP is not supported for target 'gemini-cli'");
+  const operations = await planLowering({
+    agents: [],
+    orbits: [],
+    tools: [...registry.tools.values()],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      mcpRuntimeRoot: outputRoot,
+      mcpBearerToken: "gemini-static-token",
+      sourcePluginName: "gemini-http-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const manifest = findContentOperation(operations, "gemini-extension.json");
+  const parsed = JSON.parse(manifest?.content ?? "{}") as {
+    mcpServers?: Record<string, unknown>;
+  };
+  expect(parsed.mcpServers?.["prism-generated-gemini-http-fixture"]).toEqual({
+    httpUrl: "http://127.0.0.1:38466/mcp",
+    headers: {
+      Authorization: "Bearer gemini-static-token",
+    },
+  });
+
+  const bundle = operations.find(
+    (operation): operation is ContentOperation =>
+      isContentOperation(operation) &&
+      operation.target === join(outputRoot, "prism", "mcp", "prism_generated_gemini_http_fixture", "server.mjs"),
+  );
+  expect(bundle?.content).toContain("gemini_http_fixture_echo");
+  expect(bundle?.content).toContain("PRISM_MCP_GEMINI_HTTP_TOKEN");
 });

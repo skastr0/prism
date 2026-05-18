@@ -76,7 +76,7 @@ program
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
-    "none"
+    "serve"
   )
   .action(async (pluginPath: string, options) => {
     try {
@@ -109,7 +109,7 @@ program
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
-    "none"
+    "serve"
   )
   .action(async (directory: string, options) => {
     try {
@@ -223,7 +223,7 @@ program
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior (none|verify|serve)",
     parseMcpLifecycleMode,
-    "none"
+    "serve"
   )
   .action(async (pluginPath: string, options) => {
     try {
@@ -307,10 +307,10 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override harness root")
+  .option("--root <path>", "Override Prism MCP runtime root")
   .option("--host <host>", "HTTP bind host")
   .option("--port <port>", "HTTP port or 'auto'")
-  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .option("--foreground", "Run the generated server in the current process group", false)
   .action(async (pluginPath: string, options) => {
     try {
@@ -344,8 +344,8 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override harness root")
-  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .option("--root <path>", "Override Prism MCP runtime root")
+  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string | undefined, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -393,8 +393,8 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override harness root")
-  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .option("--root <path>", "Override Prism MCP runtime root")
+  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -424,10 +424,10 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override harness root")
+  .option("--root <path>", "Override Prism MCP runtime root")
   .option("--host <host>", "HTTP bind host")
   .option("--port <port>", "HTTP port or 'auto'")
-  .option("--token-env <name>", "Environment variable containing the bearer token")
+  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -731,7 +731,7 @@ function normalizeInstallCommandOptions(
     overwrite: options.overwrite ?? false,
     backup: options.backup ?? false,
     dryRun: options.dryRun ?? false,
-    mcpLifecycle: options.mcpLifecycle ?? "none",
+    mcpLifecycle: options.mcpLifecycle ?? "serve",
   };
 }
 

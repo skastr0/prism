@@ -15,7 +15,13 @@ import {
   generateMcpServerBundle,
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
-import { resolveMcpRuntime } from "../mcp-runtime.js";
+import {
+  mcpServerBundleRuntimeOptions,
+  renderMcpBearerAuthorization,
+  renderMcpHttpUrl,
+  resolveMcpRuntime,
+  runtimeMcpServerDescriptor,
+} from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -49,6 +55,8 @@ const EXTENSION_PREFIX = "prism-generated";
 export interface GeminiCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
+  readonly mcpRuntimeRoot?: string;
+  readonly mcpBearerToken?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -345,7 +353,7 @@ const planMcpBundle = async (
   operations: LowerOperation[],
   desired: Set<string>,
 ): Promise<Record<string, unknown>> => {
-  resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
@@ -360,17 +368,34 @@ const planMcpBundle = async (
     serverName: extensionId,
     version: input.target.sourcePluginVersion,
     bundleId: extensionId,
+    ...mcpServerBundleRuntimeOptions(runtime),
     bindings,
   });
-  const target = join(extensionRoot(input.target), bundle.relativePath);
-  desired.add(bundle.relativePath);
+
+  const target = runtime.transport === "streamable-http"
+    ? runtimeMcpServerDescriptor(
+        input.target.mcpRuntimeRoot ?? input.target.root,
+        input.target.sourcePluginName,
+      ).absolutePath
+    : join(extensionRoot(input.target), bundle.relativePath);
+  if (runtime.transport === "stdio") desired.add(bundle.relativePath);
   await pushWrite(operations, target, bundle.content);
 
   return {
-    [extensionId]: {
-      command: "bun",
-      args: [`\${extensionPath}/${bundle.relativePath}`],
-    },
+    [extensionId]: runtime.transport === "streamable-http"
+      ? {
+          httpUrl: renderMcpHttpUrl(runtime),
+          headers: {
+            Authorization: renderMcpBearerAuthorization({
+              tokenEnv: runtime.tokenEnv,
+              token: input.target.mcpBearerToken,
+            }),
+          },
+        }
+      : {
+          command: "bun",
+          args: [`\${extensionPath}/${bundle.relativePath}`],
+        },
   };
 };
 

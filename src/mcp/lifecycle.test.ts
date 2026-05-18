@@ -415,7 +415,7 @@ test("MCP lifecycle foreground serve exits without writing runtime metadata", as
   });
 }, 15_000);
 
-test("MCP lifecycle status reports missing token and stale pid states", async () => {
+test("MCP lifecycle status uses stored tokens and reports stale pid states", async () => {
   const { pluginRoot, hermesRoot } = await createHermesToolFixture();
   const tokenEnv = "PRISM_MCP_TEST_TOKEN_STATES";
 
@@ -425,14 +425,14 @@ test("MCP lifecycle status reports missing token and stale pid states", async ()
     expect(pid).toBeGreaterThan(0);
 
     delete process.env[tokenEnv];
-    const missingToken = await getMcpStatus({
+    const storedTokenStatus = await getMcpStatus({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
       root: hermesRoot,
       tokenEnv,
     });
-    expect(missingToken.state).toBe("missing-token");
+    expect(storedTokenStatus.state).toBe("running");
     const stoppedWithoutToken = await stopMcp({
       pluginPath: pluginRoot,
       harness: "hermes",

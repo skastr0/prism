@@ -66,15 +66,16 @@ The current local patches keep the stdio shape but reduce obvious blast radius:
   reconnect path starts compounding the failure.
 
 The current local implementation also adds an opt-in Streamable HTTP bundle
-path for Hermes through `plugin.json -> runtime.mcp.hermes`. That solves the
-subprocess fan-out property for plugins that opt in and run the generated
-server as a single local HTTP process. Prism does not yet own daemon lifecycle.
+path through `plugin.json -> runtime.mcp.<harness>` for Hermes, Codex CLI,
+Claude Code, and Gemini CLI. Prism owns the local bearer token, starts the
+generated server during non-dry-run compile/install by default, and writes
+client config with static authorization headers for the trusted local machine.
 
 ## Target Architecture
 
 Prism should support a shared Streamable HTTP runtime for generated tools.
 
-The supported opt-in shape for Hermes is:
+The supported opt-in shape is:
 
 ```json
 {
@@ -91,7 +92,7 @@ The supported opt-in shape for Hermes is:
 }
 ```
 
-This lowers Hermes config to:
+For Hermes this lowers config to:
 
 ```yaml
 mcp_servers:
@@ -102,7 +103,7 @@ mcp_servers:
     sampling:
       enabled: false
     headers:
-      Authorization: "Bearer ${PRISM_MCP_TOKEN}"
+      Authorization: "Bearer <prism-owned-local-token>"
     tools:
       include:
         - tower_...
@@ -113,13 +114,15 @@ plugin/scope, not once per Hermes client/session. It serves multiple MCP
 sessions over the single `/mcp` endpoint. Session state is keyed by
 `MCP-Session-Id`.
 
-For a first implementation, one daemon per compiled source plugin is the
-smallest compatible step:
+For the current implementation, one daemon per compiled source plugin is the
+smallest compatible step. The daemon is shared by every harness config that
+points at the same plugin/runtime port:
 
 ```text
-~/.hermes/prism/mcp/prism_generated_<plugin>/
+~/.config/prism/mcp/prism_generated_<plugin>/
   server.mjs
   runtime.json     # port, pid, token metadata, build hash
+~/.config/prism/tokens.json
 ```
 
 The later consolidation step is one aggregate Prism daemon per scope that
@@ -141,18 +144,19 @@ A shared HTTP MCP runtime must hold these invariants:
 6. Bound concurrent tool calls per server and, eventually, per tool.
 7. Return structured tool errors instead of crashing the process.
 8. Expose a local health endpoint or status probe for Prism lifecycle commands.
-9. Store pid/port/token/build metadata in a Prism-owned runtime file.
+9. Store pid/port/token hash/build metadata in a Prism-owned runtime file and
+   the bearer token in `tokens.json` under the Prism runtime root.
 10. Never rewrite live harness config during `--dry-run`.
 
 ## Compiler Plan
 
 1. Done: keep hardened stdio as the compatibility fallback.
-2. Done: add an explicit Hermes MCP transport option:
+2. Done: add an explicit MCP transport option:
 
    ```json
    {
      "targets": {
-       "tools": ["hermes"]
+       "tools": ["hermes", "codex-cli", "claude-code", "gemini-cli"]
      },
      "runtime": {
        "mcp": {
@@ -167,7 +171,7 @@ A shared HTTP MCP runtime must hold these invariants:
 3. Done: teach `generateMcpServerBundle` to emit either:
    - current stdio JSON-RPC server, or
    - Streamable HTTP server.
-4. Next: add a Prism-owned lifecycle command:
+4. Done: add Prism-owned lifecycle commands:
 
    ```bash
    prism mcp serve <plugin> --harness hermes --host 127.0.0.1 --port auto
@@ -175,8 +179,8 @@ A shared HTTP MCP runtime must hold these invariants:
    prism mcp stop <plugin> --harness hermes
    ```
 
-5. Next: add a runtime-file/lifecycle gate so install can either start the
-   daemon or clearly report that the generated `url` server is not running.
+5. Done: add a runtime-file/lifecycle gate so install/compile starts the daemon
+   by default, or verifies it when `--mcp-lifecycle verify` is requested.
 6. Next: add process-count regression tests: ten concurrent MCP clients calling the
    same generated tool must not create ten generated server processes in HTTP
    mode.
@@ -188,7 +192,8 @@ Local tests should cover both transports:
 - stdio still accepts content-length and newline JSON-RPC.
 - Hermes stdio config emits absolute Bun when available, timeouts, disabled
   sampling, and explicit Prism runtime env.
-- HTTP config emits `url` and does not emit `command`.
+- HTTP config emits `url`/`httpUrl` plus a static Prism-owned bearer header and
+  does not emit `command`.
 - One HTTP server handles multiple initialize requests and routes follow-up
   calls by `MCP-Session-Id`.
 - Missing/invalid auth or invalid `Origin` fails before tool execution.
@@ -199,15 +204,14 @@ Local tests should cover both transports:
 
 ## Open Questions
 
-- Should Prism own daemon lifecycle directly, or should it emit launchd/systemd
-  descriptors and only verify status?
+- Add systemd support for Linux; macOS uses a user LaunchAgent for live default
+  lifecycle.
 - Should the first HTTP runtime be stateless, or stateful with per-session
   transports? Stateless is simpler; stateful preserves resumability and
   notifications if Prism needs them later.
 - Should plugin-level HTTP daemons be allowed indefinitely, or should Prism move
   quickly to a single aggregate daemon per harness scope?
-- Which non-Hermes harnesses support `url`-based MCP config today, and which
-  must stay on stdio?
+- Grok Build plugin-local HTTP MCP config remains unverified and stays on stdio.
 
 ## Sources
 

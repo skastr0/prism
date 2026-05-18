@@ -12,6 +12,7 @@ import {
 import {
   generatedMcpServerName,
   mcpServerBundleRuntimeOptions,
+  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   runtimeMcpServerDescriptor,
@@ -49,6 +50,8 @@ const TARGET_ID = "codex-cli" as const;
 export interface CodexCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
+  readonly mcpRuntimeRoot?: string;
+  readonly mcpBearerToken?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -74,6 +77,7 @@ interface PlannedHook {
 interface AgentMcpServerConfig {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
+  readonly bearerToken?: string;
   readonly bundlePath?: string;
   readonly root: string;
 }
@@ -179,6 +183,7 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
 const renderCodexMcpServerToml = (options: {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
+  readonly bearerToken?: string;
   readonly bundlePath?: string;
   readonly root: string;
   readonly enabledTools: ReadonlyArray<string>;
@@ -186,7 +191,14 @@ const renderCodexMcpServerToml = (options: {
   const transportLines = options.runtime.transport === "streamable-http"
     ? [
         `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
-        `bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`,
+        ...(options.bearerToken
+          ? [
+              `http_headers = { Authorization = ${quote(renderMcpBearerAuthorization({
+                tokenEnv: options.runtime.tokenEnv,
+                token: options.bearerToken,
+              }))} }`,
+            ]
+          : [`bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`]),
       ]
     : [
         'command = "bun"',
@@ -441,6 +453,7 @@ const renderConfigWithHookFeature = (current: string, enableHooks: boolean): str
 const renderManagedConfigBlock = (options: {
   readonly mcpServerName?: string;
   readonly mcpRuntime?: ResolvedMcpRuntime;
+  readonly mcpBearerToken?: string;
   readonly mcpBundlePath?: string;
   readonly enabledTools: ReadonlyArray<string>;
   readonly root: string;
@@ -453,6 +466,7 @@ const renderManagedConfigBlock = (options: {
       ...renderCodexMcpServerToml({
         name: options.mcpServerName,
         runtime: options.mcpRuntime,
+        ...(options.mcpBearerToken ? { bearerToken: options.mcpBearerToken } : {}),
         bundlePath: options.mcpBundlePath,
         root: options.root,
         enabledTools: options.enabledTools,
@@ -472,6 +486,7 @@ const planMcpServer = async (
   mcpServerName?: string;
   mcpBundlePath?: string;
   mcpRuntime?: ResolvedMcpRuntime;
+  mcpBearerToken?: string;
   toolNames: string[];
   globalToolNames: string[];
 }> => {
@@ -495,7 +510,10 @@ const planMcpServer = async (
   });
 
   const serverTarget = runtime.transport === "streamable-http"
-    ? runtimeMcpServerDescriptor(input.target.root, input.target.sourcePluginName).absolutePath
+    ? runtimeMcpServerDescriptor(
+        input.target.mcpRuntimeRoot ?? input.target.root,
+        input.target.sourcePluginName,
+      ).absolutePath
     : join(input.target.root, ...bundle.relativePath.split("/"));
 
   await pushWrite(
@@ -508,6 +526,7 @@ const planMcpServer = async (
     mcpServerName,
     ...(runtime.transport === "stdio" ? { mcpBundlePath: bundle.relativePath } : {}),
     mcpRuntime: runtime,
+    ...(input.target.mcpBearerToken ? { mcpBearerToken: input.target.mcpBearerToken } : {}),
     toolNames: uniqueSorted(bundle.toolNames),
     globalToolNames: uniqueSorted(
       bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map((binding) =>
@@ -527,6 +546,7 @@ const agentMcpServerConfig = (
     ? {
         name: mcp.mcpServerName,
         runtime: mcp.mcpRuntime,
+        ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
         ...(mcp.mcpBundlePath ? { bundlePath: mcp.mcpBundlePath } : {}),
         root: input.target.root,
       }
@@ -614,6 +634,7 @@ const planConfigWrite = async (
   const managedBlock = renderManagedConfigBlock({
     mcpServerName: mcp.globalToolNames.length > 0 ? mcp.mcpServerName : undefined,
     mcpRuntime: mcp.globalToolNames.length > 0 ? mcp.mcpRuntime : undefined,
+    mcpBearerToken: mcp.globalToolNames.length > 0 ? mcp.mcpBearerToken : undefined,
     mcpBundlePath: mcp.globalToolNames.length > 0 ? mcp.mcpBundlePath : undefined,
     enabledTools: mcp.globalToolNames,
     root: input.target.root,

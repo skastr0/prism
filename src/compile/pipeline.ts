@@ -73,6 +73,10 @@ import {
 import { writeLockfile } from "./lockfile.js";
 import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
 import { sha256Hex } from "../mcp/runtime-metadata.js";
+import {
+  isStreamableHttpMcpRuntime,
+  resolveMcpRuntime,
+} from "./mcp-runtime.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -512,29 +516,27 @@ const resolveCompileTargetContext = (
     };
   });
 
-const isHermesStreamableHttpRuntime = (registry: PluginRegistry): boolean =>
-  registry.runtime.mcp?.hermes?.transport === "streamable-http";
-
 const shellQuote = (value: string): string =>
   /^[A-Za-z0-9_./:=@+-]+$/u.test(value)
     ? value
     : `'${value.replace(/'/g, "'\\''")}'`;
 
-const renderHermesMcpServeCommand = (options: {
+const renderMcpServeCommand = (options: {
   readonly pluginPath: string;
+  readonly targetId: HarnessId;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
   readonly root?: string;
   readonly registry: PluginRegistry;
 }): string => {
-  const configured = options.registry.runtime.mcp?.hermes;
+  const configured = resolveMcpRuntime(options.registry, options.targetId);
   return [
     "prism",
     "mcp",
     "serve",
     shellQuote(options.pluginPath),
     "--harness",
-    "hermes",
+    options.targetId,
     "--scope",
     options.scope,
     ...(options.projectPath ? ["--project", shellQuote(options.projectPath)] : []),
@@ -544,7 +546,7 @@ const renderHermesMcpServeCommand = (options: {
   ].join(" ");
 };
 
-const findHermesMcpServerSha256 = (
+const findMcpServerSha256 = (
   operations: ReadonlyArray<LowerOperation>,
 ): string | undefined => {
   const serverWrite = operations.find((operation) =>
@@ -554,7 +556,7 @@ const findHermesMcpServerSha256 = (
   return serverWrite?.kind === "write-plugin-file" ? sha256Hex(serverWrite.content) : undefined;
 };
 
-const assertHermesHttpMcpLifecycleGate = (options: {
+const assertHttpMcpLifecycleGate = (options: {
   readonly compileOptions: CompileOptions;
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
@@ -564,29 +566,29 @@ const assertHermesHttpMcpLifecycleGate = (options: {
 }): Effect.Effect<void, CompileError> => {
   if (
     options.compileOptions.dryRun ||
-    options.targetId !== "hermes" ||
-    !isHermesStreamableHttpRuntime(options.registry) ||
+    !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
     options.artifacts.tools.length === 0
   ) {
     return Effect.void;
   }
 
   const mode = options.compileOptions.mcpLifecycle ?? "none";
-  const serveCommand = renderHermesMcpServeCommand({
+  const serveCommand = renderMcpServeCommand({
     pluginPath: options.compileOptions.pluginPath,
+    targetId: options.targetId,
     scope: options.compileOptions.scope,
     projectPath: options.compileOptions.projectPath,
     root: options.compileOptions.root,
     registry: options.registry,
   });
-  const expectedServerSha256 = findHermesMcpServerSha256(options.operations);
+  const expectedServerSha256 = findMcpServerSha256(options.operations);
 
   return Effect.tryPromise({
     try: async () => {
       if (mode === "serve") {
         await serveMcp({
           pluginPath: options.compileOptions.pluginPath,
-          harness: "hermes",
+          harness: options.targetId,
           scope: options.compileOptions.scope,
           projectPath: options.compileOptions.projectPath,
           root: options.outputRoot,
@@ -595,7 +597,7 @@ const assertHermesHttpMcpLifecycleGate = (options: {
 
       const status = await getMcpStatus({
         pluginPath: options.compileOptions.pluginPath,
-        harness: "hermes",
+        harness: options.targetId,
         scope: options.compileOptions.scope,
         projectPath: options.compileOptions.projectPath,
         root: options.outputRoot,
@@ -604,7 +606,7 @@ const assertHermesHttpMcpLifecycleGate = (options: {
       if (status.state === "running") return;
 
       throw new Error(
-        `Hermes Streamable HTTP MCP daemon '${status.descriptor.serverName}' is ${status.state}; ` +
+        `${options.targetId} Streamable HTTP MCP daemon '${status.descriptor.serverName}' is ${status.state}; ` +
           `refusing to write url config that may point to nothing. ` +
           `Run: ${serveCommand}` +
           (mode === "none" ? `\nOr rerun compile/install with --mcp-lifecycle serve.` : ""),
@@ -890,7 +892,7 @@ export const compilePluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
     });
-    yield* assertHermesHttpMcpLifecycleGate({
+    yield* assertHttpMcpLifecycleGate({
       compileOptions: options,
       registry,
       targetId: context.targetId,

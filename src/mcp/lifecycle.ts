@@ -7,13 +7,21 @@ import { promisify } from "node:util";
 import { Effect } from "effect";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import { expandPath } from "../fs.js";
-import { resolveManifestTargets } from "../manifest.js";
 import type { HarnessId, HarnessScope } from "../types.js";
 import { loadPlugin } from "../compile/load.js";
-import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "../compile/mcp-bundle.js";
-import { normalizeBundleSegment } from "../compile/lowerers/shared.js";
+import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
 import type { PluginRegistry } from "../compile/registry.js";
 import { bindingsFromCanonicalTools } from "../compile/tool-bindings.js";
+import {
+  assertMcpHttpTargetSupported,
+  assertMcpTokenEnvName,
+  assertPluginTargetsMcpTools,
+  generatedMcpServerName,
+  isMcpTokenEnvName,
+  isLoopbackMcpHost,
+  resolveMcpRuntime,
+  runtimeMcpServerDescriptor,
+} from "../compile/mcp-runtime.js";
 import {
   MCP_RUNTIME_METADATA_SCHEMA,
   computeFileSha256,
@@ -28,7 +36,7 @@ import {
   type McpRuntimeStaleReason,
 } from "./runtime-metadata.js";
 
-export type McpLifecycleHarness = Extract<HarnessId, "hermes">;
+export type McpLifecycleHarness = HarnessId;
 export type McpPortSelection = "auto" | number;
 export type McpDaemonState =
   | "running"
@@ -110,12 +118,8 @@ export interface McpStopResult {
   readonly metadata?: McpRuntimeMetadata;
 }
 
-const GENERATED_SERVER_PREFIX = "prism-generated";
-const DEFAULT_HTTP_HOST = "127.0.0.1";
-const DEFAULT_TOKEN_ENV = "PRISM_MCP_TOKEN";
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_STOP_TIMEOUT_MS = 5_000;
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const execFileAsync = promisify(execFile);
 
 const fileExists = async (path: string): Promise<boolean> => {
@@ -127,29 +131,17 @@ const fileExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const isLoopbackHost = (host: string): boolean =>
-  host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
-
-const generatedServerName = (pluginName: string): string =>
-  `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
-
 const generatedMcpServerFile = (harnessRoot: string, pluginName: string): string =>
-  join(
-    harnessRoot,
-    "prism",
-    ...mcpServerArtifactRelativePath(generatedServerName(pluginName)).split("/"),
-  );
+  runtimeMcpServerDescriptor(harnessRoot, pluginName).absolutePath;
 
 const runtimeFileForServer = (serverPath: string): string => join(dirname(serverPath), "runtime.json");
 
 const assertSupportedLifecycleTarget = (options: McpLifecycleCommonOptions): void => {
-  if (options.harness !== "hermes") {
-    throw new Error("Prism MCP lifecycle currently supports only --harness hermes.");
-  }
+  assertMcpHttpTargetSupported(options.harness, "lifecycle");
 
   const harness = getHarness(options.harness);
   if (options.scope === "project" && !harnessSupportsProjectScope(harness) && !options.root) {
-    throw new Error("Hermes MCP lifecycle does not support project scope.");
+    throw new Error(`${harness.name} MCP lifecycle does not support project scope.`);
   }
 };
 
@@ -172,7 +164,7 @@ const descriptorForRegistry = (options: {
   readonly registry: PluginRegistry;
   readonly harnessRoot: string;
 }): McpRuntimeDescriptor => {
-  const serverName = generatedServerName(options.registry.pluginName);
+  const serverName = generatedMcpServerName(options.registry.pluginName);
   const serverPath = generatedMcpServerFile(options.harnessRoot, options.registry.pluginName);
   return {
     pluginPath: resolve(options.pluginPath),
@@ -195,48 +187,19 @@ const resolveLifecycleContext = async (
   return { registry, descriptor: descriptorForRegistry({ pluginPath, registry, harnessRoot }) };
 };
 
-const runtimeHarnessConfig = (registry: PluginRegistry): {
-  readonly host: string;
-  readonly port?: number;
-  readonly tokenEnv: string;
-} => {
-  const configured = registry.runtime.mcp?.hermes;
-  return {
-    host: configured?.host?.trim() || DEFAULT_HTTP_HOST,
-    ...(Number.isInteger(configured?.port) ? { port: configured!.port } : {}),
-    tokenEnv: configured?.tokenEnv?.trim() || DEFAULT_TOKEN_ENV,
-  };
-};
-
-const assertPluginTargetsHermesTools = (registry: PluginRegistry): void => {
-  if (registry.tools.size === 0) {
-    throw new Error(`Plugin '${registry.pluginName}' has no canonical tools to serve over MCP.`);
-  }
-  if (!resolveManifestTargets(registry.targets.tools ?? []).includes("hermes")) {
-    throw new Error(
-      `Plugin '${registry.pluginName}' must include 'hermes' in targets.tools before MCP serve can expose its tools.`,
-    );
-  }
-};
-
 const assertLoopbackHost = (host: string): void => {
-  if (!isLoopbackHost(host)) {
+  if (!isLoopbackMcpHost(host)) {
     throw new Error("Prism MCP lifecycle only serves loopback HTTP hosts.");
-  }
-};
-
-const assertTokenEnvName = (tokenEnv: string): void => {
-  if (!ENV_NAME_PATTERN.test(tokenEnv)) {
-    throw new Error("MCP token env must be an environment variable name.");
   }
 };
 
 const resolvePort = async (
   selection: McpPortSelection | undefined,
   registry: PluginRegistry,
+  targetId: HarnessId,
   host: string,
 ): Promise<number> => {
-  const configured = runtimeHarnessConfig(registry).port;
+  const configured = resolveMcpRuntime(registry, targetId).port;
   const selected = selection ?? configured ?? "auto";
   if (selected === "auto") return getFreePort(host);
   if (!Number.isInteger(selected) || selected <= 0 || selected > 65535) {
@@ -306,12 +269,13 @@ const bunCommand = (): string =>
 
 const buildServerBundle = async (options: {
   readonly registry: PluginRegistry;
+  readonly targetId: HarnessId;
   readonly descriptor: McpRuntimeDescriptor;
   readonly host: string;
   readonly port: number;
   readonly tokenEnv: string;
 }): Promise<{ readonly content: string; readonly serverSha256: string; readonly toolNames: ReadonlyArray<string> }> => {
-  assertPluginTargetsHermesTools(options.registry);
+  assertPluginTargetsMcpTools(options.registry, options.targetId);
   const bundle = await generateMcpServerBundle({
     sourcePluginName: options.registry.pluginName,
     sourcePluginRoot: options.registry.pluginPath,
@@ -396,7 +360,7 @@ const trustedHealthUrl = (metadata: McpRuntimeMetadata): {
   readonly url?: string;
   readonly reason?: McpRuntimeStaleReason;
 } => {
-  if (!metadata.host || !isLoopbackHost(metadata.host)) {
+  if (!metadata.host || !isLoopbackMcpHost(metadata.host)) {
     return { reason: "metadata-host-non-loopback" };
   }
   if (!metadata.port) return { reason: "missing-runtime-port" };
@@ -667,12 +631,12 @@ const classifyStatus = async (options: {
   }
 
   if (!metadata.pid) {
-    const staleReasons = metadata.host && !isLoopbackHost(metadata.host)
+    const staleReasons = metadata.host && !isLoopbackMcpHost(metadata.host)
       ? (["metadata-host-non-loopback"] as const)
       : [];
     if (
       metadata.host &&
-      isLoopbackHost(metadata.host) &&
+      isLoopbackMcpHost(metadata.host) &&
       metadata.port &&
       !(await isPortAvailable(metadata.host, metadata.port))
     ) {
@@ -755,7 +719,7 @@ const classifyStatus = async (options: {
   }
 
   const tokenEnv = options.tokenEnv;
-  const token = tokenEnv && ENV_NAME_PATTERN.test(tokenEnv) ? tokenForEnv(tokenEnv) : undefined;
+  const token = tokenEnv && isMcpTokenEnvName(tokenEnv) ? tokenForEnv(tokenEnv) : undefined;
   if (!token) {
     return {
       state: "missing-token",
@@ -831,7 +795,7 @@ const statusWithExpectedBundle = async (options: McpStatusOptions): Promise<McpS
     descriptor,
     metadata,
     expectedServerSha256: options.expectedServerSha256,
-    tokenEnv: options.tokenEnv ?? runtimeHarnessConfig(registry).tokenEnv,
+    tokenEnv: options.tokenEnv ?? resolveMcpRuntime(registry, options.harness).tokenEnv,
   });
 };
 
@@ -883,22 +847,23 @@ export const listMcpStatuses = async (
 export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult> => {
   const { registry, descriptor } = await resolveLifecycleContext(options);
   const existing = await readRuntimeMetadataIfPresent(descriptor);
-  const configured = runtimeHarnessConfig(registry);
+  const configured = resolveMcpRuntime(registry, options.harness);
   const host = options.host?.trim() || configured.host;
   assertLoopbackHost(host);
   const portSelection =
     (options.port === undefined || options.port === "auto") && existing?.port
       ? existing.port
       : options.port;
-  const selectedPort = await resolvePort(portSelection, registry, host);
+  const selectedPort = await resolvePort(portSelection, registry, options.harness, host);
   const tokenEnv = options.tokenEnv?.trim() || configured.tokenEnv;
-  assertTokenEnvName(tokenEnv);
+  assertMcpTokenEnvName(tokenEnv);
   const token = tokenForEnv(tokenEnv);
   if (!token) {
     throw new Error(`Missing required MCP token environment variable '${tokenEnv}'.`);
   }
   const bundle = await buildServerBundle({
     registry,
+    targetId: options.harness,
     descriptor,
     host,
     port: selectedPort,

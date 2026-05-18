@@ -1,8 +1,11 @@
 # Goal: Make Prism Generated MCPs Safe Under Hermes Agent Fan-Out
 
 Date: 2026-05-17
-Status: done
+Status: in progress
 Primary target harness: `hermes`
+
+Phase 1 status: done.
+Phase 2 status: in progress.
 
 ## Receipt
 
@@ -654,6 +657,187 @@ GLYPH-MCP-HTTP-07 and GLYPH-MCP-HTTP-08 remain explicit future extensions.
 They reduce process count further and expand HTTP support to additional
 harnesses, but they are not required for the current Hermes/Tower storm fix
 captured by the final success criteria above.
+
+## Phase 2: Generic HTTP MCP Lowering
+
+Intent:
+
+- Move Streamable HTTP MCP support out of Hermes-only code paths.
+- Keep HTTP opt-in per plugin and per harness through
+  `plugin.json -> runtime.mcp.<harness>`.
+- Support every generated-MCP lowerer whose target harness can safely express a
+  URL transport with non-plaintext auth.
+- Turn HTTP on for Tower and Grok Agent wherever supported by the target
+  harness.
+- Keep stdio as the default fallback everywhere.
+- Use Pulsar CLI as an added quality/backpressure gate.
+
+Target support matrix:
+
+- Hermes: supports URL MCP config with bearer header; HTTP opt-in should be
+  supported.
+- Codex CLI: supports Streamable HTTP via `url` and `bearer_token_env_var`;
+  HTTP opt-in should be supported.
+- Claude Code: supports `type: "http"`, `url`, and env-expanded headers in
+  `.mcp.json`; HTTP opt-in should be supported for plugin-bundled MCP configs.
+- Gemini CLI: supports Streamable HTTP via `httpUrl` and static `headers`, but
+  documented env expansion is limited to the `env` block and the upstream issue
+  for header env substitution remains open. Prism must not emit plaintext bearer
+  tokens, so Gemini HTTP opt-in must fail closed until a safe token path exists.
+- Grok Build: Prism currently emits plugin-local `.mcp.json`. Treat HTTP support
+  as target-specific and require explicit evidence or fail closed.
+
+### GLYPH-MCP-HTTP-09: Shared MCP HTTP Runtime Contract
+
+Status: done
+
+Intent:
+
+- Extract a target-agnostic runtime resolver for generated MCP servers.
+- Make lowerers ask the same helper whether a plugin/harness uses stdio or
+  Streamable HTTP.
+- Make lifecycle and install-time gates target-aware instead of Hermes-only.
+
+Scope:
+
+- New shared lowerer/runtime helper under `src/compile/`.
+- `src/cli.ts`
+- `src/mcp/lifecycle.ts`
+- `src/compile/pipeline.ts`
+- tests covering target-aware runtime parsing/gating.
+
+Acceptance:
+
+- `runtime.mcp.<harness>.transport = "streamable-http"` is parsed and
+  validated generically.
+- HTTP transport requires loopback host, explicit or lifecycle-managed port,
+  and a valid token env var.
+- Unsupported target HTTP opt-ins fail closed with an actionable error.
+- `prism mcp serve/status/stop/restart` accepts supported harness IDs instead
+  of only Hermes.
+- Compile/install lifecycle gate applies to any HTTP target that writes URL
+  config.
+- Stdio remains the default for all targets.
+
+Validation:
+
+- `bun test src/compile/mcp-runtime.test.ts src/mcp/lifecycle.test.ts src/compile/pipeline.test.ts -t "MCP|Hermes|runtime"`
+- `bun test src/cli.test.ts -t mcp`
+- `bun run typecheck`
+- `git diff --check`
+- `pulsar score .`
+
+Notes:
+
+- Added `src/compile/mcp-runtime.ts` as the shared target-aware runtime
+  resolver, support matrix, generated server naming/path helper, loopback and
+  token-env validation, and tool-target assertion point.
+- Generalized `prism mcp serve/status/stop/restart` from Hermes-only to any
+  lifecycle-supported MCP target. Unsupported targets still fail closed through
+  the shared support matrix.
+- Generalized the compile/install lifecycle gate so any target that emits
+  Streamable HTTP URL config can require `verify` or `serve` before writing.
+- Pulsar hard gate passed. Readiness remains under repo-wide backpressure due
+  to pre-existing large-file/churn findings, not a new hard failure from this
+  glyph.
+
+### GLYPH-MCP-HTTP-10: HTTP Config Renderers for URL-Capable Lowerers
+
+Status: pending
+
+Intent:
+
+- Reuse shared MCP config rendering logic across lowerers.
+- Add opt-in HTTP config emission for Codex CLI and Claude Code.
+- Keep Hermes on the shared path.
+- Fail closed for Gemini/Grok targets if secure token config cannot be proven.
+
+Scope:
+
+- `src/compile/lowerers/hermes.ts`
+- `src/compile/lowerers/codex-cli.ts`
+- `src/compile/lowerers/claude-code.ts`
+- `src/compile/lowerers/gemini-cli.ts`
+- `src/compile/lowerers/grok.ts`
+- lowerer tests.
+
+Acceptance:
+
+- Hermes HTTP output remains unchanged except for shared implementation.
+- Codex HTTP output uses `url` and `bearer_token_env_var`, not `command`.
+- Claude HTTP output uses `type: "http"`, `url`, and env-expanded
+  `Authorization` header, not `command`.
+- Gemini/Grok HTTP opt-in either emits a verified secure URL config or rejects
+  the opt-in with a clear reason.
+- Stdio output remains unchanged for plugins without HTTP runtime config.
+
+Validation:
+
+- focused lowerer tests for each target.
+- `bun run typecheck`
+- `pulsar score .`
+
+### GLYPH-MCP-HTTP-11: Tower and Grok Agent HTTP Opt-In
+
+Status: pending
+
+Intent:
+
+- Turn on HTTP MCP for Tower and Grok Agent where the target lowerer supports
+  safe URL MCP config.
+
+Scope:
+
+- `../prism-plugins/tower/plugin.json`
+- `../prism-plugins/grok-agent/plugin.json`
+- plugin docs/lockfiles as needed.
+
+Acceptance:
+
+- Tower declares HTTP runtime for Hermes, Codex CLI, and Claude Code.
+- Grok Agent declares HTTP runtime for Hermes, Codex CLI, and Claude Code.
+- Unsupported targets are not silently configured as HTTP.
+- Temp-root compile previews for each supported harness emit URL config, not
+  stdio `command`.
+- Live user configs are not mutated during validation.
+
+Validation:
+
+- Prism focused tests and typecheck.
+- Prism-plugins typecheck.
+- temp-root `prism mcp serve/status/compile --mcp-lifecycle verify/stop` for
+  Tower and Grok Agent on supported targets.
+- `pulsar score .`
+
+### GLYPH-MCP-HTTP-12: Live Install Decision and Final Audit
+
+Status: pending
+
+Intent:
+
+- Decide whether to install the new HTTP MCPs into live harness configs.
+- If installed, do it with daemon lifecycle safety and verify the resulting
+  live config.
+- If not installed, record the exact operator commands.
+
+Scope:
+
+- live harness config only if explicitly authorized.
+- `mcp-http-goal.md` completion audit.
+
+Acceptance:
+
+- The final answer distinguishes capability from live installation state.
+- If live install is authorized, Tower and Grok Agent live configs use URL
+  transports for supported harnesses and daemons are running.
+- If live install is not authorized, no live config is mutated and exact
+  install commands are documented.
+
+Validation:
+
+- live or temp-root `mcp status` evidence.
+- config inspection for `url` versus `command`.
+- `git status --short` clean in both repos.
 
 ## Sources
 

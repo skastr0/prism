@@ -170,6 +170,7 @@ const createInstallAllFixture = async (): Promise<{
 };
 
 const createCliMcpFixture = async (options?: {
+  readonly harness?: "hermes" | "codex-cli";
   readonly streamableHttp?: boolean;
   readonly port?: number;
   readonly tokenEnv?: string;
@@ -178,6 +179,7 @@ const createCliMcpFixture = async (options?: {
   hermesRoot: string;
 }> => {
   const root = await createTempRoot();
+  const harness = options?.harness ?? "hermes";
   const pluginRoot = join(root, "cli-hermes-tools");
   const hermesRoot = join(root, "hermes-root");
   await mkdir(hermesRoot, { recursive: true });
@@ -189,12 +191,12 @@ const createCliMcpFixture = async (options?: {
       {
         name: "cli-hermes-tools",
         version: "0.1.0",
-        targets: { tools: ["hermes"] },
+        targets: { tools: [harness] },
         ...(options?.streamableHttp
           ? {
               runtime: {
                 mcp: {
-                  hermes: {
+                  [harness]: {
                     transport: "streamable-http",
                     host: "127.0.0.1",
                     port: options.port,
@@ -338,6 +340,24 @@ test("mcp serve/status/stop manages a Hermes daemon under an override root", asy
     await runCli(["mcp", "stop", ...common], env).catch(() => undefined);
   }
 }, 15_000);
+
+test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => {
+  const { pluginRoot, hermesRoot } = await createCliMcpFixture({ harness: "codex-cli" });
+
+  const status = await runCli([
+    "mcp",
+    "status",
+    pluginRoot,
+    "--harness",
+    "codex-cli",
+    "--root",
+    hermesRoot,
+  ], {});
+
+  expect(status.exitCode).toBe(0);
+  expect(status.stdout).toContain("stopped");
+  expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
+});
 
 test("install propagates Hermes HTTP MCP lifecycle gate", async () => {
   const port = await getFreePort("127.0.0.1");

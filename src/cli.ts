@@ -74,7 +74,7 @@ program
   .option("--compile-root <path>", "Override compile output root")
   .option(
     "--mcp-lifecycle <mode>",
-    "Hermes HTTP MCP lifecycle behavior during compile (none|verify|serve)",
+    "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
     "none"
   )
@@ -107,7 +107,7 @@ program
   .option("--compile-root <path>", "Override compile output root")
   .option(
     "--mcp-lifecycle <mode>",
-    "Hermes HTTP MCP lifecycle behavior during compile (none|verify|serve)",
+    "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
     "none"
   )
@@ -221,7 +221,7 @@ program
   .option("--root <path>", "Override harness output root")
   .option(
     "--mcp-lifecycle <mode>",
-    "Hermes HTTP MCP lifecycle behavior (none|verify|serve)",
+    "Generated HTTP MCP lifecycle behavior (none|verify|serve)",
     parseMcpLifecycleMode,
     "none"
   )
@@ -1345,8 +1345,10 @@ function parseHarnessScope(value: string): HarnessScope {
 }
 
 function parseMcpLifecycleHarness(value: string): McpLifecycleHarness {
-  if (value === "hermes") return value;
-  throw new InvalidArgumentError("Prism MCP lifecycle currently supports only 'hermes'.");
+  if (isValidHarnessId(value)) return value;
+  throw new InvalidArgumentError(
+    `Invalid MCP lifecycle harness '${value}'. Expected one of: ${getAllHarnessIds().join(", ")}.`
+  );
 }
 
 function parseMcpPortSelection(value: string | undefined): McpPortSelection | undefined {

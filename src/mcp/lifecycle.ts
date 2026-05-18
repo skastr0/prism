@@ -972,7 +972,16 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
         health: status.health,
       };
     }
-    if (status.state !== "stale-pid") {
+    if (status.state === "stale-build") {
+      await stopMcp({
+        pluginPath: options.pluginPath,
+        harness: options.harness,
+        scope: options.scope,
+        projectPath: options.projectPath,
+        root: options.root,
+        tokenEnv,
+      });
+    } else if (status.state !== "stale-pid") {
       throw new Error(
         `Recorded MCP daemon is ${status.state}; run 'prism mcp status' or 'prism mcp restart' (${status.detail}).`,
       );

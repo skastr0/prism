@@ -707,14 +707,28 @@ const astToZodSchema = (ast: SchemaAST.AST): ZodSchema => {
   }
 };
 
+const unwrapObjectAst = (ast: SchemaAST.AST): SchemaAST.AST => {
+  switch (ast._tag) {
+    case "Refinement":
+      return unwrapObjectAst(ast.from);
+    case "Transformation":
+      return unwrapObjectAst(ast.from);
+    case "Suspend":
+      return unwrapObjectAst(ast.f());
+    default:
+      return ast;
+  }
+};
+
 const objectZodFromEffectSchema = (
   schema: Schema.Schema.AnyNoContext,
   topLevelName: "Input/input" | "Output/output",
 ): ZodSchema => {
-  if (schema.ast._tag !== "TypeLiteral") {
-    unsupportedAst(schema.ast, "top-level " + topLevelName + " must be a Schema.Struct");
+  const ast = unwrapObjectAst(schema.ast);
+  if (ast._tag !== "TypeLiteral") {
+    unsupportedAst(ast, "top-level " + topLevelName + " must be a Schema.Struct");
   }
-  return astToZodSchema(schema.ast);
+  return astToZodSchema(ast);
 };
 
 const decodeWithSchema = <A>(schema: Schema.Schema<A, unknown, never>, raw: unknown): A =>

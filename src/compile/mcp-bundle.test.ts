@@ -1094,6 +1094,46 @@ export default defineTool({
   ).resolves.toMatchObject({ toolNames: ["schema_fixture_inspect"] });
 });
 
+test("MCP bundle generation supports refined object output schemas", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "schema-fixture");
+  const toolPath = join(pluginRoot, "tools", "inspect.tool.ts");
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "inspect",
+  description: "Returns a refined object output",
+  input: Schema.Struct({ payload: Schema.String }),
+  output: Schema.Struct({ ok: Schema.Boolean }).pipe(
+    Schema.filter((value) => value.ok === true),
+  ),
+  async handle() {
+    return { ok: true };
+  },
+});
+`,
+  );
+
+  await expect(
+    generateMcpServerBundle({
+      sourcePluginName: "schema-fixture",
+      serverName: "prism-mcp-schema-fixture",
+      bindings: [
+        {
+          kind: "permission",
+          logicalName: "inspect",
+          toolPluginName: "schema-fixture",
+          toolName: "inspect",
+          toolSourcePath: toolPath,
+        },
+      ],
+    }),
+  ).resolves.toMatchObject({ toolNames: ["schema_fixture_inspect"] });
+});
+
 test("MCP bundle generation fails closed when a tool input schema cannot become JSON Schema", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "schema-fixture");

@@ -253,9 +253,11 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
           "Echo from changed lifecycle tests.",
         ),
       );
-      await expect(
-        serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv)),
-      ).rejects.toThrow(/stale-build/);
+      const rebuilt = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
+      expect(rebuilt.state).toBe("started");
+      expect(rebuilt.metadata?.pid).toBeGreaterThan(0);
+      expect(rebuilt.metadata?.pid).not.toBe(first.metadata?.pid);
+      await waitForPidExit(first.metadata!.pid!);
 
       const status = await getMcpStatus({
         pluginPath: pluginRoot,
@@ -266,7 +268,7 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
       });
       expect(status.state).toBe("running");
       expect(status.health?.serverName).toBe("prism-generated-hermes-tools");
-      expect(formatMcpStatus(status)).toContain(`pid=${first.metadata?.pid}`);
+      expect(formatMcpStatus(status)).toContain(`pid=${rebuilt.metadata?.pid}`);
       expect(formatMcpStatus(status)).toContain("url=http://127.0.0.1:");
 
       const attackerPort = await getFreePort("127.0.0.1");
@@ -301,7 +303,7 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
             tokenEnv,
           }),
         ).rejects.toThrow(/Refusing to stop MCP daemon/);
-        expect(pidIsRunning(first.metadata!.pid!)).toBe(true);
+        expect(pidIsRunning(rebuilt.metadata!.pid!)).toBe(true);
         expect(pidIsRunning(process.pid)).toBe(true);
         expect(attackerHits).toBe(0);
 
@@ -407,6 +409,7 @@ test("MCP lifecycle foreground serve exits without writing runtime metadata", as
       foreground: true,
     });
     const health = await fetchHealth(port, "test-token");
+    await new Promise((resolve) => setTimeout(resolve, 250));
     process.kill(health.pid, "SIGTERM");
 
     const result = await foreground;

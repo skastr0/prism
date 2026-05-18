@@ -18,6 +18,7 @@ import { parseMcpRuntimeHealth } from "./runtime-metadata.js";
 
 const tempRoots: string[] = [];
 const execFileAsync = promisify(execFile);
+const lifecycleTestToken = "prism-lifecycle-test-token-with-enough-entropy";
 
 const effectImportPath = join(
   process.cwd(),
@@ -89,6 +90,20 @@ const withTokenEnv = <A>(name: string, value: string, run: () => Promise<A>): Pr
   return run().finally(() => {
     if (previous === undefined) delete process.env[name];
     else process.env[name] = previous;
+  });
+};
+
+const withEnv = <A>(
+  values: Readonly<Record<string, string>>,
+  run: () => Promise<A>,
+): Promise<A> => {
+  const previous = new Map(Object.keys(values).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(values)) process.env[key] = value;
+  return run().finally(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 };
 
@@ -227,11 +242,47 @@ afterEach(async () => {
   );
 });
 
+test("MCP lifecycle serializes mutations with a per-server lock", async () => {
+  const { pluginRoot, hermesRoot } = await createHermesToolFixture();
+  const tokenEnv = "PRISM_MCP_TEST_TOKEN_LOCK";
+  const lockDir = join(hermesRoot, "prism", "mcp", "prism_generated_hermes_tools");
+  const lockPath = join(lockDir, ".lifecycle.lock");
+  await mkdir(lockDir, { recursive: true });
+  await writeFile(lockPath, "busy\n");
+
+  await withEnv({ PRISM_MCP_LOCK_WAIT_MS: "50" }, async () => {
+    await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
+      await expect(
+        serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv)),
+      ).rejects.toThrow(/Timed out waiting for MCP lifecycle lock/);
+    });
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await withEnv({ PRISM_MCP_LOCK_WAIT_MS: "1000", PRISM_MCP_LOCK_STALE_MS: "1" }, async () => {
+    await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
+      const started = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
+      try {
+        expect(started.state).toBe("started");
+        expect(await pathExists(lockPath)).toBe(false);
+      } finally {
+        await stopMcp({
+          pluginPath: pluginRoot,
+          harness: "hermes",
+          scope: "global",
+          root: hermesRoot,
+          tokenEnv,
+        }).catch(() => undefined);
+      }
+    });
+  });
+}, 15_000);
+
 test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", async () => {
   const { pluginRoot, hermesRoot, toolPath } = await createHermesToolFixture();
   const tokenEnv = "PRISM_MCP_TEST_TOKEN_IDEMPOTENT";
 
-  await withTokenEnv(tokenEnv, "test-token", async () => {
+  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
     const originalConfig = await readFile(join(hermesRoot, "config.yaml"), "utf8");
     const first = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
     try {
@@ -352,7 +403,7 @@ test("MCP lifecycle stop and restart update runtime metadata safely", async () =
   const { pluginRoot, hermesRoot } = await createHermesToolFixture();
   const tokenEnv = "PRISM_MCP_TEST_TOKEN_RESTART";
 
-  await withTokenEnv(tokenEnv, "test-token", async () => {
+  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
     const started = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
     expect(started.state).toBe("started");
     const firstPid = started.metadata?.pid;
@@ -402,13 +453,13 @@ test("MCP lifecycle foreground serve exits without writing runtime metadata", as
   const tokenEnv = "PRISM_MCP_TEST_TOKEN_FOREGROUND";
   const port = await getFreePort("127.0.0.1");
 
-  await withTokenEnv(tokenEnv, "test-token", async () => {
+  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
     const foreground = serveMcp({
       ...serveOptions(pluginRoot, hermesRoot, tokenEnv),
       port,
       foreground: true,
     });
-    const health = await fetchHealth(port, "test-token");
+    const health = await fetchHealth(port, lifecycleTestToken);
     await new Promise((resolve) => setTimeout(resolve, 250));
     process.kill(health.pid, "SIGTERM");
 
@@ -422,7 +473,7 @@ test("MCP lifecycle status uses stored tokens and reports stale pid states", asy
   const { pluginRoot, hermesRoot } = await createHermesToolFixture();
   const tokenEnv = "PRISM_MCP_TEST_TOKEN_STATES";
 
-  await withTokenEnv(tokenEnv, "test-token", async () => {
+  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
     const started = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
     const pid = started.metadata?.pid;
     expect(pid).toBeGreaterThan(0);
@@ -446,7 +497,7 @@ test("MCP lifecycle status uses stored tokens and reports stale pid states", asy
     expect(stoppedWithoutToken.state).toBe("stopped");
     await waitForPidExit(pid!);
 
-    process.env[tokenEnv] = "test-token";
+    process.env[tokenEnv] = lifecycleTestToken;
     const restarted = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
     const stalePidValue = restarted.metadata?.pid;
     expect(stalePidValue).toBeGreaterThan(0);
@@ -490,7 +541,7 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
   const { pluginRoot, hermesRoot } = await createHermesToolFixture();
   const tokenEnv = "PRISM_MCP_TEST_TOKEN_CONFLICT";
 
-  await withTokenEnv(tokenEnv, "test-token", async () => {
+  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
     const started = await serveMcp(serveOptions(pluginRoot, hermesRoot, tokenEnv));
     const pid = started.metadata?.pid;
     const serverPath = started.descriptor.serverPath;

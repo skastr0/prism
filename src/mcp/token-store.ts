@@ -3,6 +3,19 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export const MCP_TOKEN_STORE_SCHEMA = "prism.mcp-tokens.v1";
+const MIN_MCP_BEARER_TOKEN_LENGTH = 24;
+const RESERVED_TOKEN_ENV_NAMES = new Set([
+  "HOME",
+  "LOGNAME",
+  "OLDPWD",
+  "PATH",
+  "PWD",
+  "SHELL",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "USER",
+]);
 
 export interface McpStoredToken {
   readonly token: string;
@@ -70,6 +83,27 @@ const writeTokenStore = async (
 
 const generateToken = (): string => randomBytes(32).toString("base64url");
 
+export const isUsableMcpBearerToken = (value: string | undefined): value is string => {
+  const token = value?.trim();
+  return Boolean(
+    token &&
+      token.length >= MIN_MCP_BEARER_TOKEN_LENGTH &&
+      !/[\s\x00-\x1F\x7F]/u.test(token),
+  );
+};
+
+const isReservedTokenEnvName = (value: string | undefined): boolean =>
+  value !== undefined && RESERVED_TOKEN_ENV_NAMES.has(value.trim().toUpperCase());
+
+export const normalizePreferredMcpBearerToken = (options: {
+  readonly preferredToken?: string;
+  readonly preferredTokenEnv?: string;
+}): string | undefined => {
+  if (isReservedTokenEnvName(options.preferredTokenEnv)) return undefined;
+  const token = options.preferredToken?.trim();
+  return isUsableMcpBearerToken(token) ? token : undefined;
+};
+
 export const hashStoredMcpToken = (token: string): string =>
   createHash("sha256").update(token, "utf8").digest("hex");
 
@@ -84,11 +118,16 @@ export const readMcpToken = async (
 export const ensureMcpToken = async (
   runtimeRoot: string,
   serverName: string,
-  options: { readonly preferredToken?: string } = {},
+  options: {
+    readonly preferredToken?: string;
+    readonly preferredTokenEnv?: string;
+  } = {},
 ): Promise<string> => {
   const store = await readTokenStore(runtimeRoot);
   const existing = store.tokens[serverName];
-  const token = options.preferredToken?.trim() || existing?.token || generateToken();
+  const preferredToken = normalizePreferredMcpBearerToken(options);
+  const existingToken = isUsableMcpBearerToken(existing?.token) ? existing.token : undefined;
+  const token = preferredToken ?? existingToken ?? generateToken();
   const now = new Date().toISOString();
   store.tokens[serverName] = {
     token,

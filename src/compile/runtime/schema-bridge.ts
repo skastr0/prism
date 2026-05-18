@@ -60,6 +60,9 @@ export interface ToolRuntimeContext {
   // and `worktree` -> `repoRoot`.
   workingDirectory?: string;
   repoRoot?: string;
+
+  // Cancellation propagated by transports that support it, including MCP SDK.
+  signal?: AbortSignal;
 }
 
 const extractStringAnnotation = (

@@ -475,7 +475,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
 
   const manifestTarget = join(root, "gemini-extension.json");
   desired.add("gemini-extension.json");
-  await pushWrite(operations, manifestTarget, json(manifest));
+  await pushWrite(operations, manifestTarget, json(manifest), "write-plugin-file", {
+    mode: input.target.mcpBearerToken && Object.keys(mcpServers).length > 0 ? 0o600 : undefined,
+  });
 
   operations.push(...await planExtensionPruning(input.target, desired));
   return operations;

@@ -297,6 +297,7 @@ export default defineTool({
       Authorization: "Bearer gemini-static-token",
     },
   });
+  expect(manifest?.mode).toBe(0o600);
 
   const bundle = operations.find(
     (operation): operation is ContentOperation =>

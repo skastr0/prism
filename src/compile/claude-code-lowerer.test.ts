@@ -410,6 +410,7 @@ export default defineTool({
   });
   expect(mcpConfig?.content).not.toContain('"command"');
   expect(mcpConfig?.content).not.toContain('"args"');
+  expect(mcpConfig?.mode).toBe(0o600);
 
   const bundle = operations.find(
     (operation): operation is ContentOperation =>

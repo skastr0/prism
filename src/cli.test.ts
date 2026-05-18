@@ -8,6 +8,7 @@ import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismOxlintPluginJs } from "./init-templates.js";
 
 const tempRoots: string[] = [];
+const cliTestToken = "prism-cli-test-token-with-enough-entropy";
 
 const effectImportPath = join(
   process.cwd(),
@@ -282,7 +283,7 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
 
 test("mcp serve/status/stop manages a Hermes daemon under an override root", async () => {
   const { pluginRoot, hermesRoot } = await createCliMcpFixture();
-  const env = { PRISM_MCP_CLI_TEST_TOKEN: "test-token" };
+  const env = { PRISM_MCP_CLI_TEST_TOKEN: cliTestToken };
   const common = [
     pluginRoot,
     "--harness",
@@ -367,7 +368,7 @@ test("install serves Hermes HTTP MCP by default", async () => {
     port,
     tokenEnv,
   });
-  const env = { [tokenEnv]: "test-token" };
+  const env = { [tokenEnv]: cliTestToken };
   const common = [
     "install",
     pluginRoot,
@@ -384,7 +385,7 @@ test("install serves Hermes HTTP MCP by default", async () => {
     expect(served.stdout).toContain("Compile (hermes, global)");
     const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
     expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
-    expect(config).toContain('Authorization: "Bearer test-token"');
+    expect(config).toContain(`Authorization: "Bearer ${cliTestToken}"`);
   } finally {
     await runCli([
       "mcp",

@@ -563,6 +563,7 @@ const planAgentWrites = async (
       join(input.target.root, "agents", `${agent.name}.toml`),
       renderAgentToml(agent, input.target, agentMcpServer),
       "write-md",
+      { mode: agentMcpServer?.bearerToken ? 0o600 : undefined },
     );
   }
 };
@@ -646,6 +647,7 @@ const planConfigWrite = async (
     configTarget,
     replaceManagedBlock(migratedConfig, input.target.sourcePluginName, managedBlock),
     "write-plugin-file",
+    { mode: mcp.globalToolNames.length > 0 && mcp.mcpBearerToken ? 0o600 : undefined },
   );
 };
 

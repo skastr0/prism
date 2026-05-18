@@ -375,6 +375,12 @@ const planMcpServer = async (
             },
       },
     }),
+    "write-plugin-file",
+    {
+      mode: runtime.transport === "streamable-http" && input.target.mcpBearerToken
+        ? 0o600
+        : undefined,
+    },
   );
 };
 

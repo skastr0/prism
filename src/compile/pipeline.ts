@@ -803,7 +803,10 @@ const resolveCompileMcpBearerToken = (options: {
       return ensureMcpToken(
         options.runtimeRoot,
         generatedMcpServerName(options.registry.pluginName),
-        preferredToken ? { preferredToken } : {},
+        {
+          ...(preferredToken ? { preferredToken } : {}),
+          preferredTokenEnv: runtime.tokenEnv,
+        },
       );
     },
     catch: (error) =>

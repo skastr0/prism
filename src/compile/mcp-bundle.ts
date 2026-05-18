@@ -575,6 +575,7 @@ interface ToolRuntimeContext {
   timestamp: string;
   workingDirectory?: string;
   repoRoot?: string;
+  signal?: AbortSignal;
 }`;
 
 const SCHEMA_BRIDGE_RUNTIME = `${SCHEMA_ANNOTATION_HELPERS}
@@ -694,7 +695,7 @@ const astToZodSchema = (ast: SchemaAST.AST): ZodSchema => {
         if (description) property = property.describe(description);
         properties[String(prop.name)] = prop.isOptional ? property.optional() : property;
       }
-      return z.object(properties).strict();
+      return z.object(properties);
     }
     case "Refinement":
       return astToZodSchema(ast.from);
@@ -754,25 +755,59 @@ const prismToolTimeoutMs = Number.isFinite(configuredToolTimeoutMs) && configure
   ? configuredToolTimeoutMs
   : 120000;
 
-const withToolTimeout = async <A>(name: string, operation: Promise<A>): Promise<A> => {
+const abortError = (name: string, reason?: unknown): Error => {
+  if (reason instanceof Error) return reason;
+  return new Error(\`MCP tool '\${name}' was aborted\`);
+};
+
+const linkAbortSignal = (
+  controller: AbortController,
+  signal: AbortSignal | undefined,
+  name: string,
+): (() => void) => {
+  if (!signal) return () => {};
+  const abort = () => controller.abort(abortError(name, signal.reason));
+  if (signal.aborted) {
+    abort();
+    return () => {};
+  }
+  signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
+};
+
+const withToolTimeout = async <A>(
+  name: string,
+  operation: (signal: AbortSignal) => Promise<A>,
+  parentSignal?: AbortSignal,
+): Promise<A> => {
+  const controller = new AbortController();
+  const unlinkAbortSignal = linkAbortSignal(controller, parentSignal, name);
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
+    if (controller.signal.aborted) throw abortError(name, controller.signal.reason);
     return await Promise.race([
-      operation,
+      operation(controller.signal),
       new Promise<A>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new Error(\`MCP tool '\${name}' timed out after \${prismToolTimeoutMs}ms\`));
+          const error = new Error(\`MCP tool '\${name}' timed out after \${prismToolTimeoutMs}ms\`);
+          controller.abort(error);
+          reject(error);
         }, prismToolTimeoutMs);
+        controller.signal.addEventListener("abort", () => reject(abortError(name, controller.signal.reason)), {
+          once: true,
+        });
       }),
     ]);
   } finally {
     if (timeout) clearTimeout(timeout);
+    unlinkAbortSignal();
   }
 };
 
 interface ToolCallRuntimeContext {
   sessionID?: string;
   agent?: string;
+  signal?: AbortSignal;
 }
 
 const runtimeContext = (callContext: ToolCallRuntimeContext = {}): ToolRuntimeContext => ({
@@ -781,6 +816,7 @@ const runtimeContext = (callContext: ToolCallRuntimeContext = {}): ToolRuntimeCo
   timestamp: new Date().toISOString(),
   workingDirectory: prismWorkingDirectory,
   repoRoot: prismRepoRoot,
+  ...(callContext.signal ? { signal: callContext.signal } : {}),
 });
 
 const createTool = (name: string, surface: ToolSurface) => {
@@ -821,7 +857,7 @@ const createTool = (name: string, surface: ToolSurface) => {
     outputSchema: outputZodSchema,
     run: runTool,
     async call(rawArgs: unknown, callContext?: ToolCallRuntimeContext) {
-      return await withToolTimeout(name, runTool(rawArgs, callContext));
+      return await withToolTimeout(name, (signal) => runTool(rawArgs, { ...callContext, signal }), callContext?.signal);
     },
   };
 };`;
@@ -840,23 +876,20 @@ const maxConcurrentToolCalls = Number.isFinite(configuredMaxConcurrentToolCalls)
   : 16;
 let activeToolCalls = 0;
 
-const withToolConcurrency = async <A>(name: string, operation: () => Promise<A>): Promise<A> => {
+const withToolConcurrency = async <A>(
+  name: string,
+  operation: (signal: AbortSignal) => Promise<A>,
+  parentSignal?: AbortSignal,
+): Promise<A> => {
   if (activeToolCalls >= maxConcurrentToolCalls) {
     throw new Error(\`MCP tool '\${name}' rejected because \${activeToolCalls} tool call(s) are already running\`);
   }
   activeToolCalls += 1;
-  let operationPromise: Promise<A>;
   try {
-    operationPromise = operation();
-  } catch (error) {
+    return await withToolTimeout(name, operation, parentSignal);
+  } finally {
     activeToolCalls -= 1;
-    throw error;
   }
-  operationPromise.then(
-    () => { activeToolCalls -= 1; },
-    () => { activeToolCalls -= 1; },
-  );
-  return await withToolTimeout(name, operationPromise);
 };
 
 const registerPrismTools = (server: McpServer): void => {
@@ -869,11 +902,13 @@ const registerPrismTools = (server: McpServer): void => {
         outputSchema: tool.outputSchema,
       },
       async (args: unknown, extra: any) => {
-        const result = await withToolConcurrency(name, () =>
+        const result = await withToolConcurrency(name, (signal) =>
           tool.run(args, {
             sessionID: extra?.sessionId,
             agent: "mcp-client",
+            signal: extra?.signal ?? signal,
           }),
+          extra?.signal,
         );
         return {
           content: [{ type: "text", text: result.text }],
@@ -954,26 +989,29 @@ const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configured
   : 1048576;
 const sessions = new Map<string, HttpSessionState>();
 
-const responseHeaders = (extra?: HeadersInit): Headers => {
+const responseHeaders = (extra?: HeadersInit, request?: Request): Headers => {
   const headers = new Headers(extra);
+  const origin = request?.headers.get("origin");
   headers.set("Access-Control-Allow-Headers", "authorization, content-type, mcp-protocol-version, mcp-session-id, last-event-id");
   headers.set("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS");
-  headers.set("Access-Control-Allow-Origin", "null");
+  headers.set("Access-Control-Allow-Origin", origin ? (isAllowedOrigin(origin) ? origin : "null") : "*");
+  headers.set("Access-Control-Expose-Headers", "mcp-session-id, mcp-protocol-version");
   headers.set("Cache-Control", "no-store");
+  headers.append("Vary", "Origin");
   return headers;
 };
 
-const jsonResponse = (body: unknown, init: ResponseInit = {}): Response => {
-  const headers = responseHeaders(init.headers);
+const jsonResponse = (body: unknown, init: ResponseInit = {}, request?: Request): Response => {
+  const headers = responseHeaders(init.headers, request);
   headers.set("content-type", "application/json");
   return new Response(JSON.stringify(body), { ...init, headers });
 };
 
-const emptyResponse = (status: number, init: ResponseInit = {}): Response =>
-  new Response(null, { ...init, status, headers: responseHeaders(init.headers) });
+const emptyResponse = (status: number, init: ResponseInit = {}, request?: Request): Response =>
+  new Response(null, { ...init, status, headers: responseHeaders(init.headers, request) });
 
-const attachResponseHeaders = (response: Response): Response => {
-  const headers = responseHeaders(response.headers);
+const attachResponseHeaders = (response: Response, request: Request): Response => {
+  const headers = responseHeaders(response.headers, request);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -1042,14 +1080,14 @@ const isAllowedOrigin = (value: string | null): boolean => {
 
 const authorize = (request: Request): Response | undefined => {
   if (!isAllowedHostHeader(request.headers.get("host"))) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden host" }, id: null }, { status: 403 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden host" }, id: null }, { status: 403 }, request);
   }
   if (!isAllowedOrigin(request.headers.get("origin"))) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden origin" }, id: null }, { status: 403 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden origin" }, id: null }, { status: 403 }, request);
   }
   const expected = \`Bearer \${httpToken}\`;
   if (request.headers.get("authorization") !== expected) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 }, request);
   }
   return undefined;
 };
@@ -1113,7 +1151,7 @@ const handleInitializePost = async (
     const id = parsedBody && typeof parsedBody === "object" && "id" in parsedBody
       ? (parsedBody as { id?: unknown }).id
       : null;
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "MCP session limit reached" }, id: id ?? null }, { status: 429 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "MCP session limit reached" }, id: id ?? null }, { status: 429 }, request);
   }
 
   const server = createPrismMcpServer();
@@ -1133,7 +1171,7 @@ const handleInitializePost = async (
   await server.connect(transport);
   const response = await transport.handleRequest(request, { parsedBody });
   if (initializedSessionID) touchSession(initializedSessionID);
-  return attachResponseHeaders(response);
+  return attachResponseHeaders(response, request);
 };
 
 const handlePost = async (request: Request): Promise<Response> => {
@@ -1141,7 +1179,7 @@ const handlePost = async (request: Request): Promise<Response> => {
   try {
     parsedBody = await readJsonBody(request);
   } catch (error) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32700, message: errorMessage(error) }, id: null }, { status: 400 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32700, message: errorMessage(error) }, id: null }, { status: 400 }, request);
   }
 
   await pruneExpiredSessions();
@@ -1153,11 +1191,11 @@ const handlePost = async (request: Request): Promise<Response> => {
   const sessionID = request.headers.get("mcp-session-id") ?? undefined;
   const session = sessionID ? sessions.get(sessionID) : undefined;
   if (!sessionID || !session) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 }, request);
   }
 
   touchSession(sessionID);
-  return attachResponseHeaders(await session.transport.handleRequest(request, { parsedBody }));
+  return attachResponseHeaders(await session.transport.handleRequest(request, { parsedBody }), request);
 };
 
 const handleSessionRequest = async (request: Request): Promise<Response> => {
@@ -1165,10 +1203,10 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
   await pruneExpiredSessions();
   const session = sessionID ? sessions.get(sessionID) : undefined;
   if (!sessionID || !session) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 });
+    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 }, request);
   }
   touchSession(sessionID);
-  return attachResponseHeaders(await session.transport.handleRequest(request));
+  return attachResponseHeaders(await session.transport.handleRequest(request), request);
 };
 
 const server = Bun.serve({
@@ -1176,21 +1214,21 @@ const server = Bun.serve({
   port: httpPort,
   fetch: async (request) => {
     const url = new URL(request.url);
-    if (request.method === "OPTIONS") return emptyResponse(204);
+    if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
     if (url.pathname === httpHealthPath) {
       const denied = authorize(request);
       if (denied) return denied;
-      if (request.method === "GET") return jsonResponse(healthPayload());
-      return jsonResponse({ error: "method not allowed" }, { status: 405 });
+      if (request.method === "GET") return jsonResponse(healthPayload(), {}, request);
+      return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
     }
-    if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 });
+    if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 }, request);
 
     const denied = authorize(request);
     if (denied) return denied;
 
     if (request.method === "POST") return await handlePost(request);
     if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
-    return jsonResponse({ error: "method not allowed" }, { status: 405 });
+    return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
   },
 });
 

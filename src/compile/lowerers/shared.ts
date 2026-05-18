@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   backupFile,
+  chmodFile,
   exists,
   listDirRecursive,
   readFile,
@@ -354,14 +355,22 @@ export const executeStandardLowering = async (
   if (options.dryRun) return { backups };
 
   for (const operation of operations) {
-    if (operation.reason === "unchanged") continue;
+    if (operation.reason === "unchanged") {
+      if (
+        (operation.kind === "write-md" || operation.kind === "write-plugin-file") &&
+        operation.mode !== undefined
+      ) {
+        await chmodFile(operation.target, operation.mode);
+      }
+      continue;
+    }
 
     if (operation.kind === "write-md" || operation.kind === "write-plugin-file") {
       if (options.backup && operation.kind === "write-md") {
         const backup = await backupFile(operation.target);
         if (backup) backups.push(backup);
       }
-      await writeFile(operation.target, operation.content);
+      await writeFile(operation.target, operation.content, { mode: operation.mode });
       continue;
     }
 
@@ -375,6 +384,9 @@ export const executeStandardLowering = async (
 };
 
 export type LowerWriteKind = "write-md" | "write-plugin-file";
+export interface LowerWriteOptions {
+  readonly mode?: number;
+}
 
 export const writeReason = async (
   target: string,
@@ -389,11 +401,13 @@ export const pushWriteOperation = async (
   target: string,
   content: string,
   kind: LowerWriteKind = "write-plugin-file",
+  options: LowerWriteOptions = {},
 ): Promise<void> => {
   operations.push({
     kind,
     target,
     content,
+    ...(options.mode !== undefined ? { mode: options.mode } : {}),
     reason: await writeReason(target, content),
   });
 };
@@ -405,6 +419,7 @@ export const pushGeneratedPluginWrite = async (options: {
   readonly target: string;
   readonly content: string;
   readonly kind?: LowerWriteKind;
+  readonly mode?: number;
 }): Promise<void> => {
   options.desiredRelativePaths.add(options.relativePath);
   await pushWriteOperation(
@@ -412,6 +427,7 @@ export const pushGeneratedPluginWrite = async (options: {
     options.target,
     options.content,
     options.kind,
+    { mode: options.mode },
   );
 };
 
@@ -424,6 +440,7 @@ export const createGeneratedPluginWritePusher =
     relativePath: string,
     content: string,
     kind: LowerWriteKind = "write-plugin-file",
+    options: LowerWriteOptions = {},
   ): Promise<void> => {
     await pushGeneratedPluginWrite({
       operations,
@@ -432,6 +449,7 @@ export const createGeneratedPluginWritePusher =
       target: resolveTarget(target, relativePath),
       content,
       kind,
+      ...options,
     });
   };
 

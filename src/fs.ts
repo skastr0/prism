@@ -64,10 +64,19 @@ export async function readJson<T>(path: string): Promise<T> {
  */
 export async function writeFile(
   path: string,
-  content: string
+  content: string,
+  options: { readonly mode?: number } = {}
 ): Promise<void> {
   await ensureDir(dirname(path));
   await Bun.write(path, content);
+  if (options.mode !== undefined) {
+    await chmodFile(path, options.mode);
+  }
+}
+
+export async function chmodFile(path: string, mode: number): Promise<void> {
+  const fs = await import("node:fs/promises");
+  await fs.chmod(path, mode).catch(() => undefined);
 }
 
 /**

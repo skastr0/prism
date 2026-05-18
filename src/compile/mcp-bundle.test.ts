@@ -5,6 +5,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "./mcp-bundle.js";
 import { Contract } from "./sources.js";
@@ -115,7 +117,18 @@ export default defineTool({
   }),
   async handle(input, context) {
     if (typeof input.delayMs === "number" && input.delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, input.delayMs));
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(resolve, input.delayMs);
+        const onAbort = () => {
+          clearTimeout(timeout);
+          reject(context.signal?.reason ?? new Error("aborted"));
+        };
+        if (context.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        context.signal?.addEventListener("abort", onAbort, { once: true });
+      });
     }
     return { created: true, orbit: input.orbit, id: input.id };
   },
@@ -721,6 +734,80 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
   }
 });
 
+test("MCP bundle Streamable HTTP works with the official SDK client", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const port = await getFreePort();
+  const token = "sdk-client-token";
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+      backup: false,
+    }),
+  );
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  if (!builder) throw new Error("builder agent was not composed");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    sourcePluginRoot: pluginRoot,
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder.toolBindings,
+    transport: "streamable-http",
+    http: {
+      host: "127.0.0.1",
+      port,
+      tokenEnv: "PRISM_MCP_TEST_HTTP_TOKEN",
+    },
+  });
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_TEST_HTTP_TOKEN: token,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+    requestInit: {
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    },
+  });
+  const client = new Client({ name: "prism-sdk-test", version: "0.1.0" });
+
+  try {
+    await waitForHttpServer(port);
+    await client.connect(transport);
+    const listed = await client.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toContain("orbit_core_create_glyph");
+
+    const called = await client.callTool({
+      name: "orbit_core_create_glyph",
+      arguments: {
+        orbit: "forge",
+        id: "SDK-1",
+        title: "SDK smoke",
+        extra: "ignored by Effect decoder",
+      },
+    });
+    expect(called.structuredContent).toEqual({ created: true, orbit: "forge", id: "SDK-1" });
+  } finally {
+    await transport.terminateSession().catch(() => undefined);
+    await client.close().catch(() => undefined);
+    child.kill("SIGTERM");
+    await waitForChildClose(child);
+  }
+});
+
 test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
@@ -767,11 +854,14 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     const initialized = await httpRpc({
       port,
       token,
+      origin: "http://127.0.0.1:12345",
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
     const sessionId = initialized.response.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
+    expect(initialized.response.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:12345");
+    expect(initialized.response.headers.get("access-control-expose-headers")).toContain("mcp-session-id");
     const secondInitialized = await httpRpc({
       port,
       token,
@@ -807,7 +897,7 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
   }
 });
 
-test("MCP bundle Streamable HTTP keeps concurrency slot until timed-out work settles", async () => {
+test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work is aborted", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
@@ -873,32 +963,17 @@ test("MCP bundle Streamable HTTP keeps concurrency slot until timed-out work set
     expect(timedOut.body.result.isError).toBe(true);
     expect(timedOut.body.result.content[0].text).toContain("timed out");
 
-    const whileUnderlyingWorkContinues = await httpRpc({
+    const afterTimedOut = await httpRpc({
       port,
       token,
       sessionId: sessionId!,
       method: "tools/call",
       params: {
         name: "orbit_core_create_glyph",
-        arguments: { orbit: "forge", id: "AP-blocked", title: "HTTP MCP" },
+        arguments: { orbit: "forge", id: "AP-after-timeout", title: "HTTP MCP" },
       },
     });
-    expect(whileUnderlyingWorkContinues.body.result.isError).toBe(true);
-    expect(whileUnderlyingWorkContinues.body.result.content[0].text).toContain("already running");
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    const afterSettled = await httpRpc({
-      port,
-      token,
-      sessionId: sessionId!,
-      method: "tools/call",
-      params: {
-        name: "orbit_core_create_glyph",
-        arguments: { orbit: "forge", id: "AP-after", title: "HTTP MCP" },
-      },
-    });
-    expect(JSON.parse(afterSettled.body.result.content[0].text).id).toBe("AP-after");
+    expect(JSON.parse(afterTimedOut.body.result.content[0].text).id).toBe("AP-after-timeout");
   } finally {
     child.kill();
     await waitForChildClose(child).catch(() => undefined);

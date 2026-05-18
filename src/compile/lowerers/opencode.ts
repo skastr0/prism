@@ -71,6 +71,7 @@ import {
 } from "./shared.js";
 import {
   backupFile,
+  chmodFile,
   exists as fileExists,
   readFile,
   writeFile,
@@ -195,6 +196,7 @@ export type LowerOperation =
       readonly kind: "write-md";
       readonly target: string;
       readonly content: string;
+      readonly mode?: number;
       readonly reason: "new" | "changed" | "unchanged";
     }
   | {
@@ -208,6 +210,7 @@ export type LowerOperation =
       readonly kind: "write-plugin-file";
       readonly target: string;
       readonly content: string;
+      readonly mode?: number;
       readonly reason: "new" | "changed" | "unchanged";
     }
   | {
@@ -2151,7 +2154,7 @@ const executeWriteOperation = async (
     const backup = await backupFile(operation.target);
     if (backup) backups.push(backup);
   }
-  await writeFile(operation.target, operation.content);
+  await writeFile(operation.target, operation.content, { mode: operation.mode });
 };
 
 const executePruneOperation = async (
@@ -2170,6 +2173,15 @@ const executeNonJsonLoweringOperations = async (
   backups: string[],
 ): Promise<void> => {
   for (const operation of operations) {
+    if (operation.reason === "unchanged") {
+      if (
+        (operation.kind === "write-md" || operation.kind === "write-plugin-file") &&
+        operation.mode !== undefined
+      ) {
+        await chmodFile(operation.target, operation.mode);
+      }
+      continue;
+    }
     if (!shouldApplyLowerOperation(operation)) continue;
     if (isOpenCodeJsonPatchOperation(operation)) continue;
 

@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, readdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -36,7 +36,7 @@ import {
   type McpRuntimeMetadata,
   type McpRuntimeStaleReason,
 } from "./runtime-metadata.js";
-import { ensureMcpToken, readMcpToken } from "./token-store.js";
+import { ensureMcpToken, normalizePreferredMcpBearerToken, readMcpToken } from "./token-store.js";
 import {
   installLaunchAgent,
   launchAgentLabelForServer,
@@ -129,6 +129,8 @@ export interface McpStopResult {
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_STOP_TIMEOUT_MS = 5_000;
+const DEFAULT_LOCK_WAIT_MS = 30_000;
+const DEFAULT_LOCK_STALE_MS = 120_000;
 const execFileAsync = promisify(execFile);
 
 const fileExists = async (path: string): Promise<boolean> => {
@@ -144,6 +146,94 @@ const generatedMcpServerFile = (harnessRoot: string, pluginName: string): string
   runtimeMcpServerDescriptor(harnessRoot, pluginName).absolutePath;
 
 const runtimeFileForServer = (serverPath: string): string => join(dirname(serverPath), "runtime.json");
+const lifecycleLockPathForServer = (serverPath: string): string =>
+  join(dirname(serverPath), ".lifecycle.lock");
+
+const positiveNumberEnv = (name: string, fallback: number): number => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const lockErrorCode = (error: unknown): string | undefined =>
+  typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : undefined;
+
+const processIsRunning = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
+  }
+};
+
+const acquireMcpServerLock = async (
+  descriptor: McpRuntimeDescriptor,
+): Promise<{ readonly path: string }> => {
+  const lockPath = lifecycleLockPathForServer(descriptor.serverPath);
+  await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
+  const handle = await open(lockPath, "wx", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify({
+      pid: process.pid,
+      serverName: descriptor.serverName,
+      createdAt: new Date().toISOString(),
+    })}\n`);
+  } finally {
+    await handle.close();
+  }
+  return { path: lockPath };
+};
+
+const lockIsStale = async (lockPath: string): Promise<boolean> => {
+  try {
+    const info = await stat(lockPath);
+    if (Date.now() - info.mtimeMs <= positiveNumberEnv("PRISM_MCP_LOCK_STALE_MS", DEFAULT_LOCK_STALE_MS)) {
+      return false;
+    }
+    const content = await readFile(lockPath, "utf8").catch(() => "");
+    const parsed = JSON.parse(content || "{}") as { readonly pid?: unknown };
+    return typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || !processIsRunning(parsed.pid);
+  } catch (error) {
+    if (lockErrorCode(error) === "ENOENT") return true;
+    if (error instanceof SyntaxError) return true;
+    throw error;
+  }
+};
+
+const withMcpServerLock = async <A>(
+  descriptor: McpRuntimeDescriptor,
+  operation: () => Promise<A>,
+): Promise<A> => {
+  const lockPath = lifecycleLockPathForServer(descriptor.serverPath);
+  const deadline = Date.now() + positiveNumberEnv("PRISM_MCP_LOCK_WAIT_MS", DEFAULT_LOCK_WAIT_MS);
+  while (true) {
+    let lock: { readonly path: string } | undefined;
+    try {
+      lock = await acquireMcpServerLock(descriptor);
+    } catch (error) {
+      if (lockErrorCode(error) !== "EEXIST") throw error;
+      if (await lockIsStale(lockPath)) {
+        await rm(lockPath, { force: true });
+        continue;
+      }
+    }
+
+    if (lock) {
+      try {
+        return await operation();
+      } finally {
+        await rm(lock.path, { force: true }).catch(() => undefined);
+      }
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for MCP lifecycle lock for '${descriptor.serverName}'.`);
+    }
+    await delay(100);
+  }
+};
 
 const assertSupportedLifecycleTarget = (options: McpLifecycleCommonOptions): void => {
   assertMcpHttpTargetSupported(options.harness, "lifecycle");
@@ -236,14 +326,7 @@ const isPortAvailable = (host: string, port: number): Promise<boolean> =>
     });
   });
 
-const pidIsRunning = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
-};
+const pidIsRunning = processIsRunning;
 
 const waitForPidExit = async (pid: number, timeoutMs: number): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
@@ -353,9 +436,13 @@ const resolveTokenForServer = async (options: {
   if (options.create) {
     return ensureMcpToken(options.descriptor.harnessRoot, options.descriptor.serverName, {
       ...(envToken ? { preferredToken: envToken } : {}),
+      ...(options.tokenEnv ? { preferredTokenEnv: options.tokenEnv } : {}),
     });
   }
-  return envToken ?? readMcpToken(options.descriptor.harnessRoot, options.descriptor.serverName);
+  return normalizePreferredMcpBearerToken({
+    preferredToken: envToken,
+    preferredTokenEnv: options.tokenEnv,
+  }) ?? readMcpToken(options.descriptor.harnessRoot, options.descriptor.serverName);
 };
 
 const fetchHealth = async (
@@ -843,8 +930,11 @@ const classifyStatus = async (options: {
 const preparedUrl = (metadata: McpRuntimeMetadata): string =>
   metadata.host && metadata.port ? `http://${metadata.host}:${metadata.port}/mcp` : "(unknown url)";
 
-const statusWithExpectedBundle = async (options: McpStatusOptions): Promise<McpStatusResult> => {
-  const { registry, descriptor } = await resolveLifecycleContext(options);
+const statusWithResolvedContext = async (
+  options: McpStatusOptions,
+  context: { readonly registry: PluginRegistry; readonly descriptor: McpRuntimeDescriptor },
+): Promise<McpStatusResult> => {
+  const { registry, descriptor } = context;
   const metadata = await readRuntimeMetadataIfPresent(descriptor);
   const tokenEnv = options.tokenEnv ?? resolveMcpRuntime(registry, options.harness).tokenEnv;
   const token = await resolveTokenForServer({
@@ -861,6 +951,9 @@ const statusWithExpectedBundle = async (options: McpStatusOptions): Promise<McpS
     token,
   });
 };
+
+const statusWithExpectedBundle = async (options: McpStatusOptions): Promise<McpStatusResult> =>
+  statusWithResolvedContext(options, await resolveLifecycleContext(options));
 
 export const getMcpStatus = async (options: McpStatusOptions): Promise<McpStatusResult> =>
   statusWithExpectedBundle(options);
@@ -914,8 +1007,11 @@ export const listMcpStatuses = async (
   return statuses;
 };
 
-export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult> => {
-  const { registry, descriptor } = await resolveLifecycleContext(options);
+const serveMcpResolved = async (
+  options: McpServeOptions,
+  context: { readonly registry: PluginRegistry; readonly descriptor: McpRuntimeDescriptor },
+): Promise<McpServeResult> => {
+  const { registry, descriptor } = context;
   const existing = await readRuntimeMetadataIfPresent(descriptor);
   const configured = resolveMcpRuntime(registry, options.harness);
   const host = options.host?.trim() || configured.host;
@@ -973,14 +1069,14 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
       };
     }
     if (status.state === "stale-build") {
-      await stopMcp({
+      await stopMcpResolved({
         pluginPath: options.pluginPath,
         harness: options.harness,
         scope: options.scope,
         projectPath: options.projectPath,
         root: options.root,
         tokenEnv,
-      });
+      }, context);
     } else if (status.state !== "stale-pid") {
       throw new Error(
         `Recorded MCP daemon is ${status.state}; run 'prism mcp status' or 'prism mcp restart' (${status.detail}).`,
@@ -1074,8 +1170,16 @@ export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult
   return { state: "started", descriptor, metadata, health };
 };
 
-export const stopMcp = async (options: McpStopOptions): Promise<McpStopResult> => {
-  const status = await getMcpStatus(options);
+export const serveMcp = async (options: McpServeOptions): Promise<McpServeResult> => {
+  const context = await resolveLifecycleContext(options);
+  return withMcpServerLock(context.descriptor, () => serveMcpResolved(options, context));
+};
+
+const stopMcpResolved = async (
+  options: McpStopOptions,
+  context: { readonly registry: PluginRegistry; readonly descriptor: McpRuntimeDescriptor },
+): Promise<McpStopResult> => {
+  const status = await statusWithResolvedContext(options, context);
   const metadata = status.metadata;
   if (!metadata?.pid) {
     return { state: "already-stopped", descriptor: status.descriptor, metadata };
@@ -1103,12 +1207,20 @@ export const stopMcp = async (options: McpStopOptions): Promise<McpStopResult> =
   return { state: "stopped", descriptor: status.descriptor, metadata: next };
 };
 
+export const stopMcp = async (options: McpStopOptions): Promise<McpStopResult> => {
+  const context = await resolveLifecycleContext(options);
+  return withMcpServerLock(context.descriptor, () => stopMcpResolved(options, context));
+};
+
 export const restartMcp = async (options: McpServeOptions): Promise<McpServeResult> => {
-  await stopMcp(options).catch((error) => {
-    if (error instanceof Error && error.message.includes("already-stopped")) return;
-    throw error;
+  const context = await resolveLifecycleContext(options);
+  return withMcpServerLock(context.descriptor, async () => {
+    await stopMcpResolved(options, context).catch((error) => {
+      if (error instanceof Error && error.message.includes("already-stopped")) return;
+      throw error;
+    });
+    return serveMcpResolved(options, context);
   });
-  return serveMcp(options);
 };
 
 export const formatMcpStatus = (status: McpStatusResult): string => {

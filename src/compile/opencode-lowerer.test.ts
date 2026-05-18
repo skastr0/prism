@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ComposedAgent } from "./compose.js";
 import { executeLowering, planLowering, type LowerOperation } from "./lowerers/opencode.js";
+import { executeStandardLowering } from "./lowerers/shared.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
 
@@ -251,6 +252,41 @@ test("opencode executeLowering skips unchanged operations without backups", asyn
     agent: { builder: { model: "old" } },
   });
   expect(await pathExists(`${jsonTarget}.bak`)).toBe(false);
+});
+
+test("executeLowering applies explicit modes to unchanged write operations", async () => {
+  const root = await createTempRoot();
+  const opencodeTarget = join(root, "opencode", "secret.toml");
+  const sharedTarget = join(root, "shared", "secret.json");
+  await writeText(opencodeTarget, "secret\n");
+  await writeText(sharedTarget, "secret\n");
+  await chmod(opencodeTarget, 0o644);
+  await chmod(sharedTarget, 0o644);
+
+  const opencodeOperations: LowerOperation[] = [
+    {
+      kind: "write-plugin-file",
+      target: opencodeTarget,
+      content: "secret\n",
+      mode: 0o600,
+      reason: "unchanged",
+    },
+  ];
+  const sharedOperations: LowerOperation[] = [
+    {
+      kind: "write-plugin-file",
+      target: sharedTarget,
+      content: "secret\n",
+      mode: 0o600,
+      reason: "unchanged",
+    },
+  ];
+
+  await executeLowering(opencodeOperations, { backup: false, dryRun: false });
+  await executeStandardLowering(sharedOperations, { backup: false, dryRun: false });
+
+  expect((await stat(opencodeTarget)).mode & 0o777).toBe(0o600);
+  expect((await stat(sharedTarget)).mode & 0o777).toBe(0o600);
 });
 
 test("opencode executeLowering preserves plugin keys and deletes empty permission keys", async () => {

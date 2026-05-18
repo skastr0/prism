@@ -371,8 +371,10 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     bearerToken: input.target.mcpBearerToken,
     toolNames: mcp.toolNames,
   });
-  if (nextConfig !== currentConfig) {
-    await pushWrite(operations, configPath(input.target), nextConfig);
+  if (nextConfig !== currentConfig || input.target.mcpBearerToken) {
+    await pushWrite(operations, configPath(input.target), nextConfig, "write-plugin-file", {
+      mode: input.target.mcpBearerToken ? 0o600 : undefined,
+    });
   }
 
   return operations;

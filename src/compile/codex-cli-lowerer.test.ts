@@ -423,6 +423,7 @@ export default defineTool({
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(agentToml?.mode).toBe(0o600);
 
   const configToml = findContentOperation(operations, "config.toml");
   expect(configToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
@@ -432,6 +433,7 @@ export default defineTool({
   expect(configToml?.content).not.toContain('command = "bun"');
   expect(configToml?.content).not.toContain("args = ");
   expect(configToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(configToml?.mode).toBe(0o600);
 
   const bundle = operations.find(
     (operation): operation is ContentOperation =>

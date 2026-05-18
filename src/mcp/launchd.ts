@@ -47,7 +47,7 @@ const renderEnvironment = (environment: Readonly<Record<string, string>>): strin
     "  </dict>",
   ].join("\n");
 
-const renderPlist = (spec: LaunchAgentSpec): string =>
+export const renderLaunchAgentPlist = (spec: LaunchAgentSpec): string =>
   `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,7 +63,12 @@ ${renderEnvironment(spec.environment)}
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
   <key>StandardOutPath</key>
   <string>${xmlEscape(spec.standardOutPath)}</string>
   <key>StandardErrorPath</key>
@@ -106,7 +111,7 @@ export const installLaunchAgent = async (
   const plistPath = launchAgentPathForLabel(spec.label);
   await mkdir(userLaunchAgentDir(), { recursive: true });
   await mkdir(join(spec.workingDirectory, "prism", "logs"), { recursive: true, mode: 0o700 });
-  await writeFile(plistPath, renderPlist(spec), { mode: 0o600 });
+  await writeFile(plistPath, renderLaunchAgentPlist(spec), { mode: 0o600 });
   await chmod(plistPath, 0o600).catch(() => undefined);
 
   const domain = launchctlDomain();

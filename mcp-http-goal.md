@@ -798,7 +798,7 @@ Notes:
 
 ### GLYPH-MCP-HTTP-11: Tower and Grok Agent HTTP Opt-In
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -822,11 +822,30 @@ Acceptance:
 
 Validation:
 
-- Prism focused tests and typecheck.
-- Prism-plugins typecheck.
-- temp-root `prism mcp serve/status/compile --mcp-lifecycle verify/stop` for
-  Tower and Grok Agent on supported targets.
+- `../prism-plugins: bun run typecheck`
+- `../prism-plugins: bun test tower/tests grok-agent/tests`
+- `prism: bun run dev -- validate ../prism-plugins/tower`
+- `prism: bun run dev -- validate ../prism-plugins/grok-agent`
+- temp-root `prism mcp serve/compile --mcp-lifecycle verify/stop` for Tower
+  and Grok Agent on Hermes, Codex CLI, and Claude Code.
+- Temp generated config inspection confirmed `url` transports and no stdio
+  `command` entries for the six supported plugin/harness pairs.
+- `../prism-plugins: git diff --check`
 - `pulsar score .`
+
+Notes:
+
+- Tower now declares Streamable HTTP runtime for Hermes (`38463`), Codex CLI
+  (`38464`), and Claude Code (`38465`) using `PRISM_MCP_TOWER_TOKEN`.
+- Grok Agent now declares Streamable HTTP runtime for Hermes (`38473`), Codex
+  CLI (`38474`), and Claude Code (`38475`) using
+  `PRISM_MCP_GROK_AGENT_TOKEN`.
+- Gemini CLI and Grok Build target remain stdio because safe HTTP bearer-token
+  config is not verified for those targets.
+- Temp daemon pids started during validation were stopped; post-stop status for
+  representative Codex and Claude temp roots reports `stopped`.
+- Pulsar hard gate passed for `../prism-plugins` using built-in defaults.
+  Readiness remains under existing duplication pressure in agent-foundations.
 
 ### GLYPH-MCP-HTTP-12: Live Install Decision and Final Audit
 

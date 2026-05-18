@@ -1,11 +1,11 @@
 # Goal: Make Prism Generated MCPs Safe Under Hermes Agent Fan-Out
 
 Date: 2026-05-17
-Status: in progress
+Status: done
 Primary target harness: `hermes`
 
 Phase 1 status: done.
-Phase 2 status: in progress.
+Phase 2 status: done.
 
 ## Receipt
 
@@ -849,7 +849,7 @@ Notes:
 
 ### GLYPH-MCP-HTTP-12: Live Install Decision and Final Audit
 
-Status: pending
+Status: done
 
 Intent:
 
@@ -873,9 +873,57 @@ Acceptance:
 
 Validation:
 
-- live or temp-root `mcp status` evidence.
-- config inspection for `url` versus `command`.
-- `git status --short` clean in both repos.
+- Live config inspection:
+  - `~/.hermes/config.yaml` still has `command: "bun"` entries for
+    `prism-generated-tower` and `prism-generated-grok-agent`.
+  - `~/.codex/config.toml` still has `command = "bun"` entries for
+    `prism-generated-tower` and `prism-generated-grok-agent`.
+  - `~/.claude/plugins/prism-generated-tower/.mcp.json` and
+    `~/.claude/plugins/prism-generated-grok-agent/.mcp.json` still have
+    stdio `command` entries.
+- Live daemon status:
+  - Tower Hermes/Codex/Claude: `stopped`, runtime metadata missing.
+  - Grok Agent Hermes/Codex/Claude: `stopped`, runtime metadata missing.
+- Token env audit:
+  - `PRISM_MCP_TOWER_TOKEN` not present in current environment.
+  - `PRISM_MCP_GROK_AGENT_TOKEN` not present in current environment.
+  - No matching token env lines found in searched shell/harness config files.
+- Process audit:
+  - Existing `bun`/`mise` MCP processes for Tower and Grok Agent are still
+    harness-owned stdio processes from existing live configs, not
+    Prism-managed HTTP daemons.
+- `git status --short` clean in `prism` and `../prism-plugins` after commits.
+
+Live activation decision:
+
+- Do not mutate live harness configs yet. Writing URL config without token env
+  visible to the harness processes would produce MCP entries that cannot
+  authenticate to their daemons.
+- Capability is implemented and committed; Tower and Grok Agent are opted into
+  Streamable HTTP for Hermes, Codex CLI, and Claude Code at the plugin manifest
+  layer.
+
+Operator commands once token env is set in the environment used to launch the
+target harnesses:
+
+```bash
+export PRISM_MCP_TOWER_TOKEN=<token>
+export PRISM_MCP_GROK_AGENT_TOKEN=<token>
+
+prism mcp serve ../prism-plugins/tower --harness hermes --scope global
+prism compile ../prism-plugins/tower --harness hermes --mcp-lifecycle verify
+prism mcp serve ../prism-plugins/tower --harness codex-cli --scope global
+prism compile ../prism-plugins/tower --harness codex-cli --mcp-lifecycle verify
+prism mcp serve ../prism-plugins/tower --harness claude-code --scope global
+prism compile ../prism-plugins/tower --harness claude-code --mcp-lifecycle verify
+
+prism mcp serve ../prism-plugins/grok-agent --harness hermes --scope global
+prism compile ../prism-plugins/grok-agent --harness hermes --mcp-lifecycle verify
+prism mcp serve ../prism-plugins/grok-agent --harness codex-cli --scope global
+prism compile ../prism-plugins/grok-agent --harness codex-cli --mcp-lifecycle verify
+prism mcp serve ../prism-plugins/grok-agent --harness claude-code --scope global
+prism compile ../prism-plugins/grok-agent --harness claude-code --mcp-lifecycle verify
+```
 
 ## Sources
 

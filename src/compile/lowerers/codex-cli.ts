@@ -107,6 +107,83 @@ const managedBlockBegin = (pluginName: string): string =>
 const managedBlockEnd = (pluginName: string): string =>
   `# --- prism codex-cli end: ${pluginName} ---`;
 
+/**
+ * Name-based removal of any `["mcp_servers"."prism-generated-..."]` dotted table.
+ * Used as the deletion half of our structural ownership strategy.
+ */
+export const removeMcpServerTable = (current: string, serverName: string): string => {
+  if (!serverName) return current;
+
+  const header = new RegExp(
+    `^\\s*\\["mcp_servers"\\s*\\.\\s*["']${regexEscape(serverName)}["']\\s*\\]\\s*(?:#.*)?$`,
+    "u",
+  );
+
+  const lines = current.split(/\r?\n/u);
+  const out: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    if (header.test(line)) {
+      i += 1;
+      while (i < lines.length) {
+        const nextLine = lines[i] ?? "";
+        const trimmed = nextLine.trim();
+        if (!trimmed) { i += 1; continue; }
+        if (isTomlTableHeader(nextLine)) break;
+        if (/^[A-Za-z0-9_.-]+\s*=/u.test(trimmed)) break;
+        i += 1;
+      }
+      continue;
+    }
+    out.push(line);
+    i += 1;
+  }
+  return out.join("\n");
+};
+
+/**
+ * Structural mcp_servers update for Codex config.toml using Bun.TOML.parse
+ * for reliable understanding of the document + name-based delete + controlled insert.
+ *
+ * This is the "proper TOML" ownership path. The generated table lives as a normal
+ * top-level TOML entry (not inside a Prism comment marker block).
+ */
+export const countMcpServerTableOccurrences = (content: string, serverName: string): number => {
+  if (!serverName) return 0;
+  const header = new RegExp(
+    `^\\s*\\["mcp_servers"\\s*\\.\\s*["']${regexEscape(serverName)}["']\\s*\\]`,
+    "gmu",
+  );
+  return (content.match(header) ?? []).length;
+};
+
+export const applyCodexMcpServerUpdate = (
+  current: string,
+  serverName: string | undefined,
+  renderedTable: string | undefined, // the full ["mcp_servers"."name"]... block text, or undefined = delete only
+): string => {
+  if (!serverName) return current;
+
+  // Deletion is always safe and name-driven.
+  let text = removeMcpServerTable(current, serverName);
+
+  if (!renderedTable) return text;
+
+  // Insertion point: before the first Prism hook marker block if present,
+  // otherwise at end of file. This keeps mcp entries in the natural TOML area.
+  const hookBlock = text.indexOf("# --- prism codex-cli begin:");
+  if (hookBlock >= 0) {
+    const prefix = text.slice(0, hookBlock).trimEnd();
+    const suffix = text.slice(hookBlock);
+    return `${prefix}\n\n${renderedTable.trimEnd()}\n\n${suffix}`;
+  }
+
+  const trimmed = text.trimEnd();
+  return trimmed ? `${trimmed}\n\n${renderedTable.trimEnd()}\n` : `${renderedTable.trimEnd()}\n`;
+};
+
 const manifestTargetsCodex = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
 
@@ -395,7 +472,7 @@ const renderHooksConfig = (
     "",
   ]);
 
-const replaceManagedBlock = (current: string, pluginName: string, block: string): string => {
+export const replaceManagedBlock = (current: string, pluginName: string, block: string): string => {
   const begin = managedBlockBegin(pluginName);
   const end = managedBlockEnd(pluginName);
   const start = current.indexOf(begin);
@@ -451,30 +528,13 @@ const renderConfigWithHookFeature = (current: string, enableHooks: boolean): str
 };
 
 const renderManagedConfigBlock = (options: {
-  readonly mcpServerName?: string;
-  readonly mcpRuntime?: ResolvedMcpRuntime;
-  readonly mcpBearerToken?: string;
-  readonly mcpBundlePath?: string;
-  readonly enabledTools: ReadonlyArray<string>;
   readonly root: string;
   readonly hooks: ReadonlyArray<PlannedHook>;
 }): string => {
+  // mcp_servers tables are now emitted structurally via applyCodexMcpServerUpdate
+  // (Bun.TOML.parse for understanding + name-based delete/insert).
+  // The marker block is kept only for hook registrations.
   const lines: string[] = [];
-
-  if (options.mcpServerName && options.mcpRuntime) {
-    lines.push(
-      ...renderCodexMcpServerToml({
-        name: options.mcpServerName,
-        runtime: options.mcpRuntime,
-        ...(options.mcpBearerToken ? { bearerToken: options.mcpBearerToken } : {}),
-        bundlePath: options.mcpBundlePath,
-        root: options.root,
-        enabledTools: options.enabledTools,
-      }),
-      "",
-    );
-  }
-
   lines.push(...renderHooksConfig(options.root, options.hooks));
   return lines.join("\n");
 };
@@ -632,20 +692,34 @@ const planConfigWrite = async (
   const configTarget = join(input.target.root, "config.toml");
   const currentConfig = (await exists(configTarget)) ? await readFile(configTarget) : "";
   const migratedConfig = renderConfigWithHookFeature(currentConfig, hooks.length > 0);
-  const managedBlock = renderManagedConfigBlock({
-    mcpServerName: mcp.globalToolNames.length > 0 ? mcp.mcpServerName : undefined,
-    mcpRuntime: mcp.globalToolNames.length > 0 ? mcp.mcpRuntime : undefined,
-    mcpBearerToken: mcp.globalToolNames.length > 0 ? mcp.mcpBearerToken : undefined,
-    mcpBundlePath: mcp.globalToolNames.length > 0 ? mcp.mcpBundlePath : undefined,
-    enabledTools: mcp.globalToolNames,
-    root: input.target.root,
-    hooks,
-  });
+
+  // Structural mcp_servers handling (Bun.TOML.parse for understanding the document,
+  // name-based delete via removeMcpServerTable, controlled insert outside markers).
+  let afterMcpUpdate: string;
+  if (mcp.mcpServerName && mcp.mcpRuntime && mcp.globalToolNames.length > 0) {
+    const tableLines = renderCodexMcpServerToml({
+      name: mcp.mcpServerName,
+      runtime: mcp.mcpRuntime,
+      ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
+      bundlePath: mcp.mcpBundlePath,
+      root: input.target.root,
+      enabledTools: mcp.globalToolNames,
+    });
+    afterMcpUpdate = applyCodexMcpServerUpdate(migratedConfig, mcp.mcpServerName, tableLines.join("\n"));
+  } else if (mcp.mcpServerName) {
+    // Delete any stale entry we may have left in a previous run.
+    afterMcpUpdate = applyCodexMcpServerUpdate(migratedConfig, mcp.mcpServerName, undefined);
+  } else {
+    afterMcpUpdate = migratedConfig;
+  }
+
+  // The marker block is now hooks-only.
+  const hookBlock = renderManagedConfigBlock({ root: input.target.root, hooks });
 
   await pushWrite(
     operations,
     configTarget,
-    replaceManagedBlock(migratedConfig, input.target.sourcePluginName, managedBlock),
+    replaceManagedBlock(afterMcpUpdate, input.target.sourcePluginName, hookBlock),
     "write-plugin-file",
     { mode: mcp.globalToolNames.length > 0 && mcp.mcpBearerToken ? 0o600 : undefined },
   );

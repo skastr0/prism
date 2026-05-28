@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -105,16 +105,45 @@ const runLaunchctl = async (
   }
 };
 
+const readExistingPlist = async (plistPath: string): Promise<string | undefined> => {
+  try {
+    return await readFile(plistPath, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+const isLaunchAgentLoaded = async (domain: string, label: string): Promise<boolean> => {
+  try {
+    await execFileAsync("launchctl", ["print", `${domain}/${label}`]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const installLaunchAgent = async (
   spec: LaunchAgentSpec,
 ): Promise<LaunchAgentInstallResult> => {
   const plistPath = launchAgentPathForLabel(spec.label);
+  const desiredPlist = renderLaunchAgentPlist(spec);
+  const domain = launchctlDomain();
+
+  // The LaunchAgent label is plugin-global (one MCP daemon per plugin across all
+  // harnesses). If the on-disk plist already matches the desired spec byte-for-byte
+  // and launchd has the service loaded, this is a no-op — skip the bootout /
+  // bootstrap / kickstart churn that would otherwise race against other harness
+  // compiles and trip launchd's ThrottleInterval.
+  const existingPlist = await readExistingPlist(plistPath);
+  if (existingPlist === desiredPlist && await isLaunchAgentLoaded(domain, spec.label)) {
+    return { label: spec.label, plistPath };
+  }
+
   await mkdir(userLaunchAgentDir(), { recursive: true });
   await mkdir(join(spec.workingDirectory, "prism", "logs"), { recursive: true, mode: 0o700 });
-  await writeFile(plistPath, renderLaunchAgentPlist(spec), { mode: 0o600 });
+  await writeFile(plistPath, desiredPlist, { mode: 0o600 });
   await chmod(plistPath, 0o600).catch(() => undefined);
 
-  const domain = launchctlDomain();
   await runLaunchctl(["bootout", `${domain}/${spec.label}`], { allowFailure: true });
   await runLaunchctl(["bootout", domain, plistPath], { allowFailure: true });
   await runLaunchctl(["bootstrap", domain, plistPath]);

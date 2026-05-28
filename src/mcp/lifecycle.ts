@@ -353,6 +353,31 @@ const terminatePid = async (
 const bunCommand = (): string =>
   /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath) ? process.execPath : "bun";
 
+// launchd's PATH resolution for non-system bins (mise, homebrew) is unreliable
+// and silently fails with EX_CONFIG (78) before the program ever runs. Resolve
+// bun to an absolute path so plists never depend on launchd's PATH lookup.
+let cachedBunAbsolutePath: string | undefined;
+const bunAbsolutePathForPlist = async (): Promise<string> => {
+  if (cachedBunAbsolutePath) return cachedBunAbsolutePath;
+  const fallback = bunCommand();
+  if (fallback.startsWith("/")) {
+    cachedBunAbsolutePath = fallback;
+    return fallback;
+  }
+  try {
+    const { stdout } = await execFileAsync("/usr/bin/which", ["bun"]);
+    const resolved = stdout.trim();
+    if (resolved.startsWith("/")) {
+      cachedBunAbsolutePath = resolved;
+      return resolved;
+    }
+  } catch {
+    // fall through to fallback
+  }
+  cachedBunAbsolutePath = fallback;
+  return fallback;
+};
+
 const buildServerBundle = async (options: {
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
@@ -748,9 +773,10 @@ const startLaunchAgent = async (
 ): Promise<void> => {
   const label = launchAgentLabelForServer(prepared.descriptor.serverName);
   const logRoot = join(prepared.descriptor.harnessRoot, "prism", "logs");
+  const bunPath = await bunAbsolutePathForPlist();
   await installLaunchAgent({
     label,
-    programArguments: [bunCommand(), prepared.descriptor.serverPath],
+    programArguments: [bunPath, prepared.descriptor.serverPath],
     workingDirectory: prepared.descriptor.harnessRoot,
     environment: launchdEnvironment(prepared),
     standardOutPath: join(logRoot, `${prepared.descriptor.serverName}.out.log`),

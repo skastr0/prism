@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  backupFile,
   chmodFile,
   exists,
   listDirRecursive,
@@ -11,6 +10,18 @@ import {
   removeFile,
   writeFile,
 } from "../../fs.js";
+import { backupManagedTarget } from "../../managed-backups.js";
+import {
+  managedEntryId,
+  readHarnessLedger,
+  removeLedgerEntries,
+  upsertLedgerEntries,
+  writeHarnessLedger,
+  type HarnessLedger,
+  type ManagedLedgerEntry,
+} from "../../managed-ledger.js";
+import type { HarnessId, HarnessScope } from "../../types.js";
+import { computeContentHash } from "../../content-hash.js";
 import type { ComposedAgent } from "../compose.js";
 import {
   renderDerivedOrbitPhaseReferences,
@@ -349,38 +360,174 @@ export const planGeneratedPluginFilePruning = async (options: {
 
 export const executeStandardLowering = async (
   operations: LowerOperation[],
-  options: { backup: boolean; dryRun: boolean },
+  options: ExecuteLoweringOptions,
 ): Promise<{ backups: string[] }> => {
   const backups: string[] = [];
   if (options.dryRun) return { backups };
+  const ledger = options.target ? await readHarnessLedger(options.target.harness) : undefined;
 
   for (const operation of operations) {
-    if (operation.reason === "unchanged") {
-      if (
-        (operation.kind === "write-md" || operation.kind === "write-plugin-file") &&
-        operation.mode !== undefined
-      ) {
-        await chmodFile(operation.target, operation.mode);
-      }
-      continue;
-    }
-
-    if (operation.kind === "write-md" || operation.kind === "write-plugin-file") {
-      if (options.backup && operation.kind === "write-md") {
-        const backup = await backupFile(operation.target);
-        if (backup) backups.push(backup);
-      }
-      await writeFile(operation.target, operation.content, { mode: operation.mode });
-      continue;
-    }
-
-    if (operation.kind === "prune-plugin-path") {
-      if (operation.targetType === "dir") await removeDir(operation.target);
-      else await removeFile(operation.target);
-    }
+    const backup = await executeLoweringOperation(operation, options, ledger);
+    if (backup) backups.push(backup);
   }
 
+  if (ledger) await writeHarnessLedger(ledger);
   return { backups };
+};
+
+type LowerWriteOperation = Extract<
+  LowerOperation,
+  { readonly kind: "write-md" | "write-plugin-file" }
+>;
+
+type LowerPruneOperation = Extract<LowerOperation, { readonly kind: "prune-plugin-path" }>;
+
+const isLowerWriteOperation = (operation: LowerOperation): operation is LowerWriteOperation =>
+  operation.kind === "write-md" || operation.kind === "write-plugin-file";
+
+const executeLoweringOperation = async (
+  operation: LowerOperation,
+  options: ExecuteLoweringOptions,
+  ledger: HarnessLedger | undefined,
+): Promise<string | null> => {
+  if (operation.reason === "unchanged") {
+    await applyUnchangedMode(operation);
+    return null;
+  }
+  if (isLowerWriteOperation(operation)) {
+    return executeLoweringWrite(operation, options, ledger);
+  }
+  if (operation.kind === "prune-plugin-path") {
+    await executeLoweringPrune(operation, options.target, ledger);
+  }
+  return null;
+};
+
+const applyUnchangedMode = async (operation: LowerOperation): Promise<void> => {
+  if (isLowerWriteOperation(operation) && operation.mode !== undefined) {
+    await chmodFile(operation.target, operation.mode);
+  }
+};
+
+const executeLoweringWrite = async (
+  operation: LowerWriteOperation,
+  options: ExecuteLoweringOptions,
+  ledger: HarnessLedger | undefined,
+): Promise<string | null> => {
+  const backup =
+    options.backup && operation.kind === "write-md"
+      ? await backupLoweringTarget(operation.target, options, "write")
+      : null;
+  await writeFile(operation.target, operation.content, { mode: operation.mode });
+  if (ledger && options.target) {
+    upsertLoweringEntry(ledger, options.target, operation.target, "file", operation.content);
+  }
+  return backup;
+};
+
+const executeLoweringPrune = async (
+  operation: LowerPruneOperation,
+  target: LowerExecutionTargetContext | undefined,
+  ledger: HarnessLedger | undefined,
+): Promise<void> => {
+  if (operation.targetType === "dir") await removeDir(operation.target);
+  else await removeFile(operation.target);
+  if (ledger && target) {
+    removeLoweringEntry(ledger, target, operation.target, operation.targetType);
+  }
+};
+
+export interface LowerExecutionTargetContext {
+  readonly harness: HarnessId;
+  readonly scope: HarnessScope;
+  readonly root: string;
+  readonly sourcePluginName: string;
+  readonly sourcePluginVersion?: string;
+  readonly sourcePluginPath?: string;
+}
+
+export interface ExecuteLoweringOptions {
+  readonly backup: boolean;
+  readonly dryRun: boolean;
+  readonly target?: LowerExecutionTargetContext;
+}
+
+export const backupLoweringTarget = async (
+  targetPath: string,
+  options: ExecuteLoweringOptions,
+  operation: "write" | "prune" | "patch",
+): Promise<string | null> => {
+  if (!options.target) return null;
+  return backupManagedTarget({
+    harness: options.target.harness,
+    scope: options.target.scope,
+    targetPath,
+    operation,
+  });
+};
+
+const lowerLedgerEntryId = (
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  kind: "file" | "directory" | "config",
+): string =>
+  managedEntryId({
+    harness: target.harness,
+    scope: target.scope,
+    root: target.root,
+    pluginName: target.sourcePluginName,
+    artifact: "compile",
+    targetPath,
+    kind,
+  });
+
+const upsertLoweringEntry = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  kind: "file" | "config",
+  content: string,
+): void => {
+  const now = new Date().toISOString();
+  const entry: ManagedLedgerEntry = {
+    id: lowerLedgerEntryId(target, targetPath, kind),
+    pluginName: target.sourcePluginName,
+    ...(target.sourcePluginVersion ? { pluginVersion: target.sourcePluginVersion } : {}),
+    pluginPath: target.sourcePluginPath ?? target.root,
+    harness: target.harness,
+    scope: target.scope,
+    root: target.root,
+    artifact: "compile",
+    targetPath,
+    kind,
+    contentHash: computeContentHash(content),
+    updatedAt: now,
+  };
+  Object.assign(ledger, upsertLedgerEntries(ledger, [entry]));
+};
+
+const removeLoweringEntry = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  targetType: "file" | "dir",
+): void => {
+  const kind = targetType === "dir" ? "directory" : "file";
+  Object.assign(
+    ledger,
+    removeLedgerEntries(ledger, new Set([lowerLedgerEntryId(target, targetPath, kind)])),
+  );
+};
+
+export const recordLoweringConfigPatch = async (
+  targetPath: string,
+  content: string,
+  options: ExecuteLoweringOptions,
+): Promise<void> => {
+  if (!options.target) return;
+  const ledger = await readHarnessLedger(options.target.harness);
+  upsertLoweringEntry(ledger, options.target, targetPath, "config", content);
+  await writeHarnessLedger(ledger);
 };
 
 export type LowerWriteKind = "write-md" | "write-plugin-file";
@@ -432,7 +579,17 @@ export const pushGeneratedPluginWrite = async (options: {
 };
 
 export const createGeneratedPluginWritePusher =
-  <Target>(resolveTarget: (target: Target, relativePath: string) => string) =>
+  <Target>(
+    resolveTarget: (target: Target, relativePath: string) => string,
+  ): ((
+    operations: LowerOperation[],
+    desiredRelativePaths: Set<string>,
+    target: Target,
+    relativePath: string,
+    content: string,
+    kind?: LowerWriteKind,
+    options?: LowerWriteOptions,
+  ) => Promise<void>) =>
   async (
     operations: LowerOperation[],
     desiredRelativePaths: Set<string>,

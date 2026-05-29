@@ -64,20 +64,20 @@ import {
   bindingsFromCanonicalTools,
 } from "../tool-bindings.js";
 import {
+  backupLoweringTarget,
+  executeStandardLowering,
   nativeHookEventName,
   prismOwnerMarker,
+  recordLoweringConfigPatch,
   renderGeneratedOrbitSkill,
+  type ExecuteLoweringOptions,
   writeReason,
 } from "./shared.js";
 import {
-  backupFile,
-  chmodFile,
   exists as fileExists,
   readFile,
   writeFile,
   listDirRecursive,
-  removeDir,
-  removeFile,
 } from "../../fs.js";
 
 // Keys at agent.<name>.* that the compiler owns. Other keys on an existing
@@ -2122,11 +2122,6 @@ type OpenCodeJsonPatchOperation = Extract<
   | { readonly kind: "patch-opencode-permission" }
 >;
 
-type ExecuteLoweringOptions = {
-  readonly backup: boolean;
-  readonly dryRun: boolean;
-};
-
 const isOpenCodeJsonPatchOperation = (
   operation: LowerOperation,
 ): operation is OpenCodeJsonPatchOperation =>
@@ -2144,57 +2139,6 @@ const collectOpenCodeJsonPatchOperations = (
     (operation): operation is OpenCodeJsonPatchOperation =>
       shouldApplyLowerOperation(operation) && isOpenCodeJsonPatchOperation(operation),
   );
-
-const executeWriteOperation = async (
-  operation: Extract<LowerOperation, { readonly kind: "write-md" | "write-plugin-file" }>,
-  options: ExecuteLoweringOptions,
-  backups: string[],
-): Promise<void> => {
-  if (options.backup && operation.kind === "write-md") {
-    const backup = await backupFile(operation.target);
-    if (backup) backups.push(backup);
-  }
-  await writeFile(operation.target, operation.content, { mode: operation.mode });
-};
-
-const executePruneOperation = async (
-  operation: Extract<LowerOperation, { readonly kind: "prune-plugin-path" }>,
-): Promise<void> => {
-  if (operation.targetType === "dir") {
-    await removeDir(operation.target);
-  } else {
-    await removeFile(operation.target);
-  }
-};
-
-const executeNonJsonLoweringOperations = async (
-  operations: ReadonlyArray<LowerOperation>,
-  options: ExecuteLoweringOptions,
-  backups: string[],
-): Promise<void> => {
-  for (const operation of operations) {
-    if (operation.reason === "unchanged") {
-      if (
-        (operation.kind === "write-md" || operation.kind === "write-plugin-file") &&
-        operation.mode !== undefined
-      ) {
-        await chmodFile(operation.target, operation.mode);
-      }
-      continue;
-    }
-    if (!shouldApplyLowerOperation(operation)) continue;
-    if (isOpenCodeJsonPatchOperation(operation)) continue;
-
-    if (operation.kind === "write-md" || operation.kind === "write-plugin-file") {
-      await executeWriteOperation(operation, options, backups);
-      continue;
-    }
-
-    if (operation.kind === "prune-plugin-path") {
-      await executePruneOperation(operation);
-    }
-  }
-};
 
 const readOpenCodeConfigForWrite = async (
   jsonTarget: string,
@@ -2273,7 +2217,7 @@ const executeOpenCodeJsonPatchOperations = async (
 
   const jsonTarget = operations[0]!.target;
   if (options.backup) {
-    const backup = await backupFile(jsonTarget);
+    const backup = await backupLoweringTarget(jsonTarget, options, "patch");
     if (backup) backups.push(backup);
   }
 
@@ -2287,6 +2231,7 @@ const executeOpenCodeJsonPatchOperations = async (
 
   const serialized = JSON.stringify(config, null, 2) + "\n";
   await writeFile(jsonTarget, serialized);
+  await recordLoweringConfigPatch(jsonTarget, serialized, options);
 };
 
 export const executeLowering = async (
@@ -2296,7 +2241,7 @@ export const executeLowering = async (
   const backups: string[] = [];
   if (options.dryRun) return { backups };
 
-  await executeNonJsonLoweringOperations(operations, options, backups);
+  backups.push(...(await executeStandardLowering(operations, options)).backups);
   await executeOpenCodeJsonPatchOperations(
     collectOpenCodeJsonPatchOperations(operations),
     options,

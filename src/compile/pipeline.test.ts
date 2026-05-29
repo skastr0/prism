@@ -36,10 +36,12 @@ import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 
 const tempRoots: string[] = [];
 const compileTestToken = "prism-compile-test-token-with-enough-entropy";
+const originalPrismHome = process.env.PRISM_HOME;
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-compile-"));
   tempRoots.push(root);
+  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
 
@@ -1210,6 +1212,7 @@ export default defineTool({
 };
 
 afterEach(async () => {
+  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );

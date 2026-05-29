@@ -5,14 +5,17 @@ import { dirname, join } from "node:path";
 import type { ComposedAgent } from "./compose.js";
 import { executeLowering, planLowering, type LowerOperation } from "./lowerers/opencode.js";
 import { executeStandardLowering } from "./lowerers/shared.js";
+import { readHarnessLedger } from "../managed-ledger.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
 
 const tempRoots: string[] = [];
+const originalPrismHome = process.env.PRISM_HOME;
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-opencode-lowerer-"));
   tempRoots.push(root);
+  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
 
@@ -49,9 +52,19 @@ const createComposedAgent = (
 });
 
 afterEach(async () => {
+  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
+});
+
+const opencodeExecutionTarget = (root: string) => ({
+  harness: "opencode" as const,
+  scope: "global" as const,
+  root,
+  sourcePluginName: "opencode-lowerer-test",
+  sourcePluginVersion: "0.1.0",
+  sourcePluginPath: join(root, "plugin"),
 });
 
 test("opencode executeLowering skips every operation during dry run", async () => {
@@ -190,10 +203,19 @@ test("opencode executeLowering applies mixed operations and aggregates config pa
     },
   ];
 
-  const result = await executeLowering(operations, { backup: true, dryRun: false });
+  const result = await executeLowering(operations, {
+    backup: true,
+    dryRun: false,
+    target: opencodeExecutionTarget(root),
+  });
 
-  expect(result.backups).toEqual([`${mdTarget}.bak`, `${jsonTarget}.bak`]);
-  expect(await readFile(`${mdTarget}.bak`, "utf8")).toBe("old markdown");
+  expect(result.backups).toHaveLength(2);
+  expect(result.backups[0]).toContain(join(process.env.PRISM_HOME!, "backups", "opencode"));
+  expect(result.backups[1]).toContain(join(process.env.PRISM_HOME!, "backups", "opencode"));
+  expect(await readFile(result.backups[0]!, "utf8")).toBe("old markdown");
+  expect(await readFile(result.backups[1]!, "utf8")).toContain('"old"');
+  expect(await pathExists(`${mdTarget}.bak`)).toBe(false);
+  expect(await pathExists(`${jsonTarget}.bak`)).toBe(false);
   expect(await pathExists(`${pluginTarget}.bak`)).toBe(false);
   expect(await readFile(mdTarget, "utf8")).toBe("new markdown");
   expect(await readFile(pluginTarget, "utf8")).toBe("new plugin");
@@ -213,6 +235,15 @@ test("opencode executeLowering applies mixed operations and aggregates config pa
       "new_*": "deny",
     },
   });
+
+  const ledger = await readHarnessLedger("opencode");
+  expect(ledger.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ targetPath: mdTarget, kind: "file" }),
+      expect.objectContaining({ targetPath: pluginTarget, kind: "file" }),
+      expect.objectContaining({ targetPath: jsonTarget, kind: "config" }),
+    ]),
+  );
 });
 
 test("opencode executeLowering skips unchanged operations without backups", async () => {

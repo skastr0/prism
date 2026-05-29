@@ -49,6 +49,7 @@ import {
   executeLowering as executeGrokLowering,
   planLowering as planGrokLowering,
 } from "./lowerers/grok.js";
+import type { ExecuteLoweringOptions } from "./lowerers/shared.js";
 import {
   InvalidTargetScopeError,
   UnsupportedTargetCapabilityError,
@@ -101,7 +102,7 @@ interface LowererModule {
   }) => Promise<LowerOperation[]>;
   readonly executeLowering: (
     operations: LowerOperation[],
-    options: { backup: boolean; dryRun: boolean },
+    options: ExecuteLoweringOptions,
   ) => Promise<{ backups: string[] }>;
 }
 
@@ -857,13 +858,27 @@ const planTargetLowering = (options: {
 const executeTargetLowering = (
   lowerer: LowererModule,
   operations: ReadonlyArray<LowerOperation>,
-  options: Pick<CompileOptions, "backup" | "dryRun">,
+  options: Pick<CompileOptions, "backup" | "dryRun" | "scope"> & {
+    readonly context: CompileTargetContext;
+    readonly registry: PluginRegistry;
+  },
 ): Effect.Effect<string[], CompileError> => {
   if (options.dryRun) return Effect.succeed([]);
 
   return Effect.gen(function* () {
     const result = yield* Effect.promise(() =>
-      lowerer.executeLowering([...operations], { backup: options.backup, dryRun: false })
+      lowerer.executeLowering([...operations], {
+        backup: options.backup,
+        dryRun: false,
+        target: {
+          harness: options.context.targetId,
+          scope: options.scope,
+          root: options.context.outputRoot,
+          sourcePluginName: options.registry.pluginName,
+          sourcePluginVersion: options.registry.pluginVersion,
+          sourcePluginPath: options.registry.pluginPath,
+        },
+      })
     );
     return result.backups;
   });
@@ -960,7 +975,13 @@ export const compilePluginForTarget = (
       artifacts,
       operations: allOps,
     });
-    const backups = yield* executeTargetLowering(context.lowerer, allOps, options);
+    const backups = yield* executeTargetLowering(context.lowerer, allOps, {
+      backup: options.backup,
+      dryRun: options.dryRun,
+      scope: options.scope,
+      context,
+      registry,
+    });
     const lockfilePath = yield* persistCompileOutputs({
       pluginPath: options.pluginPath,
       registry,

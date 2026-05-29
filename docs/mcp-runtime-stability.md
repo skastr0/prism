@@ -68,7 +68,7 @@ The current local patches keep the stdio shape but reduce obvious blast radius:
 
 The current local implementation also adds an opt-in Streamable HTTP bundle
 path through `plugin.json -> runtime.mcp.<harness>` for Hermes, Codex CLI,
-Claude Code, and Gemini CLI. Prism owns the local bearer token, starts the
+Claude Code, and Antigravity CLI. Prism owns the local bearer token, starts the
 generated server during non-dry-run compile/install by default, and writes
 client config with static authorization headers for the trusted local machine.
 
@@ -159,7 +159,7 @@ A shared HTTP MCP runtime must hold these invariants:
    ```json
    {
      "targets": {
-       "tools": ["hermes", "codex-cli", "claude-code", "gemini-cli"]
+       "tools": ["hermes", "codex-cli", "claude-code", "antigravity-cli"]
      },
      "runtime": {
        "mcp": {
@@ -195,7 +195,7 @@ Local tests should cover both transports:
 - stdio still accepts content-length and newline JSON-RPC.
 - Hermes stdio config emits absolute Bun when available, timeouts, disabled
   sampling, and explicit Prism runtime env.
-- HTTP config emits `url`/`httpUrl` plus a static Prism-owned bearer header and
+- HTTP config emits the target-native HTTP URL key plus a static Prism-owned bearer header and
   does not emit `command`.
 - One HTTP server handles multiple initialize requests and routes follow-up
   calls by `MCP-Session-Id`.

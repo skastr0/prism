@@ -34,7 +34,7 @@ const TARGET_PRESETS = {
     "claude-code",
     "opencode",
     "codex-cli",
-    "gemini-cli",
+    "antigravity-cli",
     "amp-code",
     "cursor",
     "factory-droid",
@@ -46,12 +46,56 @@ const TARGET_PRESETS = {
 const COMPILE_SUPPORTED_HARNESSES = [
   "opencode",
   "claude-code",
-  "gemini-cli",
+  "antigravity-cli",
   "codex-cli",
   "amp-code",
   "hermes",
   "grok",
 ] as const satisfies ReadonlyArray<HarnessId>;
+
+const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
+  rules: ["antigravity-cli"],
+};
+
+const getCompileManagedPluginArtifactTargets = (
+  artifact: PluginArtifactType,
+): readonly HarnessId[] => COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS[artifact] ?? [];
+
+const manifestHasStructuredCompileTargets = (
+  manifest: PluginManifest,
+  harnessId?: HarnessId,
+): boolean => {
+  const compileKeys = ["agents", ...COMPILE_ARTIFACT_TYPES] as const;
+  for (const key of compileKeys) {
+    const targets = (manifest.targets as Record<string, unknown>)[key];
+    if (!Array.isArray(targets) || targets.length === 0) continue;
+    if (!harnessId) return true;
+    const resolved = resolveManifestTargets(targets as PluginTargetId[]);
+    if (resolved.includes(harnessId)) return true;
+  }
+  return false;
+};
+
+const manifestHasCompileManagedPluginArtifactTargets = (
+  manifest: PluginManifest,
+  harnessId?: HarnessId,
+): boolean => {
+  for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+    const compileManagedTargets = getCompileManagedPluginArtifactTargets(artifact);
+    if (compileManagedTargets.length === 0) continue;
+
+    const targets = manifest.targets[artifact];
+    if (!targets || targets.length === 0) continue;
+    const resolved = resolveManifestTargetsForArtifact(targets, artifact);
+    if (!harnessId) {
+      return resolved.some((target) => compileManagedTargets.includes(target));
+    }
+    if (compileManagedTargets.includes(harnessId) && resolved.includes(harnessId)) {
+      return true;
+    }
+  }
+  return false;
+};
 
 function isTargetPresetId(value: string): value is TargetPresetId {
   return TARGET_PRESET_IDS.includes(value as TargetPresetId);
@@ -414,7 +458,7 @@ function harnessSupportsArtifact(harnessId: HarnessId, artifact: PluginArtifactT
 
   switch (artifact) {
     case "rules":
-      return harness.rulesFile !== null;
+      return harness.rulesFile !== null || harness.rulesDir !== null;
     case "commands":
       return harness.supportsCommands && harness.commandsDir !== null;
     case "agents":
@@ -740,15 +784,10 @@ export function manifestHasCompileTargets(
     return false;
   }
 
-  const compileKeys = ["agents", ...COMPILE_ARTIFACT_TYPES] as const;
-  for (const key of compileKeys) {
-    const targets = (manifest.targets as Record<string, unknown>)[key];
-    if (!Array.isArray(targets) || targets.length === 0) continue;
-    if (!harnessId) return true;
-    const resolved = resolveManifestTargets(targets as PluginTargetId[]);
-    if (resolved.includes(harnessId)) return true;
-  }
-  return false;
+  return (
+    manifestHasStructuredCompileTargets(manifest, harnessId) ||
+    manifestHasCompileManagedPluginArtifactTargets(manifest, harnessId)
+  );
 }
 
 export function formatManifestTargets(manifest: PluginManifest): string {
@@ -794,7 +833,7 @@ export function getHarnessFrontmatter(
     "openclaw",
     "hermes",
     "codex-cli",
-    "gemini-cli",
+    "antigravity-cli",
     "amp-code",
     "cursor",
     "factory-droid",

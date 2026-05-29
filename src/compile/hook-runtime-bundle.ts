@@ -8,27 +8,32 @@ const decodeTarget = (payload) => isObject(payload?.target) && typeof payload.ta
 const decodeSession = (payload) => payload?.session === undefined || isObject(payload.session)
   ? payload.session
   : undefined;
+const decodeNative = (payload) => payload?.native === undefined || isObject(payload.native)
+  ? payload.native
+  : undefined;
 export const decodeNativeHookPayloadForEvent = (event, payload) => {
   if (!isObject(payload)) return left("native hook payload must be an object");
   const target = decodeTarget(payload);
   if (!target) return left("native hook payload target is invalid");
   const session = decodeSession(payload);
   if (payload.session !== undefined && !session) return left("native hook payload session is invalid");
+  const native = decodeNative(payload);
+  if (payload.native !== undefined && !native) return left("native hook payload native context is invalid");
   if (event === "tool.before") {
     if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.before payload tool is invalid");
-    return right({ event, target, cwd: payload.cwd, session, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input } });
+    return right({ event, target, cwd: payload.cwd, session, native, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input } });
   }
   if (event === "tool.after") {
     if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.after payload tool is invalid");
-    return right({ event, target, cwd: payload.cwd, session, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input, output: payload.tool.output, success: payload.tool.success } });
+    return right({ event, target, cwd: payload.cwd, session, native, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input, output: payload.tool.output, success: payload.tool.success } });
   }
   if (event === "session.start") {
     if (!isObject(session)) return left("session.start payload session is invalid");
-    return right({ event, target, cwd: payload.cwd, session });
+    return right({ event, target, cwd: payload.cwd, session, native });
   }
   if (event === "session.end") {
     if (!isObject(session)) return left("session.end payload session is invalid");
-    return right({ event, target, cwd: payload.cwd, session, reason: payload.reason });
+    return right({ event, target, cwd: payload.cwd, session, reason: payload.reason, native });
   }
   return left("unknown hook event");
 };

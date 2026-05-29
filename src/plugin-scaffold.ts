@@ -162,7 +162,6 @@ const buildManifestTargets = (options: PluginScaffoldOptions): PluginManifestTar
       "claude-code",
       "opencode",
       "codex-cli",
-      "gemini-cli",
       "cursor",
       "factory-droid",
     ];

@@ -65,7 +65,7 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
     config: "supported",
     lifecycle: "supported",
   },
-  "gemini-cli": {
+  "antigravity-cli": {
     config: "supported",
     lifecycle: "supported",
   },

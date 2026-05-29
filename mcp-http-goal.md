@@ -681,10 +681,8 @@ Target support matrix:
   HTTP opt-in should be supported.
 - Claude Code: supports `type: "http"`, `url`, and env-expanded headers in
   `.mcp.json`; HTTP opt-in should be supported for plugin-bundled MCP configs.
-- Gemini CLI: supports Streamable HTTP via `httpUrl` and static `headers`, but
-  documented env expansion is limited to the `env` block and the upstream issue
-  for header env substitution remains open. Prism must not emit plaintext bearer
-  tokens, so Gemini HTTP opt-in must fail closed until a safe token path exists.
+- Antigravity CLI: supports Streamable HTTP via `serverUrl` and static
+  `headers`; Prism-owned local tokens make HTTP opt-in supportable.
 - Grok Build: Prism currently emits plugin-local `.mcp.json`. Treat HTTP support
   as target-specific and require explicit evidence or fail closed.
 
@@ -751,14 +749,14 @@ Intent:
 - Reuse shared MCP config rendering logic across lowerers.
 - Add opt-in HTTP config emission for Codex CLI and Claude Code.
 - Keep Hermes on the shared path.
-- Fail closed for Gemini/Grok targets if secure token config cannot be proven.
+- Fail closed for Antigravity/Grok targets if secure token config cannot be proven.
 
 Scope:
 
 - `src/compile/lowerers/hermes.ts`
 - `src/compile/lowerers/codex-cli.ts`
 - `src/compile/lowerers/claude-code.ts`
-- `src/compile/lowerers/gemini-cli.ts`
+- `src/compile/lowerers/antigravity-cli.ts`
 - `src/compile/lowerers/grok.ts`
 - lowerer tests.
 
@@ -768,14 +766,14 @@ Acceptance:
 - Codex HTTP output uses `url` and `bearer_token_env_var`, not `command`.
 - Claude HTTP output uses `type: "http"`, `url`, and env-expanded
   `Authorization` header, not `command`.
-- Gemini/Grok HTTP opt-in either emits a verified secure URL config or rejects
+- Antigravity/Grok HTTP opt-in either emits a verified secure URL config or rejects
   the opt-in with a clear reason.
 - Stdio output remains unchanged for plugins without HTTP runtime config.
 
 Validation:
 
-- `bun test src/compile/mcp-runtime.test.ts src/compile/codex-cli-lowerer.test.ts src/compile/claude-code-lowerer.test.ts src/compile/gemini-cli-lowerer.test.ts src/compile/grok-lowerer.test.ts`
-- `bun test src/compile/pipeline.test.ts -t "canonical tools|Codex|Claude|Gemini|Grok|Hermes"`
+- `bun test src/compile/mcp-runtime.test.ts src/compile/codex-cli-lowerer.test.ts src/compile/claude-code-lowerer.test.ts src/compile/antigravity-cli-lowerer.test.ts src/compile/grok-lowerer.test.ts`
+- `bun test src/compile/pipeline.test.ts -t "canonical tools|Codex|Claude|Antigravity|Grok|Hermes"`
 - `bun run typecheck`
 - `bun run build`
 - `git diff --check`
@@ -791,8 +789,10 @@ Notes:
 - Claude Code HTTP opt-in emits plugin `.mcp.json` with `type: "http"`,
   `url`, and env-expanded `Authorization` header. It writes the HTTP server
   bundle to the shared lifecycle path under `<claude-root>/prism/mcp/`.
-- Gemini CLI and Grok Build fail closed for `streamable-http` runtime opt-in
-  until Prism can prove a safe bearer-token secret source for those targets.
+- Antigravity CLI emits plugin-local `mcp_config.json` with `serverUrl` and
+  static Prism-owned bearer headers; Grok Build still fails closed for
+  `streamable-http` runtime opt-in until Prism can prove a safe bearer-token
+  secret source for that target.
 - Stdio remains the default and existing stdio lowerer tests remain passing.
 - Pulsar hard gate passed. Readiness remains under repo-wide churn pressure,
   including lowerer churn called out by Pulsar.
@@ -841,8 +841,9 @@ Notes:
 - Grok Agent now declares Streamable HTTP runtime for Hermes (`38473`), Codex
   CLI (`38474`), and Claude Code (`38475`) using
   `PRISM_MCP_GROK_AGENT_TOKEN`.
-- Gemini CLI and Grok Build target remain stdio because safe HTTP bearer-token
-  config is not verified for those targets.
+- Antigravity CLI uses plugin-local `mcp_config.json` with `serverUrl`;
+  Grok Build remains stdio because safe HTTP bearer-token config is not
+  verified for that target.
 - Temp daemon pids started during validation were stopped; post-stop status for
   representative Codex and Claude temp roots reports `stopped`.
 - Pulsar hard gate passed for `../prism-plugins` using built-in defaults.
@@ -941,7 +942,7 @@ Scope:
 
 - Prism shared MCP runtime root and token store.
 - Install/compile lifecycle defaults and LaunchAgent-managed live daemons.
-- Hermes, Codex CLI, Claude Code, and Gemini CLI MCP HTTP lowerers.
+- Hermes, Codex CLI, Claude Code, and Antigravity CLI MCP HTTP lowerers.
 - Tower and Grok Agent runtime manifests.
 
 Acceptance:
@@ -956,19 +957,19 @@ Acceptance:
 - macOS live installs create/update one user LaunchAgent per generated MCP
   server; temp-root tests can still use direct child processes.
 - Tower uses one shared URL/port (`127.0.0.1:38463`) for Hermes, Codex CLI,
-  Claude Code, and Gemini CLI.
+  Claude Code, and Antigravity CLI.
 - Grok Agent uses one shared URL/port (`127.0.0.1:38473`) for Hermes, Codex
-  CLI, Claude Code, and Gemini CLI.
+  CLI, Claude Code, and Antigravity CLI.
 
 Validation plan:
 
 - `bun test src/mcp/lifecycle.test.ts`
 - `bun test src/compile/mcp-runtime.test.ts`
 - `bun test src/compile/pipeline.test.ts -t MCP`
-- `bun test src/compile/{claude-code,codex-cli,gemini-cli}-lowerer.test.ts -t HTTP`
+- `bun test src/compile/{claude-code,codex-cli,antigravity-cli}-lowerer.test.ts -t HTTP`
 - `bun test src/cli.test.ts -t MCP`
 - `bun test src/compile/pipeline.test.ts`
-- `bun test src/compile/claude-code-lowerer.test.ts src/compile/codex-cli-lowerer.test.ts src/compile/gemini-cli-lowerer.test.ts src/compile/grok-lowerer.test.ts src/compile/mcp-runtime.test.ts src/mcp/lifecycle.test.ts src/cli.test.ts`
+- `bun test src/compile/claude-code-lowerer.test.ts src/compile/codex-cli-lowerer.test.ts src/compile/antigravity-cli-lowerer.test.ts src/compile/grok-lowerer.test.ts src/compile/mcp-runtime.test.ts src/mcp/lifecycle.test.ts src/cli.test.ts`
 - `bun run verify`
 - `pulsar score .`
 - `../prism-plugins: bun run typecheck`
@@ -985,13 +986,13 @@ Validation result:
 - `pulsar score .` hard gate passed in both repos; readiness remains red due
   to existing churn/duplication pressure outside this glyph.
 - Temp-root smoke passed for Tower and Grok Agent on Hermes, Codex CLI, Claude
-  Code, and Gemini CLI. Each compile wrote a local token store and stopped its
+  Code, and Antigravity CLI. Each compile wrote a local token store and stopped its
   temp daemon after verification.
 
 Live activation result:
 
-- Tower installed for Hermes, Codex CLI, Claude Code, and Gemini CLI.
-- Grok Agent installed for Hermes, Codex CLI, Claude Code, and Gemini CLI.
+- Tower installed for Hermes, Codex CLI, Claude Code, and Antigravity CLI.
+- Grok Agent installed for Hermes, Codex CLI, Claude Code, and Antigravity CLI.
 - Live shared HTTP daemons are running:
   - Tower: `http://127.0.0.1:38463/mcp`
   - Grok Agent: `http://127.0.0.1:38473/mcp`

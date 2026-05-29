@@ -30,9 +30,9 @@ import {
   planLowering as planClaudeCodeLowering,
 } from "./lowerers/claude-code.js";
 import {
-  executeLowering as executeGeminiCliLowering,
-  planLowering as planGeminiCliLowering,
-} from "./lowerers/gemini-cli.js";
+  executeLowering as executeAntigravityCliLowering,
+  planLowering as planAntigravityCliLowering,
+} from "./lowerers/antigravity-cli.js";
 import {
   executeLowering as executeCodexCliLowering,
   planLowering as planCodexCliLowering,
@@ -169,7 +169,7 @@ export interface CompileResult {
 const SUPPORTED_TARGETS = [
   "opencode",
   "claude-code",
-  "gemini-cli",
+  "antigravity-cli",
   "codex-cli",
   "amp-code",
   "hermes",
@@ -188,10 +188,10 @@ const getLowerer = (target: string): LowererModule => {
         planLowering: planClaudeCodeLowering,
         executeLowering: executeClaudeCodeLowering,
       };
-    case "gemini-cli":
+    case "antigravity-cli":
       return {
-        planLowering: planGeminiCliLowering,
-        executeLowering: executeGeminiCliLowering,
+        planLowering: planAntigravityCliLowering,
+        executeLowering: executeAntigravityCliLowering,
       };
     case "codex-cli":
       return {

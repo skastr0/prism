@@ -1,13 +1,12 @@
 /**
- * Gemini CLI extension lowerer.
+ * Antigravity CLI plugin lowerer.
  *
- * Produces one compiler-owned extension bundle under
- * <gemini-root>/extensions/prism-generated-<source-plugin>/.
+ * Produces one compiler-owned plugin bundle under
+ * <antigravity-root>/plugins/prism-generated-<source-plugin>/.
  */
 
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { Effect } from "effect";
-import matter from "gray-matter";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
@@ -49,10 +48,10 @@ import {
   uniqueSorted,
 } from "./shared.js";
 
-const TARGET_ID = "gemini-cli" as const;
-const EXTENSION_PREFIX = "prism-generated";
+const TARGET_ID = "antigravity-cli" as const;
+const PLUGIN_PREFIX = "prism-generated";
 
-export interface GeminiCliLowerTarget {
+export interface AntigravityCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpRuntimeRoot?: string;
@@ -68,7 +67,7 @@ export interface LowerInput {
   readonly tools: ReadonlyArray<CanonicalTool>;
   readonly hooks?: ReadonlyArray<Hook>;
   readonly registry?: PluginRegistry;
-  readonly target: GeminiCliLowerTarget;
+  readonly target: AntigravityCliLowerTarget;
 }
 
 const normalizeBundleSegment = (value: string, fallback = "plugin"): string => {
@@ -81,18 +80,18 @@ const normalizeBundleSegment = (value: string, fallback = "plugin"): string => {
   return normalized.length > 0 ? normalized : fallback;
 };
 
-const extensionIdForPlugin = (pluginName: string): string =>
-  `${EXTENSION_PREFIX}-${normalizeBundleSegment(pluginName)}`;
+const pluginIdForPlugin = (pluginName: string): string =>
+  `${PLUGIN_PREFIX}-${normalizeBundleSegment(pluginName)}`;
 
-const extensionRoot = (target: GeminiCliLowerTarget): string =>
-  join(target.root, "extensions", extensionIdForPlugin(target.sourcePluginName));
+const pluginRoot = (target: AntigravityCliLowerTarget): string =>
+  join(target.root, "plugins", pluginIdForPlugin(target.sourcePluginName));
 
-const extensionRelativePath = (target: GeminiCliLowerTarget, path: string): string =>
-  relative(extensionRoot(target), path).replace(/\\/g, "/");
+const pluginRelativePath = (target: AntigravityCliLowerTarget, path: string): string =>
+  relative(pluginRoot(target), path).replace(/\\/g, "/");
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
-const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLowerTarget): Record<string, unknown> => {
+const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: AntigravityCliLowerTarget): Record<string, unknown> => {
   const frontmatter: Record<string, unknown> = {
     name: agent.name,
     description: agent.description,
@@ -105,14 +104,14 @@ const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLo
     if (typeof override.model === "string") frontmatter.model = override.model;
   }
 
-  const serverName = extensionIdForPlugin(target.sourcePluginName);
+  const serverName = pluginIdForPlugin(target.sourcePluginName);
   const tools = uniqueSorted([
     ...(Array.isArray(override?.tools) && override.tools.every((tool) => typeof tool === "string")
       ? override.tools
       : []),
     ...agent.allowedTools,
     ...agent.toolBindings.map((binding) =>
-      geminiMcpToolNameForBinding(target.sourcePluginName, serverName, binding),
+      antigravityMcpToolNameForBinding(target.sourcePluginName, serverName, binding),
     ),
   ], { dropEmpty: true });
   if (tools.length > 0) frontmatter.tools = tools;
@@ -123,16 +122,16 @@ const composeGeminiAgentFrontmatter = (agent: ComposedAgent, target: GeminiCliLo
   return frontmatter;
 };
 
-const renderGeminiAgentMarkdown = (agent: ComposedAgent, target: GeminiCliLowerTarget): string =>
-  `${serializeFrontmatter(composeGeminiAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
+const renderAntigravityAgentMarkdown = (agent: ComposedAgent, target: AntigravityCliLowerTarget): string =>
+  `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
 
-const targetIncludesGemini = (targets: readonly PluginTargetId[] | undefined): boolean =>
+const targetIncludesAntigravity = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
 
-const artifactTargetsGemini = (
+const artifactTargetsAntigravity = (
   registry: PluginRegistry | undefined,
   artifact: AnyArtifactType,
-): boolean => targetIncludesGemini(registry?.targets[artifact]);
+): boolean => targetIncludesAntigravity(registry?.targets[artifact]);
 
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,
@@ -140,20 +139,20 @@ const copyTargetedSkillArtifacts = async (
   desired: Set<string>,
 ): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsGemini(input.registry, "skills")) return;
+  if (!pluginPath || !artifactTargetsAntigravity(input.registry, "skills")) return;
 
   const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
   for (const file of files) {
-    const target = join(extensionRoot(input.target), "skills", file.relativePath);
+    const target = join(pluginRoot(input.target), "skills", file.relativePath);
     const content = await readFile(file.sourcePath);
-    desired.add(extensionRelativePath(input.target, target));
+    desired.add(pluginRelativePath(input.target, target));
     await pushWrite(operations, target, content, file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file");
   }
 };
 
 const collectContextFiles = async (input: LowerInput): Promise<ReadonlyArray<{ label: string; content: string }>> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsGemini(input.registry, "rules")) return [];
+  if (!pluginPath || !artifactTargetsAntigravity(input.registry, "rules")) return [];
 
   const files = await collectArtifactSourceFiles(pluginPath, "rules", TARGET_ID);
   const selected = files
@@ -177,47 +176,7 @@ const renderContext = (contexts: ReadonlyArray<{ label: string; content: string 
   return lines.join("\n");
 };
 
-const tomlString = (value: string): string => JSON.stringify(value);
-
-const tomlMultilineString = (value: string): string => {
-  const escaped = value.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
-  return `"""${escaped}"""`;
-};
-
-const markdownCommandToToml = (source: string): string => {
-  const parsed = matter(source);
-  const lines: string[] = [];
-  const description = parsed.data.description;
-  if (typeof description === "string" && description.trim().length > 0) {
-    lines.push(`description = ${tomlString(description.trim())}`);
-  }
-  lines.push(`prompt = ${tomlMultilineString(parsed.content.trim())}`);
-  return `${lines.join("\n")}\n`;
-};
-
-const copyTargetedCommandArtifacts = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  desired: Set<string>,
-): Promise<void> => {
-  const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsGemini(input.registry, "commands")) return;
-
-  const files = await collectArtifactSourceFiles(pluginPath, "commands", TARGET_ID);
-  for (const file of files) {
-    if (!file.relativePath.endsWith(".toml") && !file.relativePath.endsWith(".md")) continue;
-    const relativeTarget = file.relativePath.endsWith(".md")
-      ? file.relativePath.replace(/\.md$/u, ".toml")
-      : file.relativePath;
-    const target = join(extensionRoot(input.target), "commands", relativeTarget);
-    const source = await readFile(file.sourcePath);
-    const content = file.relativePath.endsWith(".md") ? markdownCommandToToml(source) : source;
-    desired.add(extensionRelativePath(input.target, target));
-    await pushWrite(operations, target, content);
-  }
-};
-
-const geminiMcpToolNameForBinding = (
+const antigravityMcpToolNameForBinding = (
   sourcePluginName: string,
   serverName: string,
   binding: ResolvedContractBinding,
@@ -238,45 +197,47 @@ const matcherForHook = (
   return canonicalToolNames.get(tool.ref) ?? tool.ref;
 };
 
-const geminiHookEvent = (event: Hook["event"]): string =>
+const antigravityHookEvent = (event: Hook["event"]): string =>
   nativeHookEventName(event, {
-    toolBefore: "BeforeTool",
-    toolAfter: "AfterTool",
-    sessionStart: "SessionStart",
-    sessionEnd: "SessionEnd",
+    toolBefore: "PreToolUse",
+    toolAfter: "PostToolUse",
+    sessionStart: "PreInvocation",
+    sessionEnd: "Stop",
   });
 
-const GEMINI_HOOK_TOOL_INPUT_EXPRESSION =
-  "input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.args ?? input?.arguments ?? {}";
+const ANTIGRAVITY_HOOK_TOOL_INPUT_EXPRESSION =
+  "input?.toolCall?.args ?? input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.args ?? input?.arguments ?? {}";
 
-const GEMINI_HOOK_TOOL_AFTER_OUTPUT_EXPRESSION =
-  "input?.tool?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output";
+const ANTIGRAVITY_HOOK_TOOL_AFTER_OUTPUT_EXPRESSION =
+  "input?.tool?.output ?? input?.toolCall?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output ?? input?.error";
 
-const GEMINI_HOOK_SESSION_SOURCE = `const nativeSession = (input) => {
-  const id = input?.session?.id ?? input?.sessionId ?? input?.session_id;
-  return id === undefined ? undefined : { id: String(id) };
+const ANTIGRAVITY_HOOK_SESSION_SOURCE = `const nativeSession = (input) => {
+  const id = input?.conversationId ?? input?.conversation_id ?? input?.session?.id ?? input?.sessionId ?? input?.session_id;
+  const transcriptPath = input?.transcriptPath ?? input?.transcript_path;
+  if (id === undefined && transcriptPath === undefined) return undefined;
+  return {
+    id: id === undefined ? undefined : String(id),
+    transcriptPath: transcriptPath === undefined ? undefined : String(transcriptPath),
+  };
 };`;
 
-const renderGeminiHookResultHandling = (nativeEvent: string): string => `
-const toGeminiHookOutput = (nativeEvent, result) => {
+const renderAntigravityHookResultHandling = (nativeEvent: string): string => `
+const toAntigravityHookOutput = (nativeEvent, result) => {
   if (result.decision === "block") {
     return {
       decision: "deny",
       reason: result.message,
-      hookSpecificOutput: { hookEventName: nativeEvent },
     };
   }
 
-  return {
-    continue: true,
-    decision: nativeEvent === "BeforeTool" ? "approve" : "allow",
-    hookSpecificOutput: { hookEventName: nativeEvent },
-  };
+  if (nativeEvent === "PreToolUse") return { decision: "allow" };
+  if (nativeEvent === "Stop") return { decision: "continue" };
+  return {};
 };
 
-process.stdout.write(JSON.stringify(toGeminiHookOutput(${JSON.stringify(nativeEvent)}, result)));`;
+process.stdout.write(JSON.stringify(toAntigravityHookOutput(${JSON.stringify(nativeEvent)}, result)));`;
 
-const renderGeminiHookWrapperEntry = (
+const renderAntigravityHookWrapperEntry = (
   hook: Hook,
   nativeEvent: string,
   hookRuntimePath: string,
@@ -286,21 +247,22 @@ const renderGeminiHookWrapperEntry = (
     hookRuntimePath,
     harness: TARGET_ID,
     nativeEvent,
-    cwdExpression: "input?.cwd ?? input?.workspace?.cwd",
+    cwdExpression: "input?.cwd ?? input?.workspace?.cwd ?? input?.workspacePaths?.[0]",
     fallbackSessionId: TARGET_ID,
-    nativeToolInputExpression: GEMINI_HOOK_TOOL_INPUT_EXPRESSION,
-    nativeSessionSource: GEMINI_HOOK_SESSION_SOURCE,
-    toolAfterOutputExpression: GEMINI_HOOK_TOOL_AFTER_OUTPUT_EXPRESSION,
-    resultHandlingSource: renderGeminiHookResultHandling(nativeEvent),
+    nativeToolInputExpression: ANTIGRAVITY_HOOK_TOOL_INPUT_EXPRESSION,
+    nativeSessionSource: ANTIGRAVITY_HOOK_SESSION_SOURCE,
+    nativeSessionEndReasonExpression: "input?.terminationReason ?? input?.reason",
+    toolAfterOutputExpression: ANTIGRAVITY_HOOK_TOOL_AFTER_OUTPUT_EXPRESSION,
+    resultHandlingSource: renderAntigravityHookResultHandling(nativeEvent),
   });
 
 const bundleHookWrapper = (hook: Hook, nativeEvent: string): Promise<string> =>
   bundleGeneratedHookWrapper({
     hook,
-    tempPrefix: "prism-gemini-hook-",
-    buildLabel: `Gemini '${hook.name}'`,
+    tempPrefix: "prism-ag-hook-",
+    buildLabel: `Antigravity '${hook.name}'`,
     renderEntry: (entryHook, hookRuntimePath) =>
-      renderGeminiHookWrapperEntry(entryHook, nativeEvent, hookRuntimePath),
+      renderAntigravityHookWrapperEntry(entryHook, nativeEvent, hookRuntimePath),
   });
 
 const planHooks = async (
@@ -309,9 +271,9 @@ const planHooks = async (
   desired: Set<string>,
 ): Promise<void> => {
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
-  if (hooks.length === 0 || !input.registry || !artifactTargetsGemini(input.registry, "hooks")) return;
+  if (hooks.length === 0 || !input.registry || !artifactTargetsAntigravity(input.registry, "hooks")) return;
 
-  const serverName = extensionIdForPlugin(input.target.sourcePluginName);
+  const serverName = pluginIdForPlugin(input.target.sourcePluginName);
   const canonicalToolNames = collectBindingNameMap(
     mcpBindingsForAgentsAndTools(
       input.target.sourcePluginName,
@@ -319,33 +281,35 @@ const planHooks = async (
       input.agents,
     ),
     (binding) =>
-      geminiMcpToolNameForBinding(input.target.sourcePluginName, serverName, binding),
+      antigravityMcpToolNameForBinding(input.target.sourcePluginName, serverName, binding),
   );
-  const byEvent: Record<string, unknown[]> = {};
+  const config: Record<string, Record<string, unknown>> = {};
   for (const hook of hooks) {
-    const nativeEvent = geminiHookEvent(hook.event);
+    const nativeEvent = antigravityHookEvent(hook.event);
     const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, input.registry, TARGET_ID));
     const wrapperRelativePath = `hooks/${normalizeBundleSegment(hook.name, "hook")}.mjs`;
-    const wrapperTarget = join(extensionRoot(input.target), wrapperRelativePath);
+    const wrapperTarget = join(pluginRoot(input.target), wrapperRelativePath);
     desired.add(wrapperRelativePath);
     await pushWrite(operations, wrapperTarget, await bundleHookWrapper(hook, nativeEvent));
 
-    const entry: Record<string, unknown> = {
-      hooks: [
-        {
-          type: "command",
-          command: `node \"\${extensionPath}/${wrapperRelativePath}\"`,
-        },
-      ],
+    const command = {
+      type: "command",
+      command: `node \"./${wrapperRelativePath}\"`,
     };
-    const matcher = matcherForHook(resolved, canonicalToolNames);
-    if (matcher) entry.matcher = matcher;
-    (byEvent[nativeEvent] ??= []).push(entry);
+    const hookConfig = (config[hook.name] ??= {});
+    if (nativeEvent === "PreToolUse" || nativeEvent === "PostToolUse") {
+      const entry: Record<string, unknown> = { hooks: [command] };
+      const matcher = matcherForHook(resolved, canonicalToolNames);
+      if (matcher) entry.matcher = matcher;
+      ((hookConfig[nativeEvent] as unknown[] | undefined) ??= []).push(entry);
+    } else {
+      ((hookConfig[nativeEvent] as unknown[] | undefined) ??= []).push(command);
+    }
   }
 
-  const configTarget = join(extensionRoot(input.target), "hooks", "hooks.json");
-  desired.add("hooks/hooks.json");
-  await pushWrite(operations, configTarget, json({ hooks: byEvent }));
+  const configTarget = join(pluginRoot(input.target), "hooks.json");
+  desired.add("hooks.json");
+  await pushWrite(operations, configTarget, json(config));
 };
 
 const planMcpBundle = async (
@@ -361,13 +325,13 @@ const planMcpBundle = async (
   );
   if (bindings.length === 0) return {};
 
-  const extensionId = extensionIdForPlugin(input.target.sourcePluginName);
+  const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
   const bundle = await generateMcpServerBundle({
     sourcePluginName: input.target.sourcePluginName,
     sourcePluginRoot: input.target.sourcePluginPath,
-    serverName: extensionId,
+    serverName: pluginId,
     version: input.target.sourcePluginVersion,
-    bundleId: extensionId,
+    bundleId: pluginId,
     ...mcpServerBundleRuntimeOptions(runtime),
     bindings,
   });
@@ -377,14 +341,14 @@ const planMcpBundle = async (
         input.target.mcpRuntimeRoot ?? input.target.root,
         input.target.sourcePluginName,
       ).absolutePath
-    : join(extensionRoot(input.target), bundle.relativePath);
+    : join(pluginRoot(input.target), bundle.relativePath);
   if (runtime.transport === "stdio") desired.add(bundle.relativePath);
   await pushWrite(operations, target, bundle.content);
 
   return {
-    [extensionId]: runtime.transport === "streamable-http"
+    [pluginId]: runtime.transport === "streamable-http"
       ? {
-          httpUrl: renderMcpHttpUrl(runtime),
+          serverUrl: renderMcpHttpUrl(runtime),
           headers: {
             Authorization: renderMcpBearerAuthorization({
               tokenEnv: runtime.tokenEnv,
@@ -394,16 +358,16 @@ const planMcpBundle = async (
         }
       : {
           command: "bun",
-          args: [`\${extensionPath}/${bundle.relativePath}`],
+          args: [join(pluginRoot(input.target), bundle.relativePath)],
         },
   };
 };
 
-const planExtensionPruning = async (
-  target: GeminiCliLowerTarget,
+const planPluginPruning = async (
+  target: AntigravityCliLowerTarget,
   desired: ReadonlySet<string>,
 ): Promise<LowerOperation[]> => {
-  const root = extensionRoot(target);
+  const root = pluginRoot(target);
   if (!(await exists(root))) return [];
   const existingFiles = (await listDirRecursive(root)).sort((left, right) => left.localeCompare(right));
   const operations: LowerOperation[] = [];
@@ -419,29 +383,53 @@ const planExtensionPruning = async (
   return operations;
 };
 
+const legacyGeminiExtensionRoot = (target: AntigravityCliLowerTarget): string | undefined => {
+  const pluginId = pluginIdForPlugin(target.sourcePluginName);
+  if (basename(target.root) === "antigravity-cli" && basename(dirname(target.root)) === ".gemini") {
+    return join(dirname(target.root), "extensions", pluginId);
+  }
+  if (basename(target.root) === ".agents") {
+    return join(dirname(target.root), ".gemini", "extensions", pluginId);
+  }
+  return undefined;
+};
+
+const planLegacyGeminiPruning = async (
+  target: AntigravityCliLowerTarget,
+): Promise<LowerOperation[]> => {
+  const legacyRoot = legacyGeminiExtensionRoot(target);
+  if (!legacyRoot || !(await exists(legacyRoot))) return [];
+  return [{
+    kind: "prune-plugin-path",
+    target: legacyRoot,
+    targetType: "dir",
+    reason: "stale",
+  }];
+};
+
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
   const desired = new Set<string>();
-  const root = extensionRoot(input.target);
+  const root = pluginRoot(input.target);
 
   const contextFiles = await collectContextFiles(input);
   if (contextFiles.length > 0) {
-    const target = join(root, "GEMINI.md");
-    desired.add("GEMINI.md");
+    const target = join(root, "rules", "context.md");
+    desired.add("rules/context.md");
     await pushWrite(operations, target, renderContext(contextFiles), "write-md");
   }
 
   for (const agent of input.agents) {
     const target = join(root, "agents", `${agent.name}.md`);
-    desired.add(extensionRelativePath(input.target, target));
-    await pushWrite(operations, target, renderGeminiAgentMarkdown(agent, input.target), "write-md");
+    desired.add(pluginRelativePath(input.target, target));
+    await pushWrite(operations, target, renderAntigravityAgentMarkdown(agent, input.target), "write-md");
   }
 
   await copyTargetedSkillArtifacts(input, operations, desired);
 
   for (const orbit of input.orbits) {
     const target = join(root, "skills", orbit.name, "SKILL.md");
-    desired.add(extensionRelativePath(input.target, target));
+    desired.add(pluginRelativePath(input.target, target));
     await pushWrite(
       operations,
       target,
@@ -457,29 +445,33 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
         "references",
         reference.filename,
       );
-      desired.add(extensionRelativePath(input.target, referenceTarget));
+      desired.add(pluginRelativePath(input.target, referenceTarget));
       await pushWrite(operations, referenceTarget, reference.content, "write-md");
     }
   }
 
-  await copyTargetedCommandArtifacts(input, operations, desired);
   const mcpServers = await planMcpBundle(input, operations, desired);
   await planHooks(input, operations, desired);
 
   const manifest: Record<string, unknown> = {
-    name: extensionIdForPlugin(input.target.sourcePluginName),
+    name: pluginIdForPlugin(input.target.sourcePluginName),
     version: input.target.sourcePluginVersion ?? "0.1.0",
   };
-  if (contextFiles.length > 0) manifest.contextFileName = "GEMINI.md";
-  if (Object.keys(mcpServers).length > 0) manifest.mcpServers = mcpServers;
 
-  const manifestTarget = join(root, "gemini-extension.json");
-  desired.add("gemini-extension.json");
-  await pushWrite(operations, manifestTarget, json(manifest), "write-plugin-file", {
-    mode: input.target.mcpBearerToken && Object.keys(mcpServers).length > 0 ? 0o600 : undefined,
-  });
+  const manifestTarget = join(root, "plugin.json");
+  desired.add("plugin.json");
+  await pushWrite(operations, manifestTarget, json(manifest));
 
-  operations.push(...await planExtensionPruning(input.target, desired));
+  if (Object.keys(mcpServers).length > 0) {
+    const mcpConfigTarget = join(root, "mcp_config.json");
+    desired.add("mcp_config.json");
+    await pushWrite(operations, mcpConfigTarget, json({ mcpServers }), "write-plugin-file", {
+      mode: input.target.mcpBearerToken ? 0o600 : undefined,
+    });
+  }
+
+  operations.push(...await planPluginPruning(input.target, desired));
+  operations.push(...await planLegacyGeminiPruning(input.target));
   return operations;
 };
 

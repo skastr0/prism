@@ -308,7 +308,7 @@ export type HarnessId =
   | "openclaw"
   | "hermes"
   | "codex-cli"
-  | "gemini-cli"
+  | "antigravity-cli"
   | "amp-code"
   | "cursor"
   | "factory-droid"

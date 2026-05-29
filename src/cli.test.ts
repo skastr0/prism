@@ -709,6 +709,50 @@ test("install requires --project when project scope is requested", async () => {
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
 });
 
+test("install compiles Antigravity rules into a generated plugin bundle", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "antigravity-rules-plugin");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+  const rulePath = join(pluginRoot, "rules", "global", "standards.md");
+
+  await mkdir(join(pluginRoot, "rules", "global"), { recursive: true });
+  await mkdir(homeRoot, { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "antigravity-rules-plugin",
+        version: "0.1.0",
+        targets: { rules: ["antigravity-cli"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(rulePath, "Always prefer managed Antigravity plugin rules.\n");
+
+  const result = await runCli(
+    ["install", pluginRoot, "--harness", "antigravity-cli", "--dry-run"],
+    { HOME: homeRoot, PRISM_HOME: prismHome },
+  );
+
+  const generatedPluginRoot = join(
+    homeRoot,
+    ".gemini",
+    "antigravity-cli",
+    "plugins",
+    "prism-generated-antigravity-rules-plugin",
+  );
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Compile (antigravity-cli, global)");
+  expect(result.stdout).toContain(join(generatedPluginRoot, "rules", "context.md"));
+  expect(result.stdout).toContain(join(generatedPluginRoot, "plugin.json"));
+  expect(result.stdout).not.toContain(
+    join(homeRoot, ".gemini", "antigravity-cli", "rules", "standards.md"),
+  );
+});
+
 test("install CLI stores managed backups under Prism home", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "managed-rules-plugin");

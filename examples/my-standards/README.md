@@ -19,7 +19,7 @@ An example plugin that demonstrates shared artifact targeting from `plugin.json`
   "description": "Example plugin showing shared harness targets without overlays",
   "targets": {
     "rules": ["coding-harness"],
-    "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"],
+    "commands": ["claude-code", "opencode", "codex-cli", "cursor", "factory-droid"],
     "agents": ["claude-code", "opencode"],
     "skills": ["coding-harness", "claw-harness"]
   }

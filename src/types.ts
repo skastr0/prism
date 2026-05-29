@@ -9,7 +9,7 @@ export type HarnessId =
   | "openclaw"
   | "hermes"
   | "codex-cli"
-  | "gemini-cli"
+  | "antigravity-cli"
   | "amp-code"
   | "cursor"
   | "factory-droid"
@@ -253,7 +253,7 @@ export interface UnifiedFrontmatter {
   openclaw?: Record<string, unknown>;
   hermes?: Record<string, unknown>;
   "codex-cli"?: CodexCliFrontmatter;
-  "gemini-cli"?: Record<string, unknown>;
+  "antigravity-cli"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
   "factory-droid"?: FactoryDroidFrontmatter;

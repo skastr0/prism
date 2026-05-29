@@ -355,6 +355,7 @@ export interface ToolBeforeHookEventDefinition {
   readonly tool: HookToolContextDefinition;
   readonly cwd?: string;
   readonly session?: HookSessionContextDefinition;
+  readonly native?: Record<string, unknown>;
 }
 
 export interface ToolAfterHookEventDefinition {
@@ -366,6 +367,7 @@ export interface ToolAfterHookEventDefinition {
   };
   readonly cwd?: string;
   readonly session?: HookSessionContextDefinition;
+  readonly native?: Record<string, unknown>;
 }
 
 export interface SessionStartHookEventDefinition {
@@ -373,6 +375,7 @@ export interface SessionStartHookEventDefinition {
   readonly target: HookTargetContextDefinition;
   readonly cwd?: string;
   readonly session: HookSessionContextDefinition;
+  readonly native?: Record<string, unknown>;
 }
 
 export interface SessionEndHookEventDefinition {
@@ -381,6 +384,7 @@ export interface SessionEndHookEventDefinition {
   readonly cwd?: string;
   readonly session: HookSessionContextDefinition;
   readonly reason?: string;
+  readonly native?: Record<string, unknown>;
 }
 
 export type HookEventPayloadDefinition =

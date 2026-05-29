@@ -8,6 +8,7 @@ import { resolveHookMatchForTarget } from "./hooks.js";
 import {
   NativeToolAfterHookPayloadSchema,
   NativeToolBeforeHookPayloadSchema,
+  NativeSessionEndHookPayloadSchema,
   decodeHookResultForEvent,
   decodeNativeHookPayloadForEvent,
 } from "./sources.js";
@@ -133,6 +134,7 @@ test("native hook payload schemas normalize target payloads into prism events", 
     tool: { logical: "shell", name: "bash", input: { command: "pwd" } },
     cwd: "/repo",
     session: { id: "session-1" },
+    native: { artifactDirectoryPath: "/repo/.artifacts" },
   });
 
   expect(decoded).toEqual({
@@ -141,6 +143,7 @@ test("native hook payload schemas normalize target payloads into prism events", 
     tool: { logical: "shell", nativeName: "bash", input: { command: "pwd" } },
     cwd: "/repo",
     session: { id: "session-1" },
+    native: { artifactDirectoryPath: "/repo/.artifacts" },
   });
 });
 
@@ -174,6 +177,14 @@ test("native hook payload decoding is event-specific", () => {
       tool: { name: "bash", input: {}, output: "ok" },
     })._tag,
   ).toBe("Right");
+
+  const sessionEnd = Schema.decodeUnknownSync(NativeSessionEndHookPayloadSchema)({
+    target: { harness: "antigravity-cli", nativeEvent: "Stop" },
+    session: { id: "session-1" },
+    reason: "model_stop",
+    native: { executionNum: 7, fullyIdle: true, error: "none" },
+  });
+  expect(sessionEnd.native).toEqual({ executionNum: 7, fullyIdle: true, error: "none" });
 });
 
 test("hook result validation is event-specific and conservative", () => {

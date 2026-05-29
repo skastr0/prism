@@ -205,7 +205,7 @@ const renderHookWrapperInputHelpers = (options?: {
 };
 
 const nativeToolName = (input) =>
-  input?.tool?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
+  input?.tool?.name ?? input?.toolCall?.name ?? input?.toolName ?? input?.tool_name ?? input?.name ?? "";
 
 const nativeToolInput = (input) =>
   ${options?.nativeToolInputExpression ?? DEFAULT_HOOK_WRAPPER_TOOL_INPUT_EXPRESSION};
@@ -226,13 +226,14 @@ const renderHookWrapperNormalizePayload = (options: {
   readonly cwdExpression: string;
   readonly fallbackSessionId: string;
   readonly toolAfterOutputExpression?: string;
+  readonly nativeSessionEndReasonExpression?: string;
 }): string => `const normalizePayload = (input) => {
   const target = { harness: ${JSON.stringify(options.harness)}, nativeEvent: ${JSON.stringify(options.nativeEvent)} };
   const cwd = ${options.cwdExpression};
 
   switch (${JSON.stringify(options.event)}) {
     case "tool.before":
-      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input) }, cwd, session: nativeSession(input) };
+      return { target, tool: { name: String(nativeToolName(input)), input: nativeToolInput(input) }, cwd, session: nativeSession(input), native: input };
     case "tool.after":
       return {
         target,
@@ -244,11 +245,12 @@ const renderHookWrapperNormalizePayload = (options: {
         },
         cwd,
         session: nativeSession(input),
+        native: input,
       };
     case "session.start":
-      return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} } };
+      return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, native: input };
     case "session.end":
-      return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, reason: input?.reason };
+      return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, reason: ${options.nativeSessionEndReasonExpression ?? "input?.reason"}, native: input };
   }
 };`;
 
@@ -288,6 +290,7 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
   readonly toolAfterOutputExpression?: string;
   readonly nativeToolInputExpression?: string;
   readonly nativeSessionSource?: string;
+  readonly nativeSessionEndReasonExpression?: string;
   readonly blockDecisionSource?: string;
   readonly resultHandlingSource?: string;
 }): string =>
@@ -304,6 +307,7 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
       cwdExpression: options.cwdExpression,
       fallbackSessionId: options.fallbackSessionId,
       toolAfterOutputExpression: options.toolAfterOutputExpression,
+      nativeSessionEndReasonExpression: options.nativeSessionEndReasonExpression,
     }),
     renderHookWrapperExecution(options.hook.event),
     options.resultHandlingSource

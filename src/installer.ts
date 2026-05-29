@@ -58,6 +58,19 @@ interface InstallPlanningContext {
   readonly overwrite: boolean;
 }
 
+const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli"]);
+
+const rulesAreCompileManaged = (harnessId: HarnessId): boolean =>
+  COMPILE_MANAGED_RULE_HARNESSES.has(harnessId);
+
+const shouldPlanFileRouterRules = (
+  manifest: Awaited<ReturnType<typeof readManifest>>,
+  harness: HarnessConfig,
+): boolean =>
+  (harness.rulesFile !== null || harness.rulesDir !== null) &&
+  !rulesAreCompileManaged(harness.id) &&
+  manifestTargetsArtifact(manifest, "rules", harness.id);
+
 interface ManagedOutputInput {
   readonly artifact: InstallArtifact;
   readonly scope: HarnessScope;
@@ -165,8 +178,9 @@ export async function planInstallation(
       overwrite: options.overwrite,
     };
 
-    // Plan rules installation when the harness has a managed rules surface
-    if (harness.rulesFile && manifestTargetsArtifact(manifest, "rules", harnessId)) {
+    // Plan file-router rules when the harness has an install-native rules surface.
+    // Antigravity rules are plugin-bundle managed by the compile phase.
+    if (shouldPlanFileRouterRules(manifest, harness)) {
       const rulesOps = await planRulesInstallation(
         pluginPath,
         harness,
@@ -481,7 +495,7 @@ async function planAppendRuleOperation(
 
 function getProjectRuleTargetPath(
   harness: HarnessConfig,
-  rulesFile: string,
+  rulesFile: string | null,
   expandedProjectPath: string,
   relativeFile: string
 ): string {
@@ -498,16 +512,62 @@ function getProjectRuleTargetPath(
   }
 
   if (harness.projectConfigPath) {
+    if (!rulesFile) {
+      throw new Error(`${harness.id} has project rules without a rules file or rules directory`);
+    }
     return join(expandedProjectPath, rulesFile);
   }
 
+  if (!rulesFile) {
+    throw new Error(`${harness.id} has global rules without a rules file or rules directory`);
+  }
   return join(expandPath(harness.globalConfigPath), rulesFile);
+}
+
+function getRulesDirTargetPath(
+  harness: HarnessConfig,
+  root: string,
+  relativeFile: string
+): string {
+  if (!harness.rulesDir) {
+    throw new Error(`${harness.id} has no rules directory`);
+  }
+  return join(
+    root,
+    harness.rulesDir,
+    relativeFile.replace(
+      ".md",
+      harness.configFormat === "mdc" ? ".mdc" : ".md"
+    )
+  );
+}
+
+async function planRulesDirCopyOperation(
+  file: ArtifactSourceFile,
+  harness: HarnessConfig,
+  targetPath: string,
+  scope: HarnessScope,
+  root: string,
+  context: InstallPlanningContext
+): Promise<FileOperation> {
+  return planManagedCopyOperation({
+    file,
+    targetPath,
+    context,
+    artifact: "rules",
+    scope,
+    root,
+    transformMarkdown: (frontmatter, content) =>
+      harness.id === "cursor"
+        ? convertToMdc(getHarnessFrontmatter(frontmatter, harness.id), content)
+        : reconstructMarkdown(getHarnessFrontmatter(frontmatter, harness.id), content),
+  });
 }
 
 async function planProjectRuleOperation(
   file: ArtifactSourceFile,
   harness: HarnessConfig,
-  rulesFile: string,
+  rulesFile: string | null,
   expandedProjectPath: string,
   context: InstallPlanningContext
 ): Promise<FileOperation> {
@@ -520,20 +580,19 @@ async function planProjectRuleOperation(
   );
 
   if (harness.rulesDir) {
-    return planManagedCopyOperation({
+    return planRulesDirCopyOperation(
       file,
+      harness,
       targetPath,
-      context,
-      artifact: "rules",
-      scope: "project",
-      root: expandedProjectPath,
-      transformMarkdown: (frontmatter, content) =>
-        harness.id === "cursor"
-          ? convertToMdc(getHarnessFrontmatter(frontmatter, harness.id), content)
-          : reconstructMarkdown(getHarnessFrontmatter(frontmatter, harness.id), content),
-    });
+      "project",
+      expandedProjectPath,
+      context
+    );
   }
 
+  if (!rulesFile) {
+    throw new Error(`${harness.id} has no project rules target`);
+  }
   return planAppendRuleOperation(file, targetPath, context, "project", expandedProjectPath);
 }
 
@@ -548,7 +607,7 @@ async function planRulesInstallation(
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
 
-  if (!harness.rulesFile) {
+  if (!harness.rulesFile && !harness.rulesDir) {
     return operations;
   }
 
@@ -559,9 +618,24 @@ async function planRulesInstallation(
   );
 
   const globalRoot = expandPath(harness.globalConfigPath);
-  const globalTargetPath = join(globalRoot, rulesFile);
   for (const file of globalFiles) {
-    operations.push(await planAppendRuleOperation(file, globalTargetPath, context, "global", globalRoot));
+    if (rulesFile) {
+      operations.push(
+        await planAppendRuleOperation(file, join(globalRoot, rulesFile), context, "global", globalRoot)
+      );
+      continue;
+    }
+
+    operations.push(
+      await planRulesDirCopyOperation(
+        file,
+        harness,
+        getRulesDirTargetPath(harness, globalRoot, file.relativePath.slice("global/".length)),
+        "global",
+        globalRoot,
+        context
+      )
+    );
   }
 
   if (projectPath) {
@@ -596,10 +670,6 @@ async function renderManagedCopyContent(
   const harnessFrontmatter = getHarnessFrontmatter(frontmatter, harness.id);
   if (artifact === "agent" && !harnessFrontmatter.name) {
     harnessFrontmatter.name = basename(file.sourcePath, ".md");
-  }
-
-  if (harness.id === "gemini-cli" && artifact === "command") {
-    return convertCommandToToml(harnessFrontmatter, content);
   }
 
   if (harness.id === "cursor" && artifact === "rules") {
@@ -693,12 +763,7 @@ async function planCommandsInstallation(
   for (const file of mdFiles) {
     const targetDir = join(root, harness.commandsDir!);
 
-    let targetFile = file.relativePath;
-    if (harness.id === "gemini-cli") {
-      targetFile = file.relativePath.replace(".md", ".toml");
-    }
-
-    const targetPath = join(targetDir, targetFile);
+    const targetPath = join(targetDir, file.relativePath);
 
     operations.push(
       await planManagedCopyOperation({
@@ -1098,29 +1163,6 @@ async function executePruneOperation(op: FileOperation): Promise<void> {
 async function executeMergeOperation(op: FileOperation): Promise<void> {
   // For now, just copy - merge logic can be added later
   await copyFile(op.source, op.target);
-}
-
-/**
- * Convert command markdown to TOML format (for Gemini CLI)
- */
-function convertCommandToToml(
-  frontmatter: Record<string, unknown>,
-  content: string
-): string {
-  const lines: string[] = [];
-
-  if (frontmatter.description) {
-    lines.push(`description = "${frontmatter.description}"`);
-  }
-
-  // Replace prism argument placeholders with Gemini CLI format
-  const promptContent = content.replace(/\$ARGUMENTS/g, "{{args}}");
-
-  // The content becomes the prompt
-  lines.push("");
-  lines.push(`prompt = """${promptContent}"""`);
-
-  return lines.join("\n");
 }
 
 /**

@@ -22,7 +22,7 @@ const CAPABILITIES: Record<string, CompileTargetCapabilities> = {
     hooks: "supported",
     skillPermissions: "supported",
   },
-  "gemini-cli": {
+  "antigravity-cli": {
     agents: "supported",
     generatedCanonicalTools: "executable",
     hooks: "supported",

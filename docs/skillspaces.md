@@ -23,7 +23,7 @@ Most skill names are identical across the inspected harnesses. The first skillsp
 - Claude-only examples: `agent-browser` and several specialized design/domain-analysis skills not present in the current OpenCode and Codex roots
 - Codex-only examples: `prism-usage`, `codex-primary-runtime`
 
-The compiler currently lowers agents for OpenCode, Claude Code, Codex CLI, Gemini CLI, Amp Code, and Grok Build, with target-specific capability gates. Grok skillspace bindings are allowed when the skill names are known for the Grok environment; do not infer them from the older OpenCode/Claude/Codex snapshot without checking the Grok skill root.
+The compiler currently lowers agents for OpenCode, Claude Code, Codex CLI, Antigravity CLI, Amp Code, and Grok Build, with target-specific capability gates. Grok skillspace bindings are allowed when the skill names are known for the Grok environment; do not infer them from the older OpenCode/Claude/Codex snapshot without checking the Grok skill root.
 
 ## Authoring Pattern
 

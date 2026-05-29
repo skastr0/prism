@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Gemini CLI, Amp Code, Grok Build, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Amp Code, Grok Build, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -23,7 +23,7 @@ A unified plugin distribution system for AI coding harnesses.
 | OpenClaw | - | - | - | `~/.openclaw/skills/` |
 | Hermes Agent | - | - | - | `~/.hermes/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
-| Gemini CLI | `~/.gemini/GEMINI.md` | `~/.gemini/commands/` | `~/.gemini/agents/` | `~/.gemini/skills/` |
+| Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | `~/.gemini/antigravity-cli/skills/` |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
@@ -698,7 +698,7 @@ Install targeting lives in `plugin.json` and nowhere else.
   "description": "Shared standards plus harness-specific overlays",
   "targets": {
     "rules": ["coding-harness"],
-    "commands": ["claude-code", "opencode", "codex-cli", "gemini-cli", "cursor", "factory-droid"],
+    "commands": ["claude-code", "opencode", "codex-cli", "cursor", "factory-droid"],
     "agents": ["claude-code", "opencode"],
     "skills": ["coding-harness", "claw-harness"],
     "skillspaces": ["opencode", "claude-code", "grok"]
@@ -708,7 +708,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `gemini-cli`, `amp-code`, `cursor`, `factory-droid`, `grok`
+- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `amp-code`, `cursor`, `factory-droid`, `grok`
 - `claw-harness` → `openclaw`, `hermes`
 
 Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism.
@@ -751,7 +751,7 @@ Custom commands support argument placeholders to accept user input:
 |-------------|-------------|
 | `$ARGUMENTS` | The entire raw argument string |
 
-**Note:** For maximum cross-agent compatibility (especially with agents like Gemini CLI), it is highly recommended to design commands to take a single argument string using `$ARGUMENTS`.
+**Note:** For maximum cross-agent compatibility, it is highly recommended to design commands to take a single argument string using `$ARGUMENTS`.
 
 ### Examples
 

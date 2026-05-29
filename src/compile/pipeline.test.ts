@@ -514,12 +514,12 @@ const createCanonicalLanguageFixture = async (options?: {
   });
 };
 
-const createGeminiExtensionFixture = async (): Promise<{
+const createAntigravityPluginFixture = async (): Promise<{
   pluginRoot: string;
   projectRoot: string;
 }> => {
   const root = await createTempRoot();
-  const pluginRoot = join(root, "gemini-extension-demo");
+  const pluginRoot = join(root, "antigravity-plugin-demo");
   const projectRoot = join(root, "project");
   await mkdir(projectRoot, { recursive: true });
 
@@ -527,33 +527,31 @@ const createGeminiExtensionFixture = async (): Promise<{
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "gemini_extension.demo",
+        name: "antigravity_plugin.demo",
         version: "0.2.0",
         targets: {
-          rules: ["gemini-cli"],
-          commands: ["gemini-cli"],
-          skills: ["gemini-cli"],
-          agents: ["gemini-cli"],
-          orbits: ["gemini-cli"],
-          tools: ["gemini-cli"],
-          toolspaces: ["gemini-cli"],
-          hooks: ["gemini-cli"],
+          rules: ["antigravity-cli"],
+          skills: ["antigravity-cli"],
+          agents: ["antigravity-cli"],
+          orbits: ["antigravity-cli"],
+          tools: ["antigravity-cli"],
+          toolspaces: ["antigravity-cli"],
+          hooks: ["antigravity-cli"],
         },
       },
       null,
       2,
     )}\n`,
   );
-  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Gemini context\n\nUse the generated extension context.\n`);
-  await writeText(join(pluginRoot, "rules", "project", "project-context.md"), `# Project context\n\nKeep extension-local project guidance.\n`);
-  await writeText(join(pluginRoot, "commands", "hello.md"), `---\ndescription: Say hello\n---\n\nSay hello from the generated command.\n`);
+  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Antigravity context\n\nUse the generated plugin context.\n`);
+  await writeText(join(pluginRoot, "rules", "project", "project-context.md"), `# Project context\n\nKeep plugin-local project guidance.\n`);
   await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
-  await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the extension bundle.\n`);
+  await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the plugin bundle.\n`);
   await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
 
 export default defineToolspace({
   name: "workspace",
-  tools: { read_repo: { targets: { "gemini-cli": { name: "read_file" } } } },
+  tools: { read_repo: { targets: { "antigravity-cli": { name: "read_file" } } } },
 });
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
@@ -572,7 +570,7 @@ export default defineTool({
 export default defineTrait({
   name: "submittable",
   description: "Can submit work",
-  instructions: "Submit work through the typed Gemini extension tool.",
+  instructions: "Submit work through the typed Antigravity plugin tool.",
   access: { tools: [toolRef("workspace", "read_repo")] },
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
@@ -582,7 +580,7 @@ export default defineTrait({
 
 export default defineAgent({
   name: "worker",
-  description: "Gemini extension worker",
+  description: "Antigravity plugin worker",
   identity: "worker",
   traits: ["submittable"],
   skills: [skillRef("testing")],
@@ -592,7 +590,7 @@ export default defineAgent({
 
 export default defineOrbit({
   name: "delivery",
-  description: "Deliver work through Gemini",
+  description: "Deliver work through Antigravity",
   phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
 });
 `);
@@ -638,7 +636,7 @@ const createStandaloneToolFixture = async (): Promise<{
         name: "tool-only-demo",
         version: "0.1.0",
         targets: {
-          tools: ["codex-cli", "claude-code", "gemini-cli", "grok"],
+          tools: ["codex-cli", "claude-code", "antigravity-cli", "grok"],
         },
       },
       null,
@@ -1342,8 +1340,11 @@ test("artifact target resolution filters unsupported preset members", async () =
   const manifest = await readManifest(pluginRoot);
 
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
+  expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
+  expect(getManifestArtifactTargets(manifest, "rules")).toContain("antigravity-cli");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("grok");
+  expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
 });
 
 test("direct unsupported Grok command targets are rejected", async () => {
@@ -2576,15 +2577,15 @@ test("loadPlugin preserves agent normalization failure order", async () => {
   }
 });
 
-test("compilePluginForTarget emits a Gemini extension bundle", async () => {
-  const { pluginRoot, projectRoot } = await createGeminiExtensionFixture();
-  const extensionRoot = join(projectRoot, ".gemini", "extensions", "prism-generated-gemini-extension-demo");
-  await writeText(join(extensionRoot, "stale", "old.txt"), "stale\n");
+test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
+  const { pluginRoot, projectRoot } = await createAntigravityPluginFixture();
+  const outputPluginRoot = join(projectRoot, ".agents", "plugins", "prism-generated-antigravity-plugin-demo");
+  await writeText(join(outputPluginRoot, "stale", "old.txt"), "stale\n");
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
       pluginPath: pluginRoot,
-      target: "gemini-cli",
+      target: "antigravity-cli",
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
@@ -2592,80 +2593,85 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
   );
 
   expect(result.composed).toHaveLength(1);
-  expect(result.outputRoot.replace(/\/$/u, "")).toBe(join(projectRoot, ".gemini"));
+  expect(result.outputRoot.replace(/\/$/u, "")).toBe(join(projectRoot, ".agents"));
 
-  const manifest = JSON.parse(await readFile(join(extensionRoot, "gemini-extension.json"), "utf8")) as {
+  const manifest = JSON.parse(await readFile(join(outputPluginRoot, "plugin.json"), "utf8")) as {
     name: string;
     version: string;
-    contextFileName?: string | string[];
-    mcpServers?: Record<string, { command: string; args: string[]; trust?: unknown }>;
   };
 
   expect(manifest).toEqual({
-    name: "prism-generated-gemini-extension-demo",
+    name: "prism-generated-antigravity-plugin-demo",
     version: "0.2.0",
-    contextFileName: "GEMINI.md",
+  });
+
+  const mcpConfig = JSON.parse(await readFile(join(outputPluginRoot, "mcp_config.json"), "utf8")) as {
+    mcpServers?: Record<string, { command: string; args: string[]; trust?: unknown }>;
+  };
+  expect(mcpConfig).toEqual({
     mcpServers: {
-      "prism-generated-gemini-extension-demo": {
+      "prism-generated-antigravity-plugin-demo": {
         command: "bun",
-        args: ["${extensionPath}/mcp/prism_generated_gemini_extension_demo/server.mjs"],
+        args: [join(outputPluginRoot, "mcp", "prism_generated_antigravity_plugin_demo", "server.mjs")],
       },
     },
   });
-  expect(manifest.mcpServers?.["prism-generated-gemini-extension-demo"]).not.toHaveProperty("trust");
+  expect(mcpConfig.mcpServers?.["prism-generated-antigravity-plugin-demo"]).not.toHaveProperty("trust");
 
-  const context = await readFile(join(extensionRoot, "GEMINI.md"), "utf8");
+  const context = await readFile(join(outputPluginRoot, "rules", "context.md"), "utf8");
   expect(context).toContain("<!-- prism:context-source global/context.md -->");
-  expect(context).toContain("# Gemini context");
+  expect(context).toContain("# Antigravity context");
   expect(context).toContain("<!-- prism:context-source project/project-context.md -->");
   expect(context).toContain("# Project context");
 
-  const agent = await readFile(join(extensionRoot, "agents", "worker.md"), "utf8");
+  const agent = await readFile(join(outputPluginRoot, "agents", "worker.md"), "utf8");
   const parsedAgent = matter(agent);
   expect(parsedAgent.data).toMatchObject({
     name: "worker",
-    description: "Gemini extension worker",
+    description: "Antigravity plugin worker",
     tools: [
-      "mcp_prism-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
+      "mcp_prism-generated-antigravity-plugin-demo_antigravity_plugin_demo_submit_work",
       "read_file",
     ],
   });
   expect(parsedAgent.content).toContain("# Worker");
-  expect(parsedAgent.content).toContain("Submit work through the typed Gemini extension tool.");
+  expect(parsedAgent.content).toContain("Submit work through the typed Antigravity plugin tool.");
 
-  expect(await readFile(join(extensionRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
-  const orbitSkill = await readFile(join(extensionRoot, "skills", "delivery", "SKILL.md"), "utf8");
-  expect(orbitSkill).toContain('<!-- prism:orbit-skill owner="gemini_extension.demo" -->');
+  expect(await readFile(join(outputPluginRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
+  const orbitSkill = await readFile(join(outputPluginRoot, "skills", "delivery", "SKILL.md"), "utf8");
+  expect(orbitSkill).toContain('<!-- prism:orbit-skill owner="antigravity_plugin.demo" -->');
   expect(orbitSkill).toContain("# delivery");
   expect(orbitSkill).toContain("### 1. Build — agent `worker`");
 
-  const command = await readFile(join(extensionRoot, "commands", "hello.toml"), "utf8");
-  expect(command).toBe('description = "Say hello"\nprompt = """Say hello from the generated command."""\n');
+  expect(await pathExists(join(outputPluginRoot, "mcp", "prism_generated_antigravity_plugin_demo", "server.mjs"))).toBe(true);
 
-  expect(await pathExists(join(extensionRoot, "mcp", "prism_generated_gemini_extension_demo", "server.mjs"))).toBe(true);
-
-  const hookConfig = JSON.parse(await readFile(join(extensionRoot, "hooks", "hooks.json"), "utf8")) as {
-    hooks: { BeforeTool: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
+  const hookConfig = JSON.parse(await readFile(join(outputPluginRoot, "hooks.json"), "utf8")) as {
+    "audit-read": { PreToolUse: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
+    "audit-submit": { PreToolUse: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
   };
   expect(hookConfig).toEqual({
-    hooks: {
-      BeforeTool: [
+    "audit-read": {
+      PreToolUse: [
         {
           matcher: "read_file",
-          hooks: [{ type: "command", command: 'node "${extensionPath}/hooks/audit-read.mjs"' }],
+          hooks: [{ type: "command", command: 'node "./hooks/audit-read.mjs"' }],
         },
+      ],
+    },
+    "audit-submit": {
+      PreToolUse: [
         {
-          matcher: "mcp_prism-generated-gemini-extension-demo_gemini_extension_demo_submit_work",
-          hooks: [{ type: "command", command: 'node "${extensionPath}/hooks/audit-submit.mjs"' }],
+          matcher: "mcp_prism-generated-antigravity-plugin-demo_antigravity_plugin_demo_submit_work",
+          hooks: [{ type: "command", command: 'node "./hooks/audit-submit.mjs"' }],
         },
       ],
     },
   });
-  const hookWrapper = await readFile(join(extensionRoot, "hooks", "audit-submit.mjs"), "utf8");
+  const hookWrapper = await readFile(join(outputPluginRoot, "hooks", "audit-submit.mjs"), "utf8");
   expect(hookWrapper).toStartWith("#!/usr/bin/env node");
-  expect(hookWrapper).toContain("gemini-cli");
-  expect(hookWrapper).toContain("BeforeTool");
-  expect(hookWrapper).toContain("hookSpecificOutput");
+  expect(hookWrapper).toContain("antigravity-cli");
+  expect(hookWrapper).toContain("PreToolUse");
+  expect(hookWrapper).not.toContain("hookSpecificOutput");
   expect(hookWrapper).toContain('decision: "deny"');
   expect(hookWrapper).toContain("reason:");
   expect(hookWrapper).not.toContain("stopReason");
@@ -2674,13 +2680,13 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
   expect(hookWrapper).toContain("validation failed");
   expect(hookWrapper).toContain("result");
 
-  expect(await pathExists(join(extensionRoot, "stale", "old.txt"))).toBe(false);
+  expect(await pathExists(join(outputPluginRoot, "stale", "old.txt"))).toBe(false);
   expect(result.operations.some((operation) => operation.kind === "prune-plugin-path" && operation.target.endsWith(join("stale", "old.txt")))).toBe(true);
 });
 
 test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
   const { pluginRoot, projectRoot } = await createStandaloneToolFixture();
-  const targets = ["codex-cli", "claude-code", "gemini-cli", "grok"] as const;
+  const targets = ["codex-cli", "claude-code", "antigravity-cli", "grok"] as const;
 
   for (const target of targets) {
     await Effect.runPromise(
@@ -2721,20 +2727,20 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   expect(claudeBundle).toContain(expectedToolName);
   expect(claudeBundle).toContain("tools/list");
 
-  const geminiRoot = join(projectRoot, ".gemini", "extensions", "prism-generated-tool-only-demo");
-  const geminiManifest = JSON.parse(await readFile(join(geminiRoot, "gemini-extension.json"), "utf8")) as {
+  const antigravityRoot = join(projectRoot, ".agents", "plugins", "prism-generated-tool-only-demo");
+  const antigravityMcpConfig = JSON.parse(await readFile(join(antigravityRoot, "mcp_config.json"), "utf8")) as {
     mcpServers?: Record<string, { command: string; args: string[] }>;
   };
-  expect(geminiManifest.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+  expect(antigravityMcpConfig.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
     command: "bun",
-    args: ["${extensionPath}/mcp/prism_generated_tool_only_demo/server.mjs"],
+    args: [join(antigravityRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs")],
   });
-  const geminiBundle = await readFile(
-    join(geminiRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+  const antigravityBundle = await readFile(
+    join(antigravityRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
     "utf8",
   );
-  expect(geminiBundle).toContain(expectedToolName);
-  expect(geminiBundle).toContain("tools/list");
+  expect(antigravityBundle).toContain(expectedToolName);
+  expect(antigravityBundle).toContain("tools/list");
 
   const grokRoot = join(projectRoot, ".grok", "plugins", "prism-generated-tool-only-demo");
   const grokMcp = JSON.parse(await readFile(join(grokRoot, ".mcp.json"), "utf8")) as {
@@ -4534,7 +4540,7 @@ export default defineAgent({
   }
 });
 
-test("permission-only skill access lowers into Gemini agent skill frontmatter", async () => {
+test("permission-only skill access lowers into Antigravity agent skill frontmatter", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "plugin");
   const projectRoot = join(root, "project");
@@ -4547,8 +4553,8 @@ test("permission-only skill access lowers into Gemini agent skill frontmatter", 
         name: "unsupported-skill-permission-demo",
         version: "0.1.0",
         targets: {
-          agents: ["gemini-cli"],
-          skillspaces: ["gemini-cli"],
+          agents: ["antigravity-cli"],
+          skillspaces: ["antigravity-cli"],
         },
       },
       null,
@@ -4586,7 +4592,7 @@ export default defineSkillspace({
   skills: {
     testing: {
       targets: {
-        "gemini-cli": { name: "testing" },
+        "antigravity-cli": { name: "testing" },
       },
     },
   },
@@ -4609,7 +4615,7 @@ export default defineAgent({
   await Effect.runPromise(
     compilePluginForTarget({
       pluginPath: pluginRoot,
-      target: "gemini-cli",
+      target: "antigravity-cli",
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
@@ -4617,7 +4623,7 @@ export default defineAgent({
   );
 
   const agentMarkdown = await readFile(
-    join(projectRoot, ".gemini", "extensions", "prism-generated-unsupported-skill-permission-demo", "agents", "worker.md"),
+    join(projectRoot, ".agents", "plugins", "prism-generated-unsupported-skill-permission-demo", "agents", "worker.md"),
     "utf8",
   );
   expect(agentMarkdown).toContain("skills:");
@@ -5583,8 +5589,8 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
         name: "metadata-only-plugin",
         version: "0.1.0",
         targets: {
-          toolspaces: ["opencode", "claude-code", "gemini-cli", "codex-cli"],
-          modelspaces: ["opencode", "claude-code", "gemini-cli", "codex-cli"],
+          toolspaces: ["opencode", "claude-code", "antigravity-cli", "codex-cli"],
+          modelspaces: ["opencode", "claude-code", "antigravity-cli", "codex-cli"],
         },
       },
       null,
@@ -5592,7 +5598,7 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
     )}\n`,
   );
 
-  for (const target of ["opencode", "claude-code", "gemini-cli", "codex-cli"] as const) {
+  for (const target of ["opencode", "claude-code", "antigravity-cli", "codex-cli"] as const) {
     const result = await Effect.runPromise(
       compilePluginForTarget({
         pluginPath: pluginRoot,

@@ -184,6 +184,12 @@ export const HookSessionContextSchema = Schema.Struct({
 });
 export type HookSessionContext = typeof HookSessionContextSchema.Type;
 
+export const HookNativeContextSchema = Schema.Record({
+  key: Schema.String,
+  value: Schema.Unknown,
+});
+export type HookNativeContext = typeof HookNativeContextSchema.Type;
+
 export const HookToolContextSchema = Schema.Struct({
   logical: Schema.optional(Schema.String),
   nativeName: Schema.String,
@@ -197,6 +203,7 @@ export const ToolBeforeEventPayloadSchema = Schema.Struct({
   tool: HookToolContextSchema,
   cwd: Schema.optional(Schema.String),
   session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
 });
 export type ToolBeforeEventPayload = typeof ToolBeforeEventPayloadSchema.Type;
 
@@ -212,6 +219,7 @@ export const ToolAfterEventPayloadSchema = Schema.Struct({
   ),
   cwd: Schema.optional(Schema.String),
   session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
 });
 export type ToolAfterEventPayload = typeof ToolAfterEventPayloadSchema.Type;
 
@@ -220,6 +228,7 @@ export const SessionStartEventPayloadSchema = Schema.Struct({
   target: HookTargetContextSchema,
   cwd: Schema.optional(Schema.String),
   session: HookSessionContextSchema,
+  native: Schema.optional(HookNativeContextSchema),
 });
 export type SessionStartEventPayload = typeof SessionStartEventPayloadSchema.Type;
 
@@ -229,6 +238,7 @@ export const SessionEndEventPayloadSchema = Schema.Struct({
   cwd: Schema.optional(Schema.String),
   session: HookSessionContextSchema,
   reason: Schema.optional(Schema.String),
+  native: Schema.optional(HookNativeContextSchema),
 });
 export type SessionEndEventPayload = typeof SessionEndEventPayloadSchema.Type;
 
@@ -260,6 +270,7 @@ export const NativeToolBeforeHookPayloadSchema = Schema.transform(
     tool: NativeToolBeforeContextSchema,
     cwd: Schema.optional(Schema.String),
     session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
   }),
   ToolBeforeEventPayloadSchema,
   {
@@ -273,6 +284,7 @@ export const NativeToolBeforeHookPayloadSchema = Schema.transform(
       },
       cwd: native.cwd,
       session: native.session,
+      native: native.native,
     }),
     encode: (payload) => ({
       target: payload.target,
@@ -283,6 +295,7 @@ export const NativeToolBeforeHookPayloadSchema = Schema.transform(
       },
       cwd: payload.cwd,
       session: payload.session,
+      native: payload.native,
     }),
   },
 );
@@ -294,6 +307,7 @@ export const NativeToolAfterHookPayloadSchema = Schema.transform(
     tool: NativeToolAfterContextSchema,
     cwd: Schema.optional(Schema.String),
     session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
   }),
   ToolAfterEventPayloadSchema,
   {
@@ -309,6 +323,7 @@ export const NativeToolAfterHookPayloadSchema = Schema.transform(
       },
       cwd: native.cwd,
       session: native.session,
+      native: native.native,
     }),
     encode: (payload) => ({
       target: payload.target,
@@ -321,6 +336,7 @@ export const NativeToolAfterHookPayloadSchema = Schema.transform(
       },
       cwd: payload.cwd,
       session: payload.session,
+      native: payload.native,
     }),
   },
 );
@@ -331,6 +347,7 @@ export const NativeSessionStartHookPayloadSchema = Schema.transform(
     target: HookTargetContextSchema,
     cwd: Schema.optional(Schema.String),
     session: HookSessionContextSchema,
+    native: Schema.optional(HookNativeContextSchema),
   }),
   SessionStartEventPayloadSchema,
   {
@@ -339,11 +356,13 @@ export const NativeSessionStartHookPayloadSchema = Schema.transform(
       target: native.target,
       cwd: native.cwd,
       session: native.session,
+      native: native.native,
     }),
     encode: (payload) => ({
       target: payload.target,
       cwd: payload.cwd,
       session: payload.session,
+      native: payload.native,
     }),
   },
 );
@@ -355,6 +374,7 @@ export const NativeSessionEndHookPayloadSchema = Schema.transform(
     cwd: Schema.optional(Schema.String),
     session: HookSessionContextSchema,
     reason: Schema.optional(Schema.String),
+    native: Schema.optional(HookNativeContextSchema),
   }),
   SessionEndEventPayloadSchema,
   {
@@ -364,12 +384,14 @@ export const NativeSessionEndHookPayloadSchema = Schema.transform(
       cwd: native.cwd,
       session: native.session,
       reason: native.reason,
+      native: native.native,
     }),
     encode: (payload) => ({
       target: payload.target,
       cwd: payload.cwd,
       session: payload.session,
       reason: payload.reason,
+      native: payload.native,
     }),
   },
 );

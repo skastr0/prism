@@ -130,7 +130,19 @@ export interface InstallOptions {
 }
 
 // File operation types for the installation plan
-export type FileOperationType = "copy" | "append" | "merge" | "skip";
+export type FileOperationType = "copy" | "append" | "merge" | "prune" | "drift" | "skip";
+
+export interface ManagedFileOperationMetadata {
+  entryId: string;
+  pluginName: string;
+  pluginVersion?: string;
+  pluginPath: string;
+  scope: HarnessScope;
+  root: string;
+  kind: "file" | "directory" | "section" | "config";
+  sourcePath?: string;
+  contentHash: string;
+}
 
 export interface FileOperation {
   type: FileOperationType;
@@ -139,6 +151,7 @@ export interface FileOperation {
   harness: HarnessId;
   artifact: "rules" | "command" | "agent" | "tool" | "skill" | "config";
   reason?: string; // For skips or special handling
+  managed?: ManagedFileOperationMetadata;
 }
 
 // Result of an installation

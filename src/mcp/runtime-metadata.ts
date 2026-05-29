@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { computeContentHash } from "../content-hash.js";
 
 export const MCP_RUNTIME_METADATA_SCHEMA = "prism.mcp-runtime.v1" as const;
 export const MCP_RUNTIME_HEALTH_SCHEMA = "prism.mcp-health.v1" as const;
@@ -212,7 +212,7 @@ const optionalStartedAt = (record: Record<string, unknown>): string | undefined 
 };
 
 export const sha256Hex = (value: string | Buffer | Uint8Array): string =>
-  createHash("sha256").update(value).digest("hex");
+  computeContentHash(value);
 
 export const computeFileSha256 = async (path: string): Promise<string> =>
   sha256Hex(await readFile(path));

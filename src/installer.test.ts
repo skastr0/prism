@@ -1,14 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { planInstallation } from "./installer.js";
+import { install, planInstallation } from "./installer.js";
+import { readHarnessLedger } from "./managed-ledger.js";
 
 const tempRoots: string[] = [];
+const originalPrismHome = process.env.PRISM_HOME;
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-installer-"));
   tempRoots.push(root);
+  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
 
@@ -18,12 +21,13 @@ const writeText = async (path: string, content: string): Promise<void> => {
 };
 
 afterEach(async () => {
+  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
-test("planInstallation skips identical project rule append sections", async () => {
+test("planInstallation does not adopt legacy rule markers without a ledger", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");
   const projectPath = join(root, "project");
@@ -51,19 +55,67 @@ test("planInstallation skips identical project rule append sections", async () =
     dryRun: true,
   });
 
-  expect(operations).toEqual([
-    {
-      type: "skip",
-      source: join(pluginPath, "rules", "project", "context.md"),
-      target: join(projectPath, "AGENTS.md"),
-      harness: "opencode",
-      artifact: "rules",
-      reason: "Content already exists and is identical",
+  expect(operations).toHaveLength(1);
+  expect(operations[0]).toMatchObject({
+    type: "append",
+    artifact: "rules",
+    harness: "opencode",
+    source: join(pluginPath, "rules", "project", "context.md"),
+    target: join(projectPath, "AGENTS.md"),
+    managed: {
+      kind: "section",
+      pluginName: "rules-demo",
+      sourcePath: "project/context.md",
     },
-  ]);
+  });
 });
 
-test("planInstallation marks changed project rule append sections for update", async () => {
+test("install records managed rule sections and later plans unchanged as skip", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  await mkdir(projectPath, { recursive: true });
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "rules-demo",
+      version: "0.1.0",
+      targets: { rules: ["opencode"] },
+    })}\n`,
+  );
+  await writeText(join(pluginPath, "rules", "project", "context.md"), "Project rules\n");
+
+  const first = await install({
+    pluginPath,
+    harnesses: ["opencode"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: false,
+  });
+  expect(first.success).toBe(true);
+  expect(await readFile(join(projectPath, "AGENTS.md"), "utf8")).toContain(
+    "prism:managed-section begin",
+  );
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["opencode"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: true,
+  });
+
+  expect(operations).toHaveLength(1);
+  expect(operations[0]).toMatchObject({
+    type: "skip",
+    reason: "Content already exists and is identical",
+    managed: { kind: "section", pluginName: "rules-demo" },
+  });
+});
+
+test("install updates managed rule sections with Prism-home backups", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");
   const projectPath = join(root, "project");
@@ -77,30 +129,31 @@ test("planInstallation marks changed project rule append sections for update", a
     })}\n`,
   );
   await writeText(join(pluginPath, "rules", "project", "context.md"), "Project rules\n");
-  await writeText(
-    join(projectPath, "AGENTS.md"),
-    "<!-- BEGIN: context -->\nOld rules\n<!-- END: context -->\n",
-  );
 
-  const operations = await planInstallation({
+  await install({
     pluginPath,
     harnesses: ["opencode"],
     projectPath,
     overwrite: false,
     backup: false,
-    dryRun: true,
+    dryRun: false,
+  });
+  await writeText(join(pluginPath, "rules", "project", "context.md"), "Updated rules\n");
+
+  const second = await install({
+    pluginPath,
+    harnesses: ["opencode"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: false,
   });
 
-  expect(operations).toEqual([
-    {
-      type: "append",
-      source: join(pluginPath, "rules", "project", "context.md"),
-      target: join(projectPath, "AGENTS.md"),
-      harness: "opencode",
-      artifact: "rules",
-      reason: "Updating existing section",
-    },
-  ]);
+  expect(second.success).toBe(true);
+  expect(second.backups).toHaveLength(1);
+  expect(second.backups[0]).toContain(join(process.env.PRISM_HOME!, "backups", "opencode"));
+  expect(second.backups[0]).not.toContain(".bak");
+  expect(await readFile(join(projectPath, "AGENTS.md"), "utf8")).toContain("Updated rules");
 });
 
 test("planInstallation copies project rules into rulesDir with mdc extension", async () => {
@@ -127,13 +180,104 @@ test("planInstallation copies project rules into rulesDir with mdc extension", a
     dryRun: true,
   });
 
-  expect(operations).toEqual([
-    {
-      type: "copy",
-      source: join(pluginPath, "rules", "project", "policy.md"),
-      target: join(projectPath, ".cursor", "rules", "policy.mdc"),
-      harness: "cursor",
-      artifact: "rules",
+  expect(operations).toHaveLength(1);
+  expect(operations[0]).toMatchObject({
+    type: "copy",
+    source: join(pluginPath, "rules", "project", "policy.md"),
+    target: join(projectPath, ".cursor", "rules", "policy.mdc"),
+    harness: "cursor",
+    artifact: "rules",
+    managed: {
+      kind: "file",
+      pluginName: "cursor-rules-demo",
+      sourcePath: "project/policy.md",
     },
-  ]);
+  });
+});
+
+test("install prunes stale ledger-owned whole-file project rules", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  const sourcePath = join(pluginPath, "rules", "project", "policy.md");
+  const targetPath = join(projectPath, ".cursor", "rules", "policy.mdc");
+  await mkdir(projectPath, { recursive: true });
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-rules-demo",
+      version: "0.1.0",
+      targets: { rules: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(sourcePath, "Cursor rules\n");
+
+  await install({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: false,
+  });
+  await rm(sourcePath);
+
+  const second = await install({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: false,
+  });
+
+  expect(second.success).toBe(true);
+  expect(second.operations).toContainEqual(
+    expect.objectContaining({ type: "prune", target: targetPath }),
+  );
+  await expect(readFile(targetPath, "utf8")).rejects.toThrow();
+  expect((await readHarnessLedger("cursor")).entries).toHaveLength(0);
+});
+
+test("planInstallation fails closed on drifted ledger-owned files", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  const targetPath = join(projectPath, ".cursor", "rules", "policy.mdc");
+  await mkdir(projectPath, { recursive: true });
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-rules-demo",
+      version: "0.1.0",
+      targets: { rules: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(join(pluginPath, "rules", "project", "policy.md"), "Cursor rules\n");
+
+  await install({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: false,
+  });
+  await writeText(targetPath, "manual edit\n");
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    backup: false,
+    dryRun: true,
+  });
+
+  expect(operations).toHaveLength(1);
+  expect(operations[0]).toMatchObject({
+    type: "drift",
+    reason: "Managed target changed outside Prism",
+    target: targetPath,
+  });
 });

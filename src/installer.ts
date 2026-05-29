@@ -5,14 +5,14 @@
 import { basename, join } from "node:path";
 import { getHarness } from "./harnesses.js";
 import {
-  appendFile,
-  backupFile,
   copyFile,
   exists,
   expandPath,
   readFile,
   writeFile,
   ensureDir,
+  removeDir,
+  removeFile,
 } from "./fs.js";
 import {
   type ArtifactSourceFile,
@@ -30,7 +30,112 @@ import type {
   FileOperation,
   InstallOptions,
   InstallResult,
+  ManagedFileOperationMetadata,
+  HarnessScope,
 } from "./types.js";
+import { computeContentHash } from "./content-hash.js";
+import {
+  type HarnessLedger,
+  type ManagedLedgerEntry,
+  managedEntryId,
+  readHarnessLedger,
+  removeLedgerEntries,
+  upsertLedgerEntries,
+  writeHarnessLedger,
+} from "./managed-ledger.js";
+import { backupManagedTarget } from "./managed-backups.js";
+
+type InstallArtifact = FileOperation["artifact"];
+
+interface InstallPlanningContext {
+  readonly pluginPath: string;
+  readonly pluginName: string;
+  readonly pluginVersion?: string;
+  readonly harness: HarnessConfig;
+  readonly ledger: HarnessLedger;
+  readonly desiredEntryIds: Set<string>;
+  readonly targetRoots: Set<string>;
+  readonly overwrite: boolean;
+}
+
+interface ManagedOutputInput {
+  readonly artifact: InstallArtifact;
+  readonly scope: HarnessScope;
+  readonly root: string;
+  readonly targetPath: string;
+  readonly kind: ManagedFileOperationMetadata["kind"];
+  readonly sourcePath?: string;
+  readonly contentHash: string;
+}
+
+const managedOperationMetadata = (
+  context: InstallPlanningContext,
+  input: ManagedOutputInput,
+): ManagedFileOperationMetadata => {
+  const entryId = managedEntryId({
+    harness: context.harness.id,
+    scope: input.scope,
+    root: input.root,
+    pluginName: context.pluginName,
+    artifact: input.artifact,
+    targetPath: input.targetPath,
+    kind: input.kind,
+    sourcePath: input.sourcePath,
+  });
+  context.desiredEntryIds.add(entryId);
+
+  return {
+    entryId,
+    pluginName: context.pluginName,
+    ...(context.pluginVersion ? { pluginVersion: context.pluginVersion } : {}),
+    pluginPath: context.pluginPath,
+    scope: input.scope,
+    root: input.root,
+    kind: input.kind,
+    ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
+    contentHash: input.contentHash,
+  };
+};
+
+const ledgerEntryForOperation = (
+  op: FileOperation,
+  now = new Date().toISOString(),
+): ManagedLedgerEntry | undefined => {
+  if (!op.managed) return undefined;
+  return {
+    id: op.managed.entryId,
+    pluginName: op.managed.pluginName,
+    ...(op.managed.pluginVersion ? { pluginVersion: op.managed.pluginVersion } : {}),
+    pluginPath: op.managed.pluginPath,
+    harness: op.harness,
+    scope: op.managed.scope,
+    root: op.managed.root,
+    artifact: op.artifact,
+    ...(op.managed.sourcePath ? { sourcePath: op.managed.sourcePath } : {}),
+    targetPath: op.target,
+    kind: op.managed.kind,
+    contentHash: op.managed.contentHash,
+    updatedAt: now,
+  };
+};
+
+const findLedgerEntry = (
+  context: InstallPlanningContext,
+  entryId: string,
+): ManagedLedgerEntry | undefined =>
+  context.ledger.entries.find((entry) => entry.id === entryId);
+
+const readTargetHash = async (targetPath: string): Promise<string | undefined> => {
+  if (!(await exists(targetPath))) return undefined;
+  const bytes = new Uint8Array(await Bun.file(targetPath).arrayBuffer());
+  return computeContentHash(bytes);
+};
+
+const unmanagedTargetConflict = (op: FileOperation): FileOperation => ({
+  ...op,
+  type: "drift",
+  reason: "Target exists but is not owned by Prism; use --overwrite to take ownership",
+});
 
 /**
  * Plan installation operations without executing them
@@ -44,13 +149,29 @@ export async function planInstallation(
 
   for (const harnessId of options.harnesses) {
     const harness = getHarness(harnessId);
+    const ledger = await readHarnessLedger(harnessId);
+    const desiredEntryIds = new Set<string>();
+    const context: InstallPlanningContext = {
+      pluginPath,
+      pluginName: manifest.name,
+      pluginVersion: manifest.version,
+      harness,
+      ledger,
+      desiredEntryIds,
+      targetRoots: new Set([
+        expandPath(harness.globalConfigPath),
+        ...(options.projectPath ? [expandPath(options.projectPath)] : []),
+      ]),
+      overwrite: options.overwrite,
+    };
 
     // Plan rules installation when the harness has a managed rules surface
     if (harness.rulesFile && manifestTargetsArtifact(manifest, "rules", harnessId)) {
       const rulesOps = await planRulesInstallation(
         pluginPath,
         harness,
-        options.projectPath
+        options.projectPath,
+        context
       );
       operations.push(...rulesOps);
     }
@@ -61,7 +182,7 @@ export async function planInstallation(
       harness.commandsDir &&
       manifestTargetsArtifact(manifest, "commands", harnessId)
     ) {
-      const commandOps = await planCommandsInstallation(pluginPath, harness);
+      const commandOps = await planCommandsInstallation(pluginPath, harness, context);
       operations.push(...commandOps);
     }
 
@@ -81,71 +202,89 @@ export async function planInstallation(
       harness.skillsDir &&
       manifestTargetsArtifact(manifest, "skills", harnessId)
     ) {
-      const skillOps = await planSkillsInstallation(pluginPath, harness);
+      const skillOps = await planSkillsInstallation(pluginPath, harness, context);
       operations.push(...skillOps);
     }
+
+    operations.push(...(await planStaleManagedOperations(context)));
   }
 
   return operations;
 }
 
-/**
- * Check if an append operation would result in duplicate content
- * Returns: "new" if section doesn't exist, "identical" if any existing section matches, "changed" if sections exist but none match
- * Note: Handles multiple sections with the same marker (checks all of them)
- */
-async function checkAppendStatus(
-  sourcePath: string,
-  targetPath: string,
-  harnessId: HarnessId
-): Promise<"new" | "identical" | "changed"> {
-  if (!(await exists(targetPath))) {
-    return "new";
-  }
+const sectionMarker = (
+  boundary: "begin" | "end",
+  harnessId: HarnessId,
+  metadata: ManagedFileOperationMetadata,
+): string =>
+  `<!-- prism:managed-section ${boundary} plugin=${JSON.stringify(metadata.pluginName)} artifact=${JSON.stringify("rules")} harness=${JSON.stringify(harnessId)} scope=${JSON.stringify(metadata.scope)} source=${JSON.stringify(metadata.sourcePath ?? "")} -->`;
 
-  const { frontmatter, content } = await parseMarkdownFile(sourcePath);
-  const harnessFrontmatter = getHarnessFrontmatter(frontmatter, harnessId);
-  const finalContent = reconstructMarkdown(harnessFrontmatter, content);
-  const newContentTrimmed = finalContent.trim();
+const renderManagedSection = (
+  harnessId: HarnessId,
+  metadata: ManagedFileOperationMetadata,
+  content: string,
+): string =>
+  `${sectionMarker("begin", harnessId, metadata)}\n${content}\n${sectionMarker("end", harnessId, metadata)}`;
 
-  const sourceName = basename(sourcePath, ".md");
-  const beginMarker = `<!-- BEGIN: ${sourceName} -->`;
-  const endMarker = `<!-- END: ${sourceName} -->`;
+const extractManagedSection = (
+  existingContent: string,
+  harnessId: HarnessId,
+  metadata: ManagedFileOperationMetadata,
+): string | undefined => {
+  const beginMarker = sectionMarker("begin", harnessId, metadata);
+  const endMarker = sectionMarker("end", harnessId, metadata);
+  const beginIndex = existingContent.indexOf(beginMarker);
+  if (beginIndex === -1) return undefined;
+  const contentStart = beginIndex + beginMarker.length;
+  const endIndex = existingContent.indexOf(endMarker, contentStart);
+  if (endIndex === -1) return undefined;
 
-  const existingContent = await readFile(targetPath);
+  let section = existingContent.slice(contentStart, endIndex);
+  if (section.startsWith("\n")) section = section.slice(1);
+  if (section.endsWith("\n")) section = section.slice(0, -1);
+  return section;
+};
 
-  if (!existingContent.includes(beginMarker)) {
-    return "new";
-  }
-
-  // Find all sections with this marker and check if any match
-  let searchStart = 0;
-  let foundAnySection = false;
-
-  while (true) {
-    const beginIndex = existingContent.indexOf(beginMarker, searchStart);
-    if (beginIndex === -1) break;
-
-    const endIndex = existingContent.indexOf(endMarker, beginIndex);
-    if (endIndex === -1) break;
-
-    foundAnySection = true;
-
-    const existingSection = existingContent.slice(
-      beginIndex + beginMarker.length,
-      endIndex
-    );
-
-    if (existingSection.trim() === newContentTrimmed) {
-      return "identical";
+const replaceOrAppendManagedSection = (
+  existingContent: string,
+  harnessId: HarnessId,
+  metadata: ManagedFileOperationMetadata,
+  content: string,
+): string => {
+  const beginMarker = sectionMarker("begin", harnessId, metadata);
+  const endMarker = sectionMarker("end", harnessId, metadata);
+  const newSection = renderManagedSection(harnessId, metadata, content);
+  const beginIndex = existingContent.indexOf(beginMarker);
+  if (beginIndex !== -1) {
+    const endIndex = existingContent.indexOf(endMarker, beginIndex + beginMarker.length);
+    if (endIndex !== -1) {
+      const before = existingContent.slice(0, beginIndex).trimEnd();
+      const after = existingContent.slice(endIndex + endMarker.length).trimStart();
+      return [before, newSection, after].filter((part) => part.length > 0).join("\n\n") + "\n";
     }
-
-    // Move past this section for next iteration
-    searchStart = endIndex + endMarker.length;
   }
 
-  return foundAnySection ? "changed" : "new";
-}
+  const base = existingContent.trimEnd();
+  return `${base}${base.length > 0 ? "\n\n" : ""}${newSection}\n`;
+};
+
+const removeManagedSection = (
+  existingContent: string,
+  harnessId: HarnessId,
+  metadata: ManagedFileOperationMetadata,
+): string => {
+  const beginMarker = sectionMarker("begin", harnessId, metadata);
+  const endMarker = sectionMarker("end", harnessId, metadata);
+  const beginIndex = existingContent.indexOf(beginMarker);
+  if (beginIndex === -1) return existingContent;
+  const endIndex = existingContent.indexOf(endMarker, beginIndex + beginMarker.length);
+  if (endIndex === -1) return existingContent;
+
+  const before = existingContent.slice(0, beginIndex).trimEnd();
+  const after = existingContent.slice(endIndex + endMarker.length).trimStart();
+  const next = [before, after].filter((part) => part.length > 0).join("\n\n");
+  return next.length > 0 ? `${next}\n` : "";
+};
 
 async function getSharedSkillValidation(
   pluginPath: string
@@ -274,27 +413,69 @@ async function collectRuleSourceGroups(
 async function planAppendRuleOperation(
   file: ArtifactSourceFile,
   targetPath: string,
-  harnessId: HarnessId
+  context: InstallPlanningContext,
+  scope: HarnessScope,
+  root: string
 ): Promise<FileOperation> {
-  const appendStatus = await checkAppendStatus(file.sourcePath, targetPath, harnessId);
-  if (appendStatus === "identical") {
+  const { frontmatter, content } = await parseMarkdownFile(file.sourcePath);
+  const harnessFrontmatter = getHarnessFrontmatter(frontmatter, context.harness.id);
+  const finalContent = reconstructMarkdown(harnessFrontmatter, content);
+  const managed = managedOperationMetadata(context, {
+    artifact: "rules",
+    scope,
+    root,
+    targetPath,
+    kind: "section",
+    sourcePath: file.relativePath,
+    contentHash: computeContentHash(finalContent),
+  });
+  const baseOperation: FileOperation = {
+    type: "append",
+    source: file.sourcePath,
+    target: targetPath,
+    harness: context.harness.id,
+    artifact: "rules",
+    managed,
+  };
+
+  if (!(await exists(targetPath))) return baseOperation;
+
+  const existingContent = await readFile(targetPath);
+  const existingSection = extractManagedSection(existingContent, context.harness.id, managed);
+  if (existingSection === undefined) return baseOperation;
+
+  const currentHash = computeContentHash(existingSection);
+  const ledgerEntry = findLedgerEntry(context, managed.entryId);
+  if (!ledgerEntry && !context.overwrite) {
+    return unmanagedTargetConflict(baseOperation);
+  }
+  if (
+    ledgerEntry &&
+    currentHash !== ledgerEntry.contentHash &&
+    currentHash !== managed.contentHash
+  ) {
+    return {
+      ...baseOperation,
+      type: "drift",
+      reason: "Managed rules section changed outside Prism",
+    };
+  }
+
+  if (currentHash === managed.contentHash) {
     return {
       type: "skip",
       source: file.sourcePath,
       target: targetPath,
-      harness: harnessId,
+      harness: context.harness.id,
       artifact: "rules",
       reason: "Content already exists and is identical",
+      managed,
     };
   }
 
   return {
-    type: "append",
-    source: file.sourcePath,
-    target: targetPath,
-    harness: harnessId,
-    artifact: "rules",
-    reason: appendStatus === "changed" ? "Updating existing section" : undefined,
+    ...baseOperation,
+    reason: "Updating existing section",
   };
 }
 
@@ -327,7 +508,8 @@ async function planProjectRuleOperation(
   file: ArtifactSourceFile,
   harness: HarnessConfig,
   rulesFile: string,
-  expandedProjectPath: string
+  expandedProjectPath: string,
+  context: InstallPlanningContext
 ): Promise<FileOperation> {
   const relativeFile = file.relativePath.slice("project/".length);
   const targetPath = getProjectRuleTargetPath(
@@ -338,16 +520,21 @@ async function planProjectRuleOperation(
   );
 
   if (harness.rulesDir) {
-    return {
-      type: "copy",
-      source: file.sourcePath,
-      target: targetPath,
-      harness: harness.id,
+    return planManagedCopyOperation({
+      file,
+      targetPath,
+      context,
       artifact: "rules",
-    };
+      scope: "project",
+      root: expandedProjectPath,
+      transformMarkdown: (frontmatter, content) =>
+        harness.id === "cursor"
+          ? convertToMdc(getHarnessFrontmatter(frontmatter, harness.id), content)
+          : reconstructMarkdown(getHarnessFrontmatter(frontmatter, harness.id), content),
+    });
   }
 
-  return planAppendRuleOperation(file, targetPath, harness.id);
+  return planAppendRuleOperation(file, targetPath, context, "project", expandedProjectPath);
 }
 
 /**
@@ -356,7 +543,8 @@ async function planProjectRuleOperation(
 async function planRulesInstallation(
   pluginPath: string,
   harness: HarnessConfig,
-  projectPath?: string
+  projectPath: string | undefined,
+  context: InstallPlanningContext
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
 
@@ -370,9 +558,10 @@ async function planRulesInstallation(
     harness.id
   );
 
-  const globalTargetPath = join(expandPath(harness.globalConfigPath), rulesFile);
+  const globalRoot = expandPath(harness.globalConfigPath);
+  const globalTargetPath = join(globalRoot, rulesFile);
   for (const file of globalFiles) {
-    operations.push(await planAppendRuleOperation(file, globalTargetPath, harness.id));
+    operations.push(await planAppendRuleOperation(file, globalTargetPath, context, "global", globalRoot));
   }
 
   if (projectPath) {
@@ -380,7 +569,7 @@ async function planRulesInstallation(
 
     for (const file of projectFiles) {
       operations.push(
-        await planProjectRuleOperation(file, harness, rulesFile, expandedProjectPath)
+        await planProjectRuleOperation(file, harness, rulesFile, expandedProjectPath, context)
       );
     }
   }
@@ -388,19 +577,121 @@ async function planRulesInstallation(
   return operations;
 }
 
+async function renderManagedCopyContent(
+  file: ArtifactSourceFile,
+  harness: HarnessConfig,
+  artifact: InstallArtifact,
+  transformMarkdown?: (
+    frontmatter: Record<string, unknown>,
+    content: string,
+  ) => string,
+): Promise<string | Uint8Array> {
+  if (!file.sourcePath.endsWith(".md")) {
+    return new Uint8Array(await Bun.file(file.sourcePath).arrayBuffer());
+  }
+
+  const { frontmatter, content } = await parseMarkdownFile(file.sourcePath);
+  if (transformMarkdown) return transformMarkdown({ ...frontmatter }, content);
+
+  const harnessFrontmatter = getHarnessFrontmatter(frontmatter, harness.id);
+  if (artifact === "agent" && !harnessFrontmatter.name) {
+    harnessFrontmatter.name = basename(file.sourcePath, ".md");
+  }
+
+  if (harness.id === "gemini-cli" && artifact === "command") {
+    return convertCommandToToml(harnessFrontmatter, content);
+  }
+
+  if (harness.id === "cursor" && artifact === "rules") {
+    return convertToMdc(harnessFrontmatter, content);
+  }
+
+  return reconstructMarkdown(harnessFrontmatter, content);
+}
+
+async function planManagedCopyOperation(options: {
+  readonly file: ArtifactSourceFile;
+  readonly targetPath: string;
+  readonly context: InstallPlanningContext;
+  readonly artifact: InstallArtifact;
+  readonly scope: HarnessScope;
+  readonly root: string;
+  readonly transformMarkdown?: (
+    frontmatter: Record<string, unknown>,
+    content: string,
+  ) => string;
+}): Promise<FileOperation> {
+  const content = await renderManagedCopyContent(
+    options.file,
+    options.context.harness,
+    options.artifact,
+    options.transformMarkdown,
+  );
+  const contentHash = computeContentHash(content);
+  const managed = managedOperationMetadata(options.context, {
+    artifact: options.artifact,
+    scope: options.scope,
+    root: options.root,
+    targetPath: options.targetPath,
+    kind: "file",
+    sourcePath: options.file.relativePath,
+    contentHash,
+  });
+  const baseOperation: FileOperation = {
+      type: "copy",
+      source: options.file.sourcePath,
+      target: options.targetPath,
+      harness: options.context.harness.id,
+      artifact: options.artifact,
+      managed,
+    };
+
+  const currentHash = await readTargetHash(options.targetPath);
+  if (!currentHash) return baseOperation;
+
+  const ledgerEntry = findLedgerEntry(options.context, managed.entryId);
+  if (!ledgerEntry && !options.context.overwrite) {
+    return unmanagedTargetConflict(baseOperation);
+  }
+
+  if (
+    ledgerEntry &&
+    currentHash !== ledgerEntry.contentHash &&
+    currentHash !== managed.contentHash
+  ) {
+    return {
+      ...baseOperation,
+      type: "drift",
+      reason: "Managed target changed outside Prism",
+    };
+  }
+
+  if (currentHash === managed.contentHash) {
+    return {
+      ...baseOperation,
+      type: "skip",
+      reason: "Content already exists and is identical",
+    };
+  }
+
+  return { ...baseOperation, reason: "Updating changed target" };
+}
+
 /**
  * Plan commands installation
  */
 async function planCommandsInstallation(
   pluginPath: string,
-  harness: HarnessConfig
+  harness: HarnessConfig,
+  context: InstallPlanningContext
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
   const files = await collectArtifactSourceFiles(pluginPath, "commands", harness.id);
   const mdFiles = files.filter((file) => file.relativePath.endsWith(".md"));
+  const root = expandPath(harness.globalConfigPath);
 
   for (const file of mdFiles) {
-    const targetDir = join(expandPath(harness.globalConfigPath), harness.commandsDir!);
+    const targetDir = join(root, harness.commandsDir!);
 
     let targetFile = file.relativePath;
     if (harness.id === "gemini-cli") {
@@ -409,13 +700,16 @@ async function planCommandsInstallation(
 
     const targetPath = join(targetDir, targetFile);
 
-    operations.push({
-      type: "copy",
-      source: file.sourcePath,
-      target: targetPath,
-      harness: harness.id,
-      artifact: "command",
-    });
+    operations.push(
+      await planManagedCopyOperation({
+        file,
+        targetPath,
+        context,
+        artifact: "command",
+        scope: "global",
+        root,
+      }),
+    );
   }
 
   return operations;
@@ -443,7 +737,8 @@ async function planAgentsInstallation(
  */
 async function planSkillsInstallation(
   pluginPath: string,
-  harness: HarnessConfig
+  harness: HarnessConfig,
+  context: InstallPlanningContext
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
   const selectedFiles = await collectArtifactSourceFiles(pluginPath, "skills", harness.id);
@@ -453,7 +748,8 @@ async function planSkillsInstallation(
   }
 
   const validatedSkills = await getSelectedSkillValidation(pluginPath, harness.id, selectedFiles);
-  const targetDir = join(expandPath(harness.globalConfigPath), harness.skillsDir!);
+  const root = expandPath(harness.globalConfigPath);
+  const targetDir = join(root, harness.skillsDir!);
 
   for (const [skillDirName, validation] of [...validatedSkills.entries()].sort((a, b) =>
     a[0].localeCompare(b[0])
@@ -476,13 +772,97 @@ async function planSkillsInstallation(
       continue;
     }
 
-    operations.push({
-      type: "copy",
-      source: file.sourcePath,
-      target: join(targetDir, file.relativePath),
-      harness: harness.id,
-      artifact: "skill",
-    });
+    operations.push(
+      await planManagedCopyOperation({
+        file,
+        targetPath: join(targetDir, file.relativePath),
+        context,
+        artifact: "skill",
+        scope: "global",
+        root,
+      }),
+    );
+  }
+
+  return operations;
+}
+
+const installArtifacts = new Set(["rules", "command", "skill", "config"]);
+
+const metadataFromLedgerEntry = (
+  entry: ManagedLedgerEntry,
+): ManagedFileOperationMetadata => ({
+  entryId: entry.id,
+  pluginName: entry.pluginName,
+  ...(entry.pluginVersion ? { pluginVersion: entry.pluginVersion } : {}),
+  pluginPath: entry.pluginPath,
+  scope: entry.scope,
+  root: entry.root,
+  kind: entry.kind,
+  ...(entry.sourcePath ? { sourcePath: entry.sourcePath } : {}),
+  contentHash: entry.contentHash,
+});
+
+async function planStaleManagedOperations(
+  context: InstallPlanningContext,
+): Promise<FileOperation[]> {
+  const operations: FileOperation[] = [];
+
+  for (const entry of context.ledger.entries) {
+    if (entry.pluginName !== context.pluginName) continue;
+    if (!context.targetRoots.has(entry.root)) continue;
+    if (!installArtifacts.has(entry.artifact)) continue;
+    if (context.desiredEntryIds.has(entry.id)) continue;
+
+    const managed = metadataFromLedgerEntry(entry);
+    const baseOperation: FileOperation = {
+      type: "prune",
+      source: entry.sourcePath ?? entry.targetPath,
+      target: entry.targetPath,
+      harness: context.harness.id,
+      artifact: entry.artifact as FileOperation["artifact"],
+      reason: "Stale managed output",
+      managed,
+    };
+
+    if (entry.kind === "section") {
+      if (!(await exists(entry.targetPath))) {
+        operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
+        continue;
+      }
+      const existingContent = await readFile(entry.targetPath);
+      const existingSection = extractManagedSection(existingContent, context.harness.id, managed);
+      if (existingSection === undefined) {
+        operations.push({ ...baseOperation, reason: "Stale ledger entry; section missing" });
+        continue;
+      }
+      const currentHash = computeContentHash(existingSection);
+      if (currentHash !== entry.contentHash) {
+        operations.push({
+          ...baseOperation,
+          type: "drift",
+          reason: "Stale managed section changed outside Prism",
+        });
+        continue;
+      }
+      operations.push(baseOperation);
+      continue;
+    }
+
+    const currentHash = await readTargetHash(entry.targetPath);
+    if (!currentHash) {
+      operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
+      continue;
+    }
+    if (entry.kind === "file" && currentHash !== entry.contentHash) {
+      operations.push({
+        ...baseOperation,
+        type: "drift",
+        reason: "Stale managed target changed outside Prism",
+      });
+      continue;
+    }
+    operations.push(baseOperation);
   }
 
   return operations;
@@ -495,6 +875,7 @@ export async function executeInstallation(
   operations: FileOperation[],
   options: Pick<InstallOptions, "overwrite" | "backup" | "dryRun">
 ): Promise<InstallResult> {
+  void options.backup;
   const result: InstallResult = {
     success: true,
     operations: [],
@@ -507,46 +888,12 @@ export async function executeInstallation(
     return result;
   }
 
+  const ledgers = createLedgerWriteCache();
+
   for (const op of operations) {
     try {
-      if (op.type === "skip") {
-        result.operations.push(op);
-        continue;
-      }
-
-      // Check if target exists
-      const targetExists = await exists(op.target);
-
-      if (targetExists && !options.overwrite && op.type !== "append") {
-        result.operations.push({
-          ...op,
-          type: "skip",
-          reason: "Target exists and overwrite is disabled",
-        });
-        continue;
-      }
-
-      // Backup if needed
-      if (targetExists && options.backup) {
-        const backupPath = await backupFile(op.target);
-        if (backupPath) {
-          result.backups.push(backupPath);
-        }
-      }
-
-      // Execute operation
-      switch (op.type) {
-        case "copy":
-          await executeCopyOperation(op);
-          break;
-        case "append":
-          await executeAppendOperation(op);
-          break;
-        case "merge":
-          await executeMergeOperation(op);
-          break;
-      }
-
+      const backupPath = await executePlannedOperation(op, ledgers);
+      if (backupPath) result.backups.push(backupPath);
       result.operations.push(op);
     } catch (error) {
       result.success = false;
@@ -557,48 +904,126 @@ export async function executeInstallation(
     }
   }
 
+  for (const [harness, ledger] of ledgers.entries()) {
+    try {
+      await writeHarnessLedger(ledger);
+    } catch (error) {
+      result.success = false;
+      result.errors.push({
+        operation: {
+          type: "merge",
+          source: "managed-ledger",
+          target: harness,
+          harness,
+          artifact: "config",
+        },
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   return result;
 }
+
+const createLedgerWriteCache = (): {
+  readonly entries: () => IterableIterator<[HarnessId, HarnessLedger]>;
+  readonly updateForOperation: (op: FileOperation) => Promise<void>;
+} => {
+  const ledgers = new Map<HarnessId, HarnessLedger>();
+
+  const ledgerForHarness = async (harness: HarnessId): Promise<HarnessLedger> => {
+    const existing = ledgers.get(harness);
+    if (existing) return existing;
+    const ledger = await readHarnessLedger(harness);
+    ledgers.set(harness, ledger);
+    return ledger;
+  };
+
+  return {
+    entries: () => ledgers.entries(),
+    updateForOperation: async (op) => {
+      ledgers.set(op.harness, applyOperationToLedger(await ledgerForHarness(op.harness), op));
+    },
+  };
+};
+
+const executePlannedOperation = async (
+  op: FileOperation,
+  ledgers: ReturnType<typeof createLedgerWriteCache>,
+): Promise<string | null> => {
+  if (op.type === "skip") return null;
+  if (op.type === "drift") {
+    throw new Error(op.reason ?? "Managed target drift detected");
+  }
+
+  const backupPath = await backupBeforeManagedMutation(op);
+  await executeWriteOrPrune(op);
+  await ledgers.updateForOperation(op);
+  return backupPath;
+};
+
+const executeWriteOrPrune = async (op: FileOperation): Promise<void> => {
+  switch (op.type) {
+    case "copy":
+      await executeCopyOperation(op);
+      return;
+    case "append":
+      await executeAppendOperation(op);
+      return;
+    case "merge":
+      await executeMergeOperation(op);
+      return;
+    case "prune":
+      await executePruneOperation(op);
+      return;
+    case "skip":
+    case "drift":
+      return;
+  }
+};
+
+const backupBeforeManagedMutation = async (op: FileOperation): Promise<string | null> => {
+  if (!op.managed) return null;
+  if (!(await exists(op.target))) return null;
+  return backupManagedTarget({
+    harness: op.harness,
+    scope: op.managed.scope,
+    targetPath: op.target,
+    operation: op.type === "prune" ? "prune" : op.type === "merge" ? "patch" : "write",
+  });
+};
+
+const applyOperationToLedger = (
+  ledger: HarnessLedger,
+  op: FileOperation,
+): HarnessLedger => {
+  if (!op.managed) return ledger;
+  if (op.type === "prune") {
+    return removeLedgerEntries(ledger, new Set([op.managed.entryId]));
+  }
+
+  const entry = ledgerEntryForOperation(op);
+  return entry ? upsertLedgerEntries(ledger, [entry]) : ledger;
+};
 
 /**
  * Execute a copy operation with content transformation
  */
 async function executeCopyOperation(op: FileOperation): Promise<void> {
   const harness = getHarness(op.harness);
+  const rendered = await renderManagedCopyContent(
+    {
+      sourcePath: op.source,
+      relativePath: op.managed?.sourcePath ?? basename(op.source),
+      scope: "shared",
+    },
+    harness,
+    op.artifact,
+  );
 
-  if (op.source.endsWith(".md")) {
-    // Transform markdown with frontmatter
-    const { frontmatter, content } = await parseMarkdownFile(op.source);
-    const harnessFrontmatter = getHarnessFrontmatter(frontmatter, op.harness);
-
-    // Ensure name is set for agent definitions (derived from filename)
-    if (op.artifact === "agent" && !harnessFrontmatter.name) {
-      harnessFrontmatter.name = basename(op.source, ".md");
-    }
-
-    // Handle special transformations per harness
-    let finalContent: string;
-
-    if (harness.id === "gemini-cli" && op.artifact === "command") {
-      // Convert to TOML format for Gemini
-      finalContent = convertCommandToToml(harnessFrontmatter, content);
-    } else if (harness.id === "codex-cli" && op.artifact === "agent") {
-      // Convert to TOML config file for Codex agent role
-      finalContent = convertAgentToCodexToml(harnessFrontmatter, content);
-      await writeFile(op.target, finalContent);
-      // Also register this agent role in config.toml
-      await mergeCodexAgentConfig(harness, harnessFrontmatter);
-      return;
-    } else if (harness.id === "cursor" && op.artifact === "rules") {
-      // Convert to MDC format for Cursor
-      finalContent = convertToMdc(harnessFrontmatter, content);
-    } else {
-      finalContent = reconstructMarkdown(harnessFrontmatter, content);
-    }
-
-    await writeFile(op.target, finalContent);
+  if (typeof rendered === "string") {
+    await writeFile(op.target, rendered);
   } else {
-    // Binary copy
     await copyFile(op.source, op.target);
   }
 }
@@ -608,38 +1033,31 @@ async function executeCopyOperation(op: FileOperation): Promise<void> {
  * Appends content with BEGIN/END markers, or updates existing section if markers exist
  */
 async function executeAppendOperation(op: FileOperation): Promise<void> {
+  if (!op.managed) {
+    throw new Error("Managed metadata is required for append operations");
+  }
   const { frontmatter, content } = await parseMarkdownFile(op.source);
   const harnessFrontmatter = getHarnessFrontmatter(frontmatter, op.harness);
-
-  const sourceName = basename(op.source, ".md");
-  const beginMarker = `<!-- BEGIN: ${sourceName} -->`;
-  const endMarker = `<!-- END: ${sourceName} -->`;
-
   const finalContent = reconstructMarkdown(harnessFrontmatter, content);
+  const existingContent = (await exists(op.target)) ? await readFile(op.target) : "";
+  await writeFile(
+    op.target,
+    replaceOrAppendManagedSection(existingContent, op.harness, op.managed, finalContent),
+  );
+}
 
-  // Check if we need to update an existing section
-  if (await exists(op.target)) {
-    const existingContent = await readFile(op.target);
-
-    if (existingContent.includes(beginMarker)) {
-      const beginIndex = existingContent.indexOf(beginMarker);
-      const endIndex = existingContent.indexOf(endMarker);
-
-      if (endIndex > beginIndex) {
-        // Replace existing section
-        const before = existingContent.slice(0, beginIndex);
-        const after = existingContent.slice(endIndex + endMarker.length);
-        const newSection = `${beginMarker}\n${finalContent}\n${endMarker}`;
-        await writeFile(op.target, before + newSection + after);
-        return;
-      }
-    }
+async function executePruneOperation(op: FileOperation): Promise<void> {
+  if (op.managed?.kind === "section") {
+    if (!(await exists(op.target))) return;
+    await writeFile(
+      op.target,
+      removeManagedSection(await readFile(op.target), op.harness, op.managed),
+    );
+    return;
   }
 
-  // Append new section
-  const header = `\n\n${beginMarker}\n`;
-  const footer = `\n${endMarker}\n`;
-  await appendFile(op.target, header + finalContent + footer);
+  if (op.managed?.kind === "directory") await removeDir(op.target);
+  else await removeFile(op.target);
 }
 
 /**

@@ -24,6 +24,7 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  planCompileOwnedTargetedSkillPruning,
   prismOwnerMarker,
   pushWriteOperation as pushWrite,
   renderGeneratedOrbitSkill,
@@ -194,14 +195,16 @@ const renderAmpOrbitSkillMarkdown = (
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,
   operations: LowerOperation[],
-): Promise<void> => {
+): Promise<ReadonlySet<string>> => {
+  const desired = new Set<string>();
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsAmp(input.registry, "skills")) return;
+  if (!pluginPath || !artifactTargetsAmp(input.registry, "skills")) return desired;
 
   const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
   for (const file of files) {
     const target = join(ampSkillsRoot(input.target), file.relativePath);
     const content = await readFile(file.sourcePath);
+    desired.add(file.relativePath);
     await pushWrite(
       operations,
       target,
@@ -209,6 +212,7 @@ const copyTargetedSkillArtifacts = async (
       file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file",
     );
   }
+  return desired;
 };
 
 const planGeneratedSkillPruning = async (
@@ -270,15 +274,19 @@ const planAmpPlugin = async (
   await pushWrite(operations, target, bundle.content);
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desiredGeneratedSkillFiles = new Set<string>();
-
+const assertAmpLoweringInput = (input: LowerInput): void => {
   if ((input.hooks?.length ?? 0) > 0) {
     throw new Error(
       "Amp lowerer received hooks after target capability validation; this indicates a compiler planning bug.",
     );
   }
+};
+
+export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+  const operations: LowerOperation[] = [];
+  const desiredGeneratedSkillFiles = new Set<string>();
+
+  assertAmpLoweringInput(input);
 
   for (const agent of input.agents) {
     const relativeSkill = generatedAgentSkillRelativePath(agent.name);
@@ -291,7 +299,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     );
   }
 
-  await copyTargetedSkillArtifacts(input, operations);
+  const desiredTargetedSkillFiles = await copyTargetedSkillArtifacts(input, operations);
 
   for (const orbit of input.orbits) {
     const relativeSkill = generatedOrbitSkillRelativePath(orbit.name);
@@ -316,6 +324,11 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   }
 
   operations.push(...await planGeneratedSkillPruning(input.target, desiredGeneratedSkillFiles));
+  operations.push(...await planCompileOwnedTargetedSkillPruning({
+    target: { ...input.target, harness: TARGET_ID },
+    skillsRoot: ampSkillsRoot(input.target),
+    desiredRelativePaths: desiredTargetedSkillFiles,
+  }));
   await planAmpPlugin(input, operations);
   return operations;
 };

@@ -640,6 +640,55 @@ export const writeReason = async (
   return (await readFile(target)) === content ? "unchanged" : "changed";
 };
 
+const relativePathInsideRoot = (root: string, targetPath: string): string | undefined => {
+  const relativePath = relative(resolve(root), resolve(targetPath));
+  if (
+    relativePath === "" ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    return undefined;
+  }
+  return relativePath.split(sep).join("/");
+};
+
+const hasGeneratedSkillOwnerMarker = (content: string, sourcePluginName: string): boolean =>
+  content.includes("<!-- prism:") && content.includes(`owner=${JSON.stringify(sourcePluginName)}`);
+
+export const planCompileOwnedTargetedSkillPruning = async (options: {
+  readonly target: LowerExecutionTargetContext;
+  readonly skillsRoot: string;
+  readonly desiredRelativePaths: ReadonlySet<string>;
+}): Promise<LowerOperation[]> => {
+  const ledger = await readHarnessLedger(options.target.harness);
+  const operations: LowerOperation[] = [];
+
+  for (const entry of ledger.entries) {
+    if (entry.pluginName !== options.target.sourcePluginName) continue;
+    if (entry.scope !== options.target.scope) continue;
+    if (resolve(entry.root) !== resolve(options.target.root)) continue;
+    if (entry.artifact !== "compile" || entry.kind !== "file") continue;
+
+    const relativePath = relativePathInsideRoot(options.skillsRoot, entry.targetPath);
+    if (!relativePath || options.desiredRelativePaths.has(relativePath)) continue;
+
+    if (await exists(entry.targetPath)) {
+      const content = await readFile(entry.targetPath);
+      if (hasGeneratedSkillOwnerMarker(content, options.target.sourcePluginName)) continue;
+    }
+
+    operations.push({
+      kind: "prune-plugin-path",
+      target: entry.targetPath,
+      targetType: "file",
+      reason: "stale",
+    });
+  }
+
+  return operations;
+};
+
 export const pushWriteOperation = async (
   operations: LowerOperation[],
   target: string,

@@ -27,6 +27,7 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  planCompileOwnedTargetedSkillPruning,
   prismOwnerMarker,
   pushConfigPatchOperation as pushConfigPatch,
   pushWriteOperation as pushWrite,
@@ -104,12 +105,14 @@ const renderHermesOrbitSkillMarkdown = (
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,
   operations: LowerOperation[],
-): Promise<void> => {
+): Promise<ReadonlySet<string>> => {
+  const desired = new Set<string>();
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsHermes(input.registry, "skills")) return;
+  if (!pluginPath || !artifactTargetsHermes(input.registry, "skills")) return desired;
 
   const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
   for (const file of files) {
+    desired.add(file.relativePath);
     await pushWrite(
       operations,
       join(hermesSkillsRoot(input.target), file.relativePath),
@@ -117,6 +120,7 @@ const copyTargetedSkillArtifacts = async (
       file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file",
     );
   }
+  return desired;
 };
 
 const planGeneratedOrbitSkillPruning = async (
@@ -319,10 +323,7 @@ const planMcpServer = async (
   return { serverName, toolNames: bundle.toolNames };
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desiredGeneratedSkillFiles = new Set<string>();
-
+const assertHermesLoweringInput = (input: LowerInput): void => {
   if (input.agents.length > 0) {
     throw new Error(
       "Hermes lowerer received agents after target capability validation; this indicates a compiler planning bug.",
@@ -333,8 +334,15 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       "Hermes lowerer received hooks after target capability validation; this indicates a compiler planning bug.",
     );
   }
+};
 
-  await copyTargetedSkillArtifacts(input, operations);
+export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+  const operations: LowerOperation[] = [];
+  const desiredGeneratedSkillFiles = new Set<string>();
+
+  assertHermesLoweringInput(input);
+
+  const desiredTargetedSkillFiles = await copyTargetedSkillArtifacts(input, operations);
 
   for (const orbit of input.orbits) {
     const relativeSkill = `${orbit.name}/SKILL.md`;
@@ -359,6 +367,11 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   }
 
   operations.push(...await planGeneratedOrbitSkillPruning(input.target, desiredGeneratedSkillFiles));
+  operations.push(...await planCompileOwnedTargetedSkillPruning({
+    target: { ...input.target, harness: TARGET_ID },
+    skillsRoot: hermesSkillsRoot(input.target),
+    desiredRelativePaths: desiredTargetedSkillFiles,
+  }));
 
   const mcp = await planMcpServer(input, operations);
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });

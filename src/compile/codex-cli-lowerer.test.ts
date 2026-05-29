@@ -1,19 +1,22 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
+import { readHarnessLedger } from "../managed-ledger.js";
 import { loadPlugin } from "./load.js";
 import {
   applyCodexMcpServerUpdate,
   countMcpServerTableOccurrences,
+  executeLowering,
   planLowering,
   removeMcpServerTable,
 } from "./lowerers/codex-cli.js";
 import type { LowerOperation } from "./lowerers/opencode.js";
 
 const tempRoots: string[] = [];
+const originalPrismHome = process.env.PRISM_HOME;
 
 const effectImportPath = join(
   process.cwd(),
@@ -29,6 +32,7 @@ const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-codex-mcp-test-"));
   tempRoots.push(root);
+  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
 
@@ -49,6 +53,12 @@ const findContentOperation = (
   operations.find(
     (operation): operation is ContentOperation =>
       isContentOperation(operation) && operation.target.endsWith(suffix),
+  );
+
+const pathExists = async (path: string): Promise<boolean> =>
+  access(path).then(
+    () => true,
+    () => false,
   );
 
 const runGeneratedHookWrapper = (
@@ -77,6 +87,7 @@ const runGeneratedHookWrapper = (
   });
 
 afterEach(async () => {
+  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -440,6 +451,7 @@ export default defineTool({
   expect(configToml?.content).not.toContain('command = "bun"');
   expect(configToml?.content).not.toContain("args = ");
   expect(configToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(configToml?.content).not.toContain("# --- prism codex-cli begin: codex-http-fixture ---");
   expect(configToml?.mode).toBe(0o600);
 
   const bundle = operations.find(
@@ -449,6 +461,81 @@ export default defineTool({
   );
   expect(bundle?.content).toContain("codex_http_fixture_echo");
   expect(bundle?.content).toContain("PRISM_MCP_CODEX_HTTP_TOKEN");
+});
+
+test("codex-cli lowerer prunes stale compile-owned targeted skill files", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-skill-prune");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: outputRoot,
+    sourcePluginName: "codex-skill-prune",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: pluginRoot,
+  };
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-skill-prune",
+        version: "0.1.0",
+        targets: {
+          skills: ["codex-cli"],
+          tools: ["codex-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "current", "SKILL.md"),
+    "---\nname: current\ndescription: Current skill\n---\n\n# Current\n",
+  );
+  await writeText(
+    join(pluginRoot, "skills", "old", "SKILL.md"),
+    "---\nname: old\ndescription: Old skill\n---\n\n# Old\n",
+  );
+
+  const firstRegistry = await Effect.runPromise(loadPlugin(pluginRoot));
+  await executeLowering(
+    await planLowering({
+      agents: [],
+      orbits: [],
+      tools: [],
+      skills: [...firstRegistry.skills.values()],
+      hooks: [],
+      registry: firstRegistry,
+      target,
+    }),
+    { dryRun: false, target },
+  );
+  expect(await pathExists(join(outputRoot, "skills", "old", "SKILL.md"))).toBe(true);
+
+  await rm(join(pluginRoot, "skills", "old"), { recursive: true, force: true });
+  const secondRegistry = await Effect.runPromise(loadPlugin(pluginRoot));
+  await executeLowering(
+    await planLowering({
+      agents: [],
+      orbits: [],
+      tools: [],
+      skills: [...secondRegistry.skills.values()],
+      hooks: [],
+      registry: secondRegistry,
+      target,
+    }),
+    { dryRun: false, target },
+  );
+
+  expect(await pathExists(join(outputRoot, "skills", "current", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(outputRoot, "skills", "old", "SKILL.md"))).toBe(false);
+  expect((await readHarnessLedger("codex-cli")).entries).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ targetPath: join(outputRoot, "skills", "old", "SKILL.md") }),
+    ]),
+  );
 });
 
 test("codex-cli lowerer fails closed for unsupported model config keys", async () => {
@@ -501,14 +588,23 @@ enabled_tools = ["stale1"]
 command = "bun"
 enabled_tools = ["stale2"]
 
+[mcp_servers.other]
+command = "other"
+url = "http://127.0.0.1:38473/mcp"
+enabled_tools = ["grok_agent_grok_invoke"]
+
+url = "http://127.0.0.1:38473/mcp"
+http_headers = { Authorization = "Bearer stale" }
+enabled = true
+enabled_tools = ["grok_agent_grok_invoke"]
+
 [features]
 hooks = false
 `;
 
   const freshTable = `["mcp_servers"."${server}"]
-command = "bun"
-args = ["mcp/prism_generated_grok_agent/server.mjs"]
-cwd = "/tmp/test"
+url = "http://127.0.0.1:38473/mcp"
+http_headers = { Authorization = "Bearer fresh" }
 enabled = true
 required = false
 default_tools_approval_mode = "approve"
@@ -520,12 +616,25 @@ enabled_tools = ["fresh_tool"]
   // The core guarantee: exactly one copy of our server table after structural update.
   expect(countMcpServerTableOccurrences(result, server)).toBe(1);
   expect(result).toContain('enabled_tools = ["fresh_tool"]');
-  // Old duplicate bodies may leave stray lines in pathological formatting; the important
-  // thing is that the header count is 1 and the fresh data is present.
+  expect(result).not.toContain("stale1");
+  expect(result).not.toContain("stale2");
+  expect(result).not.toContain("Bearer stale");
+  expect(() => Bun.TOML.parse(result)).not.toThrow();
+  const parsed = Bun.TOML.parse(result) as {
+    readonly mcp_servers?: {
+      readonly other?: {
+        readonly command?: string;
+        readonly url?: string;
+        readonly enabled_tools?: readonly string[];
+      };
+    };
+  };
+  expect(parsed.mcp_servers?.other?.command).toBe("other");
+  expect(parsed.mcp_servers?.other?.url).toBe("http://127.0.0.1:38473/mcp");
+  expect(parsed.mcp_servers?.other?.enabled_tools).toEqual(["grok_agent_grok_invoke"]);
 });
 
 // (The full planLowering + poisoned config integration test was removed for now
 // because constructing a minimal valid registry for mcp-runtime is brittle.
 // The direct applyCodexMcpServerUpdate test above + the existing lowerer tests
 // provide good coverage of the structural path.)
-

@@ -183,6 +183,89 @@ test("planInstallation skips direct Factory skills when a compile plugin bundle 
   expect(operations.some((operation) => operation.target.includes(join(".factory", "skills")))).toBe(false);
 });
 
+test("planInstallation skips direct skills when the compile lowerer owns targeted skills", async () => {
+  const cases = [
+    "amp-code",
+    "antigravity-cli",
+    "claude-code",
+    "codex-cli",
+    "grok",
+    "hermes",
+  ] as const;
+
+  for (const harness of cases) {
+    const root = await createTempRoot();
+    const pluginPath = join(root, `plugin-${harness}`);
+    await writeText(
+      join(pluginPath, "plugin.json"),
+      `${JSON.stringify({
+        name: `compile-owned-skills-${harness}`,
+        version: "0.1.0",
+        targets: {
+          skills: [harness],
+          tools: [harness],
+        },
+      })}\n`,
+    );
+    await writeText(
+      join(pluginPath, "skills", "testing", "SKILL.md"),
+      "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+    );
+
+    const operations = await planInstallation({
+      pluginPath,
+      harnesses: [harness],
+      overwrite: false,
+      dryRun: true,
+    });
+
+    expect(
+      operations.some((operation) => operation.harness === harness && operation.artifact === "skill"),
+    ).toBe(false);
+  }
+});
+
+test("planInstallation keeps direct skills when compile does not own targeted skills", async () => {
+  const cases = [
+    {
+      harness: "codex-cli" as const,
+      targets: { skills: ["codex-cli"] },
+    },
+    {
+      harness: "opencode" as const,
+      targets: { skills: ["opencode"], tools: ["opencode"] },
+    },
+  ];
+
+  for (const item of cases) {
+    const root = await createTempRoot();
+    const pluginPath = join(root, `plugin-${item.harness}`);
+    await writeText(
+      join(pluginPath, "plugin.json"),
+      `${JSON.stringify({
+        name: `direct-skills-${item.harness}`,
+        version: "0.1.0",
+        targets: item.targets,
+      })}\n`,
+    );
+    await writeText(
+      join(pluginPath, "skills", "testing", "SKILL.md"),
+      "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+    );
+
+    const operations = await planInstallation({
+      pluginPath,
+      harnesses: [item.harness],
+      overwrite: false,
+      dryRun: true,
+    });
+
+    expect(
+      operations.some((operation) => operation.harness === item.harness && operation.artifact === "skill"),
+    ).toBe(true);
+  }
+});
+
 test("install prunes stale compile-owned Factory plugin files when compile target is removed", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");

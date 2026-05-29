@@ -51,6 +51,7 @@ import {
 import { backupManagedTarget } from "./managed-backups.js";
 
 type InstallArtifact = FileOperation["artifact"];
+type ResolvedPluginManifest = Awaited<ReturnType<typeof readManifest>>;
 
 interface InstallPlanningContext {
   readonly pluginPath: string;
@@ -69,8 +70,17 @@ const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli"]);
 const rulesAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_RULE_HARNESSES.has(harnessId);
 
+const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
+  "amp-code",
+  "antigravity-cli",
+  "claude-code",
+  "codex-cli",
+  "grok",
+  "hermes",
+]);
+
 const shouldPlanFileRouterRules = (
-  manifest: Awaited<ReturnType<typeof readManifest>>,
+  manifest: ResolvedPluginManifest,
   harness: HarnessConfig,
 ): boolean =>
   (harness.rulesFile !== null || harness.rulesDir !== null) &&
@@ -78,25 +88,25 @@ const shouldPlanFileRouterRules = (
   manifestTargetsArtifact(manifest, "rules", harness.id);
 
 const shouldPlanFileRouterSkills = (
-  manifest: Awaited<ReturnType<typeof readManifest>>,
+  manifest: ResolvedPluginManifest,
   harnessId: HarnessId,
 ): boolean =>
   manifestTargetsArtifact(manifest, "skills", harnessId) &&
-  !compileBundleOwnsPluginSkills(manifest, harnessId);
+  !compileOwnsTargetedPluginSkills(manifest, harnessId);
 
 const normalizeTargetRoot = (root: string): string => expandPath(root);
 
 const manifestTargetsAnyArtifact = (
-  manifest: Awaited<ReturnType<typeof readManifest>>,
+  manifest: ResolvedPluginManifest,
   artifact: string,
   harnessId: HarnessId,
 ): boolean => {
   const targets = (manifest.targets as Record<string, readonly PluginTargetId[] | undefined>)[artifact];
-  return resolveManifestTargets(targets ?? []).includes(harnessId);
+  return new Set(resolveManifestTargets(targets ?? [])).has(harnessId);
 };
 
 const hasOutputProducingCompileTargets = (
-  manifest: Awaited<ReturnType<typeof readManifest>>,
+  manifest: ResolvedPluginManifest,
   harnessId: HarnessId,
 ): boolean => {
   if (!manifestHasCompileTargets(manifest, harnessId)) return false;
@@ -113,14 +123,19 @@ const hasOutputProducingCompileTargets = (
   return false;
 };
 
-const compileBundleOwnsPluginSkills = (
-  manifest: Awaited<ReturnType<typeof readManifest>>,
+const compileOwnsTargetedPluginSkills = (
+  manifest: ResolvedPluginManifest,
   harnessId: HarnessId,
-): boolean =>
-  harnessId === "factory-droid" &&
-  ["agents", "tools", "hooks"].some((artifact) =>
-    manifestTargetsAnyArtifact(manifest, artifact, harnessId)
+): boolean => {
+  if (!manifestHasCompileTargets(manifest, harnessId)) return false;
+  if (COMPILE_COPIES_TARGETED_SKILL_HARNESSES.has(harnessId)) return true;
+  return (
+    harnessId === "factory-droid" &&
+    ["agents", "tools", "hooks"].some((artifact) =>
+      manifestTargetsAnyArtifact(manifest, artifact, harnessId)
+    )
   );
+};
 
 interface ManagedOutputInput {
   readonly artifact: InstallArtifact;
@@ -201,6 +216,92 @@ const unmanagedTargetConflict = (op: FileOperation): FileOperation => ({
   reason: "Target exists but is not owned by Prism; use --overwrite to take ownership",
 });
 
+const planRulesIfTargeted = async (
+  manifest: ResolvedPluginManifest,
+  pluginPath: string,
+  harness: HarnessConfig,
+  projectPath: string | undefined,
+  context: InstallPlanningContext,
+): Promise<FileOperation[]> =>
+  shouldPlanFileRouterRules(manifest, harness)
+    ? planRulesInstallation(pluginPath, harness, projectPath, context)
+    : [];
+
+const planCommandsIfTargeted = async (
+  manifest: ResolvedPluginManifest,
+  pluginPath: string,
+  harness: HarnessConfig,
+  context: InstallPlanningContext,
+): Promise<FileOperation[]> =>
+  harness.supportsCommands &&
+  harness.commandsDir &&
+  manifestTargetsArtifact(manifest, "commands", harness.id)
+    ? planCommandsInstallation(pluginPath, harness, context)
+    : [];
+
+const planAgentsIfTargeted = async (
+  manifest: ResolvedPluginManifest,
+  pluginPath: string,
+  harness: HarnessConfig,
+): Promise<FileOperation[]> =>
+  harness.supportsAgents &&
+  harness.agentsDir &&
+  manifestTargetsArtifact(manifest, "agents", harness.id)
+    ? planAgentsInstallation(pluginPath, harness)
+    : [];
+
+const planSkillsIfTargeted = async (
+  manifest: ResolvedPluginManifest,
+  pluginPath: string,
+  harness: HarnessConfig,
+  context: InstallPlanningContext,
+): Promise<FileOperation[]> =>
+  harness.supportsSkills &&
+  harness.skillsDir &&
+  shouldPlanFileRouterSkills(manifest, harness.id)
+    ? planSkillsInstallation(pluginPath, harness, context)
+    : [];
+
+const planHarnessInstallationOperations = async (options: {
+  readonly manifest: ResolvedPluginManifest;
+  readonly pluginPath: string;
+  readonly harness: HarnessConfig;
+  readonly projectPath?: string;
+  readonly context: InstallPlanningContext;
+}): Promise<FileOperation[]> => {
+  const operations: FileOperation[] = [];
+  operations.push(
+    ...(await planRulesIfTargeted(
+      options.manifest,
+      options.pluginPath,
+      options.harness,
+      options.projectPath,
+      options.context,
+    )),
+  );
+  operations.push(
+    ...(await planCommandsIfTargeted(
+      options.manifest,
+      options.pluginPath,
+      options.harness,
+      options.context,
+    )),
+  );
+  operations.push(
+    ...(await planAgentsIfTargeted(options.manifest, options.pluginPath, options.harness)),
+  );
+  operations.push(
+    ...(await planSkillsIfTargeted(
+      options.manifest,
+      options.pluginPath,
+      options.harness,
+      options.context,
+    )),
+  );
+  operations.push(...(await planStaleManagedOperations(options.context)));
+  return operations;
+};
+
 /**
  * Plan installation operations without executing them
  */
@@ -235,49 +336,15 @@ export async function planInstallation(
       overwrite: options.overwrite,
     };
 
-    // Plan file-router rules when the harness has an install-native rules surface.
-    // Antigravity rules are plugin-bundle managed by the compile phase.
-    if (shouldPlanFileRouterRules(manifest, harness)) {
-      const rulesOps = await planRulesInstallation(
+    operations.push(
+      ...(await planHarnessInstallationOperations({
+        manifest,
         pluginPath,
         harness,
-        options.projectPath,
-        context
-      );
-      operations.push(...rulesOps);
-    }
-
-    // Plan commands installation
-    if (
-      harness.supportsCommands &&
-      harness.commandsDir &&
-      manifestTargetsArtifact(manifest, "commands", harnessId)
-    ) {
-      const commandOps = await planCommandsInstallation(pluginPath, harness, context);
-      operations.push(...commandOps);
-    }
-
-    // Plan agents installation
-    if (
-      harness.supportsAgents &&
-      harness.agentsDir &&
-      manifestTargetsArtifact(manifest, "agents", harnessId)
-    ) {
-      const agentOps = await planAgentsInstallation(pluginPath, harness);
-      operations.push(...agentOps);
-    }
-
-    // Plan skills installation
-    if (
-      harness.supportsSkills &&
-      harness.skillsDir &&
-      shouldPlanFileRouterSkills(manifest, harnessId)
-    ) {
-      const skillOps = await planSkillsInstallation(pluginPath, harness, context);
-      operations.push(...skillOps);
-    }
-
-    operations.push(...(await planStaleManagedOperations(context)));
+        projectPath: options.projectPath,
+        context,
+      })),
+    );
   }
 
   return operations;
@@ -937,92 +1004,128 @@ const metadataFromLedgerEntry = (
   contentHash: entry.contentHash,
 });
 
+const shouldConsiderStaleEntry = (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+): boolean =>
+  entry.pluginName === context.pluginName &&
+  context.targetRoots.has(normalizeTargetRoot(entry.root)) &&
+  shouldPlanStaleManagedOperation(context, entry) &&
+  !context.desiredEntryIds.has(entry.id);
+
+const staleBaseOperation = (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+): FileOperation => ({
+  type: "prune",
+  source: entry.sourcePath ?? entry.targetPath,
+  target: entry.targetPath,
+  harness: context.harness.id,
+  artifact: entry.artifact as FileOperation["artifact"],
+  reason: "Stale managed output",
+  managed: metadataFromLedgerEntry(entry),
+});
+
+const planStaleSectionOperation = async (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+  baseOperation: FileOperation,
+): Promise<FileOperation> => {
+  if (!(await exists(entry.targetPath))) {
+    return { ...baseOperation, reason: "Stale ledger entry; target missing" };
+  }
+
+  const existingContent = await readFile(entry.targetPath);
+  const existingSection = extractManagedSection(
+    existingContent,
+    context.harness.id,
+    baseOperation.managed!,
+  );
+  if (existingSection === undefined) {
+    return { ...baseOperation, reason: "Stale ledger entry; section missing" };
+  }
+
+  return computeContentHash(existingSection) === entry.contentHash
+    ? baseOperation
+    : {
+        ...baseOperation,
+        type: "drift",
+        reason: "Stale managed section changed outside Prism",
+      };
+};
+
+const planStaleDirectoryOperation = async (
+  entry: ManagedLedgerEntry,
+  baseOperation: FileOperation,
+): Promise<FileOperation> =>
+  (await exists(entry.targetPath))
+    ? baseOperation
+    : { ...baseOperation, reason: "Stale ledger entry; target missing" };
+
+const staleChangedFileOperation = async (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+  baseOperation: FileOperation,
+): Promise<FileOperation> => {
+  if (
+    entry.artifact === "compile" &&
+    isSharedMcpRuntimeServerPath(entry.targetPath) &&
+    await hasOtherManagedCompileOwners({
+      currentHarness: context.harness.id,
+      currentEntryId: entry.id,
+      pluginName: entry.pluginName,
+      targetPath: entry.targetPath,
+      kind: "file",
+    })
+  ) {
+    return {
+      ...baseOperation,
+      reason: "Stale shared compile output still owned by another harness",
+    };
+  }
+
+  return {
+    ...baseOperation,
+    type: "drift",
+    reason: "Stale managed target changed outside Prism",
+  };
+};
+
+const planStaleFileLikeOperation = async (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+  baseOperation: FileOperation,
+): Promise<FileOperation> => {
+  const currentHash = await readTargetHash(entry.targetPath);
+  if (!currentHash) return { ...baseOperation, reason: "Stale ledger entry; target missing" };
+  if (entry.kind === "file" && currentHash !== entry.contentHash) {
+    return staleChangedFileOperation(context, entry, baseOperation);
+  }
+  return baseOperation;
+};
+
+const planStaleManagedOperation = async (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+): Promise<FileOperation> => {
+  const baseOperation = staleBaseOperation(context, entry);
+  if (entry.kind === "section") {
+    return planStaleSectionOperation(context, entry, baseOperation);
+  }
+  if (entry.kind === "directory") {
+    return planStaleDirectoryOperation(entry, baseOperation);
+  }
+  return planStaleFileLikeOperation(context, entry, baseOperation);
+};
+
 async function planStaleManagedOperations(
   context: InstallPlanningContext,
 ): Promise<FileOperation[]> {
   const operations: FileOperation[] = [];
 
   for (const entry of context.ledger.entries) {
-    if (entry.pluginName !== context.pluginName) continue;
-    if (!context.targetRoots.has(normalizeTargetRoot(entry.root))) continue;
-    if (!shouldPlanStaleManagedOperation(context, entry)) continue;
-    if (context.desiredEntryIds.has(entry.id)) continue;
-
-    const managed = metadataFromLedgerEntry(entry);
-    const baseOperation: FileOperation = {
-      type: "prune",
-      source: entry.sourcePath ?? entry.targetPath,
-      target: entry.targetPath,
-      harness: context.harness.id,
-      artifact: entry.artifact as FileOperation["artifact"],
-      reason: "Stale managed output",
-      managed,
-    };
-
-    if (entry.kind === "section") {
-      if (!(await exists(entry.targetPath))) {
-        operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
-        continue;
-      }
-      const existingContent = await readFile(entry.targetPath);
-      const existingSection = extractManagedSection(existingContent, context.harness.id, managed);
-      if (existingSection === undefined) {
-        operations.push({ ...baseOperation, reason: "Stale ledger entry; section missing" });
-        continue;
-      }
-      const currentHash = computeContentHash(existingSection);
-      if (currentHash !== entry.contentHash) {
-        operations.push({
-          ...baseOperation,
-          type: "drift",
-          reason: "Stale managed section changed outside Prism",
-        });
-        continue;
-      }
-      operations.push(baseOperation);
-      continue;
-    }
-
-    if (entry.kind === "directory") {
-      if (!(await exists(entry.targetPath))) {
-        operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
-        continue;
-      }
-      operations.push(baseOperation);
-      continue;
-    }
-
-    const currentHash = await readTargetHash(entry.targetPath);
-    if (!currentHash) {
-      operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
-      continue;
-    }
-    if (entry.kind === "file" && currentHash !== entry.contentHash) {
-      if (
-        entry.artifact === "compile" &&
-        isSharedMcpRuntimeServerPath(entry.targetPath) &&
-        await hasOtherManagedCompileOwners({
-          currentHarness: context.harness.id,
-          currentEntryId: entry.id,
-          pluginName: entry.pluginName,
-          targetPath: entry.targetPath,
-          kind: "file",
-        })
-      ) {
-        operations.push({
-          ...baseOperation,
-          reason: "Stale shared compile output still owned by another harness",
-        });
-        continue;
-      }
-      operations.push({
-        ...baseOperation,
-        type: "drift",
-        reason: "Stale managed target changed outside Prism",
-      });
-      continue;
-    }
-    operations.push(baseOperation);
+    if (!shouldConsiderStaleEntry(context, entry)) continue;
+    operations.push(await planStaleManagedOperation(context, entry));
   }
 
   return operations;

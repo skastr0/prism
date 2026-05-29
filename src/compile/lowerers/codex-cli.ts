@@ -37,6 +37,7 @@ import {
   bundleGeneratedHookWrapper,
   executeStandardLowering,
   nativeHookEventName,
+  planCompileOwnedTargetedSkillPruning,
   normalizeBundleSegment,
   pushConfigPatchOperation as pushConfigPatch,
   pushWriteOperation as pushWrite,
@@ -133,7 +134,6 @@ export const removeMcpServerTable = (current: string, serverName: string): strin
         const trimmed = nextLine.trim();
         if (!trimmed) { i += 1; continue; }
         if (isTomlTableHeader(nextLine)) break;
-        if (/^[A-Za-z0-9_.-]+\s*=/u.test(trimmed)) break;
         i += 1;
       }
       continue;
@@ -160,6 +160,92 @@ export const countMcpServerTableOccurrences = (content: string, serverName: stri
   return (content.match(header) ?? []).length;
 };
 
+const uniqueMcpServerBodyMarkers = (renderedTable: string): string[] =>
+  renderedTable
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.startsWith("url = ") ||
+        line.startsWith("server_url = ") ||
+        line.startsWith("command = ") ||
+        line.startsWith("args = "),
+    );
+
+const previousNonEmptyLine = (lines: readonly string[], index: number): string | undefined => {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const line = lines[cursor];
+    if (line !== undefined && line.trim().length > 0) return line;
+  }
+  return undefined;
+};
+
+const tomlKeyName = (line: string): string | undefined => {
+  const match = line.trim().match(/^([A-Za-z0-9_.-]+)\s*=/u);
+  return match?.[1];
+};
+
+const shouldRemoveOrphanedMcpLine = (options: {
+  readonly markers: ReadonlyArray<string>;
+  readonly trimmed: string;
+  readonly previous: string | undefined;
+  readonly activeTable: boolean;
+  readonly key: string | undefined;
+  readonly seenKeys: ReadonlySet<string>;
+}): boolean =>
+  options.markers.includes(options.trimmed) &&
+  options.previous !== undefined &&
+  !isTomlTableHeader(options.previous) &&
+  (!options.activeTable || (options.key !== undefined && options.seenKeys.has(options.key)));
+
+const nextLineAfterOrphanedMcpBody = (lines: readonly string[], start: number): number => {
+  let cursor = start + 1;
+  while (cursor < lines.length) {
+    const nextLine = lines[cursor] ?? "";
+    if (!nextLine.trim()) return cursor + 1;
+    if (isTomlTableHeader(nextLine)) return cursor;
+    cursor += 1;
+  }
+  return cursor;
+};
+
+const removeOrphanedMcpServerBody = (current: string, renderedTable: string | undefined): string => {
+  if (!renderedTable) return current;
+  const markers = uniqueMcpServerBodyMarkers(renderedTable);
+  if (markers.length === 0) return current;
+
+  const lines = current.split(/\r?\n/u);
+  const out: string[] = [];
+  let activeTable = false;
+  let seenKeys = new Set<string>();
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    const trimmed = line.trim();
+    if (isTomlTableHeader(line)) {
+      activeTable = true;
+      seenKeys = new Set();
+      out.push(line);
+      i += 1;
+      continue;
+    }
+
+    const key = tomlKeyName(line);
+    const previous = previousNonEmptyLine(lines, i);
+    if (shouldRemoveOrphanedMcpLine({ markers, trimmed, previous, activeTable, key, seenKeys })) {
+      i = nextLineAfterOrphanedMcpBody(lines, i);
+      continue;
+    }
+
+    if (key) seenKeys.add(key);
+    out.push(line);
+    i += 1;
+  }
+
+  return out.join("\n");
+};
+
 export const applyCodexMcpServerUpdate = (
   current: string,
   serverName: string | undefined,
@@ -167,8 +253,13 @@ export const applyCodexMcpServerUpdate = (
 ): string => {
   if (!serverName) return current;
 
-  // Deletion is always safe and name-driven.
+  // Deletion is always safe and name-driven. Orphan cleanup is intentionally
+  // parse-failure gated so a valid neighboring table that happens to share a
+  // generated URL or tool-list line is not treated as stale Prism debris.
   let text = removeMcpServerTable(current, serverName);
+  if (renderedTable && !codexTomlParses(text)) {
+    text = removeOrphanedMcpServerBody(text, renderedTable);
+  }
 
   if (!renderedTable) return text;
 
@@ -183,6 +274,15 @@ export const applyCodexMcpServerUpdate = (
 
   const trimmed = text.trimEnd();
   return trimmed ? `${trimmed}\n\n${renderedTable.trimEnd()}\n` : `${renderedTable.trimEnd()}\n`;
+};
+
+const codexTomlParses = (content: string): boolean => {
+  try {
+    Bun.TOML.parse(content);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const manifestTargetsCodex = (targets: readonly PluginTargetId[] | undefined): boolean =>
@@ -487,7 +587,9 @@ export const replaceManagedBlock = (current: string, pluginName: string, block: 
   }
 
   const trimmedBase = base.trimEnd();
-  return `${trimmedBase}${trimmedBase ? "\n\n" : ""}${begin}\n${block.trimEnd()}\n${end}\n`;
+  const trimmedBlock = block.trimEnd();
+  if (!trimmedBlock) return trimmedBase ? `${trimmedBase}\n` : "";
+  return `${trimmedBase}${trimmedBase ? "\n\n" : ""}${begin}\n${trimmedBlock}\n${end}\n`;
 };
 
 const renderConfigWithHookFeature = (current: string, enableHooks: boolean): string => {
@@ -632,10 +734,12 @@ const planAgentWrites = async (
 const planManagedSkillWrites = async (
   input: LowerInput,
   operations: LowerOperation[],
-): Promise<void> => {
-  if (!artifactTargetsCodex(input.registry, "skills")) return;
+): Promise<ReadonlySet<string>> => {
+  const desired = new Set<string>();
+  if (!artifactTargetsCodex(input.registry, "skills")) return desired;
 
   for (const skill of input.skills ?? []) {
+    desired.add(`${skill.name}/SKILL.md`);
     await pushWrite(
       operations,
       join(input.target.root, "skills", skill.name, "SKILL.md"),
@@ -643,6 +747,7 @@ const planManagedSkillWrites = async (
       "write-md",
     );
   }
+  return desired;
 };
 
 const planOrbitWrites = async (
@@ -730,11 +835,16 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   const mcp = await planMcpServer(input, operations);
 
   await planAgentWrites(input, operations, agentMcpServerConfig(input, mcp));
-  await planManagedSkillWrites(input, operations);
+  const desiredManagedSkills = await planManagedSkillWrites(input, operations);
   await planOrbitWrites(input, operations);
   await planRulesWrite(input, operations);
   const hooks = await planHooks(input, operations);
   await planConfigWrite(input, operations, mcp, hooks);
+  operations.push(...await planCompileOwnedTargetedSkillPruning({
+    target: { ...input.target, harness: TARGET_ID },
+    skillsRoot: join(input.target.root, "skills"),
+    desiredRelativePaths: desiredManagedSkills,
+  }));
 
   return operations;
 };

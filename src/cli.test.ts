@@ -80,6 +80,17 @@ const getFreePort = (host: string): Promise<number> =>
     });
   });
 
+test("install and compile help use managed backup policy instead of a per-run backup flag", async () => {
+  for (const command of ["install", "install-all", "compile"]) {
+    const result = await runCli([command, "--help"], {});
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("--dry-run");
+    expect(result.stdout).not.toContain("--backup");
+    expect(result.stdout).not.toContain(".bak");
+  }
+});
+
 type JsonObject = Record<string, unknown>;
 
 type LintRule = {
@@ -696,6 +707,79 @@ test("install requires --project when project scope is requested", async () => {
 
   expect(result.exitCode).toBe(1);
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
+});
+
+test("install CLI stores managed backups under Prism home", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "managed-rules-plugin");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+  const rulePath = join(pluginRoot, "rules", "global", "standards.md");
+  const opencodeRulesPath = join(homeRoot, ".config", "opencode", "AGENTS.md");
+
+  await mkdir(join(pluginRoot, "rules", "global"), { recursive: true });
+  await mkdir(homeRoot, { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "managed-rules-plugin",
+        version: "0.1.0",
+        targets: { rules: ["opencode"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(rulePath, "First managed rule.\n");
+
+  const env = { HOME: homeRoot, PRISM_HOME: prismHome };
+  const first = await runCli(["install", pluginRoot, "--harness", "opencode"], env);
+  expect(first.exitCode).toBe(0);
+
+  await writeFile(rulePath, "Second managed rule.\n");
+  const second = await runCli(["install", pluginRoot, "--harness", "opencode"], env);
+
+  expect(second.exitCode).toBe(0);
+  expect(second.stdout).toContain("Backups created");
+  expect(second.stdout).toContain(join(prismHome, "backups", "opencode"));
+  expect(second.stdout).not.toContain(".bak");
+  expect(await pathExists(`${opencodeRulesPath}.bak`)).toBe(false);
+  expect(await readFile(opencodeRulesPath, "utf8")).toContain("Second managed rule.");
+});
+
+test("install dry-run reports unmanaged target drift reasons", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "managed-command-plugin");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+  const commandTarget = join(homeRoot, ".config", "opencode", "commands", "review.md");
+
+  await mkdir(join(pluginRoot, "commands"), { recursive: true });
+  await mkdir(join(homeRoot, ".config", "opencode", "commands"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "managed-command-plugin",
+        version: "0.1.0",
+        targets: { commands: ["opencode"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(join(pluginRoot, "commands", "review.md"), "Managed review command.\n");
+  await writeFile(commandTarget, "User-owned review command.\n");
+
+  const result = await runCli(
+    ["install", pluginRoot, "--harness", "opencode", "--dry-run"],
+    { HOME: homeRoot, PRISM_HOME: prismHome },
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("drift");
+  expect(result.stdout).toContain("Target exists but is not owned by Prism");
 });
 
 test("install dry-run compiles targeted plugin with project scope", async () => {

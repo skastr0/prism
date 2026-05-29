@@ -119,28 +119,6 @@ export async function appendFile(
 }
 
 /**
- * Create a backup of a file (.bak extension)
- */
-export async function backupFile(path: string): Promise<string | null> {
-  if (!(await exists(path))) {
-    return null;
-  }
-
-  const backupPath = `${path}.bak`;
-  let counter = 1;
-  let finalBackupPath = backupPath;
-
-  // Find unique backup name
-  while (await exists(finalBackupPath)) {
-    finalBackupPath = `${path}.bak.${counter}`;
-    counter++;
-  }
-
-  await copyFile(path, finalBackupPath);
-  return finalBackupPath;
-}
-
-/**
  * Ensure directory exists (recursive mkdir)
  */
 export async function ensureDir(path: string): Promise<void> {
@@ -156,8 +134,9 @@ export async function listDir(path: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(path);
     return entries;
-  } catch {
-    return [];
+  } catch (error) {
+    if (isRecoverableDirectoryReadError(error)) return [];
+    throw error;
   }
 }
 
@@ -179,14 +158,21 @@ export async function listDirRecursive(path: string): Promise<string[]> {
           results.push(relativePath);
         }
       }
-    } catch {
-      // Directory doesn't exist or can't be read
+    } catch (error) {
+      if (!isRecoverableDirectoryReadError(error)) {
+        throw error;
+      }
     }
   }
 
   await walk(path);
   return results;
 }
+
+const isRecoverableDirectoryReadError = (error: unknown): boolean => {
+  const code = getNodeErrorCode(error);
+  return code === "ENOENT";
+};
 
 /**
  * Remove a file
@@ -195,8 +181,8 @@ export async function removeFile(path: string): Promise<void> {
   const fs = await import("node:fs/promises");
   try {
     await fs.unlink(path);
-  } catch {
-    // File doesn't exist, ignore
+  } catch (error) {
+    if (getNodeErrorCode(error) !== "ENOENT") throw error;
   }
 }
 
@@ -205,9 +191,10 @@ export async function removeFile(path: string): Promise<void> {
  */
 export async function removeDir(path: string): Promise<void> {
   const fs = await import("node:fs/promises");
-  try {
-    await fs.rm(path, { recursive: true, force: true });
-  } catch {
-    // Directory doesn't exist, ignore
-  }
+  await fs.rm(path, { recursive: true, force: true });
 }
+
+const getNodeErrorCode = (error: unknown): string | undefined =>
+  error instanceof Error && "code" in error
+    ? (error as NodeJS.ErrnoException).code
+    : undefined;

@@ -147,7 +147,6 @@ export interface CompileOptions {
   readonly root?: string;
   readonly mcpRoot?: string;
   readonly dryRun: boolean;
-  readonly backup: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
 }
 
@@ -858,7 +857,7 @@ const planTargetLowering = (options: {
 const executeTargetLowering = (
   lowerer: LowererModule,
   operations: ReadonlyArray<LowerOperation>,
-  options: Pick<CompileOptions, "backup" | "dryRun" | "scope"> & {
+  options: Pick<CompileOptions, "dryRun" | "scope"> & {
     readonly context: CompileTargetContext;
     readonly registry: PluginRegistry;
   },
@@ -868,7 +867,6 @@ const executeTargetLowering = (
   return Effect.gen(function* () {
     const result = yield* Effect.promise(() =>
       lowerer.executeLowering([...operations], {
-        backup: options.backup,
         dryRun: false,
         target: {
           harness: options.context.targetId,
@@ -976,7 +974,6 @@ export const compilePluginForTarget = (
       operations: allOps,
     });
     const backups = yield* executeTargetLowering(context.lowerer, allOps, {
-      backup: options.backup,
       dryRun: options.dryRun,
       scope: options.scope,
       context,

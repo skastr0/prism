@@ -2216,10 +2216,8 @@ const executeOpenCodeJsonPatchOperations = async (
   if (operations.length === 0) return;
 
   const jsonTarget = operations[0]!.target;
-  if (options.backup) {
-    const backup = await backupLoweringTarget(jsonTarget, options, "patch");
-    if (backup) backups.push(backup);
-  }
+  const backup = await backupLoweringTarget(jsonTarget, options, "patch");
+  if (backup) backups.push(backup);
 
   const config = await readOpenCodeConfigForWrite(jsonTarget);
   const agentsMap = agentConfigMapForWrite(config);

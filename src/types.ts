@@ -125,7 +125,6 @@ export interface InstallOptions {
   harnesses: HarnessId[];
   projectPath?: string;
   overwrite: boolean;
-  backup: boolean;
   dryRun: boolean;
 }
 

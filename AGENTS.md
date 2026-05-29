@@ -11,7 +11,7 @@ A unified plugin distribution system for AI coding harnesses.
 1. **Formalizes harness configurations** - Knows where each supported harness stores its config files, rules, commands, custom agents, and skills
 2. **Unified artifact format** - Write commands, rules, agents, and skills once using a common markdown format with frontmatter
 3. **Smart distribution** - Automatically transforms and copies artifacts to each harness's expected location
-4. **Safe operations** - No overwrites by default, automatic backups, dry-run mode for previewing changes
+4. **Safe operations** - No unmanaged overwrites by default, Prism-owned backups, dry-run mode for previewing changes, and stale-output pruning for files Prism owns
 5. **Harness-aware targeting** - Declare install targets per artifact in `plugin.json`, use presets like `coding-harness`, and add `harness/<id>/...` overlays when one harness needs a different file
 
 ## Supported Harnesses
@@ -86,7 +86,6 @@ prism install <plugin-path> [options]
   --project <path>  Project path for project-specific rules
   --scope <scope>   Compile output scope: global or project
   --overwrite       Overwrite existing files
-  --backup          Create .bak backups before overwriting files
   --dry-run         Preview operations without executing
 
 # Install every child plugin in a directory
@@ -96,7 +95,6 @@ prism install-all <directory> [options]
   --project <path>  Project path for project-specific rules
   --scope <scope>   Compile output scope: global or project
   --overwrite       Overwrite existing files
-  --backup          Create .bak backups before overwriting files
   --dry-run         Preview operations without executing
 
 # Validate plugin structure
@@ -105,6 +103,16 @@ prism validate <plugin-path>
 # List supported harness IDs
 prism harnesses
 ```
+
+### Prism home and managed state
+
+Prism stores cross-harness state in Prism home, defaulting to `~/.prism` and overridable with `PRISM_HOME`.
+
+- `~/.prism/config.json` controls managed behavior. The current config shape is `{ "version": 1, "backup": { "mode": "always" | "never", "retentionPerTarget": 3 } }`.
+- `~/.prism/backups/` stores managed backups outside harness config trees. Prism preserves original filenames and does not create sibling `.bak` files.
+- `~/.prism/state/<harness>.ledger.json` records files and rule sections Prism owns for each harness.
+- Re-running `prism install` or `prism compile` is the sync operation. There is no separate install/sync fork; `install` compiles first where relevant, writes desired outputs, skips unchanged content, fails closed on drift, and prunes stale ledger-owned outputs.
+- Existing files that Prism does not own are not silently adopted. Use `--overwrite` when deliberately replacing an unmanaged whole-file artifact.
 
 ## Project Structure
 

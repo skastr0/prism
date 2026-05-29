@@ -597,7 +597,7 @@ Reuse the existing lowerer execution pattern:
 - `write-md`
 - `write-plugin-file`
 - `prune-plugin-path`
-- `backupFile` only for `write-md` when `--backup` is set
+- managed Prism-home backups for target-scoped `write-md` operations
 - skip writes with reason `unchanged`
 
 Use `fs.ts` helpers:
@@ -605,7 +605,6 @@ Use `fs.ts` helpers:
 - `exists`
 - `readFile`
 - `writeFile`
-- `backupFile`
 - `listDirRecursive`
 - `removeDir`
 - `removeFile`

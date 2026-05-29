@@ -873,9 +873,8 @@ async function planStaleManagedOperations(
  */
 export async function executeInstallation(
   operations: FileOperation[],
-  options: Pick<InstallOptions, "overwrite" | "backup" | "dryRun">
+  options: Pick<InstallOptions, "overwrite" | "dryRun">
 ): Promise<InstallResult> {
-  void options.backup;
   const result: InstallResult = {
     success: true,
     operations: [],
@@ -891,39 +890,72 @@ export async function executeInstallation(
   const ledgers = createLedgerWriteCache();
 
   for (const op of operations) {
-    try {
-      const backupPath = await executePlannedOperation(op, ledgers);
-      if (backupPath) result.backups.push(backupPath);
+    const outcome = await executePlannedOperationOutcome(op, ledgers);
+    if (outcome.ok) {
+      if (outcome.backupPath) result.backups.push(outcome.backupPath);
       result.operations.push(op);
-    } catch (error) {
+    } else {
       result.success = false;
-      result.errors.push({
-        operation: op,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      result.errors.push({ operation: op, message: outcome.message });
     }
   }
 
   for (const [harness, ledger] of ledgers.entries()) {
-    try {
-      await writeHarnessLedger(ledger);
-    } catch (error) {
+    const outcome = await writeLedgerOutcome(harness, ledger);
+    if (!outcome.ok) {
       result.success = false;
-      result.errors.push({
-        operation: {
-          type: "merge",
-          source: "managed-ledger",
-          target: harness,
-          harness,
-          artifact: "config",
-        },
-        message: error instanceof Error ? error.message : String(error),
-      });
+      result.errors.push({ operation: outcome.operation, message: outcome.message });
     }
   }
 
   return result;
 }
+
+type InstallExecutionOutcome =
+  | { readonly ok: true; readonly backupPath: string | null }
+  | { readonly ok: false; readonly message: string };
+
+const executePlannedOperationOutcome = async (
+  op: FileOperation,
+  ledgers: ReturnType<typeof createLedgerWriteCache>,
+): Promise<InstallExecutionOutcome> => {
+  try {
+    return { ok: true, backupPath: await executePlannedOperation(op, ledgers) };
+  } catch (error) {
+    return { ok: false, message: installFailureMessage(error) };
+  }
+};
+
+type LedgerWriteOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly operation: FileOperation; readonly message: string };
+
+const writeLedgerOutcome = async (
+  harness: HarnessId,
+  ledger: HarnessLedger,
+): Promise<LedgerWriteOutcome> => {
+  try {
+    await writeHarnessLedger(ledger);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      operation: {
+        type: "merge",
+        source: "managed-ledger",
+        target: harness,
+        harness,
+        artifact: "config",
+      },
+      message: installFailureMessage(error),
+    };
+  }
+};
+
+const installFailureMessage = (error: unknown): string => {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return `Non-Error thrown: ${String(error)}`;
+};
 
 const createLedgerWriteCache = (): {
   readonly entries: () => IterableIterator<[HarnessId, HarnessLedger]>;

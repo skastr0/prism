@@ -15,6 +15,16 @@ bun run typecheck
 bun run build
 ```
 
+## Managed State
+
+Prism uses `~/.prism` for durable install and compile state. Set `PRISM_HOME` to override it.
+
+- `config.json` controls managed backups, currently `backup.mode` (`always` or `never`) and `backup.retentionPerTarget`.
+- `backups/` stores backups outside harness config directories and does not create sibling `.bak` files.
+- `state/<harness>.ledger.json` tracks Prism-owned outputs so repeated installs can skip unchanged files, fail closed on drift, and prune stale managed files.
+
+`prism install` is the unified refresh path. It compiles first when a plugin has compile targets for the selected harnesses, then reconciles install-phase artifacts; there is no separate sync command.
+
 ## Release Readiness
 
 See [release.md](release.md) before making the repository public or publishing release assets. Pay special attention to bundled plugin and skill provenance.

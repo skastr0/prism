@@ -88,7 +88,7 @@ test("opencode executeLowering skips every operation during dry run", async () =
         reason: "new",
       },
     ],
-    { backup: true, dryRun: true },
+    { dryRun: true },
   );
 
   expect(result.backups).toEqual([]);
@@ -204,7 +204,6 @@ test("opencode executeLowering applies mixed operations and aggregates config pa
   ];
 
   const result = await executeLowering(operations, {
-    backup: true,
     dryRun: false,
     target: opencodeExecutionTarget(root),
   });
@@ -273,7 +272,7 @@ test("opencode executeLowering skips unchanged operations without backups", asyn
         reason: "unchanged",
       },
     ],
-    { backup: true, dryRun: false },
+    { dryRun: false },
   );
 
   expect(result.backups).toEqual([]);
@@ -313,8 +312,8 @@ test("executeLowering applies explicit modes to unchanged write operations", asy
     },
   ];
 
-  await executeLowering(opencodeOperations, { backup: false, dryRun: false });
-  await executeStandardLowering(sharedOperations, { backup: false, dryRun: false });
+  await executeLowering(opencodeOperations, { dryRun: false });
+  await executeStandardLowering(sharedOperations, { dryRun: false });
 
   expect((await stat(opencodeTarget)).mode & 0o777).toBe(0o600);
   expect((await stat(sharedTarget)).mode & 0o777).toBe(0o600);
@@ -353,7 +352,7 @@ test("opencode executeLowering preserves plugin keys and deletes empty permissio
         reason: "changed",
       },
     ],
-    { backup: false, dryRun: false },
+    { dryRun: false },
   );
 
   expect(await readJson<Record<string, unknown>>(jsonTarget)).toEqual({
@@ -385,7 +384,7 @@ test("opencode executeLowering deletes absent empty plugin keys and normalizes s
         reason: "new",
       },
     ],
-    { backup: false, dryRun: false },
+    { dryRun: false },
   );
 
   expect(await readJson<Record<string, unknown>>(jsonTarget)).toEqual({

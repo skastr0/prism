@@ -412,7 +412,6 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -501,7 +500,6 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -547,7 +545,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -745,7 +742,6 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
   const builder = compile.composed.find((agent) => agent.name === "builder");
@@ -817,7 +813,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -906,7 +901,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -989,7 +983,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -1071,7 +1064,6 @@ test("MCP bundle stdio exits when stdin closes", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -1105,7 +1097,6 @@ test("MCP bundle stdio exits on SIGTERM", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 

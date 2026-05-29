@@ -1451,7 +1451,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -1484,7 +1483,6 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -1807,7 +1805,6 @@ test("compilePluginForTarget dry-run leaves lowerer outputs cache and lockfile u
       scope: "project",
       projectPath: projectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -1836,7 +1833,6 @@ test("compilePluginForTarget does not persist cache or lockfile after lowering f
         scope: "project",
         projectPath: projectRoot,
         dryRun: false,
-        backup: false,
       }),
     ),
   ).rejects.toThrow();
@@ -1855,7 +1851,6 @@ test("orbit phase validation succeeds when assigned agents satisfy requirements"
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -1887,7 +1882,6 @@ test("orbit phase validation succeeds when assigned agents satisfy requirements"
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
   const generatedPluginWrites = warmOpencode.operations.filter(
@@ -1911,7 +1905,6 @@ test("orbit validation fails when assigned agents do not satisfy requirements", 
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2218,7 +2211,6 @@ test("orbit orchestrator validation fails when the orchestrator agent does not e
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2240,7 +2232,6 @@ test("orbit skill renders orchestrator section and grants the orbit skill to the
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2296,7 +2287,6 @@ export default defineOrbit({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2358,7 +2348,6 @@ export default defineOrbit({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2384,7 +2373,6 @@ test("slot-filled trait tools fail closed on inline schemas", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2405,7 +2393,6 @@ test("slot-filled trait tools fail closed on undeclared slots", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2426,7 +2413,6 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2602,7 +2588,6 @@ test("compilePluginForTarget emits a Gemini extension bundle", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2705,7 +2690,6 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
         scope: "project",
         projectPath: projectRoot,
         dryRun: false,
-        backup: false,
       }),
     );
   }
@@ -2778,7 +2762,6 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2815,7 +2798,6 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -2855,7 +2837,6 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -3053,7 +3034,6 @@ export default defineTool({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -3136,7 +3116,6 @@ export default defineHook({
       scope: "project",
       projectPath: projectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -3196,7 +3175,6 @@ export default defineTool({
       target: "hermes",
       scope: "global",
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -3307,7 +3285,6 @@ export default defineTool({
       target: "hermes",
       scope: "global",
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -3368,7 +3345,6 @@ test("compilePluginForTarget serves Hermes HTTP MCP by default before config wri
           scope: "global",
           root: hermesRoot,
           dryRun: false,
-          backup: false,
         }),
       );
 
@@ -3425,7 +3401,6 @@ test("compilePluginForTarget can write harness config to a profile root while sh
           root: hermesRoot,
           mcpRoot: runtimeRoot,
           dryRun: false,
-          backup: false,
         }),
       );
 
@@ -3484,7 +3459,6 @@ test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async
         scope: "global",
         root: hermesRoot,
         dryRun: false,
-        backup: false,
         mcpLifecycle: "serve",
       }),
     );
@@ -3531,7 +3505,6 @@ test("compilePluginForTarget verifies a running Hermes HTTP MCP daemon before co
           scope: "global",
           root: hermesRoot,
           dryRun: false,
-          backup: false,
           mcpLifecycle: "verify",
         }),
       );
@@ -3586,7 +3559,6 @@ test("compilePluginForTarget rejects stale Hermes HTTP daemons before config wri
             scope: "global",
             root: hermesRoot,
             dryRun: false,
-            backup: false,
             mcpLifecycle: "verify",
           }),
         ),
@@ -3623,7 +3595,6 @@ test("compilePluginForTarget can start Hermes HTTP MCP before config write", asy
           scope: "global",
           root: hermesRoot,
           dryRun: false,
-          backup: false,
           mcpLifecycle: "serve",
         }),
       );
@@ -3660,7 +3631,6 @@ test("compilePluginForTarget leaves Hermes stdio MCP fallback ungated", async ()
       scope: "global",
       root: hermesRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -3723,7 +3693,6 @@ export default defineTool({
         target: "hermes",
         scope: "global",
         dryRun: true,
-        backup: false,
       }),
     ),
   ).rejects.toThrow("loopback host");
@@ -3775,7 +3744,6 @@ export default defineAgent({
       target: "hermes",
       scope: "global",
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -3819,7 +3787,6 @@ export default defineHook({
       target: "hermes",
       scope: "global",
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -3935,7 +3902,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -3983,7 +3949,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
   expect(warmCompile.built).toEqual([]);
@@ -4023,7 +3988,6 @@ export default defineSkillspace({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
   expect(skillspaceChangedCompile.built).toEqual(["worker"]);
@@ -4121,7 +4085,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -4268,7 +4231,6 @@ export default defineAgent({
         scope: "project",
         projectPath: projectRoot,
         dryRun: false,
-        backup: false,
       }),
     );
 
@@ -4390,7 +4352,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -4471,7 +4432,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -4563,7 +4523,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -4654,7 +4613,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -4677,7 +4635,6 @@ test("trait-orbit example lowers assigned traits and orbit skill into opencode p
       scope: "project",
       projectPath: projectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -4922,7 +4879,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -5043,7 +4999,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
   const worker = result.composed.find((agent) => agent.name === "worker");
@@ -5148,7 +5103,6 @@ export default defineAgent({
       scope: "project",
       projectPath: missingProjectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -5170,7 +5124,6 @@ test("external permission-only consumers do not emit empty generated plugin shel
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5242,7 +5195,6 @@ test("opencode tools-only plugins bundle runtime helper imports from declared de
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5268,7 +5220,6 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5312,7 +5263,6 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5395,7 +5345,6 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5524,7 +5473,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5572,7 +5520,6 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5653,7 +5600,6 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
         scope: "project",
         projectPath: projectRoot,
         dryRun: true,
-        backup: false,
       }),
     );
 
@@ -5737,7 +5683,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: true,
-      backup: false,
     }),
   );
 
@@ -5763,7 +5708,6 @@ test("derived orbit skill deduplicates traits and renders multi-agent phase sub-
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -5835,7 +5779,6 @@ export default defineOrbit({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -6282,7 +6225,6 @@ export default defineOrbit({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -6589,7 +6531,6 @@ export default defineOrbit({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -6610,7 +6551,6 @@ test("derived orbit skill renders trait sections from description + bound-by + g
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -6707,7 +6647,6 @@ test("derived orbit skill drops the closure-discipline section", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -6729,7 +6668,6 @@ test("derived orbit skill drops the input-shape placeholder line", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 
@@ -6753,7 +6691,6 @@ test("derived orbit skill agent sub-sections do not render a duplicated **Identi
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      backup: false,
     }),
   );
 

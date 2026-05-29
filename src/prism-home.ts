@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Schema } from "effect";
-import { ensureDir, exists, readFile, writeFile } from "./fs.js";
+import { exists, readFile } from "./fs.js";
 
 export const PRISM_CONFIG_SCHEMA_VERSION = 1;
 export const DEFAULT_BACKUP_RETENTION_PER_TARGET = 3;
@@ -103,14 +103,4 @@ export const readPrismConfig = async (
   }
 
   return normalizePrismConfig(decodeRawPrismConfig(parsed));
-};
-
-export const writePrismConfig = async (
-  config: PrismConfig,
-  prismHome = resolvePrismHome(),
-): Promise<string> => {
-  const path = prismConfigPath(prismHome);
-  await ensureDir(prismHome);
-  await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  return path;
 };

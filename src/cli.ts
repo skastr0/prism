@@ -68,7 +68,6 @@ program
     "global"
   )
   .option("--overwrite", "Overwrite existing files", false)
-  .option("--backup", "Create .bak backups before overwriting files")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .option("--compile-root <path>", "Override compile output root")
@@ -102,7 +101,6 @@ program
     "global"
   )
   .option("--overwrite", "Overwrite existing files", false)
-  .option("--backup", "Create .bak backups before overwriting files")
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .option("--compile-root <path>", "Override compile output root")
@@ -135,7 +133,6 @@ program
         mcpLifecycle: options.mcpLifecycle,
         validate: options.validate,
         dryRun: options.dryRun,
-        backup: options.backup,
         overwrite: options.overwrite,
       });
 
@@ -220,7 +217,6 @@ program
   .option("-p, --project <path>", "Project root when compiling with --scope project")
   .option("--dry-run", "Preview operations without writing", false)
   .option("--clean", "Clear compile cache before compiling", false)
-  .option("--backup", "Create .bak backups before overwriting files")
   .option("--root <path>", "Override harness output root")
   .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
@@ -252,7 +248,6 @@ program
         root: options.root,
         mcpRoot: options.mcpRoot,
         dryRun: options.dryRun,
-        backup: options.backup,
         mcpLifecycle: options.mcpLifecycle,
       });
 
@@ -615,20 +610,26 @@ type InstallCommandOptions = {
   all?: boolean;
   harness?: string;
   project?: string;
-  scope: HarnessScope;
+  scope?: HarnessScope;
   overwrite?: boolean;
-  backup?: boolean;
   validate?: boolean;
   dryRun?: boolean;
   compileRoot?: string;
   mcpRoot?: string;
-  mcpLifecycle: CompileMcpLifecycleMode;
+  mcpLifecycle?: CompileMcpLifecycleMode;
 };
 
-type NormalizedInstallOptions = InstallCommandOptions & {
+type NormalizedInstallOptions = {
+  all?: boolean;
+  harness?: string;
+  project?: string;
+  scope: HarnessScope;
   overwrite: boolean;
-  backup: boolean;
+  validate?: boolean;
   dryRun: boolean;
+  compileRoot?: string;
+  mcpRoot?: string;
+  mcpLifecycle: CompileMcpLifecycleMode;
 };
 
 type InstallCommandContext = LoadedPlugin & {
@@ -667,7 +668,6 @@ type InstallAllRefreshOptions = {
   mcpLifecycle: CompileMcpLifecycleMode;
   validate?: boolean;
   dryRun: boolean;
-  backup: boolean;
   overwrite: boolean;
 };
 
@@ -702,7 +702,6 @@ async function runInstallCommand(
     mcpRoot: context.options.mcpRoot,
     mcpLifecycle: context.options.mcpLifecycle,
     dryRun: context.options.dryRun,
-    backup: context.options.backup,
   });
   if (!compilePhase.success) {
     process.exit(1);
@@ -736,8 +735,8 @@ function normalizeInstallCommandOptions(
 ): NormalizedInstallOptions {
   return {
     ...options,
+    scope: options.scope ?? "global",
     overwrite: options.overwrite ?? false,
-    backup: options.backup ?? false,
     dryRun: options.dryRun ?? false,
     mcpLifecycle: options.mcpLifecycle ?? "serve",
   };
@@ -773,7 +772,6 @@ async function planOrRunInstallCommand(
     harnesses: context.harnesses,
     projectPath: context.options.project,
     overwrite: context.options.overwrite,
-    backup: context.options.backup,
     dryRun: context.options.dryRun,
   });
 
@@ -788,7 +786,6 @@ async function planOrRunInstallCommand(
     harnesses: context.harnesses,
     projectPath: context.options.project,
     overwrite: context.options.overwrite,
-    backup: context.options.backup,
     dryRun: false,
   });
 
@@ -947,7 +944,6 @@ async function refreshDiscoveredPlugin(
     mcpRoot: options.mcpRoot,
     mcpLifecycle: options.mcpLifecycle,
     dryRun: options.dryRun,
-    backup: options.backup,
   });
 
   if (!compilePhase.success) {
@@ -1042,7 +1038,6 @@ async function planOrRunPluginInstall(
     harnesses: options.harnesses,
     projectPath: options.projectPath,
     overwrite: options.overwrite,
-    backup: options.backup,
     dryRun: options.dryRun,
   });
 
@@ -1057,7 +1052,6 @@ async function planOrRunPluginInstall(
     harnesses: options.harnesses,
     projectPath: options.projectPath,
     overwrite: options.overwrite,
-    backup: options.backup,
     dryRun: false,
   });
 
@@ -1186,22 +1180,51 @@ function printOperations(operations: FileOperation[], indent = ""): void {
   for (const [harness, ops] of byHarness) {
     console.log(`${indent}   ${harness}:`);
     for (const op of ops) {
-      // Determine if this is an "update" (append with "Updating existing section" reason)
-      const isUpdate = op.type === "append" && op.reason === "Updating existing section";
-      const icon =
-        op.type === "copy"
-          ? "📄"
-          : op.type === "append"
-            ? isUpdate ? "🔄" : "📝"
-            : op.type === "skip"
-              ? "⏭️"
-              : "🔀";
-      const displayType = isUpdate ? "update" : op.type;
-      const status = op.type === "skip" || isUpdate ? ` (${op.reason})` : "";
+      const isUpdate = isRuleSectionUpdate(op);
+      const icon = operationIcon(op, isUpdate);
+      const displayType = operationDisplayType(op, isUpdate);
+      const status = operationStatus(op, isUpdate);
       console.log(`${indent}      ${icon} ${displayType.padEnd(6)} ${op.artifact}: ${op.target}${status}`);
     }
   }
 }
+
+const isRuleSectionUpdate = (op: FileOperation): boolean =>
+  op.type === "append" && op.reason === "Updating existing section";
+
+const operationIcon = (op: FileOperation, isUpdate: boolean): string => {
+  switch (op.type) {
+    case "copy":
+      return "📄";
+    case "append":
+      return isUpdate ? "🔄" : "📝";
+    case "skip":
+      return "⏭️";
+    case "prune":
+      return "🧹";
+    case "drift":
+      return "⚠️";
+    case "merge":
+      return "🔀";
+  }
+};
+
+const operationDisplayType = (op: FileOperation, isUpdate: boolean): string =>
+  isUpdate ? "update" : op.type;
+
+const operationStatus = (op: FileOperation, isUpdate: boolean): string => {
+  if (isUpdate) return ` (${op.reason})`;
+  switch (op.type) {
+    case "skip":
+    case "prune":
+    case "drift":
+      return ` (${op.reason})`;
+    case "copy":
+    case "append":
+    case "merge":
+      return "";
+  }
+};
 
 function resolveRequestedHarnesses(options: {
   all?: boolean;
@@ -1282,7 +1305,6 @@ async function runCompilePhaseForPlugin(options: {
   mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
   dryRun: boolean;
-  backup: boolean;
   indent?: string;
 }): Promise<
   | { success: true; backups: string[] }
@@ -1303,7 +1325,6 @@ async function runCompilePhaseForPlugin(options: {
         root: options.compileRoot,
         mcpRoot: options.mcpRoot,
         dryRun: options.dryRun,
-        backup: options.backup,
         mcpLifecycle: options.mcpLifecycle,
       })
     );

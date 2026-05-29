@@ -415,7 +415,7 @@ const executeLoweringWrite = async (
   ledger: HarnessLedger | undefined,
 ): Promise<string | null> => {
   const backup =
-    options.backup && operation.kind === "write-md"
+    operation.kind === "write-md"
       ? await backupLoweringTarget(operation.target, options, "write")
       : null;
   await writeFile(operation.target, operation.content, { mode: operation.mode });
@@ -447,7 +447,6 @@ export interface LowerExecutionTargetContext {
 }
 
 export interface ExecuteLoweringOptions {
-  readonly backup: boolean;
   readonly dryRun: boolean;
   readonly target?: LowerExecutionTargetContext;
 }

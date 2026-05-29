@@ -51,7 +51,6 @@ test("planInstallation does not adopt legacy rule markers without a ledger", asy
     harnesses: ["opencode"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: true,
   });
 
@@ -90,7 +89,6 @@ test("install records managed rule sections and later plans unchanged as skip", 
     harnesses: ["opencode"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: false,
   });
   expect(first.success).toBe(true);
@@ -103,7 +101,6 @@ test("install records managed rule sections and later plans unchanged as skip", 
     harnesses: ["opencode"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: true,
   });
 
@@ -135,7 +132,6 @@ test("install updates managed rule sections with Prism-home backups", async () =
     harnesses: ["opencode"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: false,
   });
   await writeText(join(pluginPath, "rules", "project", "context.md"), "Updated rules\n");
@@ -145,7 +141,6 @@ test("install updates managed rule sections with Prism-home backups", async () =
     harnesses: ["opencode"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: false,
   });
 
@@ -176,7 +171,6 @@ test("planInstallation copies project rules into rulesDir with mdc extension", a
     harnesses: ["cursor"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: true,
   });
 
@@ -217,7 +211,6 @@ test("install prunes stale ledger-owned whole-file project rules", async () => {
     harnesses: ["cursor"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: false,
   });
   await rm(sourcePath);
@@ -227,7 +220,6 @@ test("install prunes stale ledger-owned whole-file project rules", async () => {
     harnesses: ["cursor"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: false,
   });
 
@@ -260,7 +252,6 @@ test("planInstallation fails closed on drifted ledger-owned files", async () => 
     harnesses: ["cursor"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: false,
   });
   await writeText(targetPath, "manual edit\n");
@@ -270,7 +261,6 @@ test("planInstallation fails closed on drifted ledger-owned files", async () => 
     harnesses: ["cursor"],
     projectPath,
     overwrite: false,
-    backup: false,
     dryRun: true,
   });
 

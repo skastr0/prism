@@ -9,6 +9,7 @@ import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
+import { runtimeMcpServerDescriptor } from "./mcp-runtime.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
@@ -32,6 +33,8 @@ import {
   readManifest,
   resolveManifestTargets,
 } from "../manifest.js";
+import { computeContentHash } from "../content-hash.js";
+import { managedEntryId, readHarnessLedger, writeHarnessLedger } from "../managed-ledger.js";
 import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 
 const tempRoots: string[] = [];
@@ -636,7 +639,7 @@ const createStandaloneToolFixture = async (): Promise<{
         name: "tool-only-demo",
         version: "0.1.0",
         targets: {
-          tools: ["codex-cli", "claude-code", "antigravity-cli", "grok"],
+          tools: ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid"],
         },
       },
       null,
@@ -2686,7 +2689,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
 test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
   const { pluginRoot, projectRoot } = await createStandaloneToolFixture();
-  const targets = ["codex-cli", "claude-code", "antigravity-cli", "grok"] as const;
+  const targets = ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid"] as const;
 
   for (const target of targets) {
     await Effect.runPromise(
@@ -2756,6 +2759,22 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   );
   expect(grokBundle).toContain(expectedToolName);
   expect(grokBundle).toContain("tools/list");
+
+  const factoryRoot = join(projectRoot, ".factory", "plugins", "prism-generated-tool-only-demo");
+  const factoryMcp = JSON.parse(await readFile(join(factoryRoot, "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, { type: string; command: string; args: string[] }>;
+  };
+  expect(factoryMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+    type: "stdio",
+    command: "bun",
+    args: ["${DROID_PLUGIN_ROOT}/mcp/prism_generated_tool_only_demo/server.mjs"],
+  });
+  const factoryBundle = await readFile(
+    join(factoryRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(factoryBundle).toContain(expectedToolName);
+  expect(factoryBundle).toContain("tools/list");
 });
 
 test("compilePluginForTarget emits a Codex project bundle", async () => {
@@ -4630,6 +4649,96 @@ export default defineAgent({
   expect(agentMarkdown).toContain('- "testing"');
 });
 
+test("permission-only skill access fails closed for Factory Droid droids", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "factory-skill-permission-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["factory-droid"],
+          skillspaces: ["factory-droid"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "external.trait.ts"),
+    `import { defineTrait, skillspaceRef } from "prism";
+
+export default defineTrait({
+  name: "external",
+  description: "Uses an external skill",
+  access: {
+    skills: [skillspaceRef("external-skills", "testing")],
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
+    `import { defineSkillspace } from "prism";
+
+export default defineSkillspace({
+  name: "external-skills",
+  skills: {
+    testing: {
+      targets: {
+        "factory-droid": { name: "testing" },
+      },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from "prism";
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  traits: ["external"],
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
+  if (failure._tag === "UnsupportedTargetCapabilityError") {
+    expect(failure.capability).toBe("skill-permissions");
+    expect(failure.message).toContain("permission-only skills");
+  }
+});
+
 test("trait-orbit example lowers assigned traits and orbit skill into opencode permissions", async () => {
   const projectRoot = await createTempRoot();
   const pluginRoot = join(process.cwd(), "examples", "trait-orbit-contracts");
@@ -5512,6 +5621,531 @@ export default defineAgent({
   );
   expect(mcpServer).toContain("grok_pipeline_demo_submit_work");
   expect(await pathExists(join(projectRoot, ".grok", "agents", "worker.md"))).toBe(false);
+});
+
+test("compilePluginForTarget lowers Factory Droid plugin-bundle surfaces", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "factory-pipeline-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "factory-pipeline-demo",
+        version: "0.1.0",
+        targets: {
+          agents: ["factory-droid"],
+          skills: ["factory-droid"],
+          tools: ["factory-droid"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "submit-work.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed Factory work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input) {
+    return { acknowledged: true };
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "submittable.trait.ts"),
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  instructions: "Submit completed work through the generated Factory MCP tool.",
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Factory worker",
+  identity: "worker",
+  traits: ["submittable"],
+  skills: [skillRef("testing")],
+  targets: {
+    "factory-droid": {
+      model: "inherit",
+      tools: ["Read"],
+    },
+  },
+});
+`,
+  );
+
+  const factory = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(factory.outputRoot).toBe(join(projectRoot, ".factory/"));
+  const pluginRootPath = join(
+    projectRoot,
+    ".factory",
+    "plugins",
+    "prism-generated-factory-pipeline-demo",
+  );
+  expect(await pathExists(join(pluginRootPath, ".factory-plugin", "plugin.json"))).toBe(true);
+  const droid = await readFile(join(pluginRootPath, "droids", "worker.md"), "utf8");
+  expect(droid).toContain('description: "Factory worker"');
+  expect(droid).toContain('model: "inherit"');
+  expect(droid).toContain('- "Read"');
+  expect(droid).toContain(
+    '- "mcp__prism-generated-factory-pipeline-demo__factory_pipeline_demo_submit_work"',
+  );
+  expect(droid).not.toContain("skills:");
+  expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
+  const mcpConfig = await readFile(join(pluginRootPath, "mcp.json"), "utf8");
+  expect(mcpConfig).toContain('"prism-generated-factory-pipeline-demo"');
+  expect(mcpConfig).toContain(
+    '"${DROID_PLUGIN_ROOT}/mcp/prism_generated_factory_pipeline_demo/server.mjs"',
+  );
+  const mcpServer = await readFile(
+    join(pluginRootPath, "mcp", "prism_generated_factory_pipeline_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(mcpServer).toContain("factory_pipeline_demo_submit_work");
+  expect(await pathExists(join(projectRoot, ".factory", "droids", "worker.md"))).toBe(false);
+});
+
+test("compilePluginForTarget gates Factory HTTP MCP for agent-bound dependency tools", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "factory-http-agent-demo");
+  const coreRoot = join(root, "factory-tool-core");
+  const factoryRoot = join(root, "factory-root");
+  const mcpRoot = join(root, "mcp-root");
+  const port = await getFreePort("127.0.0.1");
+
+  await writeText(
+    join(coreRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "factory-tool-core",
+        version: "0.1.0",
+        targets: {
+          tools: ["factory-droid"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(coreRoot, "tools", "submit-work.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed Factory work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input) {
+    return { acknowledged: true };
+  },
+});
+`,
+  );
+  await writeText(
+    join(coreRoot, "traits", "submittable.trait.ts"),
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "factory-http-agent-demo",
+        version: "0.1.0",
+        deps: {
+          core: "../factory-tool-core",
+        },
+        targets: {
+          agents: ["factory-droid"],
+        },
+        runtime: {
+          mcp: {
+            "factory-droid": {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port,
+              tokenEnv: "PRISM_MCP_FACTORY_AGENT_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Factory worker",
+  identity: "worker",
+  traits: ["core:submittable"],
+  targets: {
+    "factory-droid": {
+      model: "inherit",
+    },
+  },
+});
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "global",
+      root: factoryRoot,
+      mcpRoot,
+      dryRun: false,
+      mcpLifecycle: "none",
+    }),
+  );
+
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("PluginManifestError");
+  if (failure._tag === "PluginManifestError") {
+    expect(failure.message).toContain("factory-droid Streamable HTTP MCP daemon");
+    expect(failure.message).toContain("refusing to write url config");
+  }
+
+  try {
+    const compiled = await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "factory-droid",
+        scope: "global",
+        root: factoryRoot,
+        mcpRoot,
+        dryRun: false,
+        mcpLifecycle: "serve",
+      }),
+    );
+    expect(compiled.operations.some((operation) =>
+      operation.kind === "write-plugin-file" &&
+      operation.content.includes("factory_tool_core_submit_work")
+    )).toBe(true);
+  } finally {
+    await stopMcp({
+      pluginPath: pluginRoot,
+      harness: "factory-droid",
+      scope: "global",
+      root: mcpRoot,
+      tokenEnv: "PRISM_MCP_FACTORY_AGENT_TOKEN",
+    }).catch(() => undefined);
+  }
+});
+
+test("compilePluginForTarget prunes stale Factory plugin bundle for template-only orbit targets", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "factory-source-only");
+  const projectRoot = join(root, "project");
+  const generatedRoot = join(
+    projectRoot,
+    ".factory",
+    "plugins",
+    "prism-generated-factory-source-only",
+  );
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "factory-source-only",
+      version: "0.1.0",
+      targets: {
+        skills: ["factory-droid"],
+        orbits: ["factory-droid"],
+      },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+  await writeText(
+    join(pluginRoot, "orbits", "template.orbit.ts"),
+    `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "template",
+  description: "Template-only Factory orbit.",
+  parameters: [{ name: "topic" }],
+  phases: [{ name: "Work on \${topic}" }],
+});
+`,
+  );
+  const staleTarget = join(generatedRoot, "droids", "stale.md");
+  const staleContent = "---\nname: stale\n---\n";
+  await writeText(staleTarget, staleContent);
+  const staleEntryId = managedEntryId({
+    harness: "factory-droid",
+    scope: "project",
+    root: join(projectRoot, ".factory"),
+    pluginName: "factory-source-only",
+    artifact: "compile",
+    targetPath: staleTarget,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("factory-droid")),
+    entries: [
+      {
+        id: staleEntryId,
+        pluginName: "factory-source-only",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "factory-droid",
+        scope: "project",
+        root: join(projectRoot, ".factory"),
+        artifact: "compile",
+        targetPath: staleTarget,
+        kind: "file",
+        contentHash: computeContentHash(staleContent),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: generatedRoot,
+      targetType: "dir",
+    }),
+  );
+  expect(await directoryExists(generatedRoot)).toBe(false);
+  expect((await readHarnessLedger("factory-droid")).entries).toHaveLength(0);
+});
+
+test("compilePluginForTarget forgets stale Factory shared MCP runtime when another harness owns it", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "factory-shared-runtime");
+  const projectRoot = join(root, "project");
+  const mcpRoot = join(root, "mcp-runtime");
+  const factoryRoot = join(projectRoot, ".factory");
+  const claudeRoot = join(projectRoot, ".claude");
+  const targetPath = runtimeMcpServerDescriptor(mcpRoot, "factory-shared-runtime").absolutePath;
+  const content = "console.log('shared runtime');\n";
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "factory-shared-runtime",
+      version: "0.1.0",
+      targets: { agents: ["factory-droid"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    "---\ndescription: Factory worker\n---\n\n# Worker\n\nFactory worker.\n",
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Factory worker",
+  identity: "worker",
+  traits: [],
+  targets: {
+    "factory-droid": { tools: ["Read"] },
+  },
+});
+`,
+  );
+  await writeText(targetPath, content);
+
+  const factoryEntryId = managedEntryId({
+    harness: "factory-droid",
+    scope: "project",
+    root: factoryRoot,
+    pluginName: "factory-shared-runtime",
+    artifact: "compile",
+    targetPath,
+    kind: "file",
+  });
+  const claudeEntryId = managedEntryId({
+    harness: "claude-code",
+    scope: "project",
+    root: claudeRoot,
+    pluginName: "factory-shared-runtime",
+    artifact: "compile",
+    targetPath,
+    kind: "file",
+  });
+  const sharedEntry = {
+    pluginName: "factory-shared-runtime",
+    pluginVersion: "0.1.0",
+    pluginPath: pluginRoot,
+    scope: "project" as const,
+    artifact: "compile",
+    targetPath,
+    kind: "file" as const,
+    contentHash: computeContentHash(content),
+    updatedAt: new Date().toISOString(),
+  };
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("factory-droid")),
+    entries: [{ ...sharedEntry, id: factoryEntryId, harness: "factory-droid", root: factoryRoot }],
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("claude-code")),
+    entries: [{ ...sharedEntry, id: claudeEntryId, harness: "claude-code", root: claudeRoot }],
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "project",
+      projectPath: projectRoot,
+      mcpRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: targetPath,
+      targetType: "file",
+      shared: true,
+    }),
+  );
+  expect(await readFile(targetPath, "utf8")).toBe(content);
+  expect((await readHarnessLedger("factory-droid")).entries.some((entry) => entry.id === factoryEntryId)).toBe(false);
+  expect((await readHarnessLedger("claude-code")).entries.some((entry) => entry.id === claudeEntryId)).toBe(true);
+});
+
+test("compilePluginForTarget keeps plugin skills out of Factory orbit-only bundles", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "factory-orbit-only");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "factory-orbit-only",
+      version: "0.1.0",
+      targets: {
+        skills: ["factory-droid"],
+        orbits: ["factory-droid"],
+      },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+  await writeText(
+    join(pluginRoot, "orbits", "delivery.orbit.ts"),
+    `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "delivery",
+  description: "Concrete Factory orbit.",
+  phases: [{ name: "Deliver" }],
+});
+`,
+  );
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const generatedRoot = join(
+    projectRoot,
+    ".factory",
+    "plugins",
+    "prism-generated-factory-orbit-only",
+  );
+  expect(await pathExists(join(generatedRoot, "skills", "delivery", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(generatedRoot, "skills", "testing", "SKILL.md"))).toBe(false);
 });
 
 test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canonical tool runtime is required", async () => {

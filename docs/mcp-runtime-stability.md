@@ -215,6 +215,7 @@ Local tests should cover both transports:
 - Should plugin-level HTTP daemons be allowed indefinitely, or should Prism move
   quickly to a single aggregate daemon per harness scope?
 - Grok Build plugin-local HTTP MCP config remains unverified and stays on stdio.
+- Factory Droid supports both plugin-local stdio MCP through generated `mcp.json` and Prism-managed loopback Streamable HTTP MCP when explicitly configured.
 
 ## Sources
 

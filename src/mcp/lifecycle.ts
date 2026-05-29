@@ -7,15 +7,19 @@ import { promisify } from "node:util";
 import { Effect } from "effect";
 import { getHarness, harnessSupportsProjectScope } from "../harnesses.js";
 import { expandPath } from "../fs.js";
-import type { HarnessId, HarnessScope } from "../types.js";
+import { resolveManifestTargets } from "../manifest.js";
+import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
+import { composeAgent, type ComposedAgent } from "../compile/compose.js";
 import { loadPlugin } from "../compile/load.js";
 import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
 import type { PluginRegistry } from "../compile/registry.js";
-import { bindingsFromCanonicalTools } from "../compile/tool-bindings.js";
+import {
+  bindingsFromCanonicalTools,
+  mcpBindingsForAgentsAndTools,
+} from "../compile/tool-bindings.js";
 import {
   assertMcpHttpTargetSupported,
   assertMcpTokenEnvName,
-  assertPluginTargetsMcpTools,
   defaultMcpRuntimeRoot,
   generatedMcpServerName,
   isMcpTokenEnvName,
@@ -23,6 +27,13 @@ import {
   resolveMcpRuntime,
   runtimeMcpServerDescriptor,
 } from "../compile/mcp-runtime.js";
+import type { ResolvedContractBinding } from "../compile/resolve.js";
+import {
+  instantiateOrbit,
+  resolveAgent,
+  resolveOrbitToolPermissions,
+  validateOrbit,
+} from "../compile/resolve.js";
 import {
   MCP_RUNTIME_METADATA_SCHEMA,
   computeFileSha256,
@@ -126,6 +137,11 @@ export interface McpStopResult {
   readonly descriptor: McpRuntimeDescriptor;
   readonly metadata?: McpRuntimeMetadata;
 }
+
+type McpLifecycleResolvedContext = {
+  readonly registry: PluginRegistry;
+  readonly descriptor: McpRuntimeDescriptor;
+};
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 const DEFAULT_STOP_TIMEOUT_MS = 5_000;
@@ -272,7 +288,7 @@ const descriptorForRegistry = (options: {
 
 const resolveLifecycleContext = async (
   options: McpLifecycleCommonOptions,
-): Promise<{ readonly registry: PluginRegistry; readonly descriptor: McpRuntimeDescriptor }> => {
+): Promise<McpLifecycleResolvedContext> => {
   assertSupportedLifecycleTarget(options);
   const pluginPath = expandPath(options.pluginPath);
   const registry = await loadRegistry(pluginPath);
@@ -387,7 +403,12 @@ const buildServerBundle = async (options: {
   readonly tokenEnv: string;
   readonly toolTimeoutMs: number;
 }): Promise<{ readonly content: string; readonly serverSha256: string; readonly toolNames: ReadonlyArray<string> }> => {
-  assertPluginTargetsMcpTools(options.registry, options.targetId);
+  const bindings = await resolveLifecycleMcpBindings(options.registry, options.targetId);
+  if (bindings.length === 0) {
+    throw new Error(
+      `Plugin '${options.registry.pluginName}' has no canonical tools or agent-bound canonical tools to serve over MCP.`,
+    );
+  }
   const bundle = await generateMcpServerBundle({
     sourcePluginName: options.registry.pluginName,
     sourcePluginRoot: options.registry.pluginPath,
@@ -402,16 +423,125 @@ const buildServerBundle = async (options: {
       port: options.port,
       tokenEnv: options.tokenEnv,
     },
-    bindings: bindingsFromCanonicalTools(
-      options.registry.pluginName,
-      [...options.registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name)),
-    ),
+    bindings,
   });
   return {
     content: bundle.content,
     serverSha256: sha256Hex(bundle.content),
     toolNames: bundle.toolNames,
   };
+};
+
+const registryTargetsHarness = (
+  registry: PluginRegistry,
+  artifact: string,
+  target: HarnessId,
+): boolean => {
+  const targets = (registry.targets as Record<string, readonly PluginTargetId[] | undefined>)[artifact];
+  return resolveManifestTargets(targets ?? []).includes(target);
+};
+
+const findRegistryByPluginName = (
+  registry: PluginRegistry,
+  pluginName: string,
+): PluginRegistry | undefined => {
+  if (registry.pluginName === pluginName) return registry;
+  for (const dep of registry.deps.values()) {
+    const found = findRegistryByPluginName(dep, pluginName);
+    if (found) return found;
+  }
+  return undefined;
+};
+
+const assertLifecycleBindingsTargetHarness = (
+  registry: PluginRegistry,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+  target: HarnessId,
+): void => {
+  for (const binding of bindings) {
+    const owner = findRegistryByPluginName(registry, binding.toolPluginName);
+    if (owner && registryTargetsHarness(owner, "tools", target)) continue;
+    throw new Error(
+      `MCP tool binding '${binding.logicalName}' resolves from plugin '${binding.toolPluginName}', ` +
+        `but that plugin's targets.tools does not include '${target}'.`,
+    );
+  }
+};
+
+const composeLifecycleAgents = async (
+  registry: PluginRegistry,
+  target: HarnessId,
+): Promise<ComposedAgent[]> => {
+  if (!registryTargetsHarness(registry, "agents", target)) return [];
+  const agents: ComposedAgent[] = [];
+  for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    agents.push(composeAgent(await Effect.runPromise(resolveAgent(agent, registry, target))));
+  }
+  return agents;
+};
+
+const lifecycleOrbits = async (
+  registry: PluginRegistry,
+  target: HarnessId,
+) => {
+  if (!registryTargetsHarness(registry, "orbits", target)) return [];
+  const orbits = [];
+  for (const [, orbit] of [...registry.orbits.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    await Effect.runPromise(validateOrbit(orbit, registry));
+    if (orbit.parameters.length > 0) continue;
+    orbits.push(await Effect.runPromise(instantiateOrbit(orbit)));
+  }
+  return orbits;
+};
+
+const applyLifecycleOrbitToolPermissions = (
+  agents: ReadonlyArray<ComposedAgent>,
+  permissions: ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>>,
+): ComposedAgent[] =>
+  agents.map((agent) => {
+    const permitted = permissions.get(agent.name) ?? [];
+    if (permitted.length === 0) return agent;
+
+    const existing = new Set(agent.toolBindings.map((binding) => binding.logicalName));
+    const merged = [...agent.toolBindings];
+    for (const binding of permitted) {
+      if (existing.has(binding.logicalName)) continue;
+      merged.push(binding);
+      existing.add(binding.logicalName);
+    }
+
+    return {
+      ...agent,
+      toolBindings: merged.sort((left, right) =>
+        left.logicalName.localeCompare(right.logicalName),
+      ),
+    };
+  });
+
+const resolveLifecycleMcpBindings = async (
+  registry: PluginRegistry,
+  target: HarnessId,
+): Promise<ReadonlyArray<ResolvedContractBinding>> => {
+  const sourceToolBindings = registryTargetsHarness(registry, "tools", target)
+    ? bindingsFromCanonicalTools(
+        registry.pluginName,
+        [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name)),
+      )
+    : [];
+  const composed = await composeLifecycleAgents(registry, target);
+  const orbits = await lifecycleOrbits(registry, target);
+  const composedWithOrbitTools = applyLifecycleOrbitToolPermissions(
+    composed,
+    await Effect.runPromise(resolveOrbitToolPermissions(orbits, registry)),
+  );
+  const bindings = mcpBindingsForAgentsAndTools(
+    registry.pluginName,
+    [],
+    composedWithOrbitTools,
+  );
+  const allBindings = [...sourceToolBindings, ...bindings];
+  assertLifecycleBindingsTargetHarness(registry, allBindings, target);
+  return allBindings;
 };
 
 const writeServerBundle = async (
@@ -579,8 +709,8 @@ const listenerPidsFromProc = async (port: number): Promise<ReadonlyArray<number>
   const procEntries = await readdir("/proc", { withFileTypes: true }).catch(() => []);
 
   const pids = new Set<number>();
-  await Promise.all(procEntries.map(async (entry) => {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) return;
+  for (const entry of procEntries) {
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
     const pid = Number(entry.name);
     const fdEntries = await readdir(join("/proc", entry.name, "fd"), { withFileTypes: true })
       .catch(() => []);
@@ -591,13 +721,14 @@ const listenerPidsFromProc = async (port: number): Promise<ReadonlyArray<number>
         const inode = match?.[1];
         if (inode && inodes.has(inode)) {
           pids.add(pid);
-          return;
+          break;
         }
       } catch {
         // Processes and file descriptors can disappear while scanning /proc.
+        continue;
       }
     }
-  }));
+  }
 
   return [...pids];
 };
@@ -1035,9 +1166,185 @@ export const listMcpStatuses = async (
   return statuses;
 };
 
+const handleExistingMcpDaemon = async (options: {
+  readonly serveOptions: McpServeOptions;
+  readonly context: McpLifecycleResolvedContext;
+  readonly existing?: McpRuntimeMetadata;
+  readonly prepared: McpPreparedServer;
+  readonly tokenEnv: string;
+  readonly token: string;
+}): Promise<McpServeResult | undefined> => {
+  const { existing, prepared, tokenEnv, token, context } = options;
+  if (!existing?.pid) return undefined;
+
+  const status = await classifyStatus({
+    descriptor: prepared.descriptor,
+    metadata: existing,
+    expectedServerSha256: prepared.serverSha256,
+    tokenEnv,
+    token,
+  });
+  if (status.state === "running") {
+    return {
+      state: "already-running",
+      descriptor: prepared.descriptor,
+      metadata: status.metadata,
+      health: status.health,
+    };
+  }
+  if (status.state === "stale-build") {
+    await stopMcpResolved({
+      pluginPath: options.serveOptions.pluginPath,
+      harness: options.serveOptions.harness,
+      scope: options.serveOptions.scope,
+      projectPath: options.serveOptions.projectPath,
+      root: options.serveOptions.root,
+      tokenEnv,
+    }, context);
+    return undefined;
+  }
+  if (status.state === "stale-pid") return undefined;
+
+  throw new Error(
+    `Recorded MCP daemon is ${status.state}; run 'prism mcp status' or 'prism mcp restart' (${status.detail}).`,
+  );
+};
+
+const runForegroundPreparedServer = async (
+  prepared: McpPreparedServer,
+  previousServerContent: string | undefined,
+  startupTimeoutMs: number | undefined,
+): Promise<McpServeResult> => {
+  const descriptor = prepared.descriptor;
+  let child: ChildProcess;
+  try {
+    child = spawnServerProcess(prepared, { foreground: true });
+  } catch (error) {
+    await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
+    throw error;
+  }
+
+  try {
+    // Bun, shims, and launchd can make the serving pid differ from the
+    // immediate child pid; startup identity is proven by token + server hash.
+    await waitForHealth(
+      prepared,
+      undefined,
+      startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+    );
+  } catch (error) {
+    child.kill("SIGTERM");
+    await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
+    throw error;
+  }
+
+  const exit = await waitForChildExit(child);
+  if (exit.code !== 0 && exit.signal === null) {
+    throw new Error(`Foreground MCP server exited with code ${exit.code}`);
+  }
+  return { state: "foreground-exited", descriptor };
+};
+
+const stopPreparedServerProcess = async (options: {
+  readonly pid?: number;
+  readonly useLaunchAgent: boolean;
+  readonly serverName: string;
+}): Promise<void> => {
+  if (options.pid !== undefined) {
+    await terminatePid(options.pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
+    return;
+  }
+  if (options.useLaunchAgent) {
+    await stopLaunchAgent(launchAgentLabelForServer(options.serverName));
+  }
+};
+
+const rollbackPreparedServerStart = async (options: {
+  readonly pid?: number;
+  readonly useLaunchAgent: boolean;
+  readonly serverName: string;
+  readonly descriptor: McpRuntimeDescriptor;
+  readonly previousServerContent: string | undefined;
+}): Promise<void> => {
+  await stopPreparedServerProcess(options).catch(() => undefined);
+  await restoreServerBundle(options.descriptor, options.previousServerContent).catch(() => undefined);
+};
+
+const startPreparedServer = async (
+  prepared: McpPreparedServer,
+  options: McpServeOptions,
+  previousServerContent: string | undefined,
+): Promise<{
+  readonly pid?: number;
+  readonly useLaunchAgent: boolean;
+  readonly health: McpRuntimeHealth;
+}> => {
+  let pid: number | undefined;
+  const useLaunchAgent = shouldUseLaunchAgent(options);
+  try {
+    if (useLaunchAgent) await startLaunchAgent(prepared);
+    else pid = spawnDaemon(prepared);
+  } catch (error) {
+    await restoreServerBundle(prepared.descriptor, previousServerContent).catch(() => undefined);
+    throw error;
+  }
+
+  try {
+    // Bun, shims, and launchd can make the serving pid differ from the
+    // immediate child pid; metadata records the health pid after startup.
+    const health = await waitForHealth(
+      prepared,
+      undefined,
+      options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+    );
+    return { pid, useLaunchAgent, health };
+  } catch (error) {
+    await rollbackPreparedServerStart({
+      pid,
+      useLaunchAgent,
+      serverName: prepared.descriptor.serverName,
+      descriptor: prepared.descriptor,
+      previousServerContent,
+    });
+    throw error;
+  }
+};
+
+const persistPreparedServerMetadata = async (
+  prepared: McpPreparedServer,
+  started: {
+    readonly pid?: number;
+    readonly useLaunchAgent: boolean;
+    readonly health: McpRuntimeHealth;
+  },
+  previousServerContent: string | undefined,
+): Promise<McpRuntimeMetadata> => {
+  const metadata = metadataForPreparedServer(prepared, started.health.pid, started.health);
+  try {
+    await writeMcpRuntimeMetadata(prepared.descriptor.runtimePath, metadata);
+    return metadata;
+  } catch (error) {
+    try {
+      await stopPreparedServerProcess({
+        pid: started.pid,
+        useLaunchAgent: started.useLaunchAgent,
+        serverName: prepared.descriptor.serverName,
+      });
+      await restoreServerBundle(prepared.descriptor, previousServerContent);
+    } catch (cleanupError) {
+      throw new Error(
+        `Failed to write MCP runtime metadata and failed to stop MCP daemon: ${
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+        }`,
+      );
+    }
+    throw error;
+  }
+};
+
 const serveMcpResolved = async (
   options: McpServeOptions,
-  context: { readonly registry: PluginRegistry; readonly descriptor: McpRuntimeDescriptor },
+  context: McpLifecycleResolvedContext,
 ): Promise<McpServeResult> => {
   const { registry, descriptor } = context;
   const existing = await readRuntimeMetadataIfPresent(descriptor);
@@ -1081,37 +1388,15 @@ const serveMcpResolved = async (
     toolNames: bundle.toolNames,
   };
 
-  if (existing?.pid) {
-    const status = await classifyStatus({
-      descriptor,
-      metadata: existing,
-      expectedServerSha256: prepared.serverSha256,
-      tokenEnv,
-      token,
-    });
-    if (status.state === "running") {
-      return {
-        state: "already-running",
-        descriptor,
-        metadata: status.metadata,
-        health: status.health,
-      };
-    }
-    if (status.state === "stale-build") {
-      await stopMcpResolved({
-        pluginPath: options.pluginPath,
-        harness: options.harness,
-        scope: options.scope,
-        projectPath: options.projectPath,
-        root: options.root,
-        tokenEnv,
-      }, context);
-    } else if (status.state !== "stale-pid") {
-      throw new Error(
-        `Recorded MCP daemon is ${status.state}; run 'prism mcp status' or 'prism mcp restart' (${status.detail}).`,
-      );
-    }
-  }
+  const existingResult = await handleExistingMcpDaemon({
+    serveOptions: options,
+    context,
+    existing,
+    prepared,
+    tokenEnv,
+    token,
+  });
+  if (existingResult) return existingResult;
 
   if (!(await isPortAvailable(host, selectedPort))) {
     throw new Error(`Port ${selectedPort} on ${host} is already in use.`);
@@ -1121,81 +1406,12 @@ const serveMcpResolved = async (
   await writeServerBundle(descriptor, bundle.content);
 
   if (options.foreground) {
-    let child: ChildProcess;
-    try {
-      child = spawnServerProcess(prepared, { foreground: true });
-    } catch (error) {
-      await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
-      throw error;
-    }
-    // Bun, shims, and launchd can make the serving pid differ from the
-    // immediate child pid; startup identity is proven by token + server hash.
-    await waitForHealth(
-      prepared,
-      undefined,
-      options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
-    ).catch(async (error) => {
-      child.kill("SIGTERM");
-      await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
-      throw error;
-    });
-    const exit = await waitForChildExit(child);
-    if (exit.code !== 0 && exit.signal === null) {
-      throw new Error(`Foreground MCP server exited with code ${exit.code}`);
-    }
-    return { state: "foreground-exited", descriptor };
+    return runForegroundPreparedServer(prepared, previousServerContent, options.startupTimeoutMs);
   }
 
-  let pid: number | undefined;
-  let health: McpRuntimeHealth;
-  const useLaunchAgent = shouldUseLaunchAgent(options);
-  try {
-    if (useLaunchAgent) {
-      await startLaunchAgent(prepared);
-    } else {
-      pid = spawnDaemon(prepared);
-    }
-  } catch (error) {
-    await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
-    throw error;
-  }
-  try {
-    // Bun, shims, and launchd can make the serving pid differ from the
-    // immediate child pid; metadata records the health pid after startup.
-    health = await waitForHealth(
-      prepared,
-      undefined,
-      options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
-    );
-  } catch (error) {
-    if (pid !== undefined) {
-      await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS).catch(() => undefined);
-    } else if (useLaunchAgent) {
-      await stopLaunchAgent(launchAgentLabelForServer(prepared.descriptor.serverName)).catch(() => undefined);
-    }
-    await restoreServerBundle(descriptor, previousServerContent).catch(() => undefined);
-    throw error;
-  }
-  const metadata = metadataForPreparedServer(prepared, health.pid, health);
-  try {
-    await writeMcpRuntimeMetadata(descriptor.runtimePath, metadata);
-  } catch (error) {
-    try {
-      if (pid !== undefined) {
-        await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
-      } else if (useLaunchAgent) {
-        await stopLaunchAgent(launchAgentLabelForServer(prepared.descriptor.serverName));
-      }
-      await restoreServerBundle(descriptor, previousServerContent);
-    } catch (cleanupError) {
-      throw new Error(
-        `Failed to write MCP runtime metadata and failed to stop MCP daemon: ${
-          cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
-        }`,
-      );
-    }
-    throw error;
-  }
+  const started = await startPreparedServer(prepared, options, previousServerContent);
+  const metadata = await persistPreparedServerMetadata(prepared, started, previousServerContent);
+  const health = started.health;
   return { state: "started", descriptor, metadata, health };
 };
 

@@ -87,6 +87,27 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
   });
 });
 
+test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
+  const runtime = resolveMcpRuntime(
+    registry({
+      mcp: {
+        "factory-droid": {
+          transport: "streamable-http",
+          host: "127.0.0.1",
+          port: 38466,
+          tokenEnv: "PRISM_MCP_FACTORY_TOKEN",
+        },
+      },
+    }),
+    "factory-droid",
+    { requirePort: true },
+  );
+
+  expect(runtime.targetId).toBe("factory-droid");
+  expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:38466/mcp");
+  expect(getMcpHttpTargetSupport("factory-droid").config).toBe("supported");
+});
+
 test("MCP runtime fails closed for unsupported HTTP targets", () => {
   expect(() =>
     resolveMcpRuntime(

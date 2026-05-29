@@ -17,5 +17,9 @@ export default defineAgent({
     "claude-code": {
       model: "sonnet",
     },
+    "factory-droid": {
+      model: "inherit",
+      tools: ["Read", "Grep", "Glob"],
+    },
   },
 });

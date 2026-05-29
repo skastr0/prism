@@ -117,6 +117,10 @@ export default defineAgent({
     "claude-code": {
       model: "sonnet",
     },
+    "factory-droid": {
+      model: "inherit",
+      tools: ["Read", "Grep", "Glob"],
+    },
   },
 });
 `;
@@ -166,7 +170,7 @@ const buildManifestTargets = (options: PluginScaffoldOptions): PluginManifestTar
       "factory-droid",
     ];
   }
-  if (options.withAgent) targets.agents = ["claude-code", "opencode"];
+  if (options.withAgent) targets.agents = ["claude-code", "opencode", "factory-droid"];
   if (options.withSkill) targets.skills = ["coding-harness", "claw-harness"];
   return targets;
 };

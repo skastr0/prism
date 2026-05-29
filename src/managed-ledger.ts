@@ -1,6 +1,8 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Schema } from "effect";
 import { ensureDir, exists, readFile, writeFile } from "./fs.js";
+import { getAllHarnessIds } from "./harnesses.js";
+import { computeContentHash } from "./content-hash.js";
 import { prismStateDir, resolvePrismHome } from "./prism-home.js";
 import type { HarnessId, HarnessScope } from "./types.js";
 
@@ -121,6 +123,45 @@ export const managedEntryId = (input: {
     input.sourcePath ?? "",
     input.targetPath,
   ].join("\u001f");
+
+export const isSharedMcpRuntimeServerPath = (targetPath: string): boolean =>
+  /[/\\]prism[/\\]mcp[/\\][^/\\]+[/\\]server\.mjs$/u.test(targetPath);
+
+export const hasOtherManagedCompileOwners = async (input: {
+  readonly currentHarness: HarnessId;
+  readonly currentEntryId: string;
+  readonly pluginName: string;
+  readonly targetPath: string;
+  readonly kind: ManagedOutputKind;
+}): Promise<boolean> => {
+  const targetPath = resolve(input.targetPath);
+  const currentContentHash = await currentTargetContentHash(targetPath);
+  if (!currentContentHash) return false;
+
+  for (const harness of getAllHarnessIds()) {
+    if (harness === input.currentHarness) continue;
+    const ledger = await readHarnessLedger(harness);
+    if (
+      ledger.entries.some(
+        (entry) =>
+          entry.id !== input.currentEntryId &&
+          entry.pluginName === input.pluginName &&
+          entry.artifact === "compile" &&
+          entry.kind === input.kind &&
+          entry.contentHash === currentContentHash &&
+          resolve(entry.targetPath) === targetPath,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const currentTargetContentHash = async (targetPath: string): Promise<string | undefined> => {
+  if (!(await exists(targetPath))) return undefined;
+  return computeContentHash(await readFile(targetPath));
+};
 
 export const upsertLedgerEntries = (
   ledger: HarnessLedger,

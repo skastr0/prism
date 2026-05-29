@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   chmodFile,
   exists,
@@ -12,6 +12,8 @@ import {
 } from "../../fs.js";
 import { backupManagedTarget } from "../../managed-backups.js";
 import {
+  hasOtherManagedCompileOwners,
+  isSharedMcpRuntimeServerPath,
   managedEntryId,
   readHarnessLedger,
   removeLedgerEntries,
@@ -347,6 +349,18 @@ export const planGeneratedPluginFilePruning = async (options: {
   readonly resolveTarget: (relativePath: string) => string;
 }): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
+  if (options.desiredRelativePaths.size === 0) {
+    if (await exists(options.root)) {
+      operations.push({
+        kind: "prune-plugin-path",
+        target: options.root,
+        targetType: "dir",
+        reason: "stale",
+      });
+    }
+    return operations;
+  }
+
   const existingFiles = await listDirRecursive(options.root);
 
   for (const relativePath of existingFiles.sort((left, right) => left.localeCompare(right))) {
@@ -469,11 +483,34 @@ const executeLoweringPrune = async (
   target: LowerExecutionTargetContext | undefined,
   ledger: HarnessLedger | undefined,
 ): Promise<void> => {
+  if (await shouldForgetSharedPrune(operation, target)) {
+    if (ledger && target) {
+      removeLoweringEntry(ledger, target, operation.target, operation.targetType);
+    }
+    return;
+  }
+
   if (operation.targetType === "dir") await removeDir(operation.target);
   else await removeFile(operation.target);
   if (ledger && target) {
     removeLoweringEntry(ledger, target, operation.target, operation.targetType);
   }
+};
+
+const shouldForgetSharedPrune = async (
+  operation: LowerPruneOperation,
+  target: LowerExecutionTargetContext | undefined,
+): Promise<boolean> => {
+  const shared = (operation as LowerPruneOperation & { readonly shared?: boolean }).shared;
+  if (!shared || !target || operation.targetType !== "file") return false;
+  if (!isSharedMcpRuntimeServerPath(operation.target)) return false;
+  return hasOtherManagedCompileOwners({
+    currentHarness: target.harness,
+    currentEntryId: lowerLedgerEntryId(target, operation.target, "file"),
+    pluginName: target.sourcePluginName,
+    targetPath: operation.target,
+    kind: "file",
+  });
 };
 
 export interface LowerExecutionTargetContext {
@@ -551,9 +588,30 @@ const removeLoweringEntry = (
   targetType: "file" | "dir",
 ): void => {
   const kind = targetType === "dir" ? "directory" : "file";
+  const entryIds = new Set([lowerLedgerEntryId(target, targetPath, kind)]);
+  const resolvedPruneRoot = targetType === "dir" ? resolve(targetPath) : undefined;
+  for (const entry of ledger.entries) {
+    if (entry.pluginName !== target.sourcePluginName || entry.artifact !== "compile") continue;
+    if (targetType === "file" && entry.kind === kind && entry.targetPath === targetPath) {
+      entryIds.add(entry.id);
+      continue;
+    }
+    if (targetType !== "dir" || !resolvedPruneRoot) continue;
+    const entryRelativePath = relative(resolvedPruneRoot, resolve(entry.targetPath));
+    if (
+      entryRelativePath === "" ||
+      (
+        entryRelativePath !== ".." &&
+        !entryRelativePath.startsWith(`..${sep}`) &&
+        !isAbsolute(entryRelativePath)
+      )
+    ) {
+      entryIds.add(entry.id);
+    }
+  }
   Object.assign(
     ledger,
-    removeLedgerEntries(ledger, new Set([lowerLedgerEntryId(target, targetPath, kind)])),
+    removeLedgerEntries(ledger, entryIds),
   );
 };
 

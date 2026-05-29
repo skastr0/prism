@@ -355,6 +355,7 @@ const mergeTraitTools = (
     trait: resolvedTrait.trait,
     binding: resolvedTrait.binding,
     registry,
+    refRegistry: resolvedTrait.owner,
   });
   if (!(materializedTraitTools instanceof Array)) {
     return agentError(

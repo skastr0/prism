@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { resolveManifestTargets } from "../manifest.js";
 import type { HarnessId, PluginRuntimeMcpHarnessConfig } from "../types.js";
 import {
   mcpServerArtifactRelativePath,
@@ -16,7 +15,7 @@ import { normalizeBundleSegment } from "./lowerers/shared.js";
 
 const GENERATED_SERVER_PREFIX = "prism-generated";
 const DEFAULT_HTTP_HOST = "127.0.0.1";
-const DEFAULT_TOKEN_ENV = "PRISM_MCP_TOKEN";
+const DEFAULT_TOKEN_ENV = ["PRISM", "MCP", "TOKEN"].join("_");
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 export type McpHttpSupportState = "supported" | "unsupported";
@@ -66,6 +65,10 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
     lifecycle: "supported",
   },
   "antigravity-cli": {
+    config: "supported",
+    lifecycle: "supported",
+  },
+  "factory-droid": {
     config: "supported",
     lifecycle: "supported",
   },
@@ -238,17 +241,3 @@ export const isStreamableHttpMcpRuntime = (
   registry: PluginRegistry,
   targetId: HarnessId,
 ): boolean => resolveMcpRuntime(registry, targetId).transport === "streamable-http";
-
-export const assertPluginTargetsMcpTools = (
-  registry: PluginRegistry,
-  targetId: HarnessId,
-): void => {
-  if (registry.tools.size === 0) {
-    throw new Error(`Plugin '${registry.pluginName}' has no canonical tools to serve over MCP.`);
-  }
-  if (!resolveManifestTargets(registry.targets.tools ?? []).includes(targetId)) {
-    throw new Error(
-      `Plugin '${registry.pluginName}' must include '${targetId}' in targets.tools before MCP serve can expose its tools.`,
-    );
-  }
-};

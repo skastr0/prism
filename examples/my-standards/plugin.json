@@ -11,7 +11,7 @@
       "cursor",
       "factory-droid"
     ],
-    "agents": ["claude-code", "opencode"],
+    "agents": ["claude-code", "opencode", "factory-droid"],
     "skills": ["coding-harness", "claw-harness"]
   }
 }

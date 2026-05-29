@@ -49,6 +49,10 @@ import {
   executeLowering as executeGrokLowering,
   planLowering as planGrokLowering,
 } from "./lowerers/grok.js";
+import {
+  executeLowering as executeFactoryDroidLowering,
+  planLowering as planFactoryDroidLowering,
+} from "./lowerers/factory-droid.js";
 import type { ExecuteLoweringOptions } from "./lowerers/shared.js";
 import {
   InvalidTargetScopeError,
@@ -80,6 +84,7 @@ import {
   isStreamableHttpMcpRuntime,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
+import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
 import { ensureMcpToken } from "../mcp/token-store.js";
 
 interface LowererModule {
@@ -174,6 +179,7 @@ const SUPPORTED_TARGETS = [
   "amp-code",
   "hermes",
   "grok",
+  "factory-droid",
 ] as const;
 
 const getLowerer = (target: string): LowererModule => {
@@ -213,6 +219,11 @@ const getLowerer = (target: string): LowererModule => {
         planLowering: planGrokLowering,
         executeLowering: executeGrokLowering,
       };
+    case "factory-droid":
+      return {
+        planLowering: planFactoryDroidLowering,
+        executeLowering: executeFactoryDroidLowering,
+      };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
   }
@@ -223,7 +234,9 @@ const pathSegments = (path: string): ReadonlyArray<string> =>
 
 const isAgentMarkdownTarget = (target: string, agentName: string): boolean =>
   basename(target) === `${agentName}.md` &&
-  pathSegments(dirname(target)).includes("agents");
+  ["agents", "droids"].some((segment) =>
+    pathSegments(dirname(target)).includes(segment),
+  );
 
 const collectCacheOutputs = (
   agentName: string,
@@ -573,13 +586,19 @@ const assertHttpMcpLifecycleGate = (options: {
   readonly targetId: HarnessId;
   readonly outputRoot: string;
   readonly mcpRuntimeRoot: string;
+  readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
   readonly operations: ReadonlyArray<LowerOperation>;
 }): Effect.Effect<void, CompileError> => {
+  const bindings = mcpBindingsForAgentsAndTools(
+    options.registry.pluginName,
+    options.artifacts.tools,
+    options.agents,
+  );
   if (
     options.compileOptions.dryRun ||
     !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
-    options.artifacts.tools.length === 0
+    bindings.length === 0
   ) {
     return Effect.void;
   }
@@ -785,13 +804,20 @@ const selectTargetArtifacts = (
 const resolveCompileMcpBearerToken = (options: {
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
+  readonly agents: ReadonlyArray<ComposedAgent>;
+  readonly artifacts: TargetArtifacts;
   readonly runtimeRoot: string;
   readonly dryRun: boolean;
 }): Effect.Effect<string | undefined, CompileError> => {
+  const bindings = mcpBindingsForAgentsAndTools(
+    options.registry.pluginName,
+    options.artifacts.tools,
+    options.agents,
+  );
   if (
     options.dryRun ||
     !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
-    options.registry.tools.size === 0
+    bindings.length === 0
   ) {
     return Effect.succeed(undefined);
   }
@@ -818,6 +844,7 @@ const resolveCompileMcpBearerToken = (options: {
 };
 
 const planTargetLowering = (options: {
+  readonly targetId: HarnessId;
   readonly lowerer: LowererModule;
   readonly surfaces: TargetSurfaceSelection;
   readonly agents: ReadonlyArray<ComposedAgent>;
@@ -829,7 +856,7 @@ const planTargetLowering = (options: {
   readonly mcpRuntimeRoot: string;
   readonly mcpBearerToken?: string;
 }): Effect.Effect<LowerOperation[], CompileError> => {
-  if (!options.surfaces.hasLowerableArtifacts) {
+  if (!options.surfaces.hasLowerableArtifacts && options.targetId !== "factory-droid") {
     return Effect.succeed([]);
   }
 
@@ -949,10 +976,13 @@ export const compilePluginForTarget = (
     const mcpBearerToken = yield* resolveCompileMcpBearerToken({
       registry,
       targetId: context.targetId,
+      agents: composedForLowering,
+      artifacts,
       runtimeRoot: context.mcpRuntimeRoot,
       dryRun: options.dryRun,
     });
     const allOps = yield* planTargetLowering({
+      targetId: context.targetId,
       lowerer: context.lowerer,
       surfaces,
       agents: composedForLowering,
@@ -970,6 +1000,7 @@ export const compilePluginForTarget = (
       targetId: context.targetId,
       outputRoot: context.outputRoot,
       mcpRuntimeRoot: context.mcpRuntimeRoot,
+      agents: composedForLowering,
       artifacts,
       operations: allOps,
     });

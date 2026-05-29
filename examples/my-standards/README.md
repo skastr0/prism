@@ -20,7 +20,7 @@ An example plugin that demonstrates shared artifact targeting from `plugin.json`
   "targets": {
     "rules": ["coding-harness"],
     "commands": ["claude-code", "opencode", "codex-cli", "cursor", "factory-droid"],
-    "agents": ["claude-code", "opencode"],
+    "agents": ["claude-code", "opencode", "factory-droid"],
     "skills": ["coding-harness", "claw-harness"]
   }
 }

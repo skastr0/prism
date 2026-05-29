@@ -51,6 +51,7 @@ const COMPILE_SUPPORTED_HARNESSES = [
   "amp-code",
   "hermes",
   "grok",
+  "factory-droid",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {

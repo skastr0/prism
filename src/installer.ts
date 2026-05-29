@@ -3,7 +3,7 @@
  */
 
 import { basename, join } from "node:path";
-import { getHarness } from "./harnesses.js";
+import { getHarness, resolveHarnessRoot } from "./harnesses.js";
 import {
   copyFile,
   exists,
@@ -18,10 +18,12 @@ import {
   type ArtifactSourceFile,
   collectArtifactSourceFiles,
   getHarnessFrontmatter,
+  manifestHasCompileTargets,
   manifestTargetsArtifact,
   parseMarkdownFile,
   readManifest,
   reconstructMarkdown,
+  resolveManifestTargets,
   validateSkill,
 } from "./manifest.js";
 import type {
@@ -32,11 +34,14 @@ import type {
   InstallResult,
   ManagedFileOperationMetadata,
   HarnessScope,
+  PluginTargetId,
 } from "./types.js";
 import { computeContentHash } from "./content-hash.js";
 import {
   type HarnessLedger,
   type ManagedLedgerEntry,
+  hasOtherManagedCompileOwners,
+  isSharedMcpRuntimeServerPath,
   managedEntryId,
   readHarnessLedger,
   removeLedgerEntries,
@@ -55,6 +60,7 @@ interface InstallPlanningContext {
   readonly ledger: HarnessLedger;
   readonly desiredEntryIds: Set<string>;
   readonly targetRoots: Set<string>;
+  readonly pruneCompileOutputs: boolean;
   readonly overwrite: boolean;
 }
 
@@ -70,6 +76,51 @@ const shouldPlanFileRouterRules = (
   (harness.rulesFile !== null || harness.rulesDir !== null) &&
   !rulesAreCompileManaged(harness.id) &&
   manifestTargetsArtifact(manifest, "rules", harness.id);
+
+const shouldPlanFileRouterSkills = (
+  manifest: Awaited<ReturnType<typeof readManifest>>,
+  harnessId: HarnessId,
+): boolean =>
+  manifestTargetsArtifact(manifest, "skills", harnessId) &&
+  !compileBundleOwnsPluginSkills(manifest, harnessId);
+
+const normalizeTargetRoot = (root: string): string => expandPath(root);
+
+const manifestTargetsAnyArtifact = (
+  manifest: Awaited<ReturnType<typeof readManifest>>,
+  artifact: string,
+  harnessId: HarnessId,
+): boolean => {
+  const targets = (manifest.targets as Record<string, readonly PluginTargetId[] | undefined>)[artifact];
+  return resolveManifestTargets(targets ?? []).includes(harnessId);
+};
+
+const hasOutputProducingCompileTargets = (
+  manifest: Awaited<ReturnType<typeof readManifest>>,
+  harnessId: HarnessId,
+): boolean => {
+  if (!manifestHasCompileTargets(manifest, harnessId)) return false;
+  if (
+    ["agents", "orbits", "tools", "hooks"].some((artifact) =>
+      manifestTargetsAnyArtifact(manifest, artifact, harnessId)
+    )
+  ) {
+    return true;
+  }
+  if (harnessId === "antigravity-cli" && manifestTargetsArtifact(manifest, "rules", harnessId)) {
+    return true;
+  }
+  return false;
+};
+
+const compileBundleOwnsPluginSkills = (
+  manifest: Awaited<ReturnType<typeof readManifest>>,
+  harnessId: HarnessId,
+): boolean =>
+  harnessId === "factory-droid" &&
+  ["agents", "tools", "hooks"].some((artifact) =>
+    manifestTargetsAnyArtifact(manifest, artifact, harnessId)
+  );
 
 interface ManagedOutputInput {
   readonly artifact: InstallArtifact;
@@ -164,6 +215,10 @@ export async function planInstallation(
     const harness = getHarness(harnessId);
     const ledger = await readHarnessLedger(harnessId);
     const desiredEntryIds = new Set<string>();
+    const projectRoot = options.projectPath ? expandPath(options.projectPath) : undefined;
+    const projectHarnessRoot = options.projectPath
+      ? resolveHarnessRoot(harness, "project", options.projectPath)
+      : null;
     const context: InstallPlanningContext = {
       pluginPath,
       pluginName: manifest.name,
@@ -172,9 +227,11 @@ export async function planInstallation(
       ledger,
       desiredEntryIds,
       targetRoots: new Set([
-        expandPath(harness.globalConfigPath),
-        ...(options.projectPath ? [expandPath(options.projectPath)] : []),
+        normalizeTargetRoot(harness.globalConfigPath),
+        ...(projectRoot ? [normalizeTargetRoot(projectRoot)] : []),
+        ...(projectHarnessRoot ? [normalizeTargetRoot(projectHarnessRoot)] : []),
       ]),
+      pruneCompileOutputs: !hasOutputProducingCompileTargets(manifest, harnessId),
       overwrite: options.overwrite,
     };
 
@@ -214,7 +271,7 @@ export async function planInstallation(
     if (
       harness.supportsSkills &&
       harness.skillsDir &&
-      manifestTargetsArtifact(manifest, "skills", harnessId)
+      shouldPlanFileRouterSkills(manifest, harnessId)
     ) {
       const skillOps = await planSkillsInstallation(pluginPath, harness, context);
       operations.push(...skillOps);
@@ -854,6 +911,18 @@ async function planSkillsInstallation(
 
 const installArtifacts = new Set(["rules", "command", "skill", "config"]);
 
+const shouldPlanStaleManagedOperation = (
+  context: InstallPlanningContext,
+  entry: ManagedLedgerEntry,
+): boolean => {
+  if (installArtifacts.has(entry.artifact)) return true;
+  return (
+    context.pruneCompileOutputs &&
+    entry.artifact === "compile" &&
+    (entry.kind === "file" || entry.kind === "directory")
+  );
+};
+
 const metadataFromLedgerEntry = (
   entry: ManagedLedgerEntry,
 ): ManagedFileOperationMetadata => ({
@@ -875,8 +944,8 @@ async function planStaleManagedOperations(
 
   for (const entry of context.ledger.entries) {
     if (entry.pluginName !== context.pluginName) continue;
-    if (!context.targetRoots.has(entry.root)) continue;
-    if (!installArtifacts.has(entry.artifact)) continue;
+    if (!context.targetRoots.has(normalizeTargetRoot(entry.root))) continue;
+    if (!shouldPlanStaleManagedOperation(context, entry)) continue;
     if (context.desiredEntryIds.has(entry.id)) continue;
 
     const managed = metadataFromLedgerEntry(entry);
@@ -914,12 +983,38 @@ async function planStaleManagedOperations(
       continue;
     }
 
+    if (entry.kind === "directory") {
+      if (!(await exists(entry.targetPath))) {
+        operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
+        continue;
+      }
+      operations.push(baseOperation);
+      continue;
+    }
+
     const currentHash = await readTargetHash(entry.targetPath);
     if (!currentHash) {
       operations.push({ ...baseOperation, reason: "Stale ledger entry; target missing" });
       continue;
     }
     if (entry.kind === "file" && currentHash !== entry.contentHash) {
+      if (
+        entry.artifact === "compile" &&
+        isSharedMcpRuntimeServerPath(entry.targetPath) &&
+        await hasOtherManagedCompileOwners({
+          currentHarness: context.harness.id,
+          currentEntryId: entry.id,
+          pluginName: entry.pluginName,
+          targetPath: entry.targetPath,
+          kind: "file",
+        })
+      ) {
+        operations.push({
+          ...baseOperation,
+          reason: "Stale shared compile output still owned by another harness",
+        });
+        continue;
+      }
       operations.push({
         ...baseOperation,
         type: "drift",
@@ -1053,10 +1148,27 @@ const executePlannedOperation = async (
     throw new Error(op.reason ?? "Managed target drift detected");
   }
 
+  if (await shouldForgetSharedCompilePrune(op)) {
+    await ledgers.updateForOperation(op);
+    return null;
+  }
+
   const backupPath = await backupBeforeManagedMutation(op);
   await executeWriteOrPrune(op);
   await ledgers.updateForOperation(op);
   return backupPath;
+};
+
+const shouldForgetSharedCompilePrune = async (op: FileOperation): Promise<boolean> => {
+  if (op.type !== "prune" || op.artifact !== "compile" || !op.managed) return false;
+  if (op.managed.kind !== "file" || !isSharedMcpRuntimeServerPath(op.target)) return false;
+  return hasOtherManagedCompileOwners({
+    currentHarness: op.harness,
+    currentEntryId: op.managed.entryId,
+    pluginName: op.managed.pluginName,
+    targetPath: op.target,
+    kind: "file",
+  });
 };
 
 const executeWriteOrPrune = async (op: FileOperation): Promise<void> => {

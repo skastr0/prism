@@ -52,6 +52,12 @@ const CAPABILITIES: Record<string, CompileTargetCapabilities> = {
     hooks: "supported",
     skillPermissions: "supported",
   },
+  "factory-droid": {
+    agents: "supported",
+    generatedCanonicalTools: "executable",
+    hooks: "supported",
+    skillPermissions: "unsupported",
+  },
 };
 
 export const getCompileTargetCapabilities = (

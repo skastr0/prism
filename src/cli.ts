@@ -205,7 +205,7 @@ program
   .description("Compile agent language sources into per-harness artifacts")
   .option(
     "--harness <id>",
-    "Target harness ID ('opencode', 'claude-code', 'antigravity-cli', 'codex-cli', 'amp-code', 'hermes', or 'grok')",
+    "Target harness ID ('opencode', 'claude-code', 'antigravity-cli', 'codex-cli', 'amp-code', 'hermes', 'grok', or 'factory-droid')",
     "opencode"
   )
   .option(

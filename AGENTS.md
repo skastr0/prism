@@ -27,13 +27,15 @@ A unified plugin distribution system for AI coding harnesses.
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
-| Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | `~/.factory/droids/` | `~/.factory/skills/` |
+| Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
 Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
 
 Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
+
+Factory Droid is part of the `coding-harness` preset with full compile-phase plugin-bundle support. Install-phase rules append/copy into `.factory` roots and install-phase commands still write `commands/`. Skills-only plugins still install shared skills directly into `.factory/skills/`; when a plugin also targets Factory compile surfaces, targeted skills are bundled into `<factory-root>/plugins/prism-generated-<source-plugin>/skills/` instead to avoid double-loading Prism-owned skill files. Compile-phase agents, orbit skills, hooks, and canonical tools lower into the same generated bundle using Factory's native plugin layout: `.factory-plugin/plugin.json`, root `droids/`, `skills/`, `mcp.json`, and `hooks/hooks.json`. Prism does not patch `~/.factory/settings.json` for generated plugin bundles.
 
 ## Tech Stack
 
@@ -548,11 +550,11 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "grok"],
-    "orbits": ["opencode", "claude-code", "grok"],
-    "tools": ["opencode", "grok"],
-    "toolspaces": ["opencode", "claude-code", "grok"],
-    "modelspaces": ["opencode", "claude-code", "grok"]
+    "agents": ["opencode", "claude-code", "grok", "factory-droid"],
+    "orbits": ["opencode", "claude-code", "grok", "factory-droid"],
+    "tools": ["opencode", "grok", "factory-droid"],
+    "toolspaces": ["opencode", "claude-code", "grok", "factory-droid"],
+    "modelspaces": ["opencode", "claude-code", "grok", "factory-droid"]
   }
 }
 ```
@@ -561,7 +563,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
 - `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode and Grok; tools-only plugins may target Hermes for generated MCP exposure
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Grok, and Factory Droid; tools-only plugins may target Hermes for generated MCP exposure
 
 ### CLI
 
@@ -577,6 +579,9 @@ prism compile ./my-plugin --harness hermes
 
 # Compile Grok agents, skills, hooks, and canonical tools into a generated Grok plugin bundle
 prism compile ./my-plugin --harness grok
+
+# Compile Factory Droid agents, skills, hooks, and canonical tools into a generated Factory plugin bundle
+prism compile ./my-plugin --harness factory-droid
 
 # Compile into a project-local OpenCode root for a business/app repo
 prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
@@ -618,6 +623,16 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server plus plugin-local `.mcp.json`
 - Emits `hooks/hooks.json` and bundled hook wrappers using Grok hook event names and Grok deny output for blocking `tool.before` hooks
 - Does not install commands or patch `config.toml` in PR1
+
+#### Factory Droid
+
+- Writes one generated plugin bundle per compiled source plugin under `<factory-root>/plugins/prism-generated-<source-plugin>/`
+- Writes `.factory-plugin/plugin.json` plus compiled droids into the generated plugin's `droids/<name>.md` with Factory frontmatter overrides from `targets.factory-droid`; known Factory tool categories are expanded to concrete tool arrays before generated MCP tool names are added
+- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server plus plugin-local `mcp.json`; generated tools use Factory's `mcp__<server>__<tool>` tool-name pattern in droid frontmatter and hook matchers
+- Emits `hooks/hooks.json` and bundled hook wrappers using Factory hook event names and `${DROID_PLUGIN_ROOT}` wrapper commands
+- Bundles targeted skills and direct `skillRef(...)` dependencies, but fails closed for permission-only skill visibility because Factory's documented droid frontmatter does not expose per-droid skill allowlists
+- Does not install compile-owned commands or patch `settings.json`; install-phase rules and commands retain direct `.factory/` behavior, while skills-only plugins still install to `.factory/skills/` and compiled Factory bundles carry targeted skills inside the generated plugin to avoid double-loading Prism-owned skill files
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 
@@ -699,7 +714,7 @@ Install targeting lives in `plugin.json` and nowhere else.
   "targets": {
     "rules": ["coding-harness"],
     "commands": ["claude-code", "opencode", "codex-cli", "cursor", "factory-droid"],
-    "agents": ["claude-code", "opencode"],
+    "agents": ["claude-code", "opencode", "factory-droid"],
     "skills": ["coding-harness", "claw-harness"],
     "skillspaces": ["opencode", "claude-code", "grok"]
   }
@@ -711,7 +726,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 - `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `amp-code`, `cursor`, `factory-droid`, `grok`
 - `claw-harness` → `openclaw`, `hermes`
 
-Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism.
+Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Factory Droid remains included for install-phase commands because Droid still supports legacy `.factory/commands/` files.
 
 ### Rules to remember
 

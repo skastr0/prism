@@ -148,7 +148,7 @@ export interface FileOperation {
   source: string;
   target: string;
   harness: HarnessId;
-  artifact: "rules" | "command" | "agent" | "tool" | "skill" | "config";
+  artifact: "rules" | "command" | "agent" | "tool" | "skill" | "config" | "compile";
   reason?: string; // For skips or special handling
   managed?: ManagedFileOperationMetadata;
 }

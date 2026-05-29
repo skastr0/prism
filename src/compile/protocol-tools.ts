@@ -49,6 +49,7 @@ type MaterializeTraitToolsOptions = {
   readonly trait: Trait;
   readonly binding: NormalizedTraitBinding;
   readonly registry: PluginRegistry;
+  readonly refRegistry?: PluginRegistry;
 };
 
 type ResolvedToolRef = {
@@ -270,7 +271,7 @@ const resolveTraitToolAttachment = (
   logicalName: string,
   attachment: NormalizedTraitToolAttachment,
 ): ResolvedToolRef | ProtocolSurfaceError => {
-  const resolved = resolveToolRef(attachment.ref, options.registry);
+  const resolved = resolveToolRef(attachment.ref, options.refRegistry ?? options.registry);
   if (resolved) return resolved;
 
   return protocolError(

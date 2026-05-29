@@ -131,6 +131,26 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     alternativeRulesFiles: ["AGENTS.md", "ANTIGRAVITY.md"],
   },
 
+  "kimi-code": {
+    id: "kimi-code",
+    name: "Kimi Code",
+    globalConfigPath: "~/.kimi-code/",
+    projectConfigPath: null,
+    rulesFile: null,
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: "skills/",
+    configFile: null,
+    configFormat: "json",
+    supportsTools: false,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: true,
+    supportsMCP: false,
+  },
+
   "amp-code": {
     id: "amp-code",
     name: "Amp Code",
@@ -192,6 +212,26 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsSkills: true,
     supportsMCP: true,
     alternativeRulesFiles: [".droid.yaml", "CLAUDE.md"],
+  },
+
+  pi: {
+    id: "pi",
+    name: "Pi",
+    globalConfigPath: "~/.pi/agent/",
+    projectConfigPath: null,
+    rulesFile: null,
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: "skills/",
+    configFile: null,
+    configFormat: "json",
+    supportsTools: false,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: true,
+    supportsMCP: false,
   },
 
   grok: {

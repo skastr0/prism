@@ -82,6 +82,28 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   expect(LOWERER_CAPABILITIES["amp-code"].surfaces.generatedTools.kind).toBe(
     "native-plugin-api",
   );
+  expect(LOWERER_CAPABILITIES["kimi-code"].compile).toEqual({
+    agents: "unsupported",
+    generatedCanonicalTools: "unsupported",
+    hooks: "unsupported",
+    skillPermissions: "unsupported",
+  });
+  expect(LOWERER_CAPABILITIES["kimi-code"].surfaces.skills).toMatchObject({
+    kind: "direct-file",
+    path: "<kimi-root>/skills/",
+  });
+  expect(LOWERER_CAPABILITIES.pi.compile).toEqual({
+    agents: "unsupported",
+    generatedCanonicalTools: "unsupported",
+    hooks: "unsupported",
+    skillPermissions: "unsupported",
+  });
+  expect(LOWERER_CAPABILITIES.pi.surfaces.pluginBundle.kind).toBe("unsupported");
+  expect(LOWERER_CAPABILITIES.pi.surfaces.skills).toMatchObject({
+    kind: "direct-file",
+    path: "<pi-root>/skills/",
+  });
+  expect(LOWERER_CAPABILITIES.pi.surfaces.commands.kind).toBe("unsupported");
   expect(LOWERER_CAPABILITIES.hermes.surfaces.generatedTools.kind).toBe(
     "generated-mcp",
   );

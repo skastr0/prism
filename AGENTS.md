@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Amp Code, Grok Build, and Factory Droid, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Kimi Code, Amp Code, Grok Build, Factory Droid, and Pi, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -24,10 +24,12 @@ A unified plugin distribution system for AI coding harnesses.
 | Hermes Agent | - | - | - | `~/.hermes/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
 | Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | `~/.gemini/antigravity-cli/skills/` |
+| Kimi Code | - | - | - | `~/.kimi-code/skills/` |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
+| Pi | - | - | - | `~/.pi/agent/skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
@@ -36,6 +38,10 @@ Hermes first-party support is skills plus generated MCP tools. Shared skill file
 Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
 
 Factory Droid is part of the `coding-harness` preset with full compile-phase plugin-bundle support. Install-phase rules append/copy into `.factory` roots and install-phase commands still write `commands/`. Skills-only plugins still install shared skills directly into `.factory/skills/`; when a plugin also targets Factory compile surfaces, targeted skills are bundled into `<factory-root>/plugins/prism-generated-<source-plugin>/skills/` instead to avoid double-loading Prism-owned skill files. Compile-phase agents, orbit skills, hooks, and canonical tools lower into the same generated bundle using Factory's native plugin layout: `.factory-plugin/plugin.json`, root `droids/`, `skills/`, `mcp.json`, and `hooks/hooks.json`. Prism does not patch `~/.factory/settings.json` for generated plugin bundles.
+
+Kimi Code is part of the `coding-harness` preset for install-phase skills only. The active Kimi Code target uses the current `~/.kimi-code` home; Prism does not retain legacy `~/.kimi` support as a compatibility fork. Prism does not manage Kimi rules, commands, agents, tools, hooks, MCP config, or plugin bundles in this base target.
+
+Pi is part of the `coding-harness` preset for install-phase skills only. Prism does not manage Pi rules, prompt-template commands, agents, tools, hooks, MCP config, extensions, or packages in this base target.
 
 ## Tech Stack
 
@@ -723,7 +729,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `amp-code`, `cursor`, `factory-droid`, `grok`
+- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `grok`
 - `claw-harness` → `openclaw`, `hermes`
 
 Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Factory Droid remains included for install-phase commands because Droid still supports legacy `.factory/commands/` files.

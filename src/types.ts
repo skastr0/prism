@@ -10,9 +10,11 @@ export type HarnessId =
   | "hermes"
   | "codex-cli"
   | "antigravity-cli"
+  | "kimi-code"
   | "amp-code"
   | "cursor"
   | "factory-droid"
+  | "pi"
   | "grok";
 
 export const HARNESS_SCOPES = ["global", "project"] as const;
@@ -254,9 +256,11 @@ export interface UnifiedFrontmatter {
   hermes?: Record<string, unknown>;
   "codex-cli"?: CodexCliFrontmatter;
   "antigravity-cli"?: Record<string, unknown>;
+  "kimi-code"?: Record<string, unknown>;
   "amp-code"?: Record<string, unknown>;
   cursor?: CursorFrontmatter;
   "factory-droid"?: FactoryDroidFrontmatter;
+  pi?: Record<string, unknown>;
   grok?: Record<string, unknown>;
 }
 

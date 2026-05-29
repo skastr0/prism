@@ -125,6 +125,46 @@ test("planInstallation keeps Factory skills direct with source-only compile targ
   expect(operations.some((operation) => operation.target.includes(join(".factory", "skills")))).toBe(true);
 });
 
+test("planInstallation routes Kimi and Pi base support to skills only", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "skills-only-demo",
+      version: "0.1.0",
+      targets: { skills: ["kimi-code", "pi"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginPath, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["kimi-code", "pi"],
+    overwrite: false,
+    dryRun: true,
+  });
+
+  expect(operations).toHaveLength(2);
+  expect(operations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        harness: "kimi-code",
+        artifact: "skill",
+        target: expect.stringContaining(join(".kimi-code", "skills", "testing", "SKILL.md")),
+      }),
+      expect.objectContaining({
+        harness: "pi",
+        artifact: "skill",
+        target: expect.stringContaining(join(".pi", "agent", "skills", "testing", "SKILL.md")),
+      }),
+    ]),
+  );
+});
+
 test("planInstallation keeps Factory skills direct with orbit-only compile targets", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");

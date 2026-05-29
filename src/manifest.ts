@@ -35,9 +35,11 @@ const TARGET_PRESETS = {
     "opencode",
     "codex-cli",
     "antigravity-cli",
+    "kimi-code",
     "amp-code",
     "cursor",
     "factory-droid",
+    "pi",
     "grok",
   ],
   "claw-harness": ["openclaw", "hermes"],
@@ -835,9 +837,11 @@ export function getHarnessFrontmatter(
     "hermes",
     "codex-cli",
     "antigravity-cli",
+    "kimi-code",
     "amp-code",
     "cursor",
     "factory-droid",
+    "pi",
     "grok",
   ];
 

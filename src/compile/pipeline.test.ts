@@ -1316,8 +1316,10 @@ test("claw-harness preset targets OpenClaw and Hermes", () => {
   expect(resolveManifestTargets(["claw-harness"])).toEqual(["openclaw", "hermes"]);
 });
 
-test("coding-harness preset includes Grok", () => {
+test("coding-harness preset includes admitted coding harnesses", () => {
   expect(resolveManifestTargets(["coding-harness"])).toContain("grok");
+  expect(resolveManifestTargets(["coding-harness"])).toContain("kimi-code");
+  expect(resolveManifestTargets(["coding-harness"])).toContain("pi");
 });
 
 test("artifact target resolution filters unsupported preset members", async () => {
@@ -1344,10 +1346,18 @@ test("artifact target resolution filters unsupported preset members", async () =
 
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
+  expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("kimi-code");
+  expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("antigravity-cli");
+  expect(getManifestArtifactTargets(manifest, "rules")).not.toContain("kimi-code");
+  expect(getManifestArtifactTargets(manifest, "rules")).not.toContain("pi");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("grok");
+  expect(getManifestArtifactTargets(manifest, "skills")).toContain("kimi-code");
+  expect(getManifestArtifactTargets(manifest, "skills")).toContain("pi");
   expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
+  expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(false);
+  expect(manifestHasCompileTargets(manifest, "pi")).toBe(false);
 });
 
 test("direct unsupported Grok command targets are rejected", async () => {
@@ -1370,6 +1380,33 @@ test("direct unsupported Grok command targets are rejected", async () => {
 
   await expect(readManifest(pluginRoot)).rejects.toThrow(
     "targets.commands resolves to unsupported harnesses for commands: grok (Grok Build)",
+  );
+});
+
+test("direct non-skill Kimi and Pi targets are rejected", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "skills-only-target-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "skills-only-target-demo",
+        version: "0.1.0",
+        targets: {
+          rules: ["kimi-code"],
+          commands: ["pi"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await expect(readManifest(pluginRoot)).rejects.toThrow(
+    "targets.rules resolves to unsupported harnesses for rules: kimi-code (Kimi Code)",
+  );
+  await expect(readManifest(pluginRoot)).rejects.toThrow(
+    "targets.commands resolves to unsupported harnesses for commands: pi (Pi)",
   );
 });
 

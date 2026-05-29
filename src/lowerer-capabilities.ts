@@ -321,6 +321,30 @@ export const LOWERER_CAPABILITIES = {
       },
     },
   },
+  "kimi-code": {
+    harness: "kimi-code",
+    family: "coding-harness",
+    compile: compileUnsupported,
+    surfaces: {
+      pluginBundle: unsupported("Prism does not manage Kimi Code plugin bundles in the skills-only base target."),
+      rules: unsupported("Kimi Code rules are not managed in the skills-only base target."),
+      commands: unsupported("Kimi Code command-like workflows should be represented as skills for now."),
+      agents: unsupported("Kimi Code subagents are runtime dispatches; Prism does not lower custom Kimi agent definitions yet."),
+      skills: {
+        kind: "direct-file",
+        path: "<kimi-root>/skills/",
+        summary: "Install writes Agent Skill folders into Kimi's user skill root.",
+      },
+      generatedTools: unsupported("Prism does not manage Kimi Code tools in the skills-only base target."),
+      hooks: unsupported("Prism does not manage Kimi Code hooks in the skills-only base target."),
+      mcpConfig: unsupported("Prism does not manage Kimi Code MCP config in the skills-only base target."),
+      agentConfig: unsupported("No Prism-managed Kimi agent config surface exists yet."),
+    },
+    notes: [
+      "The active Kimi Code target uses ~/.kimi-code; legacy ~/.kimi paths are not a Prism compatibility target.",
+      "Kimi Code base support is intentionally skills-only.",
+    ],
+  },
   "amp-code": {
     harness: "amp-code",
     family: "coding-harness",
@@ -439,6 +463,29 @@ export const LOWERER_CAPABILITIES = {
         summary: "Droid settings live in generated frontmatter.",
       },
     },
+  },
+  pi: {
+    harness: "pi",
+    family: "coding-harness",
+    compile: compileUnsupported,
+    surfaces: {
+      pluginBundle: unsupported("Prism does not manage Pi extensions or packages in the skills-only base target."),
+      rules: unsupported("Pi context files are not managed in the skills-only base target."),
+      commands: unsupported("Pi prompt templates and extension commands are not managed in the skills-only base target."),
+      agents: unsupported("Pi core does not expose a first-party custom-agent file surface; subagent files are extension/package-owned."),
+      skills: {
+        kind: "direct-file",
+        path: "<pi-root>/skills/",
+        summary: "Install writes Agent Skill folders into Pi's user skill root.",
+      },
+      generatedTools: unsupported("Prism does not manage Pi tools in the skills-only base target."),
+      hooks: unsupported("Prism does not manage Pi hooks in the skills-only base target."),
+      mcpConfig: unsupported("Prism does not manage Pi MCP config in the skills-only base target."),
+      agentConfig: unsupported("No Prism-managed Pi agent config surface exists yet."),
+    },
+    notes: [
+      "Pi base support is intentionally skills-only.",
+    ],
   },
   grok: {
     harness: "grok",

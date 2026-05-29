@@ -38,6 +38,7 @@ import {
   executeStandardLowering,
   nativeHookEventName,
   normalizeBundleSegment,
+  pushConfigPatchOperation as pushConfigPatch,
   pushWriteOperation as pushWrite,
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
@@ -716,11 +717,10 @@ const planConfigWrite = async (
   // The marker block is now hooks-only.
   const hookBlock = renderManagedConfigBlock({ root: input.target.root, hooks });
 
-  await pushWrite(
+  await pushConfigPatch(
     operations,
     configTarget,
     replaceManagedBlock(afterMcpUpdate, input.target.sourcePluginName, hookBlock),
-    "write-plugin-file",
     { mode: mcp.globalToolNames.length > 0 && mcp.mcpBearerToken ? 0o600 : undefined },
   );
 };

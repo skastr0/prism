@@ -3209,11 +3209,11 @@ export default defineTool({
 
   const configWrite = result.operations.find(
     (operation) =>
-      operation.kind === "write-plugin-file" &&
+      operation.kind === "patch-config" &&
       operation.target === join(hermesRoot, "config.yaml"),
   );
-  expect(configWrite?.kind).toBe("write-plugin-file");
-  if (configWrite?.kind === "write-plugin-file") {
+  expect(configWrite?.kind).toBe("patch-config");
+  if (configWrite?.kind === "patch-config") {
     const expectedBunCommand = /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath)
       ? process.execPath
       : "bun";
@@ -3310,11 +3310,11 @@ export default defineTool({
 
   const configWrite = result.operations.find(
     (operation) =>
-      operation.kind === "write-plugin-file" &&
+      operation.kind === "patch-config" &&
       operation.target === join(hermesRoot, "config.yaml"),
   );
-  expect(configWrite?.kind).toBe("write-plugin-file");
-  if (configWrite?.kind === "write-plugin-file") {
+  expect(configWrite?.kind).toBe("patch-config");
+  if (configWrite?.kind === "patch-config") {
     expect(configWrite.content).toContain("prism-generated-hermes-http-demo:");
     expect(configWrite.content).toContain('url: "http://127.0.0.1:38463/mcp"');
     expect(configWrite.content).toContain("connect_timeout: 15");
@@ -3357,9 +3357,9 @@ test("compilePluginForTarget serves Hermes HTTP MCP by default before config wri
           operation,
         ): operation is Extract<
           (typeof result.operations)[number],
-          { readonly kind: "write-plugin-file" }
+          { readonly kind: "patch-config" }
         > =>
-          operation.kind === "write-plugin-file" &&
+          operation.kind === "patch-config" &&
           operation.target === join(hermesRoot, "config.yaml"),
       );
       expect(configWrite?.mode).toBe(0o600);

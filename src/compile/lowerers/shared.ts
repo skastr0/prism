@@ -380,16 +380,25 @@ type LowerWriteOperation = Extract<
   { readonly kind: "write-md" | "write-plugin-file" }
 >;
 
+type LowerConfigPatchOperation = Extract<LowerOperation, { readonly kind: "patch-config" }>;
+
 type LowerPruneOperation = Extract<LowerOperation, { readonly kind: "prune-plugin-path" }>;
 
 const isLowerWriteOperation = (operation: LowerOperation): operation is LowerWriteOperation =>
   operation.kind === "write-md" || operation.kind === "write-plugin-file";
+
+const isLowerConfigPatchOperation = (
+  operation: LowerOperation,
+): operation is LowerConfigPatchOperation => operation.kind === "patch-config";
 
 const executeLoweringOperation = async (
   operation: LowerOperation,
   options: ExecuteLoweringOptions,
   ledger: HarnessLedger | undefined,
 ): Promise<string | null> => {
+  if (isLowerConfigPatchOperation(operation)) {
+    return executeLoweringConfigPatch(operation, options, ledger);
+  }
   if (operation.reason === "unchanged") {
     await applyUnchangedMode(operation);
     return null;
@@ -404,7 +413,10 @@ const executeLoweringOperation = async (
 };
 
 const applyUnchangedMode = async (operation: LowerOperation): Promise<void> => {
-  if (isLowerWriteOperation(operation) && operation.mode !== undefined) {
+  if (
+    (isLowerWriteOperation(operation) || isLowerConfigPatchOperation(operation)) &&
+    operation.mode !== undefined
+  ) {
     await chmodFile(operation.target, operation.mode);
   }
 };
@@ -421,6 +433,29 @@ const executeLoweringWrite = async (
   await writeFile(operation.target, operation.content, { mode: operation.mode });
   if (ledger && options.target) {
     upsertLoweringEntry(ledger, options.target, operation.target, "file", operation.content);
+  }
+  return backup;
+};
+
+const executeLoweringConfigPatch = async (
+  operation: LowerConfigPatchOperation,
+  options: ExecuteLoweringOptions,
+  ledger: HarnessLedger | undefined,
+): Promise<string | null> => {
+  if (operation.reason === "unchanged") {
+    await applyUnchangedMode(operation);
+    if (ledger && options.target) {
+      removeLoweringEntry(ledger, options.target, operation.target, "file");
+      upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
+    }
+    return null;
+  }
+
+  const backup = await backupLoweringTarget(operation.target, options, "patch");
+  await writeFile(operation.target, operation.content, { mode: operation.mode });
+  if (ledger && options.target) {
+    removeLoweringEntry(ledger, options.target, operation.target, "file");
+    upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
   }
   return backup;
 };
@@ -525,6 +560,7 @@ export const recordLoweringConfigPatch = async (
 ): Promise<void> => {
   if (!options.target) return;
   const ledger = await readHarnessLedger(options.target.harness);
+  removeLoweringEntry(ledger, options.target, targetPath, "file");
   upsertLoweringEntry(ledger, options.target, targetPath, "config", content);
   await writeHarnessLedger(ledger);
 };
@@ -551,6 +587,21 @@ export const pushWriteOperation = async (
 ): Promise<void> => {
   operations.push({
     kind,
+    target,
+    content,
+    ...(options.mode !== undefined ? { mode: options.mode } : {}),
+    reason: await writeReason(target, content),
+  });
+};
+
+export const pushConfigPatchOperation = async (
+  operations: LowerOperation[],
+  target: string,
+  content: string,
+  options: LowerWriteOptions = {},
+): Promise<void> => {
+  operations.push({
+    kind: "patch-config",
     target,
     content,
     ...(options.mode !== undefined ? { mode: options.mode } : {}),

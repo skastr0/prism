@@ -281,6 +281,7 @@ export default defineTool({
   expect(bundle?.content).toContain("tools/list");
 
   const configToml = findContentOperation(operations, "config.toml");
+  expect(configToml?.kind).toBe("patch-config");
   expect(configToml?.content).toContain('model = "codex-default"');
   expect(configToml?.content).toContain("[features]\nhooks = true\nmodel_widget = true");
   expect(configToml?.content).not.toContain("codex_hooks");
@@ -431,6 +432,7 @@ export default defineTool({
   expect(agentToml?.mode).toBe(0o600);
 
   const configToml = findContentOperation(operations, "config.toml");
+  expect(configToml?.kind).toBe("patch-config");
   expect(configToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(configToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(configToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
@@ -526,5 +528,4 @@ enabled_tools = ["fresh_tool"]
 // because constructing a minimal valid registry for mcp-runtime is brittle.
 // The direct applyCodexMcpServerUpdate test above + the existing lowerer tests
 // provide good coverage of the structural path.)
-
 

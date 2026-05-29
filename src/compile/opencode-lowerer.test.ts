@@ -245,6 +245,133 @@ test("opencode executeLowering applies mixed operations and aggregates config pa
   );
 });
 
+test("executeStandardLowering backs up and records config patch operations", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const configTarget = join(targetRoot, "config.toml");
+
+  await executeStandardLowering(
+    [
+      {
+        kind: "write-plugin-file",
+        target: configTarget,
+        content: "old config\n",
+        reason: "new",
+      },
+    ],
+    {
+      dryRun: false,
+      target: {
+        harness: "codex-cli",
+        scope: "global",
+        root: targetRoot,
+        sourcePluginName: "config-patch-test",
+        sourcePluginVersion: "0.1.0",
+        sourcePluginPath: join(root, "plugin"),
+      },
+    },
+  );
+  await chmod(configTarget, 0o644);
+
+  const result = await executeStandardLowering(
+    [
+      {
+        kind: "patch-config",
+        target: configTarget,
+        content: "new config\n",
+        mode: 0o600,
+        reason: "changed",
+      },
+    ],
+    {
+      dryRun: false,
+      target: {
+        harness: "codex-cli",
+        scope: "global",
+        root: targetRoot,
+        sourcePluginName: "config-patch-test",
+        sourcePluginVersion: "0.1.0",
+        sourcePluginPath: join(root, "plugin"),
+      },
+    },
+  );
+
+  expect(result.backups).toHaveLength(1);
+  expect(result.backups[0]).toContain(join(process.env.PRISM_HOME!, "backups", "codex-cli"));
+  expect(await readFile(result.backups[0]!, "utf8")).toBe("old config\n");
+  expect(await pathExists(`${configTarget}.bak`)).toBe(false);
+  expect(await readFile(configTarget, "utf8")).toBe("new config\n");
+  expect((await stat(configTarget)).mode & 0o777).toBe(0o600);
+
+  const ledger = await readHarnessLedger("codex-cli");
+  expect(ledger.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ targetPath: configTarget, kind: "config" }),
+    ]),
+  );
+  expect(ledger.entries).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ targetPath: configTarget, kind: "file" }),
+    ]),
+  );
+});
+
+test("executeStandardLowering records unchanged config patches and migrates old file ownership", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".hermes");
+  const configTarget = join(targetRoot, "config.yaml");
+  const target = {
+    harness: "hermes" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "config-patch-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+
+  await executeStandardLowering(
+    [
+      {
+        kind: "write-plugin-file",
+        target: configTarget,
+        content: "stable config\n",
+        reason: "new",
+      },
+    ],
+    { dryRun: false, target },
+  );
+  await chmod(configTarget, 0o644);
+
+  const result = await executeStandardLowering(
+    [
+      {
+        kind: "patch-config",
+        target: configTarget,
+        content: "stable config\n",
+        mode: 0o600,
+        reason: "unchanged",
+      },
+    ],
+    { dryRun: false, target },
+  );
+
+  expect(result.backups).toEqual([]);
+  expect(await readFile(configTarget, "utf8")).toBe("stable config\n");
+  expect((await stat(configTarget)).mode & 0o777).toBe(0o600);
+
+  const ledger = await readHarnessLedger("hermes");
+  expect(ledger.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ targetPath: configTarget, kind: "config" }),
+    ]),
+  );
+  expect(ledger.entries).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ targetPath: configTarget, kind: "file" }),
+    ]),
+  );
+});
+
 test("opencode executeLowering skips unchanged operations without backups", async () => {
   const root = await createTempRoot();
   const mdTarget = join(root, "agents", "builder.md");
@@ -288,10 +415,13 @@ test("executeLowering applies explicit modes to unchanged write operations", asy
   const root = await createTempRoot();
   const opencodeTarget = join(root, "opencode", "secret.toml");
   const sharedTarget = join(root, "shared", "secret.json");
+  const configTarget = join(root, "shared", "config.toml");
   await writeText(opencodeTarget, "secret\n");
   await writeText(sharedTarget, "secret\n");
+  await writeText(configTarget, "secret\n");
   await chmod(opencodeTarget, 0o644);
   await chmod(sharedTarget, 0o644);
+  await chmod(configTarget, 0o644);
 
   const opencodeOperations: LowerOperation[] = [
     {
@@ -310,6 +440,13 @@ test("executeLowering applies explicit modes to unchanged write operations", asy
       mode: 0o600,
       reason: "unchanged",
     },
+    {
+      kind: "patch-config",
+      target: configTarget,
+      content: "secret\n",
+      mode: 0o600,
+      reason: "unchanged",
+    },
   ];
 
   await executeLowering(opencodeOperations, { dryRun: false });
@@ -317,6 +454,7 @@ test("executeLowering applies explicit modes to unchanged write operations", asy
 
   expect((await stat(opencodeTarget)).mode & 0o777).toBe(0o600);
   expect((await stat(sharedTarget)).mode & 0o777).toBe(0o600);
+  expect((await stat(configTarget)).mode & 0o777).toBe(0o600);
 });
 
 test("opencode executeLowering preserves plugin keys and deletes empty permission keys", async () => {

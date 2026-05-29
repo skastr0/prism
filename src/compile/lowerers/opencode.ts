@@ -214,6 +214,13 @@ export type LowerOperation =
       readonly reason: "new" | "changed" | "unchanged";
     }
   | {
+      readonly kind: "patch-config";
+      readonly target: string;
+      readonly content: string;
+      readonly mode?: number;
+      readonly reason: "new" | "changed" | "unchanged";
+    }
+  | {
       readonly kind: "patch-opencode-plugins";
       readonly target: string;
       readonly pluginEntry: string;
@@ -2257,6 +2264,8 @@ export const describeOperation = (op: LowerOperation): string => {
       return `${op.reason.padEnd(9)} json   ${op.target} [agent.${op.agentName}]`;
     case "write-plugin-file":
       return `${op.reason.padEnd(9)} plugin ${op.target}`;
+    case "patch-config":
+      return `${op.reason.padEnd(9)} config ${op.target}`;
     case "patch-opencode-plugins":
       return `${op.reason.padEnd(9)} json   ${op.target} [plugin ${op.desiredPresent ? "+=" : "-="} ${op.pluginEntry}]`;
     case "patch-opencode-permission":

@@ -28,6 +28,7 @@ import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
   prismOwnerMarker,
+  pushConfigPatchOperation as pushConfigPatch,
   pushWriteOperation as pushWrite,
   renderGeneratedOrbitSkill,
   yamlScalar,
@@ -373,7 +374,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     toolNames: mcp.toolNames,
   });
   if (nextConfig !== currentConfig || input.target.mcpBearerToken) {
-    await pushWrite(operations, configPath(input.target), nextConfig, "write-plugin-file", {
+    await pushConfigPatch(operations, configPath(input.target), nextConfig, {
       mode: input.target.mcpBearerToken ? 0o600 : undefined,
     });
   }

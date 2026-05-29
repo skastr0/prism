@@ -908,7 +908,7 @@ const registerPrismTools = (server: McpServer): void => {
           tool.run(args, {
             sessionID: extra?.sessionId,
             agent: "mcp-client",
-            signal: extra?.signal ?? signal,
+            signal,
           }),
           extra?.signal,
         );
@@ -990,6 +990,10 @@ const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configured
   ? configuredMaxRequestBytes
   : 1048576;
 const sessions = new Map<string, HttpSessionState>();
+let pendingSessionBootstraps = 0;
+
+const activeOrPendingSessionCount = (): number =>
+  sessions.size + pendingSessionBootstraps;
 
 const responseHeaders = (extra?: HeadersInit, request?: Request): Headers => {
   const headers = new Headers(extra);
@@ -1139,23 +1143,26 @@ const readJsonBody = async (request: Request): Promise<unknown> => {
   return JSON.parse(text);
 };
 
-const isInitializeJsonRpcRequest = (value: unknown): boolean =>
+// Prism only routes a new HTTP session here. The SDK transport still owns
+// initialize semantics and the protocol method dispatch after routing.
+const isSdkSessionBootstrapRequest = (value: unknown): boolean =>
   value !== null &&
   typeof value === "object" &&
   !Array.isArray(value) &&
   (value as { method?: unknown }).method === "initialize";
 
-const handleInitializePost = async (
+const handleSdkSessionBootstrapPost = async (
   request: Request,
   parsedBody: unknown,
 ): Promise<Response> => {
-  if (sessions.size >= maxSessions) {
+  if (activeOrPendingSessionCount() >= maxSessions) {
     const id = parsedBody && typeof parsedBody === "object" && "id" in parsedBody
       ? (parsedBody as { id?: unknown }).id
       : null;
     return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "MCP session limit reached" }, id: id ?? null }, { status: 429 }, request);
   }
 
+  pendingSessionBootstraps += 1;
   const server = createPrismMcpServer();
   let initializedSessionID: string | undefined;
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -1170,10 +1177,26 @@ const handleInitializePost = async (
     },
   });
 
-  await server.connect(transport);
-  const response = await transport.handleRequest(request, { parsedBody });
-  if (initializedSessionID) touchSession(initializedSessionID);
-  return attachResponseHeaders(response, request);
+  try {
+    await server.connect(transport);
+    const response = await transport.handleRequest(request, { parsedBody });
+    if (initializedSessionID) touchSession(initializedSessionID);
+    return attachResponseHeaders(response, request);
+  } finally {
+    pendingSessionBootstraps -= 1;
+    if (!initializedSessionID) {
+      try {
+        await transport.close();
+      } catch {
+        // The SDK transport may already be closed after a failed bootstrap.
+      }
+      try {
+        await server.close();
+      } catch {
+        // The server connection may already be closed by transport cleanup.
+      }
+    }
+  }
 };
 
 const handlePost = async (request: Request): Promise<Response> => {
@@ -1186,8 +1209,8 @@ const handlePost = async (request: Request): Promise<Response> => {
 
   await pruneExpiredSessions();
 
-  if (isInitializeJsonRpcRequest(parsedBody)) {
-    return await handleInitializePost(request, parsedBody);
+  if (isSdkSessionBootstrapRequest(parsedBody)) {
+    return await handleSdkSessionBootstrapPost(request, parsedBody);
   }
 
   const sessionID = request.headers.get("mcp-session-id") ?? undefined;

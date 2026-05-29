@@ -172,8 +172,8 @@ A shared HTTP MCP runtime must hold these invariants:
    ```
 
 3. Done: teach `generateMcpServerBundle` to emit either:
-   - current stdio JSON-RPC server, or
-   - Streamable HTTP server.
+   - SDK-backed stdio server, or
+   - SDK-backed Streamable HTTP server.
 4. Done: add Prism-owned lifecycle commands:
 
    ```bash

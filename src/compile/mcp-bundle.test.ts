@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -33,6 +33,15 @@ const createTempRoot = async (): Promise<string> => {
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content);
+};
+
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const createSdlcMcpFixture = async (): Promise<{
@@ -109,6 +118,7 @@ export default defineTool({
     id: Schema.String,
     title: Schema.String,
     delayMs: Schema.optional(Schema.Number),
+    markerPath: Schema.optional(Schema.String),
   }),
   output: Schema.Struct({
     created: Schema.Boolean,
@@ -129,6 +139,9 @@ export default defineTool({
         }
         context.signal?.addEventListener("abort", onAbort, { once: true });
       });
+    }
+    if (typeof input.markerPath === "string") {
+      await Bun.write(input.markerPath, "completed\\n");
     }
     return { created: true, orbit: input.orbit, id: input.id };
   },
@@ -619,6 +632,28 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     });
     expect(unauthorized.status).toBe(401);
 
+    const forbiddenHost = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        host: "evil.example",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "evil", version: "0.1.0" },
+        },
+      }),
+    });
+    expect(forbiddenHost.status).toBe(403);
+
     const forbidden = await httpRpc({
       port,
       token,
@@ -943,6 +978,7 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
     });
     const sessionId = initialized.response.headers.get("mcp-session-id");
     expect(sessionId).toBeTruthy();
+    const markerPath = join(projectRoot, "timeout-marker.txt");
 
     const timedOut = await httpRpc({
       port,
@@ -951,11 +987,19 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
       method: "tools/call",
       params: {
         name: "orbit_core_create_glyph",
-        arguments: { orbit: "forge", id: "AP-timeout", title: "HTTP MCP", delayMs: 200 },
+        arguments: {
+          orbit: "forge",
+          id: "AP-timeout",
+          title: "HTTP MCP",
+          delayMs: 200,
+          markerPath,
+        },
       },
     });
     expect(timedOut.body.result.isError).toBe(true);
     expect(timedOut.body.result.content[0].text).toContain("timed out");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(await pathExists(markerPath)).toBe(false);
 
     const afterTimedOut = await httpRpc({
       port,
@@ -1017,21 +1061,22 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
 
   try {
     await waitForHttpServer(port);
-    const first = await httpRpc({
-      port,
-      token,
-      method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
-    });
-    expect(first.response.status).toBe(200);
-
-    const second = await httpRpc({
-      port,
-      token,
-      method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b", version: "0.1.0" } },
-    });
-    expect(second.response.status).toBe(429);
+    const initializations = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        httpRpc({
+          port,
+          token,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: `client-${index}`, version: "0.1.0" },
+          },
+        }),
+      ),
+    );
+    expect(initializations.filter((init) => init.response.status === 200)).toHaveLength(1);
+    expect(initializations.filter((init) => init.response.status === 429)).toHaveLength(5);
 
     const oversized = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
@@ -1198,6 +1243,69 @@ export default defineTool({
       ],
     }),
   ).resolves.toMatchObject({ toolNames: ["schema_fixture_inspect"] });
+});
+
+test("MCP bundle validates tool output at runtime", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "schema-fixture");
+  const projectRoot = join(root, "project");
+  const toolPath = join(pluginRoot, "tools", "inspect.tool.ts");
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "inspect",
+  description: "Returns an invalid output payload",
+  input: Schema.Struct({ payload: Schema.String }),
+  output: Schema.Struct({ ok: Schema.Boolean }),
+  async handle() {
+    return { ok: "not-a-boolean" };
+  },
+});
+`,
+  );
+
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "schema-fixture",
+    serverName: "prism-mcp-schema-fixture",
+    bindings: [
+      {
+        kind: "permission",
+        logicalName: "inspect",
+        toolPluginName: "schema-fixture",
+        toolName: "inspect",
+        toolSourcePath: toolPath,
+      },
+    ],
+  });
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const client = new RpcClient(child);
+  try {
+    await client.request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "prism-test", version: "0.1.0" },
+    });
+
+    const invalid = await client.request("tools/call", {
+      name: "schema_fixture_inspect",
+      arguments: { payload: "demo" },
+    });
+    expect(invalid.result.isError).toBe(true);
+    expect(invalid.result.content[0].text).toContain("ok");
+  } finally {
+    child.kill();
+    await waitForChildClose(child).catch(() => undefined);
+  }
 });
 
 test("MCP bundle generation fails closed when a tool input schema cannot become JSON Schema", async () => {

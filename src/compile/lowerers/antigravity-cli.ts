@@ -383,7 +383,9 @@ const planPluginPruning = async (
   return operations;
 };
 
-const legacyGeminiExtensionRoot = (target: AntigravityCliLowerTarget): string | undefined => {
+const legacyPreAntigravityExtensionRoot = (
+  target: AntigravityCliLowerTarget,
+): string | undefined => {
   const pluginId = pluginIdForPlugin(target.sourcePluginName);
   if (basename(target.root) === "antigravity-cli" && basename(dirname(target.root)) === ".gemini") {
     return join(dirname(target.root), "extensions", pluginId);
@@ -394,10 +396,10 @@ const legacyGeminiExtensionRoot = (target: AntigravityCliLowerTarget): string | 
   return undefined;
 };
 
-const planLegacyGeminiPruning = async (
+const planLegacyExtensionPruning = async (
   target: AntigravityCliLowerTarget,
 ): Promise<LowerOperation[]> => {
-  const legacyRoot = legacyGeminiExtensionRoot(target);
+  const legacyRoot = legacyPreAntigravityExtensionRoot(target);
   if (!legacyRoot || !(await exists(legacyRoot))) return [];
   return [{
     kind: "prune-plugin-path",
@@ -471,7 +473,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   }
 
   operations.push(...await planPluginPruning(input.target, desired));
-  operations.push(...await planLegacyGeminiPruning(input.target));
+  operations.push(...await planLegacyExtensionPruning(input.target));
   return operations;
 };
 

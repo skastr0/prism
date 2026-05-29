@@ -124,6 +124,7 @@ prism/
 │   ├── cli.ts          # CLI entry point and commands
 │   ├── types.ts        # TypeScript types and interfaces
 │   ├── harnesses.ts    # Harness registry (paths, formats, capabilities)
+│   ├── lowerer-capabilities.ts # Typed lowerer surface-kind contract
 │   ├── fs.ts           # Filesystem utilities (Bun APIs)
 │   ├── manifest.ts     # Plugin manifest and frontmatter parsing
 │   ├── installer.ts    # Core installation logic (file-router phase)
@@ -650,9 +651,8 @@ Orbit source artifacts are source-language constructs. For the current supported
 
 1. Add a lowerer module under `src/compile/lowerers/`
 2. Wire it into `src/compile/pipeline.ts`
-3. Update `SUPPORTED_TARGETS` in pipeline.ts
-4. Declare compile target capabilities in `src/compile/target-capabilities.ts`, especially whether generated canonical tools are executable
-5. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
+3. Declare the harness surface contract in `src/lowerer-capabilities.ts`, including compile target capabilities and whether the lowerer uses native plugin APIs, native plugin bundles, generated MCP, direct files, config patches, or unsupported surfaces
+4. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
 
 ### Install + compile unified
 

@@ -25,6 +25,13 @@ Prism uses `~/.prism` for durable install and compile state. Set `PRISM_HOME` to
 
 `prism install` is the unified refresh path. It compiles first when a plugin has compile targets for the selected harnesses, then reconciles install-phase artifacts; there is no separate sync command.
 
+## Lowerer Capabilities
+
+Prism tracks where a harness stores files separately from what kind of lowerer
+surface Prism uses for that harness. The typed contract lives in
+`src/lowerer-capabilities.ts` and the human-readable matrix lives in
+[`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
+
 ## Release Readiness
 
 See [release.md](release.md) before making the repository public or publishing release assets. Pay special attention to bundled plugin and skill provenance.

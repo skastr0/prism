@@ -142,7 +142,7 @@ const generatedPluginEntryForName = (
   pluginName: string,
 ): string =>
   pathToFileURL(
-    join(generatedPluginRootForName(target, pluginName), "dist", "server.mjs")
+    generatedPluginRootForName(target, pluginName)
   ).href;
 
 const staleGeneratedPluginSourceEntryForName = (
@@ -174,7 +174,8 @@ const isStaleGeneratedPluginEntry = (
     !relativePluginPath.startsWith("../") &&
     !relativePluginPath.startsWith("/") &&
     relativePluginPath.startsWith(`${GENERATED_PLUGIN_PREFIX}-`) &&
-    relativePluginPath.endsWith("/src/server.ts")
+    (relativePluginPath.endsWith("/src/server.ts") ||
+      relativePluginPath.endsWith("/dist/server.mjs"))
   );
 };
 

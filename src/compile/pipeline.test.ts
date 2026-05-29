@@ -84,7 +84,7 @@ const readDirectoryTextFiles = async (
 
 const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
   pathToFileURL(
-    join(projectRoot, ".opencode", "plugins", pluginId, "dist", "server.mjs"),
+    join(projectRoot, ".opencode", "plugins", pluginId),
   ).href;
 
 const generatedStaleSourcePluginEntry = (projectRoot: string, pluginId: string): string =>

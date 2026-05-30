@@ -27,7 +27,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
-| Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
+| Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` + generated MCP |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 | Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
 
@@ -44,6 +44,8 @@ Factory Droid is part of the `coding-harness` preset with full compile-phase plu
 Kimi Code is part of the `coding-harness` preset with compile-phase generated plugin support. The active Kimi Code target uses the current `~/.kimi-code` home; Prism does not retain legacy `~/.kimi` support as a compatibility fork. Prism emits one generated user-scoped plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/` with `kimi.plugin.json`, plugin skills, session-start context, plugin-declared MCP servers, and hook wrappers, then registers it in `<kimi-root>/plugins/installed.json` so Kimi loads it as an enabled plugin. Prism patches `<kimi-root>/config.toml -> [[hooks]]` for Kimi hooks because official Kimi plugins ignore hook fields. Compiled agents lower honestly as role/workflow skills, not native agent files, because Kimi subagents are runtime dispatches rather than a persistent custom-agent file surface.
 
 Amp Code is part of the `coding-harness` preset with compile-phase native TypeScript plugin support. Prism emits one generated plugin under `.amp/plugins/prism-generated-<source-plugin>.ts` for project scope or `<amp-root>/plugins/prism-generated-<source-plugin>.ts` for global/system scope, registers canonical tools with Amp's `registerTool` API, and lowers supported Prism hooks through Amp's `amp.on(...)` plugin events. Prism maps `tool.before -> tool.call`, `tool.after -> tool.result`, and `session.start -> session.start`; `session.end` fails closed because Amp does not expose a native session-end event. Compiled agents still lower as generated role skills rather than experimental custom Amp agent modes.
+
+Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules, commands, and skills still write to Cursor's direct file surfaces. Compile-phase `tools/*.tool.ts` artifacts lower into a generated MCP server and Prism patches one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry in `~/.cursor/mcp.json` globally or `.cursor/mcp.json` for project scope. Stdio mode writes the server under `<cursor-root>/mcp/`; Streamable HTTP mode writes the shared Prism MCP runtime under `<mcp-runtime-root>/prism/mcp/` and uses Cursor's `url` plus `headers` MCP shape. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
 
 Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
@@ -474,7 +476,7 @@ defineAgent({
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code, Antigravity CLI, Kimi Code, Grok, and Factory Droid support them through compiler-owned plugin bundles with bundled MCP servers. Pi supports them through compiler-owned package extensions using Pi's native `registerTool` API.
+Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code, Antigravity CLI, Kimi Code, Grok, and Factory Droid support them through compiler-owned plugin bundles with bundled MCP servers. Cursor supports tool-only plugins through generated MCP entries in `mcp.json`. Pi supports canonical tools through compiler-owned package extensions using Pi's native `registerTool` API.
 
 ### Canonical tools vs harness-native plugins
 
@@ -563,7 +565,7 @@ Canonical example:
   "targets": {
     "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
     "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
-    "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
+    "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code", "cursor"],
     "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
     "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"]
   }
@@ -574,7 +576,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
 - `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Antigravity CLI, Kimi Code, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes for generated MCP exposure
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Antigravity CLI, Kimi Code, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes or Cursor for generated MCP exposure
 
 ### CLI
 
@@ -602,6 +604,9 @@ prism compile ./my-plugin --harness pi
 
 # Compile Kimi role skills, plugin MCP, and hooks into generated Kimi surfaces
 prism compile ./my-plugin --harness kimi-code
+
+# Compile canonical tools into Cursor mcp.json
+prism compile ./my-plugin --harness cursor
 
 # Compile into a project-local OpenCode root for a business/app repo
 prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
@@ -673,6 +678,14 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server by default; generated tools use Kimi's plugin MCP runtime names with the `mcp__<server>__<tool>` qualification in role skills and hook matchers
 - Emits hook wrappers under plugin `hooks/` and patches `<kimi-root>/config.toml` with managed `[[hooks]]` entries using Kimi hook event names
 - Keeps project scope unsupported because official Kimi plugin installs are user-scoped
+
+#### Cursor
+
+- Emits canonical `tools/*.tool.ts` as a generated MCP server
+- Patches `<cursor-root>/mcp.json` with one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry
+- Uses `command`/`args` for stdio MCP and `url`/`headers` for Streamable HTTP MCP, matching Cursor's IDE and CLI MCP contract
+- Supports global `~/.cursor/mcp.json` and project `.cursor/mcp.json`
+- Fails closed for compiled agents, orbits, hooks, and per-agent skill permission visibility
 
 #### Pi
 

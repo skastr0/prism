@@ -527,6 +527,108 @@ test("install prunes stale compile-owned Factory plugin files when compile targe
   expect((await readHarnessLedger("factory-droid")).entries).toHaveLength(0);
 });
 
+test("planInstallation does not prune Cursor MCP runtimes while config cleanup belongs to the lowerer", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  const cursorRoot = join(projectPath, ".cursor");
+  const configPath = join(cursorRoot, "mcp.json");
+  const targetPath = join(
+    cursorRoot,
+    "mcp",
+    "prism_generated_cursor_compile_demo",
+    "server.mjs",
+  );
+  const content = "console.log('stale Cursor MCP runtime');\n";
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-compile-demo",
+      version: "0.1.0",
+      targets: { skills: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(
+    configPath,
+    `${JSON.stringify({
+      mcpServers: {
+        "prism-generated-cursor-compile-demo": {
+          type: "stdio",
+          command: "bun",
+          args: [targetPath],
+        },
+      },
+    })}\n`,
+  );
+  await writeText(targetPath, content);
+
+  const configEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "project",
+    root: cursorRoot,
+    pluginName: "cursor-compile-demo",
+    artifact: "compile",
+    targetPath: configPath,
+    kind: "config",
+  });
+  const serverEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "project",
+    root: cursorRoot,
+    pluginName: "cursor-compile-demo",
+    artifact: "compile",
+    targetPath,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("cursor")),
+    entries: [
+      {
+        id: configEntryId,
+        pluginName: "cursor-compile-demo",
+        pluginVersion: "0.1.0",
+        pluginPath,
+        harness: "cursor",
+        scope: "project",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: configPath,
+        kind: "config",
+        contentHash: computeContentHash(await readFile(configPath, "utf8")),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: serverEntryId,
+        pluginName: "cursor-compile-demo",
+        pluginVersion: "0.1.0",
+        pluginPath,
+        harness: "cursor",
+        scope: "project",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath,
+        kind: "file",
+        contentHash: computeContentHash(content),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    dryRun: true,
+  });
+
+  expect(operations.some((operation) =>
+    operation.type === "prune" &&
+    operation.artifact === "compile" &&
+    operation.target === targetPath
+  )).toBe(false);
+});
+
 test("install prunes stale compile-owned Factory plugin files when only source compile targets remain", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");

@@ -425,7 +425,11 @@ export const LOWERER_CAPABILITIES = {
   cursor: {
     harness: "cursor",
     family: "coding-harness",
-    compile: compileUnsupported,
+    compile: compileSupported({
+      agents: "unsupported",
+      hooks: "unsupported",
+      skillPermissions: "unsupported",
+    }),
     surfaces: {
       pluginBundle: unsupported("Prism does not manage Cursor extensions."),
       rules: {
@@ -444,11 +448,23 @@ export const LOWERER_CAPABILITIES = {
         path: "<cursor-root>/skills/",
         summary: "Install writes Agent Skill folders.",
       },
-      generatedTools: unsupported(),
+      generatedTools: {
+        kind: "generated-mcp",
+        path: "<cursor-root>/mcp/prism_generated_<plugin>/server.mjs or <mcp-runtime-root>/prism/mcp/prism_generated_<plugin>/server.mjs",
+        summary: "Canonical tools lower to a generated MCP server referenced by Cursor mcp.json.",
+      },
       hooks: unsupported(),
-      mcpConfig: unsupported("Prism does not patch Cursor MCP config yet."),
+      mcpConfig: {
+        kind: "config-patch",
+        path: "<cursor-root>/mcp.json#mcpServers",
+        summary: "Compile patches a compiler-owned Cursor MCP server entry.",
+      },
       agentConfig: unsupported(),
     },
+    notes: [
+      "Cursor compile support is tools-only for now; compiled agents, orbits, hooks, and skill permission visibility remain unsupported.",
+      "Cursor IDE and CLI share the same mcp.json contract.",
+    ],
   },
   "factory-droid": {
     harness: "factory-droid",

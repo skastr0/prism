@@ -61,6 +61,10 @@ import {
   executeLowering as executeKimiCodeLowering,
   planLowering as planKimiCodeLowering,
 } from "./lowerers/kimi-code.js";
+import {
+  executeLowering as executeCursorLowering,
+  planLowering as planCursorLowering,
+} from "./lowerers/cursor.js";
 import type { ExecuteLoweringOptions } from "./lowerers/shared.js";
 import {
   InvalidTargetScopeError,
@@ -190,6 +194,7 @@ const SUPPORTED_TARGETS = [
   "factory-droid",
   "pi",
   "kimi-code",
+  "cursor",
 ] as const;
 
 const getLowerer = (target: string): LowererModule => {
@@ -243,6 +248,11 @@ const getLowerer = (target: string): LowererModule => {
       return {
         planLowering: planKimiCodeLowering,
         executeLowering: executeKimiCodeLowering,
+      };
+    case "cursor":
+      return {
+        planLowering: planCursorLowering,
+        executeLowering: executeCursorLowering,
       };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
@@ -809,17 +819,24 @@ const applyOrbitGrantsAndAssertCapabilities = (options: {
 const selectTargetArtifacts = (
   registry: PluginRegistry,
   surfaces: TargetSurfaceSelection,
-): TargetArtifacts => ({
-  tools: surfaces.tools
-    ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
-    : [],
-  skills: surfaces.skills
-    ? [...registry.skills.values()].sort((left, right) => left.name.localeCompare(right.name))
-    : [],
-  hooks: surfaces.hooks
-    ? [...registry.hooks.values()].sort((left, right) => left.name.localeCompare(right.name))
-    : [],
-});
+  targetId: HarnessId,
+): TargetArtifacts => {
+  const compileOwnedSkills =
+    targetId !== "cursor" &&
+    targetId !== "openclaw" &&
+    surfaces.skills;
+  return {
+    tools: surfaces.tools
+      ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [],
+    skills: compileOwnedSkills
+      ? [...registry.skills.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [],
+    hooks: surfaces.hooks
+      ? [...registry.hooks.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [],
+  };
+};
 
 const resolveCompileMcpBearerToken = (options: {
   readonly registry: PluginRegistry;
@@ -880,7 +897,8 @@ const planTargetLowering = (options: {
     !options.surfaces.hasLowerableArtifacts &&
     options.targetId !== "factory-droid" &&
     options.targetId !== "pi" &&
-    options.targetId !== "kimi-code"
+    options.targetId !== "kimi-code" &&
+    options.targetId !== "cursor"
   ) {
     return Effect.succeed([]);
   }
@@ -997,7 +1015,7 @@ export const compilePluginForTarget = (
       composed: agentResult.composed,
       orbits,
     });
-    const artifacts = selectTargetArtifacts(registry, surfaces);
+    const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
     const mcpBearerToken = yield* resolveCompileMcpBearerToken({
       registry,
       targetId: context.targetId,

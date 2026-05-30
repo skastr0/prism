@@ -58,6 +58,11 @@ const COMPILE_SUPPORTED_HARNESSES = [
   "kimi-code",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
+const TOOL_COMPILE_SUPPORTED_HARNESSES = [
+  ...COMPILE_SUPPORTED_HARNESSES,
+  "cursor",
+] as const satisfies ReadonlyArray<HarnessId>;
+
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
   rules: ["antigravity-cli", "pi", "kimi-code"],
   commands: ["pi", "kimi-code"],
@@ -76,8 +81,16 @@ const manifestHasStructuredCompileTargets = (
   for (const key of compileKeys) {
     const targets = (manifest.targets as Record<string, unknown>)[key];
     if (!Array.isArray(targets) || targets.length === 0) continue;
-    if (!harnessId) return true;
-    const resolved = resolveManifestTargets(targets as PluginTargetId[]);
+    const resolved =
+      key === "agents"
+        ? resolveManifestTargetsForArtifact(targets as PluginTargetId[], "agents")
+        : resolveManifestTargets(targets as PluginTargetId[]).filter((target) =>
+            targetSupportsCompileArtifact(target, key),
+          );
+    if (harnessId === undefined) {
+      if (resolved.length > 0) return true;
+      continue;
+    }
     if (resolved.includes(harnessId)) return true;
   }
   return false;
@@ -486,6 +499,15 @@ function targetSupportsPluginArtifact(harnessId: HarnessId, artifact: PluginArti
   return harnessSupportsArtifact(harnessId, artifact);
 }
 
+function targetSupportsCompileArtifact(
+  harnessId: HarnessId,
+  artifact: CompileArtifactType,
+): boolean {
+  const supportedHarnesses =
+    artifact === "tools" ? TOOL_COMPILE_SUPPORTED_HARNESSES : COMPILE_SUPPORTED_HARNESSES;
+  return (supportedHarnesses as readonly HarnessId[]).includes(harnessId);
+}
+
 /**
  * Read and validate plugin manifest
  */
@@ -623,10 +645,7 @@ function validateCompileTargetSupport(
 ): void {
   const unsupportedCompileTargets = resolveManifestTargets(
     declaredTargets as PluginTargetId[]
-  ).filter(
-    (harnessId) =>
-      !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId),
-  );
+  ).filter((harnessId) => !targetSupportsCompileArtifact(harnessId, artifact));
 
   if (unsupportedCompileTargets.length > 0) {
     errors.push(
@@ -787,13 +806,6 @@ export function manifestHasCompileTargets(
   manifest: PluginManifest,
   harnessId?: HarnessId
 ): boolean {
-  if (
-    harnessId &&
-    !(COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId)
-  ) {
-    return false;
-  }
-
   return (
     manifestHasStructuredCompileTargets(manifest, harnessId) ||
     manifestHasCompileManagedPluginArtifactTargets(manifest, harnessId)

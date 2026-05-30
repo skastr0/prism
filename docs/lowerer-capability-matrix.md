@@ -36,7 +36,7 @@ patched into a config file.
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools | native `amp.on(...)` plugin events | none |
-| Cursor | unsupported | unsupported | direct skills | unsupported | unsupported | none |
+| Cursor | unsupported | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
 | Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin `.mcp.json` | plugin hooks | none for generated bundle |
@@ -106,6 +106,14 @@ agents, tools, or hooks, Prism bundles targeted managed skills into that plugin
 to avoid double-loading the same Prism-owned skill from `.factory/skills/`.
 Permission-only skill visibility still fails closed because the official Droid
 frontmatter documents `tools` but not a per-droid skill allowlist.
+
+Cursor compile support is tools-only. Cursor's official MCP contract uses
+`~/.cursor/mcp.json` globally and `.cursor/mcp.json` per project, and Cursor CLI
+respects the same file as the IDE. Prism lowers canonical tools into a generated
+MCP server and patches one compiler-owned `mcpServers` entry in that file:
+stdio entries use `command` plus `args`, while Streamable HTTP entries use `url`
+plus `headers`. Prism does not compile Cursor agents, hooks, or per-agent skill
+permissions yet, and it leaves Cursor's native approval flow intact.
 
 ## Source Pointers
 

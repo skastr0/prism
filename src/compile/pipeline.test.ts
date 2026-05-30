@@ -10,7 +10,7 @@ import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { runtimeMcpServerDescriptor } from "./mcp-runtime.js";
-import { compilePluginForTarget } from "./pipeline.js";
+import { compilePluginForTarget, type CompileResult } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
 import {
@@ -672,7 +672,7 @@ const createStandaloneToolFixture = async (): Promise<{
         name: "tool-only-demo",
         version: "0.1.0",
         targets: {
-          tools: ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid"],
+          tools: ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid", "cursor"],
         },
       },
       null,
@@ -1353,6 +1353,7 @@ test("coding-harness preset includes admitted coding harnesses", () => {
   expect(resolveManifestTargets(["coding-harness"])).toContain("grok");
   expect(resolveManifestTargets(["coding-harness"])).toContain("kimi-code");
   expect(resolveManifestTargets(["coding-harness"])).toContain("pi");
+  expect(resolveManifestTargets(["coding-harness"])).toContain("cursor");
 });
 
 test("artifact target resolution filters unsupported preset members", async () => {
@@ -1391,6 +1392,37 @@ test("artifact target resolution filters unsupported preset members", async () =
   expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
+  expect(manifestHasCompileTargets(manifest, "cursor")).toBe(false);
+});
+
+test("Cursor compile support is tools-only", async () => {
+  const root = await createTempRoot();
+  const toolOnlyRoot = join(root, "cursor-tools-only");
+  await writeText(
+    join(toolOnlyRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-tools-only",
+      version: "0.1.0",
+      targets: { tools: ["cursor"] },
+    })}\n`,
+  );
+
+  const manifest = await readManifest(toolOnlyRoot);
+  expect(manifestHasCompileTargets(manifest, "cursor")).toBe(true);
+
+  const agentRoot = join(root, "cursor-agent-unsupported");
+  await writeText(
+    join(agentRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-agent-unsupported",
+      version: "0.1.0",
+      targets: { agents: ["cursor"] },
+    })}\n`,
+  );
+
+  await expect(readManifest(agentRoot)).rejects.toThrow(
+    "targets.agents resolves to unsupported compile harnesses: cursor",
+  );
 });
 
 test("direct unsupported Grok command targets are rejected", async () => {
@@ -2916,7 +2948,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
 test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
   const { pluginRoot, projectRoot } = await createStandaloneToolFixture();
-  const targets = ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid"] as const;
+  const targets = ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid", "cursor"] as const;
 
   for (const target of targets) {
     await Effect.runPromise(
@@ -3002,6 +3034,457 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   );
   expect(factoryBundle).toContain(expectedToolName);
   expect(factoryBundle).toContain("tools/list");
+
+  const cursorConfig = JSON.parse(await readFile(join(projectRoot, ".cursor", "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, { type: string; command: string; args: string[] }>;
+  };
+  expect(cursorConfig.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+    type: "stdio",
+    command: "bun",
+    args: [join(projectRoot, ".cursor", "mcp", "prism_generated_tool_only_demo", "server.mjs")],
+  });
+  const cursorBundle = await readFile(
+    join(projectRoot, ".cursor", "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+    "utf8",
+  );
+  expect(cursorBundle).toContain(expectedToolName);
+  expect(cursorBundle).toContain("tools/list");
+});
+
+test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async () => {
+  const { pluginRoot } = await createStandaloneToolFixture();
+  const root = await createTempRoot();
+  const cursorRoot = join(root, "cursor-home");
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "global",
+      root: cursorRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.composed).toHaveLength(0);
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "patch-config",
+      target: join(cursorRoot, "mcp.json"),
+    }),
+  );
+  const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, { type: string; command: string; args: string[] }>;
+  };
+  expect(config.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+    type: "stdio",
+    command: "bun",
+    args: [join(cursorRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs")],
+  });
+  expect(await pathExists(join(cursorRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"))).toBe(true);
+  expect((await readHarnessLedger("cursor")).entries.some((entry) =>
+    entry.pluginName === "tool-only-demo" &&
+    entry.targetPath === join(cursorRoot, "mcp.json") &&
+    entry.kind === "config"
+  )).toBe(true);
+});
+
+test("compilePluginForTarget prunes stale Cursor MCP outputs when tools target is removed", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-empty-cleanup");
+  const cursorRoot = join(root, "cursor-home");
+  const staleServerPath = join(cursorRoot, "mcp", "prism_generated_cursor_empty_cleanup", "server.mjs");
+  const staleServerContent = "console.log('stale Cursor runtime');\n";
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-empty-cleanup",
+      version: "0.1.0",
+      targets: {},
+    })}\n`,
+  );
+  await writeText(
+    join(cursorRoot, "mcp.json"),
+    `${JSON.stringify({
+      mcpServers: {
+        "prism-generated-cursor-empty-cleanup": {
+          type: "stdio",
+          command: "bun",
+          args: [staleServerPath],
+        },
+        userServer: { url: "https://example.com/mcp" },
+      },
+    }, null, 2)}\n`,
+  );
+  await writeText(staleServerPath, staleServerContent);
+  const configEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "global",
+    root: cursorRoot,
+    pluginName: "cursor-empty-cleanup",
+    artifact: "compile",
+    targetPath: join(cursorRoot, "mcp.json"),
+    kind: "config",
+  });
+  const serverEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "global",
+    root: cursorRoot,
+    pluginName: "cursor-empty-cleanup",
+    artifact: "compile",
+    targetPath: staleServerPath,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("cursor")),
+    entries: [
+      {
+        id: configEntryId,
+        pluginName: "cursor-empty-cleanup",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: join(cursorRoot, "mcp.json"),
+        kind: "config",
+        contentHash: computeContentHash(await readFile(join(cursorRoot, "mcp.json"), "utf8")),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: serverEntryId,
+        pluginName: "cursor-empty-cleanup",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: staleServerPath,
+        kind: "file",
+        contentHash: computeContentHash(staleServerContent),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "global",
+      root: cursorRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: staleServerPath,
+      targetType: "file",
+    }),
+  );
+  expect(await pathExists(staleServerPath)).toBe(false);
+  const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, unknown>;
+  };
+  expect(config.mcpServers?.["prism-generated-cursor-empty-cleanup"]).toBeUndefined();
+  expect(config.mcpServers?.userServer).toEqual({ url: "https://example.com/mcp" });
+  const entries = (await readHarnessLedger("cursor")).entries;
+  expect(entries.some((entry) => entry.id === serverEntryId)).toBe(false);
+  expect(entries.some((entry) => entry.id === configEntryId)).toBe(true);
+});
+
+test("compilePluginForTarget leaves unrelated Cursor MCP config untouched without tool targets", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-noop-cleanup");
+  const cursorRoot = join(root, "cursor-home");
+  const mcpRoot = join(root, "mcp-runtime");
+  const configPath = join(cursorRoot, "mcp.json");
+  const collidingServerPath = join(cursorRoot, "mcp", "prism_generated_cursor_noop_cleanup", "server.mjs");
+  const originalConfig = `{"mcpServers":{"prism-generated-cursor-noop-cleanup":{"type":"stdio","command":"bun","args":["${collidingServerPath}"]},"userServer":{"url":"https://example.com/mcp"}}}\n`;
+  const collidingServerContent = "console.log('user-owned collision');\n";
+  const sharedServerPath = runtimeMcpServerDescriptor(mcpRoot, "cursor-noop-cleanup").absolutePath;
+  const sharedServerContent = "console.log('user-owned shared collision');\n";
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-noop-cleanup",
+      version: "0.1.0",
+      targets: {},
+    })}\n`,
+  );
+  await writeText(configPath, originalConfig);
+  await writeText(collidingServerPath, collidingServerContent);
+  await writeText(sharedServerPath, sharedServerContent);
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "global",
+      root: cursorRoot,
+      mcpRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations.some((operation) => operation.kind === "patch-config")).toBe(false);
+  expect(result.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(await readFile(configPath, "utf8")).toBe(originalConfig);
+  expect(await readFile(collidingServerPath, "utf8")).toBe(collidingServerContent);
+  expect(await readFile(sharedServerPath, "utf8")).toBe(sharedServerContent);
+});
+
+test("compilePluginForTarget leaves Cursor skills to install while lowering tools", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-mixed-skills-tools");
+  const cursorRoot = join(root, "cursor-home");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-mixed-skills-tools",
+      version: "0.1.0",
+      targets: {
+        skills: ["cursor"],
+        tools: ["cursor"],
+      },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo-message.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo-message",
+  description: "Echo through Cursor MCP.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "global",
+      root: cursorRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations.some((operation) =>
+    operation.kind === "write-md" &&
+    operation.target.endsWith(join("skills", "testing", "SKILL.md"))
+  )).toBe(false);
+  expect(await pathExists(join(cursorRoot, "skills", "testing", "SKILL.md"))).toBe(false);
+  const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, unknown>;
+  };
+  expect(config.mcpServers?.["prism-generated-cursor-mixed-skills-tools"]).toBeDefined();
+});
+
+test("compilePluginForTarget skips Cursor config deletion when ledger content drifted", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-stale-ledger-collision");
+  const cursorRoot = join(root, "cursor-home");
+  const configPath = join(cursorRoot, "mcp.json");
+  const staleServerPath = join(
+    cursorRoot,
+    "mcp",
+    "prism_generated_cursor_stale_ledger_collision",
+    "server.mjs",
+  );
+  const staleServerContent = "console.log('stale Cursor runtime');\n";
+  const ledgerConfig = `${JSON.stringify({ mcpServers: { userServer: { url: "https://example.com/mcp" } } })}\n`;
+  const currentConfig = `${JSON.stringify({
+    mcpServers: {
+      "prism-generated-cursor-stale-ledger-collision": {
+        type: "stdio",
+        command: "bun",
+        args: [staleServerPath],
+      },
+      userServer: { url: "https://example.com/mcp" },
+    },
+  })}\n`;
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-stale-ledger-collision",
+      version: "0.1.0",
+      targets: {},
+    })}\n`,
+  );
+  await writeText(configPath, currentConfig);
+  await writeText(staleServerPath, staleServerContent);
+  const configEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "global",
+    root: cursorRoot,
+    pluginName: "cursor-stale-ledger-collision",
+    artifact: "compile",
+    targetPath: configPath,
+    kind: "config",
+  });
+  const serverEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "global",
+    root: cursorRoot,
+    pluginName: "cursor-stale-ledger-collision",
+    artifact: "compile",
+    targetPath: staleServerPath,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("cursor")),
+    entries: [
+      {
+        id: configEntryId,
+        pluginName: "cursor-stale-ledger-collision",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: configPath,
+        kind: "config",
+        contentHash: computeContentHash(ledgerConfig),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: serverEntryId,
+        pluginName: "cursor-stale-ledger-collision",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: staleServerPath,
+        kind: "file",
+        contentHash: computeContentHash(staleServerContent),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "global",
+      root: cursorRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations.some((operation) => operation.kind === "patch-config")).toBe(false);
+  expect(result.operations.some((operation) =>
+    operation.kind === "prune-plugin-path" &&
+    operation.target === staleServerPath
+  )).toBe(false);
+  expect(await readFile(configPath, "utf8")).toBe(currentConfig);
+  expect(await readFile(staleServerPath, "utf8")).toBe(staleServerContent);
+});
+
+test("compilePluginForTarget lowers Cursor Streamable HTTP MCP config", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-http-demo");
+  const cursorRoot = join(root, "cursor-home");
+  const mcpRoot = join(root, "mcp-runtime");
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_CURSOR_TOKEN";
+  await mkdir(pluginRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "cursor-http-demo",
+        version: "0.1.0",
+        targets: { tools: ["cursor"] },
+        runtime: {
+          mcp: {
+            cursor: {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port,
+              tokenEnv,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo-message.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo-message",
+  description: "Echo through Cursor HTTP MCP.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  let result: CompileResult;
+  try {
+    result = await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        mcpRoot,
+        dryRun: false,
+        mcpLifecycle: "serve",
+      }),
+    );
+  } finally {
+    await stopMcp({
+      pluginPath: pluginRoot,
+      harness: "cursor",
+      scope: "global",
+      root: mcpRoot,
+      tokenEnv,
+    }).catch(() => undefined);
+  }
+
+  const serverPath = runtimeMcpServerDescriptor(mcpRoot, "cursor-http-demo").absolutePath;
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "write-plugin-file",
+      target: serverPath,
+    }),
+  );
+  const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+  };
+  expect(config.mcpServers?.["prism-generated-cursor-http-demo"]).toEqual({
+    url: `http://127.0.0.1:${port}/mcp`,
+    headers: {
+      Authorization: expect.stringMatching(/^Bearer [A-Za-z0-9_-]{32,}$/),
+    },
+  });
 });
 
 test("compilePluginForTarget emits a Codex project bundle", async () => {

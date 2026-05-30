@@ -129,6 +129,27 @@ test("MCP runtime supports Kimi Code Streamable HTTP config", () => {
   expect(getMcpHttpTargetSupport("kimi-code").config).toBe("supported");
 });
 
+test("MCP runtime supports Cursor Streamable HTTP config", () => {
+  const runtime = resolveMcpRuntime(
+    registry({
+      mcp: {
+        cursor: {
+          transport: "streamable-http",
+          host: "127.0.0.1",
+          port: 38468,
+          tokenEnv: "PRISM_MCP_CURSOR_TOKEN",
+        },
+      },
+    }),
+    "cursor",
+    { requirePort: true },
+  );
+
+  expect(runtime.targetId).toBe("cursor");
+  expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:38468/mcp");
+  expect(getMcpHttpTargetSupport("cursor").config).toBe("supported");
+});
+
 test("MCP runtime fails closed for unsupported HTTP targets", () => {
   expect(() =>
     resolveMcpRuntime(

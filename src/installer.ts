@@ -1010,6 +1010,22 @@ const shouldPlanStaleManagedOperation = (
   entry: ManagedLedgerEntry,
 ): boolean => {
   if (installArtifacts.has(entry.artifact)) return true;
+  if (
+    context.pruneCompileOutputs &&
+    entry.artifact === "compile" &&
+    (entry.kind === "file" || entry.kind === "directory") &&
+    context.harness.id === "cursor" &&
+    context.ledger.entries.some(
+      (candidate) =>
+        candidate.pluginName === entry.pluginName &&
+        candidate.scope === entry.scope &&
+        normalizeTargetRoot(candidate.root) === normalizeTargetRoot(entry.root) &&
+        candidate.artifact === "compile" &&
+        candidate.kind === "config",
+    )
+  ) {
+    return false;
+  }
   return (
     context.pruneCompileOutputs &&
     entry.artifact === "compile" &&

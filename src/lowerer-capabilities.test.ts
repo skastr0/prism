@@ -48,6 +48,7 @@ test("compile target capabilities are derived from lowerer capability profiles",
       "factory-droid",
       "pi",
       "kimi-code",
+      "cursor",
     ]),
   );
 
@@ -133,4 +134,17 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
     "config-patch",
   );
   expect(LOWERER_CAPABILITIES.openclaw.surfaces.skills.kind).toBe("direct-file");
+  expect(LOWERER_CAPABILITIES.cursor.compile).toEqual({
+    agents: "unsupported",
+    generatedCanonicalTools: "executable",
+    hooks: "unsupported",
+    skillPermissions: "unsupported",
+  });
+  expect(LOWERER_CAPABILITIES.cursor.surfaces.generatedTools.kind).toBe(
+    "generated-mcp",
+  );
+  expect(LOWERER_CAPABILITIES.cursor.surfaces.mcpConfig).toMatchObject({
+    kind: "config-patch",
+    path: "<cursor-root>/mcp.json#mcpServers",
+  });
 });

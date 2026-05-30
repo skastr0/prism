@@ -6,6 +6,12 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismOxlintPluginJs } from "./init-templates.js";
+import { computeContentHash } from "./content-hash.js";
+import {
+  managedEntryId,
+  readHarnessLedger,
+  writeHarnessLedger,
+} from "./managed-ledger.js";
 
 const tempRoots: string[] = [];
 const cliTestToken = "prism-cli-test-token-with-enough-entropy";
@@ -186,7 +192,7 @@ const createInstallAllFixture = async (): Promise<{
 };
 
 const createCliMcpFixture = async (options?: {
-  readonly harness?: "hermes" | "codex-cli";
+  readonly harness?: "hermes" | "codex-cli" | "cursor";
   readonly streamableHttp?: boolean;
   readonly port?: number;
   readonly tokenEnv?: string;
@@ -358,14 +364,14 @@ test("mcp serve/status/stop manages a Hermes daemon under an override root", asy
 }, 15_000);
 
 test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => {
-  const { pluginRoot, hermesRoot } = await createCliMcpFixture({ harness: "codex-cli" });
+  const { pluginRoot, hermesRoot } = await createCliMcpFixture({ harness: "cursor" });
 
   const status = await runCli([
     "mcp",
     "status",
     pluginRoot,
     "--harness",
-    "codex-cli",
+    "cursor",
     "--root",
     hermesRoot,
   ], {});
@@ -373,6 +379,136 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
   expect(status.exitCode).toBe(0);
   expect(status.stdout).toContain("stopped");
   expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
+});
+
+test("install runs Cursor lowerer cleanup when tools target is removed", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cursor-cleanup-plugin");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+  const cursorRoot = join(homeRoot, ".cursor");
+  const configPath = join(cursorRoot, "mcp.json");
+  const serverPath = join(
+    cursorRoot,
+    "mcp",
+    "prism_generated_cursor_cleanup_plugin",
+    "server.mjs",
+  );
+  const serverContent = "console.log('stale Cursor MCP runtime');\n";
+
+  await mkdir(pluginRoot, { recursive: true });
+  await mkdir(join(cursorRoot, "mcp", "prism_generated_cursor_cleanup_plugin"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "cursor-cleanup-plugin",
+        version: "0.1.0",
+        targets: {},
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        mcpServers: {
+          "prism-generated-cursor-cleanup-plugin": {
+            type: "stdio",
+            command: "bun",
+            args: [serverPath],
+          },
+          userServer: { url: "https://example.com/mcp" },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeFile(serverPath, serverContent);
+
+  const configEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "global",
+    root: cursorRoot,
+    pluginName: "cursor-cleanup-plugin",
+    artifact: "compile",
+    targetPath: configPath,
+    kind: "config",
+  });
+  const serverEntryId = managedEntryId({
+    harness: "cursor",
+    scope: "global",
+    root: cursorRoot,
+    pluginName: "cursor-cleanup-plugin",
+    artifact: "compile",
+    targetPath: serverPath,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("cursor", prismHome)),
+    entries: [
+      {
+        id: configEntryId,
+        pluginName: "cursor-cleanup-plugin",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: configPath,
+        kind: "config",
+        contentHash: computeContentHash(await readFile(configPath, "utf8")),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: serverEntryId,
+        pluginName: "cursor-cleanup-plugin",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "compile",
+        targetPath: serverPath,
+        kind: "file",
+        contentHash: computeContentHash(serverContent),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  }, prismHome);
+
+  const result = await runCli(
+    [
+      "install",
+      pluginRoot,
+      "--harness",
+      "cursor",
+      "--compile-root",
+      cursorRoot,
+      "--no-validate",
+    ],
+    { HOME: homeRoot, PRISM_HOME: prismHome },
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Compile (cursor, global)");
+  expect(await pathExists(serverPath)).toBe(false);
+  const config = JSON.parse(await readFile(configPath, "utf8")) as {
+    mcpServers?: Record<string, unknown>;
+  };
+  expect(config.mcpServers?.["prism-generated-cursor-cleanup-plugin"]).toBeUndefined();
+  expect(config.mcpServers?.userServer).toEqual({ url: "https://example.com/mcp" });
+  expect(
+    (await readHarnessLedger("cursor", prismHome)).entries.some(
+      (entry) => entry.id === serverEntryId,
+    ),
+  ).toBe(false);
 });
 
 test("install serves Hermes HTTP MCP by default", async () => {

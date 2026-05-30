@@ -5,7 +5,12 @@
 
 import { Command, InvalidArgumentError } from "commander";
 import { Effect } from "effect";
-import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
+import {
+  getAllHarnessIds,
+  getHarness,
+  isValidHarnessId,
+  resolveHarnessRoot,
+} from "./harnesses.js";
 import { install, planInstallation } from "./installer.js";
 import {
   formatManifestTargets,
@@ -46,6 +51,7 @@ import {
   type McpLifecycleHarness,
   type McpPortSelection,
 } from "./mcp/lifecycle.js";
+import { readHarnessLedger } from "./managed-ledger.js";
 
 const program = new Command();
 
@@ -1314,7 +1320,7 @@ async function runCompilePhaseForPlugin(options: {
   const compileBackups: string[] = [];
 
   for (const harnessId of options.harnesses) {
-    if (!manifestHasCompileTargets(options.manifest, harnessId)) continue;
+    if (!(await shouldRunCompilePhaseForHarness(options, harnessId))) continue;
 
     const compileExit = await Effect.runPromiseExit(
       compilePluginForTarget({
@@ -1365,6 +1371,56 @@ async function runCompilePhaseForPlugin(options: {
 
   return { success: true, backups: compileBackups };
 }
+
+const LOWERER_OWNED_STALE_CONFIG_CLEANUP_HARNESSES = new Set<HarnessId>(["cursor"]);
+
+const compileOutputRootForHarness = (options: {
+  readonly harnessId: HarnessId;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly compileRoot?: string;
+}): string | null =>
+  options.compileRoot
+    ? expandPath(options.compileRoot)
+    : resolveHarnessRoot(getHarness(options.harnessId), options.scope, options.projectPath);
+
+const hasLowererOwnedStaleCompileConfig = async (options: {
+  readonly manifest: PluginManifest;
+  readonly harnessId: HarnessId;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly compileRoot?: string;
+}): Promise<boolean> => {
+  if (!LOWERER_OWNED_STALE_CONFIG_CLEANUP_HARNESSES.has(options.harnessId)) {
+    return false;
+  }
+
+  const outputRoot = compileOutputRootForHarness(options);
+  if (!outputRoot) return false;
+
+  const normalizedRoot = expandPath(outputRoot);
+  const ledger = await readHarnessLedger(options.harnessId);
+  return ledger.entries.some(
+    (entry) =>
+      entry.pluginName === options.manifest.name &&
+      entry.artifact === "compile" &&
+      entry.kind === "config" &&
+      entry.scope === options.scope &&
+      expandPath(entry.root) === normalizedRoot,
+  );
+};
+
+const shouldRunCompilePhaseForHarness = async (
+  options: {
+    readonly manifest: PluginManifest;
+    readonly scope: HarnessScope;
+    readonly projectPath?: string;
+    readonly compileRoot?: string;
+  },
+  harnessId: HarnessId,
+): Promise<boolean> =>
+  manifestHasCompileTargets(options.manifest, harnessId) ||
+  await hasLowererOwnedStaleCompileConfig({ ...options, harnessId });
 
 function parseHarnessScope(value: string): HarnessScope {
   if ((HARNESS_SCOPES as readonly string[]).includes(value)) {

@@ -123,6 +123,7 @@ export default defineHook({
     event.tool.input?.block
       || event.cwd !== ${JSON.stringify(pluginRoot)}
       || event.session?.id !== "session-1"
+      || event.native?.stepIdx !== 19
       || event.native?.artifactDirectoryPath !== ${JSON.stringify(join(pluginRoot, "artifacts"))}
       ? { decision: "block" as const, message: "blocked" }
       : { decision: "continue" as const },
@@ -141,7 +142,25 @@ export default defineHook({
   description: "Audit shell command responses",
   event: hookEvent.toolAfter,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
-  handle: (event) => Effect.succeed(event.tool.output?.ok && event.cwd === ${JSON.stringify(pluginRoot)} && event.session?.id === "session-2" ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
+  handle: (event) => Effect.succeed(event.tool.output?.ok && event.cwd === ${JSON.stringify(pluginRoot)} && event.session?.id === "session-2" && event.native?.stepIdx === 5 && event.native?.error === "" ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "pre-invoke.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "pre-invoke",
+  description: "Validate Antigravity invocation metadata",
+  event: hookEvent.sessionStart,
+  handle: (event) => event.session?.id === "session-4"
+      && event.native?.invocationNum === 3
+      && event.native?.initialNumSteps === 10
+    ? Effect.succeed({ decision: "continue" as const })
+    : Effect.fail(new Error("missing invocation payload")),
 });
 `,
   );
@@ -177,16 +196,18 @@ export default defineHook({
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const hook = registry.hooks.get("audit-shell");
   const afterHook = registry.hooks.get("audit-shell-after");
+  const startHook = registry.hooks.get("pre-invoke");
   const stopHook = registry.hooks.get("keep-going");
   if (!hook) throw new Error("expected audit-shell hook");
   if (!afterHook) throw new Error("expected audit-shell-after hook");
+  if (!startHook) throw new Error("expected pre-invoke hook");
   if (!stopHook) throw new Error("expected keep-going hook");
 
   const operations = await planLowering({
     agents: [],
     orbits: [],
     tools: [],
-    hooks: [hook, afterHook, stopHook],
+    hooks: [hook, afterHook, startHook, stopHook],
     registry,
     target: {
       scope: "project",
@@ -200,6 +221,7 @@ export default defineHook({
   const hookConfig = findContentOperation(operations, "hooks.json");
   expect(hookConfig?.content).toContain('"PreToolUse"');
   expect(hookConfig?.content).toContain('"PostToolUse"');
+  expect(hookConfig?.content).toContain('"PreInvocation"');
   expect(hookConfig?.content).toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_shell"');
   expect(hookConfig?.content).toContain('node \\"./hooks/audit-shell.mjs\\"');
@@ -223,6 +245,7 @@ export default defineHook({
   await writeText(hookWrapper.target, hookWrapper.content);
   const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
     toolCall: { name: "run_shell", args: { block: true } },
+    stepIdx: 19,
     conversationId: "session-1",
     artifactDirectoryPath: join(pluginRoot, "artifacts"),
     workspacePaths: [pluginRoot],
@@ -236,6 +259,7 @@ export default defineHook({
 
   const approved = await runGeneratedHookWrapper(hookWrapper.target, {
     toolCall: { name: "run_shell", args: {} },
+    stepIdx: 19,
     conversationId: "session-1",
     artifactDirectoryPath: join(pluginRoot, "artifacts"),
     workspacePaths: [pluginRoot],
@@ -252,6 +276,8 @@ export default defineHook({
   await writeText(afterHookWrapper.target, afterHookWrapper.content);
   const afterResult = await runGeneratedHookWrapper(afterHookWrapper.target, {
     toolCall: { name: "run_shell", args: {}, output: { ok: true } },
+    stepIdx: 5,
+    error: "",
     conversationId: "session-2",
     tool_response: { ok: true },
     workspacePaths: [pluginRoot],
@@ -259,6 +285,20 @@ export default defineHook({
   expect(afterResult.exitCode).toBe(0);
   expect(afterResult.stderr).toBe("");
   expect(JSON.parse(afterResult.stdout.trim())).toEqual({});
+
+  const startHookWrapper = findContentOperation(operations, join("hooks", "pre-invoke.mjs"));
+  if (!startHookWrapper) throw new Error("expected pre-invoke wrapper");
+  await writeText(startHookWrapper.target, startHookWrapper.content);
+  const startResult = await runGeneratedHookWrapper(startHookWrapper.target, {
+    invocationNum: 3,
+    initialNumSteps: 10,
+    conversationId: "session-4",
+    workspacePaths: [pluginRoot],
+    transcriptPath: join(pluginRoot, "transcript.jsonl"),
+  });
+  expect(startResult.exitCode).toBe(0);
+  expect(startResult.stderr).toBe("");
+  expect(JSON.parse(startResult.stdout.trim())).toEqual({});
 
   const stopHookWrapper = findContentOperation(operations, join("hooks", "keep-going.mjs"));
   if (!stopHookWrapper) throw new Error("expected keep-going wrapper");
@@ -275,6 +315,35 @@ export default defineHook({
   expect(stopResult.exitCode).toBe(0);
   expect(stopResult.stderr).toBe("");
   expect(JSON.parse(stopResult.stdout.trim())).toEqual({ decision: "continue" });
+
+  const globalLegacyRoot = join(
+    root,
+    ".gemini",
+    "extensions",
+    "prism-generated-antigravity-hook-fixture",
+  );
+  await writeText(join(globalLegacyRoot, "gemini-extension.json"), "{}\n");
+  const globalOperations = await planLowering({
+    agents: [],
+    orbits: [],
+    tools: [],
+    hooks: [hook],
+    registry,
+    target: {
+      scope: "global",
+      root: join(root, ".gemini", "antigravity-cli"),
+      sourcePluginName: "antigravity-hook-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+  expect(globalOperations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: globalLegacyRoot,
+      targetType: "dir",
+    }),
+  );
 });
 
 test("antigravity-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {

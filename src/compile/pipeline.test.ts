@@ -630,7 +630,11 @@ export default defineHook({
   description: "Audit read calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
-  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+  handle: (event) => Effect.succeed(
+    event.tool.input?.block
+      ? { decision: "block" as const, message: "read-blocked" }
+      : { decision: "continue" as const },
+  ),
 });
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
@@ -641,7 +645,11 @@ export default defineHook({
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("submit_work") },
-  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+  handle: (event) => Effect.succeed(
+    event.tool.input?.block
+      ? { decision: "block" as const, message: "canonical-blocked" }
+      : { decision: "continue" as const },
+  ),
 });
 `);
 
@@ -1405,6 +1413,29 @@ test("direct unsupported Grok command targets are rejected", async () => {
 
   await expect(readManifest(pluginRoot)).rejects.toThrow(
     "targets.commands resolves to unsupported harnesses for commands: grok (Grok Build)",
+  );
+});
+
+test("direct unsupported Antigravity command targets are rejected", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "direct-antigravity-command-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "direct-antigravity-command-demo",
+        version: "0.1.0",
+        targets: {
+          commands: ["antigravity-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await expect(readManifest(pluginRoot)).rejects.toThrow(
+    "targets.commands resolves to unsupported harnesses for commands: antigravity-cli (Antigravity CLI)",
   );
 });
 
@@ -2646,7 +2677,14 @@ test("loadPlugin preserves agent normalization failure order", async () => {
 test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   const { pluginRoot, projectRoot } = await createAntigravityPluginFixture();
   const outputPluginRoot = join(projectRoot, ".agents", "plugins", "prism-generated-antigravity-plugin-demo");
+  const legacyExtensionRoot = join(
+    projectRoot,
+    ".gemini",
+    "extensions",
+    "prism-generated-antigravity-plugin-demo",
+  );
   await writeText(join(outputPluginRoot, "stale", "old.txt"), "stale\n");
+  await writeText(join(legacyExtensionRoot, "gemini-extension.json"), "{}\n");
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
@@ -2695,6 +2733,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   expect(parsedAgent.data).toMatchObject({
     name: "worker",
     description: "Antigravity plugin worker",
+    skills: ["delivery", "testing"],
     tools: [
       "mcp_prism-generated-antigravity-plugin-demo_antigravity_plugin_demo_submit_work",
       "read_file",
@@ -2746,8 +2785,133 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   expect(hookWrapper).toContain("validation failed");
   expect(hookWrapper).toContain("result");
 
+  const directHookProcess = Bun.spawn({
+    cmd: [process.execPath, join(outputPluginRoot, "hooks", "audit-read.mjs")],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  directHookProcess.stdin.write(JSON.stringify({
+    toolCall: { name: "read_file", args: { block: true } },
+    conversationId: "session-1",
+    artifactDirectoryPath: join(pluginRoot, "artifacts"),
+    workspacePaths: [pluginRoot],
+  }));
+  directHookProcess.stdin.end();
+  const [directHookExit, directHookStdout, directHookStderr] = await Promise.all([
+    directHookProcess.exited,
+    new Response(directHookProcess.stdout).text(),
+    new Response(directHookProcess.stderr).text(),
+  ]);
+  expect(directHookExit).toBe(0);
+  expect(directHookStderr).toBe("");
+  expect(JSON.parse(directHookStdout.trim())).toEqual({
+    decision: "deny",
+    reason: "read-blocked",
+  });
+
+  const canonicalHookProcess = Bun.spawn({
+    cmd: [process.execPath, join(outputPluginRoot, "hooks", "audit-submit.mjs")],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  canonicalHookProcess.stdin.write(JSON.stringify({
+    toolCall: {
+      name: "mcp_prism-generated-antigravity-plugin-demo_antigravity_plugin_demo_submit_work",
+      args: { block: true },
+    },
+    conversationId: "session-2",
+    workspacePaths: [pluginRoot],
+  }));
+  canonicalHookProcess.stdin.end();
+  const [canonicalHookExit, canonicalHookStdout, canonicalHookStderr] = await Promise.all([
+    canonicalHookProcess.exited,
+    new Response(canonicalHookProcess.stdout).text(),
+    new Response(canonicalHookProcess.stderr).text(),
+  ]);
+  expect(canonicalHookExit).toBe(0);
+  expect(canonicalHookStderr).toBe("");
+  expect(JSON.parse(canonicalHookStdout.trim())).toEqual({
+    decision: "deny",
+    reason: "canonical-blocked",
+  });
+
   expect(await pathExists(join(outputPluginRoot, "stale", "old.txt"))).toBe(false);
   expect(result.operations.some((operation) => operation.kind === "prune-plugin-path" && operation.target.endsWith(join("stale", "old.txt")))).toBe(true);
+  expect(await directoryExists(legacyExtensionRoot)).toBe(false);
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: legacyExtensionRoot,
+      targetType: "dir",
+    }),
+  );
+
+  const outputFiles = [
+    join(outputPluginRoot, "plugin.json"),
+    join(outputPluginRoot, "mcp_config.json"),
+    join(outputPluginRoot, "rules", "context.md"),
+    join(outputPluginRoot, "agents", "worker.md"),
+    join(outputPluginRoot, "skills", "testing", "SKILL.md"),
+    join(outputPluginRoot, "skills", "delivery", "SKILL.md"),
+    join(outputPluginRoot, "mcp", "prism_generated_antigravity_plugin_demo", "server.mjs"),
+    join(outputPluginRoot, "hooks.json"),
+    join(outputPluginRoot, "hooks", "audit-read.mjs"),
+    join(outputPluginRoot, "hooks", "audit-submit.mjs"),
+  ];
+  const outputSnapshot = Object.fromEntries(
+    await Promise.all(
+      outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
+    ),
+  );
+  const ledgerSnapshot = (await readHarnessLedger("antigravity-cli")).entries
+    .filter((entry) => entry.pluginName === "antigravity_plugin.demo")
+    .map((entry) => ({
+      id: entry.id,
+      artifact: entry.artifact,
+      kind: entry.kind,
+      scope: entry.scope,
+      root: entry.root,
+      targetPath: entry.targetPath,
+      contentHash: entry.contentHash,
+      updatedAt: entry.updatedAt,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const warmCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "antigravity-cli",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  const warmWrites = warmCompile.operations.filter(
+    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
+  );
+  expect(warmWrites.length).toBeGreaterThan(0);
+  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
+  expect(warmCompile.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(Object.fromEntries(
+    await Promise.all(
+      outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
+    ),
+  )).toEqual(outputSnapshot);
+  expect((await readHarnessLedger("antigravity-cli")).entries
+    .filter((entry) => entry.pluginName === "antigravity_plugin.demo")
+    .map((entry) => ({
+      id: entry.id,
+      artifact: entry.artifact,
+      kind: entry.kind,
+      scope: entry.scope,
+      root: entry.root,
+      targetPath: entry.targetPath,
+      contentHash: entry.contentHash,
+      updatedAt: entry.updatedAt,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id))).toEqual(ledgerSnapshot);
 });
 
 test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {

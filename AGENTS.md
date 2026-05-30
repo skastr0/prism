@@ -23,7 +23,7 @@ A unified plugin distribution system for AI coding harnesses.
 | OpenClaw | - | - | - | `~/.openclaw/skills/` |
 | Hermes Agent | - | - | - | `~/.hermes/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
-| Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | `~/.gemini/antigravity-cli/skills/` |
+| Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | generated plugin `skills/` |
 | Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
@@ -34,6 +34,8 @@ A unified plugin distribution system for AI coding harnesses.
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
 Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
+
+Antigravity CLI is part of the `coding-harness` preset with compile-phase plugin-bundle support. Prism emits one generated plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/` using Antigravity's native root `plugin.json`, `mcp_config.json`, `hooks.json`, `rules/`, `agents/`, and `skills/` layout. Managed skills and concrete orbit instances lower as plugin skills; official Antigravity CLI skills surface as slash commands, so Prism does not write direct command files and direct `targets.commands: ["antigravity-cli"]` fails manifest validation. Prism also prunes legacy `.gemini/extensions/prism-generated-<source-plugin>/` outputs when lowering Antigravity bundles.
 
 Grok Build is part of the `coding-harness` preset. Install-phase rules append to `~/.grok/AGENTS.md`, shared skills install into `~/.grok/skills/`, and compile-phase agents, managed skills, orbit skills, hooks, and canonical tools lower into `~/.grok/plugins/prism-generated-<source-plugin>/`. Prism does not install Grok commands or patch `~/.grok/config.toml`; preset expansion is artifact-aware, so `targets.commands: ["coding-harness"]` skips Grok while direct `targets.commands: ["grok"]` remains invalid.
 
@@ -470,7 +472,7 @@ defineAgent({
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code, Kimi Code, and Grok support them through compiler-owned plugin bundles with bundled MCP servers. Pi supports them through compiler-owned package extensions using Pi's native `registerTool` API.
+Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code, Antigravity CLI, Kimi Code, Grok, and Factory Droid support them through compiler-owned plugin bundles with bundled MCP servers. Pi supports them through compiler-owned package extensions using Pi's native `registerTool` API.
 
 ### Canonical tools vs harness-native plugins
 
@@ -557,11 +559,11 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"],
-    "orbits": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"],
-    "tools": ["opencode", "grok", "factory-droid", "pi", "kimi-code"],
-    "toolspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"],
-    "modelspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"]
+    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
+    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
+    "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
+    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
+    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"]
   }
 }
 ```
@@ -570,7 +572,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
 - `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Kimi Code, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes for generated MCP exposure
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Antigravity CLI, Kimi Code, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes for generated MCP exposure
 
 ### CLI
 
@@ -583,6 +585,9 @@ prism compile ./my-plugin --harness claude-code
 
 # Compile canonical tools into a Hermes MCP server and config entry
 prism compile ./my-plugin --harness hermes
+
+# Compile Antigravity agents, skills, hooks, rules, and canonical tools into a generated plugin bundle
+prism compile ./my-plugin --harness antigravity-cli
 
 # Compile Grok agents, skills, hooks, and canonical tools into a generated Grok plugin bundle
 prism compile ./my-plugin --harness grok
@@ -627,6 +632,16 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Emits canonical `tools/*.tool.ts` as a generated MCP stdio server at `<hermes-root>/prism/mcp/prism_generated_<source-plugin>/server.mjs`
 - Patches `<hermes-root>/config.yaml` with a compiler-owned `mcp_servers.prism-generated-<source-plugin>` entry using `bun <server.mjs>`
 - Fails closed for compiled agents and hooks; profiles, SOUL, and native Hermes Python plugins are intentionally out of scope
+
+#### Antigravity CLI
+
+- Writes one generated plugin bundle per compiled source plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/`
+- Writes root `plugin.json`, plugin `rules/context.md`, and compiled agents into `agents/<name>.md` with Antigravity frontmatter
+- Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server plus plugin-local `mcp_config.json`; HTTP MCP mode uses Antigravity's `serverUrl` field
+- Emits root `hooks.json` and bundled hook wrappers for Prism hook DSL events mapped to Antigravity hook names: `tool.before`/`tool.after`/`session.start`/`session.end` become `PreToolUse`/`PostToolUse`/`PreInvocation`/`Stop`. The wrapper preserves the native Antigravity payload at `event.native`, but Prism does not expose Antigravity-only `PostInvocation`, `injectSteps`, or `terminationBehavior` as compile-language hook outputs.
+- Does not lower direct command files; commands should be modeled as plugin skills/orbits, and direct `targets.commands: ["antigravity-cli"]` fails manifest validation
+- Prunes stale `.gemini/extensions/prism-generated-<source-plugin>/` bundles left by the pre-Antigravity Gemini extension target
 
 #### Grok Build
 

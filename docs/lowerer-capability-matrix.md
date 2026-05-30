@@ -46,6 +46,23 @@ Active Antigravity outputs still live under Antigravity's official
 `~/.gemini/antigravity-cli` home path, and Prism may prune legacy
 `~/.gemini/extensions` outputs during Antigravity lowering so old Gemini
 extension bundles do not linger.
+Official Antigravity CLI plugins are staged under
+`~/.gemini/antigravity-cli/plugins/<plugin_name>/` with root `plugin.json`,
+optional `mcp_config.json`, optional `hooks.json`, and optional `skills/`,
+`agents/`, and `rules/` directories. Prism follows that native bundle shape for
+compiled rules, agents, targeted skills, concrete orbit skills, canonical-tool
+MCP servers, and hooks. Antigravity skills surface as slash commands, so Prism
+does not write a separate direct command-file surface; unsupported direct
+`targets.commands: ["antigravity-cli"]` declarations fail manifest validation
+instead of being silently dropped. Remote MCP entries use Antigravity's
+documented `serverUrl` field, and hook wrappers emit Antigravity `PreToolUse`,
+`PostToolUse`, and `Stop` output shapes. Hook lowering is Prism-hook-DSL
+lowering, not a generic Antigravity hook authoring API: Prism currently maps
+`tool.before`, `tool.after`, `session.start`, and `session.end` to
+`PreToolUse`, `PostToolUse`, `PreInvocation`, and `Stop`, preserves the full
+native Antigravity stdin payload at `event.native`, and intentionally does not
+model Antigravity-only `PostInvocation` outputs such as `injectSteps` or
+`terminationBehavior`.
 
 Amp is product-native for generated tools through its TypeScript plugin API. Prism
 does not yet lower compiled agents through a native Amp custom-agent surface; it
@@ -86,7 +103,7 @@ frontmatter documents `tools` but not a per-droid skill allowlist.
 
 - OpenCode plugins: https://opencode.ai/docs/plugins/
 - Claude Code plugins and reference: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference
-- Antigravity plugins and migration: https://antigravity.google/docs/cli-plugins and https://antigravity.google/docs/gcli-migration
+- Antigravity plugins, migration, and hooks: https://antigravity.google/docs/cli-plugins, https://antigravity.google/docs/gcli-migration, and https://www.antigravity.google/docs/hooks
 - Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks
 - Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
 - Amp plugin API: https://ampcode.com/manual/plugin-api

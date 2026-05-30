@@ -15,8 +15,8 @@ import {
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
 } from "../mcp-runtime.js";
+import { runtimeMcpServerPathForTarget } from "../mcp-runtime-path.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -36,6 +36,7 @@ import {
   nativeHookEventName,
   normalizeBundleSegment,
   planGeneratedPluginPruning,
+  planSharedMcpRuntimePrune,
   pushConfigPatchOperation as pushConfigPatch,
   pushWriteOperation,
   regexEscape,
@@ -575,9 +576,17 @@ const planMcpServer = async (
     input.tools ?? [],
     input.agents,
   );
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
+  if (runtime.transport !== "streamable-http" || bindings.length === 0) {
+    await planSharedMcpRuntimePrune(operations, runtimeMcpServerPathForTarget(input.target), {
+      harness: TARGET_ID,
+      scope: input.target.scope,
+      root: input.target.root,
+      sourcePluginName: input.target.sourcePluginName,
+    });
+  }
   if (bindings.length === 0) return { toolNames: [] };
 
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const bundle = await generateMcpServerBundle({
     sourcePluginName: input.target.sourcePluginName,
@@ -590,10 +599,7 @@ const planMcpServer = async (
   });
 
   const runtimeServerPath = runtime.transport === "streamable-http"
-    ? runtimeMcpServerDescriptor(
-        input.target.mcpRuntimeRoot ?? input.target.root,
-        input.target.sourcePluginName,
-      ).absolutePath
+    ? runtimeMcpServerPathForTarget(input.target)
     : undefined;
   const targetPath = runtimeServerPath ?? generatedPath(input.target, bundle.relativePath);
   await pushWriteOperation(operations, targetPath, bundle.content);
@@ -729,15 +735,18 @@ const planConfigPatch = async (
   hooks: ReadonlyArray<PlannedHook>,
 ): Promise<void> => {
   const configTarget = join(input.target.root, "config.toml");
-  const current = (await exists(configTarget)) ? await readFile(configTarget) : "";
+  const configExists = await exists(configTarget);
+  const current = configExists ? await readFile(configTarget) : "";
+  const next = replaceManagedBlock(
+    current,
+    input.target.sourcePluginName,
+    renderHooksConfig(input.target, hooks),
+  );
+  if (!configExists && next.length === 0) return;
   await pushConfigPatch(
     operations,
     configTarget,
-    replaceManagedBlock(
-      current,
-      input.target.sourcePluginName,
-      renderHooksConfig(input.target, hooks),
-    ),
+    next,
   );
 };
 
@@ -788,6 +797,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   const contexts = await collectContextFiles(input);
 
   if (!hasPluginOutput(input, contexts)) {
+    await planSharedMcpRuntimePrune(state.operations, runtimeMcpServerPathForTarget(input.target), {
+      harness: TARGET_ID,
+      scope: input.target.scope,
+      root: input.target.root,
+      sourcePluginName: input.target.sourcePluginName,
+    });
     await planConfigPatch(input, state.operations, []);
     await planInstalledPluginRegistration(input, state.operations, false);
     await planGeneratedPluginPruning({

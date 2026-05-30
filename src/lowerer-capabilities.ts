@@ -519,8 +519,8 @@ export const LOWERER_CAPABILITIES = {
       },
       agents: {
         kind: "markdown-file",
-        path: "<pi-root>/agents/<name>.md",
-        summary: "Compiled agents lower to Pi's native agent markdown files.",
+        path: "~/.pi/agents/<name>.md or .pi/agents/<name>.md",
+        summary: "Compiled agents lower to the markdown files discovered by the pi-agents package.",
       },
       skills: {
         kind: "native-plugin-bundle",
@@ -540,13 +540,13 @@ export const LOWERER_CAPABILITIES = {
       mcpConfig: unsupported("Prism-generated Pi tools use extension APIs instead of MCP config."),
       agentConfig: {
         kind: "markdown-file",
-        path: "<pi-root>/agents/<name>.md",
+        path: "~/.pi/agents/<name>.md or .pi/agents/<name>.md",
         summary: "Pi agent settings live in generated agent frontmatter.",
       },
     },
     notes: [
       "Pi packages are referenced from settings.json#packages; project scope uses .pi/settings.json.",
-      "Compiled Pi agents use native .pi/agents markdown; generated packages carry supporting tools, hooks, prompts, and skills.",
+      "Compiled Pi agents use pi-agents markdown discovery: ~/.pi/agents globally and nearest .pi/agents in project scope.",
     ],
   },
   grok: {

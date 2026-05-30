@@ -29,7 +29,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
-| Pi | generated package extension context | generated package `prompts/` | native `agents/` markdown | generated package `skills/` |
+| Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
@@ -43,7 +43,7 @@ Factory Droid is part of the `coding-harness` preset with full compile-phase plu
 
 Kimi Code is part of the `coding-harness` preset with compile-phase generated plugin support. The active Kimi Code target uses the current `~/.kimi-code` home; Prism does not retain legacy `~/.kimi` support as a compatibility fork. Prism emits one generated user-scoped plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/` with `kimi.plugin.json`, plugin skills, session-start context, plugin-declared MCP servers, and hook wrappers, then registers it in `<kimi-root>/plugins/installed.json` so Kimi loads it as an enabled plugin. Prism patches `<kimi-root>/config.toml -> [[hooks]]` for Kimi hooks because official Kimi plugins ignore hook fields. Compiled agents lower honestly as role/workflow skills, not native agent files, because Kimi subagents are runtime dispatches rather than a persistent custom-agent file surface.
 
-Pi is part of the `coding-harness` preset with compile-phase package support plus native agent markdown. Prism writes compiled agents to `<pi-root>/agents/<name>.md`, emits one generated local Pi package under `<pi-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
+Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
 ## Tech Stack
 
@@ -674,9 +674,9 @@ prism compile ./my-plugin --harness claude-code --dry-run
 
 #### Pi
 
-- Writes one generated package per compiled source plugin under `<pi-root>/packages/prism-generated-<source-plugin>/`
-- Patches `<pi-root>/settings.json` with a compiler-owned `packages` entry pointing at `./packages/prism-generated-<source-plugin>`
-- Writes compiled agents as native Pi agent markdown at `<pi-root>/agents/<name>.md`
+- Writes one generated package per compiled source plugin under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`
+- Patches `<pi-settings-root>/settings.json` with a compiler-owned `packages` entry pointing at `./packages/prism-generated-<source-plugin>`
+- Writes compiled agents as pi-agents markdown at `~/.pi/agents/<name>.md` globally and `.pi/agents/<name>.md` for project scope
 - Writes targeted managed skills and concrete orbit instances into package `skills/<name>/SKILL.md`
 - Writes install-phase command markdown as Pi prompt templates under package `prompts/`
 - Injects targeted rules/context through package `extensions/prism-extension.js` using Pi's extension event API

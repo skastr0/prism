@@ -6531,24 +6531,101 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
   expect((await readHarnessLedger("pi")).entries.some((entry) => entry.targetPath === staleAgentPath)).toBe(false);
 });
 
+test("compilePluginForTarget leaves absent Pi cleanup settings absent", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "pi-empty-cleanup");
+  const piRoot = join(root, "pi-home", "agent");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "pi-empty-cleanup",
+      version: "0.1.0",
+      targets: {},
+    })}\n`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "pi",
+      scope: "global",
+      root: piRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations.some((operation) =>
+    operation.kind === "patch-config" &&
+    operation.target === join(piRoot, "settings.json")
+  )).toBe(false);
+  expect(await pathExists(join(piRoot, "settings.json"))).toBe(false);
+});
+
 test("compilePluginForTarget lowers Pi package surfaces in global scope with an override root", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "pi-global-demo");
-  const piRoot = join(root, "pi-root");
+  const piHome = join(root, "pi-home");
+  const piRoot = join(piHome, "agent");
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({
       name: "pi-global-demo",
       version: "0.1.0",
       targets: {
+        agents: ["pi"],
         skills: ["pi"],
       },
     })}\n`,
   );
   await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    "---\ndescription: Pi global worker\n---\n\n# Worker\n",
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Pi global worker",
+  identity: "worker",
+  traits: [],
+});
+`,
+  );
+  await writeText(
     join(pluginRoot, "skills", "testing", "SKILL.md"),
     "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
   );
+  const legacyAgentPath = join(piRoot, "agents", "worker.md");
+  const legacyAgentContent = "---\nname: worker\ndescription: Legacy Pi worker\n---\n\n<!-- prism:pi-agent owner=\"pi-global-demo\" -->\n\n# Legacy\n";
+  await writeText(legacyAgentPath, legacyAgentContent);
+  const legacyAgentEntryId = managedEntryId({
+    harness: "pi",
+    scope: "global",
+    root: piRoot,
+    pluginName: "pi-global-demo",
+    artifact: "compile",
+    targetPath: legacyAgentPath,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("pi")),
+    entries: [{
+      id: legacyAgentEntryId,
+      pluginName: "pi-global-demo",
+      pluginVersion: "0.1.0",
+      pluginPath: pluginRoot,
+      harness: "pi",
+      scope: "global",
+      root: piRoot,
+      artifact: "compile",
+      targetPath: legacyAgentPath,
+      kind: "file",
+      contentHash: computeContentHash(legacyAgentContent),
+      updatedAt: new Date().toISOString(),
+    }],
+  });
 
   const compiled = await Effect.runPromise(
     compilePluginForTarget({
@@ -6562,6 +6639,16 @@ test("compilePluginForTarget lowers Pi package surfaces in global scope with an 
 
   expect(compiled.outputRoot).toBe(piRoot);
   expect(await pathExists(join(piRoot, "packages", "prism-generated-pi-global-demo", "skills", "testing", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(piHome, "agents", "worker.md"))).toBe(true);
+  expect(await pathExists(join(piRoot, "agents", "worker.md"))).toBe(false);
+  expect(compiled.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: legacyAgentPath,
+      targetType: "file",
+    }),
+  );
+  expect((await readHarnessLedger("pi")).entries.some((entry) => entry.id === legacyAgentEntryId)).toBe(false);
   const settings = JSON.parse(await readFile(join(piRoot, "settings.json"), "utf8")) as {
     packages?: string[];
   };
@@ -6943,6 +7030,176 @@ test("compilePluginForTarget rejects Kimi Code project scope", async () => {
     scope: "project",
     message: "this harness has no project-local config root",
   });
+});
+
+test("compilePluginForTarget leaves absent Kimi cleanup files absent", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "kimi-empty-cleanup");
+  const kimiRoot = join(root, "kimi-home");
+  const mcpRoot = join(root, "mcp-runtime");
+  const staleRuntimePath = runtimeMcpServerDescriptor(mcpRoot, "kimi-empty-cleanup").absolutePath;
+  const staleRuntimeContent = "console.log('stale Kimi runtime');\n";
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "kimi-empty-cleanup",
+      version: "0.1.0",
+      targets: {},
+    })}\n`,
+  );
+  await writeText(staleRuntimePath, staleRuntimeContent);
+  const staleRuntimeEntryId = managedEntryId({
+    harness: "kimi-code",
+    scope: "global",
+    root: kimiRoot,
+    pluginName: "kimi-empty-cleanup",
+    artifact: "compile",
+    targetPath: staleRuntimePath,
+    kind: "file",
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("kimi-code")),
+    entries: [{
+      id: staleRuntimeEntryId,
+      pluginName: "kimi-empty-cleanup",
+      pluginVersion: "0.1.0",
+      pluginPath: pluginRoot,
+      harness: "kimi-code",
+      scope: "global",
+      root: kimiRoot,
+      artifact: "compile",
+      targetPath: staleRuntimePath,
+      kind: "file",
+      contentHash: computeContentHash(staleRuntimeContent),
+      updatedAt: new Date().toISOString(),
+    }],
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "kimi-code",
+      scope: "global",
+      root: kimiRoot,
+      mcpRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations.some((operation) =>
+    operation.kind === "patch-config" &&
+    (operation.target === join(kimiRoot, "config.toml") ||
+      operation.target === join(kimiRoot, "plugins", "installed.json"))
+  )).toBe(false);
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: staleRuntimePath,
+      targetType: "file",
+      shared: true,
+    }),
+  );
+  expect(await pathExists(join(kimiRoot, "config.toml"))).toBe(false);
+  expect(await pathExists(join(kimiRoot, "plugins", "installed.json"))).toBe(false);
+  expect(await pathExists(staleRuntimePath)).toBe(false);
+  expect((await readHarnessLedger("kimi-code")).entries.some((entry) => entry.id === staleRuntimeEntryId)).toBe(false);
+});
+
+test("compilePluginForTarget drops stale Kimi shared MCP ledger when runtime file is already missing", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "kimi-shared-runtime");
+  const kimiRoot = join(root, "kimi-home");
+  const claudeRoot = join(root, "claude-home");
+  const mcpRoot = join(root, "mcp-runtime");
+  const targetPath = runtimeMcpServerDescriptor(mcpRoot, "kimi-shared-runtime").absolutePath;
+  const content = "console.log('shared runtime');\n";
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "kimi-shared-runtime",
+      version: "0.1.0",
+      targets: { agents: ["kimi-code"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    "---\ndescription: Kimi worker\n---\n\n# Worker\n\nKimi worker.\n",
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Kimi worker",
+  identity: "worker",
+  traits: [],
+});
+`,
+  );
+  await writeText(targetPath, content);
+
+  const kimiEntryId = managedEntryId({
+    harness: "kimi-code",
+    scope: "global",
+    root: kimiRoot,
+    pluginName: "kimi-shared-runtime",
+    artifact: "compile",
+    targetPath,
+    kind: "file",
+  });
+  const claudeEntryId = managedEntryId({
+    harness: "claude-code",
+    scope: "global",
+    root: claudeRoot,
+    pluginName: "kimi-shared-runtime",
+    artifact: "compile",
+    targetPath,
+    kind: "file",
+  });
+  const sharedEntry = {
+    pluginName: "kimi-shared-runtime",
+    pluginVersion: "0.1.0",
+    pluginPath: pluginRoot,
+    scope: "global" as const,
+    artifact: "compile",
+    targetPath,
+    kind: "file" as const,
+    contentHash: computeContentHash(content),
+    updatedAt: new Date().toISOString(),
+  };
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("kimi-code")),
+    entries: [{ ...sharedEntry, id: kimiEntryId, harness: "kimi-code", root: kimiRoot }],
+  });
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("claude-code")),
+    entries: [{ ...sharedEntry, id: claudeEntryId, harness: "claude-code", root: claudeRoot }],
+  });
+  await rm(targetPath);
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "kimi-code",
+      scope: "global",
+      root: kimiRoot,
+      mcpRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(await pathExists(targetPath)).toBe(false);
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: targetPath,
+      targetType: "file",
+      shared: true,
+    }),
+  );
+  expect((await readHarnessLedger("kimi-code")).entries.some((entry) => entry.id === kimiEntryId)).toBe(false);
+  expect((await readHarnessLedger("claude-code")).entries.some((entry) => entry.id === claudeEntryId)).toBe(true);
 });
 
 test("compilePluginForTarget gates Factory HTTP MCP for agent-bound dependency tools", async () => {

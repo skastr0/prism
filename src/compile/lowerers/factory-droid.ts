@@ -7,7 +7,6 @@
 
 import { join } from "node:path";
 import { Effect } from "effect";
-import { exists } from "../../fs.js";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
@@ -19,8 +18,8 @@ import {
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
 } from "../mcp-runtime.js";
+import { runtimeMcpServerPathForTarget } from "../mcp-runtime-path.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -41,6 +40,7 @@ import {
   planGeneratedPluginManifest,
   planGeneratedPluginPruning,
   planGeneratedPluginSkillWrites,
+  planSharedMcpRuntimePrune,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
   pushWriteOperation as pushRawWrite,
@@ -294,27 +294,6 @@ const factoryBundleOwnsPluginSkills = (input: LowerInput): boolean =>
   (input.tools?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0;
 
-const sharedMcpServerPath = (target: FactoryDroidLowerTarget): string =>
-  runtimeMcpServerDescriptor(
-    target.mcpRuntimeRoot ?? target.root,
-    target.sourcePluginName,
-  ).absolutePath;
-
-const planSharedMcpServerPrune = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-): Promise<void> => {
-  const target = sharedMcpServerPath(input.target);
-  if (!(await exists(target))) return;
-  operations.push({
-    kind: "prune-plugin-path",
-    target,
-    targetType: "file",
-    shared: true,
-    reason: "stale",
-  } as LowerOperation);
-};
-
 const planMcpServer = async (
   input: LowerInput,
   operations: LowerOperation[],
@@ -329,7 +308,12 @@ const planMcpServer = async (
   const pluginId = generatedPluginId(input.target);
 
   if (runtime.transport !== "streamable-http" || bindings.length === 0) {
-    await planSharedMcpServerPrune(input, operations);
+    await planSharedMcpRuntimePrune(operations, runtimeMcpServerPathForTarget(input.target), {
+      harness: TARGET_ID,
+      scope: input.target.scope,
+      root: input.target.root,
+      sourcePluginName: input.target.sourcePluginName,
+    });
   }
 
   if (bindings.length === 0) {
@@ -356,7 +340,7 @@ const planMcpServer = async (
   if (runtime.transport === "streamable-http") {
     await pushRawWrite(
       operations,
-      sharedMcpServerPath(input.target),
+      runtimeMcpServerPathForTarget(input.target),
       bundle.content,
     );
   } else {
@@ -409,7 +393,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     generatedPath(input.target, relativePath);
 
   if (!hasFactoryOutput(input)) {
-    await planSharedMcpServerPrune(input, state.operations);
+    await planSharedMcpRuntimePrune(state.operations, runtimeMcpServerPathForTarget(input.target), {
+      harness: TARGET_ID,
+      scope: input.target.scope,
+      root: input.target.root,
+      sourcePluginName: input.target.sourcePluginName,
+    });
     await planGeneratedPluginPruning({
       state,
       root: generatedPluginRoot(input.target),

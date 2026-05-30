@@ -38,7 +38,7 @@ patched into a config file.
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools | unsupported | none |
 | Cursor | unsupported | unsupported | direct skills | unsupported | unsupported | none |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
-| Pi | `native-plugin-bundle` | root agent markdown | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
+| Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
 | Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin `.mcp.json` | plugin hooks | none for generated bundle |
 
 Gemini CLI is not a supported target. Antigravity CLI is the replacement target.
@@ -82,11 +82,12 @@ plugin MCP runtime names and `mcp__<server>__<tool>` qualification. Hooks are no
 patches managed `[[hooks]]` entries in `<kimi-root>/config.toml` and stores hook
 wrappers in the generated plugin bundle.
 
-Pi uses generated local packages under `<pi-root>/packages/prism-generated-<plugin>/`
+Pi uses generated local packages under `<pi-settings-root>/packages/prism-generated-<plugin>/`
 and a managed `settings.json#packages` entry. Prism bundles targeted skills,
 orbit skills, prompt-template commands, context injection, hooks, and canonical
-tools into that package. Compiled agents lower to Pi's native
-`<pi-root>/agents/<name>.md` markdown surface.
+tools into that package. Compiled agents lower to the pi-agents markdown discovery
+surface: `~/.pi/agents/<name>.md` globally and `.pi/agents/<name>.md` for project
+scope.
 
 Factory Droid compile output follows the documented plugin layout: only
 `.factory-plugin/plugin.json` lives under `.factory-plugin/`, while generated

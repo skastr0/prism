@@ -110,7 +110,7 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   });
   expect(LOWERER_CAPABILITIES.pi.surfaces.agents).toMatchObject({
     kind: "markdown-file",
-    path: "<pi-root>/agents/<name>.md",
+    path: "~/.pi/agents/<name>.md or .pi/agents/<name>.md",
   });
   expect(LOWERER_CAPABILITIES.pi.surfaces.skills).toMatchObject({
     kind: "native-plugin-bundle",

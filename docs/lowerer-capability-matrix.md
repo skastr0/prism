@@ -71,12 +71,24 @@ orbit skills, prompt-template commands, context injection, hooks, and canonical
 tools into that package. Compiled agents lower to Pi's native
 `<pi-root>/agents/<name>.md` markdown surface.
 
+Factory Droid compile output follows the documented plugin layout: only
+`.factory-plugin/plugin.json` lives under `.factory-plugin/`, while generated
+droids, skills, hooks, and MCP config live at the plugin root. Factory rules and
+commands remain install-phase direct-file artifacts, because Droid's native
+plugin command surface is still a slash-command file surface rather than a
+compile-owned canonical command model. When a generated Factory bundle contains
+agents, tools, or hooks, Prism bundles targeted managed skills into that plugin
+to avoid double-loading the same Prism-owned skill from `.factory/skills/`.
+Permission-only skill visibility still fails closed because the official Droid
+frontmatter documents `tools` but not a per-droid skill allowlist.
+
 ## Source Pointers
 
 - OpenCode plugins: https://opencode.ai/docs/plugins/
 - Claude Code plugins and reference: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference
 - Antigravity plugins and migration: https://antigravity.google/docs/cli-plugins and https://antigravity.google/docs/gcli-migration
 - Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks
+- Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
 - Amp plugin API: https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings
 - Hermes MCP and plugin surfaces: https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp and https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins

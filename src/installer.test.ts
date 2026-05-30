@@ -275,6 +275,104 @@ test("planInstallation skips direct Factory skills when a compile plugin bundle 
   expect(operations.some((operation) => operation.target.includes(join(".factory", "skills")))).toBe(false);
 });
 
+test("planInstallation skips direct Factory skills when tools or hooks create a compile bundle", async () => {
+  const cases = ["tools", "hooks"] as const;
+
+  for (const artifact of cases) {
+    const root = await createTempRoot();
+    const pluginPath = join(root, `plugin-${artifact}`);
+    await writeText(
+      join(pluginPath, "plugin.json"),
+      `${JSON.stringify({
+        name: `factory-${artifact}-compile-demo`,
+        version: "0.1.0",
+        targets: {
+          [artifact]: ["factory-droid"],
+          skills: ["factory-droid"],
+        },
+      })}\n`,
+    );
+    await writeText(
+      join(pluginPath, "skills", "testing", "SKILL.md"),
+      "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+    );
+
+    const operations = await planInstallation({
+      pluginPath,
+      harnesses: ["factory-droid"],
+      overwrite: false,
+      dryRun: true,
+    });
+
+    expect(
+      operations.some((operation) =>
+        operation.artifact === "skill" &&
+        operation.harness === "factory-droid"
+      ),
+    ).toBe(false);
+  }
+});
+
+test("planInstallation keeps Factory rules and commands direct when a compile bundle owns skills", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  await mkdir(projectPath, { recursive: true });
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "factory-mixed-routing-demo",
+      version: "0.1.0",
+      targets: {
+        rules: ["factory-droid"],
+        commands: ["factory-droid"],
+        agents: ["factory-droid"],
+        skills: ["factory-droid"],
+      },
+    })}\n`,
+  );
+  await writeText(join(pluginPath, "rules", "global", "context.md"), "Global Factory rules\n");
+  await writeText(join(pluginPath, "rules", "project", "context.md"), "Project Factory rules\n");
+  await writeText(join(pluginPath, "commands", "review.md"), "# Review\n\nReview the change.\n");
+  await writeText(
+    join(pluginPath, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["factory-droid"],
+    projectPath,
+    overwrite: false,
+    dryRun: true,
+  });
+
+  expect(operations).toContainEqual(expect.objectContaining({
+    type: "append",
+    artifact: "rules",
+    harness: "factory-droid",
+    source: join(pluginPath, "rules", "global", "context.md"),
+  }));
+  expect(operations).toContainEqual(expect.objectContaining({
+    type: "copy",
+    artifact: "rules",
+    harness: "factory-droid",
+    source: join(pluginPath, "rules", "project", "context.md"),
+    target: join(projectPath, ".factory", "rules", "context.md"),
+  }));
+  expect(operations.some((operation) =>
+    operation.artifact === "command" &&
+    operation.harness === "factory-droid" &&
+    operation.target.endsWith(join(".factory", "commands", "review.md"))
+  )).toBe(true);
+  expect(
+    operations.some((operation) =>
+      operation.artifact === "skill" &&
+      operation.harness === "factory-droid"
+    ),
+  ).toBe(false);
+});
+
 test("planInstallation skips direct skills when the compile lowerer owns targeted skills", async () => {
   const cases = [
     "amp-code",

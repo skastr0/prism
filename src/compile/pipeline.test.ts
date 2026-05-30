@@ -5701,7 +5701,10 @@ test("compilePluginForTarget lowers Factory Droid plugin-bundle surfaces", async
         targets: {
           agents: ["factory-droid"],
           skills: ["factory-droid"],
+          orbits: ["factory-droid"],
           tools: ["factory-droid"],
+          toolspaces: ["factory-droid"],
+          hooks: ["factory-droid"],
         },
       },
       null,
@@ -5727,6 +5730,13 @@ description: Testing guidance
 # Testing
 `,
   );
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  tools: { read_repo: { targets: { "factory-droid": { name: "Read" } } } },
+});
+`);
   await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
@@ -5745,12 +5755,13 @@ export default defineTool({
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+    `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
 
 export default defineTrait({
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit completed work through the generated Factory MCP tool.",
+  access: { tools: [toolRef("workspace", "read_repo")] },
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
 });
@@ -5775,6 +5786,36 @@ export default defineAgent({
 });
 `,
   );
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "delivery",
+  description: "Deliver work through Factory Droid",
+  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-read",
+  description: "Audit Factory read calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-submit",
+  description: "Audit canonical submit calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.canonical("submit_work") },
+  handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
+});
+`);
 
   const factory = await Effect.runPromise(
     compilePluginForTarget({
@@ -5803,6 +5844,7 @@ export default defineAgent({
   );
   expect(droid).not.toContain("skills:");
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(pluginRootPath, "skills", "delivery", "SKILL.md"))).toBe(true);
   const mcpConfig = await readFile(join(pluginRootPath, "mcp.json"), "utf8");
   expect(mcpConfig).toContain('"prism-generated-factory-pipeline-demo"');
   expect(mcpConfig).toContain(
@@ -5813,7 +5855,129 @@ export default defineAgent({
     "utf8",
   );
   expect(mcpServer).toContain("factory_pipeline_demo_submit_work");
+  const hookConfig = await readFile(join(pluginRootPath, "hooks", "hooks.json"), "utf8");
+  expect(hookConfig).toContain('"PreToolUse"');
+  expect(hookConfig).toContain('"matcher": "Read"');
+  expect(hookConfig).toContain(
+    '"matcher": "mcp__prism-generated-factory-pipeline-demo__factory_pipeline_demo_submit_work"',
+  );
+  expect(hookConfig).toContain('node \\"${DROID_PLUGIN_ROOT}/hooks/audit-read.mjs\\"');
+  expect(hookConfig).toContain('node \\"${DROID_PLUGIN_ROOT}/hooks/audit-submit.mjs\\"');
+  expect(await pathExists(join(pluginRootPath, "hooks", "audit-read.mjs"))).toBe(true);
+  expect(await pathExists(join(pluginRootPath, "hooks", "audit-submit.mjs"))).toBe(true);
+
+  const directHookProcess = Bun.spawn({
+    cmd: [process.execPath, join(pluginRootPath, "hooks", "audit-read.mjs")],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  directHookProcess.stdin.write(JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "Read",
+    tool_input: { block: true },
+    session_id: "session-1",
+    cwd: pluginRoot,
+  }));
+  directHookProcess.stdin.end();
+  const [directHookExit, directHookStdout, directHookStderr] = await Promise.all([
+    directHookProcess.exited,
+    new Response(directHookProcess.stdout).text(),
+    new Response(directHookProcess.stderr).text(),
+  ]);
+  expect(directHookExit).toBe(2);
+  expect(directHookStdout).toBe("");
+  expect(directHookStderr.trim()).toBe("blocked");
+
+  const canonicalHookProcess = Bun.spawn({
+    cmd: [process.execPath, join(pluginRootPath, "hooks", "audit-submit.mjs")],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  canonicalHookProcess.stdin.write(JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "mcp__prism-generated-factory-pipeline-demo__factory_pipeline_demo_submit_work",
+    tool_input: { summary: "done" },
+    session_id: "session-2",
+    cwd: pluginRoot,
+  }));
+  canonicalHookProcess.stdin.end();
+  const [canonicalHookExit, canonicalHookStdout, canonicalHookStderr] = await Promise.all([
+    canonicalHookProcess.exited,
+    new Response(canonicalHookProcess.stdout).text(),
+    new Response(canonicalHookProcess.stderr).text(),
+  ]);
+  expect(canonicalHookExit).toBe(2);
+  expect(canonicalHookStdout).toBe("");
+  expect(canonicalHookStderr.trim()).toBe("canonical-blocked");
+
   expect(await pathExists(join(projectRoot, ".factory", "droids", "worker.md"))).toBe(false);
+  expect(await pathExists(join(projectRoot, ".factory", "skills", "testing", "SKILL.md"))).toBe(false);
+
+  const outputFiles = [
+    join(pluginRootPath, ".factory-plugin", "plugin.json"),
+    join(pluginRootPath, "droids", "worker.md"),
+    join(pluginRootPath, "skills", "testing", "SKILL.md"),
+    join(pluginRootPath, "skills", "delivery", "SKILL.md"),
+    join(pluginRootPath, "mcp.json"),
+    join(pluginRootPath, "mcp", "prism_generated_factory_pipeline_demo", "server.mjs"),
+    join(pluginRootPath, "hooks", "hooks.json"),
+    join(pluginRootPath, "hooks", "audit-read.mjs"),
+    join(pluginRootPath, "hooks", "audit-submit.mjs"),
+  ];
+  const outputSnapshot = Object.fromEntries(
+    await Promise.all(
+      outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
+    ),
+  );
+  const ledgerSnapshot = (await readHarnessLedger("factory-droid")).entries
+    .filter((entry) => entry.pluginName === "factory-pipeline-demo")
+    .map((entry) => ({
+      id: entry.id,
+      artifact: entry.artifact,
+      kind: entry.kind,
+      scope: entry.scope,
+      root: entry.root,
+      targetPath: entry.targetPath,
+      contentHash: entry.contentHash,
+      updatedAt: entry.updatedAt,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const warmCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  const warmWrites = warmCompile.operations.filter(
+    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
+  );
+  expect(warmWrites.length).toBeGreaterThan(0);
+  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
+  expect(warmCompile.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(Object.fromEntries(
+    await Promise.all(
+      outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
+    ),
+  )).toEqual(outputSnapshot);
+  expect((await readHarnessLedger("factory-droid")).entries
+    .filter((entry) => entry.pluginName === "factory-pipeline-demo")
+    .map((entry) => ({
+      id: entry.id,
+      artifact: entry.artifact,
+      kind: entry.kind,
+      scope: entry.scope,
+      root: entry.root,
+      targetPath: entry.targetPath,
+      contentHash: entry.contentHash,
+      updatedAt: entry.updatedAt,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id))).toEqual(ledgerSnapshot);
 });
 
 test("compilePluginForTarget lowers Pi package and extension surfaces", async () => {

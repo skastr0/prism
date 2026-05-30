@@ -467,24 +467,53 @@ export const LOWERER_CAPABILITIES = {
   pi: {
     harness: "pi",
     family: "coding-harness",
-    compile: compileUnsupported,
+    compile: compileSupported(),
     surfaces: {
-      pluginBundle: unsupported("Prism does not manage Pi extensions or packages in the skills-only base target."),
-      rules: unsupported("Pi context files are not managed in the skills-only base target."),
-      commands: unsupported("Pi prompt templates and extension commands are not managed in the skills-only base target."),
-      agents: unsupported("Pi core does not expose a first-party custom-agent file surface; subagent files are extension/package-owned."),
-      skills: {
-        kind: "direct-file",
-        path: "<pi-root>/skills/",
-        summary: "Install writes Agent Skill folders into Pi's user skill root.",
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<pi-root>/packages/prism-generated-<plugin>/",
+        summary: "Compile emits a local Pi package and registers it through settings.json packages.",
       },
-      generatedTools: unsupported("Prism does not manage Pi tools in the skills-only base target."),
-      hooks: unsupported("Prism does not manage Pi hooks in the skills-only base target."),
-      mcpConfig: unsupported("Prism does not manage Pi MCP config in the skills-only base target."),
-      agentConfig: unsupported("No Prism-managed Pi agent config surface exists yet."),
+      rules: {
+        kind: "native-plugin-api",
+        path: "<generated-package>/extensions/prism-extension.js",
+        summary: "Rules lower as Pi before_agent_start context injection in the generated extension.",
+      },
+      commands: {
+        kind: "native-plugin-bundle",
+        path: "<generated-package>/prompts/",
+        summary: "Compile writes Prism command markdown as Pi prompt templates in the generated package.",
+      },
+      agents: {
+        kind: "markdown-file",
+        path: "<pi-root>/agents/<name>.md",
+        summary: "Compiled agents lower to Pi's native agent markdown files.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-package>/skills/",
+        summary: "Compile bundles targeted skills and concrete orbit skills into the generated Pi package.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<generated-package>/extensions/prism-extension.js",
+        summary: "Canonical tools lower through Pi's extension registerTool API.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<generated-package>/extensions/prism-extension.js and <generated-package>/hooks/",
+        summary: "Hooks lower through Pi extension events and generated wrapper files.",
+      },
+      mcpConfig: unsupported("Prism-generated Pi tools use extension APIs instead of MCP config."),
+      agentConfig: {
+        kind: "markdown-file",
+        path: "<pi-root>/agents/<name>.md",
+        summary: "Pi agent settings live in generated agent frontmatter.",
+      },
     },
     notes: [
-      "Pi base support is intentionally skills-only.",
+      "Pi packages are referenced from settings.json#packages; project scope uses .pi/settings.json.",
+      "Compiled Pi agents use native .pi/agents markdown; generated packages carry supporting tools, hooks, prompts, and skills.",
     ],
   },
   grok: {

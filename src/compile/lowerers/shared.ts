@@ -336,12 +336,15 @@ export const bundleGeneratedHookWrapper = async (options: {
     const outdir = join(tempRoot, "dist");
     await buildHookWrapperWithBun(entry, outdir, options.buildLabel);
 
-    const built = await readFile(join(outdir, "wrapper.mjs"));
+    const built = normalizeBuiltHookWrapper(await readFile(join(outdir, "wrapper.mjs")));
     return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
 };
+
+const normalizeBuiltHookWrapper = (content: string): string =>
+  content.replace(/^\/\/ .*\/prism-[^/\n]*hook-[^/\n]+\/[^\n]+\n/gm, "");
 
 export const planGeneratedPluginFilePruning = async (options: {
   readonly root: string;

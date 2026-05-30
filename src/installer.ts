@@ -65,10 +65,15 @@ interface InstallPlanningContext {
   readonly overwrite: boolean;
 }
 
-const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli"]);
+const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli", "pi"]);
 
 const rulesAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_RULE_HARNESSES.has(harnessId);
+
+const COMPILE_MANAGED_COMMAND_HARNESSES = new Set<HarnessId>(["pi"]);
+
+const commandsAreCompileManaged = (harnessId: HarnessId): boolean =>
+  COMPILE_MANAGED_COMMAND_HARNESSES.has(harnessId);
 
 const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
   "amp-code",
@@ -77,7 +82,10 @@ const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
   "codex-cli",
   "grok",
   "hermes",
+  "pi",
 ]);
+
+const PI_COMPILE_MANAGED_PLUGIN_ARTIFACTS = ["rules", "commands", "skills"] as const;
 
 const shouldPlanFileRouterRules = (
   manifest: ResolvedPluginManifest,
@@ -118,6 +126,14 @@ const hasOutputProducingCompileTargets = (
     return true;
   }
   if (harnessId === "antigravity-cli" && manifestTargetsArtifact(manifest, "rules", harnessId)) {
+    return true;
+  }
+  if (
+    harnessId === "pi" &&
+    PI_COMPILE_MANAGED_PLUGIN_ARTIFACTS.some((artifact) =>
+      manifestTargetsArtifact(manifest, artifact, harnessId)
+    )
+  ) {
     return true;
   }
   return false;
@@ -235,6 +251,7 @@ const planCommandsIfTargeted = async (
 ): Promise<FileOperation[]> =>
   harness.supportsCommands &&
   harness.commandsDir &&
+  !commandsAreCompileManaged(harness.id) &&
   manifestTargetsArtifact(manifest, "commands", harness.id)
     ? planCommandsInstallation(pluginPath, harness, context)
     : [];

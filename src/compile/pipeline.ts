@@ -53,6 +53,10 @@ import {
   executeLowering as executeFactoryDroidLowering,
   planLowering as planFactoryDroidLowering,
 } from "./lowerers/factory-droid.js";
+import {
+  executeLowering as executePiLowering,
+  planLowering as planPiLowering,
+} from "./lowerers/pi.js";
 import type { ExecuteLoweringOptions } from "./lowerers/shared.js";
 import {
   InvalidTargetScopeError,
@@ -180,6 +184,7 @@ const SUPPORTED_TARGETS = [
   "hermes",
   "grok",
   "factory-droid",
+  "pi",
 ] as const;
 
 const getLowerer = (target: string): LowererModule => {
@@ -223,6 +228,11 @@ const getLowerer = (target: string): LowererModule => {
       return {
         planLowering: planFactoryDroidLowering,
         executeLowering: executeFactoryDroidLowering,
+      };
+    case "pi":
+      return {
+        planLowering: planPiLowering,
+        executeLowering: executePiLowering,
       };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
@@ -856,7 +866,11 @@ const planTargetLowering = (options: {
   readonly mcpRuntimeRoot: string;
   readonly mcpBearerToken?: string;
 }): Effect.Effect<LowerOperation[], CompileError> => {
-  if (!options.surfaces.hasLowerableArtifacts && options.targetId !== "factory-droid") {
+  if (
+    !options.surfaces.hasLowerableArtifacts &&
+    options.targetId !== "factory-droid" &&
+    options.targetId !== "pi"
+  ) {
     return Effect.succeed([]);
   }
 

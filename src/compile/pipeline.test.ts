@@ -1347,17 +1347,17 @@ test("artifact target resolution filters unsupported preset members", async () =
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("kimi-code");
-  expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("pi");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("antigravity-cli");
   expect(getManifestArtifactTargets(manifest, "rules")).not.toContain("kimi-code");
-  expect(getManifestArtifactTargets(manifest, "rules")).not.toContain("pi");
+  expect(getManifestArtifactTargets(manifest, "rules")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("grok");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("pi");
   expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(false);
-  expect(manifestHasCompileTargets(manifest, "pi")).toBe(false);
+  expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
 });
 
 test("direct unsupported Grok command targets are rejected", async () => {
@@ -1383,7 +1383,7 @@ test("direct unsupported Grok command targets are rejected", async () => {
   );
 });
 
-test("direct non-skill Kimi and Pi targets are rejected", async () => {
+test("direct Kimi non-skill targets are rejected while Pi command targets are compile-managed", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "skills-only-target-demo");
   await writeText(
@@ -1405,9 +1405,31 @@ test("direct non-skill Kimi and Pi targets are rejected", async () => {
   await expect(readManifest(pluginRoot)).rejects.toThrow(
     "targets.rules resolves to unsupported harnesses for rules: kimi-code (Kimi Code)",
   );
-  await expect(readManifest(pluginRoot)).rejects.toThrow(
-    "targets.commands resolves to unsupported harnesses for commands: pi (Pi)",
+});
+
+test("direct Pi rules and commands are compile-managed plugin artifact targets", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "pi-command-target-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "pi-command-target-demo",
+        version: "0.1.0",
+        targets: {
+          rules: ["pi"],
+          commands: ["pi"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
   );
+
+  const manifest = await readManifest(pluginRoot);
+  expect(getManifestArtifactTargets(manifest, "rules")).toContain("pi");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
+  expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
 });
 
 test("opencode model pools distribute same-profile agents by stable peer order", async () => {
@@ -5788,6 +5810,430 @@ export default defineAgent({
   );
   expect(mcpServer).toContain("factory_pipeline_demo_submit_work");
   expect(await pathExists(join(projectRoot, ".factory", "droids", "worker.md"))).toBe(false);
+});
+
+test("compilePluginForTarget lowers Pi package and extension surfaces", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "pi-pipeline-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "pi-pipeline-demo",
+        version: "0.1.0",
+        targets: {
+          rules: ["pi"],
+          commands: ["pi"],
+          agents: ["pi"],
+          skills: ["pi"],
+          orbits: ["pi"],
+          tools: ["pi"],
+          toolspaces: ["pi"],
+          hooks: ["pi"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Pi context\n\nUse the generated Pi package context.\n`);
+  await writeText(join(pluginRoot, "commands", "review.md"), `# Review\n\nReview the current change.\n`);
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+
+Use Pi package surfaces.
+`,
+  );
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  tools: { read_repo: { targets: { pi: { name: "read" } } } },
+});
+`);
+  await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit completed Pi work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input, context) {
+    return { acknowledged: input.summary.length > 0 && context.agent === "pi" };
+  },
+});
+`);
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  instructions: "Submit work through the typed Pi extension tool.",
+  access: { tools: [toolRef("workspace", "read_repo")] },
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`);
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Pi package worker",
+  identity: "worker",
+  traits: ["submittable"],
+  skills: [skillRef("testing")],
+});
+`);
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "delivery",
+  description: "Deliver work through Pi",
+  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-read",
+  description: "Audit read calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-submit",
+  description: "Audit canonical submit calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.canonical("submit_work") },
+  handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
+});
+`);
+
+  const compiled = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "pi",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(compiled.outputRoot).toBe(join(projectRoot, ".pi/"));
+  const packageRoot = join(projectRoot, ".pi", "packages", "prism-generated-pi-pipeline-demo");
+  const settings = JSON.parse(await readFile(join(projectRoot, ".pi", "settings.json"), "utf8")) as {
+    packages?: string[];
+  };
+  expect(settings.packages).toContain("./packages/prism-generated-pi-pipeline-demo");
+  expect(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"))).toMatchObject({
+    name: "prism-generated-pi-pipeline-demo",
+    keywords: ["pi-package"],
+    pi: {
+      extensions: ["./extensions"],
+      skills: ["./skills"],
+      prompts: ["./prompts"],
+    },
+  });
+
+  const piAgent = await readFile(
+    join(projectRoot, ".pi", "agents", "worker.md"),
+    "utf8",
+  );
+  expect(piAgent).toContain('name: "worker"');
+  expect(piAgent).toContain('description: "Pi package worker"');
+  expect(piAgent).toContain('tools:');
+  expect(piAgent).toContain('- "read"');
+  expect(piAgent).toContain('- "pi_pipeline_demo_submit_work"');
+  expect(piAgent).toContain('skills:');
+  expect(piAgent).toContain('- "testing"');
+  expect(piAgent).toContain("<!-- prism:pi-agent owner=\"pi-pipeline-demo\" -->");
+  expect(await pathExists(join(packageRoot, "skills", "prism-agent-worker", "SKILL.md"))).toBe(false);
+  expect(await pathExists(join(packageRoot, "skills", "testing", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(packageRoot, "skills", "delivery", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(packageRoot, "prompts", "review.md"))).toBe(true);
+  expect(await pathExists(join(projectRoot, ".pi", "skills", "testing", "SKILL.md"))).toBe(false);
+
+  const extensionPath = join(packageRoot, "extensions", "prism-extension.js");
+  const extensionSource = await readFile(extensionPath, "utf8");
+  expect(extensionSource).toContain("registerTool");
+  expect(extensionSource).toContain("before_agent_start");
+  expect(extensionSource).toContain("tool_call");
+  expect(extensionSource).toContain("tool_result");
+  expect(extensionSource).toContain("pi_pipeline_demo_submit_work");
+  expect(await pathExists(join(packageRoot, "hooks", "audit-read.mjs"))).toBe(true);
+  expect(await pathExists(join(packageRoot, "hooks", "audit-submit.mjs"))).toBe(true);
+
+  const loaded = await import(`${pathToFileURL(extensionPath).href}?test=${Date.now()}`) as {
+    readonly default: (pi: {
+      readonly registerTool: (definition: any) => void;
+      readonly on: (event: string, handler: any) => void;
+    }) => void;
+  };
+  const registeredTools: any[] = [];
+  const handlers = new Map<string, any>();
+  loaded.default({
+    registerTool: (definition) => {
+      registeredTools.push(definition);
+    },
+    on: (event, handler) => {
+      handlers.set(event, handler);
+    },
+  });
+
+  expect(registeredTools.map((tool) => tool.name)).toContain("pi_pipeline_demo_submit_work");
+  const submitTool = registeredTools.find((tool) => tool.name === "pi_pipeline_demo_submit_work");
+  const toolResult = await submitTool.execute(
+    "tool-call-1",
+    { summary: "done" },
+    undefined,
+    undefined,
+    {
+      cwd: projectRoot,
+      sessionManager: { getSessionFile: () => "session-1.json" },
+    },
+  );
+  expect(JSON.parse(toolResult.content[0].text)).toEqual({ acknowledged: true });
+  expect(toolResult.details.structuredContent).toEqual({ acknowledged: true });
+
+  const contextPatch = await handlers.get("before_agent_start")?.({ systemPrompt: "Base" });
+  expect(contextPatch.systemPrompt).toContain("Base");
+  expect(contextPatch.systemPrompt).toContain("Pi context");
+  const blocked = await handlers.get("tool_call")?.(
+    { toolName: "read", input: { block: true } },
+    { cwd: pluginRoot, sessionManager: { getSessionFile: () => "session-2.json" } },
+  );
+  expect(blocked).toEqual({ block: true, reason: "blocked" });
+  const canonicalBlocked = await handlers.get("tool_call")?.(
+    { toolName: "pi_pipeline_demo_submit_work", input: { summary: "stop" } },
+    { cwd: pluginRoot, sessionManager: { getSessionFile: () => "session-3.json" } },
+  );
+  expect(canonicalBlocked).toEqual({ block: true, reason: "canonical-blocked" });
+  const directHookWrapper = join(packageRoot, "hooks", "audit-read.mjs");
+  const directHookProcess = Bun.spawn({
+    cmd: [process.execPath, directHookWrapper],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  directHookProcess.stdin.write(JSON.stringify({
+    toolName: "read",
+    input: { block: true },
+    cwd: pluginRoot,
+    sessionId: "session-4",
+  }));
+  directHookProcess.stdin.end();
+  const [directHookExit, directHookStdout, directHookStderr] = await Promise.all([
+    directHookProcess.exited,
+    new Response(directHookProcess.stdout).text(),
+    new Response(directHookProcess.stderr).text(),
+  ]);
+  expect(directHookExit).toBe(0);
+  expect(directHookStderr).toBe("");
+  expect(JSON.parse(directHookStdout.trim())).toEqual({
+    decision: "block",
+    message: "blocked",
+  });
+  const canonicalHookWrapper = join(packageRoot, "hooks", "audit-submit.mjs");
+  const canonicalHookProcess = Bun.spawn({
+    cmd: [process.execPath, canonicalHookWrapper],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  canonicalHookProcess.stdin.write(JSON.stringify({
+    toolName: "pi_pipeline_demo_submit_work",
+    input: { summary: "stop" },
+    cwd: pluginRoot,
+    sessionId: "session-5",
+  }));
+  canonicalHookProcess.stdin.end();
+  const [canonicalHookExit, canonicalHookStdout, canonicalHookStderr] = await Promise.all([
+    canonicalHookProcess.exited,
+    new Response(canonicalHookProcess.stdout).text(),
+    new Response(canonicalHookProcess.stderr).text(),
+  ]);
+  expect(canonicalHookExit).toBe(0);
+  expect(canonicalHookStderr).toBe("");
+  expect(JSON.parse(canonicalHookStdout.trim())).toEqual({
+    decision: "block",
+    message: "canonical-blocked",
+  });
+
+  const warmCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "pi",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  const warmWrites = warmCompile.operations.filter(
+    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
+  );
+  const warmConfigPatches = warmCompile.operations.filter(
+    (operation) => operation.kind === "patch-config",
+  );
+  expect(warmWrites.length).toBeGreaterThan(0);
+  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
+  expect(warmConfigPatches).toHaveLength(1);
+  expect(warmConfigPatches[0]?.reason).toBe("unchanged");
+  const warmSettings = JSON.parse(await readFile(join(projectRoot, ".pi", "settings.json"), "utf8")) as {
+    packages?: string[];
+  };
+  expect(warmSettings.packages?.filter((entry) => entry === "./packages/prism-generated-pi-pipeline-demo")).toHaveLength(1);
+});
+
+test("compilePluginForTarget prunes stale Pi package and settings entry for source-only targets", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "pi-source-only");
+  const projectRoot = join(root, "project");
+  const piRoot = join(projectRoot, ".pi");
+  const generatedRoot = join(piRoot, "packages", "prism-generated-pi-source-only");
+  const staleAgentPath = join(piRoot, "agents", "stale.md");
+  await mkdir(projectRoot, { recursive: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "pi-source-only",
+      version: "0.1.0",
+      targets: {
+        toolspaces: ["pi"],
+      },
+    })}\n`,
+  );
+  await writeText(join(generatedRoot, "skills", "stale", "SKILL.md"), "---\nname: stale\ndescription: Stale\n---\n\n# Stale\n");
+  const staleAgentContent = "---\nname: stale\ndescription: Stale\n---\n\n<!-- prism:pi-agent owner=\"pi-source-only\" -->\n\n# Stale\n";
+  await writeText(staleAgentPath, staleAgentContent);
+  await writeText(
+    join(piRoot, "settings.json"),
+    `${JSON.stringify({
+      packages: [
+        "./packages/prism-generated-pi-source-only",
+        "./packages/keep-me",
+      ],
+    }, null, 2)}\n`,
+  );
+  await writeHarnessLedger({
+    version: 1,
+    harness: "pi",
+    entries: [{
+      id: managedEntryId({
+        harness: "pi",
+        scope: "project",
+        root: piRoot,
+        pluginName: "pi-source-only",
+        artifact: "compile",
+        targetPath: staleAgentPath,
+        kind: "file",
+      }),
+      pluginName: "pi-source-only",
+      pluginVersion: "0.1.0",
+      pluginPath: pluginRoot,
+      harness: "pi",
+      scope: "project",
+      root: piRoot,
+      artifact: "compile",
+      targetPath: staleAgentPath,
+      kind: "file",
+      contentHash: computeContentHash(staleAgentContent),
+      updatedAt: new Date().toISOString(),
+    }],
+  });
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "pi",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: generatedRoot,
+      targetType: "dir",
+    }),
+  );
+  expect(result.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: staleAgentPath,
+      targetType: "file",
+    }),
+  );
+  expect(await directoryExists(generatedRoot)).toBe(false);
+  expect(await pathExists(staleAgentPath)).toBe(false);
+  const settings = JSON.parse(await readFile(join(piRoot, "settings.json"), "utf8")) as {
+    packages?: string[];
+  };
+  expect(settings.packages).toEqual(["./packages/keep-me"]);
+  expect((await readHarnessLedger("pi")).entries.some((entry) => entry.targetPath === staleAgentPath)).toBe(false);
+});
+
+test("compilePluginForTarget lowers Pi package surfaces in global scope with an override root", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "pi-global-demo");
+  const piRoot = join(root, "pi-root");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "pi-global-demo",
+      version: "0.1.0",
+      targets: {
+        skills: ["pi"],
+      },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+
+  const compiled = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "pi",
+      scope: "global",
+      root: piRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(compiled.outputRoot).toBe(piRoot);
+  expect(await pathExists(join(piRoot, "packages", "prism-generated-pi-global-demo", "skills", "testing", "SKILL.md"))).toBe(true);
+  const settings = JSON.parse(await readFile(join(piRoot, "settings.json"), "utf8")) as {
+    packages?: string[];
+  };
+  expect(settings.packages).toContain("./packages/prism-generated-pi-global-demo");
 });
 
 test("compilePluginForTarget gates Factory HTTP MCP for agent-bound dependency tools", async () => {

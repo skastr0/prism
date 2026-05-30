@@ -46,6 +46,7 @@ test("compile target capabilities are derived from lowerer capability profiles",
       "hermes",
       "grok",
       "factory-droid",
+      "pi",
     ]),
   );
 
@@ -93,17 +94,26 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
     path: "<kimi-root>/skills/",
   });
   expect(LOWERER_CAPABILITIES.pi.compile).toEqual({
-    agents: "unsupported",
-    generatedCanonicalTools: "unsupported",
-    hooks: "unsupported",
-    skillPermissions: "unsupported",
+    agents: "supported",
+    generatedCanonicalTools: "executable",
+    hooks: "supported",
+    skillPermissions: "supported",
   });
-  expect(LOWERER_CAPABILITIES.pi.surfaces.pluginBundle.kind).toBe("unsupported");
+  expect(LOWERER_CAPABILITIES.pi.surfaces.pluginBundle).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<pi-root>/packages/prism-generated-<plugin>/",
+  });
+  expect(LOWERER_CAPABILITIES.pi.surfaces.agents).toMatchObject({
+    kind: "markdown-file",
+    path: "<pi-root>/agents/<name>.md",
+  });
   expect(LOWERER_CAPABILITIES.pi.surfaces.skills).toMatchObject({
-    kind: "direct-file",
-    path: "<pi-root>/skills/",
+    kind: "native-plugin-bundle",
+    path: "<generated-package>/skills/",
   });
-  expect(LOWERER_CAPABILITIES.pi.surfaces.commands.kind).toBe("unsupported");
+  expect(LOWERER_CAPABILITIES.pi.surfaces.commands.kind).toBe("native-plugin-bundle");
+  expect(LOWERER_CAPABILITIES.pi.surfaces.generatedTools.kind).toBe("native-plugin-api");
+  expect(LOWERER_CAPABILITIES.pi.surfaces.hooks.kind).toBe("native-plugin-api");
   expect(LOWERER_CAPABILITIES.hermes.surfaces.generatedTools.kind).toBe(
     "generated-mcp",
   );

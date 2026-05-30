@@ -29,7 +29,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
-| Pi | - | - | - | `~/.pi/agent/skills/` |
+| Pi | generated package extension context | generated package `prompts/` | native `agents/` markdown | generated package `skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
@@ -41,7 +41,7 @@ Factory Droid is part of the `coding-harness` preset with full compile-phase plu
 
 Kimi Code is part of the `coding-harness` preset for install-phase skills only. The active Kimi Code target uses the current `~/.kimi-code` home; Prism does not retain legacy `~/.kimi` support as a compatibility fork. Prism does not manage Kimi rules, commands, agents, tools, hooks, MCP config, or plugin bundles in this base target.
 
-Pi is part of the `coding-harness` preset for install-phase skills only. Prism does not manage Pi rules, prompt-template commands, agents, tools, hooks, MCP config, extensions, or packages in this base target.
+Pi is part of the `coding-harness` preset with compile-phase package support plus native agent markdown. Prism writes compiled agents to `<pi-root>/agents/<name>.md`, emits one generated local Pi package under `<pi-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
 ## Tech Stack
 
@@ -470,7 +470,7 @@ defineAgent({
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code and Grok support them through compiler-owned plugin bundles with bundled MCP servers.
+Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code and Grok support them through compiler-owned plugin bundles with bundled MCP servers. Pi supports them through compiler-owned package extensions using Pi's native `registerTool` API.
 
 ### Canonical tools vs harness-native plugins
 
@@ -557,11 +557,11 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "grok", "factory-droid"],
-    "orbits": ["opencode", "claude-code", "grok", "factory-droid"],
-    "tools": ["opencode", "grok", "factory-droid"],
-    "toolspaces": ["opencode", "claude-code", "grok", "factory-droid"],
-    "modelspaces": ["opencode", "claude-code", "grok", "factory-droid"]
+    "agents": ["opencode", "claude-code", "grok", "factory-droid", "pi"],
+    "orbits": ["opencode", "claude-code", "grok", "factory-droid", "pi"],
+    "tools": ["opencode", "grok", "factory-droid", "pi"],
+    "toolspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi"],
+    "modelspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi"]
   }
 }
 ```
@@ -570,7 +570,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
 - `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Grok, and Factory Droid; tools-only plugins may target Hermes for generated MCP exposure
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes for generated MCP exposure
 
 ### CLI
 
@@ -589,6 +589,9 @@ prism compile ./my-plugin --harness grok
 
 # Compile Factory Droid agents, skills, hooks, and canonical tools into a generated Factory plugin bundle
 prism compile ./my-plugin --harness factory-droid
+
+# Compile Pi agents, prompt templates, hooks, and canonical tools into generated Pi surfaces
+prism compile ./my-plugin --harness pi
 
 # Compile into a project-local OpenCode root for a business/app repo
 prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
@@ -640,6 +643,18 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Emits `hooks/hooks.json` and bundled hook wrappers using Factory hook event names and `${DROID_PLUGIN_ROOT}` wrapper commands
 - Bundles targeted skills and direct `skillRef(...)` dependencies, but fails closed for permission-only skill visibility because Factory's documented droid frontmatter does not expose per-droid skill allowlists
 - Does not install compile-owned commands or patch `settings.json`; install-phase rules and commands retain direct `.factory/` behavior, while skills-only plugins still install to `.factory/skills/` and compiled Factory bundles carry targeted skills inside the generated plugin to avoid double-loading Prism-owned skill files
+
+#### Pi
+
+- Writes one generated package per compiled source plugin under `<pi-root>/packages/prism-generated-<source-plugin>/`
+- Patches `<pi-root>/settings.json` with a compiler-owned `packages` entry pointing at `./packages/prism-generated-<source-plugin>`
+- Writes compiled agents as native Pi agent markdown at `<pi-root>/agents/<name>.md`
+- Writes targeted managed skills and concrete orbit instances into package `skills/<name>/SKILL.md`
+- Writes install-phase command markdown as Pi prompt templates under package `prompts/`
+- Injects targeted rules/context through package `extensions/prism-extension.js` using Pi's extension event API
+- Emits canonical `tools/*.tool.ts` through the same generated Pi extension using `registerTool`
+- Emits hook wrappers under package `hooks/` and wires them to Pi extension events
+- Does not emit MCP config because generated Pi tools use native extension APIs rather than MCP
 
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 

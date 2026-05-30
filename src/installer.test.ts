@@ -125,7 +125,7 @@ test("planInstallation keeps Factory skills direct with source-only compile targ
   expect(operations.some((operation) => operation.target.includes(join(".factory", "skills")))).toBe(true);
 });
 
-test("planInstallation routes Kimi and Pi base support to skills only", async () => {
+test("planInstallation routes Kimi base support to direct skills", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");
   await writeText(
@@ -133,7 +133,7 @@ test("planInstallation routes Kimi and Pi base support to skills only", async ()
     `${JSON.stringify({
       name: "skills-only-demo",
       version: "0.1.0",
-      targets: { skills: ["kimi-code", "pi"] },
+      targets: { skills: ["kimi-code"] },
     })}\n`,
   );
   await writeText(
@@ -143,12 +143,12 @@ test("planInstallation routes Kimi and Pi base support to skills only", async ()
 
   const operations = await planInstallation({
     pluginPath,
-    harnesses: ["kimi-code", "pi"],
+    harnesses: ["kimi-code"],
     overwrite: false,
     dryRun: true,
   });
 
-  expect(operations).toHaveLength(2);
+  expect(operations).toHaveLength(1);
   expect(operations).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -156,13 +156,36 @@ test("planInstallation routes Kimi and Pi base support to skills only", async ()
         artifact: "skill",
         target: expect.stringContaining(join(".kimi-code", "skills", "testing", "SKILL.md")),
       }),
-      expect.objectContaining({
-        harness: "pi",
-        artifact: "skill",
-        target: expect.stringContaining(join(".pi", "agent", "skills", "testing", "SKILL.md")),
-      }),
     ]),
   );
+});
+
+test("planInstallation skips direct Pi skills because compile owns the generated package", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "pi-skills-demo",
+      version: "0.1.0",
+      targets: { skills: ["pi"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginPath, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["pi"],
+    overwrite: false,
+    dryRun: true,
+  });
+
+  expect(
+    operations.some((operation) => operation.harness === "pi" && operation.artifact === "skill"),
+  ).toBe(false);
 });
 
 test("planInstallation keeps Factory skills direct with orbit-only compile targets", async () => {
@@ -231,6 +254,7 @@ test("planInstallation skips direct skills when the compile lowerer owns targete
     "codex-cli",
     "grok",
     "hermes",
+    "pi",
   ] as const;
 
   for (const harness of cases) {

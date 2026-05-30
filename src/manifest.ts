@@ -54,10 +54,13 @@ const COMPILE_SUPPORTED_HARNESSES = [
   "hermes",
   "grok",
   "factory-droid",
+  "pi",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
-  rules: ["antigravity-cli"],
+  rules: ["antigravity-cli", "pi"],
+  commands: ["pi"],
+  skills: ["pi"],
 };
 
 const getCompileManagedPluginArtifactTargets = (
@@ -259,7 +262,7 @@ async function validateHarnessOverlays(
         continue;
       }
 
-      if (!harnessSupportsArtifact(harnessId, artifactEntry.name)) {
+      if (!targetSupportsPluginArtifact(harnessId, artifactEntry.name)) {
         errors.push(
           `Harness '${harnessId}' does not support ${artifactEntry.name} overlays (found ${overlayPath})`
         );
@@ -474,6 +477,9 @@ function harnessSupportsArtifact(harnessId: HarnessId, artifact: PluginArtifactT
 function targetSupportsPluginArtifact(harnessId: HarnessId, artifact: PluginArtifactType): boolean {
   if (artifact === "agents") {
     return (COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId);
+  }
+  if (getCompileManagedPluginArtifactTargets(artifact).includes(harnessId)) {
+    return true;
   }
 
   return harnessSupportsArtifact(harnessId, artifact);

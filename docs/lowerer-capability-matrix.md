@@ -34,7 +34,7 @@ patched into a config file.
 | Hermes Agent | unsupported | unsupported | root skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` |
 | Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` |
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
-| Kimi Code | unsupported | unsupported | direct skills | unsupported | unsupported | none |
+| Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools | unsupported | none |
 | Cursor | unsupported | unsupported | direct skills | unsupported | unsupported | none |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
@@ -51,10 +51,19 @@ Amp is product-native for generated tools through its TypeScript plugin API. Pri
 does not yet lower compiled agents through a native Amp custom-agent surface; it
 uses generated role skills for that part of the compile output.
 
-Kimi Code's current home is `~/.kimi-code`. Prism installs Agent Skills there,
-but does not preserve legacy `~/.kimi` as a compatibility target. Prism does
-not manage Kimi rules, commands, agents, tools, hooks, MCP config, or plugin
-bundles in this base target.
+Kimi Code's current home is `~/.kimi-code`; Prism does not preserve legacy
+`~/.kimi` as a compatibility target. Compile-phase Kimi output is a generated
+user-scoped plugin bundle under
+`<kimi-root>/plugins/managed/prism-generated-<plugin>/` with `kimi.plugin.json`,
+plus a managed `<kimi-root>/plugins/installed.json` record so Kimi loads the
+plugin as an enabled user-scoped plugin.
+Targeted skills, concrete orbit skills, command workflows, and compiled agents
+lower as Kimi skills; compiled agents are role/workflow skills because official
+Kimi subagents are runtime dispatches rather than persistent custom-agent files.
+Canonical tools lower through plugin-declared MCP servers using Kimi's
+plugin MCP runtime names and `mcp__<server>__<tool>` qualification. Hooks are not plugin manifest fields; Prism
+patches managed `[[hooks]]` entries in `<kimi-root>/config.toml` and stores hook
+wrappers in the generated plugin bundle.
 
 Pi uses generated local packages under `<pi-root>/packages/prism-generated-<plugin>/`
 and a managed `settings.json#packages` entry. Prism bundles targeted skills,
@@ -67,7 +76,7 @@ tools into that package. Compiled agents lower to Pi's native
 - OpenCode plugins: https://opencode.ai/docs/plugins/
 - Claude Code plugins and reference: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference
 - Antigravity plugins and migration: https://antigravity.google/docs/cli-plugins and https://antigravity.google/docs/gcli-migration
-- Kimi Code config, skills, plugins, MCP, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, and https://moonshotai.github.io/kimi-code/en/customization/hooks
+- Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks
 - Amp plugin API: https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings
 - Hermes MCP and plugin surfaces: https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp and https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins

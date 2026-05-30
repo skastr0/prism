@@ -24,7 +24,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Hermes Agent | - | - | - | `~/.hermes/skills/` |
 | Codex CLI | `~/.codex/AGENTS.md` | `~/.codex/prompts/` | `~/.codex/agents/` | `~/.codex/skills/` |
 | Antigravity CLI | generated plugin `rules/` | - | generated plugin `agents/` | `~/.gemini/antigravity-cli/skills/` |
-| Kimi Code | - | - | - | `~/.kimi-code/skills/` |
+| Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | - | - | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
 | Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` |
@@ -39,7 +39,7 @@ Grok Build is part of the `coding-harness` preset. Install-phase rules append to
 
 Factory Droid is part of the `coding-harness` preset with full compile-phase plugin-bundle support. Install-phase rules append/copy into `.factory` roots and install-phase commands still write `commands/`. Skills-only plugins still install shared skills directly into `.factory/skills/`; when a plugin also targets Factory compile surfaces, targeted skills are bundled into `<factory-root>/plugins/prism-generated-<source-plugin>/skills/` instead to avoid double-loading Prism-owned skill files. Compile-phase agents, orbit skills, hooks, and canonical tools lower into the same generated bundle using Factory's native plugin layout: `.factory-plugin/plugin.json`, root `droids/`, `skills/`, `mcp.json`, and `hooks/hooks.json`. Prism does not patch `~/.factory/settings.json` for generated plugin bundles.
 
-Kimi Code is part of the `coding-harness` preset for install-phase skills only. The active Kimi Code target uses the current `~/.kimi-code` home; Prism does not retain legacy `~/.kimi` support as a compatibility fork. Prism does not manage Kimi rules, commands, agents, tools, hooks, MCP config, or plugin bundles in this base target.
+Kimi Code is part of the `coding-harness` preset with compile-phase generated plugin support. The active Kimi Code target uses the current `~/.kimi-code` home; Prism does not retain legacy `~/.kimi` support as a compatibility fork. Prism emits one generated user-scoped plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/` with `kimi.plugin.json`, plugin skills, session-start context, plugin-declared MCP servers, and hook wrappers, then registers it in `<kimi-root>/plugins/installed.json` so Kimi loads it as an enabled plugin. Prism patches `<kimi-root>/config.toml -> [[hooks]]` for Kimi hooks because official Kimi plugins ignore hook fields. Compiled agents lower honestly as role/workflow skills, not native agent files, because Kimi subagents are runtime dispatches rather than a persistent custom-agent file surface.
 
 Pi is part of the `coding-harness` preset with compile-phase package support plus native agent markdown. Prism writes compiled agents to `<pi-root>/agents/<name>.md`, emits one generated local Pi package under `<pi-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
@@ -470,7 +470,7 @@ defineAgent({
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.
 
-Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code and Grok support them through compiler-owned plugin bundles with bundled MCP servers. Pi supports them through compiler-owned package extensions using Pi's native `registerTool` API.
+Generated canonical tool execution is target-capability-gated. OpenCode supports executable generated canonical tools through compiler-owned generated plugins. Claude Code, Kimi Code, and Grok support them through compiler-owned plugin bundles with bundled MCP servers. Pi supports them through compiler-owned package extensions using Pi's native `registerTool` API.
 
 ### Canonical tools vs harness-native plugins
 
@@ -557,11 +557,11 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "grok", "factory-droid", "pi"],
-    "orbits": ["opencode", "claude-code", "grok", "factory-droid", "pi"],
-    "tools": ["opencode", "grok", "factory-droid", "pi"],
-    "toolspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi"],
-    "modelspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi"]
+    "agents": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"],
+    "orbits": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"],
+    "tools": ["opencode", "grok", "factory-droid", "pi", "kimi-code"],
+    "toolspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"],
+    "modelspaces": ["opencode", "claude-code", "grok", "factory-droid", "pi", "kimi-code"]
   }
 }
 ```
@@ -570,7 +570,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
 - `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes for generated MCP exposure
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Kimi Code, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes for generated MCP exposure
 
 ### CLI
 
@@ -592,6 +592,9 @@ prism compile ./my-plugin --harness factory-droid
 
 # Compile Pi agents, prompt templates, hooks, and canonical tools into generated Pi surfaces
 prism compile ./my-plugin --harness pi
+
+# Compile Kimi role skills, plugin MCP, and hooks into generated Kimi surfaces
+prism compile ./my-plugin --harness kimi-code
 
 # Compile into a project-local OpenCode root for a business/app repo
 prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
@@ -643,6 +646,16 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Emits `hooks/hooks.json` and bundled hook wrappers using Factory hook event names and `${DROID_PLUGIN_ROOT}` wrapper commands
 - Bundles targeted skills and direct `skillRef(...)` dependencies, but fails closed for permission-only skill visibility because Factory's documented droid frontmatter does not expose per-droid skill allowlists
 - Does not install compile-owned commands or patch `settings.json`; install-phase rules and commands retain direct `.factory/` behavior, while skills-only plugins still install to `.factory/skills/` and compiled Factory bundles carry targeted skills inside the generated plugin to avoid double-loading Prism-owned skill files
+
+#### Kimi Code
+
+- Writes one generated user-scoped plugin bundle per compiled source plugin under `<kimi-root>/plugins/managed/prism-generated-<source-plugin>/`
+- Writes `kimi.plugin.json` with plugin `skills`, optional `sessionStart.skill`, and plugin-declared `mcpServers`
+- Registers the generated plugin in `<kimi-root>/plugins/installed.json`, preserving user plugin and MCP enable/disable state
+- Writes targeted managed skills, concrete orbit instances, command workflows, and compiled agent role/workflow fallbacks into plugin `skills/<name>/SKILL.md`
+- Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server by default; generated tools use Kimi's plugin MCP runtime names with the `mcp__<server>__<tool>` qualification in role skills and hook matchers
+- Emits hook wrappers under plugin `hooks/` and patches `<kimi-root>/config.toml` with managed `[[hooks]]` entries using Kimi hook event names
+- Keeps project scope unsupported because official Kimi plugin installs are user-scoped
 
 #### Pi
 

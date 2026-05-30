@@ -88,7 +88,10 @@ test("install and compile help use managed backup policy instead of a per-run ba
     expect(result.stdout).toContain("--dry-run");
     expect(result.stdout).not.toContain("--backup");
     expect(result.stdout).not.toContain(".bak");
-    if (command === "compile") expect(result.stdout).toContain("'pi'");
+    if (command === "compile") {
+      expect(result.stdout).toContain("'pi'");
+      expect(result.stdout).toContain("'kimi-code'");
+    }
   }
 });
 

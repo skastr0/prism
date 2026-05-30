@@ -65,12 +65,12 @@ interface InstallPlanningContext {
   readonly overwrite: boolean;
 }
 
-const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli", "pi"]);
+const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli", "pi", "kimi-code"]);
 
 const rulesAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_RULE_HARNESSES.has(harnessId);
 
-const COMPILE_MANAGED_COMMAND_HARNESSES = new Set<HarnessId>(["pi"]);
+const COMPILE_MANAGED_COMMAND_HARNESSES = new Set<HarnessId>(["pi", "kimi-code"]);
 
 const commandsAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_COMMAND_HARNESSES.has(harnessId);
@@ -82,10 +82,12 @@ const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
   "codex-cli",
   "grok",
   "hermes",
+  "kimi-code",
   "pi",
 ]);
 
 const PI_COMPILE_MANAGED_PLUGIN_ARTIFACTS = ["rules", "commands", "skills"] as const;
+const KIMI_COMPILE_MANAGED_PLUGIN_ARTIFACTS = ["rules", "commands", "skills"] as const;
 
 const shouldPlanFileRouterRules = (
   manifest: ResolvedPluginManifest,
@@ -131,6 +133,14 @@ const hasOutputProducingCompileTargets = (
   if (
     harnessId === "pi" &&
     PI_COMPILE_MANAGED_PLUGIN_ARTIFACTS.some((artifact) =>
+      manifestTargetsArtifact(manifest, artifact, harnessId)
+    )
+  ) {
+    return true;
+  }
+  if (
+    harnessId === "kimi-code" &&
+    KIMI_COMPILE_MANAGED_PLUGIN_ARTIFACTS.some((artifact) =>
       manifestTargetsArtifact(manifest, artifact, harnessId)
     )
   ) {

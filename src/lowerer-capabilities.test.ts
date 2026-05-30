@@ -47,6 +47,7 @@ test("compile target capabilities are derived from lowerer capability profiles",
       "grok",
       "factory-droid",
       "pi",
+      "kimi-code",
     ]),
   );
 
@@ -84,14 +85,18 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
     "native-plugin-api",
   );
   expect(LOWERER_CAPABILITIES["kimi-code"].compile).toEqual({
-    agents: "unsupported",
-    generatedCanonicalTools: "unsupported",
-    hooks: "unsupported",
-    skillPermissions: "unsupported",
+    agents: "supported",
+    generatedCanonicalTools: "executable",
+    hooks: "supported",
+    skillPermissions: "supported",
   });
-  expect(LOWERER_CAPABILITIES["kimi-code"].surfaces.skills).toMatchObject({
-    kind: "direct-file",
-    path: "<kimi-root>/skills/",
+  expect(LOWERER_CAPABILITIES["kimi-code"].surfaces.pluginBundle).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<kimi-root>/plugins/managed/prism-generated-<plugin>/",
+  });
+  expect(LOWERER_CAPABILITIES["kimi-code"].surfaces.hooks).toMatchObject({
+    kind: "config-patch",
+    path: "<kimi-root>/config.toml#hooks",
   });
   expect(LOWERER_CAPABILITIES.pi.compile).toEqual({
     agents: "supported",

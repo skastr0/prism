@@ -72,6 +72,10 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
     config: "supported",
     lifecycle: "supported",
   },
+  "kimi-code": {
+    config: "supported",
+    lifecycle: "supported",
+  },
   grok: {
     config: "unsupported",
     lifecycle: "unsupported",

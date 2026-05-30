@@ -125,7 +125,7 @@ test("planInstallation keeps Factory skills direct with source-only compile targ
   expect(operations.some((operation) => operation.target.includes(join(".factory", "skills")))).toBe(true);
 });
 
-test("planInstallation routes Kimi base support to direct skills", async () => {
+test("planInstallation skips direct Kimi skills because compile owns the generated plugin", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");
   await writeText(
@@ -148,16 +148,9 @@ test("planInstallation routes Kimi base support to direct skills", async () => {
     dryRun: true,
   });
 
-  expect(operations).toHaveLength(1);
-  expect(operations).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        harness: "kimi-code",
-        artifact: "skill",
-        target: expect.stringContaining(join(".kimi-code", "skills", "testing", "SKILL.md")),
-      }),
-    ]),
-  );
+  expect(
+    operations.some((operation) => operation.harness === "kimi-code" && operation.artifact === "skill"),
+  ).toBe(false);
 });
 
 test("planInstallation skips direct Pi skills because compile owns the generated package", async () => {
@@ -186,6 +179,42 @@ test("planInstallation skips direct Pi skills because compile owns the generated
   expect(
     operations.some((operation) => operation.harness === "pi" && operation.artifact === "skill"),
   ).toBe(false);
+});
+
+test("planInstallation skips direct Kimi and Pi rules and commands because compile owns them", async () => {
+  const cases = ["kimi-code", "pi"] as const;
+
+  for (const harness of cases) {
+    const root = await createTempRoot();
+    const pluginPath = join(root, `plugin-${harness}`);
+    await writeText(
+      join(pluginPath, "plugin.json"),
+      `${JSON.stringify({
+        name: `compile-owned-rules-commands-${harness}`,
+        version: "0.1.0",
+        targets: {
+          rules: [harness],
+          commands: [harness],
+        },
+      })}\n`,
+    );
+    await writeText(join(pluginPath, "rules", "global", "context.md"), "Global context\n");
+    await writeText(join(pluginPath, "commands", "review.md"), "# Review\n\nReview the change.\n");
+
+    const operations = await planInstallation({
+      pluginPath,
+      harnesses: [harness],
+      overwrite: false,
+      dryRun: true,
+    });
+
+    expect(
+      operations.some((operation) =>
+        operation.harness === harness &&
+        (operation.artifact === "rules" || operation.artifact === "command")
+      ),
+    ).toBe(false);
+  }
 });
 
 test("planInstallation keeps Factory skills direct with orbit-only compile targets", async () => {

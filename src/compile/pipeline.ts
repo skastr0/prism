@@ -57,6 +57,10 @@ import {
   executeLowering as executePiLowering,
   planLowering as planPiLowering,
 } from "./lowerers/pi.js";
+import {
+  executeLowering as executeKimiCodeLowering,
+  planLowering as planKimiCodeLowering,
+} from "./lowerers/kimi-code.js";
 import type { ExecuteLoweringOptions } from "./lowerers/shared.js";
 import {
   InvalidTargetScopeError,
@@ -185,6 +189,7 @@ const SUPPORTED_TARGETS = [
   "grok",
   "factory-droid",
   "pi",
+  "kimi-code",
 ] as const;
 
 const getLowerer = (target: string): LowererModule => {
@@ -233,6 +238,11 @@ const getLowerer = (target: string): LowererModule => {
       return {
         planLowering: planPiLowering,
         executeLowering: executePiLowering,
+      };
+    case "kimi-code":
+      return {
+        planLowering: planKimiCodeLowering,
+        executeLowering: executeKimiCodeLowering,
       };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
@@ -869,7 +879,8 @@ const planTargetLowering = (options: {
   if (
     !options.surfaces.hasLowerableArtifacts &&
     options.targetId !== "factory-droid" &&
-    options.targetId !== "pi"
+    options.targetId !== "pi" &&
+    options.targetId !== "kimi-code"
   ) {
     return Effect.succeed([]);
   }

@@ -108,6 +108,27 @@ test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
   expect(getMcpHttpTargetSupport("factory-droid").config).toBe("supported");
 });
 
+test("MCP runtime supports Kimi Code Streamable HTTP config", () => {
+  const runtime = resolveMcpRuntime(
+    registry({
+      mcp: {
+        "kimi-code": {
+          transport: "streamable-http",
+          host: "127.0.0.1",
+          port: 38467,
+          tokenEnv: "PRISM_MCP_KIMI_TOKEN",
+        },
+      },
+    }),
+    "kimi-code",
+    { requirePort: true },
+  );
+
+  expect(runtime.targetId).toBe("kimi-code");
+  expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:38467/mcp");
+  expect(getMcpHttpTargetSupport("kimi-code").config).toBe("supported");
+});
+
 test("MCP runtime fails closed for unsupported HTTP targets", () => {
   expect(() =>
     resolveMcpRuntime(

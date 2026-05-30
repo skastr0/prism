@@ -92,6 +92,31 @@ const generatedStaleSourcePluginEntry = (projectRoot: string, pluginId: string):
     join(projectRoot, ".opencode", "plugins", pluginId, "src", "server.ts"),
   ).href;
 
+const sanitizeKimiMcpNamePart = (part: string): string =>
+  part.replace(/[^a-zA-Z0-9_-]/gu, "_").replace(/_+/gu, "_");
+
+const kimiStableHash8 = (input: string): string => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index++) {
+    hash ^= input.codePointAt(index)!;
+    hash = Math.trunc(Math.imul(hash, 0x01000193));
+  }
+  return hash.toString(16).padStart(8, "0");
+};
+
+const qualifyKimiMcpToolName = (serverName: string, toolName: string): string => {
+  const full = `mcp__${sanitizeKimiMcpNamePart(serverName)}__${sanitizeKimiMcpNamePart(toolName)}`;
+  if (full.length <= 64) return full;
+  const hash = kimiStableHash8(full);
+  return `${full.slice(0, 64 - hash.length - 1)}_${hash}`;
+};
+
+const kimiPluginMcpToolName = (
+  pluginId: string,
+  serverName: string,
+  toolName: string,
+): string => qualifyKimiMcpToolName(`plugin-${pluginId}:${serverName}`, toolName);
+
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content);
@@ -1346,17 +1371,17 @@ test("artifact target resolution filters unsupported preset members", async () =
 
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
-  expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("kimi-code");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("antigravity-cli");
-  expect(getManifestArtifactTargets(manifest, "rules")).not.toContain("kimi-code");
+  expect(getManifestArtifactTargets(manifest, "rules")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("grok");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("pi");
   expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
-  expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(false);
+  expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
 });
 
@@ -1383,42 +1408,18 @@ test("direct unsupported Grok command targets are rejected", async () => {
   );
 });
 
-test("direct Kimi non-skill targets are rejected while Pi command targets are compile-managed", async () => {
+test("direct Kimi and Pi rules and commands are compile-managed plugin artifact targets", async () => {
   const root = await createTempRoot();
-  const pluginRoot = join(root, "skills-only-target-demo");
+  const pluginRoot = join(root, "managed-plugin-artifact-demo");
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "skills-only-target-demo",
+        name: "managed-plugin-artifact-demo",
         version: "0.1.0",
         targets: {
-          rules: ["kimi-code"],
-          commands: ["pi"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  await expect(readManifest(pluginRoot)).rejects.toThrow(
-    "targets.rules resolves to unsupported harnesses for rules: kimi-code (Kimi Code)",
-  );
-});
-
-test("direct Pi rules and commands are compile-managed plugin artifact targets", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "pi-command-target-demo");
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "pi-command-target-demo",
-        version: "0.1.0",
-        targets: {
-          rules: ["pi"],
-          commands: ["pi"],
+          rules: ["kimi-code", "pi"],
+          commands: ["kimi-code", "pi"],
         },
       },
       null,
@@ -1428,8 +1429,11 @@ test("direct Pi rules and commands are compile-managed plugin artifact targets",
 
   const manifest = await readManifest(pluginRoot);
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("pi");
+  expect(getManifestArtifactTargets(manifest, "rules")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
+  expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
 });
 
 test("opencode model pools distribute same-profile agents by stable peer order", async () => {
@@ -6234,6 +6238,383 @@ test("compilePluginForTarget lowers Pi package surfaces in global scope with an 
     packages?: string[];
   };
   expect(settings.packages).toContain("./packages/prism-generated-pi-global-demo");
+});
+
+test("compilePluginForTarget lowers Kimi Code plugin, MCP, role skills, and hooks", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "kimi-pipeline-demo");
+  const kimiRoot = join(root, "kimi-home");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "kimi-pipeline-demo",
+        version: "0.1.0",
+        targets: {
+          rules: ["kimi-code"],
+          commands: ["kimi-code"],
+          agents: ["kimi-code"],
+          skills: ["kimi-code"],
+          orbits: ["kimi-code"],
+          tools: ["kimi-code"],
+          toolspaces: ["kimi-code"],
+          hooks: ["kimi-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Kimi context\n\nUse the generated Kimi plugin context.\n`);
+  await writeText(join(pluginRoot, "commands", "review.md"), `# Review\n\nReview the current change.\n`);
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    `---
+name: testing
+description: Testing guidance
+---
+
+# Testing
+`,
+  );
+  await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---
+description: Worker identity
+---
+
+# Worker
+
+Use Kimi plugin surfaces.
+`);
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  tools: { read_repo: { targets: { "kimi-code": { name: "Read" } } } },
+});
+`);
+  await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "submit-work",
+  description: "Submit work",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle(input) {
+    return { acknowledged: input.summary.length > 0 };
+  },
+});
+`);
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "submittable",
+  description: "Can submit work",
+  instructions: "Submit work through the typed Kimi MCP tool.",
+  access: { tools: [toolRef("workspace", "read_repo")] },
+  tools: { submit_work: { ref: "submit-work" } },
+  require: { tools: ["submit_work"] },
+});
+`);
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Kimi plugin worker",
+  identity: "worker",
+  traits: ["submittable"],
+  skills: [skillRef("testing")],
+});
+`);
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "delivery",
+  description: "Deliver work through Kimi",
+  phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-read",
+  description: "Audit reads",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
+  handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
+});
+`);
+  await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-submit",
+  description: "Audit canonical submit calls",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.canonical("submit_work") },
+  handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
+});
+`);
+
+  const compiled = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "kimi-code",
+      scope: "global",
+      root: kimiRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(compiled.outputRoot).toBe(kimiRoot);
+  const kimiPluginId = "prism-generated-kimi-pipeline-demo";
+  const kimiServerName = "prism-generated-kimi-pipeline-demo";
+  const kimiToolName = "kimi_pipeline_demo_submit_work";
+  const qualifiedKimiToolName = kimiPluginMcpToolName(kimiPluginId, kimiServerName, kimiToolName);
+  expect(qualifiedKimiToolName).toBe("mcp__plugin-prism-generated-kimi-pipeline-demo_prism-g_-438e7dd4");
+  expect(qualifiedKimiToolName.length).toBe(64);
+  expect(qualifiedKimiToolName).toContain("_-");
+  const pluginOutputRoot = join(kimiRoot, "plugins", "managed", kimiPluginId);
+  const manifest = JSON.parse(await readFile(join(pluginOutputRoot, "kimi.plugin.json"), "utf8")) as {
+    name: string;
+    skills: string;
+    sessionStart?: { skill?: string };
+    mcpServers?: Record<string, { command?: string; args?: string[]; cwd?: string; enabledTools?: string[] }>;
+  };
+  expect(manifest).toMatchObject({
+    name: kimiPluginId,
+    skills: "./skills/",
+    sessionStart: { skill: "prism-context" },
+  });
+  expect(manifest.mcpServers?.[kimiServerName]).toMatchObject({
+    command: "bun",
+    args: ["./mcp/prism_generated_kimi_pipeline_demo/server.mjs"],
+    cwd: "./",
+    enabledTools: [kimiToolName],
+  });
+  const installed = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
+    plugins?: Array<Record<string, unknown>>;
+  };
+  expect(installed.plugins).toContainEqual(expect.objectContaining({
+    id: kimiPluginId,
+    root: pluginOutputRoot,
+    source: "local-path",
+    enabled: true,
+    originalSource: pluginRoot,
+  }));
+  await writeText(join(kimiRoot, "plugins", "installed.json"), `${JSON.stringify({
+    version: 1,
+    plugins: [
+      {
+        id: kimiPluginId,
+        root: pluginOutputRoot,
+        source: "local-path",
+        enabled: false,
+        installedAt: "2026-05-30T00:00:00.000Z",
+        updatedAt: "2026-05-30T00:00:00.000Z",
+        originalSource: pluginRoot,
+        capabilities: { mcpServers: { [kimiServerName]: { enabled: false } } },
+      },
+      {
+        id: "user-plugin",
+        root: "/tmp/user-plugin",
+        source: "local-path",
+        enabled: true,
+        installedAt: "2026-05-29T00:00:00.000Z",
+        futureField: { preserved: true },
+      },
+    ],
+  }, null, 2)}\n`);
+
+  const preservedInstalled = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
+    plugins?: Array<Record<string, unknown>>;
+  };
+  expect(preservedInstalled.plugins?.[0]).toMatchObject({
+    enabled: false,
+    capabilities: { mcpServers: { [kimiServerName]: { enabled: false } } },
+  });
+
+  const roleSkill = await readFile(join(pluginOutputRoot, "skills", "prism-agent-worker", "SKILL.md"), "utf8");
+  expect(roleSkill).toContain("name: \"prism-agent-worker\"");
+  expect(roleSkill).toContain("<!-- prism:kimi-agent-role -->");
+  expect(roleSkill).toContain(`\`${qualifiedKimiToolName}\``);
+  expect(await pathExists(join(pluginOutputRoot, "skills", "testing", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(pluginOutputRoot, "skills", "delivery", "SKILL.md"))).toBe(true);
+  expect(await pathExists(join(pluginOutputRoot, "skills", "prism-command-review", "SKILL.md"))).toBe(true);
+  expect(await readFile(join(pluginOutputRoot, "skills", "prism-context", "SKILL.md"), "utf8")).toContain("Kimi context");
+  expect(await readFile(join(pluginOutputRoot, "mcp", "prism_generated_kimi_pipeline_demo", "server.mjs"), "utf8")).toContain("kimi_pipeline_demo_submit_work");
+
+  const config = await readFile(join(kimiRoot, "config.toml"), "utf8");
+  expect(config).toContain("# --- prism kimi-code begin: kimi-pipeline-demo ---");
+  expect(config).toContain('event = "PreToolUse"');
+  expect(config).toContain('matcher = "Read"');
+  expect(config).toContain(`matcher = "${qualifiedKimiToolName}"`);
+  expect(config).toContain("audit-submit.mjs");
+
+  const directHookProcess = Bun.spawn({
+    cmd: [process.execPath, join(pluginOutputRoot, "hooks", "audit-read.mjs")],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  directHookProcess.stdin.write(JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "Read",
+    tool_input: { block: true },
+    session_id: "session-1",
+    cwd: pluginRoot,
+  }));
+  directHookProcess.stdin.end();
+  const [directHookExit, directHookStdout, directHookStderr] = await Promise.all([
+    directHookProcess.exited,
+    new Response(directHookProcess.stdout).text(),
+    new Response(directHookProcess.stderr).text(),
+  ]);
+  expect(directHookExit).toBe(2);
+  expect(directHookStdout).toBe("");
+  expect(directHookStderr.trim()).toBe("blocked");
+
+  const canonicalHookProcess = Bun.spawn({
+    cmd: [process.execPath, join(pluginOutputRoot, "hooks", "audit-submit.mjs")],
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  canonicalHookProcess.stdin.write(JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: qualifiedKimiToolName,
+    tool_input: { summary: "done" },
+    session_id: "session-2",
+    cwd: pluginRoot,
+  }));
+  canonicalHookProcess.stdin.end();
+  const [canonicalHookExit, canonicalHookStdout, canonicalHookStderr] = await Promise.all([
+    canonicalHookProcess.exited,
+    new Response(canonicalHookProcess.stdout).text(),
+    new Response(canonicalHookProcess.stderr).text(),
+  ]);
+  expect(canonicalHookExit).toBe(2);
+  expect(canonicalHookStdout).toBe("");
+  expect(canonicalHookStderr.trim()).toBe("canonical-blocked");
+
+  const warmCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "kimi-code",
+      scope: "global",
+      root: kimiRoot,
+      dryRun: false,
+    }),
+  );
+  const warmWrites = warmCompile.operations.filter(
+    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
+  );
+  const warmConfigPatches = warmCompile.operations.filter(
+    (operation) => operation.kind === "patch-config" && operation.target === join(kimiRoot, "config.toml"),
+  );
+  const warmInstalledPatches = warmCompile.operations.filter(
+    (operation) => operation.kind === "patch-config" && operation.target === join(kimiRoot, "plugins", "installed.json"),
+  );
+  expect(warmWrites.length).toBeGreaterThan(0);
+  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
+  expect(warmConfigPatches).toHaveLength(1);
+  expect(warmConfigPatches[0]?.reason).toBe("unchanged");
+  expect(warmInstalledPatches).toHaveLength(1);
+  expect(warmInstalledPatches[0]?.reason).toBe("unchanged");
+  const warmConfig = await readFile(join(kimiRoot, "config.toml"), "utf8");
+  expect(warmConfig).toBe(config);
+  expect(warmConfig.match(/prism kimi-code begin/g) ?? []).toHaveLength(1);
+  const warmInstalled = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
+    plugins?: Array<Record<string, unknown>>;
+  };
+  expect(warmInstalled.plugins?.[0]).toMatchObject({
+    enabled: false,
+    capabilities: { mcpServers: { [kimiServerName]: { enabled: false } } },
+  });
+  expect(warmInstalled.plugins).toContainEqual(expect.objectContaining({
+    id: "user-plugin",
+    futureField: { preserved: true },
+  }));
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "kimi-pipeline-demo",
+        version: "0.1.0",
+        targets: {},
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const pruneCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "kimi-code",
+      scope: "global",
+      root: kimiRoot,
+      dryRun: false,
+    }),
+  );
+  expect(pruneCompile.operations.some((operation) =>
+    operation.kind === "prune-plugin-path" &&
+    operation.target === pluginOutputRoot &&
+    operation.targetType === "dir"
+  )).toBe(true);
+  expect(await directoryExists(pluginOutputRoot)).toBe(false);
+  expect(await readFile(join(kimiRoot, "config.toml"), "utf8")).not.toContain("prism kimi-code begin");
+  const prunedInstalled = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
+    plugins?: Array<Record<string, unknown>>;
+  };
+  expect(prunedInstalled.plugins).toEqual([
+    {
+      id: "user-plugin",
+      root: "/tmp/user-plugin",
+      source: "local-path",
+      enabled: true,
+      installedAt: "2026-05-29T00:00:00.000Z",
+      futureField: { preserved: true },
+    },
+  ]);
+});
+
+test("compilePluginForTarget rejects Kimi Code project scope", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "kimi-project-scope-demo");
+  const projectRoot = join(root, "project");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "kimi-project-scope-demo",
+      version: "0.1.0",
+      targets: { skills: ["kimi-code"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+
+  const exit = await Effect.runPromiseExit(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "kimi-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+    }),
+  );
+  const failure = getFailure(exit);
+  expect(failure._tag).toBe("InvalidTargetScopeError");
+  expect(failure).toMatchObject({
+    target: "kimi-code",
+    scope: "project",
+    message: "this harness has no project-local config root",
+  });
 });
 
 test("compilePluginForTarget gates Factory HTTP MCP for agent-bound dependency tools", async () => {

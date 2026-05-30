@@ -55,12 +55,13 @@ const COMPILE_SUPPORTED_HARNESSES = [
   "grok",
   "factory-droid",
   "pi",
+  "kimi-code",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
-  rules: ["antigravity-cli", "pi"],
-  commands: ["pi"],
-  skills: ["pi"],
+  rules: ["antigravity-cli", "pi", "kimi-code"],
+  commands: ["pi", "kimi-code"],
+  skills: ["pi", "kimi-code"],
 };
 
 const getCompileManagedPluginArtifactTargets = (

@@ -142,13 +142,13 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     agentsDir: null,
     toolsDir: null,
     skillsDir: "skills/",
-    configFile: null,
-    configFormat: "json",
-    supportsTools: false,
+    configFile: "config.toml",
+    configFormat: "toml",
+    supportsTools: true,
     supportsCommands: false,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: false,
+    supportsMCP: true,
   },
 
   "amp-code": {

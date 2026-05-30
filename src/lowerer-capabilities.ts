@@ -324,25 +324,58 @@ export const LOWERER_CAPABILITIES = {
   "kimi-code": {
     harness: "kimi-code",
     family: "coding-harness",
-    compile: compileUnsupported,
+    compile: compileSupported(),
     surfaces: {
-      pluginBundle: unsupported("Prism does not manage Kimi Code plugin bundles in the skills-only base target."),
-      rules: unsupported("Kimi Code rules are not managed in the skills-only base target."),
-      commands: unsupported("Kimi Code command-like workflows should be represented as skills for now."),
-      agents: unsupported("Kimi Code subagents are runtime dispatches; Prism does not lower custom Kimi agent definitions yet."),
-      skills: {
-        kind: "direct-file",
-        path: "<kimi-root>/skills/",
-        summary: "Install writes Agent Skill folders into Kimi's user skill root.",
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<kimi-root>/plugins/managed/prism-generated-<plugin>/",
+        summary: "Compile emits a Kimi plugin bundle with kimi.plugin.json and registers it in plugins/installed.json.",
       },
-      generatedTools: unsupported("Prism does not manage Kimi Code tools in the skills-only base target."),
-      hooks: unsupported("Prism does not manage Kimi Code hooks in the skills-only base target."),
-      mcpConfig: unsupported("Prism does not manage Kimi Code MCP config in the skills-only base target."),
-      agentConfig: unsupported("No Prism-managed Kimi agent config surface exists yet."),
+      rules: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-context/SKILL.md",
+        summary: "Rules lower into a sessionStart skill because Kimi plugins inject Markdown skills, not arbitrary rule files.",
+      },
+      commands: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-command-<name>/SKILL.md",
+        summary: "Command-like workflows lower as manual Kimi flow skills.",
+      },
+      agents: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-agent-<name>/SKILL.md",
+        summary: "Compiled agents lower honestly as role/workflow skills; Kimi subagents are runtime dispatches, not custom agent files.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/",
+        summary: "Compile bundles targeted plugin skills and orbit skills into the generated Kimi plugin.",
+      },
+      generatedTools: {
+        kind: "generated-mcp",
+        path: "<generated-plugin>/kimi.plugin.json#mcpServers",
+        summary: "Canonical tools lower to a generated MCP server declared by the Kimi plugin manifest.",
+      },
+      hooks: {
+        kind: "config-patch",
+        path: "<kimi-root>/config.toml#hooks",
+        summary: "Hooks lower to managed [[hooks]] config entries plus generated wrapper scripts.",
+      },
+      mcpConfig: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/kimi.plugin.json#mcpServers + <kimi-root>/plugins/installed.json",
+        summary: "MCP config is plugin-local and enabled through Kimi's installed plugin record; Prism patches config.toml only for hooks.",
+      },
+      agentConfig: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-agent-<name>/SKILL.md",
+        summary: "Agent role settings and instructions live in generated Kimi role skills.",
+      },
     },
     notes: [
       "The active Kimi Code target uses ~/.kimi-code; legacy ~/.kimi paths are not a Prism compatibility target.",
-      "Kimi Code base support is intentionally skills-only.",
+      "Kimi Code plugins are user-scoped in official docs; Prism keeps project scope unsupported for this lowerer.",
+      "Kimi Code subagents are runtime dispatches, so Prism compiled agents lower as role skills rather than native subagent definitions.",
     ],
   },
   "amp-code": {

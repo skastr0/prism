@@ -381,7 +381,7 @@ export const LOWERER_CAPABILITIES = {
   "amp-code": {
     harness: "amp-code",
     family: "coding-harness",
-    compile: compileSupported({ hooks: "unsupported" }),
+    compile: compileSupported(),
     surfaces: {
       pluginBundle: {
         kind: "native-plugin-api",
@@ -409,12 +409,17 @@ export const LOWERER_CAPABILITIES = {
         path: "<generated-plugin>.ts",
         summary: "Canonical tools lower to Amp registerTool definitions.",
       },
-      hooks: unsupported("Amp event hooks exist in the plugin API, but Prism does not lower hooks yet."),
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>.ts",
+        summary: "Supported Prism hooks lower to Amp amp.on(...) plugin event handlers; session.end fails closed because Amp has no native session-end event.",
+      },
       mcpConfig: unsupported("Prism-generated Amp tools use plugin APIs instead of MCP config."),
       agentConfig: unsupported("No Prism-managed Amp agent config patch exists."),
     },
     notes: [
-      "Amp generated tools use the native plugin API; compiled agents currently lower as role-skill guidance.",
+      "Amp generated tools and supported hooks use the native plugin API; compiled agents currently lower as role-skill guidance.",
+      "Amp exposes session.start, tool.call, tool.result, agent.start, and agent.end plugin events; Prism does not map portable session.end to agent.end.",
     ],
   },
   cursor: {

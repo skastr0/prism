@@ -1,18 +1,21 @@
 /** Amp Code lowerer. */
 
 import { dirname, join } from "node:path";
+import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
+import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   ampPluginToolNameForBinding,
   generateAmpPluginBundle,
 } from "../mcp-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
+import { effectBundleImportPath } from "../runtime-deps.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  bindingFromToolSource,
   bindingsFromCanonicalTools,
+  collectBindingNameMap,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import {
@@ -24,6 +27,7 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  matcherForResolvedToolHook,
   planCompileOwnedTargetedSkillPruning,
   prismOwnerMarker,
   pushWriteOperation as pushWrite,
@@ -122,6 +126,191 @@ const uniqueBindings = (
       ampPluginToolNameForBinding(sourcePluginName, right),
     ),
   );
+};
+
+interface PlannedAmpHook {
+  readonly hook: Hook;
+  readonly importName: string;
+  readonly nativeEvent: "tool.call" | "tool.result" | "session.start";
+  readonly matcher?: string;
+}
+
+const collectAmpBindings = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> =>
+  uniqueBindings(input.target.sourcePluginName, [
+    ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
+    ...input.agents.flatMap((agent) => agent.toolBindings),
+  ]);
+
+const ampNativeHookEvent = (hook: Hook): PlannedAmpHook["nativeEvent"] => {
+  switch (hook.event) {
+    case "tool.before":
+      return "tool.call";
+    case "tool.after":
+      return "tool.result";
+    case "session.start":
+      return "session.start";
+    case "session.end":
+      throw new Error(
+        `Amp does not expose a native session.end plugin event; cannot lower Prism hook '${hook.name}'.`,
+      );
+  }
+};
+
+const planAmpHooks = async (
+  input: LowerInput,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+): Promise<PlannedAmpHook[]> => {
+  const canonicalToolNames = collectBindingNameMap(
+    bindings,
+    (binding) => ampPluginToolNameForBinding(input.target.sourcePluginName, binding),
+  );
+  const planned: PlannedAmpHook[] = [];
+  for (const [index, hook] of [...(input.hooks ?? [])]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .entries()) {
+    const nativeEvent = ampNativeHookEvent(hook);
+    let matcher: string | undefined;
+    if (hook.event === "tool.before" || hook.event === "tool.after") {
+      if (!input.registry) throw new Error("Amp hook lowering requires a plugin registry");
+      const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, input.registry, TARGET_ID));
+      matcher = matcherForResolvedToolHook(resolved, canonicalToolNames);
+    }
+    planned.push({
+      hook,
+      nativeEvent,
+      importName: `prismAmpHook${index}`,
+      matcher,
+    });
+  }
+  return planned;
+};
+
+const renderAmpHookImports = (hooks: ReadonlyArray<PlannedAmpHook>): string =>
+  hooks.length === 0
+    ? ""
+    : [
+        `import { Effect } from ${JSON.stringify(effectBundleImportPath())};`,
+        ...hooks.map((hook) =>
+          `import ${hook.importName} from ${JSON.stringify(hook.hook.sourcePath.replace(/\\/g, "/"))};`
+        ),
+      ].join("\n");
+
+const hookEntry = (hook: PlannedAmpHook): string =>
+  `{ name: ${JSON.stringify(hook.hook.name)}, event: ${JSON.stringify(hook.hook.event)}, matcher: ${JSON.stringify(hook.matcher)}, handle: ${hook.importName}.handle }`;
+
+const AMP_HOOK_SETUP_RUNTIME = `
+const prismAmpToPromise = (value: any): Promise<any> =>
+  Effect.isEffect(value) ? Effect.runPromise(value) : Promise.resolve(value);
+
+const prismAmpValidateHookResult = (event: string, result: any): any => {
+  const value = result ?? { decision: "continue" };
+  if (event === "tool.before") {
+    if (value?.decision === "continue") return { decision: "continue" };
+    if (value?.decision === "block" && typeof value.message === "string") return value;
+    throw new Error("Invalid Prism Amp hook result for " + event);
+  }
+  if (value?.decision === "continue") return { decision: "continue" };
+  throw new Error("Invalid Prism Amp hook result for " + event);
+};
+
+const prismAmpRunHook = async (entry: any, payload: any): Promise<any> =>
+  prismAmpValidateHookResult(entry.event, await prismAmpToPromise(entry.handle(payload)));
+
+const prismAmpMatchesTool = (matcher: string | undefined, toolName: string): boolean => {
+  if (!matcher) return true;
+  try {
+    return new RegExp(matcher).test(toolName);
+  } catch {
+    return false;
+  }
+};
+
+const prismAmpSession = (event: any, ctx: any): { id?: string } | undefined => {
+  const id = event?.thread?.id ?? ctx?.thread?.id;
+  return id === undefined ? undefined : { id: String(id) };
+};
+
+const prismAmpRequiredSession = (event: any, ctx: any): { id?: string } =>
+  prismAmpSession(event, ctx) ?? { id: "amp-code" };`.trim();
+
+const renderAmpHookArray = (
+  variableName: string,
+  hooks: ReadonlyArray<PlannedAmpHook>,
+): string => `const ${variableName} = [
+${hooks.map((hook) => `  ${hookEntry(hook)},`).join("\n")}
+];`;
+
+const AMP_TOOL_BEFORE_HANDLER = `
+if (prismAmpToolBeforeHooks.length > 0) {
+  amp.on?.("tool.call", async (event: any, ctx: any) => {
+    const toolName = String(event?.tool ?? "");
+    for (const entry of prismAmpToolBeforeHooks) {
+      if (!prismAmpMatchesTool(entry.matcher, toolName)) continue;
+      const result = await prismAmpRunHook(entry, {
+        event: "tool.before",
+        target: { harness: "amp-code", nativeEvent: "tool.call" },
+        tool: { nativeName: toolName, input: event?.input ?? {} },
+        cwd: process.cwd(),
+        session: prismAmpSession(event, ctx),
+        native: event ?? {},
+      });
+      if (result.decision === "block") {
+        return { action: "reject-and-continue", message: result.message };
+      }
+    }
+    return { action: "allow" };
+  });
+}`.trim();
+
+const AMP_TOOL_AFTER_HANDLER = `
+if (prismAmpToolAfterHooks.length > 0) {
+  amp.on?.("tool.result", async (event: any, ctx: any) => {
+    const toolName = String(event?.tool ?? "");
+    for (const entry of prismAmpToolAfterHooks) {
+      if (!prismAmpMatchesTool(entry.matcher, toolName)) continue;
+      await prismAmpRunHook(entry, {
+        event: "tool.after",
+        target: { harness: "amp-code", nativeEvent: "tool.result" },
+        tool: {
+          nativeName: toolName,
+          input: event?.input ?? {},
+          output: event?.output ?? event?.error,
+          success: event?.status === "done",
+        },
+        cwd: process.cwd(),
+        session: prismAmpSession(event, ctx),
+        native: event ?? {},
+      });
+    }
+  });
+}`.trim();
+
+const AMP_SESSION_START_HANDLER = `
+if (prismAmpSessionStartHooks.length > 0) {
+  amp.on?.("session.start", async (event: any, ctx: any) => {
+    for (const entry of prismAmpSessionStartHooks) {
+      await prismAmpRunHook(entry, {
+        event: "session.start",
+        target: { harness: "amp-code", nativeEvent: "session.start" },
+        cwd: process.cwd(),
+        session: prismAmpRequiredSession(event, ctx),
+        native: event ?? {},
+      });
+    }
+  });
+}`.trim();
+
+const renderAmpHookSetup = (hooks: ReadonlyArray<PlannedAmpHook>): string => {
+  if (hooks.length === 0) return "";
+  return [
+    AMP_HOOK_SETUP_RUNTIME,
+    renderAmpHookArray("prismAmpToolBeforeHooks", hooks.filter((hook) => hook.hook.event === "tool.before")),
+    renderAmpHookArray("prismAmpToolAfterHooks", hooks.filter((hook) => hook.hook.event === "tool.after")),
+    renderAmpHookArray("prismAmpSessionStartHooks", hooks.filter((hook) => hook.hook.event === "session.start")),
+    AMP_TOOL_BEFORE_HANDLER,
+    AMP_TOOL_AFTER_HANDLER,
+    AMP_SESSION_START_HANDLER,
+  ].join("\n\n");
 };
 
 const renderAmpAgentSkillMarkdown = (
@@ -248,12 +437,10 @@ const planAmpPlugin = async (
   input: LowerInput,
   operations: LowerOperation[],
 ): Promise<void> => {
-  const bindings = uniqueBindings(input.target.sourcePluginName, [
-    ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
-    ...input.agents.flatMap((agent) => agent.toolBindings),
-  ]);
+  const bindings = collectAmpBindings(input);
+  const hooks = await planAmpHooks(input, bindings);
   const target = generatedPluginPath(input.target);
-  if (bindings.length === 0) {
+  if (bindings.length === 0 && hooks.length === 0) {
     if (await exists(target)) {
       operations.push({
         kind: "prune-plugin-path",
@@ -270,23 +457,15 @@ const planAmpPlugin = async (
     sourcePluginRoot: input.target.sourcePluginPath ?? input.registry?.pluginPath,
     version: input.target.sourcePluginVersion,
     bindings,
+    setupImports: renderAmpHookImports(hooks),
+    setupSource: renderAmpHookSetup(hooks),
   });
   await pushWrite(operations, target, bundle.content);
-};
-
-const assertAmpLoweringInput = (input: LowerInput): void => {
-  if ((input.hooks?.length ?? 0) > 0) {
-    throw new Error(
-      "Amp lowerer received hooks after target capability validation; this indicates a compiler planning bug.",
-    );
-  }
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
   const desiredGeneratedSkillFiles = new Set<string>();
-
-  assertAmpLoweringInput(input);
 
   for (const agent of input.agents) {
     const relativeSkill = generatedAgentSkillRelativePath(agent.name);

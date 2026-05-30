@@ -3328,7 +3328,7 @@ export default defineTool({
   expect(source).not.toContain("defineTool");
 });
 
-test("compilePluginForTarget rejects Amp hooks at the capability boundary", async () => {
+test("compilePluginForTarget lowers Amp tools and hooks through one native plugin", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "amp-hook-demo");
   const projectRoot = join(root, "project");
@@ -3341,12 +3341,205 @@ test("compilePluginForTarget rejects Amp hooks at the capability boundary", asyn
         name: "amp-hook-demo",
         version: "0.1.0",
         targets: {
+          tools: ["amp-code"],
+          hooks: ["amp-code"],
+          toolspaces: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
+    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  tools: {
+    echo: { targets: { "amp-code": { name: "amp_hook_demo_echo" } } },
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo a message through Amp hooks.",
+  input: Schema.Struct({
+    message: Schema.String,
+  }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "audit-before.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-before",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.any() },
+  handle: (event) => Effect.succeed(
+    typeof event.tool.input === "object" &&
+      event.tool.input !== null &&
+      "block" in event.tool.input &&
+      event.tool.input.block === true
+      ? { decision: "block" as const, message: \`blocked \${event.tool.nativeName}\` }
+      : { decision: "continue" as const },
+  ),
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-start",
+  event: hookEvent.sessionStart,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "audit-after.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-after",
+  event: hookEvent.toolAfter,
+  match: { tool: hookTool.tool(toolRef("workspace", "echo")) },
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.outputRoot).toBe(join(projectRoot, ".agents/"));
+  const pluginPath = join(projectRoot, ".amp", "plugins", "prism-generated-amp-hook-demo.ts");
+  expect(await pathExists(pluginPath)).toBe(true);
+
+  const generated = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`) as {
+    readonly default: (amp: {
+      readonly registerTool: (definition: unknown) => void;
+      readonly on: (event: string, handler: (...args: unknown[]) => unknown) => void;
+    }) => void;
+  };
+  const registeredTools: unknown[] = [];
+  const registeredEvents = new Map<string, Array<(...args: unknown[]) => unknown>>();
+  generated.default({
+    registerTool: (definition) => { registeredTools.push(definition); },
+    on: (event, handler) => {
+      registeredEvents.set(event, [...(registeredEvents.get(event) ?? []), handler]);
+    },
+  });
+
+  expect(registeredTools).toHaveLength(1);
+  expect([...registeredEvents.keys()].sort()).toEqual([
+    "session.start",
+    "tool.call",
+    "tool.result",
+  ]);
+  const toolCall = registeredEvents.get("tool.call")?.[0];
+  const toolResult = registeredEvents.get("tool.result")?.[0];
+  const sessionStart = registeredEvents.get("session.start")?.[0];
+  if (!toolCall || !toolResult || !sessionStart) {
+    throw new Error("expected generated Amp hook handlers");
+  }
+
+  await expect(toolCall({
+    thread: { id: "T-1" },
+    tool: "amp_hook_demo_echo",
+    input: { block: false },
+  }, { thread: { id: "T-1" } })).resolves.toEqual({ action: "allow" });
+  await expect(toolCall({
+    thread: { id: "T-1" },
+    tool: "amp_hook_demo_echo",
+    input: { block: true },
+  }, { thread: { id: "T-1" } })).resolves.toEqual({
+    action: "reject-and-continue",
+    message: "blocked amp_hook_demo_echo",
+  });
+  await expect(toolResult({
+    thread: { id: "T-1" },
+    toolUseID: "toolu_1",
+    tool: "amp_hook_demo_echo",
+    input: { message: "hello" },
+    status: "done",
+    output: "ok",
+  }, { thread: { id: "T-1" } })).resolves.toBeUndefined();
+  await expect(toolResult({
+    thread: { id: "T-1" },
+    toolUseID: "toolu_2",
+    tool: "unmatched_tool",
+    input: { message: "ignored" },
+    status: "done",
+    output: "ignored",
+  }, { thread: { id: "T-1" } })).resolves.toBeUndefined();
+  await expect(sessionStart({
+    thread: { id: "T-1" },
+  }, { thread: { id: "T-1" } })).resolves.toBeUndefined();
+
+  const source = await readFile(pluginPath, "utf8");
+  expect(source).toContain("registerTool");
+  expect(source).toContain('on?.("tool.call"');
+  expect(source).toContain('on?.("tool.result"');
+  expect(source).toContain('on?.("session.start"');
+});
+
+test("compilePluginForTarget lowers hook-only Amp plugins without tool registrations", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-hook-only-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-hook-only-demo",
+        version: "0.1.0",
+        targets: {
           hooks: ["amp-code"],
         },
       },
       null,
       2,
     )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "audit-before.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "audit-before",
+  event: hookEvent.toolBefore,
+  match: { tool: hookTool.any() },
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
   );
   await writeText(
     join(pluginRoot, "hooks", "session-start.hook.ts"),
@@ -3361,22 +3554,80 @@ export default defineHook({
 `,
   );
 
-  const exit = await Effect.runPromiseExit(
+  await Effect.runPromise(
     compilePluginForTarget({
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
       projectPath: projectRoot,
-      dryRun: true,
+      dryRun: false,
     }),
   );
 
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("UnsupportedTargetCapabilityError");
-  if (failure._tag === "UnsupportedTargetCapabilityError") {
-    expect(failure.capability).toBe("hooks");
-    expect(failure.message).toContain("does not support Prism hook lowering");
-  }
+  const pluginPath = join(projectRoot, ".amp", "plugins", "prism-generated-amp-hook-only-demo.ts");
+  const generated = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`) as {
+    readonly default: (amp: {
+      readonly registerTool: (definition: unknown) => void;
+      readonly on: (event: string, handler: (...args: unknown[]) => unknown) => void;
+    }) => void;
+  };
+  const registeredTools: unknown[] = [];
+  const registeredEvents = new Map<string, Array<(...args: unknown[]) => unknown>>();
+  generated.default({
+    registerTool: (definition) => { registeredTools.push(definition); },
+    on: (event, handler) => {
+      registeredEvents.set(event, [...(registeredEvents.get(event) ?? []), handler]);
+    },
+  });
+
+  expect(registeredTools).toHaveLength(0);
+  expect([...registeredEvents.keys()].sort()).toEqual(["session.start", "tool.call"]);
+});
+
+test("compilePluginForTarget rejects Amp session-end hooks because Amp has no native event", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-session-end-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-session-end-demo",
+        version: "0.1.0",
+        targets: {
+          hooks: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "session-end.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-end",
+  event: hookEvent.sessionEnd,
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "amp-code",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: true,
+      }),
+    ),
+  ).rejects.toThrow("Amp does not expose a native session.end plugin event");
 });
 
 test("compilePluginForTarget lowers Hermes skills and canonical tools into MCP config", async () => {

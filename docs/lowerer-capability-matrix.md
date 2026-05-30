@@ -35,7 +35,7 @@ patched into a config file.
 | Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` |
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
-| Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools | unsupported | none |
+| Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools | native `amp.on(...)` plugin events | none |
 | Cursor | unsupported | unsupported | direct skills | unsupported | unsupported | none |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
@@ -64,9 +64,16 @@ native Antigravity stdin payload at `event.native`, and intentionally does not
 model Antigravity-only `PostInvocation` outputs such as `injectSteps` or
 `terminationBehavior`.
 
-Amp is product-native for generated tools through its TypeScript plugin API. Prism
-does not yet lower compiled agents through a native Amp custom-agent surface; it
-uses generated role skills for that part of the compile output.
+Amp is product-native for generated tools and supported hooks through its
+TypeScript plugin API. Prism emits generated plugins under Amp's documented
+project/system plugin locations and uses `amp.registerTool(...)` for canonical
+tools plus `amp.on(...)` for portable hooks. Prism maps `tool.before` to
+`tool.call`, `tool.after` to `tool.result`, and `session.start` to
+`session.start`. It deliberately fails closed for `session.end` because Amp's
+official plugin lifecycle has no session-end event; Prism does not map that to
+turn-level `agent.end`. Prism does not yet lower compiled agents through a
+native Amp custom-agent surface; it uses generated role skills for that part of
+the compile output.
 
 Kimi Code's current home is `~/.kimi-code`; Prism does not preserve legacy
 `~/.kimi` as a compatibility target. Compile-phase Kimi output is a generated
@@ -107,7 +114,7 @@ frontmatter documents `tools` but not a per-droid skill allowlist.
 - Antigravity plugins, migration, and hooks: https://antigravity.google/docs/cli-plugins, https://antigravity.google/docs/gcli-migration, and https://www.antigravity.google/docs/hooks
 - Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks
 - Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
-- Amp plugin API: https://ampcode.com/manual/plugin-api
+- Amp plugins and plugin API: https://ampcode.com/manual and https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings
 - Hermes MCP and plugin surfaces: https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp and https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins
 - OpenClaw skills: https://docs.openclaw.ai/tools/skills

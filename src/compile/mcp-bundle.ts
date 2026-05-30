@@ -98,6 +98,8 @@ export interface AmpPluginBundleOptions {
   readonly dependencyPluginRoots?: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]>;
   readonly version?: string;
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
+  readonly setupImports?: string;
+  readonly setupSource?: string;
 }
 
 export interface AmpPluginBundle {
@@ -202,6 +204,18 @@ interface PluginMirrorCollectionState {
   readonly generatedFiles: Map<string, Map<string, string>>;
 }
 
+class BundleBuildError extends Error {
+  readonly bundleKind: string;
+  readonly diagnostics: string;
+
+  constructor(kind: string, diagnostics: string) {
+    super(`failed to build ${kind} bundle: ${diagnostics}`);
+    this.name = "BundleBuildError";
+    this.bundleKind = kind;
+    this.diagnostics = diagnostics;
+  }
+}
+
 const createPluginMirrorCollectionState = (
   dependencyPluginRoots: ReadonlyMap<string, string> | ReadonlyArray<readonly [string, string]>,
 ): PluginMirrorCollectionState => {
@@ -214,7 +228,7 @@ const createPluginMirrorCollectionState = (
   return { byPlugin, generatedFiles: new Map() };
 };
 
-const ensureMirrorPluginEntries = (
+const getOrCreateMirrorPluginEntries = (
   state: PluginMirrorCollectionState,
   pluginName: string,
   pluginRoot: string,
@@ -261,7 +275,7 @@ const registerBindingMirrorInputs = (
   sourcePluginRoot?: string,
 ): void => {
   const toolRoot = pluginRootFromToolSource(binding.toolSourcePath);
-  ensureMirrorPluginEntries(state, binding.toolPluginName, toolRoot).set(
+  getOrCreateMirrorPluginEntries(state, binding.toolPluginName, toolRoot).set(
     `tools/${binding.toolName}.tool.ts`,
     {
       relativePath: `tools/${binding.toolName}.tool.ts`,
@@ -280,7 +294,7 @@ const registerBindingMirrorInputs = (
   // (e.g. cross-plugin trait + slot binding). Falling back to deriving
   // from contract.sourcePath would map the host plugin to the trait
   // plugin's root, which is wrong.
-  ensureMirrorPluginEntries(
+  getOrCreateMirrorPluginEntries(
     state,
     binding.contract.pluginName,
     contractPluginRootForBinding(binding.contract, sourcePluginName, sourcePluginRoot),
@@ -1325,10 +1339,11 @@ const toolDefinitions = [
 __PRISM_TOOL_ENTRIES__
 ];
 
-export default function (amp: { registerTool(definition: any): unknown }) {
+export default function (amp: { registerTool(definition: any): unknown; on?: (event: string, handler: any) => unknown }) {
   for (const definition of toolDefinitions) {
     amp.registerTool(definition);
   }
+__PRISM_PLUGIN_SETUP__
 }`;
 
 const PI_EXTENSION_RUNTIME = `const runtimeContext = (ctx?: any, signal?: AbortSignal): ToolRuntimeContext => {
@@ -1467,9 +1482,13 @@ const renderMcpHttpRuntime = (options: {
     }),
   ]);
 
-const renderAmpToolRegistrationRuntime = (toolEntries: string): string =>
+const renderAmpToolRegistrationRuntime = (
+  toolEntries: string,
+  setupSource: string | undefined,
+): string =>
   replaceTemplateTokens(AMP_TOOL_FACTORY_RUNTIME, {
     __PRISM_TOOL_ENTRIES__: toolEntries,
+    __PRISM_PLUGIN_SETUP__: setupSource ? setupSource.trimEnd().replace(/^/gm, "  ") : "",
   });
 
 const renderPiExtensionRuntime = (
@@ -1531,6 +1550,8 @@ const renderAmpPluginEntry = (options: {
   readonly sourcePluginName: string;
   readonly version: string;
   readonly specs: ReadonlyArray<McpAdapterSpec>;
+  readonly setupImports?: string;
+  readonly setupSource?: string;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
@@ -1545,9 +1566,10 @@ const renderAmpPluginEntry = (options: {
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     imports,
+    options.setupImports ?? "",
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("amp-schema-bridge"),
-    renderAmpToolRegistrationRuntime(entries),
+    renderAmpToolRegistrationRuntime(entries, options.setupSource),
   ]);
 };
 
@@ -1717,7 +1739,7 @@ export const generateMcpServerBundle = async (
 
     if (!build.success) {
       const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new Error(`failed to build MCP server bundle: ${diagnostics}`);
+      throw new BundleBuildError("MCP server", diagnostics);
     }
 
     const builtPath = join(outdir, "server.mjs");
@@ -1756,6 +1778,8 @@ export const generateAmpPluginBundle = async (
       sourcePluginName: options.sourcePluginName,
       version,
       specs,
+      setupImports: options.setupImports,
+      setupSource: options.setupSource,
     });
     const entryPath = await writeTempBundleSources({
       tempRoot,
@@ -1778,7 +1802,7 @@ export const generateAmpPluginBundle = async (
 
     if (!build.success) {
       const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new Error(`failed to build Amp plugin bundle: ${diagnostics}`);
+      throw new BundleBuildError("Amp plugin", diagnostics);
     }
 
     const builtPath = join(outdir, "plugin.mjs");
@@ -1839,7 +1863,7 @@ export const generatePiExtensionBundle = async (
 
     if (!build.success) {
       const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new Error(`failed to build Pi extension bundle: ${diagnostics}`);
+      throw new BundleBuildError("Pi extension", diagnostics);
     }
 
     const builtPath = join(outdir, "extension.js");

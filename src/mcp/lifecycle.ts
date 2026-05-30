@@ -1,6 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { access, mkdir, open, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -53,6 +52,7 @@ import {
   launchAgentLabelForServer,
   stopLaunchAgent,
 } from "./launchd.js";
+import { getFreePort, isPortAvailable } from "./ports.js";
 
 export type McpLifecycleHarness = HarnessId;
 export type McpPortSelection = "auto" | number;
@@ -316,31 +316,6 @@ const resolvePort = async (
   }
   return selected;
 };
-
-const getFreePort = (host: string): Promise<number> =>
-  new Promise((resolvePortValue, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, host, () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to allocate TCP port"));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolvePortValue(port));
-    });
-  });
-
-const isPortAvailable = (host: string, port: number): Promise<boolean> =>
-  new Promise((resolveAvailable) => {
-    const server = createServer();
-    server.once("error", () => resolveAvailable(false));
-    server.listen(port, host, () => {
-      server.close(() => resolveAvailable(true));
-    });
-  });
 
 const pidIsRunning = processIsRunning;
 

@@ -150,6 +150,42 @@ test("MCP runtime supports Cursor Streamable HTTP config", () => {
   expect(getMcpHttpTargetSupport("cursor").config).toBe("supported");
 });
 
+test("MCP runtime accepts a lifecycle-resolved Streamable HTTP port", () => {
+  const runtime = resolveMcpRuntime(
+    registry({
+      mcp: {
+        hermes: {
+          transport: "streamable-http",
+          host: "127.0.0.1",
+          tokenEnv: "PRISM_MCP_HERMES_TOKEN",
+        },
+      },
+    }),
+    "hermes",
+    { requirePort: true, resolvedPort: 39123 },
+  );
+
+  expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:39123/mcp");
+});
+
+test("MCP runtime still rejects missing Streamable HTTP ports when required", () => {
+  expect(() =>
+    resolveMcpRuntime(
+      registry({
+        mcp: {
+          hermes: {
+            transport: "streamable-http",
+            host: "127.0.0.1",
+            tokenEnv: "PRISM_MCP_HERMES_TOKEN",
+          },
+        },
+      }),
+      "hermes",
+      { requirePort: true },
+    ),
+  ).toThrow(/requires plugin\.json runtime\.mcp\.hermes\.port/);
+});
+
 test("MCP runtime fails closed for unsupported HTTP targets", () => {
   expect(() =>
     resolveMcpRuntime(

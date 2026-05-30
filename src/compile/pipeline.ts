@@ -98,6 +98,7 @@ import {
 } from "./mcp-runtime.js";
 import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
 import { ensureMcpToken } from "../mcp/token-store.js";
+import { getFreePort } from "../mcp/ports.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -112,6 +113,7 @@ interface LowererModule {
       readonly root: string;
       readonly mcpRuntimeRoot?: string;
       readonly mcpBearerToken?: string;
+      readonly mcpRuntimePort?: number;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
       readonly sourcePluginPath?: string;
@@ -610,6 +612,102 @@ const findMcpServerSha256 = (
   return serverWrite?.kind === "write-plugin-file" ? sha256Hex(serverWrite.content) : undefined;
 };
 
+const mcpBindingsForTarget = (options: {
+  readonly registry: PluginRegistry;
+  readonly agents: ReadonlyArray<ComposedAgent>;
+  readonly artifacts: TargetArtifacts;
+}): ReturnType<typeof mcpBindingsForAgentsAndTools> =>
+  mcpBindingsForAgentsAndTools(
+    options.registry.pluginName,
+    options.artifacts.tools,
+    options.agents,
+  );
+
+const portFromMcpMetadata = (metadata: { readonly port?: number } | undefined): number | undefined =>
+  metadata?.port !== undefined &&
+  Number.isInteger(metadata.port) &&
+  metadata.port > 0 &&
+  metadata.port <= 65535
+    ? metadata.port
+    : undefined;
+
+const resolveCompileMcpRuntimePort = (options: {
+  readonly compileOptions: CompileOptions;
+  readonly registry: PluginRegistry;
+  readonly targetId: HarnessId;
+  readonly mcpRuntimeRoot: string;
+  readonly agents: ReadonlyArray<ComposedAgent>;
+  readonly artifacts: TargetArtifacts;
+}): Effect.Effect<number | undefined, CompileError> => {
+  const bindings = mcpBindingsForTarget({
+    registry: options.registry,
+    agents: options.agents,
+    artifacts: options.artifacts,
+  });
+  const runtime = resolveMcpRuntime(options.registry, options.targetId);
+  if (runtime.transport !== "streamable-http" || bindings.length === 0) {
+    return Effect.succeed(undefined);
+  }
+  if (runtime.port !== undefined) {
+    return Effect.succeed(undefined);
+  }
+
+  const mode = options.compileOptions.mcpLifecycle ?? "serve";
+  const serveCommand = renderMcpServeCommand({
+    pluginPath: options.compileOptions.pluginPath,
+    targetId: options.targetId,
+    scope: options.compileOptions.scope,
+    projectPath: options.compileOptions.projectPath,
+    root: options.mcpRuntimeRoot,
+    registry: options.registry,
+  });
+
+  return Effect.tryPromise({
+    try: async () => {
+      if (options.compileOptions.dryRun) {
+        return getFreePort(runtime.host);
+      }
+
+      if (mode === "serve") {
+        const served = await serveMcp({
+          pluginPath: options.compileOptions.pluginPath,
+          harness: options.targetId,
+          scope: options.compileOptions.scope,
+          projectPath: options.compileOptions.projectPath,
+          root: options.mcpRuntimeRoot,
+        });
+        const port = portFromMcpMetadata(served.metadata);
+        if (port !== undefined) return port;
+        throw new Error(
+          `${options.targetId} Streamable HTTP MCP daemon started without recording a runtime port.`,
+        );
+      }
+
+      const status = await getMcpStatus({
+        pluginPath: options.compileOptions.pluginPath,
+        harness: options.targetId,
+        scope: options.compileOptions.scope,
+        projectPath: options.compileOptions.projectPath,
+        root: options.mcpRuntimeRoot,
+      });
+      const port = status.state === "running" ? portFromMcpMetadata(status.metadata) : undefined;
+      if (port !== undefined) return port;
+
+      throw new Error(
+        `${options.targetId} Streamable HTTP MCP runtime has no configured port and no running metadata; ` +
+          `refusing to write url config that may point to nothing. ` +
+          `Run: ${serveCommand}` +
+          (mode === "none" ? `\nOr rerun compile/install with --mcp-lifecycle serve.` : ""),
+      );
+    },
+    catch: (error) =>
+      new PluginManifestError({
+        pluginPath: options.compileOptions.pluginPath,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+  });
+};
+
 const assertHttpMcpLifecycleGate = (options: {
   readonly compileOptions: CompileOptions;
   readonly registry: PluginRegistry;
@@ -620,11 +718,11 @@ const assertHttpMcpLifecycleGate = (options: {
   readonly artifacts: TargetArtifacts;
   readonly operations: ReadonlyArray<LowerOperation>;
 }): Effect.Effect<void, CompileError> => {
-  const bindings = mcpBindingsForAgentsAndTools(
-    options.registry.pluginName,
-    options.artifacts.tools,
-    options.agents,
-  );
+  const bindings = mcpBindingsForTarget({
+    registry: options.registry,
+    agents: options.agents,
+    artifacts: options.artifacts,
+  });
   if (
     options.compileOptions.dryRun ||
     !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
@@ -892,6 +990,7 @@ const planTargetLowering = (options: {
   readonly outputRoot: string;
   readonly mcpRuntimeRoot: string;
   readonly mcpBearerToken?: string;
+  readonly mcpRuntimePort?: number;
 }): Effect.Effect<LowerOperation[], CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
@@ -916,6 +1015,7 @@ const planTargetLowering = (options: {
         root: options.outputRoot,
         mcpRuntimeRoot: options.mcpRuntimeRoot,
         ...(options.mcpBearerToken ? { mcpBearerToken: options.mcpBearerToken } : {}),
+        ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
         sourcePluginPath: options.registry.pluginPath,
@@ -1016,6 +1116,14 @@ export const compilePluginForTarget = (
       orbits,
     });
     const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
+    const mcpRuntimePort = yield* resolveCompileMcpRuntimePort({
+      compileOptions: options,
+      registry,
+      targetId: context.targetId,
+      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      agents: composedForLowering,
+      artifacts,
+    });
     const mcpBearerToken = yield* resolveCompileMcpBearerToken({
       registry,
       targetId: context.targetId,
@@ -1036,6 +1144,7 @@ export const compilePluginForTarget = (
       outputRoot: context.outputRoot,
       mcpRuntimeRoot: context.mcpRuntimeRoot,
       ...(mcpBearerToken ? { mcpBearerToken } : {}),
+      ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
     yield* assertHttpMcpLifecycleGate({
       compileOptions: options,

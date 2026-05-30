@@ -85,7 +85,6 @@ The supported opt-in shape is:
       "hermes": {
         "transport": "streamable-http",
         "host": "127.0.0.1",
-        "port": 38463,
         "tokenEnv": "PRISM_MCP_TOKEN",
         "connectTimeoutMs": 10000,
         "toolTimeoutMs": 120000
@@ -94,6 +93,14 @@ The supported opt-in shape is:
   }
 }
 ```
+
+`port` is optional. If omitted, non-dry-run compile/install with the default
+`--mcp-lifecycle serve` starts or reuses the Prism-managed daemon first,
+records the selected loopback port in runtime metadata, and renders harness
+config from that concrete port. Use an explicit `port` only when the deployment
+requires a stable reserved port; Prism then fails closed if that port is
+occupied. Dry-run allocates a non-persistent preview port so output planning can
+still be inspected without mutating runtime state.
 
 For Hermes this lowers config to:
 

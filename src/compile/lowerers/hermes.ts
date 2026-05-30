@@ -42,6 +42,7 @@ export interface HermesLowerTarget {
   readonly root: string;
   readonly mcpRuntimeRoot?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -293,7 +294,10 @@ const planMcpServer = async (
 ): Promise<{ serverName: string; toolNames: ReadonlyArray<string> }> => {
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
+    requirePort: bindings.length > 0,
+    resolvedPort: input.target.mcpRuntimePort,
+  });
   const serverFile = generatedMcpServerFile(input.target, runtime);
 
   if (bindings.length === 0) {
@@ -374,7 +378,10 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   }));
 
   const mcp = await planMcpServer(input, operations);
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
+    requirePort: mcp.toolNames.length > 0,
+    resolvedPort: input.target.mcpRuntimePort,
+  });
   const currentConfig = (await exists(configPath(input.target)))
     ? await readFile(configPath(input.target))
     : "";

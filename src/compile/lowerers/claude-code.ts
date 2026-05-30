@@ -60,6 +60,7 @@ export interface ClaudeCodeLowerTarget {
   readonly root: string;
   readonly mcpRuntimeRoot?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -308,7 +309,10 @@ const planMcpServer = async (
     input.tools,
     input.agents,
   );
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
+    requirePort: bindings.length > 0,
+    resolvedPort: input.target.mcpRuntimePort,
+  });
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {

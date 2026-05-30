@@ -56,6 +56,7 @@ export interface AntigravityCliLowerTarget {
   readonly root: string;
   readonly mcpRuntimeRoot?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -317,12 +318,15 @@ const planMcpBundle = async (
   operations: LowerOperation[],
   desired: Set<string>,
 ): Promise<Record<string, unknown>> => {
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
+    requirePort: bindings.length > 0,
+    resolvedPort: input.target.mcpRuntimePort,
+  });
   if (bindings.length === 0) return {};
 
   const pluginId = pluginIdForPlugin(input.target.sourcePluginName);

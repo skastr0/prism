@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { computeContentHash } from "./content-hash.js";
 import { install, planInstallation } from "./installer.js";
@@ -151,6 +151,51 @@ test("planInstallation skips direct Kimi skills because compile owns the generat
   expect(
     operations.some((operation) => operation.harness === "kimi-code" && operation.artifact === "skill"),
   ).toBe(false);
+});
+
+test("planInstallation keeps Cursor skills direct because Cursor documents Agent Skills", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-skills-demo",
+      version: "0.1.0",
+      targets: { skills: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginPath, "skills", "prism-cursor-contract-test", "SKILL.md"),
+    "---\nname: prism-cursor-contract-test\ndescription: Cursor skill contract regression\n---\n\n# Cursor Skill Contract\n",
+  );
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["cursor"],
+    overwrite: true,
+    dryRun: true,
+  });
+
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      type: "copy",
+      source: join(pluginPath, "skills", "prism-cursor-contract-test", "SKILL.md"),
+      target: join(
+        homedir(),
+        ".cursor",
+        "skills",
+        "prism-cursor-contract-test",
+        "SKILL.md",
+      ),
+      harness: "cursor",
+      artifact: "skill",
+      managed: expect.objectContaining({
+        kind: "file",
+        pluginName: "cursor-skills-demo",
+        sourcePath: "prism-cursor-contract-test/SKILL.md",
+      }),
+    }),
+  );
 });
 
 test("planInstallation skips direct Pi skills because compile owns the generated package", async () => {

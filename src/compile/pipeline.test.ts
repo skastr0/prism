@@ -1393,6 +1393,7 @@ test("artifact target resolution filters unsupported preset members", async () =
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("grok");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "skills")).toContain("pi");
+  expect(getManifestArtifactTargets(manifest, "skills")).toContain("cursor");
   expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);

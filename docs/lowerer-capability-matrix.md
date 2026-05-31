@@ -89,7 +89,10 @@ Kimi subagents are runtime dispatches rather than persistent custom-agent files.
 Canonical tools lower through plugin-declared MCP servers using Kimi's
 plugin MCP runtime names and `mcp__<server>__<tool>` qualification. Hooks are not plugin manifest fields; Prism
 patches managed `[[hooks]]` entries in `<kimi-root>/config.toml` and stores hook
-wrappers in the generated plugin bundle.
+wrappers in the generated plugin bundle. The current Moonshot-hosted Kimi Code
+CLI docs also support project-local `.kimi-code/skills/` and
+`.kimi-code/mcp.json`, but Prism's generated Kimi plugin lowerer keeps project
+scope unsupported because Kimi plugin installs are user-scoped.
 
 Pi uses generated local packages under `<pi-settings-root>/packages/prism-generated-<plugin>/`
 and a managed `settings.json#packages` entry. Prism bundles targeted skills,
@@ -114,7 +117,9 @@ Cursor compile support is tools-only. Cursor's official MCP contract uses
 respects the same file as the IDE. Prism lowers canonical tools into a generated
 MCP server and patches one compiler-owned `mcpServers` entry in that file:
 stdio entries use `command` plus `args`, while Streamable HTTP entries use `url`
-plus `headers`. Prism does not compile Cursor agents, hooks, or per-agent skill
+plus `headers`. Cursor documents Agent Skills under `.cursor/skills/` and
+`~/.cursor/skills/`, so Prism keeps Cursor skills as install-phase direct-file
+artifacts. Prism does not compile Cursor agents, hooks, or per-agent skill
 permissions yet, and it leaves Cursor's native approval flow intact.
 
 ## Source Pointers
@@ -122,7 +127,7 @@ permissions yet, and it leaves Cursor's native approval flow intact.
 - OpenCode plugins: https://opencode.ai/docs/plugins/
 - Claude Code plugins and reference: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference
 - Antigravity plugins, migration, and hooks: https://antigravity.google/docs/cli-plugins, https://antigravity.google/docs/gcli-migration, and https://www.antigravity.google/docs/hooks
-- Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks
+- Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks. Older `www.kimi.com/code/docs/...` Kimi Code CLI pages are legacy docs and point readers to this Moonshot-hosted documentation for new-version details.
 - Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
 - Amp plugins and plugin API: https://ampcode.com/manual and https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings
@@ -130,5 +135,5 @@ permissions yet, and it leaves Cursor's native approval flow intact.
 - OpenClaw skills: https://docs.openclaw.ai/tools/skills
 - Factory plugin/settings hierarchy: https://docs.factory.ai/guides/building/building-plugins and https://docs.factory.ai/enterprise/hierarchical-settings-and-org-control
 - Grok Build skills/plugins: https://docs.x.ai/build/features/skills-plugins-marketplaces
-- Cursor rules and commands: https://docs.cursor.com/en/context and https://docs.cursor.com/en/agent/chat/commands
+- Cursor rules, skills, commands, plugins, and MCP: https://cursor.com/docs/rules, https://cursor.com/docs/skills, https://cursor.com/docs/cli/reference/slash-commands, https://cursor.com/docs/reference/plugins, and https://cursor.com/docs/mcp
 - Codex public use cases mention skills and plugins, but Prism's Codex CLI contract is primarily tracked from the local Codex configuration surface and current repo tests until fuller public CLI extension docs exist: https://developers.openai.com/codex/use-cases

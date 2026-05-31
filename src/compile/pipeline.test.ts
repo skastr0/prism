@@ -884,7 +884,9 @@ export default defineHook({
   return { pluginRoot, projectRoot };
 };
 
-const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
+const createToolsOnlyRuntimeDepImportFixture = async (
+  target: "opencode" | "cursor" | "amp-code" = "opencode",
+): Promise<{
   pluginRoot: string;
   projectRoot: string;
 }> => {
@@ -904,7 +906,7 @@ const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
           "orbit-core": "./deps/orbit-core",
         },
         targets: {
-          tools: ["opencode"],
+          tools: [target],
         },
       },
       null,
@@ -918,7 +920,7 @@ const createToolsOnlyRuntimeDepImportFixture = async (): Promise<{
         name: "orbit-core",
         version: "0.1.0",
         targets: {
-          tools: ["opencode"],
+          tools: [target],
         },
       },
       null,
@@ -6676,6 +6678,48 @@ test("opencode tools-only plugins bundle runtime helper imports from declared de
 
   expect(server).toContain("signal_core_record_signal");
   expect(server).toContain("normalizeOrbitMessage");
+});
+
+test("Cursor tools-only plugins bundle runtime helper imports from declared deps", async () => {
+  const { pluginRoot, projectRoot } = await createToolsOnlyRuntimeDepImportFixture("cursor");
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const server = await readFile(
+    join(projectRoot, ".cursor", "mcp", "prism_generated_signal_core", "server.mjs"),
+    "utf8",
+  );
+  expect(server).toContain("signal_core_record_signal");
+  expect(server).toContain("normalizeOrbitMessage");
+});
+
+test("Amp tools-only plugins bundle runtime helper imports from declared deps", async () => {
+  const { pluginRoot, projectRoot } = await createToolsOnlyRuntimeDepImportFixture("amp-code");
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const plugin = await readFile(
+    join(projectRoot, ".amp", "plugins", "prism-generated-signal-core.ts"),
+    "utf8",
+  );
+  expect(plugin).toContain("signal_core_record_signal");
+  expect(plugin).toContain("normalizeOrbitMessage");
 });
 
 test("tools-only plugins emit the complete owner runtime plugin", async () => {

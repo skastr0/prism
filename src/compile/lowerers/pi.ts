@@ -572,6 +572,9 @@ const planExtension = async (options: {
   const bundle: PiExtensionBundle = await generatePiExtensionBundle({
     sourcePluginName: options.input.target.sourcePluginName,
     sourcePluginRoot: options.input.target.sourcePluginPath ?? options.input.registry?.pluginPath,
+    dependencyPluginRoots: options.input.registry
+      ? Object.entries(options.input.registry.dependencyPaths)
+      : undefined,
     version: options.input.target.sourcePluginVersion,
     bindings,
     setupImports: renderPiSetupImports(options.plannedHooks),

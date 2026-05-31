@@ -549,6 +549,7 @@ const planAmpPlugin = async (
   const bundle = await generateAmpPluginBundle({
     sourcePluginName: input.target.sourcePluginName,
     sourcePluginRoot: input.target.sourcePluginPath ?? input.registry?.pluginPath,
+    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
     version: input.target.sourcePluginVersion,
     bindings,
     setupImports: renderAmpHookImports(hooks),

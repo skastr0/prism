@@ -1,8 +1,8 @@
 /**
  * Claude Code plugin-bundle lowerer.
  *
- * Produces one compiler-owned Claude plugin bundle under
- * <claude-root>/plugins/prism-generated-<source-plugin>/.
+ * Produces one compiler-owned Claude skills-directory plugin bundle under
+ * <claude-root>/skills/prism-generated-<source-plugin>/.
  */
 
 import { join } from "node:path";
@@ -27,7 +27,7 @@ import {
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
-import { listDirRecursive, readFile } from "../../fs.js";
+import { exists, listDirRecursive, readFile } from "../../fs.js";
 import { resolveManifestTargets } from "../../manifest.js";
 import type { HarnessScope, PluginTargetId } from "../../types.js";
 import type { LowerOperation } from "./opencode.js";
@@ -80,10 +80,16 @@ const generatedPluginId = (target: ClaudeCodeLowerTarget): string =>
   `${GENERATED_PLUGIN_PREFIX}-${normalizeBundleSegment(target.sourcePluginName)}`;
 
 const generatedPluginRoot = (target: ClaudeCodeLowerTarget): string =>
+  join(target.root, "skills", generatedPluginId(target));
+
+const legacyGeneratedPluginRoot = (target: ClaudeCodeLowerTarget): string =>
   join(target.root, "plugins", generatedPluginId(target));
 
 const generatedPath = (target: ClaudeCodeLowerTarget, relativePath: string): string =>
   join(generatedPluginRoot(target), ...relativePath.split("/"));
+
+const legacyGeneratedPath = (target: ClaudeCodeLowerTarget, relativePath: string): string =>
+  join(legacyGeneratedPluginRoot(target), ...relativePath.split("/"));
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
@@ -389,6 +395,46 @@ const planMcpServer = async (
   );
 };
 
+const legacyGeneratedPluginRootIsPrismOwned = async (
+  target: ClaudeCodeLowerTarget,
+): Promise<boolean> => {
+  const manifestPath = legacyGeneratedPath(target, ".claude-plugin/plugin.json");
+  if (!(await exists(manifestPath))) return false;
+
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath)) as { readonly name?: unknown };
+    return manifest.name === generatedPluginId(target);
+  } catch {
+    return false;
+  }
+};
+
+const planLegacyGeneratedPluginPruning = async (
+  target: ClaudeCodeLowerTarget,
+): Promise<LowerOperation[]> => {
+  const legacyRoot = legacyGeneratedPluginRoot(target);
+  if (!(await exists(legacyRoot))) return [];
+  if (!(await legacyGeneratedPluginRootIsPrismOwned(target))) return [];
+
+  const operations: LowerOperation[] = [];
+  const existingFiles = await listDirRecursive(legacyRoot);
+  for (const relativePath of existingFiles.sort((left, right) => left.localeCompare(right))) {
+    operations.push({
+      kind: "prune-plugin-path",
+      target: legacyGeneratedPath(target, relativePath),
+      targetType: "file",
+      reason: "stale",
+    });
+  }
+  operations.push({
+    kind: "prune-plugin-path",
+    target: legacyRoot,
+    targetType: "dir",
+    reason: "stale",
+  });
+  return operations;
+};
+
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const state = createGeneratedPluginPlanState();
   const resolveTarget = (relativePath: string): string =>
@@ -427,6 +473,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     root: generatedPluginRoot(input.target),
     resolveTarget,
   });
+  state.operations.push(...(await planLegacyGeneratedPluginPruning(input.target)));
 
   return state.operations;
 };

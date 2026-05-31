@@ -996,6 +996,50 @@ test("install dry-run compiles targeted plugin with project scope", async () => 
   ).toBe(false);
 });
 
+test("install dry-run compiles Claude command-only plugins into skills-dir plugin bundles", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "claude-command-plugin");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+
+  await mkdir(join(pluginRoot, "commands"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "claude-command-plugin",
+        version: "0.1.0",
+        targets: { commands: ["claude-code"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(join(pluginRoot, "commands", "review.md"), "# Review\n\nReview the change.\n");
+
+  const result = await runCli(
+    ["install", pluginRoot, "--harness", "claude-code", "--dry-run"],
+    { HOME: homeRoot, PRISM_HOME: prismHome },
+  );
+
+  const generatedCommandPath = join(
+    homeRoot,
+    ".claude",
+    "skills",
+    "prism-generated-claude-command-plugin",
+    "commands",
+    "review.md",
+  );
+  const directCommandPath = join(homeRoot, ".claude", "commands", "review.md");
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Compile (claude-code, global)");
+  expect(result.stdout).toContain(generatedCommandPath);
+  expect(result.stdout).not.toContain(directCommandPath);
+  expect(await pathExists(generatedCommandPath)).toBe(false);
+  expect(await pathExists(directCommandPath)).toBe(false);
+});
+
 test("install-all requires --project when project scope is requested", async () => {
   const { monorepoRoot, homeRoot } = await createInstallAllFixture();
 
@@ -1047,7 +1091,7 @@ test("install-all compiles discovered child plugins with project scope", async (
       join(
         projectRoot,
         ".claude",
-        "plugins",
+        "skills",
         "prism-generated-canonical-compile-fixture",
         "agents",
         "builder.md",
@@ -1059,7 +1103,7 @@ test("install-all compiles discovered child plugins with project scope", async (
       join(
         projectRoot,
         ".claude",
-        "plugins",
+        "skills",
         "prism-generated-canonical-compile-fixture",
         "skills",
         "delivery-contract",
@@ -1072,7 +1116,7 @@ test("install-all compiles discovered child plugins with project scope", async (
   ).toBe(false);
   expect(
     await pathExists(
-      join(homeRoot, ".claude", "plugins", "prism-generated-canonical-compile-fixture", "agents", "builder.md"),
+      join(homeRoot, ".claude", "skills", "prism-generated-canonical-compile-fixture", "agents", "builder.md"),
     )
   ).toBe(false);
 });

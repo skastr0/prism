@@ -28,7 +28,7 @@ patched into a config file.
 
 | Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | `native-plugin-bundle` | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle |
+| Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle |
 | OpenCode | `native-plugin-api` | root markdown | root skills | native plugin tools | native plugin hooks | `opencode.json` agent/plugin entries |
 | OpenClaw | unsupported | unsupported | direct skills | unsupported | unsupported | none |
 | Hermes Agent | unsupported | unsupported | root skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` |
@@ -46,6 +46,19 @@ Active Antigravity outputs still live under Antigravity's official
 `~/.gemini/antigravity-cli` home path, and Prism may prune legacy
 `~/.gemini/extensions` outputs during Antigravity lowering so old Gemini
 extension bundles do not linger.
+
+Claude Code's documented local plugin autoload surface is a skills-directory
+plugin: `~/.claude/skills/<plugin>/.claude-plugin/plugin.json` for personal
+scope or `<cwd>/.claude/skills/<plugin>/.claude-plugin/plugin.json` for project
+scope. Prism follows that surface for generated Claude bundles and puts
+root-level `commands/`, `agents/`, `skills/`, `hooks/`, and `.mcp.json`
+components under `<claude-root>/skills/prism-generated-<plugin>/`. Claude
+plugins namespace skills and flat Markdown commands as `/plugin-name:name`, so
+Prism treats `targets.commands: ["claude-code"]` as compile-managed and does
+not write direct `~/.claude/commands/` files. Lowering also prunes Prism-owned
+legacy `<claude-root>/plugins/prism-generated-<plugin>/` bundles from the older
+Prism output layout.
+
 Official Antigravity CLI plugins are staged under
 `~/.gemini/antigravity-cli/plugins/<plugin_name>/` with root `plugin.json`,
 optional `mcp_config.json`, optional `hooks.json`, and optional `skills/`,

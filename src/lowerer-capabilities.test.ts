@@ -91,6 +91,14 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   expect(LOWERER_CAPABILITIES["amp-code"].surfaces.hooks.kind).toBe(
     "native-plugin-api",
   );
+  expect(LOWERER_CAPABILITIES["claude-code"].surfaces.pluginBundle).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<claude-root>/skills/prism-generated-<plugin>/",
+  });
+  expect(LOWERER_CAPABILITIES["claude-code"].surfaces.commands).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<generated-plugin>/commands/",
+  });
   expect(LOWERER_CAPABILITIES["kimi-code"].compile).toEqual({
     agents: "supported",
     generatedCanonicalTools: "executable",

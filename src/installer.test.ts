@@ -384,17 +384,17 @@ test("planInstallation skips direct Pi skills because compile owns the generated
   ).toBe(false);
 });
 
-test("planInstallation skips direct Amp, Kimi, and Pi commands because compile owns them", async () => {
-  {
+test("planInstallation skips direct Amp, Claude, Kimi, and Pi commands because compile owns them", async () => {
+  for (const harness of ["amp-code", "claude-code"] as const) {
     const root = await createTempRoot();
-    const pluginPath = join(root, "plugin-amp-code");
+    const pluginPath = join(root, `plugin-${harness}`);
     await writeText(
       join(pluginPath, "plugin.json"),
       `${JSON.stringify({
-        name: "compile-owned-commands-amp-code",
+        name: `compile-owned-commands-${harness}`,
         version: "0.1.0",
         targets: {
-          commands: ["amp-code"],
+          commands: [harness],
         },
       })}\n`,
     );
@@ -402,14 +402,14 @@ test("planInstallation skips direct Amp, Kimi, and Pi commands because compile o
 
     const operations = await planInstallation({
       pluginPath,
-      harnesses: ["amp-code"],
+      harnesses: [harness],
       overwrite: false,
       dryRun: true,
     });
 
     expect(
       operations.some((operation) =>
-        operation.harness === "amp-code" && operation.artifact === "command"
+        operation.harness === harness && operation.artifact === "command"
       ),
     ).toBe(false);
   }

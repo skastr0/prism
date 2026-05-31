@@ -106,6 +106,17 @@ test("claude-code lowerer emits a plugin bundle with agents, skills, MCP, and ho
     `---\ndescription: Say hello\n---\n\nSay hello from Claude plugin bundle.\n`,
   );
 
+  const legacyPluginRoot = join(
+    outputRoot,
+    "plugins",
+    "prism-generated-claude-plugin-fixture",
+  );
+  await writeText(
+    join(legacyPluginRoot, ".claude-plugin", "plugin.json"),
+    `${JSON.stringify({ name: "prism-generated-claude-plugin-fixture" })}\n`,
+  );
+  await writeText(join(legacyPluginRoot, "commands", "old.md"), "# Old\n");
+
   await writeText(
     join(pluginRoot, "skills", "testing", "SKILL.md"),
     `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`,
@@ -241,13 +252,13 @@ export default defineTool({
     join(".claude-plugin", "plugin.json"),
   );
   expect(pluginManifest?.target).toContain(
-    join(".claude", "plugins", "prism-generated-claude-plugin-fixture"),
+    join(".claude", "skills", "prism-generated-claude-plugin-fixture"),
   );
   expect(pluginManifest?.content).toContain('"name": "prism-generated-claude-plugin-fixture"');
 
   const agent = findContentOperation(operations, join("agents", "reviewer.md"));
   expect(agent?.target).toContain(
-    join(".claude", "plugins", "prism-generated-claude-plugin-fixture", "agents"),
+    join(".claude", "skills", "prism-generated-claude-plugin-fixture", "agents"),
   );
   expect(agent?.content).toContain('description: "Claude plugin reviewer"');
   expect(agent?.content).toContain('model: "opus"');
@@ -292,6 +303,20 @@ export default defineTool({
     '"matcher": "mcp__prism-generated-claude-plugin-fixture__claude_plugin_fixture_echo"',
   );
   expect(hookConfig?.content).toContain('node \\"${CLAUDE_PLUGIN_ROOT}/hooks/audit-shell.mjs\\"');
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: join(legacyPluginRoot, "commands", "old.md"),
+      targetType: "file",
+    }),
+  );
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: legacyPluginRoot,
+      targetType: "dir",
+    }),
+  );
 
   const hookWrapper = findContentOperation(operations, join("hooks", "audit-shell.mjs"));
   expect(hookWrapper?.content).toContain("native payload");

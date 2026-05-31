@@ -880,8 +880,8 @@ Validation:
     `prism-generated-tower` and `prism-generated-grok-agent`.
   - `~/.codex/config.toml` still has `command = "bun"` entries for
     `prism-generated-tower` and `prism-generated-grok-agent`.
-  - `~/.claude/plugins/prism-generated-tower/.mcp.json` and
-    `~/.claude/plugins/prism-generated-grok-agent/.mcp.json` still have
+  - `~/.claude/skills/prism-generated-tower/.mcp.json` and
+    `~/.claude/skills/prism-generated-grok-agent/.mcp.json` still have
     stdio `command` entries.
 - Live daemon status:
   - Tower Hermes/Codex/Claude: `stopped`, runtime metadata missing.

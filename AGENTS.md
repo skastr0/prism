@@ -18,7 +18,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 | Harness | Rules | Commands | Agents | Skills |
 |---------|-------|----------|--------|--------|
-| Claude Code | `~/.claude/CLAUDE.md` | `~/.claude/commands/` | `~/.claude/agents/` | `~/.claude/skills/` |
+| Claude Code | `~/.claude/CLAUDE.md` | generated skills-dir plugin `commands/` | generated skills-dir plugin `agents/` | `~/.claude/skills/` + generated skills-dir plugins |
 | OpenCode | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/commands/` | `~/.config/opencode/agents/` | `~/.config/opencode/skills/` |
 | OpenClaw | - | - | - | `~/.openclaw/skills/` |
 | Hermes Agent | - | - | - | `~/.hermes/skills/` |
@@ -34,6 +34,8 @@ A unified plugin distribution system for AI coding harnesses.
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
 Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
+
+Claude Code is part of the `coding-harness` preset with compile-phase skills-directory plugin support. Prism emits one generated plugin under `<claude-root>/skills/prism-generated-<source-plugin>/` with `.claude-plugin/plugin.json` plus root-level `commands/`, `agents/`, `skills/`, `hooks/`, and `.mcp.json` components, matching Claude's documented skills-directory plugin autoload surface. Plugin skills and commands are namespaced by the generated plugin name, so Prism does not write direct `~/.claude/commands/` files for command artifacts. Skills-only plugins may still install shared skills directly into `~/.claude/skills/`; when a plugin also targets Claude compile surfaces, targeted skills are bundled into the generated plugin to avoid double-loading Prism-owned skill files. Prism prunes legacy `<claude-root>/plugins/prism-generated-<source-plugin>/` outputs when lowering the new skills-directory bundle.
 
 Antigravity CLI is part of the `coding-harness` preset with compile-phase plugin-bundle support. Prism emits one generated plugin under `<antigravity-root>/plugins/prism-generated-<source-plugin>/` using Antigravity's native root `plugin.json`, `mcp_config.json`, `hooks.json`, `rules/`, `agents/`, and `skills/` layout. Managed skills and concrete orbit instances lower as plugin skills; official Antigravity CLI skills surface as slash commands, so Prism does not write direct command files and direct `targets.commands: ["antigravity-cli"]` fails manifest validation. Prism also prunes legacy `.gemini/extensions/prism-generated-<source-plugin>/` outputs when lowering Antigravity bundles.
 
@@ -626,11 +628,13 @@ prism compile ./my-plugin --harness claude-code --dry-run
 
 #### Claude Code
 
+- Writes one generated skills-directory plugin bundle per compiled source plugin under `<claude-root>/skills/prism-generated-<source-plugin>/`
 - Writes compiled agents into the generated plugin's `agents/<name>.md` with Claude-style YAML frontmatter
 - Supports `description`, `model`, `temperature`, `top_p`, and `allowed-tools` from compile output
-- Writes one generated plugin bundle per compiled source plugin under `<claude-root>/plugins/prism-generated-<source-plugin>/`
 - Writes targeted managed skills and concrete orbit instances into the generated plugin's `skills/<name>/SKILL.md`
+- Writes command artifacts into the generated plugin's root `commands/` component; Claude exposes plugin commands/skills under a namespaced slash-command form such as `/prism-generated-my-plugin:review`
 - Emits canonical `tools/*.tool.ts` as a bundled MCP stdio server plus plugin-local `.mcp.json` when agents bind canonical tools; Streamable HTTP mode uses Prism-managed runtime metadata, and omitted manifest ports are selected before config write
+- Prunes legacy `<claude-root>/plugins/prism-generated-<source-plugin>/` outputs when lowering the skills-directory plugin bundle
 
 #### Hermes
 
@@ -793,7 +797,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 - `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `grok`
 - `claw-harness` → `openclaw`, `hermes`
 
-Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Cursor remains included for install-phase commands, but Prism lowers those commands through Cursor's local plugin bundle layout instead of direct `~/.cursor/commands/` files. Factory Droid remains included for install-phase commands because Droid still supports legacy `.factory/commands/` files.
+Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, and Pi remain command targets, but Prism lowers those commands through each harness's generated plugin/package/API surface instead of direct command files. Factory Droid remains included for install-phase commands because Droid still supports legacy `.factory/commands/` files.
 
 ### Rules to remember
 

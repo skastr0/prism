@@ -1383,6 +1383,7 @@ test("artifact target resolution filters unsupported preset members", async () =
 
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("claude-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("amp-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
@@ -1476,7 +1477,7 @@ test("direct unsupported Antigravity command targets are rejected", async () => 
   );
 });
 
-test("direct Amp, Kimi, and Pi commands are compile-managed plugin artifact targets", async () => {
+test("direct Amp, Claude, Kimi, and Pi commands are compile-managed plugin artifact targets", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "managed-plugin-artifact-demo");
   await writeText(
@@ -1487,7 +1488,7 @@ test("direct Amp, Kimi, and Pi commands are compile-managed plugin artifact targ
         version: "0.1.0",
         targets: {
           rules: ["kimi-code", "pi"],
-          commands: ["amp-code", "kimi-code", "pi"],
+          commands: ["amp-code", "claude-code", "kimi-code", "pi"],
         },
       },
       null,
@@ -1499,9 +1500,11 @@ test("direct Amp, Kimi, and Pi commands are compile-managed plugin artifact targ
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("amp-code");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("claude-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
   expect(manifestHasCompileTargets(manifest, "amp-code")).toBe(true);
+  expect(manifestHasCompileTargets(manifest, "claude-code")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
 });
@@ -2981,7 +2984,7 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   expect(codexBundle).toContain(expectedToolName);
   expect(codexBundle).toContain("tools/list");
 
-  const claudeRoot = join(projectRoot, ".claude", "plugins", "prism-generated-tool-only-demo");
+  const claudeRoot = join(projectRoot, ".claude", "skills", "prism-generated-tool-only-demo");
   const claudeMcp = JSON.parse(await readFile(join(claudeRoot, ".mcp.json"), "utf8")) as {
     mcpServers?: Record<string, { command: string; args: string[] }>;
   };
@@ -4222,6 +4225,101 @@ Review the current branch and report findings first.
   );
   expect(await pathExists(pluginPath)).toBe(false);
   expect((await readHarnessLedger("amp-code")).entries.some((entry) => entry.targetPath === pluginPath)).toBe(false);
+});
+
+test("compilePluginForTarget lowers Claude commands into skills-dir plugin bundles", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "claude-command-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "claude-command-demo",
+        version: "0.1.0",
+        targets: {
+          commands: ["claude-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "commands", "review.md"),
+    `---\ndescription: Review current branch changes\n---\n\n# Review\n\nReview the current branch.\n`,
+  );
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const commandPath = join(
+    projectRoot,
+    ".claude",
+    "skills",
+    "prism-generated-claude-command-demo",
+    "commands",
+    "review.md",
+  );
+  expect(await readFile(commandPath, "utf8")).toContain("Review the current branch.");
+  expect(await pathExists(join(projectRoot, ".claude", "commands", "review.md"))).toBe(false);
+});
+
+test("compilePluginForTarget prunes only Prism-owned legacy Claude plugin roots", async () => {
+  const root = await createTempRoot();
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  for (const [pluginName, legacyManifestName, shouldPrune] of [
+    ["claude-owned-legacy", "prism-generated-claude-owned-legacy", true],
+    ["claude-unowned-legacy", "user-owned-claude-plugin", false],
+  ] as const) {
+    const pluginRoot = join(root, pluginName);
+    await writeText(
+      join(pluginRoot, "plugin.json"),
+      `${JSON.stringify(
+        {
+          name: pluginName,
+          version: "0.1.0",
+          targets: {
+            commands: ["claude-code"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeText(join(pluginRoot, "commands", "review.md"), "# Review\n\nReview.\n");
+
+    const legacyRoot = join(projectRoot, ".claude", "plugins", `prism-generated-${pluginName}`);
+    await writeText(
+      join(legacyRoot, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: legacyManifestName })}\n`,
+    );
+    await writeText(join(legacyRoot, "commands", "old.md"), "# Old\n");
+
+    await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "claude-code",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+      }),
+    );
+
+    expect(await directoryExists(legacyRoot)).toBe(!shouldPrune);
+    expect(await pathExists(join(legacyRoot, "commands", "old.md"))).toBe(!shouldPrune);
+  }
 });
 
 test("compilePluginForTarget rejects Amp command id collisions", async () => {
@@ -6866,7 +6964,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   const pluginRootPath = join(
     projectRoot,
     ".claude",
-    "plugins",
+    "skills",
     "prism-generated-canonical-compile-fixture",
   );
   const claudeAgent = await readFile(join(pluginRootPath, "agents", "builder.md"), "utf8");
@@ -8788,7 +8886,7 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
   const pluginRootPath = join(
     projectRoot,
     ".claude",
-    "plugins",
+    "skills",
     "prism-generated-canonical-compile-fixture",
   );
   const claudeAgent = await readFile(

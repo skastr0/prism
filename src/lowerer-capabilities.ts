@@ -83,8 +83,8 @@ export const LOWERER_CAPABILITIES = {
     surfaces: {
       pluginBundle: {
         kind: "native-plugin-bundle",
-        path: "<claude-root>/plugins/prism-generated-<plugin>/",
-        summary: "Compile emits Claude Code plugin directories with plugin metadata.",
+        path: "<claude-root>/skills/prism-generated-<plugin>/",
+        summary: "Compile emits Claude Code skills-directory plugin bundles with plugin metadata.",
       },
       rules: {
         kind: "direct-file",
@@ -92,9 +92,9 @@ export const LOWERER_CAPABILITIES = {
         summary: "Install appends managed sections to the native instructions file.",
       },
       commands: {
-        kind: "direct-file",
-        path: "<claude-root>/commands/",
-        summary: "Install writes markdown command files.",
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/commands/",
+        summary: "Install compiles markdown command files into the generated plugin bundle.",
       },
       agents: {
         kind: "markdown-file",

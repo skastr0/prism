@@ -198,7 +198,7 @@ Grok supports:
 - Plugin-bundled skills, agents, hooks, MCP servers, and LSP servers.
 - Hooks with Claude-compatible event names such as `PreToolUse`, `PostToolUse`, `SessionStart`, and `SessionEnd`.
 - Native MCP config through `[mcp_servers.<name>]` in `~/.grok/config.toml` or project `.grok/config.toml`.
-- Claude Code compatibility for `.claude/plugins`, plugin components, `.mcp.json`, hooks, agents, skills, and project instruction files.
+- Claude Code compatibility for skills-directory plugins under `.claude/skills/<plugin>`, plugin components, `.mcp.json`, hooks, agents, skills, and project instruction files.
 - AGENTS.md compatibility for `Agents.md`, `Claude.md`, `AGENT.md`, and `AGENTS.md`.
 
 Important details:

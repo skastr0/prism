@@ -33,7 +33,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
-Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Prism does not lower Hermes rules, commands, custom agents, profiles, SOUL, or native Python plugins.
+Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Hermes profile-local MCP is expressed by compiling the normal `hermes` target against a profile home such as `~/.hermes/profiles/coder` with `--root` / `--compile-root`; `--mcp-root` remains the explicit split for shared HTTP runtimes. Prism does not lower Hermes rules, commands, custom agents, SOUL/personality files, runtime delegation, or native Python plugins.
 
 Claude Code is part of the `coding-harness` preset with compile-phase skills-directory plugin support. Prism emits one generated plugin under `<claude-root>/skills/prism-generated-<source-plugin>/` with `.claude-plugin/plugin.json` plus root-level `commands/`, `agents/`, `skills/`, `hooks/`, and `.mcp.json` components, matching Claude's documented skills-directory plugin autoload surface. Plugin skills and commands are namespaced by the generated plugin name, so Prism does not write direct `~/.claude/commands/` files for command artifacts. Skills-only plugins may still install shared skills directly into `~/.claude/skills/`; when a plugin also targets Claude compile surfaces, targeted skills are bundled into the generated plugin to avoid double-loading Prism-owned skill files. Prism prunes legacy `<claude-root>/plugins/prism-generated-<source-plugin>/` outputs when lowering the new skills-directory bundle.
 
@@ -642,7 +642,8 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Writes concrete orbit instances into `<hermes-root>/skills/<orbit-name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` as a generated MCP stdio server at `<hermes-root>/prism/mcp/prism_generated_<source-plugin>/server.mjs`, or as a Prism-managed Streamable HTTP runtime when configured
 - Patches `<hermes-root>/config.yaml` with a compiler-owned `mcp_servers.prism-generated-<source-plugin>` entry using `bun <server.mjs>` for stdio or a managed loopback `url` for Streamable HTTP; omitted HTTP ports are selected before config write
-- Fails closed for compiled agents and hooks; profiles, SOUL, and native Hermes Python plugins are intentionally out of scope
+- A Hermes profile is treated as a harness root: use `--root ~/.hermes/profiles/<name>` for `compile` or `--compile-root ~/.hermes/profiles/<name>` for `install` / `install-all`
+- Fails closed for compiled agents and hooks; SOUL/personality lowering, runtime delegation, and native Hermes Python plugins are intentionally out of scope
 
 #### Antigravity CLI
 

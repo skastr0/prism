@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Cause, Effect, Option, Schema } from "effect";
 import matter from "gray-matter";
@@ -4717,6 +4717,93 @@ test("compilePluginForTarget can write harness config to a profile root while sh
       }).catch(() => undefined);
     }
   });
+});
+
+test("compilePluginForTarget keeps Hermes shared MCP runtime owned by another profile root", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_HERMES_SHARED_PROFILE_TOKEN";
+  const pluginName = "hermes-shared-profile-runtime";
+  const { pluginRoot, hermesRoot: profileRootA } = await createHermesHttpToolPlugin({
+    pluginName,
+    tokenEnv,
+    port,
+  });
+  const root = dirname(pluginRoot);
+  const profileRootB = join(root, "hermes-profile-b");
+  const runtimeRoot = join(root, "shared-runtime-root");
+  const serverPath = runtimeMcpServerDescriptor(runtimeRoot, pluginName).absolutePath;
+
+  await mkdir(profileRootB, { recursive: true });
+
+  await withEnv(tokenEnv, compileTestToken, async () => {
+    await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        root: profileRootA,
+        mcpRoot: runtimeRoot,
+        dryRun: false,
+      }),
+    );
+    await Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        root: profileRootB,
+        mcpRoot: runtimeRoot,
+        dryRun: false,
+      }),
+    );
+  });
+
+  expect(await pathExists(serverPath)).toBe(true);
+  await rm(join(pluginRoot, "tools", "echo.tool.ts"));
+
+  const cleanup = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      root: profileRootA,
+      mcpRoot: runtimeRoot,
+      dryRun: false,
+      mcpLifecycle: "none",
+    }),
+  );
+
+  expect(cleanup.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: serverPath,
+      targetType: "file",
+      shared: true,
+    }),
+  );
+  expect(await pathExists(serverPath)).toBe(true);
+  expect(await readFile(join(profileRootA, "config.yaml"), "utf8")).not.toContain(
+    "prism-generated-hermes-shared-profile-runtime",
+  );
+  expect(await readFile(join(profileRootB, "config.yaml"), "utf8")).toContain(
+    "prism-generated-hermes-shared-profile-runtime",
+  );
+
+  const ledger = await readHarnessLedger("hermes");
+  expect(
+    ledger.entries.some(
+      (entry) =>
+        resolve(entry.root) === resolve(profileRootA) &&
+        resolve(entry.targetPath) === resolve(serverPath),
+    ),
+  ).toBe(false);
+  expect(
+    ledger.entries.some(
+      (entry) =>
+        resolve(entry.root) === resolve(profileRootB) &&
+        resolve(entry.targetPath) === resolve(serverPath),
+    ),
+  ).toBe(true);
 });
 
 test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async () => {

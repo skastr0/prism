@@ -1,6 +1,6 @@
 /** Hermes Agent lowerer. */
 
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { generateMcpServerBundle } from "../mcp-bundle.js";
 import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
@@ -27,6 +27,7 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
+  planSharedMcpRuntimePrune,
   planCompileOwnedTargetedSkillPruning,
   prismOwnerMarker,
   pushConfigPatchOperation as pushConfigPatch,
@@ -75,6 +76,13 @@ const generatedMcpServerRoot = (
   runtime?: ResolvedMcpRuntime,
 ): string =>
   dirname(generatedMcpServerFile(target, runtime));
+
+const usesSharedMcpRuntimeRoot = (
+  target: HermesLowerTarget,
+  runtime: ResolvedMcpRuntime,
+): boolean =>
+  runtime.transport === "streamable-http" &&
+  resolve(target.mcpRuntimeRoot ?? target.root) !== resolve(target.root);
 
 const configPath = (target: HermesLowerTarget): string =>
   join(target.root, "config.yaml");
@@ -301,7 +309,19 @@ const planMcpServer = async (
   const serverFile = generatedMcpServerFile(input.target, runtime);
 
   if (bindings.length === 0) {
-    if (await exists(generatedMcpServerRoot(input.target, runtime))) {
+    if (usesSharedMcpRuntimeRoot(input.target, runtime)) {
+      await planSharedMcpRuntimePrune(
+        operations,
+        serverFile,
+        {
+          harness: TARGET_ID,
+          scope: input.target.scope,
+          root: input.target.root,
+          sourcePluginName: input.target.sourcePluginName,
+        },
+        { protectSameHarnessOtherRoots: true },
+      );
+    } else if (await exists(generatedMcpServerRoot(input.target, runtime))) {
       operations.push({
         kind: "prune-plugin-path",
         target: generatedMcpServerRoot(input.target, runtime),

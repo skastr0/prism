@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismOxlintPluginJs } from "./init-templates.js";
@@ -381,6 +381,30 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
   expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
 });
 
+test("compile writes Hermes MCP config to an explicit profile root", async () => {
+  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
+
+  const result = await runCli([
+    "compile",
+    pluginRoot,
+    "--harness",
+    "hermes",
+    "--root",
+    hermesRoot,
+  ], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain(`Output root: ${hermesRoot}`);
+  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+  expect(config).toContain("mcp_servers:");
+  expect(config).toContain("prism-generated-cli-hermes-tools:");
+  expect(
+    await pathExists(
+      join(hermesRoot, "prism", "mcp", "prism_generated_cli_hermes_tools", "server.mjs"),
+    ),
+  ).toBe(true);
+});
+
 test("install runs Cursor lowerer cleanup when tools target is removed", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-cleanup-plugin");
@@ -551,6 +575,33 @@ test("install serves Hermes HTTP MCP by default", async () => {
     ], env).catch(() => undefined);
   }
 }, 20_000);
+
+test("install-all compiles Hermes child plugins into an explicit profile root", async () => {
+  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
+
+  const result = await runCli([
+    "install-all",
+    dirname(pluginRoot),
+    "--harness",
+    "hermes",
+    "--compile-root",
+    hermesRoot,
+    "--no-validate",
+  ], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Compile (hermes, global)");
+  expect(result.stdout).toContain(`Root: ${hermesRoot}`);
+  expect(result.stdout).toContain("All plugin refreshes completed successfully");
+  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+  expect(config).toContain("mcp_servers:");
+  expect(config).toContain("prism-generated-cli-hermes-tools:");
+  expect(
+    await pathExists(
+      join(hermesRoot, "prism", "mcp", "prism_generated_cli_hermes_tools", "server.mjs"),
+    ),
+  ).toBe(true);
+});
 
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {
   const root = await createTempRoot();

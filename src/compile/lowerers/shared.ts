@@ -422,6 +422,14 @@ const executeLoweringOperation = async (
   }
   if (operation.reason === "unchanged") {
     await applyUnchangedMode(operation);
+    if (
+      isLowerWriteOperation(operation) &&
+      ledger &&
+      options.target &&
+      !hasCurrentLoweringEntry(ledger, options.target, operation.target, "file")
+    ) {
+      upsertLoweringEntry(ledger, options.target, operation.target, "file", operation.content);
+    }
     return null;
   }
   if (isLowerWriteOperation(operation)) {
@@ -488,7 +496,7 @@ const executeLoweringPrune = async (
 ): Promise<void> => {
   if (await shouldForgetSharedPrune(operation, target)) {
     if (ledger && target) {
-      removeLoweringEntry(ledger, target, operation.target, operation.targetType);
+      removeCurrentLoweringEntry(ledger, target, operation.target, "file");
     }
     return;
   }
@@ -513,6 +521,10 @@ const shouldForgetSharedPrune = async (
     pluginName: target.sourcePluginName,
     targetPath: operation.target,
     kind: "file",
+    includeCurrentHarnessOtherRoots:
+      (operation as LowerPruneOperation & { readonly protectSameHarnessOtherRoots?: boolean })
+        .protectSameHarnessOtherRoots === true,
+    currentRoot: target.root,
   });
 };
 
@@ -615,6 +627,48 @@ const removeLoweringEntry = (
   Object.assign(
     ledger,
     removeLedgerEntries(ledger, entryIds),
+  );
+};
+
+const removeCurrentLoweringEntry = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  kind: "file" | "directory" | "config",
+): void => {
+  const entryIds = new Set([lowerLedgerEntryId(target, targetPath, kind)]);
+  const resolvedRoot = resolve(target.root);
+  const resolvedTargetPath = resolve(targetPath);
+  for (const entry of ledger.entries) {
+    if (entry.pluginName !== target.sourcePluginName) continue;
+    if (entry.artifact !== "compile") continue;
+    if (entry.kind !== kind) continue;
+    if (entry.scope !== target.scope) continue;
+    if (resolve(entry.root) !== resolvedRoot) continue;
+    if (resolve(entry.targetPath) !== resolvedTargetPath) continue;
+    entryIds.add(entry.id);
+  }
+  Object.assign(
+    ledger,
+    removeLedgerEntries(ledger, entryIds),
+  );
+};
+
+const hasCurrentLoweringEntry = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  kind: "file" | "directory" | "config",
+): boolean => {
+  const resolvedRoot = resolve(target.root);
+  const resolvedTargetPath = resolve(targetPath);
+  return ledger.entries.some((entry) =>
+    entry.pluginName === target.sourcePluginName &&
+    entry.artifact === "compile" &&
+    entry.kind === kind &&
+    entry.scope === target.scope &&
+    resolve(entry.root) === resolvedRoot &&
+    resolve(entry.targetPath) === resolvedTargetPath
   );
 };
 
@@ -956,6 +1010,9 @@ export const planSharedMcpRuntimePrune = async (
     readonly root: string;
     readonly sourcePluginName: string;
   },
+  options: {
+    readonly protectSameHarnessOtherRoots?: boolean;
+  } = {},
 ): Promise<void> => {
   const hasTarget = await exists(target);
   const hasLedgerEntry = owner ? await hasSharedMcpRuntimeLedgerEntry(owner, target) : false;
@@ -965,6 +1022,7 @@ export const planSharedMcpRuntimePrune = async (
     target,
     targetType: "file",
     shared: true,
+    ...(options.protectSameHarnessOtherRoots ? { protectSameHarnessOtherRoots: true } : {}),
     reason: "stale",
   } as LowerOperation);
 };

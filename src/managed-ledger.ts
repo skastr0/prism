@@ -133,18 +133,26 @@ export const hasOtherManagedCompileOwners = async (input: {
   readonly pluginName: string;
   readonly targetPath: string;
   readonly kind: ManagedOutputKind;
+  readonly includeCurrentHarnessOtherRoots?: boolean;
+  readonly currentRoot?: string;
 }): Promise<boolean> => {
   const targetPath = resolve(input.targetPath);
+  const currentRoot = input.currentRoot ? resolve(input.currentRoot) : undefined;
   const currentContentHash = await currentTargetContentHash(targetPath);
   if (!currentContentHash) return false;
 
   for (const harness of getAllHarnessIds()) {
-    if (harness === input.currentHarness) continue;
+    if (harness === input.currentHarness && !input.includeCurrentHarnessOtherRoots) continue;
     const ledger = await readHarnessLedger(harness);
     if (
       ledger.entries.some(
         (entry) =>
           entry.id !== input.currentEntryId &&
+          (
+            harness !== input.currentHarness ||
+            !currentRoot ||
+            resolve(entry.root) !== currentRoot
+          ) &&
           entry.pluginName === input.pluginName &&
           entry.artifact === "compile" &&
           entry.kind === input.kind &&

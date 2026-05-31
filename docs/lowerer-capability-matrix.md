@@ -31,7 +31,7 @@ patched into a config file.
 | Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle |
 | OpenCode | `native-plugin-api` | root markdown | root skills | native plugin tools | native plugin hooks | `opencode.json` agent/plugin entries |
 | OpenClaw | unsupported | unsupported | direct skills | unsupported | unsupported | none |
-| Hermes Agent | unsupported | unsupported | root skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` |
+| Hermes Agent | unsupported | unsupported | root/profile skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` |
 | Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` |
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
@@ -125,6 +125,15 @@ to avoid double-loading the same Prism-owned skill from `.factory/skills/`.
 Permission-only skill visibility still fails closed because the official Droid
 frontmatter documents `tools` but not a per-droid skill allowlist.
 
+Hermes profile-local MCP is intentionally expressed through the existing root
+override rather than a new target. Hermes profiles are separate Hermes homes, so
+`prism compile ./plugin --harness hermes --root ~/.hermes/profiles/<name>` writes
+skills and `config.yaml#mcp_servers` into that profile root. `--mcp-root` remains
+the explicit split when a generated HTTP runtime should live outside the profile
+root. See `docs/hermes-profile-mcp.md` for the collision and non-goal contract:
+Prism does not lower SOUL/personality files, runtime delegation, or native
+Hermes Python plugins as part of profile-local MCP support.
+
 Cursor compile support is tools-only. Cursor's official MCP contract uses
 `~/.cursor/mcp.json` globally and `.cursor/mcp.json` per project, and Cursor CLI
 respects the same file as the IDE. Prism lowers canonical tools into a generated
@@ -148,7 +157,7 @@ leaves Cursor's native approval flow intact.
 - Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
 - Amp plugins and plugin API: https://ampcode.com/manual and https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings
-- Hermes MCP and plugin surfaces: https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp and https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins
+- Hermes profiles, profile commands, MCP, and plugin surfaces: https://hermes-agent.nousresearch.com/docs/user-guide/profiles/, https://hermes-agent.nousresearch.com/docs/reference/profile-commands/, https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference/, and https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins
 - OpenClaw skills: https://docs.openclaw.ai/tools/skills
 - Factory plugin/settings hierarchy: https://docs.factory.ai/guides/building/building-plugins and https://docs.factory.ai/enterprise/hierarchical-settings-and-org-control
 - Grok Build skills/plugins: https://docs.x.ai/build/features/skills-plugins-marketplaces

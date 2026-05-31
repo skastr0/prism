@@ -151,6 +151,7 @@ export interface FileOperation {
   target: string;
   harness: HarnessId;
   artifact: "rules" | "command" | "agent" | "tool" | "skill" | "config" | "compile";
+  content?: string; // Generated content for managed files without a source artifact.
   reason?: string; // For skips or special handling
   managed?: ManagedFileOperationMetadata;
 }

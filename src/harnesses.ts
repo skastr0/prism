@@ -179,7 +179,7 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     projectConfigPath: ".cursor/",
     rulesFile: ".cursorrules",
     rulesDir: "rules/",
-    commandsDir: "commands/",
+    commandsDir: null,
     agentsDir: null,
     toolsDir: null,
     skillsDir: "skills/",

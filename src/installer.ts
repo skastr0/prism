@@ -2,7 +2,7 @@
  * Core installation logic for plugin distribution
  */
 
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
 import {
   copyFile,
@@ -37,6 +37,7 @@ import type {
   PluginTargetId,
 } from "./types.js";
 import { computeContentHash } from "./content-hash.js";
+import { normalizeGeneratedPluginName } from "./compile/generated-plugin.js";
 import {
   type HarnessLedger,
   type ManagedLedgerEntry,
@@ -104,7 +105,7 @@ const shouldPlanFileRouterSkills = (
   manifestTargetsArtifact(manifest, "skills", harnessId) &&
   !compileOwnsTargetedPluginSkills(manifest, harnessId);
 
-const normalizeTargetRoot = (root: string): string => expandPath(root);
+const normalizeTargetRoot = (root: string): string => resolve(expandPath(root));
 
 const manifestTargetsAnyArtifact = (
   manifest: ResolvedPluginManifest,
@@ -263,10 +264,13 @@ const planCommandsIfTargeted = async (
   context: InstallPlanningContext,
 ): Promise<FileOperation[]> =>
   harness.supportsCommands &&
-  harness.commandsDir &&
   !commandsAreCompileManaged(harness.id) &&
   manifestTargetsArtifact(manifest, "commands", harness.id)
-    ? planCommandsInstallation(pluginPath, harness, context)
+    ? harness.id === "cursor"
+      ? planCursorPluginCommandsInstallation(pluginPath, context)
+      : harness.commandsDir
+        ? planCommandsInstallation(pluginPath, harness, context)
+        : []
     : [];
 
 const planAgentsIfTargeted = async (
@@ -852,23 +856,70 @@ async function planManagedCopyOperation(options: {
     options.transformMarkdown,
   );
   const contentHash = computeContentHash(content);
+  return planManagedFileOperation({
+    source: options.file.sourcePath,
+    sourcePath: options.file.relativePath,
+    targetPath: options.targetPath,
+    contentHash,
+    context: options.context,
+    artifact: options.artifact,
+    scope: options.scope,
+    root: options.root,
+  });
+}
+
+async function planManagedGeneratedContentOperation(options: {
+  readonly source: string;
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly content: string;
+  readonly context: InstallPlanningContext;
+  readonly artifact: InstallArtifact;
+  readonly scope: HarnessScope;
+  readonly root: string;
+}): Promise<FileOperation> {
+  return planManagedFileOperation({
+    source: options.source,
+    sourcePath: options.sourcePath,
+    targetPath: options.targetPath,
+    contentHash: computeContentHash(options.content),
+    content: options.content,
+    context: options.context,
+    artifact: options.artifact,
+    scope: options.scope,
+    root: options.root,
+  });
+}
+
+async function planManagedFileOperation(options: {
+  readonly source: string;
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly contentHash: string;
+  readonly content?: string;
+  readonly context: InstallPlanningContext;
+  readonly artifact: InstallArtifact;
+  readonly scope: HarnessScope;
+  readonly root: string;
+}): Promise<FileOperation> {
   const managed = managedOperationMetadata(options.context, {
     artifact: options.artifact,
     scope: options.scope,
     root: options.root,
     targetPath: options.targetPath,
     kind: "file",
-    sourcePath: options.file.relativePath,
-    contentHash,
+    sourcePath: options.sourcePath,
+    contentHash: options.contentHash,
   });
   const baseOperation: FileOperation = {
-      type: "copy",
-      source: options.file.sourcePath,
-      target: options.targetPath,
-      harness: options.context.harness.id,
-      artifact: options.artifact,
-      managed,
-    };
+    type: "copy",
+    source: options.source,
+    target: options.targetPath,
+    harness: options.context.harness.id,
+    artifact: options.artifact,
+    ...(options.content !== undefined ? { content: options.content } : {}),
+    managed,
+  };
 
   const currentHash = await readTargetHash(options.targetPath);
   if (!currentHash) return baseOperation;
@@ -923,6 +974,76 @@ async function planCommandsInstallation(
       await planManagedCopyOperation({
         file,
         targetPath,
+        context,
+        artifact: "command",
+        scope: "global",
+        root,
+      }),
+    );
+  }
+
+  return operations;
+}
+
+const normalizeCursorPluginNameSegment = (pluginName: string): string => {
+  const normalized = normalizeGeneratedPluginName(pluginName)
+    .replace(/_/g, "-")
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "");
+  return normalized.length > 0 ? normalized : "plugin";
+};
+
+const cursorGeneratedPluginName = (pluginName: string): string =>
+  `prism-generated-${normalizeCursorPluginNameSegment(pluginName)}`;
+
+const cursorGeneratedCommandPluginRoot = (
+  root: string,
+  pluginName: string,
+): string => join(root, "plugins", "local", cursorGeneratedPluginName(pluginName));
+
+const renderCursorGeneratedCommandPluginManifest = (
+  context: InstallPlanningContext,
+): string => `${JSON.stringify(
+  {
+    name: cursorGeneratedPluginName(context.pluginName),
+    ...(context.pluginVersion ? { version: context.pluginVersion } : {}),
+    description: `Prism-generated Cursor commands for ${context.pluginName}.`,
+    commands: "commands/",
+  },
+  null,
+  2,
+)}\n`;
+
+async function planCursorPluginCommandsInstallation(
+  pluginPath: string,
+  context: InstallPlanningContext,
+): Promise<FileOperation[]> {
+  const operations: FileOperation[] = [];
+  const files = await collectArtifactSourceFiles(pluginPath, "commands", context.harness.id);
+  const commandFiles = files.filter((file) => file.relativePath.endsWith(".md"));
+  if (commandFiles.length === 0) return operations;
+
+  const root = expandPath(context.harness.globalConfigPath);
+  const pluginRoot = cursorGeneratedCommandPluginRoot(root, context.pluginName);
+  const manifestPath = join(pluginRoot, ".cursor-plugin", "plugin.json");
+  operations.push(
+    await planManagedGeneratedContentOperation({
+      source: join(pluginPath, ".cursor-plugin", "plugin.json"),
+      sourcePath: ".cursor-plugin/plugin.json",
+      targetPath: manifestPath,
+      content: renderCursorGeneratedCommandPluginManifest(context),
+      context,
+      artifact: "config",
+      scope: "global",
+      root,
+    }),
+  );
+
+  for (const file of commandFiles) {
+    operations.push(
+      await planManagedCopyOperation({
+        file,
+        targetPath: join(pluginRoot, "commands", file.relativePath),
         context,
         artifact: "command",
         scope: "global",
@@ -1368,6 +1489,11 @@ const applyOperationToLedger = (
  * Execute a copy operation with content transformation
  */
 async function executeCopyOperation(op: FileOperation): Promise<void> {
+  if (op.content !== undefined) {
+    await writeFile(op.target, op.content);
+    return;
+  }
+
   const harness = getHarness(op.harness);
   const rendered = await renderManagedCopyContent(
     {

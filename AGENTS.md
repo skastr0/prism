@@ -27,7 +27,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Kimi Code | generated plugin `prism-context` skill | generated plugin command skills | generated plugin role skills | generated plugin skills |
 | Amp Code | `~/.config/amp/AGENTS.md` | generated plugin `registerCommand` | generated role skills | `~/.config/amp/skills/` |
 | Grok Build | `~/.grok/AGENTS.md` | - | generated plugin bundle | `~/.grok/skills/` |
-| Cursor | `~/.cursor/.cursorrules` | `~/.cursor/commands/` | - | `~/.cursor/skills/` + generated MCP |
+| Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | - | `~/.cursor/skills/` + generated MCP |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 | Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
 
@@ -45,7 +45,7 @@ Kimi Code is part of the `coding-harness` preset with compile-phase generated pl
 
 Amp Code is part of the `coding-harness` preset with compile-phase native TypeScript plugin support. Prism emits one generated plugin under `.amp/plugins/prism-generated-<source-plugin>.ts` for project scope or `<amp-root>/plugins/prism-generated-<source-plugin>.ts` for global/system scope, lowers markdown commands with Amp's `registerCommand` API by appending the command prompt to the active thread, registers canonical tools with Amp's `registerTool` API, and lowers supported Prism hooks through Amp's `amp.on(...)` plugin events. Prism maps `tool.before -> tool.call`, `tool.after -> tool.result`, and `session.start -> session.start`; `session.end` fails closed because Amp does not expose a native session-end event. Compiled agents still lower as generated role skills rather than experimental custom Amp agent modes.
 
-Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules, commands, and skills still write to Cursor's direct file surfaces; Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated MCP server and Prism patches one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry in `~/.cursor/mcp.json` globally or `.cursor/mcp.json` for project scope. Stdio mode writes the server under `<cursor-root>/mcp/`; Streamable HTTP mode writes the shared Prism MCP runtime under `<mcp-runtime-root>/prism/mcp/` and uses Cursor's `url` plus `headers` MCP shape. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
+Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts lower into a generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json` and `commands/` component discovery. Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated MCP server and Prism patches one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry in `~/.cursor/mcp.json` globally or `.cursor/mcp.json` for project scope. Stdio mode writes the server under `<cursor-root>/mcp/`; Streamable HTTP mode writes the shared Prism MCP runtime under `<mcp-runtime-root>/prism/mcp/` and uses Cursor's `url` plus `headers` MCP shape. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
 
 Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
@@ -686,6 +686,7 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Patches `<cursor-root>/mcp.json` with one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry
 - Uses `command`/`args` for stdio MCP and `url`/`headers` for Streamable HTTP MCP, matching Cursor's IDE and CLI MCP contract; Streamable HTTP mode can omit manifest ports and lets Prism select the managed daemon port before config write
 - Supports global `~/.cursor/mcp.json` and project `.cursor/mcp.json`
+- Installs command artifacts through generated local Cursor plugins under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/commands/`
 - Keeps install-phase skills direct because Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`
 - Fails closed for compiled agents, orbits, hooks, and per-agent skill permission visibility
 
@@ -792,7 +793,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 - `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `grok`
 - `claw-harness` → `openclaw`, `hermes`
 
-Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Factory Droid remains included for install-phase commands because Droid still supports legacy `.factory/commands/` files.
+Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Cursor remains included for install-phase commands, but Prism lowers those commands through Cursor's local plugin bundle layout instead of direct `~/.cursor/commands/` files. Factory Droid remains included for install-phase commands because Droid still supports legacy `.factory/commands/` files.
 
 ### Rules to remember
 

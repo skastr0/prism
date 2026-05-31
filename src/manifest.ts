@@ -492,6 +492,9 @@ function targetSupportsPluginArtifact(harnessId: HarnessId, artifact: PluginArti
   if (artifact === "agents") {
     return (COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId);
   }
+  if (artifact === "commands" && harnessId === "cursor") {
+    return true;
+  }
   if (getCompileManagedPluginArtifactTargets(artifact).includes(harnessId)) {
     return true;
   }

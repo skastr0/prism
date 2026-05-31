@@ -143,6 +143,14 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
     hooks: "unsupported",
     skillPermissions: "unsupported",
   });
+  expect(LOWERER_CAPABILITIES.cursor.surfaces.pluginBundle).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<cursor-root>/plugins/local/prism-generated-<plugin>/",
+  });
+  expect(LOWERER_CAPABILITIES.cursor.surfaces.commands).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<generated-plugin>/commands/",
+  });
   expect(LOWERER_CAPABILITIES.cursor.surfaces.generatedTools.kind).toBe(
     "generated-mcp",
   );

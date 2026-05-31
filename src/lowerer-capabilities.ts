@@ -436,16 +436,20 @@ export const LOWERER_CAPABILITIES = {
       skillPermissions: "unsupported",
     }),
     surfaces: {
-      pluginBundle: unsupported("Prism does not manage Cursor extensions."),
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<cursor-root>/plugins/local/prism-generated-<plugin>/",
+        summary: "Install emits local Cursor plugin bundles for Prism-managed command components.",
+      },
       rules: {
         kind: "direct-file",
         path: "<cursor-root>/.cursorrules or rules/",
         summary: "Install writes Cursor rules files.",
       },
       commands: {
-        kind: "direct-file",
-        path: "<cursor-root>/commands/",
-        summary: "Install writes Cursor command markdown files.",
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/commands/",
+        summary: "Install writes Cursor commands inside the generated local plugin bundle.",
       },
       agents: unsupported(),
       skills: {
@@ -468,6 +472,7 @@ export const LOWERER_CAPABILITIES = {
     },
     notes: [
       "Cursor compile support is tools-only for now; compiled agents, orbits, hooks, and skill permission visibility remain unsupported.",
+      "Cursor command artifacts install through a local plugin bundle under ~/.cursor/plugins/local so Prism uses Cursor's native command discovery instead of direct command files.",
       "Cursor Agent Skills are docs-backed under .cursor/skills and ~/.cursor/skills, so Prism keeps install-phase skills direct.",
       "Cursor IDE and CLI share the same mcp.json contract.",
     ],

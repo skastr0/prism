@@ -1,6 +1,6 @@
 # Lowerer Capability Matrix
 
-Checked: 2026-05-30
+Checked: 2026-05-31
 
 Prism keeps two related contracts separate:
 
@@ -36,7 +36,7 @@ patched into a config file.
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none |
-| Cursor | unsupported | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
+| Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
 | Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin `.mcp.json` | plugin hooks | none for generated bundle |
@@ -117,10 +117,14 @@ Cursor compile support is tools-only. Cursor's official MCP contract uses
 respects the same file as the IDE. Prism lowers canonical tools into a generated
 MCP server and patches one compiler-owned `mcpServers` entry in that file:
 stdio entries use `command` plus `args`, while Streamable HTTP entries use `url`
-plus `headers`. Cursor documents Agent Skills under `.cursor/skills/` and
-`~/.cursor/skills/`, so Prism keeps Cursor skills as install-phase direct-file
-artifacts. Prism does not compile Cursor agents, hooks, or per-agent skill
-permissions yet, and it leaves Cursor's native approval flow intact.
+plus `headers`. Cursor documents local plugins under
+`~/.cursor/plugins/local/<plugin>` with `.cursor-plugin/plugin.json` and default
+`commands/` component discovery, so Prism installs Cursor command artifacts into
+a generated local plugin bundle instead of direct `~/.cursor/commands/` files.
+Cursor documents Agent Skills under `.cursor/skills/` and `~/.cursor/skills/`,
+so Prism keeps Cursor skills as install-phase direct-file artifacts. Prism does
+not compile Cursor agents, hooks, or per-agent skill permissions yet, and it
+leaves Cursor's native approval flow intact.
 
 ## Source Pointers
 

@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { computeContentHash } from "./content-hash.js";
 import { install, planInstallation } from "./installer.js";
 import { managedEntryId, readHarnessLedger, writeHarnessLedger } from "./managed-ledger.js";
@@ -194,6 +194,164 @@ test("planInstallation keeps Cursor skills direct because Cursor documents Agent
         pluginName: "cursor-skills-demo",
         sourcePath: "prism-cursor-contract-test/SKILL.md",
       }),
+    }),
+  );
+});
+
+test("planInstallation lowers Cursor commands through a local plugin bundle", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "cursor-commands-demo",
+      version: "0.1.0",
+      targets: { commands: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(
+    join(pluginPath, "commands", "review.md"),
+    "---\nname: review\ndescription: Review the current change\n---\n\n# Review\n",
+  );
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["cursor"],
+    overwrite: true,
+    dryRun: true,
+  });
+
+  const cursorRoot = join(homedir(), ".cursor/");
+  const pluginRoot = join(cursorRoot, "plugins", "local", "prism-generated-cursor-commands-demo");
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      type: "copy",
+      source: join(pluginPath, ".cursor-plugin", "plugin.json"),
+      target: join(pluginRoot, ".cursor-plugin", "plugin.json"),
+      harness: "cursor",
+      artifact: "config",
+      content: expect.stringContaining('"commands": "commands/"'),
+      managed: expect.objectContaining({
+        kind: "file",
+        pluginName: "cursor-commands-demo",
+        sourcePath: ".cursor-plugin/plugin.json",
+      }),
+    }),
+  );
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      type: "copy",
+      source: join(pluginPath, "commands", "review.md"),
+      target: join(pluginRoot, "commands", "review.md"),
+      harness: "cursor",
+      artifact: "command",
+      managed: expect.objectContaining({
+        kind: "file",
+        pluginName: "cursor-commands-demo",
+        sourcePath: "review.md",
+      }),
+    }),
+  );
+  expect(operations.some((operation) =>
+    operation.target === join(cursorRoot, "commands", "review.md")
+  )).toBe(false);
+});
+
+test("planInstallation prunes stale Cursor command plugin files", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const pluginName = `cursor-command-prune-${basename(root).toLowerCase()}`;
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: pluginName,
+      version: "0.1.0",
+      targets: { commands: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(join(pluginPath, "commands", "current.md"), "# Current\n\nCurrent command.\n");
+
+  const cursorRoot = join(homedir(), ".cursor/");
+  const pluginRoot = join(cursorRoot, "plugins", "local", `prism-generated-${pluginName}`);
+  const staleTargetPath = join(pluginRoot, "commands", "old.md");
+  const staleManifestPath = join(pluginRoot, ".cursor-plugin", "old-plugin.json");
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("cursor")),
+    entries: [
+      {
+        id: managedEntryId({
+          harness: "cursor",
+          scope: "global",
+          root: cursorRoot,
+          pluginName,
+          artifact: "command",
+          targetPath: staleTargetPath,
+          kind: "file",
+          sourcePath: "old.md",
+        }),
+        pluginName,
+        pluginVersion: "0.1.0",
+        pluginPath,
+        harness: "cursor",
+        scope: "global",
+        root: cursorRoot,
+        artifact: "command",
+        targetPath: staleTargetPath,
+        kind: "file",
+        sourcePath: "old.md",
+        contentHash: computeContentHash("stale command"),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: managedEntryId({
+          harness: "cursor",
+          scope: "global",
+          root: join(homedir(), ".cursor"),
+          pluginName,
+          artifact: "config",
+          targetPath: staleManifestPath,
+          kind: "file",
+          sourcePath: ".cursor-plugin/old-plugin.json",
+        }),
+        pluginName,
+        pluginVersion: "0.1.0",
+        pluginPath,
+        harness: "cursor",
+        scope: "global",
+        root: join(homedir(), ".cursor"),
+        artifact: "config",
+        targetPath: staleManifestPath,
+        kind: "file",
+        sourcePath: ".cursor-plugin/old-plugin.json",
+        contentHash: computeContentHash("stale manifest"),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+  });
+
+  const operations = await planInstallation({
+    pluginPath,
+    harnesses: ["cursor"],
+    overwrite: true,
+    dryRun: true,
+  });
+
+  expect(operations).toContainEqual(
+    expect.objectContaining({ type: "copy", target: join(pluginRoot, "commands", "current.md") }),
+  );
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      type: "prune",
+      target: staleTargetPath,
+      reason: "Stale ledger entry; target missing",
+    }),
+  );
+  expect(operations).toContainEqual(
+    expect.objectContaining({
+      type: "prune",
+      artifact: "config",
+      target: staleManifestPath,
+      reason: "Stale ledger entry; target missing",
     }),
   );
 });

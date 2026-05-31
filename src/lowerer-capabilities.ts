@@ -393,7 +393,11 @@ export const LOWERER_CAPABILITIES = {
         path: "<amp-root>/AGENTS.md",
         summary: "Install appends managed sections to the native instructions file.",
       },
-      commands: unsupported("Amp commands should be implemented by native plugins, not file routing."),
+      commands: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>.ts",
+        summary: "Commands lower to Amp registerCommand definitions that append Prism command prompts to the active thread.",
+      },
       agents: {
         kind: "markdown-file",
         path: "<amp-root>/skills/prism-agent-<name>/SKILL.md",
@@ -418,7 +422,7 @@ export const LOWERER_CAPABILITIES = {
       agentConfig: unsupported("No Prism-managed Amp agent config patch exists."),
     },
     notes: [
-      "Amp generated tools and supported hooks use the native plugin API; compiled agents currently lower as role-skill guidance.",
+      "Amp generated commands, tools, and supported hooks use the native plugin API; compiled agents currently lower as role-skill guidance.",
       "Amp exposes session.start, tool.call, tool.result, agent.start, and agent.end plugin events; Prism does not map portable session.end to agent.end.",
     ],
   },

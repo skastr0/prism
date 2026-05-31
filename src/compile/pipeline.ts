@@ -994,6 +994,7 @@ const planTargetLowering = (options: {
 }): Effect.Effect<LowerOperation[], CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
+    options.targetId !== "amp-code" &&
     options.targetId !== "factory-droid" &&
     options.targetId !== "pi" &&
     options.targetId !== "kimi-code" &&
@@ -1089,9 +1090,19 @@ const persistCompileOutputs = (options: {
     );
   });
 
-export const compilePluginForTarget = (
-  options: CompileOptions
-): Effect.Effect<CompileResult, CompileError> =>
+const prepareLoweringInputs = (
+  options: CompileOptions,
+): Effect.Effect<{
+  readonly context: CompileTargetContext;
+  readonly registry: PluginRegistry;
+  readonly surfaces: TargetSurfaceSelection;
+  readonly agentResult: AgentCompositionResult;
+  readonly orbits: ReadonlyArray<Orbit>;
+  readonly composedForLowering: ReadonlyArray<ComposedAgent>;
+  readonly artifacts: TargetArtifacts;
+  readonly mcpRuntimePort?: number;
+  readonly mcpBearerToken?: string;
+}, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
     const registry = yield* loadPlugin(options.pluginPath);
@@ -1132,6 +1143,35 @@ export const compilePluginForTarget = (
       runtimeRoot: context.mcpRuntimeRoot,
       dryRun: options.dryRun,
     });
+
+    return {
+      context,
+      registry,
+      surfaces,
+      agentResult,
+      orbits,
+      composedForLowering,
+      artifacts,
+      ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
+      ...(mcpBearerToken ? { mcpBearerToken } : {}),
+    };
+  });
+
+export const compilePluginForTarget = (
+  options: CompileOptions
+): Effect.Effect<CompileResult, CompileError> =>
+  Effect.gen(function* () {
+    const {
+      context,
+      registry,
+      surfaces,
+      agentResult,
+      orbits,
+      composedForLowering,
+      artifacts,
+      mcpRuntimePort,
+      mcpBearerToken,
+    } = yield* prepareLoweringInputs(options);
     const allOps = yield* planTargetLowering({
       targetId: context.targetId,
       lowerer: context.lowerer,

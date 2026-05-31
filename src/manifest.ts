@@ -65,7 +65,7 @@ const TOOL_COMPILE_SUPPORTED_HARNESSES = [
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
   rules: ["antigravity-cli", "pi", "kimi-code"],
-  commands: ["pi", "kimi-code"],
+  commands: ["amp-code", "pi", "kimi-code"],
   skills: ["pi", "kimi-code"],
 };
 

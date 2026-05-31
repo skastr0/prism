@@ -1381,6 +1381,7 @@ test("artifact target resolution filters unsupported preset members", async () =
 
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("grok");
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("amp-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
@@ -1472,7 +1473,7 @@ test("direct unsupported Antigravity command targets are rejected", async () => 
   );
 });
 
-test("direct Kimi and Pi rules and commands are compile-managed plugin artifact targets", async () => {
+test("direct Amp, Kimi, and Pi commands are compile-managed plugin artifact targets", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "managed-plugin-artifact-demo");
   await writeText(
@@ -1483,7 +1484,7 @@ test("direct Kimi and Pi rules and commands are compile-managed plugin artifact 
         version: "0.1.0",
         targets: {
           rules: ["kimi-code", "pi"],
-          commands: ["kimi-code", "pi"],
+          commands: ["amp-code", "kimi-code", "pi"],
         },
       },
       null,
@@ -1494,8 +1495,10 @@ test("direct Kimi and Pi rules and commands are compile-managed plugin artifact 
   const manifest = await readManifest(pluginRoot);
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("kimi-code");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("amp-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
+  expect(manifestHasCompileTargets(manifest, "amp-code")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
 });
@@ -4066,6 +4069,192 @@ export default defineHook({
 
   expect(registeredTools).toHaveLength(0);
   expect([...registeredEvents.keys()].sort()).toEqual(["session.start", "tool.call"]);
+});
+
+test("compilePluginForTarget lowers Amp commands through the native plugin API", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-command-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-command-demo",
+        version: "0.1.0",
+        targets: {
+          commands: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "commands", "review.md"),
+    `---
+description: Review current branch changes
+amp-code:
+  title: Review Current Branch
+  category: Prism Commands
+---
+
+# Review
+
+Review the current branch and report findings first.
+`,
+  );
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const pluginPath = join(projectRoot, ".amp", "plugins", "prism-generated-amp-command-demo.ts");
+  expect(await pathExists(pluginPath)).toBe(true);
+
+  const generated = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`) as {
+    readonly default: (amp: {
+      readonly registerTool: (definition: unknown) => void;
+      readonly registerCommand: (
+        id: string,
+        options: Record<string, unknown>,
+        handler: (ctx: { thread?: { append: (messages: unknown[]) => Promise<void> } }) => Promise<void>,
+      ) => void;
+    }) => void;
+  };
+  const registeredCommands: Array<{
+    id: string;
+    options: Record<string, unknown>;
+    handler: (ctx: { thread?: { append: (messages: unknown[]) => Promise<void> } }) => Promise<void>;
+  }> = [];
+  generated.default({
+    registerTool: () => undefined,
+    registerCommand: (id, options, handler) => {
+      registeredCommands.push({ id, options, handler });
+    },
+  });
+
+  expect(registeredCommands).toHaveLength(1);
+  const command = registeredCommands[0]!;
+  expect(command.id).toBe("prism-generated-amp-command-demo-review");
+  expect(command.options).toEqual({
+    title: "Review Current Branch",
+    category: "Prism Commands",
+    description: "Review current branch changes",
+  });
+
+  const appended: unknown[][] = [];
+  await command.handler({
+    thread: {
+      append: async (messages) => {
+        appended.push(messages);
+      },
+    },
+  });
+  expect(appended).toEqual([[
+    {
+      type: "user-message",
+      content: "# Review\n\nReview the current branch and report findings first.",
+    },
+  ]]);
+  await expect(command.handler({})).rejects.toThrow("active Amp thread");
+
+  const source = await readFile(pluginPath, "utf8");
+  const sourceHash = computeContentHash(source);
+  const warmCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  expect(computeContentHash(await readFile(pluginPath, "utf8"))).toBe(sourceHash);
+  expect(warmCompile.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+
+  await rm(join(pluginRoot, "commands"), { recursive: true, force: true });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({ name: "amp-command-demo", version: "0.1.0", targets: {} }, null, 2)}\n`,
+  );
+  await writeFile(pluginPath, `${source}\n// external change\n`);
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "amp-code",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+      }),
+    ),
+  ).rejects.toThrow("Refusing to prune drifted Amp generated plugin");
+  expect(await pathExists(pluginPath)).toBe(true);
+
+  await writeFile(pluginPath, source);
+  const pruneCompile = await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  expect(pruneCompile.operations).toContainEqual(
+    expect.objectContaining({
+      kind: "prune-plugin-path",
+      target: pluginPath,
+      targetType: "file",
+      reason: "stale",
+    }),
+  );
+  expect(await pathExists(pluginPath)).toBe(false);
+  expect((await readHarnessLedger("amp-code")).entries.some((entry) => entry.targetPath === pluginPath)).toBe(false);
+});
+
+test("compilePluginForTarget rejects Amp command id collisions", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-command-collision-demo");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-command-collision-demo",
+        version: "0.1.0",
+        targets: {
+          commands: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "commands", "foo-bar.md"), "# Foo bar\n");
+  await writeText(join(pluginRoot, "commands", "foo", "bar.md"), "# Foo nested bar\n");
+
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        pluginPath: pluginRoot,
+        target: "amp-code",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: true,
+      }),
+    ),
+  ).rejects.toThrow("Amp command id collision");
 });
 
 test("compilePluginForTarget rejects Amp session-end hooks because Amp has no native event", async () => {

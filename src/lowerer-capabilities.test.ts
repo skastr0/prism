@@ -85,6 +85,9 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   expect(LOWERER_CAPABILITIES["amp-code"].surfaces.generatedTools.kind).toBe(
     "native-plugin-api",
   );
+  expect(LOWERER_CAPABILITIES["amp-code"].surfaces.commands.kind).toBe(
+    "native-plugin-api",
+  );
   expect(LOWERER_CAPABILITIES["amp-code"].surfaces.hooks.kind).toBe(
     "native-plugin-api",
   );

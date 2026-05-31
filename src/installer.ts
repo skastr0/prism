@@ -70,7 +70,7 @@ const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli", "p
 const rulesAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_RULE_HARNESSES.has(harnessId);
 
-const COMPILE_MANAGED_COMMAND_HARNESSES = new Set<HarnessId>(["pi", "kimi-code"]);
+const COMPILE_MANAGED_COMMAND_HARNESSES = new Set<HarnessId>(["amp-code", "pi", "kimi-code"]);
 
 const commandsAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_COMMAND_HARNESSES.has(harnessId);
@@ -128,6 +128,9 @@ const hasOutputProducingCompileTargets = (
     return true;
   }
   if (harnessId === "antigravity-cli" && manifestTargetsArtifact(manifest, "rules", harnessId)) {
+    return true;
+  }
+  if (harnessId === "amp-code" && manifestTargetsArtifact(manifest, "commands", harnessId)) {
     return true;
   }
   if (

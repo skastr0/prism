@@ -35,7 +35,7 @@ patched into a config file.
 | Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` |
 | Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
 | Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
-| Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools | native `amp.on(...)` plugin events | none |
+| Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none |
 | Cursor | unsupported | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
@@ -64,11 +64,13 @@ native Antigravity stdin payload at `event.native`, and intentionally does not
 model Antigravity-only `PostInvocation` outputs such as `injectSteps` or
 `terminationBehavior`.
 
-Amp is product-native for generated tools and supported hooks through its
+Amp is product-native for generated commands, tools, and supported hooks through its
 TypeScript plugin API. Prism emits generated plugins under Amp's documented
-project/system plugin locations and uses `amp.registerTool(...)` for canonical
-tools plus `amp.on(...)` for portable hooks. Prism maps `tool.before` to
-`tool.call`, `tool.after` to `tool.result`, and `session.start` to
+project/system plugin locations, uses `amp.registerCommand(...)` for Prism
+markdown commands, `amp.registerTool(...)` for canonical tools, and
+`amp.on(...)` for portable hooks. Generated commands append the Prism command
+prompt to the active Amp thread through `ctx.thread?.append(...)`. Prism maps
+`tool.before` to `tool.call`, `tool.after` to `tool.result`, and `session.start` to
 `session.start`. It deliberately fails closed for `session.end` because Amp's
 official plugin lifecycle has no session-end event; Prism does not map that to
 turn-level `agent.end`. Prism does not yet lower compiled agents through a

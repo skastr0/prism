@@ -1,6 +1,6 @@
 /** Amp Code lowerer. */
 
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
@@ -17,12 +17,19 @@ import {
   bindingsFromCanonicalTools,
   collectBindingNameMap,
 } from "../tool-bindings.js";
-import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
+import {
+  collectArtifactSourceFiles,
+  getHarnessFrontmatter,
+  parseMarkdownFile,
+  resolveManifestTargets,
+} from "../../manifest.js";
 import {
   exists,
   listDirRecursive,
   readFile,
 } from "../../fs.js";
+import { computeContentHash } from "../../content-hash.js";
+import { readHarnessLedger } from "../../managed-ledger.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
 import type { LowerOperation } from "./opencode.js";
 import {
@@ -135,11 +142,67 @@ interface PlannedAmpHook {
   readonly matcher?: string;
 }
 
+interface PlannedAmpCommand {
+  readonly id: string;
+  readonly title: string;
+  readonly category: string;
+  readonly description?: string;
+  readonly prompt: string;
+}
+
 const collectAmpBindings = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> =>
   uniqueBindings(input.target.sourcePluginName, [
     ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
     ...input.agents.flatMap((agent) => agent.toolBindings),
   ]);
+
+const stringField = (record: Record<string, unknown>, field: string): string | undefined => {
+  const value = record[field];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+};
+
+const commandStem = (relativePath: string): string =>
+  relativePath.replace(/\.md$/u, "");
+
+const commandId = (sourcePluginName: string, relativePath: string): string =>
+  `${generatedPluginId(sourcePluginName)}-${normalizeBundleSegment(commandStem(relativePath), "command")}`;
+
+const titleFromCommandPath = (relativePath: string): string => {
+  const stem = commandStem(relativePath).split("/").at(-1) ?? commandStem(relativePath);
+  return stem
+    .replace(/[-_]+/gu, " ")
+    .replace(/\b[a-z]/gu, (letter) => letter.toUpperCase());
+};
+
+const collectAmpCommands = async (input: LowerInput): Promise<PlannedAmpCommand[]> => {
+  const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
+  if (!pluginPath || !artifactTargetsAmp(input.registry, "commands")) return [];
+
+  const commands: PlannedAmpCommand[] = [];
+  const seenIds = new Set<string>();
+  const files = await collectArtifactSourceFiles(pluginPath, "commands", TARGET_ID);
+  for (const file of files.filter((entry) => entry.relativePath.endsWith(".md"))) {
+    const parsed = await parseMarkdownFile(file.sourcePath);
+    const frontmatter = getHarnessFrontmatter(parsed.frontmatter, TARGET_ID);
+    const prompt = parsed.content.trim();
+    if (prompt.length === 0) continue;
+    const id = commandId(input.target.sourcePluginName, file.relativePath);
+    if (seenIds.has(id)) throw new Error(`Amp command id collision for '${id}'`);
+    seenIds.add(id);
+    const description = stringField(frontmatter, "description");
+    commands.push({
+      id,
+      title:
+        stringField(frontmatter, "title") ??
+        stringField(frontmatter, "name") ??
+        titleFromCommandPath(file.relativePath),
+      category: stringField(frontmatter, "category") ?? `Prism: ${input.target.sourcePluginName}`,
+      ...(description ? { description } : {}),
+      prompt,
+    });
+  }
+  return commands.sort((left, right) => left.id.localeCompare(right.id));
+};
 
 const ampNativeHookEvent = (hook: Hook): PlannedAmpHook["nativeEvent"] => {
   switch (hook.event) {
@@ -313,6 +376,43 @@ const renderAmpHookSetup = (hooks: ReadonlyArray<PlannedAmpHook>): string => {
   ].join("\n\n");
 };
 
+const renderAmpCommandSetup = (commands: ReadonlyArray<PlannedAmpCommand>): string => {
+  if (commands.length === 0) return "";
+  return `
+const prismAmpCommands = ${JSON.stringify(commands, null, 2)};
+
+if (typeof amp.registerCommand !== "function") {
+  throw new Error("Prism Amp command lowering requires amp.registerCommand");
+}
+
+for (const command of prismAmpCommands) {
+  amp.registerCommand(
+    command.id,
+    {
+      title: command.title,
+      category: command.category,
+      ...(command.description ? { description: command.description } : {}),
+    },
+    async (ctx: any) => {
+      if (typeof ctx?.thread?.append !== "function") {
+        throw new Error("Prism Amp command requires an active Amp thread");
+      }
+      await ctx.thread.append([
+        { type: "user-message", content: command.prompt },
+      ]);
+    },
+  );
+}`.trim();
+};
+
+const joinAmpSetupSections = (
+  commands: ReadonlyArray<PlannedAmpCommand>,
+  hooks: ReadonlyArray<PlannedAmpHook>,
+): string =>
+  [renderAmpCommandSetup(commands), renderAmpHookSetup(hooks)]
+    .filter((section) => section.trim().length > 0)
+    .join("\n\n");
+
 const renderAmpAgentSkillMarkdown = (
   agent: ComposedAgent,
   target: AmpCodeLowerTarget,
@@ -439,16 +539,10 @@ const planAmpPlugin = async (
 ): Promise<void> => {
   const bindings = collectAmpBindings(input);
   const hooks = await planAmpHooks(input, bindings);
+  const commands = await collectAmpCommands(input);
   const target = generatedPluginPath(input.target);
-  if (bindings.length === 0 && hooks.length === 0) {
-    if (await exists(target)) {
-      operations.push({
-        kind: "prune-plugin-path",
-        target,
-        targetType: "file",
-        reason: "stale",
-      });
-    }
+  if (bindings.length === 0 && hooks.length === 0 && commands.length === 0) {
+    await planGeneratedPluginFilePrune(input, operations, target);
     return;
   }
 
@@ -458,9 +552,42 @@ const planAmpPlugin = async (
     version: input.target.sourcePluginVersion,
     bindings,
     setupImports: renderAmpHookImports(hooks),
-    setupSource: renderAmpHookSetup(hooks),
+    setupSource: joinAmpSetupSections(commands, hooks),
   });
   await pushWrite(operations, target, bundle.content);
+};
+
+const planGeneratedPluginFilePrune = async (
+  input: LowerInput,
+  operations: LowerOperation[],
+  target: string,
+): Promise<void> => {
+  const ledger = await readHarnessLedger(TARGET_ID);
+  const entry = ledger.entries.find((candidate) =>
+    candidate.pluginName === input.target.sourcePluginName &&
+    candidate.scope === input.target.scope &&
+    resolve(candidate.root) === resolve(input.target.root) &&
+    candidate.artifact === "compile" &&
+    candidate.kind === "file" &&
+    resolve(candidate.targetPath) === resolve(target)
+  );
+  if (!entry) return;
+
+  if (await exists(target)) {
+    const currentHash = computeContentHash(await readFile(target));
+    if (currentHash !== entry.contentHash) {
+      throw new Error(
+        `Refusing to prune drifted Amp generated plugin '${target}'; target changed outside Prism.`,
+      );
+    }
+  }
+
+  operations.push({
+    kind: "prune-plugin-path",
+    target,
+    targetType: "file",
+    reason: "stale",
+  });
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {

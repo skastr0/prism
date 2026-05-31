@@ -1339,7 +1339,11 @@ const toolDefinitions = [
 __PRISM_TOOL_ENTRIES__
 ];
 
-export default function (amp: { registerTool(definition: any): unknown; on?: (event: string, handler: any) => unknown }) {
+export default function (amp: {
+  registerTool(definition: any): unknown;
+  registerCommand?: (id: string, options: any, handler: (ctx: any) => void | Promise<void>) => unknown;
+  on?: (event: string, handler: any) => unknown;
+}) {
   for (const definition of toolDefinitions) {
     amp.registerTool(definition);
   }

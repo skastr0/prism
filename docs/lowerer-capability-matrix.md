@@ -43,21 +43,18 @@ patched into a config file.
 
 Gemini CLI is not a supported target. Antigravity CLI is the replacement target.
 Active Antigravity outputs still live under Antigravity's official
-`~/.gemini/antigravity-cli` home path, and Prism may prune legacy
-`~/.gemini/extensions` outputs during Antigravity lowering so old Gemini
-extension bundles do not linger.
+`~/.gemini/antigravity-cli` home path.
 
 Claude Code's documented local plugin autoload surface is a skills-directory
 plugin: `~/.claude/skills/<plugin>/.claude-plugin/plugin.json` for personal
 scope or `<cwd>/.claude/skills/<plugin>/.claude-plugin/plugin.json` for project
-scope. Prism follows that surface for generated Claude bundles and puts
+scope. Prism treats that as the canonical generated-local Claude surface and
+does not write marketplace cache internals. Generated Claude bundles put
 root-level `commands/`, `agents/`, `skills/`, `hooks/`, and `.mcp.json`
 components under `<claude-root>/skills/prism-generated-<plugin>/`. Claude
 plugins namespace skills and flat Markdown commands as `/plugin-name:name`, so
 Prism treats `targets.commands: ["claude-code"]` as compile-managed and does
-not write direct `~/.claude/commands/` files. Lowering also prunes Prism-owned
-legacy `<claude-root>/plugins/prism-generated-<plugin>/` bundles from the older
-Prism output layout.
+not write direct `~/.claude/commands/` files.
 
 Official Antigravity CLI plugins are staged under
 `~/.gemini/antigravity-cli/plugins/<plugin_name>/` with root `plugin.json`,
@@ -90,9 +87,8 @@ turn-level `agent.end`. Prism does not yet lower compiled agents through a
 native Amp custom-agent surface; it uses generated role skills for that part of
 the compile output.
 
-Kimi Code's current home is `~/.kimi-code`; Prism does not preserve legacy
-`~/.kimi` as a compatibility target. Compile-phase Kimi output is a generated
-user-scoped plugin bundle under
+Kimi Code's current home is `~/.kimi-code`, and Prism targets that home
+exclusively. Compile-phase Kimi output is a generated user-scoped plugin bundle under
 `<kimi-root>/plugins/managed/prism-generated-<plugin>/` with `kimi.plugin.json`,
 plus a managed `<kimi-root>/plugins/installed.json` record so Kimi loads the
 plugin as an enabled user-scoped plugin.
@@ -153,7 +149,7 @@ leaves Cursor's native approval flow intact.
 - OpenCode plugins: https://opencode.ai/docs/plugins/
 - Claude Code plugins and reference: https://code.claude.com/docs/en/plugins and https://code.claude.com/docs/en/plugins-reference
 - Antigravity plugins, migration, and hooks: https://antigravity.google/docs/cli-plugins, https://antigravity.google/docs/gcli-migration, and https://www.antigravity.google/docs/hooks
-- Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks. Older `www.kimi.com/code/docs/...` Kimi Code CLI pages are legacy docs and point readers to this Moonshot-hosted documentation for new-version details.
+- Kimi Code config, skills, plugins, MCP, agents/subagents, and hooks: https://moonshotai.github.io/kimi-code/en/configuration/config-files.html, https://moonshotai.github.io/kimi-code/en/customization/skills.html, https://moonshotai.github.io/kimi-code/en/customization/plugins.html, https://moonshotai.github.io/kimi-code/en/customization/mcp.html, https://moonshotai.github.io/kimi-code/en/customization/agents, and https://moonshotai.github.io/kimi-code/en/customization/hooks. Current Kimi Code CLI details live in the Moonshot-hosted docs rather than the older `www.kimi.com/code/docs/...` pages.
 - Factory Droid plugins, custom droids, skills, hooks, and MCP: https://docs.factory.ai/cli/configuration/plugins, https://docs.factory.ai/cli/configuration/custom-droids, https://docs.factory.ai/cli/configuration/skills, https://docs.factory.ai/reference/hooks-reference, and https://docs.factory.ai/cli/configuration/mcp
 - Amp plugins and plugin API: https://ampcode.com/manual and https://ampcode.com/manual/plugin-api
 - Pi agents, extensions, SDK, skills, prompts, packages, and settings: https://pi.dev/packages/pi-agents, https://pi.dev/docs/latest/extensions, https://pi.dev/docs/latest/sdk, https://pi.dev/docs/latest/skills, https://pi.dev/docs/latest/prompt-templates, https://pi.dev/docs/latest/packages, and https://pi.dev/docs/latest/settings

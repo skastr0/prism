@@ -5,7 +5,7 @@
  * <antigravity-root>/plugins/prism-generated-<source-plugin>/.
  */
 
-import { basename, dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
@@ -388,32 +388,6 @@ const planPluginPruning = async (
   return operations;
 };
 
-const legacyPreAntigravityExtensionRoot = (
-  target: AntigravityCliLowerTarget,
-): string | undefined => {
-  const pluginId = pluginIdForPlugin(target.sourcePluginName);
-  if (basename(target.root) === "antigravity-cli" && basename(dirname(target.root)) === ".gemini") {
-    return join(dirname(target.root), "extensions", pluginId);
-  }
-  if (basename(target.root) === ".agents") {
-    return join(dirname(target.root), ".gemini", "extensions", pluginId);
-  }
-  return undefined;
-};
-
-const planLegacyExtensionPruning = async (
-  target: AntigravityCliLowerTarget,
-): Promise<LowerOperation[]> => {
-  const legacyRoot = legacyPreAntigravityExtensionRoot(target);
-  if (!legacyRoot || !(await exists(legacyRoot))) return [];
-  return [{
-    kind: "prune-plugin-path",
-    target: legacyRoot,
-    targetType: "dir",
-    reason: "stale",
-  }];
-};
-
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
   const desired = new Set<string>();
@@ -478,7 +452,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   }
 
   operations.push(...await planPluginPruning(input.target, desired));
-  operations.push(...await planLegacyExtensionPruning(input.target));
   return operations;
 };
 

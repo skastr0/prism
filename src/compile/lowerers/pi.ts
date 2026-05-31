@@ -90,9 +90,6 @@ const agentsRoot = (target: PiLowerTarget): string =>
     ? join(dirname(resolve(target.root)), "agents")
     : join(target.root, "agents");
 
-const legacyGlobalAgentsRoot = (target: PiLowerTarget): string =>
-  join(resolve(target.root), "agents");
-
 const agentPath = (target: PiLowerTarget, agentName: string): string =>
   join(agentsRoot(target), `${agentName}.md`);
 
@@ -276,27 +273,14 @@ const planAgentPruning = async (
 ): Promise<void> => {
   const ledger = await readHarnessLedger(TARGET_ID);
   const currentRoot = agentsRoot(input.target);
-  const roots = [
-    { root: currentRoot, legacy: false },
-    ...(input.target.scope === "global" &&
-      resolve(legacyGlobalAgentsRoot(input.target)) !== resolve(currentRoot)
-      ? [{ root: legacyGlobalAgentsRoot(input.target), legacy: true }]
-      : []),
-  ];
   for (const entry of ledger.entries) {
     if (entry.pluginName !== input.target.sourcePluginName) continue;
     if (entry.scope !== input.target.scope) continue;
     if (resolve(entry.root) !== resolve(input.target.root)) continue;
     if (entry.artifact !== "compile" || entry.kind !== "file") continue;
 
-    const match = roots
-      .map((candidate) => ({
-        ...candidate,
-        relativePath: relativePathInsideRoot(candidate.root, entry.targetPath),
-      }))
-      .find((candidate) => candidate.relativePath !== undefined);
-    if (!match?.relativePath) continue;
-    if (!match.legacy && desiredRelativePaths.has(match.relativePath)) continue;
+    const relativePath = relativePathInsideRoot(currentRoot, entry.targetPath);
+    if (!relativePath || desiredRelativePaths.has(relativePath)) continue;
     operations.push({
       kind: "prune-plugin-path",
       target: entry.targetPath,

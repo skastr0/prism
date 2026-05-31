@@ -185,14 +185,6 @@ export default defineHook({
 `,
   );
 
-  const legacyRoot = join(
-    root,
-    ".gemini",
-    "extensions",
-    "prism-generated-antigravity-hook-fixture",
-  );
-  await writeText(join(legacyRoot, "gemini-extension.json"), "{}\n");
-
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const hook = registry.hooks.get("audit-shell");
   const afterHook = registry.hooks.get("audit-shell-after");
@@ -225,13 +217,6 @@ export default defineHook({
   expect(hookConfig?.content).toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_shell"');
   expect(hookConfig?.content).toContain('node \\"./hooks/audit-shell.mjs\\"');
-  expect(operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: legacyRoot,
-      targetType: "dir",
-    }),
-  );
 
   const hookWrapper = findContentOperation(operations, join("hooks", "audit-shell.mjs"));
   expect(hookWrapper?.content).toContain("native payload");
@@ -315,35 +300,6 @@ export default defineHook({
   expect(stopResult.exitCode).toBe(0);
   expect(stopResult.stderr).toBe("");
   expect(JSON.parse(stopResult.stdout.trim())).toEqual({ decision: "continue" });
-
-  const globalLegacyRoot = join(
-    root,
-    ".gemini",
-    "extensions",
-    "prism-generated-antigravity-hook-fixture",
-  );
-  await writeText(join(globalLegacyRoot, "gemini-extension.json"), "{}\n");
-  const globalOperations = await planLowering({
-    agents: [],
-    orbits: [],
-    tools: [],
-    hooks: [hook],
-    registry,
-    target: {
-      scope: "global",
-      root: join(root, ".gemini", "antigravity-cli"),
-      sourcePluginName: "antigravity-hook-fixture",
-      sourcePluginVersion: "0.1.0",
-      sourcePluginPath: pluginRoot,
-    },
-  });
-  expect(globalOperations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: globalLegacyRoot,
-      targetType: "dir",
-    }),
-  );
 });
 
 test("antigravity-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {

@@ -2719,14 +2719,7 @@ test("loadPlugin preserves agent normalization failure order", async () => {
 test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   const { pluginRoot, projectRoot } = await createAntigravityPluginFixture();
   const outputPluginRoot = join(projectRoot, ".agents", "plugins", "prism-generated-antigravity-plugin-demo");
-  const legacyExtensionRoot = join(
-    projectRoot,
-    ".gemini",
-    "extensions",
-    "prism-generated-antigravity-plugin-demo",
-  );
   await writeText(join(outputPluginRoot, "stale", "old.txt"), "stale\n");
-  await writeText(join(legacyExtensionRoot, "gemini-extension.json"), "{}\n");
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
@@ -2881,14 +2874,6 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
   expect(await pathExists(join(outputPluginRoot, "stale", "old.txt"))).toBe(false);
   expect(result.operations.some((operation) => operation.kind === "prune-plugin-path" && operation.target.endsWith(join("stale", "old.txt")))).toBe(true);
-  expect(await directoryExists(legacyExtensionRoot)).toBe(false);
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: legacyExtensionRoot,
-      targetType: "dir",
-    }),
-  );
 
   const outputFiles = [
     join(outputPluginRoot, "plugin.json"),
@@ -4272,54 +4257,6 @@ test("compilePluginForTarget lowers Claude commands into skills-dir plugin bundl
   );
   expect(await readFile(commandPath, "utf8")).toContain("Review the current branch.");
   expect(await pathExists(join(projectRoot, ".claude", "commands", "review.md"))).toBe(false);
-});
-
-test("compilePluginForTarget prunes only Prism-owned legacy Claude plugin roots", async () => {
-  const root = await createTempRoot();
-  const projectRoot = join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-
-  for (const [pluginName, legacyManifestName, shouldPrune] of [
-    ["claude-owned-legacy", "prism-generated-claude-owned-legacy", true],
-    ["claude-unowned-legacy", "user-owned-claude-plugin", false],
-  ] as const) {
-    const pluginRoot = join(root, pluginName);
-    await writeText(
-      join(pluginRoot, "plugin.json"),
-      `${JSON.stringify(
-        {
-          name: pluginName,
-          version: "0.1.0",
-          targets: {
-            commands: ["claude-code"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeText(join(pluginRoot, "commands", "review.md"), "# Review\n\nReview.\n");
-
-    const legacyRoot = join(projectRoot, ".claude", "plugins", `prism-generated-${pluginName}`);
-    await writeText(
-      join(legacyRoot, ".claude-plugin", "plugin.json"),
-      `${JSON.stringify({ name: legacyManifestName })}\n`,
-    );
-    await writeText(join(legacyRoot, "commands", "old.md"), "# Old\n");
-
-    await Effect.runPromise(
-      compilePluginForTarget({
-        pluginPath: pluginRoot,
-        target: "claude-code",
-        scope: "project",
-        projectPath: projectRoot,
-        dryRun: false,
-      }),
-    );
-
-    expect(await directoryExists(legacyRoot)).toBe(!shouldPrune);
-    expect(await pathExists(join(legacyRoot, "commands", "old.md"))).toBe(!shouldPrune);
-  }
 });
 
 test("compilePluginForTarget rejects Amp command id collisions", async () => {
@@ -7953,35 +7890,6 @@ export default defineAgent({
     join(pluginRoot, "skills", "testing", "SKILL.md"),
     "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
   );
-  const legacyAgentPath = join(piRoot, "agents", "worker.md");
-  const legacyAgentContent = "---\nname: worker\ndescription: Legacy Pi worker\n---\n\n<!-- prism:pi-agent owner=\"pi-global-demo\" -->\n\n# Legacy\n";
-  await writeText(legacyAgentPath, legacyAgentContent);
-  const legacyAgentEntryId = managedEntryId({
-    harness: "pi",
-    scope: "global",
-    root: piRoot,
-    pluginName: "pi-global-demo",
-    artifact: "compile",
-    targetPath: legacyAgentPath,
-    kind: "file",
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("pi")),
-    entries: [{
-      id: legacyAgentEntryId,
-      pluginName: "pi-global-demo",
-      pluginVersion: "0.1.0",
-      pluginPath: pluginRoot,
-      harness: "pi",
-      scope: "global",
-      root: piRoot,
-      artifact: "compile",
-      targetPath: legacyAgentPath,
-      kind: "file",
-      contentHash: computeContentHash(legacyAgentContent),
-      updatedAt: new Date().toISOString(),
-    }],
-  });
 
   const compiled = await Effect.runPromise(
     compilePluginForTarget({
@@ -7996,15 +7904,6 @@ export default defineAgent({
   expect(compiled.outputRoot).toBe(piRoot);
   expect(await pathExists(join(piRoot, "packages", "prism-generated-pi-global-demo", "skills", "testing", "SKILL.md"))).toBe(true);
   expect(await pathExists(join(piHome, "agents", "worker.md"))).toBe(true);
-  expect(await pathExists(join(piRoot, "agents", "worker.md"))).toBe(false);
-  expect(compiled.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: legacyAgentPath,
-      targetType: "file",
-    }),
-  );
-  expect((await readHarnessLedger("pi")).entries.some((entry) => entry.id === legacyAgentEntryId)).toBe(false);
   const settings = JSON.parse(await readFile(join(piRoot, "settings.json"), "utf8")) as {
     packages?: string[];
   };

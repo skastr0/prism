@@ -28,48 +28,6 @@ afterEach(async () => {
   );
 });
 
-test("planInstallation does not adopt legacy rule markers without a ledger", async () => {
-  const root = await createTempRoot();
-  const pluginPath = join(root, "plugin");
-  const projectPath = join(root, "project");
-  await mkdir(projectPath, { recursive: true });
-  await writeText(
-    join(pluginPath, "plugin.json"),
-    `${JSON.stringify({
-      name: "rules-demo",
-      version: "0.1.0",
-      targets: { rules: ["opencode"] },
-    })}\n`,
-  );
-  await writeText(join(pluginPath, "rules", "project", "context.md"), "Project rules\n");
-  await writeText(
-    join(projectPath, "AGENTS.md"),
-    "<!-- BEGIN: context -->\nProject rules\n<!-- END: context -->\n",
-  );
-
-  const operations = await planInstallation({
-    pluginPath,
-    harnesses: ["opencode"],
-    projectPath,
-    overwrite: false,
-    dryRun: true,
-  });
-
-  expect(operations).toHaveLength(1);
-  expect(operations[0]).toMatchObject({
-    type: "append",
-    artifact: "rules",
-    harness: "opencode",
-    source: join(pluginPath, "rules", "project", "context.md"),
-    target: join(projectPath, "AGENTS.md"),
-    managed: {
-      kind: "section",
-      pluginName: "rules-demo",
-      sourcePath: "project/context.md",
-    },
-  });
-});
-
 test("planInstallation keeps Factory skills direct only when no compile bundle is targeted", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");

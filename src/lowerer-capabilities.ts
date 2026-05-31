@@ -373,7 +373,7 @@ export const LOWERER_CAPABILITIES = {
       },
     },
     notes: [
-      "The active Kimi Code target uses ~/.kimi-code; legacy ~/.kimi paths are not a Prism compatibility target.",
+      "The active Kimi Code target uses ~/.kimi-code exclusively.",
       "Kimi Code plugins are user-scoped in official docs; Prism keeps project scope unsupported for this lowerer.",
       "Current Moonshot-hosted Kimi Code CLI docs also document project-local .kimi-code/skills and .kimi-code/mcp.json, but Prism does not mix those direct project surfaces with generated user-scoped plugin bundles yet.",
       "Kimi Code subagents are runtime dispatches, so Prism compiled agents lower as role skills rather than native subagent definitions.",

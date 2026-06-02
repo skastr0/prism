@@ -1,0 +1,29 @@
+{
+  "name": "@skastr0/prism-linux-arm64",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Prism standalone CLI binary for Linux arm64.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skastr0/prism.git",
+    "directory": "packages/npm/prism-linux-arm64"
+  },
+  "homepage": "https://github.com/skastr0/prism#readme",
+  "bugs": {
+    "url": "https://github.com/skastr0/prism/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin",
+    "LICENSE"
+  ]
+}

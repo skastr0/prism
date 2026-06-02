@@ -48,7 +48,7 @@ async function install() {
 
   if (!existsSync(binaryPath)) {
     console.error(`Binary not found: ${binaryPath}`);
-    console.error("Run 'bun run build' first to create the binaries.");
+    console.error("Run 'bun run build:cli' first to create the binaries.");
     process.exit(1);
   }
 

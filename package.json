@@ -1,29 +1,39 @@
 {
-  "name": "@skastr0/prism",
+  "name": "@skastr0/prism-workspace",
   "version": "0.1.0",
   "description": "Unified plugin distribution system for AI coding harnesses",
   "type": "module",
   "private": true,
-  "packageManager": "bun@latest",
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "packages/npm/*"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./cli": "./src/cli.ts"
   },
   "scripts": {
     "dev": "bun run ./src/cli.ts",
-    "build": "bun scripts/build.ts",
+    "build": "bun run build:cli",
+    "build:cli": "bun scripts/build.ts",
+    "build:npm-cli": "bun scripts/build-npm-cli-packages.ts",
     "install:local": "bun scripts/install.ts",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run typecheck && bun run build"
+    "verify": "bun run typecheck && bun run build",
+    "pack:npm-cli:dry-run": "bun run build:npm-cli && npm pack --dry-run --workspace packages/npm/prism-darwin-arm64 --workspace packages/npm/prism-darwin-x64 --workspace packages/npm/prism-linux-arm64 --workspace packages/npm/prism-linux-x64 --workspace packages/npm/prism",
+    "smoke:npm-cli": "bun run build:npm-cli && node packages/npm/prism/bin/prism.js --version"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@opencode-ai/plugin": "^1.4.14",
+    "@opencode-ai/plugin": "^1.15.13",
     "commander": "^13.1.0",
     "effect": "^3.21.1",
     "gray-matter": "^4.0.3",
     "typescript": "^5.8.3",
     "zod": "4.4.3"
+  },
+  "overrides": {
+    "uuid": "13.0.1"
   },
   "devDependencies": {
     "@types/bun": "^1.2.14"

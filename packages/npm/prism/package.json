@@ -1,0 +1,43 @@
+{
+  "name": "@skastr0/prism",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Unified plugin distribution CLI for AI coding harnesses.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skastr0/prism.git",
+    "directory": "packages/npm/prism"
+  },
+  "homepage": "https://github.com/skastr0/prism#readme",
+  "bugs": {
+    "url": "https://github.com/skastr0/prism/issues"
+  },
+  "keywords": [
+    "prism",
+    "cli",
+    "ai-coding",
+    "agents",
+    "plugins"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "prism": "bin/prism.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@skastr0/prism-darwin-arm64": "0.1.0",
+    "@skastr0/prism-darwin-x64": "0.1.0",
+    "@skastr0/prism-linux-arm64": "0.1.0",
+    "@skastr0/prism-linux-x64": "0.1.0"
+  }
+}

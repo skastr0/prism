@@ -6,7 +6,7 @@
       "name": "prism",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",
-        "@opencode-ai/plugin": "^1.4.14",
+        "@opencode-ai/plugin": "^1.15.13",
         "commander": "^13.1.0",
         "effect": "^3.21.1",
         "gray-matter": "^4.0.3",
@@ -17,6 +17,38 @@
         "@types/bun": "^1.2.14",
       },
     },
+    "packages/npm/prism": {
+      "name": "@skastr0/prism",
+      "version": "0.1.0",
+      "bin": {
+        "prism": "bin/prism.js",
+      },
+      "optionalDependencies": {
+        "@skastr0/prism-darwin-arm64": "0.1.0",
+        "@skastr0/prism-darwin-x64": "0.1.0",
+        "@skastr0/prism-linux-arm64": "0.1.0",
+        "@skastr0/prism-linux-x64": "0.1.0",
+      },
+    },
+    "packages/npm/prism-darwin-arm64": {
+      "name": "@skastr0/prism-darwin-arm64",
+      "version": "0.1.0",
+    },
+    "packages/npm/prism-darwin-x64": {
+      "name": "@skastr0/prism-darwin-x64",
+      "version": "0.1.0",
+    },
+    "packages/npm/prism-linux-arm64": {
+      "name": "@skastr0/prism-linux-arm64",
+      "version": "0.1.0",
+    },
+    "packages/npm/prism-linux-x64": {
+      "name": "@skastr0/prism-linux-x64",
+      "version": "0.1.0",
+    },
+  },
+  "overrides": {
+    "uuid": "13.0.1",
   },
   "packages": {
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
@@ -35,9 +67,19 @@
 
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3", "", { "os": "win32", "cpu": "x64" }, "sha512-x0fWaQtYp4E6sktbsdAqnehxDgEc/VwM7uLsRCYWaiGu0ykYdZPiS8zCWdnjHwyiumousxfBm4SO31eXqwEZhQ=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.4.14", "", { "dependencies": { "@opencode-ai/sdk": "1.4.14", "effect": "4.0.0-beta.48", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.1.100", "@opentui/solid": ">=0.1.100" }, "optionalPeers": ["@opentui/core", "@opentui/solid"] }, "sha512-3KQkhkVo30vnTA+PJdBBRXHDFKi6Own4qiWgguYTwZo8JygQCpFL5NonGYGAzCVoncnzPesfwddUbyY4vv8k2w=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.15.13", "", { "dependencies": { "@opencode-ai/sdk": "1.15.13", "effect": "4.0.0-beta.66", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.2.16", "@opentui/keymap": ">=0.2.16", "@opentui/solid": ">=0.2.16" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-NFwZGhmxIPijtfz9swPJXDmhOpq4UWP8WjEE7GEMr7FwtJrK/hv6v36nFimed5+OKk+pQCrTJn/vhRW7Io72IA=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.4.14", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-X/3Zz61iMh8rwESx6UkxgLted/Fuhld41iqGwTA/+ydVfxbxlsS5iBbUoI/D0fdf1c+EVWpNcF7CHydnvBT3RA=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.15.13", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-4TwojIoQ8EG6/mVBuUVYZXiFcwNmiiytEnjnvyuvSJjGwFIlw2YIBFxtSVC3FbwwbwHT63teh1RHiQUUC4U5xw=="],
+
+    "@skastr0/prism": ["@skastr0/prism@workspace:packages/npm/prism"],
+
+    "@skastr0/prism-darwin-arm64": ["@skastr0/prism-darwin-arm64@workspace:packages/npm/prism-darwin-arm64"],
+
+    "@skastr0/prism-darwin-x64": ["@skastr0/prism-darwin-x64@workspace:packages/npm/prism-darwin-x64"],
+
+    "@skastr0/prism-linux-arm64": ["@skastr0/prism-linux-arm64@workspace:packages/npm/prism-linux-arm64"],
+
+    "@skastr0/prism-linux-x64": ["@skastr0/prism-linux-x64@workspace:packages/npm/prism-linux-x64"],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
@@ -265,7 +307,7 @@
 
     "unpipe": ["unpipe@1.0.0", "", {}, "sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ=="],
 
-    "uuid": ["uuid@13.0.0", "", { "bin": { "uuid": "dist-node/bin/uuid" } }, "sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w=="],
+    "uuid": ["uuid@13.0.1", "", { "bin": { "uuid": "dist-node/bin/uuid" } }, "sha512-9ezox2roIft6ExBVTVqibSd5dc5/47Sw/uY6b4SjQUT2TzQ0tltNquWA46y4xPQmdZYqvnio22SgWd41M86+jw=="],
 
     "vary": ["vary@1.1.2", "", {}, "sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg=="],
 
@@ -279,7 +321,7 @@
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
-    "@opencode-ai/plugin/effect": ["effect@4.0.0-beta.48", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.6.0", "find-my-way-ts": "^0.1.6", "ini": "^6.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^1.11.9", "multipasta": "^0.2.7", "toml": "^4.1.1", "uuid": "^13.0.0", "yaml": "^2.8.3" } }, "sha512-MMAM/ZabuNdNmgXiin+BAanQXK7qM8mlt7nfXDoJ/Gn9V8i89JlCq+2N0AiWmqFLXjGLA0u3FjiOjSOYQk5uMw=="],
+    "@opencode-ai/plugin/effect": ["effect@4.0.0-beta.66", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.6.0", "find-my-way-ts": "^0.1.6", "ini": "^6.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^1.11.9", "multipasta": "^0.2.7", "toml": "^4.1.1", "uuid": "^13.0.0", "yaml": "^2.8.3" } }, "sha512-4arEr62cziFa8BBVDUwJCJJmaVepXf/kRg7KtC0h8+bufngscrHbwWFhr9c+HonwOF+31U3iD3xUJmw9KzX7Dw=="],
 
     "@opencode-ai/plugin/zod": ["zod@4.1.8", "", {}, "sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ=="],
 

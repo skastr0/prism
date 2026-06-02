@@ -17,7 +17,7 @@ Thanks for considering a contribution to prism. This is an experimental, solo-ma
 
 ## Local Workflow
 
-Use the commands documented in README.md and release.md for this repository. Before opening a pull request, run the available verification commands and include the results in the PR description.
+Use the commands documented in README.md for this repository. Before opening a pull request, run the available verification commands and include the results in the PR description.
 
 ## Pull Requests
 

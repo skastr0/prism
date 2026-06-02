@@ -36,7 +36,15 @@ targets such as Antigravity CLI, Kimi Code, Factory Droid, and Pi.
 
 ## Release Readiness
 
-See [release.md](release.md) before making the repository public or publishing release assets. Pay special attention to bundled plugin and skill provenance.
+Prism's npm CLI distribution uses a private root workspace plus a public npm runner package and per-platform binary packages under `packages/npm/`.
+
+```bash
+bun run verify
+bun run pack:npm-cli:dry-run
+bun run smoke:npm-cli
+```
+
+Public release actions still require maintainer approval for repository visibility, tag pushes, npm trusted publishing or token setup, protected environment approval, and the real registry publish.
 
 ## Security
 

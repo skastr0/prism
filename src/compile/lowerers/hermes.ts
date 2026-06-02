@@ -158,20 +158,20 @@ const planGeneratedOrbitSkillPruning = async (
   return operations;
 };
 
-const escapeRegex = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 const isTopLevelKey = (line: string): boolean =>
   /^[A-Za-z0-9_.-]+:\s*(?:#.*)?$/.test(line) ||
   /^[A-Za-z0-9_.-]+:\s+\S/.test(line);
+
+const topLevelKeyName = (line: string): string | undefined => {
+  const match = /^([A-Za-z0-9_.-]+):\s*(?:.*)?$/u.exec(line);
+  return match?.[1];
+};
 
 const findTopLevelBlock = (
   lines: string[],
   key: string,
 ): { start: number; end: number } | undefined => {
-  const start = lines.findIndex((line) =>
-    new RegExp(`^${escapeRegex(key)}:\\s*(?:.*)?$`).test(line),
-  );
+  const start = lines.findIndex((line) => topLevelKeyName(line) === key);
   if (start === -1) return undefined;
 
   let end = lines.length;
@@ -182,6 +182,11 @@ const findTopLevelBlock = (
     }
   }
   return { start, end };
+};
+
+const childBlockKeyName = (line: string): string | undefined => {
+  const match = /^  ([^\s#][^:]*):\s*(?:.*)?$/u.exec(line);
+  return match?.[1];
 };
 
 const renderHermesMcpServerYaml = (options: {
@@ -267,8 +272,7 @@ const replaceHermesMcpServerBlock = (
   const before = lines.slice(0, mcpBlock.start);
   const body = lines.slice(mcpBlock.start + 1, mcpBlock.end);
   const after = lines.slice(mcpBlock.end);
-  const childPattern = new RegExp(`^  ${escapeRegex(options.serverName)}:\\s*(?:#.*)?$`);
-  const childStart = body.findIndex((line) => childPattern.test(line));
+  const childStart = body.findIndex((line) => childBlockKeyName(line) === options.serverName);
   const nextBody = [...body];
 
   if (childStart !== -1) {

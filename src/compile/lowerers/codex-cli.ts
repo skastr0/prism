@@ -110,6 +110,11 @@ const managedBlockBegin = (pluginName: string): string =>
 const managedBlockEnd = (pluginName: string): string =>
   `# --- prism codex-cli end: ${pluginName} ---`;
 
+const parseMcpServerTableHeader = (line: string): string | undefined => {
+  const match = /^\s*\["mcp_servers"\s*\.\s*(["'])([^"']+)\1\s*\]\s*(?:#.*)?$/u.exec(line);
+  return match?.[2];
+};
+
 /**
  * Name-based removal of any `["mcp_servers"."prism-generated-..."]` dotted table.
  * Used as the deletion half of our structural ownership strategy.
@@ -117,18 +122,13 @@ const managedBlockEnd = (pluginName: string): string =>
 export const removeMcpServerTable = (current: string, serverName: string): string => {
   if (!serverName) return current;
 
-  const header = new RegExp(
-    `^\\s*\\["mcp_servers"\\s*\\.\\s*["']${regexEscape(serverName)}["']\\s*\\]\\s*(?:#.*)?$`,
-    "u",
-  );
-
   const lines = current.split(/\r?\n/u);
   const out: string[] = [];
   let i = 0;
 
   while (i < lines.length) {
     const line = lines[i] ?? "";
-    if (header.test(line)) {
+    if (parseMcpServerTableHeader(line) === serverName) {
       i += 1;
       while (i < lines.length) {
         const nextLine = lines[i] ?? "";
@@ -154,11 +154,9 @@ export const removeMcpServerTable = (current: string, serverName: string): strin
  */
 export const countMcpServerTableOccurrences = (content: string, serverName: string): number => {
   if (!serverName) return 0;
-  const header = new RegExp(
-    `^\\s*\\["mcp_servers"\\s*\\.\\s*["']${regexEscape(serverName)}["']\\s*\\]`,
-    "gmu",
-  );
-  return (content.match(header) ?? []).length;
+  return content
+    .split(/\r?\n/u)
+    .filter((line) => parseMcpServerTableHeader(line) === serverName).length;
 };
 
 const uniqueMcpServerBodyMarkers = (renderedTable: string): string[] =>

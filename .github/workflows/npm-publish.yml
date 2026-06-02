@@ -1,0 +1,55 @@
+name: Publish npm packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    concurrency:
+      group: npm-publish-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - run: bun run verify
+      - run: bun run build:npm-cli
+      - name: Publish packages
+        run: |
+          set -euo pipefail
+
+          for package_dir in \
+            packages/npm/prism-darwin-arm64 \
+            packages/npm/prism-darwin-x64 \
+            packages/npm/prism-linux-arm64 \
+            packages/npm/prism-linux-x64 \
+            packages/npm/prism
+          do
+            package_name="$(node -p "require('./${package_dir}/package.json').name")"
+            package_version="$(node -p "require('./${package_dir}/package.json').version")"
+
+            if npm view "${package_name}@${package_version}" version --prefer-online >/dev/null 2>&1; then
+              echo "Skipping ${package_name}@${package_version}; already published"
+              continue
+            fi
+
+            echo "Publishing ${package_name}@${package_version} from ${package_dir}"
+            npm publish "./${package_dir}" --access public
+          done

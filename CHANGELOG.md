@@ -2,7 +2,7 @@
 
 All notable changes to Prism will be documented in this file.
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-06-03
 
 - Prepare Prism for npm CLI distribution through `@skastr0/prism`.
 - Add per-platform npm packages for prebuilt Bun standalone binaries.

@@ -1784,6 +1784,7 @@ const buildInstantiatedOrbit = (
     pulsar_checkpoints: checkpoints,
     evolution: tail.evolution,
     body: tail.body,
+    ...(orbit.signal_emitter ? { signal_emitter: orbit.signal_emitter } : {}),
   });
 };
 

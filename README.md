@@ -47,6 +47,20 @@ surface Prism uses for that harness. The typed contract lives in
 Keep the matrix synced to official harness docs when changing generated bundle
 targets such as Antigravity CLI, Kimi Code, Factory Droid, and Pi.
 
+## Source Contracts
+
+The canonical public TypeScript source names are `AgentSource`, `TraitSource`,
+`OrbitSource`, `ToolSource`, `ToolspaceSource`, `ModelspaceSource`,
+`SkillspaceSource`, and `HookSource`. The older `define*` helpers remain
+transitional identity wrappers for authoring ergonomics; new contract checks
+should target the `*Source` names and matching loader schemas.
+
+`OrbitSource.signal_emitter` is accepted and preserved as source metadata. It
+documents outbound signal/delegation destinations; lowerers do not grant runtime
+signal tools from that field by itself. `tool_permissions.bind` is intentionally
+unsupported for now and rejected by the strict loader schemas; orbit tool grants
+currently accept `ref` and optional `as` only.
+
 ## Release Readiness
 
 Prism's npm CLI distribution uses a private root workspace plus a public npm runner package and per-platform binary packages under `packages/npm/`.

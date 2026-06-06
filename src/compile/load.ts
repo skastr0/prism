@@ -2102,6 +2102,7 @@ const parseOrbitDefinition = (
       pulsar_checkpoints: parsed.pulsar_checkpoints ?? [],
       evolution: parsed.evolution,
       body: resolvedBody,
+      ...(parsed.signal_emitter ? { signal_emitter: parsed.signal_emitter } : {}),
     });
   });
 

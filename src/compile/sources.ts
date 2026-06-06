@@ -171,6 +171,8 @@ export const HookDefinitionSchema = Schema.Struct({
   handle: Schema.Any,
 });
 export type HookDefinition = typeof HookDefinitionSchema.Type;
+export const HookSourceSchema = HookDefinitionSchema;
+export type HookSource = typeof HookSourceSchema.Type;
 
 export const HookTargetContextSchema = Schema.Struct({
   harness: Schema.String,
@@ -819,6 +821,8 @@ export const TraitSchema = Schema.Struct({
   inject: Schema.optional(TraitInjectSchema),
   require: Schema.optional(TraitRequireSchema),
 });
+export const TraitSourceSchema = TraitSchema;
+export type TraitSource = typeof TraitSourceSchema.Type;
 
 export const NormalizedTraitToolAttachmentSchema = Schema.Struct({
   ref: Schema.String,
@@ -854,6 +858,8 @@ export const CanonicalToolSchema = Schema.Struct({
   handle: Schema.Any,
 });
 export type CanonicalToolInput = typeof CanonicalToolSchema.Type;
+export const ToolSourceSchema = CanonicalToolSchema;
+export type ToolSource = typeof ToolSourceSchema.Type;
 
 export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")({
   name: Schema.String,
@@ -913,6 +919,8 @@ export const AgentSchema = Schema.Struct({
     Schema.Record({ key: Schema.String, value: Schema.Object }),
   ),
 });
+export const AgentSourceSchema = AgentSchema;
+export type AgentSource = typeof AgentSourceSchema.Type;
 
 export class Agent extends Schema.Class<Agent>("Agent")({
   name: Schema.String,
@@ -972,6 +980,8 @@ export const ToolspaceSchema = Schema.Struct({
   tools: Schema.Record({ key: Schema.String, value: ToolDefinitionSchema }),
   groups: Schema.optional(Schema.Record({ key: Schema.String, value: ToolGroupSchema })),
 });
+export const ToolspaceSourceSchema = ToolspaceSchema;
+export type ToolspaceSource = typeof ToolspaceSourceSchema.Type;
 
 export const NormalizedToolDefinitionSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
@@ -1008,6 +1018,8 @@ export const ModelspaceSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
   profiles: Schema.Record({ key: Schema.String, value: ModelProfileSchema }),
 });
+export const ModelspaceSourceSchema = ModelspaceSchema;
+export type ModelspaceSource = typeof ModelspaceSourceSchema.Type;
 
 export class Modelspace extends Schema.Class<Modelspace>("Modelspace")({
   name: Schema.String,
@@ -1042,6 +1054,8 @@ export const SkillspaceSchema = Schema.Struct({
   skills: Schema.Record({ key: Schema.String, value: SkillDefinitionSchema }),
 });
 export type SkillspaceInput = typeof SkillspaceSchema.Type;
+export const SkillspaceSourceSchema = SkillspaceSchema;
+export type SkillspaceSource = typeof SkillspaceSourceSchema.Type;
 
 export class Skillspace extends Schema.Class<Skillspace>("Skillspace")({
   name: Schema.String,
@@ -1156,6 +1170,29 @@ export const OrbitPulsarCheckpointSchema = Schema.Struct({
 });
 export type OrbitPulsarCheckpoint = typeof OrbitPulsarCheckpointSchema.Type;
 
+export const OrbitSignalEmitterPrioritySchema = Schema.Literal(
+  "low",
+  "normal",
+  "high",
+  "urgent",
+);
+export type OrbitSignalEmitterPriority =
+  typeof OrbitSignalEmitterPrioritySchema.Type;
+
+export const OrbitSignalEmitterDestinationSchema = Schema.Struct({
+  project_key: Schema.String,
+  orbit: Schema.String,
+  default_priority: Schema.optional(OrbitSignalEmitterPrioritySchema),
+  note: Schema.optional(Schema.String),
+});
+export type OrbitSignalEmitterDestination =
+  typeof OrbitSignalEmitterDestinationSchema.Type;
+
+export const OrbitSignalEmitterSchema = Schema.Struct({
+  destinations: Schema.optional(Schema.Array(OrbitSignalEmitterDestinationSchema)),
+});
+export type OrbitSignalEmitter = typeof OrbitSignalEmitterSchema.Type;
+
 export const OrbitDefinitionEntrySchema = Schema.Struct({
   purpose: Schema.String,
   contains: Schema.optional(Schema.Array(Schema.String)),
@@ -1184,8 +1221,11 @@ export const OrbitDefinitionSchema = Schema.Struct({
   pulsar_checkpoints: Schema.optional(Schema.Array(OrbitPulsarCheckpointSchema)),
   evolution: Schema.optional(Schema.String),
   body: Schema.optional(Schema.String),
+  signal_emitter: Schema.optional(OrbitSignalEmitterSchema),
 });
 export type OrbitDefinition = typeof OrbitDefinitionSchema.Type;
+export const OrbitSourceSchema = OrbitDefinitionSchema;
+export type OrbitSource = typeof OrbitSourceSchema.Type;
 
 export class Orbit extends Schema.Class<Orbit>("Orbit")({
   name: Schema.String,
@@ -1200,4 +1240,5 @@ export class Orbit extends Schema.Class<Orbit>("Orbit")({
   pulsar_checkpoints: Schema.Array(OrbitPulsarCheckpointSchema),
   evolution: Schema.optional(Schema.String),
   body: Schema.String,
+  signal_emitter: Schema.optional(OrbitSignalEmitterSchema),
 }) {}

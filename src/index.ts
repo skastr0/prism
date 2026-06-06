@@ -92,6 +92,8 @@ export interface AgentDefinition {
   readonly targets?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 
+export type AgentSource = AgentDefinition;
+
 export interface CanonicalToolDefinition {
   readonly name: string;
   readonly description: string;
@@ -100,6 +102,8 @@ export interface CanonicalToolDefinition {
   readonly slots?: Readonly<Record<string, ToolSlotDefinition>>;
   readonly handle: (input: unknown, context: import("./compile/runtime/schema-bridge").ToolRuntimeContext) => Promise<unknown>;
 }
+
+export type ToolSource = CanonicalToolDefinition;
 
 export interface TraitDefinition {
   readonly name: string;
@@ -115,6 +119,8 @@ export interface TraitDefinition {
     readonly skills?: ReadonlyArray<SkillRefInput>;
   };
 }
+
+export type TraitSource = TraitDefinition;
 
 export interface TraitBindingDefinition {
   readonly kind: "trait-binding";
@@ -260,6 +266,8 @@ export interface OrbitDefinition {
   readonly signal_emitter?: OrbitSignalEmitterDefinition;
 }
 
+export type OrbitSource = OrbitDefinition;
+
 export interface ToolTargetBindingDefinition {
   readonly name: string;
 }
@@ -280,6 +288,8 @@ export interface ToolspaceDefinition {
   readonly tools: Readonly<Record<string, ToolDefinition>>;
   readonly groups?: Readonly<Record<string, ToolGroupDefinition>>;
 }
+
+export type ToolspaceSource = ToolspaceDefinition;
 
 export interface ModelTargetDefinition {
   readonly model: string;
@@ -309,6 +319,8 @@ export interface ModelspaceDefinition {
   readonly profiles: Readonly<Record<string, ModelProfileDefinition>>;
 }
 
+export type ModelspaceSource = ModelspaceDefinition;
+
 export interface SkillTargetBindingDefinition {
   readonly name: string;
 }
@@ -323,6 +335,8 @@ export interface SkillspaceDefinition {
   readonly description?: string;
   readonly skills: Readonly<Record<string, SkillDefinition>>;
 }
+
+export type SkillspaceSource = SkillspaceDefinition;
 
 export const hookEvent = {
   toolBefore: "tool.before",
@@ -461,6 +475,8 @@ export interface HookDefinition<E extends HookEvent = HookEvent> {
   readonly match?: HookMatchDefinition<E>;
   readonly handle: HookHandlerDefinition<E>;
 }
+
+export type HookSource<E extends HookEvent = HookEvent> = HookDefinition<E>;
 
 export const withNamedRef = <TKind extends string>(
   kind: TKind,
@@ -614,18 +630,26 @@ export const hookMatcher = {
   tool: hookTool,
 } as const;
 
-export const defineAgent = <T extends AgentDefinition>(agent: T): T => agent;
-export const defineTrait = <T extends TraitDefinition>(trait: T): T => trait;
-export const defineOrbit = <T extends OrbitDefinition>(orbit: T): T =>
+/** Transitional identity wrapper. The canonical public source type is `AgentSource`. */
+export const defineAgent = <T extends AgentSource>(agent: T): T => agent;
+/** Transitional identity wrapper. The canonical public source type is `TraitSource`. */
+export const defineTrait = <T extends TraitSource>(trait: T): T => trait;
+/** Transitional identity wrapper. The canonical public source type is `OrbitSource`. */
+export const defineOrbit = <T extends OrbitSource>(orbit: T): T =>
   orbit;
-export const defineTool = <T extends CanonicalToolDefinition>(tool: T): T => tool;
-export const defineToolspace = <T extends ToolspaceDefinition>(toolspace: T): T =>
+/** Transitional identity wrapper. The canonical public source type is `ToolSource`. */
+export const defineTool = <T extends ToolSource>(tool: T): T => tool;
+/** Transitional identity wrapper. The canonical public source type is `ToolspaceSource`. */
+export const defineToolspace = <T extends ToolspaceSource>(toolspace: T): T =>
   toolspace;
-export const defineModelspace = <T extends ModelspaceDefinition>(modelspace: T): T =>
+/** Transitional identity wrapper. The canonical public source type is `ModelspaceSource`. */
+export const defineModelspace = <T extends ModelspaceSource>(modelspace: T): T =>
   modelspace;
-export const defineSkillspace = <T extends SkillspaceDefinition>(skillspace: T): T =>
+/** Transitional identity wrapper. The canonical public source type is `SkillspaceSource`. */
+export const defineSkillspace = <T extends SkillspaceSource>(skillspace: T): T =>
   skillspace;
-export const defineHook = <E extends HookEvent, T extends HookDefinition<E>>(
+/** Transitional identity wrapper. The canonical public source type is `HookSource`. */
+export const defineHook = <E extends HookEvent, T extends HookSource<E>>(
   hook: T,
 ): T => hook;
 

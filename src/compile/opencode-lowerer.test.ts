@@ -104,11 +104,37 @@ test("opencode executeLowering applies mixed operations and aggregates config pa
   const pruneFileTarget = join(root, "plugins", "generated", "stale.txt");
   const pruneDirTarget = join(root, "plugins", "generated", "stale-dir");
   const jsonTarget = join(root, "opencode.json");
+  const target = opencodeExecutionTarget(root);
 
-  await writeText(mdTarget, "old markdown");
-  await writeText(pluginTarget, "old plugin");
-  await writeText(pruneFileTarget, "stale file");
-  await writeText(join(pruneDirTarget, "nested.txt"), "stale dir");
+  await executeStandardLowering(
+    [
+      {
+        kind: "write-md",
+        target: mdTarget,
+        content: "old markdown",
+        reason: "new",
+      },
+      {
+        kind: "write-plugin-file",
+        target: pluginTarget,
+        content: "old plugin",
+        reason: "new",
+      },
+      {
+        kind: "write-plugin-file",
+        target: pruneFileTarget,
+        content: "stale file",
+        reason: "new",
+      },
+      {
+        kind: "write-plugin-file",
+        target: join(pruneDirTarget, "nested.txt"),
+        content: "stale dir",
+        reason: "new",
+      },
+    ],
+    { dryRun: false, target },
+  );
   await writeText(
     jsonTarget,
     `${JSON.stringify(
@@ -205,7 +231,7 @@ test("opencode executeLowering applies mixed operations and aggregates config pa
 
   const result = await executeLowering(operations, {
     dryRun: false,
-    target: opencodeExecutionTarget(root),
+    target,
   });
 
   expect(result.backups).toHaveLength(2);
@@ -368,6 +394,167 @@ test("executeStandardLowering records unchanged config patches and migrates old 
   expect(ledger.entries).not.toEqual(
     expect.arrayContaining([
       expect.objectContaining({ targetPath: configTarget, kind: "file" }),
+    ]),
+  );
+});
+
+test("executeStandardLowering rejects unmanaged existing compile writes", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "agents", "builder.md");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-ownership-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeText(targetPath, "user content\n");
+
+  await expect(
+    executeStandardLowering(
+      [
+        {
+          kind: "write-md",
+          target: targetPath,
+          content: "generated content\n",
+          reason: "changed",
+        },
+      ],
+      { dryRun: false, target },
+    ),
+  ).rejects.toThrow("Compile target exists but is not owned by Prism");
+  expect(await readFile(targetPath, "utf8")).toBe("user content\n");
+});
+
+test("executeStandardLowering repairs missing ledger for identical compile writes", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "agents", "builder.md");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-recovery-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeText(targetPath, "generated content\n");
+
+  const result = await executeStandardLowering(
+    [
+      {
+        kind: "write-md",
+        target: targetPath,
+        content: "generated content\n",
+        reason: "unchanged",
+      },
+    ],
+    { dryRun: false, target },
+  );
+
+  expect(result.backups).toEqual([]);
+  expect((await readHarnessLedger("codex-cli")).entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        pluginName: "compile-recovery-test",
+        kind: "file",
+        targetPath,
+      }),
+    ]),
+  );
+});
+
+test("executeStandardLowering refuses to prune changed stale compile files", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "plugins", "generated", "stale.txt");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-prune-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+
+  await executeStandardLowering(
+    [
+      {
+        kind: "write-plugin-file",
+        target: targetPath,
+        content: "old generated content\n",
+        reason: "new",
+      },
+    ],
+    { dryRun: false, target },
+  );
+  await writeText(targetPath, "user changed content\n");
+
+  await expect(
+    executeStandardLowering(
+      [
+        {
+          kind: "prune-plugin-path",
+          target: targetPath,
+          targetType: "file",
+          reason: "stale",
+        },
+      ],
+      { dryRun: false, target },
+    ),
+  ).rejects.toThrow("Managed compile prune target changed outside Prism");
+  expect(await readFile(targetPath, "utf8")).toBe("user changed content\n");
+});
+
+test("executeStandardLowering prunes ledger-owned generated roots", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const generatedRoot = join(targetRoot, "plugins", "generated");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-root-prune-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+
+  await executeStandardLowering(
+    [
+      {
+        kind: "write-plugin-file",
+        target: join(generatedRoot, "package.json"),
+        content: "{}\n",
+        reason: "new",
+      },
+      {
+        kind: "write-plugin-file",
+        target: join(generatedRoot, "dist", "server.mjs"),
+        content: "console.log('generated');\n",
+        reason: "new",
+      },
+    ],
+    { dryRun: false, target },
+  );
+
+  await executeStandardLowering(
+    [
+      {
+        kind: "prune-plugin-path",
+        target: generatedRoot,
+        targetType: "dir",
+        reason: "stale",
+      },
+    ],
+    { dryRun: false, target },
+  );
+
+  expect(await pathExists(generatedRoot)).toBe(false);
+  expect((await readHarnessLedger("codex-cli")).entries).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ pluginName: "compile-root-prune-test" }),
     ]),
   );
 });

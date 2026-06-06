@@ -455,6 +455,13 @@ const executeLoweringWrite = async (
   options: ExecuteLoweringOptions,
   ledger: HarnessLedger | undefined,
 ): Promise<string | null> => {
+  await assertLoweringWriteAuthority({
+    targetPath: operation.target,
+    desiredContent: operation.content,
+    kind: "file",
+    target: options.target,
+    ledger,
+  });
   const backup =
     operation.kind === "write-md"
       ? await backupLoweringTarget(operation.target, options, "write")
@@ -501,6 +508,7 @@ const executeLoweringPrune = async (
     return;
   }
 
+  await assertLoweringPruneAuthority(operation, target, ledger);
   if (operation.targetType === "dir") await removeDir(operation.target);
   else await removeFile(operation.target);
   if (ledger && target) {
@@ -542,6 +550,92 @@ export interface ExecuteLoweringOptions {
   readonly target?: LowerExecutionTargetContext;
 }
 
+class LoweringOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LoweringOwnershipError";
+  }
+}
+
+const assertLoweringWriteAuthority = async (input: {
+  readonly targetPath: string;
+  readonly desiredContent: string;
+  readonly kind: "file" | "config";
+  readonly target: LowerExecutionTargetContext | undefined;
+  readonly ledger?: HarnessLedger;
+}): Promise<void> => {
+  if (!input.target || !input.ledger) return;
+
+  const currentHash = await currentLoweringTargetHash(input.targetPath);
+  if (!currentHash) return;
+
+  const desiredHash = computeContentHash(input.desiredContent);
+  if (currentHash === desiredHash) return;
+
+  const ledgerEntry = findCurrentLoweringEntry(
+    input.ledger,
+    input.target,
+    input.targetPath,
+    input.kind,
+  );
+  if (!ledgerEntry) {
+    if (
+      input.kind === "file" &&
+      await targetHasGeneratedOwnerMarker(input.targetPath, input.target.sourcePluginName)
+    ) {
+      return;
+    }
+    throw new LoweringOwnershipError(
+      `Compile target exists but is not owned by Prism: ${input.targetPath}`,
+    );
+  }
+
+  if (currentHash !== ledgerEntry.contentHash) {
+    throw new LoweringOwnershipError(
+      `Managed compile target changed outside Prism: ${input.targetPath}`,
+    );
+  }
+};
+
+const assertLoweringPruneAuthority = async (
+  operation: LowerPruneOperation,
+  target: LowerExecutionTargetContext | undefined,
+  ledger: HarnessLedger | undefined,
+): Promise<void> => {
+  if (!target || !ledger) return;
+  if (!(await exists(operation.target))) return;
+
+  if (operation.targetType === "file") {
+    await assertLoweringFilePruneAuthority(operation.target, target, ledger);
+    return;
+  }
+
+  const relativeFiles = await listDirRecursive(operation.target);
+  for (const relativeFile of relativeFiles) {
+    await assertLoweringFilePruneAuthority(join(operation.target, relativeFile), target, ledger);
+  }
+};
+
+const assertLoweringFilePruneAuthority = async (
+  targetPath: string,
+  target: LowerExecutionTargetContext,
+  ledger: HarnessLedger,
+): Promise<void> => {
+  const ledgerEntry = findCurrentLoweringEntry(ledger, target, targetPath, "file");
+  if (!ledgerEntry) {
+    if (await targetHasGeneratedOwnerMarker(targetPath, target.sourcePluginName)) return;
+    throw new LoweringOwnershipError(
+      `Compile prune target is not owned by Prism: ${targetPath}`,
+    );
+  }
+
+  const currentHash = await currentLoweringTargetHash(targetPath);
+  if (!currentHash || currentHash === ledgerEntry.contentHash) return;
+  throw new LoweringOwnershipError(
+    `Managed compile prune target changed outside Prism: ${targetPath}`,
+  );
+};
+
 export const backupLoweringTarget = async (
   targetPath: string,
   options: ExecuteLoweringOptions,
@@ -570,6 +664,29 @@ const lowerLedgerEntryId = (
     targetPath,
     kind,
   });
+
+const findCurrentLoweringEntry = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  kind: "file" | "directory" | "config",
+): ManagedLedgerEntry | undefined => {
+  const resolvedRoot = resolve(target.root);
+  const resolvedTargetPath = resolve(targetPath);
+  return ledger.entries.find((entry) =>
+    entry.pluginName === target.sourcePluginName &&
+    entry.artifact === "compile" &&
+    entry.kind === kind &&
+    entry.scope === target.scope &&
+    resolve(entry.root) === resolvedRoot &&
+    resolve(entry.targetPath) === resolvedTargetPath
+  );
+};
+
+const currentLoweringTargetHash = async (targetPath: string): Promise<string | undefined> => {
+  if (!(await exists(targetPath))) return undefined;
+  return computeContentHash(await readFile(targetPath));
+};
 
 const upsertLoweringEntry = (
   ledger: HarnessLedger,
@@ -660,16 +777,7 @@ const hasCurrentLoweringEntry = (
   targetPath: string,
   kind: "file" | "directory" | "config",
 ): boolean => {
-  const resolvedRoot = resolve(target.root);
-  const resolvedTargetPath = resolve(targetPath);
-  return ledger.entries.some((entry) =>
-    entry.pluginName === target.sourcePluginName &&
-    entry.artifact === "compile" &&
-    entry.kind === kind &&
-    entry.scope === target.scope &&
-    resolve(entry.root) === resolvedRoot &&
-    resolve(entry.targetPath) === resolvedTargetPath
-  );
+  return findCurrentLoweringEntry(ledger, target, targetPath, kind) !== undefined;
 };
 
 export const recordLoweringConfigPatch = async (
@@ -712,6 +820,14 @@ const relativePathInsideRoot = (root: string, targetPath: string): string | unde
 
 const hasGeneratedSkillOwnerMarker = (content: string, sourcePluginName: string): boolean =>
   content.includes("<!-- prism:") && content.includes(`owner=${JSON.stringify(sourcePluginName)}`);
+
+const targetHasGeneratedOwnerMarker = async (
+  targetPath: string,
+  sourcePluginName: string,
+): Promise<boolean> => {
+  if (!(await exists(targetPath))) return false;
+  return hasGeneratedSkillOwnerMarker(await readFile(targetPath), sourcePluginName);
+};
 
 export const planCompileOwnedTargetedSkillPruning = async (options: {
   readonly target: LowerExecutionTargetContext;

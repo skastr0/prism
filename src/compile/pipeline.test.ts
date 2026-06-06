@@ -2719,7 +2719,35 @@ test("loadPlugin preserves agent normalization failure order", async () => {
 test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   const { pluginRoot, projectRoot } = await createAntigravityPluginFixture();
   const outputPluginRoot = join(projectRoot, ".agents", "plugins", "prism-generated-antigravity-plugin-demo");
-  await writeText(join(outputPluginRoot, "stale", "old.txt"), "stale\n");
+  const stalePath = join(outputPluginRoot, "stale", "old.txt");
+  const staleContent = "stale\n";
+  await writeText(stalePath, staleContent);
+  await writeHarnessLedger({
+    version: 1,
+    harness: "antigravity-cli",
+    entries: [{
+      id: managedEntryId({
+        harness: "antigravity-cli",
+        scope: "project",
+        root: join(projectRoot, ".agents"),
+        pluginName: "antigravity_plugin.demo",
+        artifact: "compile",
+        targetPath: stalePath,
+        kind: "file",
+      }),
+      pluginName: "antigravity_plugin.demo",
+      pluginVersion: "0.1.0",
+      pluginPath: pluginRoot,
+      harness: "antigravity-cli",
+      scope: "project",
+      root: join(projectRoot, ".agents"),
+      artifact: "compile",
+      targetPath: stalePath,
+      kind: "file",
+      contentHash: computeContentHash(staleContent),
+      updatedAt: new Date().toISOString(),
+    }],
+  });
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
@@ -7740,6 +7768,8 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
   const projectRoot = join(root, "project");
   const piRoot = join(projectRoot, ".pi");
   const generatedRoot = join(piRoot, "packages", "prism-generated-pi-source-only");
+  const stalePackageSkillPath = join(generatedRoot, "skills", "stale", "SKILL.md");
+  const stalePackageSkillContent = "---\nname: stale\ndescription: Stale\n---\n\n# Stale\n";
   const staleAgentPath = join(piRoot, "agents", "stale.md");
   await mkdir(projectRoot, { recursive: true });
   await writeText(
@@ -7752,7 +7782,7 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
       },
     })}\n`,
   );
-  await writeText(join(generatedRoot, "skills", "stale", "SKILL.md"), "---\nname: stale\ndescription: Stale\n---\n\n# Stale\n");
+  await writeText(stalePackageSkillPath, stalePackageSkillContent);
   const staleAgentContent = "---\nname: stale\ndescription: Stale\n---\n\n<!-- prism:pi-agent owner=\"pi-source-only\" -->\n\n# Stale\n";
   await writeText(staleAgentPath, staleAgentContent);
   await writeText(
@@ -7767,28 +7797,52 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
   await writeHarnessLedger({
     version: 1,
     harness: "pi",
-    entries: [{
-      id: managedEntryId({
+    entries: [
+      {
+        id: managedEntryId({
+          harness: "pi",
+          scope: "project",
+          root: piRoot,
+          pluginName: "pi-source-only",
+          artifact: "compile",
+          targetPath: stalePackageSkillPath,
+          kind: "file",
+        }),
+        pluginName: "pi-source-only",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
         harness: "pi",
         scope: "project",
         root: piRoot,
+        artifact: "compile",
+        targetPath: stalePackageSkillPath,
+        kind: "file",
+        contentHash: computeContentHash(stalePackageSkillContent),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: managedEntryId({
+          harness: "pi",
+          scope: "project",
+          root: piRoot,
+          pluginName: "pi-source-only",
+          artifact: "compile",
+          targetPath: staleAgentPath,
+          kind: "file",
+        }),
         pluginName: "pi-source-only",
+        pluginVersion: "0.1.0",
+        pluginPath: pluginRoot,
+        harness: "pi",
+        scope: "project",
+        root: piRoot,
         artifact: "compile",
         targetPath: staleAgentPath,
         kind: "file",
-      }),
-      pluginName: "pi-source-only",
-      pluginVersion: "0.1.0",
-      pluginPath: pluginRoot,
-      harness: "pi",
-      scope: "project",
-      root: piRoot,
-      artifact: "compile",
-      targetPath: staleAgentPath,
-      kind: "file",
-      contentHash: computeContentHash(staleAgentContent),
-      updatedAt: new Date().toISOString(),
-    }],
+        contentHash: computeContentHash(staleAgentContent),
+        updatedAt: new Date().toISOString(),
+      },
+    ],
   });
 
   const result = await Effect.runPromise(

@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import { basename, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import type * as TypeScript from "typescript";
 import matter from "gray-matter";
 import {
   Agent,
@@ -66,7 +66,10 @@ import {
 } from "./errors.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
+import { typescriptBundleImportPath } from "./runtime-deps.js";
 import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
+
+const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof TypeScript;
 
 const listDir = (path: string): Effect.Effect<string[]> =>
   Effect.tryPromise({
@@ -799,7 +802,7 @@ interface SchemaSymbolSource {
 
 type BindingToolSlotSources = Map<number, Map<string, Map<string, SchemaSymbolSource>>>;
 
-const propertyNameText = (name: ts.PropertyName): string | undefined => {
+const propertyNameText = (name: TypeScript.PropertyName): string | undefined => {
   if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
     return name.text;
   }
@@ -807,9 +810,9 @@ const propertyNameText = (name: ts.PropertyName): string | undefined => {
 };
 
 const objectProperty = (
-  object: ts.ObjectLiteralExpression | undefined,
+  object: TypeScript.ObjectLiteralExpression | undefined,
   name: string,
-): ts.Expression | undefined => {
+): TypeScript.Expression | undefined => {
   if (!object) return undefined;
   for (const property of object.properties) {
     if (!ts.isPropertyAssignment(property)) continue;
@@ -819,10 +822,14 @@ const objectProperty = (
   return undefined;
 };
 
-const asObjectLiteral = (value: ts.Expression | undefined): ts.ObjectLiteralExpression | undefined =>
+const asObjectLiteral = (
+  value: TypeScript.Expression | undefined,
+): TypeScript.ObjectLiteralExpression | undefined =>
   value && ts.isObjectLiteralExpression(value) ? value : undefined;
 
-const asArrayLiteral = (value: ts.Expression | undefined): ts.ArrayLiteralExpression | undefined =>
+const asArrayLiteral = (
+  value: TypeScript.Expression | undefined,
+): TypeScript.ArrayLiteralExpression | undefined =>
   value && ts.isArrayLiteralExpression(value) ? value : undefined;
 
 const resolveImportedModuleSource = (
@@ -841,7 +848,7 @@ const resolveImportedModuleSource = (
 
 const collectImportedSchemaSymbols = (
   sourcePath: string,
-  source: ts.SourceFile,
+  source: TypeScript.SourceFile,
 ): Map<string, SchemaSymbolSource> => {
   const imports = new Map<string, SchemaSymbolSource>();
 
@@ -882,7 +889,7 @@ const collectBindingToolSlotSources = (
 
   const collectFromBindTrait = (
     traitIndex: number,
-    call: ts.CallExpression,
+    call: TypeScript.CallExpression,
   ): void => {
     const options = asObjectLiteral(call.arguments[1]);
     const tools = asObjectLiteral(objectProperty(options, "tools"));
@@ -909,7 +916,7 @@ const collectBindingToolSlotSources = (
     result.set(traitIndex, byTool);
   };
 
-  const visit = (node: ts.Node): void => {
+  const visit = (node: TypeScript.Node): void => {
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&

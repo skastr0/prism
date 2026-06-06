@@ -31,6 +31,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run verify
       - run: bun run build:npm-cli
+      - run: bun run pack:npm-cli:dry-run
+      - run: bun scripts/smoke-npm-cli.ts --skip-build
       - name: Publish packages
         run: |
           set -euo pipefail

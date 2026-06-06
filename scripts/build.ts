@@ -3,7 +3,6 @@
 import { readFileSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -40,24 +39,6 @@ for (const { platform, arch } of targets) {
       entrypoints: [join(repoRoot, "src", "cli.ts")],
       define: {
         APP_VERSION: `'${version}'`,
-        PRISM_EFFECT_ENTRYPOINT: JSON.stringify(
-          fileURLToPath(import.meta.resolve("effect")).replace(/\\/g, "/")
-        ),
-        PRISM_MCP_SDK_MCP_ENTRYPOINT: JSON.stringify(
-          fileURLToPath(import.meta.resolve("@modelcontextprotocol/sdk/server/mcp.js")).replace(/\\/g, "/")
-        ),
-        PRISM_MCP_SDK_STDIO_ENTRYPOINT: JSON.stringify(
-          fileURLToPath(import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js")).replace(/\\/g, "/")
-        ),
-        PRISM_MCP_SDK_WEB_STANDARD_HTTP_ENTRYPOINT: JSON.stringify(
-          fileURLToPath(import.meta.resolve("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js")).replace(/\\/g, "/")
-        ),
-        PRISM_OPENCODE_PLUGIN_ENTRYPOINT: JSON.stringify(
-          fileURLToPath(import.meta.resolve("@opencode-ai/plugin")).replace(/\\/g, "/")
-        ),
-        PRISM_ZOD_V4_ENTRYPOINT: JSON.stringify(
-          fileURLToPath(import.meta.resolve("zod/v4")).replace(/\\/g, "/")
-        ),
         SCHEMA_BRIDGE_SOURCE: JSON.stringify(
           readFileSync(join(repoRoot, "src", "compile", "runtime", "schema-bridge.ts"), "utf8")
         ),

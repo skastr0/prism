@@ -31,7 +31,8 @@ try {
   process.exit(1);
 }
 
-const binaryPath = join(dirname(packageJsonPath), "bin", "prism");
+const platformPackageRoot = dirname(packageJsonPath);
+const binaryPath = join(platformPackageRoot, "bin", "prism");
 
 if (!existsSync(binaryPath)) {
   console.error(`prism: platform binary not found at ${binaryPath}`);
@@ -39,6 +40,11 @@ if (!existsSync(binaryPath)) {
 }
 
 const result = spawnSync(binaryPath, process.argv.slice(2), {
+  env: {
+    ...process.env,
+    PRISM_RUNTIME_DEPS_PACKAGE_ROOT:
+      process.env.PRISM_RUNTIME_DEPS_PACKAGE_ROOT ?? platformPackageRoot,
+  },
   stdio: "inherit",
 });
 

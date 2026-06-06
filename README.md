@@ -13,6 +13,7 @@ bun install
 bun run verify
 bun run typecheck
 bun run build
+bun run check:install-all-idempotency
 ```
 
 ## Managed State
@@ -24,6 +25,18 @@ Prism uses `~/.prism` for durable install and compile state. Set `PRISM_HOME` to
 - `state/<harness>.ledger.json` tracks Prism-owned outputs so repeated installs can skip unchanged files, fail closed on drift, and prune stale managed files.
 
 `prism install` is the unified refresh path. It compiles first when a plugin has compile targets for the selected harnesses, then reconciles install-phase artifacts; there is no separate sync command.
+
+For corpus-level Codex CLI idempotency, run:
+
+```bash
+bun run check:install-all-idempotency
+```
+
+The gate runs `install-all ../prism-plugins --harness codex-cli` twice in
+isolated `HOME`, `PRISM_HOME`, and MCP runtime roots. Streamable HTTP MCP
+plugins are served on temporary loopback ports and stopped before cleanup. The
+gate fails on warm-run stale prunes, config churn, duplicate MCP tables, orphan
+hook blocks, ledger churn, or backup churn.
 
 ## Lowerer Capabilities
 

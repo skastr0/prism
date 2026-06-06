@@ -9,7 +9,7 @@ import { Effect } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import { expandPath } from "../fs.js";
-import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
+import type { HarnessId, HarnessScope } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
   instantiateOrbit,
@@ -76,8 +76,13 @@ import {
 } from "./errors.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
-import { resolveManifestTargets } from "../manifest.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
+import {
+  selectSourcesForTarget,
+  sourceSelectionFromManifestTargets,
+  type SourceNoun,
+  type SourceRuntimeRequirements,
+} from "../source-selection.js";
 import {
   computeAgentCacheDescriptor,
   computeContentHash,
@@ -135,6 +140,9 @@ interface CompileTargetContext {
 }
 
 interface TargetSurfaceSelection {
+  readonly target: HarnessId;
+  readonly scope: HarnessScope;
+  readonly runtime: SourceRuntimeRequirements;
   readonly agents: boolean;
   readonly orbits: boolean;
   readonly tools: boolean;
@@ -336,11 +344,13 @@ const applyOrbitSkillPermissions = (
 
 const registryTargetsHarness = (
   registry: PluginRegistry,
-  artifact: string,
+  artifact: SourceNoun,
   target: HarnessId,
 ): boolean => {
-  const targets = (registry.targets as Record<string, readonly PluginTargetId[] | undefined>)[artifact];
-  return resolveManifestTargets(targets ?? []).includes(target);
+  const selection = sourceSelectionFromManifestTargets(registry.targets, {
+    runtime: registry.runtime,
+  });
+  return selectSourcesForTarget(selection, target).nouns[artifact];
 };
 
 const findRegistryByPluginName = (
@@ -782,16 +792,25 @@ const assertHttpMcpLifecycleGate = (options: {
 const selectTargetSurfaces = (
   registry: PluginRegistry,
   targetId: HarnessId,
+  scope: HarnessScope,
 ): TargetSurfaceSelection => {
-  const agents = registryTargetsHarness(registry, "agents", targetId);
-  const orbits = registryTargetsHarness(registry, "orbits", targetId);
-  const tools = registryTargetsHarness(registry, "tools", targetId);
-  const skills = registryTargetsHarness(registry, "skills", targetId);
-  const hooks = registryTargetsHarness(registry, "hooks", targetId);
-  const rules = registryTargetsHarness(registry, "rules", targetId);
-  const commands = registryTargetsHarness(registry, "commands", targetId);
+  const selected = selectSourcesForTarget(
+    sourceSelectionFromManifestTargets(registry.targets, { runtime: registry.runtime }),
+    targetId,
+    { scope },
+  );
+  const agents = selected.nouns.agents;
+  const orbits = selected.nouns.orbits;
+  const tools = selected.nouns.tools;
+  const skills = selected.nouns.skills;
+  const hooks = selected.nouns.hooks;
+  const rules = selected.nouns.rules;
+  const commands = selected.nouns.commands;
 
   return {
+    target: selected.target,
+    scope,
+    runtime: selected.runtime,
     agents,
     orbits,
     tools,
@@ -1106,7 +1125,7 @@ const prepareLoweringInputs = (
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
     const registry = yield* loadPlugin(options.pluginPath);
-    const surfaces = selectTargetSurfaces(registry, context.targetId);
+    const surfaces = selectTargetSurfaces(registry, context.targetId, options.scope);
     yield* assertTargetSupportsAgents(options.target, surfaces.agents);
     yield* assertTargetSupportsHooks(options.target, surfaces.hooks);
 

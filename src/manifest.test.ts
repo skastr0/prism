@@ -232,6 +232,38 @@ test("validateSkill warns when body exceeds recommended length", async () => {
   expect(result.skillPath).toBe(skillPath);
 });
 
+test("readManifest rejects unsupported direct source noun targets", async () => {
+  const agentPluginRoot = await createPluginWithManifest("unsupported-hermes-agent", {
+    agents: ["hermes"],
+  });
+  const hookPluginRoot = await createPluginWithManifest("unsupported-hermes-hook", {
+    hooks: ["hermes"],
+  });
+
+  await expectManifestValidationDetails(agentPluginRoot, [
+    "targets.agents resolves to unsupported compile harnesses: hermes (Hermes Agent). Source agents must be authored as agents/*.agent.ts and can only target compile-supported harnesses.",
+  ]);
+  await expectManifestValidationDetails(hookPluginRoot, [
+    "targets.hooks resolves to unsupported harnesses for hooks: hermes (Hermes Agent)",
+  ]);
+});
+
+test("readManifest rejects presets that resolve to no supported source noun targets", async () => {
+  const agentPluginRoot = await createPluginWithManifest("empty-preset-agent", {
+    agents: ["claw-harness"],
+  });
+  const hookPluginRoot = await createPluginWithManifest("empty-preset-hook", {
+    hooks: ["claw-harness"],
+  });
+
+  await expectManifestValidationDetails(agentPluginRoot, [
+    "targets.agents preset 'claw-harness' resolves to no supported harnesses for agents",
+  ]);
+  await expectManifestValidationDetails(hookPluginRoot, [
+    "targets.hooks preset 'claw-harness' resolves to no supported harnesses for hooks",
+  ]);
+});
+
 test("readManifest rejects file-level targets in shared install artifacts", async () => {
   const pluginRoot = await createPluginWithManifest("shared-file-targets", {
     rules: ["opencode"],

@@ -5229,7 +5229,7 @@ export default defineTool({
   ).rejects.toThrow("loopback host");
 });
 
-test("compilePluginForTarget rejects Hermes agents and hooks at the capability boundary", async () => {
+test("compilePluginForTarget rejects Hermes agents and hooks during source selection", async () => {
   const root = await createTempRoot();
   const agentPluginRoot = join(root, "hermes-agent-demo");
   const hookPluginRoot = join(root, "hermes-hook-demo");
@@ -5279,11 +5279,8 @@ export default defineAgent({
   );
 
   const agentFailure = getFailure(agentExit);
-  expect(agentFailure._tag).toBe("UnsupportedTargetCapabilityError");
-  if (agentFailure._tag === "UnsupportedTargetCapabilityError") {
-    expect(agentFailure.capability).toBe("compiled-agents");
-    expect(agentFailure.message).toContain("does not support compiled Prism agents");
-  }
+  expect(agentFailure._tag).toBe("PluginManifestError");
+  expect(agentFailure.message).toContain("targets.agents resolves to unsupported compile harnesses");
 
   await writeText(
     join(hookPluginRoot, "plugin.json"),
@@ -5322,11 +5319,8 @@ export default defineHook({
   );
 
   const hookFailure = getFailure(hookExit);
-  expect(hookFailure._tag).toBe("UnsupportedTargetCapabilityError");
-  if (hookFailure._tag === "UnsupportedTargetCapabilityError") {
-    expect(hookFailure.capability).toBe("hooks");
-    expect(hookFailure.message).toContain("does not support Prism hook lowering");
-  }
+  expect(hookFailure._tag).toBe("PluginManifestError");
+  expect(hookFailure.message).toContain("targets.hooks resolves to unsupported harnesses for hooks");
 });
 
 test("opencode trait skill access lowers to permission without becoming a dependency", async () => {

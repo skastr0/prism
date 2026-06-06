@@ -68,6 +68,12 @@ import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { typescriptBundleImportPath } from "./runtime-deps.js";
 import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
+import {
+  isPluginTargetId,
+  SOURCE_NOUNS,
+  validateSourceTargetSupport,
+  type SourceNoun,
+} from "../source-selection.js";
 
 const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof TypeScript;
 
@@ -2230,6 +2236,68 @@ interface PluginManifest {
   runtime: PluginRuntimeConfig;
 }
 
+const validatePluginManifestTargetsForLoad = (
+  pluginPath: string,
+  targets: PluginManifestTargets,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    const rawTargets = targets as Record<string, unknown>;
+    const sourceNounSet = new Set<string>(SOURCE_NOUNS);
+    const sourceNounList = SOURCE_NOUNS.join(", ");
+    for (const key of Object.keys(rawTargets)) {
+      if (sourceNounSet.has(key)) continue;
+      return yield* Effect.fail(
+        new PluginManifestError({
+          pluginPath,
+          message: `Unknown targets key '${key}'. Expected one of: ${sourceNounList}`,
+        }),
+      );
+    }
+
+    for (const noun of SOURCE_NOUNS) {
+      const declaredTargets = rawTargets[noun];
+      if (declaredTargets === undefined) continue;
+
+      if (!Array.isArray(declaredTargets)) {
+        return yield* Effect.fail(
+          new PluginManifestError({
+            pluginPath,
+            message: `targets.${noun} must be an array of harness IDs and/or preset IDs`,
+          }),
+        );
+      }
+
+      if (declaredTargets.length === 0) {
+        return yield* Effect.fail(
+          new PluginManifestError({
+            pluginPath,
+            message: `targets.${noun} must not be empty`,
+          }),
+        );
+      }
+
+      const unknownTarget = declaredTargets.find((target) => !isPluginTargetId(target));
+      if (unknownTarget !== undefined) {
+        return yield* Effect.fail(
+          new PluginManifestError({
+            pluginPath,
+            message: `targets.${noun} contains unknown target '${String(unknownTarget)}'`,
+          }),
+        );
+      }
+
+      const supportErrors = validateSourceTargetSupport(noun as SourceNoun, declaredTargets);
+      if (supportErrors.length > 0) {
+        return yield* Effect.fail(
+          new PluginManifestError({
+            pluginPath,
+            message: supportErrors.join("\n"),
+          }),
+        );
+      }
+    }
+  });
+
 const readPluginManifest = (
   pluginPath: string,
 ): Effect.Effect<PluginManifest, CompileError> =>
@@ -2298,6 +2366,7 @@ const readPluginManifest = (
       rawTargets && typeof rawTargets === "object" && !Array.isArray(rawTargets)
         ? (rawTargets as PluginManifestTargets)
         : {};
+    yield* validatePluginManifestTargetsForLoad(pluginPath, targets);
 
     const rawRuntime = data.runtime;
     let runtime: PluginRuntimeConfig = {};

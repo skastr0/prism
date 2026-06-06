@@ -18,9 +18,9 @@ import type {
   PluginArtifactType,
   PluginManifest,
   PluginTargetId,
+  AnyArtifactType,
   SkillFrontmatter,
   SkillValidationResult,
-  TargetPresetId,
   UnifiedFrontmatter,
 } from "./types.js";
 import {
@@ -28,72 +28,32 @@ import {
   COMPILE_ARTIFACT_TYPES,
   PLUGIN_ARTIFACT_TYPES,
   SKILL_VALIDATION,
-  TARGET_PRESET_IDS,
 } from "./types.js";
 import type { CompileArtifactType } from "./types.js";
-import { getAllHarnessIds, getHarness, isValidHarnessId } from "./harnesses.js";
+import { getAllHarnessIds, isValidHarnessId } from "./harnesses.js";
+import {
+  getCompileManagedPluginArtifactTargets,
+  isPluginTargetId,
+  resolveManifestTargets as resolveSourceTargets,
+  resolveManifestTargetsForSourceNoun,
+  sourceSelectionFromManifestTargets,
+  targetSupportsSourceNoun,
+  validateSourceTargetSupport as validateSourceTargetSupportSelection,
+} from "./source-selection.js";
 
 const MANIFEST_FILE = "plugin.json";
 const HARNESS_ROOT = "harness";
-
-const TARGET_PRESETS = {
-  "coding-harness": [
-    "claude-code",
-    "opencode",
-    "codex-cli",
-    "antigravity-cli",
-    "kimi-code",
-    "amp-code",
-    "cursor",
-    "factory-droid",
-    "pi",
-    "grok",
-  ],
-  "claw-harness": ["openclaw", "hermes"],
-} as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
-
-const COMPILE_SUPPORTED_HARNESSES = [
-  "opencode",
-  "claude-code",
-  "antigravity-cli",
-  "codex-cli",
-  "amp-code",
-  "hermes",
-  "grok",
-  "factory-droid",
-  "pi",
-  "kimi-code",
-] as const satisfies ReadonlyArray<HarnessId>;
-
-const TOOL_COMPILE_SUPPORTED_HARNESSES = [
-  ...COMPILE_SUPPORTED_HARNESSES,
-  "cursor",
-] as const satisfies ReadonlyArray<HarnessId>;
-
-const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
-  rules: ["antigravity-cli", "pi", "kimi-code"],
-  commands: ["amp-code", "claude-code", "pi", "kimi-code"],
-  skills: ["pi", "kimi-code"],
-};
-
-const getCompileManagedPluginArtifactTargets = (
-  artifact: PluginArtifactType,
-): readonly HarnessId[] => COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS[artifact] ?? [];
 
 const manifestHasStructuredCompileTargets = (
   manifest: PluginManifest,
   harnessId?: HarnessId,
 ): boolean => {
+  const selection = sourceSelectionFromManifestTargets(manifest.targets, {
+    runtime: manifest.runtime,
+  });
   const compileKeys = ["agents", ...COMPILE_ARTIFACT_TYPES] as const;
   for (const key of compileKeys) {
-    const targets = (manifest.targets as Record<string, unknown>)[key];
-    if (!Array.isArray(targets) || targets.length === 0) continue;
-    const resolved =
-      key === "agents"
-        ? resolveManifestTargetsForArtifact(targets as PluginTargetId[], "agents")
-        : resolveManifestTargets(targets as PluginTargetId[]).filter((target) =>
-            targetSupportsCompileArtifact(target, key),
-          );
+    const resolved = selection.entries.find((entry) => entry.noun === key)?.harnesses ?? [];
     if (harnessId === undefined) {
       if (resolved.length > 0) return true;
       continue;
@@ -123,14 +83,6 @@ const manifestHasCompileManagedPluginArtifactTargets = (
   }
   return false;
 };
-
-function isTargetPresetId(value: string): value is TargetPresetId {
-  return TARGET_PRESET_IDS.includes(value as TargetPresetId);
-}
-
-function isPluginTargetId(value: unknown): value is PluginTargetId {
-  return typeof value === "string" && (isValidHarnessId(value) || isTargetPresetId(value));
-}
 
 function formatManifestErrors(errors: string[]): string {
   return errors.map((error) => `- ${error}`).join("\n");
@@ -477,7 +429,7 @@ async function validateHarnessOverlays(
         continue;
       }
 
-      if (!targetSupportsPluginArtifact(harnessId, artifactEntry.name)) {
+      if (!targetSupportsSourceNoun(harnessId, artifactEntry.name)) {
         errors.push(
           `Harness '${harnessId}' does not support ${artifactEntry.name} overlays (found ${overlayPath})`
         );
@@ -674,44 +626,6 @@ async function getPresentArtifacts(pluginPath: string): Promise<PluginArtifactTy
   return presentArtifacts;
 }
 
-function harnessSupportsArtifact(harnessId: HarnessId, artifact: PluginArtifactType): boolean {
-  const harness = getHarness(harnessId);
-
-  switch (artifact) {
-    case "rules":
-      return harness.rulesFile !== null || harness.rulesDir !== null;
-    case "commands":
-      return harness.supportsCommands && harness.commandsDir !== null;
-    case "agents":
-      return harness.supportsAgents && harness.agentsDir !== null;
-    case "skills":
-      return harness.supportsSkills && harness.skillsDir !== null;
-  }
-}
-
-function targetSupportsPluginArtifact(harnessId: HarnessId, artifact: PluginArtifactType): boolean {
-  if (artifact === "agents") {
-    return (COMPILE_SUPPORTED_HARNESSES as readonly HarnessId[]).includes(harnessId);
-  }
-  if (artifact === "commands" && harnessId === "cursor") {
-    return true;
-  }
-  if (getCompileManagedPluginArtifactTargets(artifact).includes(harnessId)) {
-    return true;
-  }
-
-  return harnessSupportsArtifact(harnessId, artifact);
-}
-
-function targetSupportsCompileArtifact(
-  harnessId: HarnessId,
-  artifact: CompileArtifactType,
-): boolean {
-  const supportedHarnesses =
-    artifact === "tools" ? TOOL_COMPILE_SUPPORTED_HARNESSES : COMPILE_SUPPORTED_HARNESSES;
-  return (supportedHarnesses as readonly HarnessId[]).includes(harnessId);
-}
-
 /**
  * Read and validate plugin manifest
  */
@@ -802,13 +716,16 @@ function validateTargetDeclarations(targets: Record<string, unknown>): string[] 
   }
 
   for (const artifact of PLUGIN_ARTIFACT_TYPES) {
-    validateDeclaredTargetList(targets, artifact, errors);
+    const declaredTargets = validateDeclaredTargetList(targets, artifact, errors);
+    if (declaredTargets) {
+      validateSourceTargetSupport(artifact, declaredTargets, errors);
+    }
   }
 
   for (const artifact of COMPILE_ARTIFACT_TYPES) {
     const declaredTargets = validateDeclaredTargetList(targets, artifact, errors);
     if (declaredTargets) {
-      validateCompileTargetSupport(artifact, declaredTargets, errors);
+      validateSourceTargetSupport(artifact, declaredTargets, errors);
     }
   }
 
@@ -842,20 +759,12 @@ function validateDeclaredTargetList(
   return declaredTargets;
 }
 
-function validateCompileTargetSupport(
-  artifact: CompileArtifactType,
+function validateSourceTargetSupport(
+  artifact: AnyArtifactType,
   declaredTargets: unknown[],
   errors: string[]
 ): void {
-  const unsupportedCompileTargets = resolveManifestTargets(
-    declaredTargets as PluginTargetId[]
-  ).filter((harnessId) => !targetSupportsCompileArtifact(harnessId, artifact));
-
-  if (unsupportedCompileTargets.length > 0) {
-    errors.push(
-      `targets.${artifact} resolves to unsupported compile harnesses: ${unsupportedCompileTargets.join(", ")}`
-    );
-  }
+  errors.push(...validateSourceTargetSupportSelection(artifact, declaredTargets));
 }
 
 async function validateManifestLayout(
@@ -870,7 +779,6 @@ async function validateManifestLayout(
   errors.push(...await validateNoSourceMarkdownAgents(pluginPath));
   errors.push(...await validateHarnessOverlays(pluginPath, typedManifest));
   errors.push(...validatePresentArtifactTargets(typedManifest, presentArtifacts));
-  errors.push(...validatePluginArtifactTargetSupport(typedManifest));
   return errors;
 }
 
@@ -884,32 +792,6 @@ function validatePresentArtifactTargets(
     if (!declaredTargets || declaredTargets.length === 0) {
       errors.push(
         `Plugin contains ${artifact} artifacts, but plugin.json targets.${artifact} is missing or empty`
-      );
-    }
-  }
-  return errors;
-}
-
-function validatePluginArtifactTargetSupport(manifest: PluginManifest): string[] {
-  const errors: string[] = [];
-  for (const artifact of PLUGIN_ARTIFACT_TYPES) {
-    const declaredTargets = manifest.targets[artifact];
-    if (!declaredTargets || declaredTargets.length === 0) {
-      continue;
-    }
-
-    const unsupportedTargets = declaredTargets
-      .filter((target): target is HarnessId => !isTargetPresetId(target))
-      .filter((harnessId) => !targetSupportsPluginArtifact(harnessId, artifact));
-
-    if (unsupportedTargets.length > 0) {
-      const unsupportedList = unsupportedTargets
-        .map((harnessId) => `${harnessId} (${getHarness(harnessId).name})`)
-        .join(", ");
-      errors.push(
-        artifact === "agents"
-          ? `targets.agents resolves to unsupported compile harnesses: ${unsupportedList}. Source agents must be authored as agents/*.agent.ts and can only target compile-supported harnesses.`
-          : `targets.${artifact} resolves to unsupported harnesses for ${artifact}: ${unsupportedList}`
       );
     }
   }
@@ -938,42 +820,14 @@ async function validateManifest(
 }
 
 export function resolveManifestTargets(targets: readonly PluginTargetId[]): HarnessId[] {
-  const resolvedTargets = new Set<HarnessId>();
-
-  for (const target of targets) {
-    if (isTargetPresetId(target)) {
-      for (const harnessId of TARGET_PRESETS[target]) {
-        resolvedTargets.add(harnessId);
-      }
-      continue;
-    }
-
-    resolvedTargets.add(target);
-  }
-
-  return [...resolvedTargets];
+  return resolveSourceTargets(targets);
 }
 
 export function resolveManifestTargetsForArtifact(
   targets: readonly PluginTargetId[],
   artifact: PluginArtifactType
 ): HarnessId[] {
-  const resolvedTargets = new Set<HarnessId>();
-
-  for (const target of targets) {
-    if (isTargetPresetId(target)) {
-      for (const harnessId of TARGET_PRESETS[target]) {
-        if (targetSupportsPluginArtifact(harnessId, artifact)) {
-          resolvedTargets.add(harnessId);
-        }
-      }
-      continue;
-    }
-
-    resolvedTargets.add(target);
-  }
-
-  return [...resolvedTargets];
+  return resolveManifestTargetsForSourceNoun(targets, artifact);
 }
 
 export function getManifestArtifactTargets(

@@ -42,8 +42,7 @@ if (!existsSync(binaryPath)) {
 const result = spawnSync(binaryPath, process.argv.slice(2), {
   env: {
     ...process.env,
-    PRISM_RUNTIME_DEPS_PACKAGE_ROOT:
-      process.env.PRISM_RUNTIME_DEPS_PACKAGE_ROOT ?? platformPackageRoot,
+    PRISM_RUNTIME_DEPS_PACKAGE_ROOT: platformPackageRoot,
   },
   stdio: "inherit",
 });

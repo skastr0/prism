@@ -139,3 +139,25 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     );
   });
 });
+
+test("runtime dependency resolution rejects package exports that escape the package root", async () => {
+  const root = await createTempRoot();
+  const outside = join(root, "outside.js");
+
+  await writeText(join(root, "package.json"), `{"name":"prism-runtime","type":"module"}\n`);
+  await writeText(outside, "\n");
+  await writeText(
+    join(root, "node_modules", "effect", "package.json"),
+    `${JSON.stringify({
+      name: "effect",
+      type: "module",
+      exports: {
+        ".": "../outside.js",
+      },
+    })}\n`,
+  );
+
+  await withRuntimeDepsRoot(root, async () => {
+    expect(effectBundleImportPath()).not.toBe(outside.replace(/\\/g, "/"));
+  });
+});

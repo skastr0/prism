@@ -40,13 +40,15 @@ Prism's npm CLI distribution uses a private root workspace plus a public npm run
 
 ```bash
 bun run verify
+bun run build:npm-cli
 bun run pack:npm-cli:dry-run
-bun run smoke:npm-cli
+bun scripts/smoke-npm-cli.ts --skip-build
 ```
 
-The smoke command builds the platform packages, installs packed tarballs into a
-clean temporary project, compiles a canonical-tool fixture, and checks generated
-runtime output for build-machine `node_modules` paths.
+The smoke script installs packed tarballs into a clean temporary project,
+compiles a canonical-tool fixture, and checks generated runtime output for
+build-machine `node_modules` paths. `bun run smoke:npm-cli` runs the same
+sequence with the build and pack dry-run included.
 
 Public release actions still require maintainer approval for repository visibility, tag pushes, npm trusted publishing or token setup, protected environment approval, and the real registry publish.
 

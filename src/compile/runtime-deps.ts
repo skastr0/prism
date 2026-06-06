@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathContains } from "../fs.js";
 
 const normalizeImportPath = (path: string): string => path.replace(/\\/g, "/");
 
@@ -103,6 +104,14 @@ const resolveExistingPath = (path: string): string | undefined => {
   return candidates.find((candidate) => isFile(candidate));
 };
 
+const resolvePackageTarget = (packageRoot: string, target: string): string | undefined => {
+  const resolved = resolveExistingPath(join(packageRoot, target));
+  if (!resolved || !pathContains(packageRoot, resolved)) {
+    return undefined;
+  }
+  return resolved;
+};
+
 const resolveExportValue = (value: unknown): string | undefined => {
   if (typeof value === "string") {
     return value;
@@ -138,7 +147,7 @@ const resolvePackageExport = (
     if (typeof exports === "string" || Array.isArray(exports)) {
       if (subpath === ".") {
         const target = resolveExportValue(exports);
-        if (target) return resolveExistingPath(join(packageRoot, target));
+        if (target) return resolvePackageTarget(packageRoot, target);
       }
       return undefined;
     }
@@ -146,7 +155,7 @@ const resolvePackageExport = (
     if (exports && typeof exports === "object") {
       const record = exports as Record<string, unknown>;
       const target = resolveExportValue(record[subpath] ?? (subpath === "." ? record : undefined));
-      if (target) return resolveExistingPath(join(packageRoot, target));
+      if (target) return resolvePackageTarget(packageRoot, target);
 
       for (const [pattern, value] of Object.entries(record)) {
         if (!pattern.includes("*")) continue;
@@ -157,27 +166,27 @@ const resolvePackageExport = (
         const matched = subpath.slice(prefix.length, subpath.length - suffix.length);
         const patternTarget = resolveExportValue(value);
         if (!patternTarget) continue;
-        const resolved = resolveExistingPath(join(packageRoot, patternTarget.replaceAll("*", matched)));
+        const resolved = resolvePackageTarget(packageRoot, patternTarget.replaceAll("*", matched));
         if (resolved) return resolved;
       }
     }
   }
 
   if (subpath !== ".") {
-    return resolveExistingPath(join(packageRoot, subpath.slice(2)));
+    return resolvePackageTarget(packageRoot, subpath.slice(2));
   }
 
   if (packageJson.module) {
-    const resolved = resolveExistingPath(join(packageRoot, packageJson.module));
+    const resolved = resolvePackageTarget(packageRoot, packageJson.module);
     if (resolved) return resolved;
   }
 
   if (packageJson.main) {
-    const resolved = resolveExistingPath(join(packageRoot, packageJson.main));
+    const resolved = resolvePackageTarget(packageRoot, packageJson.main);
     if (resolved) return resolved;
   }
 
-  return resolveExistingPath(join(packageRoot, "index"));
+  return resolvePackageTarget(packageRoot, "index");
 };
 
 const resolveFromPackageRootFilesystem = (

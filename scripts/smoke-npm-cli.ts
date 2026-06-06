@@ -145,6 +145,19 @@ export default defineTool({
   );
 };
 
+const createPoisonedRuntimeRoot = async (root: string): Promise<string> => {
+  await writeText(join(root, "package.json"), `{"name":"poisoned-runtime","type":"module"}\n`);
+  await writeText(
+    join(root, "node_modules", "typescript", "package.json"),
+    `{"name":"typescript","type":"commonjs","main":"lib/typescript.js"}\n`,
+  );
+  await writeText(
+    join(root, "node_modules", "typescript", "lib", "typescript.js"),
+    `throw new Error("poisoned runtime dependency root was used");\n`,
+  );
+  return root;
+};
+
 const main = async (): Promise<void> => {
   if (!skipBuild) {
     await run("Building npm CLI packages", ["bun", "run", "build:npm-cli"]);
@@ -169,6 +182,7 @@ const main = async (): Promise<void> => {
     const pluginRoot = join(tempRoot, "runtime-smoke-plugin");
     const hermesRoot = join(tempRoot, "hermes");
     const prismHome = join(tempRoot, "prism-home");
+    const poisonedRuntimeRoot = await createPoisonedRuntimeRoot(join(tempRoot, "poisoned-runtime"));
     await mkdir(tarballDir, { recursive: true });
     await mkdir(appRoot, { recursive: true });
     await mkdir(hermesRoot, { recursive: true });
@@ -194,7 +208,16 @@ const main = async (): Promise<void> => {
     );
 
     const prismBin = join(appRoot, "node_modules", ".bin", "prism");
-    await run("Checking installed Prism CLI version", ["node", prismBin, "--version"], { cwd: appRoot });
+    await run(
+      "Checking installed Prism CLI version with poisoned parent runtime env",
+      ["node", prismBin, "--version"],
+      {
+        cwd: appRoot,
+        env: {
+          PRISM_RUNTIME_DEPS_PACKAGE_ROOT: poisonedRuntimeRoot,
+        },
+      },
+    );
     await run(
       "Compiling canonical tool fixture with installed Prism CLI",
       [

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { computeContentHash } from "./content-hash.js";
@@ -213,6 +213,35 @@ test("planInstallation lowers Cursor commands through a local plugin bundle", as
   expect(operations.some((operation) =>
     operation.target === join(cursorRoot, "commands", "review.md")
   )).toBe(false);
+});
+
+test("planInstallation rejects command symlinks that resolve outside the plugin root", async () => {
+  const root = await createTempRoot();
+  const externalRoot = join(root, "external");
+  await writeText(join(externalRoot, "review.md"), "# External review\n");
+
+  const pluginPath = join(root, "plugin");
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "escaped-command-symlink",
+      version: "0.1.0",
+      targets: { commands: ["cursor"] },
+    })}\n`,
+  );
+  await mkdir(join(pluginPath, "commands"), { recursive: true });
+  await symlink(join(externalRoot, "review.md"), join(pluginPath, "commands", "review.md"));
+
+  await expect(
+    planInstallation({
+      pluginPath,
+      harnesses: ["cursor"],
+      overwrite: true,
+      dryRun: true,
+    }),
+  ).rejects.toThrow(
+    "Symlinked artifact file commands/review.md resolves outside plugin root",
+  );
 });
 
 test("planInstallation prunes stale Cursor command plugin files", async () => {

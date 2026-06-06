@@ -13,6 +13,7 @@ import {
   ensureDir,
   removeDir,
   removeFile,
+  realPathContainedBy,
 } from "./fs.js";
 import {
   type ArtifactSourceFile,
@@ -1469,6 +1470,15 @@ const executeWriteOrPrune = async (op: FileOperation): Promise<void> => {
   }
 };
 
+const assertManagedSourceContained = async (op: FileOperation): Promise<void> => {
+  if (!op.managed?.pluginPath) return;
+  const containedPath = await realPathContainedBy(op.managed.pluginPath, op.source);
+  if (containedPath) return;
+  throw new Error(
+    `Managed source resolves outside plugin root: ${op.managed.sourcePath ?? op.source}`,
+  );
+};
+
 const backupBeforeManagedMutation = async (op: FileOperation): Promise<string | null> => {
   if (!op.managed) return null;
   if (!(await exists(op.target))) return null;
@@ -1502,6 +1512,7 @@ async function executeCopyOperation(op: FileOperation): Promise<void> {
     return;
   }
 
+  await assertManagedSourceContained(op);
   const harness = getHarness(op.harness);
   const rendered = await renderManagedCopyContent(
     {
@@ -1528,6 +1539,7 @@ async function executeAppendOperation(op: FileOperation): Promise<void> {
   if (!op.managed) {
     throw new Error("Managed metadata is required for append operations");
   }
+  await assertManagedSourceContained(op);
   const { frontmatter, content } = await parseMarkdownFile(op.source);
   const harnessFrontmatter = getHarnessFrontmatter(frontmatter, op.harness);
   const finalContent = reconstructMarkdown(harnessFrontmatter, content);
@@ -1557,6 +1569,7 @@ async function executePruneOperation(op: FileOperation): Promise<void> {
  */
 async function executeMergeOperation(op: FileOperation): Promise<void> {
   // For now, just copy - merge logic can be added later
+  await assertManagedSourceContained(op);
   await copyFile(op.source, op.target);
 }
 

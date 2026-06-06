@@ -4,7 +4,14 @@
 
 import { basename, join } from "node:path";
 import matter from "gray-matter";
-import { exists, expandPath, listDirRecursive, readFile, readJson } from "./fs.js";
+import {
+  exists,
+  expandPath,
+  listDirRecursive,
+  readFile,
+  readJson,
+  realPathContainedBy,
+} from "./fs.js";
 import type {
   HarnessId,
   AgentValidationResult,
@@ -188,6 +195,62 @@ export interface ArtifactSourceFile {
   scope: "shared" | "harness";
 }
 
+interface ScanRootInspection {
+  readonly exists: boolean;
+  readonly error?: string;
+}
+
+function artifactRootDisplayPath(
+  artifact: PluginArtifactType,
+  scope: "shared" | "harness",
+  harnessId: HarnessId | undefined,
+): string {
+  if (scope === "harness" && harnessId) {
+    return `${HARNESS_ROOT}/${harnessId}/${artifact}`;
+  }
+  return artifact;
+}
+
+async function inspectContainedScanRoot(input: {
+  readonly pluginPath: string;
+  readonly rootPath: string;
+  readonly displayRoot: string;
+  readonly rootKind: string;
+}): Promise<ScanRootInspection> {
+  const { lstat } = await import("node:fs/promises");
+  let stats: Awaited<ReturnType<typeof lstat>>;
+
+  try {
+    stats = await lstat(input.rootPath);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { exists: false };
+    }
+    return {
+      exists: true,
+      error: `${input.rootKind} ${input.displayRoot} could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  if (stats.isSymbolicLink()) {
+    try {
+      const realSourcePath = await realPathContainedBy(input.pluginPath, input.rootPath);
+      if (realSourcePath) return { exists: true };
+      return {
+        exists: true,
+        error: `Symlinked ${input.rootKind} ${input.displayRoot} resolves outside plugin root`,
+      };
+    } catch (error) {
+      return {
+        exists: true,
+        error: `Symlinked ${input.rootKind} ${input.displayRoot} could not be resolved inside plugin root: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  return { exists: true };
+}
+
 export async function collectArtifactSourceFiles(
   pluginPath: string,
   artifact: PluginArtifactType,
@@ -208,14 +271,36 @@ export async function collectArtifactSourceFiles(
   ];
 
   for (const layer of layers) {
+    const rootInspection = await inspectContainedScanRoot({
+      pluginPath,
+      rootPath: layer.rootPath,
+      displayRoot: artifactRootDisplayPath(artifact, layer.scope, harnessId),
+      rootKind: "artifact root",
+    });
+    if (!rootInspection.exists) continue;
+    if (rootInspection.error) {
+      throw new PluginManifestError(pluginPath, "Artifact source escaped plugin root", [
+        rootInspection.error,
+      ]);
+    }
+
     const files = (await listDirRecursive(layer.rootPath)).sort((a, b) =>
       a.localeCompare(b)
     );
 
     for (const relativePath of files) {
+      const sourcePath = join(layer.rootPath, relativePath);
+      const realSourcePath = await realPathContainedBy(pluginPath, sourcePath);
+      if (!realSourcePath) {
+        throw new PluginManifestError(pluginPath, "Artifact source escaped plugin root", [
+          `Symlinked artifact file ${artifactSourceDisplayPath(artifact, layer.scope, harnessId, relativePath)} resolves outside plugin root`,
+        ]);
+      }
+      const { lstat } = await import("node:fs/promises");
+      const sourceStats = await lstat(sourcePath);
       selectedFiles.set(relativePath, {
         relativePath,
-        sourcePath: join(layer.rootPath, relativePath),
+        sourcePath: sourceStats.isSymbolicLink() ? realSourcePath : sourcePath,
         scope: layer.scope,
       });
     }
@@ -224,6 +309,122 @@ export async function collectArtifactSourceFiles(
   return [...selectedFiles.values()].sort((a, b) =>
     a.relativePath.localeCompare(b.relativePath)
   );
+}
+
+function artifactSourceDisplayPath(
+  artifact: PluginArtifactType,
+  scope: "shared" | "harness",
+  harnessId: HarnessId | undefined,
+  relativePath: string,
+): string {
+  if (scope === "harness" && harnessId) {
+    return `${HARNESS_ROOT}/${harnessId}/${artifact}/${relativePath}`;
+  }
+  return `${artifact}/${relativePath}`;
+}
+
+async function collectArtifactSymlinkContainmentErrors(pluginPath: string): Promise<string[]> {
+  const errors: string[] = [];
+
+  for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+    await pushSymlinkContainmentErrors({
+      errors,
+      pluginPath,
+      rootPath: join(pluginPath, artifact),
+      displayRoot: artifact,
+      rootKind: "artifact root",
+    });
+  }
+
+  const harnessRoot = join(pluginPath, HARNESS_ROOT);
+  const harnessRootInspection = await inspectContainedScanRoot({
+    pluginPath,
+    rootPath: harnessRoot,
+    displayRoot: HARNESS_ROOT,
+    rootKind: "harness root",
+  });
+  if (!harnessRootInspection.exists) return errors;
+  if (harnessRootInspection.error) {
+    errors.push(harnessRootInspection.error);
+    return errors;
+  }
+
+  const { readdir } = await import("node:fs/promises");
+  const harnessEntries = await readdir(harnessRoot, { withFileTypes: true });
+  for (const harnessEntry of harnessEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!harnessEntry.isDirectory() && !harnessEntry.isSymbolicLink()) continue;
+    const harnessPath = join(harnessRoot, harnessEntry.name);
+    const harnessInspection = await inspectContainedScanRoot({
+      pluginPath,
+      rootPath: harnessPath,
+      displayRoot: `${HARNESS_ROOT}/${harnessEntry.name}`,
+      rootKind: "harness overlay root",
+    });
+    if (!harnessInspection.exists) continue;
+    if (harnessInspection.error) {
+      errors.push(harnessInspection.error);
+      continue;
+    }
+
+    for (const artifact of PLUGIN_ARTIFACT_TYPES) {
+      await pushSymlinkContainmentErrors({
+        errors,
+        pluginPath,
+        rootPath: join(harnessPath, artifact),
+        displayRoot: `${HARNESS_ROOT}/${harnessEntry.name}/${artifact}`,
+        rootKind: "artifact root",
+      });
+    }
+  }
+
+  return errors;
+}
+
+async function pushSymlinkContainmentErrors(input: {
+  readonly errors: string[];
+  readonly pluginPath: string;
+  readonly rootPath: string;
+  readonly displayRoot: string;
+  readonly rootKind: string;
+}): Promise<void> {
+  const rootInspection = await inspectContainedScanRoot({
+    pluginPath: input.pluginPath,
+    rootPath: input.rootPath,
+    displayRoot: input.displayRoot,
+    rootKind: input.rootKind,
+  });
+  if (!rootInspection.exists) return;
+  if (rootInspection.error) {
+    input.errors.push(rootInspection.error);
+    return;
+  }
+
+  const { lstat } = await import("node:fs/promises");
+  const files = await listDirRecursive(input.rootPath);
+  for (const relativePath of files) {
+    const sourcePath = join(input.rootPath, relativePath);
+    let isSymlink = false;
+    try {
+      isSymlink = (await lstat(sourcePath)).isSymbolicLink();
+    } catch (error) {
+      input.errors.push(
+        `Artifact file ${input.displayRoot}/${relativePath} could not be inspected: ${error instanceof Error ? error.message : String(error)}`
+      );
+      continue;
+    }
+
+    try {
+      const realSourcePath = await realPathContainedBy(input.pluginPath, sourcePath);
+      if (realSourcePath) continue;
+      input.errors.push(
+        `${isSymlink ? "Symlinked artifact file" : "Artifact file"} ${input.displayRoot}/${relativePath} resolves outside plugin root`
+      );
+    } catch (error) {
+      input.errors.push(
+        `Symlinked artifact file ${input.displayRoot}/${relativePath} could not be resolved inside plugin root: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
 }
 
 async function validateHarnessOverlays(
@@ -662,6 +863,8 @@ async function validateManifestLayout(
   typedManifest: PluginManifest
 ): Promise<string[]> {
   const errors: string[] = [];
+  errors.push(...await collectArtifactSymlinkContainmentErrors(pluginPath));
+  if (errors.length > 0) return errors;
   const presentArtifacts = await getPresentArtifacts(pluginPath);
   errors.push(...await validateNoFileLevelInstallTargets(pluginPath));
   errors.push(...await validateNoSourceMarkdownAgents(pluginPath));

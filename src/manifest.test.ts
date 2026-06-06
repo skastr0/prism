@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SKILL_VALIDATION } from "./types.js";
@@ -324,4 +324,102 @@ test("readManifest reports invalid YAML while checking file-level targets", asyn
   );
 
   await expect(readManifest(pluginRoot)).rejects.toThrow("unexpected end of the stream");
+});
+
+test("readManifest rejects rule, command, and skill support symlinks outside the plugin root", async () => {
+  const root = await createTempRoot();
+  const externalRoot = join(root, "external");
+  await writeText(join(externalRoot, "rules.md"), "# External rules\n");
+  await writeText(join(externalRoot, "command.md"), "# External command\n");
+  await writeText(join(externalRoot, "reference.md"), "# External reference\n");
+
+  const pluginRoot = await createPluginWithManifest("escaped-artifact-symlinks", {
+    rules: ["opencode"],
+    commands: ["opencode"],
+    skills: ["opencode"],
+  });
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n",
+  );
+  await mkdir(join(pluginRoot, "rules", "global"), { recursive: true });
+  await mkdir(join(pluginRoot, "commands"), { recursive: true });
+  await mkdir(join(pluginRoot, "skills", "testing", "references"), { recursive: true });
+  await symlink(
+    join(externalRoot, "rules.md"),
+    join(pluginRoot, "rules", "global", "standards.md"),
+  );
+  await symlink(
+    join(externalRoot, "command.md"),
+    join(pluginRoot, "commands", "review.md"),
+  );
+  await symlink(
+    join(externalRoot, "reference.md"),
+    join(pluginRoot, "skills", "testing", "references", "external.md"),
+  );
+
+  await expectManifestValidationDetails(pluginRoot, [
+    "Symlinked artifact file rules/global/standards.md resolves outside plugin root",
+    "Symlinked artifact file commands/review.md resolves outside plugin root",
+    "Symlinked artifact file skills/testing/references/external.md resolves outside plugin root",
+  ]);
+});
+
+test("readManifest rejects harness overlay symlinks outside the plugin root", async () => {
+  const root = await createTempRoot();
+  const externalRoot = join(root, "external");
+  await writeText(join(externalRoot, "command.md"), "# External command\n");
+
+  const pluginRoot = await createPluginWithManifest("escaped-overlay-symlink", {
+    commands: ["opencode"],
+  });
+  await mkdir(join(pluginRoot, "harness", "opencode", "commands"), { recursive: true });
+  await symlink(
+    join(externalRoot, "command.md"),
+    join(pluginRoot, "harness", "opencode", "commands", "review.md"),
+  );
+
+  await expectManifestValidationDetails(pluginRoot, [
+    "Symlinked artifact file harness/opencode/commands/review.md resolves outside plugin root",
+  ]);
+});
+
+test("readManifest rejects artifact directory symlinks outside the plugin root", async () => {
+  const root = await createTempRoot();
+  const externalCommands = join(root, "external", "commands");
+  await writeText(join(externalCommands, "review.md"), "# External command\n");
+
+  const pluginRoot = await createPluginWithManifest("escaped-artifact-directory", {
+    commands: ["opencode"],
+  });
+  await symlink(externalCommands, join(pluginRoot, "commands"));
+
+  await expectManifestValidationDetails(pluginRoot, [
+    "Symlinked artifact root commands resolves outside plugin root",
+  ]);
+});
+
+test("readManifest rejects harness roots and overlay artifact roots symlinked outside the plugin root", async () => {
+  const root = await createTempRoot();
+  const externalHarnessRoot = join(root, "external-harness");
+  const externalCommands = join(root, "external-commands");
+  await writeText(join(externalHarnessRoot, "opencode", "commands", "review.md"), "# External command\n");
+  await writeText(join(externalCommands, "review.md"), "# External command\n");
+
+  const harnessRootPlugin = await createPluginWithManifest("escaped-harness-root", {
+    commands: ["opencode"],
+  });
+  await symlink(externalHarnessRoot, join(harnessRootPlugin, "harness"));
+  await expectManifestValidationDetails(harnessRootPlugin, [
+    "Symlinked harness root harness resolves outside plugin root",
+  ]);
+
+  const overlayRootPlugin = await createPluginWithManifest("escaped-overlay-root", {
+    commands: ["opencode"],
+  });
+  await mkdir(join(overlayRootPlugin, "harness", "opencode"), { recursive: true });
+  await symlink(externalCommands, join(overlayRootPlugin, "harness", "opencode", "commands"));
+  await expectManifestValidationDetails(overlayRootPlugin, [
+    "Symlinked artifact root harness/opencode/commands resolves outside plugin root",
+  ]);
 });

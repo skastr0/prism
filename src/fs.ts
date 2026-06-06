@@ -3,7 +3,7 @@
  */
 
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Expand ~ to home directory
@@ -97,6 +97,27 @@ export async function copyFile(
   } catch {
     // Ignore permission propagation failures on platforms that do not support chmod.
   }
+}
+
+export function pathContains(parentPath: string, childPath: string): boolean {
+  const relativePath = relative(resolve(parentPath), resolve(childPath));
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+  );
+}
+
+export async function realPathContainedBy(
+  rootPath: string,
+  candidatePath: string,
+): Promise<string | null> {
+  const fs = await import("node:fs/promises");
+  const [rootRealPath, candidateRealPath] = await Promise.all([
+    fs.realpath(rootPath),
+    fs.realpath(candidatePath),
+  ]);
+
+  return pathContains(rootRealPath, candidateRealPath) ? candidateRealPath : null;
 }
 
 /**

@@ -1135,6 +1135,123 @@ test("install records managed rule sections and later plans unchanged as skip", 
   });
 });
 
+test("install repairs missing ledger for identical managed rule sections", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  await mkdir(projectPath, { recursive: true });
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "rules-recovery-demo",
+      version: "0.1.0",
+      targets: { rules: ["opencode"] },
+    })}\n`,
+  );
+  await writeText(join(pluginPath, "rules", "project", "context.md"), "Project rules\n");
+
+  const first = await install({
+    pluginPath,
+    harnesses: ["opencode"],
+    projectPath,
+    overwrite: false,
+    dryRun: false,
+  });
+  expect(first.success).toBe(true);
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("opencode")),
+    entries: [],
+  });
+
+  const second = await install({
+    pluginPath,
+    harnesses: ["opencode"],
+    projectPath,
+    overwrite: false,
+    dryRun: false,
+  });
+
+  expect(second.success).toBe(true);
+  expect(second.operations).toContainEqual(
+    expect.objectContaining({
+      type: "skip",
+      reason: "Content already exists and is identical",
+      managed: expect.objectContaining({
+        kind: "section",
+        pluginName: "rules-recovery-demo",
+      }),
+    }),
+  );
+  expect((await readHarnessLedger("opencode")).entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        pluginName: "rules-recovery-demo",
+        kind: "section",
+        targetPath: join(projectPath, "AGENTS.md"),
+      }),
+    ]),
+  );
+});
+
+test("install repairs missing ledger for identical managed whole-file targets", async () => {
+  const root = await createTempRoot();
+  const pluginPath = join(root, "plugin");
+  const projectPath = join(root, "project");
+  await mkdir(projectPath, { recursive: true });
+  await writeText(
+    join(pluginPath, "plugin.json"),
+    `${JSON.stringify({
+      name: "rules-file-recovery-demo",
+      version: "0.1.0",
+      targets: { rules: ["cursor"] },
+    })}\n`,
+  );
+  await writeText(join(pluginPath, "rules", "project", "policy.md"), "Cursor rules\n");
+
+  const first = await install({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    dryRun: false,
+  });
+  expect(first.success).toBe(true);
+  await writeHarnessLedger({
+    ...(await readHarnessLedger("cursor")),
+    entries: [],
+  });
+
+  const targetPath = join(projectPath, ".cursor", "rules", "policy.mdc");
+  const second = await install({
+    pluginPath,
+    harnesses: ["cursor"],
+    projectPath,
+    overwrite: false,
+    dryRun: false,
+  });
+
+  expect(second.success).toBe(true);
+  expect(second.operations).toContainEqual(
+    expect.objectContaining({
+      type: "skip",
+      target: targetPath,
+      managed: expect.objectContaining({
+        kind: "file",
+        pluginName: "rules-file-recovery-demo",
+      }),
+    }),
+  );
+  expect((await readHarnessLedger("cursor")).entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        pluginName: "rules-file-recovery-demo",
+        kind: "file",
+        targetPath,
+      }),
+    ]),
+  );
+});
+
 test("install updates managed rule sections with Prism-home backups", async () => {
   const root = await createTempRoot();
   const pluginPath = join(root, "plugin");

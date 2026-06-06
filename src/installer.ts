@@ -627,6 +627,18 @@ async function planAppendRuleOperation(
 
   const currentHash = computeContentHash(existingSection);
   const ledgerEntry = findLedgerEntry(context, managed.entryId);
+  if (currentHash === managed.contentHash) {
+    return {
+      type: "skip",
+      source: file.sourcePath,
+      target: targetPath,
+      harness: context.harness.id,
+      artifact: "rules",
+      reason: "Content already exists and is identical",
+      managed,
+    };
+  }
+
   if (!ledgerEntry && !context.overwrite) {
     return unmanagedTargetConflict(baseOperation);
   }
@@ -639,18 +651,6 @@ async function planAppendRuleOperation(
       ...baseOperation,
       type: "drift",
       reason: "Managed rules section changed outside Prism",
-    };
-  }
-
-  if (currentHash === managed.contentHash) {
-    return {
-      type: "skip",
-      source: file.sourcePath,
-      target: targetPath,
-      harness: context.harness.id,
-      artifact: "rules",
-      reason: "Content already exists and is identical",
-      managed,
     };
   }
 
@@ -934,6 +934,14 @@ async function planManagedFileOperation(options: {
   if (!currentHash) return baseOperation;
 
   const ledgerEntry = findLedgerEntry(options.context, managed.entryId);
+  if (currentHash === managed.contentHash) {
+    return {
+      ...baseOperation,
+      type: "skip",
+      reason: "Content already exists and is identical",
+    };
+  }
+
   if (!ledgerEntry && !options.context.overwrite) {
     return unmanagedTargetConflict(baseOperation);
   }
@@ -947,14 +955,6 @@ async function planManagedFileOperation(options: {
       ...baseOperation,
       type: "drift",
       reason: "Managed target changed outside Prism",
-    };
-  }
-
-  if (currentHash === managed.contentHash) {
-    return {
-      ...baseOperation,
-      type: "skip",
-      reason: "Content already exists and is identical",
     };
   }
 
@@ -1422,7 +1422,10 @@ const executePlannedOperation = async (
   op: FileOperation,
   ledgers: ReturnType<typeof createLedgerWriteCache>,
 ): Promise<string | null> => {
-  if (op.type === "skip") return null;
+  if (op.type === "skip") {
+    await ledgers.updateForOperation(op);
+    return null;
+  }
   if (op.type === "drift") {
     throw new Error(op.reason ?? "Managed target drift detected");
   }

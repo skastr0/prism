@@ -3,7 +3,8 @@
  */
 
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Expand ~ to home directory
@@ -67,12 +68,34 @@ export async function writeFile(
   content: string,
   options: { readonly mode?: number } = {}
 ): Promise<void> {
+  const fs = await import("node:fs/promises");
   await ensureDir(dirname(path));
-  await Bun.write(path, content);
-  if (options.mode !== undefined) {
-    await chmodFile(path, options.mode);
+
+  const tempPath = temporarySiblingPath(path);
+  try {
+    await Bun.write(tempPath, content);
+    const mode = options.mode ?? await existingMode(path);
+    if (mode !== undefined) {
+      await fs.chmod(tempPath, mode).catch(() => undefined);
+    }
+    await fs.rename(tempPath, path);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => undefined);
+    throw error;
   }
 }
+
+const temporarySiblingPath = (path: string): string =>
+  join(dirname(path), `.prism-${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+
+const existingMode = async (path: string): Promise<number | undefined> => {
+  const fs = await import("node:fs/promises");
+  try {
+    return (await fs.stat(path)).mode;
+  } catch {
+    return undefined;
+  }
+};
 
 export async function chmodFile(path: string, mode: number): Promise<void> {
   const fs = await import("node:fs/promises");
@@ -89,13 +112,16 @@ export async function copyFile(
   const fs = await import("node:fs/promises");
 
   await ensureDir(dirname(target));
-  await fs.copyFile(source, target);
+  const tempPath = temporarySiblingPath(target);
 
   try {
+    await fs.copyFile(source, tempPath);
     const stat = await fs.stat(source);
-    await fs.chmod(target, stat.mode);
-  } catch {
-    // Ignore permission propagation failures on platforms that do not support chmod.
+    await fs.chmod(tempPath, stat.mode).catch(() => undefined);
+    await fs.rename(tempPath, target);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => undefined);
+    throw error;
   }
 }
 

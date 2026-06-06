@@ -4,6 +4,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
+import { computeContentHash } from "../content-hash.js";
 import { readHarnessLedger } from "../managed-ledger.js";
 import { loadPlugin } from "./load.js";
 import { Orbit } from "./sources.js";
@@ -623,6 +624,56 @@ test("codex-cli lowerer keeps generated orbit reference files on warm runs", asy
 
   await executeLowering(warmOperations, { dryRun: false, target });
   expect(await pathExists(referencePath)).toBe(true);
+});
+
+test("codex-cli config ledger entries share the latest config hash", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const configTarget = join(outputRoot, "config.toml");
+  const alphaTarget = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: outputRoot,
+    sourcePluginName: "alpha",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "alpha"),
+  };
+  const betaTarget = {
+    ...alphaTarget,
+    sourcePluginName: "beta",
+    sourcePluginPath: join(root, "beta"),
+  };
+  const alphaConfig = "[features]\nhooks = true\n";
+  const betaConfig = `${alphaConfig}\n[\"mcp_servers\".\"prism-generated-beta\"]\ncommand = \"bun\"\n`;
+
+  await executeLowering([
+    {
+      kind: "patch-config",
+      target: configTarget,
+      content: alphaConfig,
+      reason: "new",
+    },
+  ], { dryRun: false, target: alphaTarget });
+  await executeLowering([
+    {
+      kind: "patch-config",
+      target: configTarget,
+      content: betaConfig,
+      baseContentHash: computeContentHash(alphaConfig),
+      reason: "changed",
+    },
+  ], { dryRun: false, target: betaTarget });
+
+  const finalHash = computeContentHash(betaConfig);
+  const entries = (await readHarnessLedger("codex-cli")).entries.filter((entry) =>
+    entry.kind === "config" && entry.targetPath === configTarget
+  );
+  expect(entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ pluginName: "alpha", contentHash: finalHash }),
+      expect.objectContaining({ pluginName: "beta", contentHash: finalHash }),
+    ]),
+  );
 });
 
 test("codex-cli lowerer fails closed for unsupported model config keys", async () => {

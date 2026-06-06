@@ -679,6 +679,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
       state,
       root: generatedPackageRoot(input.target),
       resolveTarget,
+      owner: {
+        harness: TARGET_ID,
+        scope: input.target.scope,
+        root: input.target.root,
+        sourcePluginName: input.target.sourcePluginName,
+      },
     });
     await planAgentPruning(input, state.operations, desiredAgentRelativePaths);
     return state.operations;
@@ -714,6 +720,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     state,
     root: generatedPackageRoot(input.target),
     resolveTarget,
+    owner: {
+      harness: TARGET_ID,
+      scope: input.target.scope,
+      root: input.target.root,
+      sourcePluginName: input.target.sourcePluginName,
+    },
   });
   await planAgentPruning(input, state.operations, desiredAgentRelativePaths);
 

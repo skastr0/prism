@@ -350,10 +350,19 @@ export const planGeneratedPluginFilePruning = async (options: {
   readonly root: string;
   readonly desiredRelativePaths: ReadonlySet<string>;
   readonly resolveTarget: (relativePath: string) => string;
+  readonly owner?: {
+    readonly harness: HarnessId;
+    readonly scope: HarnessScope;
+    readonly root: string;
+    readonly sourcePluginName: string;
+  };
 }): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
   if (options.desiredRelativePaths.size === 0) {
-    if (await exists(options.root)) {
+    if (
+      await exists(options.root) ||
+      (options.owner && await hasGeneratedPluginLedgerEntries(options.owner, options.root))
+    ) {
       operations.push({
         kind: "prune-plugin-path",
         target: options.root,
@@ -377,6 +386,25 @@ export const planGeneratedPluginFilePruning = async (options: {
   }
 
   return operations;
+};
+
+const hasGeneratedPluginLedgerEntries = async (
+  owner: {
+    readonly harness: HarnessId;
+    readonly scope: HarnessScope;
+    readonly root: string;
+    readonly sourcePluginName: string;
+  },
+  generatedRoot: string,
+): Promise<boolean> => {
+  const ledger = await readHarnessLedger(owner.harness);
+  return ledger.entries.some((entry) =>
+    entry.pluginName === owner.sourcePluginName &&
+    entry.scope === owner.scope &&
+    resolve(entry.root) === resolve(owner.root) &&
+    entry.artifact === "compile" &&
+    relativePathInsideRoot(generatedRoot, entry.targetPath) !== undefined
+  );
 };
 
 export const executeStandardLowering = async (
@@ -426,7 +454,13 @@ const executeLoweringOperation = async (
       isLowerWriteOperation(operation) &&
       ledger &&
       options.target &&
-      !hasCurrentLoweringEntry(ledger, options.target, operation.target, "file")
+      !hasCurrentLoweringEntryForContent(
+        ledger,
+        options.target,
+        operation.target,
+        "file",
+        operation.content,
+      )
     ) {
       upsertLoweringEntry(ledger, options.target, operation.target, "file", operation.content);
     }
@@ -478,11 +512,22 @@ const executeLoweringConfigPatch = async (
   options: ExecuteLoweringOptions,
   ledger: HarnessLedger | undefined,
 ): Promise<string | null> => {
+  await assertLoweringConfigPatchAuthority(operation, options.target);
   if (operation.reason === "unchanged") {
     await applyUnchangedMode(operation);
     if (ledger && options.target) {
       removeLoweringEntry(ledger, options.target, operation.target, "file");
-      upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
+      if (
+        !hasCurrentLoweringEntryForContent(
+          ledger,
+          options.target,
+          operation.target,
+          "config",
+          operation.content,
+        )
+      ) {
+        upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
+      }
     }
     return null;
   }
@@ -494,6 +539,28 @@ const executeLoweringConfigPatch = async (
     upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
   }
   return backup;
+};
+
+const assertLoweringConfigPatchAuthority = async (
+  operation: LowerConfigPatchOperation,
+  target: LowerExecutionTargetContext | undefined,
+): Promise<void> => {
+  if (!target) return;
+  const currentHash = await currentLoweringTargetHash(operation.target);
+  if (!currentHash) return;
+
+  const desiredHash = computeContentHash(operation.content);
+  if (currentHash === desiredHash) return;
+  if (operation.baseContentHash === undefined) {
+    throw new LoweringOwnershipError(
+      `Compile config patch lacks base content hash: ${operation.target}`,
+    );
+  }
+  if (currentHash !== operation.baseContentHash) {
+    throw new LoweringOwnershipError(
+      `Compile config target changed while Prism was patching it: ${operation.target}`,
+    );
+  }
 };
 
 const executeLoweringPrune = async (
@@ -579,12 +646,6 @@ const assertLoweringWriteAuthority = async (input: {
     input.kind,
   );
   if (!ledgerEntry) {
-    if (
-      input.kind === "file" &&
-      await targetHasGeneratedOwnerMarker(input.targetPath, input.target.sourcePluginName)
-    ) {
-      return;
-    }
     throw new LoweringOwnershipError(
       `Compile target exists but is not owned by Prism: ${input.targetPath}`,
     );
@@ -623,7 +684,6 @@ const assertLoweringFilePruneAuthority = async (
 ): Promise<void> => {
   const ledgerEntry = findCurrentLoweringEntry(ledger, target, targetPath, "file");
   if (!ledgerEntry) {
-    if (await targetHasGeneratedOwnerMarker(targetPath, target.sourcePluginName)) return;
     throw new LoweringOwnershipError(
       `Compile prune target is not owned by Prism: ${targetPath}`,
     );
@@ -696,6 +756,7 @@ const upsertLoweringEntry = (
   content: string,
 ): void => {
   const now = new Date().toISOString();
+  const contentHash = computeContentHash(content);
   const entry: ManagedLedgerEntry = {
     id: lowerLedgerEntryId(target, targetPath, kind),
     pluginName: target.sourcePluginName,
@@ -707,10 +768,36 @@ const upsertLoweringEntry = (
     artifact: "compile",
     targetPath,
     kind,
-    contentHash: computeContentHash(content),
+    contentHash,
     updatedAt: now,
   };
-  Object.assign(ledger, upsertLedgerEntries(ledger, [entry]));
+  const baseLedger = kind === "config"
+    ? refreshSiblingConfigEntries(ledger, target, targetPath, contentHash, now)
+    : ledger;
+  Object.assign(ledger, upsertLedgerEntries(baseLedger, [entry]));
+};
+
+const refreshSiblingConfigEntries = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  contentHash: string,
+  updatedAt: string,
+): HarnessLedger => {
+  const resolvedRoot = resolve(target.root);
+  const resolvedTargetPath = resolve(targetPath);
+  return {
+    ...ledger,
+    entries: ledger.entries.map((entry) => {
+      if (entry.artifact !== "compile") return entry;
+      if (entry.kind !== "config") return entry;
+      if (entry.scope !== target.scope) return entry;
+      if (resolve(entry.root) !== resolvedRoot) return entry;
+      if (resolve(entry.targetPath) !== resolvedTargetPath) return entry;
+      if (entry.contentHash === contentHash) return entry;
+      return { ...entry, contentHash, updatedAt };
+    }),
+  };
 };
 
 const removeLoweringEntry = (
@@ -780,6 +867,16 @@ const hasCurrentLoweringEntry = (
   return findCurrentLoweringEntry(ledger, target, targetPath, kind) !== undefined;
 };
 
+const hasCurrentLoweringEntryForContent = (
+  ledger: HarnessLedger,
+  target: LowerExecutionTargetContext,
+  targetPath: string,
+  kind: "file" | "config",
+  content: string,
+): boolean =>
+  findCurrentLoweringEntry(ledger, target, targetPath, kind)?.contentHash ===
+  computeContentHash(content);
+
 export const recordLoweringConfigPatch = async (
   targetPath: string,
   content: string,
@@ -820,14 +917,6 @@ const relativePathInsideRoot = (root: string, targetPath: string): string | unde
 
 const hasGeneratedSkillOwnerMarker = (content: string, sourcePluginName: string): boolean =>
   content.includes("<!-- prism:") && content.includes(`owner=${JSON.stringify(sourcePluginName)}`);
-
-const targetHasGeneratedOwnerMarker = async (
-  targetPath: string,
-  sourcePluginName: string,
-): Promise<boolean> => {
-  if (!(await exists(targetPath))) return false;
-  return hasGeneratedSkillOwnerMarker(await readFile(targetPath), sourcePluginName);
-};
 
 export const planCompileOwnedTargetedSkillPruning = async (options: {
   readonly target: LowerExecutionTargetContext;
@@ -884,12 +973,21 @@ export const pushConfigPatchOperation = async (
   content: string,
   options: LowerWriteOptions = {},
 ): Promise<void> => {
+  const currentContent = (await exists(target)) ? await readFile(target) : undefined;
   operations.push({
     kind: "patch-config",
     target,
     content,
     ...(options.mode !== undefined ? { mode: options.mode } : {}),
-    reason: await writeReason(target, content),
+    ...(currentContent === undefined
+      ? {}
+      : { baseContentHash: computeContentHash(currentContent) }),
+    reason:
+      currentContent === undefined
+        ? "new"
+        : currentContent === content
+          ? "unchanged"
+          : "changed",
   });
 };
 
@@ -1167,12 +1265,19 @@ export const planGeneratedPluginPruning = async (options: {
   readonly state: GeneratedPluginPlanState;
   readonly root: string;
   readonly resolveTarget: (relativePath: string) => string;
+  readonly owner?: {
+    readonly harness: HarnessId;
+    readonly scope: HarnessScope;
+    readonly root: string;
+    readonly sourcePluginName: string;
+  };
 }): Promise<void> => {
   options.state.operations.push(
     ...(await planGeneratedPluginFilePruning({
       root: options.root,
       desiredRelativePaths: options.state.desiredRelativePaths,
       resolveTarget: options.resolveTarget,
+      owner: options.owner,
     })),
   );
 };

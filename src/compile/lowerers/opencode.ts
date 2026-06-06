@@ -79,6 +79,7 @@ import {
   writeFile,
   listDirRecursive,
 } from "../../fs.js";
+import { computeContentHash } from "../../content-hash.js";
 
 // Keys at agent.<name>.* that the compiler owns. Other keys on an existing
 // block are preserved verbatim during patching.
@@ -219,6 +220,7 @@ export type LowerOperation =
       readonly target: string;
       readonly content: string;
       readonly mode?: number;
+      readonly baseContentHash?: string;
       readonly reason: "new" | "changed" | "unchanged";
     }
   | {
@@ -1579,7 +1581,8 @@ const buildGeneratedOpenCodePluginBundle = async (options: {
   readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "prism-opencode-plugin-"));
+  const tempRootPrefix = ["prism", "opencode", "plugin", ""].join("-");
+  const tempRoot = await mkdtemp(join(tmpdir(), tempRootPrefix));
   try {
     const mirrors = await expandBundleMirrors(options.mirrors, options.importPluginRoots);
     const entryPath = await writeTempGeneratedPluginSources({
@@ -2148,10 +2151,26 @@ const collectOpenCodeJsonPatchOperations = (
       shouldApplyLowerOperation(operation) && isOpenCodeJsonPatchOperation(operation),
   );
 
-const readOpenCodeConfigForWrite = async (
+const readOpenCodeConfigTextForWrite = async (
   jsonTarget: string,
-): Promise<Record<string, unknown>> =>
-  (await fileExists(jsonTarget)) ? await readJson<Record<string, unknown>>(jsonTarget) : {};
+): Promise<string | undefined> =>
+  (await fileExists(jsonTarget)) ? await readFile(jsonTarget) : undefined;
+
+const parseOpenCodeConfigForWrite = (
+  content: string | undefined,
+): Record<string, unknown> =>
+  content === undefined ? {} : JSON.parse(content) as Record<string, unknown>;
+
+const assertOpenCodeConfigBaseUnchanged = async (
+  jsonTarget: string,
+  baseContentHash: string | undefined,
+): Promise<void> => {
+  if (baseContentHash === undefined) return;
+  const currentHash = computeContentHash(await readFile(jsonTarget));
+  if (currentHash !== baseContentHash) {
+    throw new Error(`OpenCode config changed while Prism was patching it: ${jsonTarget}`);
+  }
+};
 
 const agentConfigMapForWrite = (
   config: Record<string, unknown>,
@@ -2224,10 +2243,12 @@ const executeOpenCodeJsonPatchOperations = async (
   if (operations.length === 0) return;
 
   const jsonTarget = operations[0]!.target;
+  const baseContent = await readOpenCodeConfigTextForWrite(jsonTarget);
+  const baseContentHash = baseContent === undefined ? undefined : computeContentHash(baseContent);
   const backup = await backupLoweringTarget(jsonTarget, options, "patch");
   if (backup) backups.push(backup);
 
-  const config = await readOpenCodeConfigForWrite(jsonTarget);
+  const config = parseOpenCodeConfigForWrite(baseContent);
   const agentsMap = agentConfigMapForWrite(config);
 
   for (const operation of operations) {
@@ -2236,6 +2257,7 @@ const executeOpenCodeJsonPatchOperations = async (
   config.agent = agentsMap;
 
   const serialized = JSON.stringify(config, null, 2) + "\n";
+  await assertOpenCodeConfigBaseUnchanged(jsonTarget, baseContentHash);
   await writeFile(jsonTarget, serialized);
   await recordLoweringConfigPatch(jsonTarget, serialized, options);
 };

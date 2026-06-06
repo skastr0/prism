@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ComposedAgent } from "./compose.js";
 import { executeLowering, planLowering, type LowerOperation } from "./lowerers/opencode.js";
-import { executeStandardLowering } from "./lowerers/shared.js";
-import { readHarnessLedger } from "../managed-ledger.js";
+import { executeStandardLowering, planGeneratedPluginFilePruning } from "./lowerers/shared.js";
+import { managedEntryId, readHarnessLedger, writeHarnessLedger } from "../managed-ledger.js";
+import { computeContentHash } from "../content-hash.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
 
@@ -305,6 +306,7 @@ test("executeStandardLowering backs up and records config patch operations", asy
         kind: "patch-config",
         target: configTarget,
         content: "new config\n",
+        baseContentHash: computeContentHash("old config\n"),
         mode: 0o600,
         reason: "changed",
       },
@@ -428,6 +430,39 @@ test("executeStandardLowering rejects unmanaged existing compile writes", async 
   expect(await readFile(targetPath, "utf8")).toBe("user content\n");
 });
 
+test("executeStandardLowering rejects owner-marker-only compile writes", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "skills", "generated", "SKILL.md");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-marker-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeText(
+    targetPath,
+    "<!-- prism:orbit-skill owner=\"compile-marker-test\" -->\n\nuser changed content\n",
+  );
+
+  await expect(
+    executeStandardLowering(
+      [
+        {
+          kind: "write-md",
+          target: targetPath,
+          content: "<!-- prism:orbit-skill owner=\"compile-marker-test\" -->\n\ngenerated content\n",
+          reason: "changed",
+        },
+      ],
+      { dryRun: false, target },
+    ),
+  ).rejects.toThrow("Compile target exists but is not owned by Prism");
+  expect(await readFile(targetPath, "utf8")).toContain("user changed content");
+});
+
 test("executeStandardLowering repairs missing ledger for identical compile writes", async () => {
   const root = await createTempRoot();
   const targetRoot = join(root, ".codex");
@@ -508,6 +543,100 @@ test("executeStandardLowering refuses to prune changed stale compile files", asy
   expect(await readFile(targetPath, "utf8")).toBe("user changed content\n");
 });
 
+test("executeStandardLowering rejects owner-marker-only stale prunes", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "skills", "generated", "SKILL.md");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-marker-prune-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeText(
+    targetPath,
+    "<!-- prism:orbit-skill owner=\"compile-marker-prune-test\" -->\n\nuser changed content\n",
+  );
+
+  await expect(
+    executeStandardLowering(
+      [
+        {
+          kind: "prune-plugin-path",
+          target: targetPath,
+          targetType: "file",
+          reason: "stale",
+        },
+      ],
+      { dryRun: false, target },
+    ),
+  ).rejects.toThrow("Compile prune target is not owned by Prism");
+  expect(await pathExists(targetPath)).toBe(true);
+});
+
+test("executeStandardLowering rejects config patches without current base proof", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "config.toml");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-config-proof-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeText(targetPath, "user config\n");
+
+  await expect(
+    executeStandardLowering(
+      [
+        {
+          kind: "patch-config",
+          target: targetPath,
+          content: "generated config\n",
+          reason: "changed",
+        },
+      ],
+      { dryRun: false, target },
+    ),
+  ).rejects.toThrow("Compile config patch lacks base content hash");
+  expect(await readFile(targetPath, "utf8")).toBe("user config\n");
+});
+
+test("executeStandardLowering rejects config patches when the base changed", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".codex");
+  const targetPath = join(targetRoot, "config.toml");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "compile-config-drift-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeText(targetPath, "user config\n");
+
+  await expect(
+    executeStandardLowering(
+      [
+        {
+          kind: "patch-config",
+          target: targetPath,
+          content: "generated config\n",
+          baseContentHash: computeContentHash("old config\n"),
+          reason: "changed",
+        },
+      ],
+      { dryRun: false, target },
+    ),
+  ).rejects.toThrow("Compile config target changed while Prism was patching it");
+  expect(await readFile(targetPath, "utf8")).toBe("user config\n");
+});
+
 test("executeStandardLowering prunes ledger-owned generated roots", async () => {
   const root = await createTempRoot();
   const targetRoot = join(root, ".codex");
@@ -557,6 +686,70 @@ test("executeStandardLowering prunes ledger-owned generated roots", async () => 
       expect.objectContaining({ pluginName: "compile-root-prune-test" }),
     ]),
   );
+});
+
+test("executeStandardLowering forgets stale ledger entries after generated roots disappear", async () => {
+  const root = await createTempRoot();
+  const targetRoot = join(root, ".factory");
+  const generatedRoot = join(targetRoot, "plugins", "generated");
+  const missingPath = join(generatedRoot, "dist", "server.mjs");
+  const target = {
+    harness: "factory-droid" as const,
+    scope: "global" as const,
+    root: targetRoot,
+    sourcePluginName: "missing-root-cleanup-test",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: join(root, "plugin"),
+  };
+  await writeHarnessLedger({
+    version: 1,
+    harness: "factory-droid",
+    entries: [{
+      id: managedEntryId({
+        harness: "factory-droid",
+        scope: "global",
+        root: targetRoot,
+        pluginName: "missing-root-cleanup-test",
+        artifact: "compile",
+        targetPath: missingPath,
+        kind: "file",
+      }),
+      pluginName: "missing-root-cleanup-test",
+      pluginVersion: "0.1.0",
+      pluginPath: target.sourcePluginPath,
+      harness: "factory-droid",
+      scope: "global",
+      root: targetRoot,
+      artifact: "compile",
+      targetPath: missingPath,
+      kind: "file",
+      contentHash: computeContentHash("already deleted\n"),
+      updatedAt: new Date().toISOString(),
+    }],
+  });
+
+  const operations = await planGeneratedPluginFilePruning({
+    root: generatedRoot,
+    desiredRelativePaths: new Set(),
+    resolveTarget: (relativePath) => join(generatedRoot, relativePath),
+    owner: {
+      harness: "factory-droid",
+      scope: "global",
+      root: targetRoot,
+      sourcePluginName: "missing-root-cleanup-test",
+    },
+  });
+
+  expect(operations).toEqual([
+    {
+      kind: "prune-plugin-path",
+      target: generatedRoot,
+      targetType: "dir",
+      reason: "stale",
+    },
+  ]);
+  await executeStandardLowering(operations, { dryRun: false, target });
+  expect((await readHarnessLedger("factory-droid")).entries).toHaveLength(0);
 });
 
 test("opencode executeLowering skips unchanged operations without backups", async () => {

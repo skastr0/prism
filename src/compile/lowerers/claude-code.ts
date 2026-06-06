@@ -426,6 +426,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     state,
     root: generatedPluginRoot(input.target),
     resolveTarget,
+    owner: {
+      harness: TARGET_ID,
+      scope: input.target.scope,
+      root: input.target.root,
+      sourcePluginName: input.target.sourcePluginName,
+    },
   });
 
   return state.operations;

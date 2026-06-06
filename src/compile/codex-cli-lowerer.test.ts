@@ -6,12 +6,14 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { readHarnessLedger } from "../managed-ledger.js";
 import { loadPlugin } from "./load.js";
+import { Orbit } from "./sources.js";
 import {
   applyCodexMcpServerUpdate,
   countMcpServerTableOccurrences,
   executeLowering,
   planLowering,
   removeMcpServerTable,
+  replaceManagedBlock,
 } from "./lowerers/codex-cli.js";
 import type { LowerOperation } from "./lowerers/opencode.js";
 
@@ -60,6 +62,9 @@ const pathExists = async (path: string): Promise<boolean> =>
     () => true,
     () => false,
   );
+
+const countSubstring = (content: string, value: string): number =>
+  content.split(value).length - 1;
 
 const runGeneratedHookWrapper = (
   wrapperPath: string,
@@ -538,6 +543,88 @@ test("codex-cli lowerer prunes stale compile-owned targeted skill files", async 
   );
 });
 
+test("codex-cli lowerer keeps generated orbit reference files on warm runs", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-orbit-reference-warm-run");
+  const target = {
+    harness: "codex-cli" as const,
+    scope: "global" as const,
+    root: outputRoot,
+    sourcePluginName: "codex-orbit-reference-warm-run",
+    sourcePluginVersion: "0.1.0",
+    sourcePluginPath: pluginRoot,
+  };
+  const orbit = new Orbit({
+    name: "delivery",
+    sourcePath: join(pluginRoot, "orbits", "delivery.orbit.ts"),
+    description: "Delivery orbit",
+    parameters: [],
+    phases: [
+      {
+        name: "brief",
+        agents: [],
+        requires: [],
+        telos: "Set up the work.",
+        real_world_change: "Reference file exists.",
+        cold_pickup_test: "A warm compile leaves the reference in place.",
+        body: "Full phase reference body.",
+      },
+    ],
+    tool_permissions: [],
+    pulsar_checkpoints: [],
+    body: "Run the delivery orbit.",
+  });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-orbit-reference-warm-run",
+        version: "0.1.0",
+        targets: { orbits: ["codex-cli"] },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await executeLowering(
+    await planLowering({
+      agents: [],
+      orbits: [orbit],
+      tools: [],
+      skills: [],
+      hooks: [],
+      target,
+    }),
+    { dryRun: false, target },
+  );
+
+  const referencePath = join(outputRoot, "skills", "delivery", "references", "brief.md");
+  expect(await pathExists(referencePath)).toBe(true);
+
+  const warmOperations = await planLowering({
+    agents: [],
+    orbits: [orbit],
+    tools: [],
+    skills: [],
+    hooks: [],
+    target,
+  });
+  expect(warmOperations).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "prune-plugin-path",
+        target: referencePath,
+      }),
+    ]),
+  );
+
+  await executeLowering(warmOperations, { dryRun: false, target });
+  expect(await pathExists(referencePath)).toBe(true);
+});
+
 test("codex-cli lowerer fails closed for unsupported model config keys", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".codex");
@@ -580,7 +667,7 @@ test("applyCodexMcpServerUpdate removes duplicates and inserts exactly one copy"
   const server = "prism-generated-grok-agent";
 
   const poisoned = `
-["mcp_servers"."${server}"]
+[mcp_servers."${server}"]
 command = "bun"
 enabled_tools = ["stale1"]
 
@@ -632,6 +719,122 @@ enabled_tools = ["fresh_tool"]
   expect(parsed.mcp_servers?.other?.command).toBe("other");
   expect(parsed.mcp_servers?.other?.url).toBe("http://127.0.0.1:38473/mcp");
   expect(parsed.mcp_servers?.other?.enabled_tools).toEqual(["grok_agent_grok_invoke"]);
+});
+
+test("applyCodexMcpServerUpdate preserves existing MCP table position", () => {
+  const tower = "prism-generated-tower";
+  const grok = "prism-generated-grok-agent";
+  const sessionWatch = "prism-generated-session-watch";
+  const current = `[features]
+hooks = true
+
+["mcp_servers"."${tower}"]
+url = "http://127.0.0.1:11111/mcp"
+enabled_tools = ["old_tower"]
+
+["mcp_servers"."${grok}"]
+url = "http://127.0.0.1:22222/mcp"
+enabled_tools = ["grok_agent_grok_invoke"]
+
+["mcp_servers"."${sessionWatch}"]
+command = "bun"
+enabled_tools = ["session_watch_emit_session_event"]
+
+# --- prism codex-cli begin: session-watch ---
+hooks = true
+# --- prism codex-cli end: session-watch ---
+`;
+
+  const freshTower = `["mcp_servers"."${tower}"]
+url = "http://127.0.0.1:33333/mcp"
+enabled_tools = ["fresh_tower"]
+`;
+
+  const result = applyCodexMcpServerUpdate(current, tower, freshTower);
+
+  expect(countMcpServerTableOccurrences(result, tower)).toBe(1);
+  expect(result).toContain('enabled_tools = ["fresh_tower"]');
+  expect(result).not.toContain("old_tower");
+  expect(result.indexOf(`["mcp_servers"."${tower}"]`)).toBeLessThan(
+    result.indexOf(`["mcp_servers"."${grok}"]`),
+  );
+  expect(result.indexOf(`["mcp_servers"."${grok}"]`)).toBeLessThan(
+    result.indexOf(`["mcp_servers"."${sessionWatch}"]`),
+  );
+  expect(() => Bun.TOML.parse(result)).not.toThrow();
+});
+
+test("applyCodexMcpServerUpdate preserves adjacent managed hook block markers", () => {
+  const server = "prism-generated-session-watch";
+  const begin = "# --- prism codex-cli begin: session-watch ---";
+  const end = "# --- prism codex-cli end: session-watch ---";
+  const current = `["mcp_servers"."${server}"]
+command = "bun"
+enabled_tools = ["old_session_watch"]
+
+${begin}
+[["hooks"."Stop"]]
+[["hooks"."Stop"."hooks"]]
+type = "command"
+command = "node \\"old.mjs\\""
+${end}
+`;
+  const freshTable = `["mcp_servers"."${server}"]
+command = "bun"
+enabled_tools = ["session_watch_emit_session_event"]
+`;
+
+  const afterMcpUpdate = applyCodexMcpServerUpdate(current, server, freshTable);
+  expect(afterMcpUpdate).toContain(begin);
+  expect(afterMcpUpdate).toContain(end);
+  expect(afterMcpUpdate).not.toContain("old_session_watch");
+
+  const result = replaceManagedBlock(
+    afterMcpUpdate,
+    "session-watch",
+    '[["hooks"."Stop"]]\n[["hooks"."Stop"."hooks"]]\ntype = "command"\ncommand = "node \\"fresh.mjs\\""',
+  );
+
+  expect(countSubstring(result, begin)).toBe(1);
+  expect(countSubstring(result, end)).toBe(1);
+  expect(result).toContain('command = "node \\"fresh.mjs\\""');
+  expect(result).not.toContain("old.mjs");
+  expect(() => Bun.TOML.parse(result)).not.toThrow();
+});
+
+test("replaceManagedBlock removes orphaned hook body when begin marker is missing", () => {
+  const begin = "# --- prism codex-cli begin: session-watch ---";
+  const end = "# --- prism codex-cli end: session-watch ---";
+  const hookBlock = '[["hooks"."Stop"]]\n[["hooks"."Stop"."hooks"]]\ntype = "command"\ncommand = "node \\"fresh.mjs\\""';
+  const corrupted = `[features]
+hooks = true
+
+${hookBlock}
+${end}
+`;
+
+  const result = replaceManagedBlock(corrupted, "session-watch", hookBlock);
+
+  expect(countSubstring(result, '[["hooks"."Stop"]]')).toBe(1);
+  expect(countSubstring(result, begin)).toBe(1);
+  expect(countSubstring(result, end)).toBe(1);
+  expect(() => Bun.TOML.parse(result)).not.toThrow();
+
+  const duplicated = `[features]
+hooks = true
+
+${hookBlock}
+
+${begin}
+${hookBlock}
+${end}
+`;
+  const deduped = replaceManagedBlock(duplicated, "session-watch", hookBlock);
+
+  expect(countSubstring(deduped, '[["hooks"."Stop"]]')).toBe(1);
+  expect(countSubstring(deduped, begin)).toBe(1);
+  expect(countSubstring(deduped, end)).toBe(1);
+  expect(() => Bun.TOML.parse(deduped)).not.toThrow();
 });
 
 // (The full planLowering + poisoned config integration test was removed for now

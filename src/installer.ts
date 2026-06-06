@@ -1501,10 +1501,32 @@ const applyOperationToLedger = (
   if (op.type === "prune") {
     return removeLedgerEntries(ledger, new Set([op.managed.entryId]));
   }
+  if (op.type === "skip" && hasCurrentInstallLedgerEntry(ledger, op)) {
+    return ledger;
+  }
 
   const entry = ledgerEntryForOperation(op);
   return entry ? upsertLedgerEntries(ledger, [entry]) : ledger;
 };
+
+const hasCurrentInstallLedgerEntry = (
+  ledger: HarnessLedger,
+  op: FileOperation,
+): boolean =>
+  ledger.entries.some((entry) =>
+    entry.id === op.managed?.entryId &&
+    entry.contentHash === op.managed.contentHash &&
+    entry.targetPath === op.target &&
+    entry.kind === op.managed.kind &&
+    entry.pluginName === op.managed.pluginName &&
+    entry.pluginVersion === op.managed.pluginVersion &&
+    entry.pluginPath === op.managed.pluginPath &&
+    entry.sourcePath === op.managed.sourcePath &&
+    entry.root === op.managed.root &&
+    entry.scope === op.managed.scope &&
+    entry.artifact === op.artifact &&
+    entry.harness === op.harness
+  );
 
 /**
  * Execute a copy operation with content transformation

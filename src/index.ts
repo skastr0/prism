@@ -85,7 +85,7 @@ export interface AgentDefinition {
   readonly identity: string;
   readonly personality?: string;
   readonly model?: ModelProfileRefInput;
-  readonly traits?: ReadonlyArray<TraitRefInput | TraitBindingDefinition>;
+  readonly traits?: ReadonlyArray<TraitRefInput | TraitBindingSource>;
   readonly access?: AccessDefinition;
   readonly skills?: ReadonlyArray<SkillRefInput>;
   readonly color?: string;
@@ -127,6 +127,13 @@ export interface TraitBindingDefinition {
   readonly trait: TraitRefInput;
   readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>>;
 }
+
+export interface PlainTraitBindingDefinition {
+  readonly trait: TraitRefInput;
+  readonly tools?: Readonly<Record<string, TraitBindingToolDefinition>>;
+}
+
+export type TraitBindingSource = TraitBindingDefinition | PlainTraitBindingDefinition;
 
 export interface ToolSchemaSlotDefinition {
   readonly kind: "schema";

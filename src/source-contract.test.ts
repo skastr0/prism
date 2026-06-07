@@ -53,6 +53,14 @@ describe("public source contracts", () => {
             },
           },
         },
+        {
+          trait: { kind: "trait-ref", name: "dispatchable" },
+          tools: {
+            submit_dispatch: {
+              slots: { payload: Schema.Struct({ summary: Schema.String }) },
+            },
+          },
+        },
       ],
       access: {
         tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],

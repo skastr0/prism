@@ -1,0 +1,406 @@
+import { afterEach, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { Cause, Effect, Option, Schema } from "effect";
+import type { CompileError } from "./errors.js";
+import { loadPlugin } from "./load.js";
+import type { Agent } from "./sources.js";
+
+const tempRoots: string[] = [];
+
+const createTempRoot = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), "prism-load-"));
+  tempRoots.push(root);
+  return root;
+};
+
+const writeText = async (path: string, content: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+};
+
+const getFailure = (
+  exit: Awaited<ReturnType<typeof Effect.runPromiseExit>>,
+): CompileError => {
+  if (exit._tag !== "Failure") {
+    throw new Error("Expected load to fail");
+  }
+
+  const failure = Cause.failureOption(exit.cause);
+  if (Option.isNone(failure)) {
+    throw new Error("Expected typed load error");
+  }
+
+  return failure.value as CompileError;
+};
+
+const effectImportPath = join(
+  process.cwd(),
+  "node_modules",
+  "effect",
+  "dist",
+  "esm",
+  "index.js",
+).replace(/\\/g, "/");
+
+const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+
+afterEach(async () => {
+  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+const writeManifest = (pluginRoot: string): Promise<void> =>
+  writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "noun-first-fixture",
+        version: "0.1.0",
+        targets: {
+          agents: ["opencode"],
+          orbits: ["opencode"],
+          tools: ["opencode"],
+          toolspaces: ["opencode"],
+          modelspaces: ["opencode"],
+          skillspaces: ["opencode"],
+          hooks: ["opencode"],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+
+const writeSharedNounSources = async (pluginRoot: string): Promise<void> => {
+  await writeManifest(pluginRoot);
+  await writeText(
+    join(pluginRoot, "schemas.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export const VerdictSchema = Schema.Struct({ summary: Schema.String });
+`,
+  );
+  await writeText(
+    join(pluginRoot, "traits", "reviewable.trait.ts"),
+    `export default {
+  name: "reviewable",
+  description: "Can review work.",
+  instructions: ["Review the implementation."],
+  tools: { submit_review: { ref: "submit_review" } },
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "submit_review.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "submit_review",
+  description: "Submit review findings.",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle() {
+    return { acknowledged: true };
+  },
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
+    `export default {
+  name: "workspace",
+  description: "Workspace tool bindings.",
+  tools: {
+    run_shell: {
+      description: "Run a shell command.",
+      targets: { opencode: { name: "bash" } },
+    },
+  },
+  groups: {
+    repo: {
+      description: "Repository tools.",
+      tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
+    },
+  },
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "modelspaces", "models.modelspace.ts"),
+    `export default {
+  name: "models",
+  description: "Model bindings.",
+  profiles: {
+    default: {
+      description: "Default model.",
+      targets: { opencode: { model: "openai/gpt-5" } },
+    },
+  },
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "skillspaces", "global.skillspace.ts"),
+    `export default {
+  name: "global",
+  description: "Global skills.",
+  skills: {
+    testing: {
+      description: "Testing skill.",
+      targets: { opencode: { name: "testing" } },
+    },
+  },
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "orbits", "delivery.orbit.ts"),
+    `export default {
+  name: "delivery",
+  description: "Delivery orbit.",
+  phases: [{
+    name: "Build",
+    agents: [{ kind: "agent-ref", name: "builder" }],
+    requires: [{ all: [{ kind: "trait-ref", name: "reviewable" }] }],
+  }],
+};
+`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "session-start",
+  event: "session.start",
+  handle: () => Effect.succeed({ decision: "continue" }),
+};
+`,
+  );
+};
+
+const agentSnapshot = (agent: Agent) => ({
+  name: agent.name,
+  description: agent.description,
+  identity: agent.identity,
+  model: agent.model,
+  traits: agent.traits.map((trait) => ({
+    ref: trait.ref,
+    tools: Object.fromEntries(
+      Object.entries(trait.tools).map(([toolName, tool]) => [
+        toolName,
+        {
+          slots: Object.fromEntries(
+            Object.entries(tool.slots).map(([slotName, slot]) => [
+              slotName,
+              {
+                isSchema: Schema.isSchema(slot.schema),
+                source: {
+                  sourcePath: slot.source.sourcePath.endsWith("schemas.ts")
+                    ? "<plugin>/schemas.ts"
+                    : slot.source.sourcePath,
+                  exportName: slot.source.exportName,
+                },
+              },
+            ]),
+          ),
+        },
+      ]),
+    ),
+  })),
+  access: agent.access,
+  skills: agent.skills,
+  targets: agent.targets,
+});
+
+test("loadPlugin loads default-exported noun source objects across source families", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeSharedNounSources(pluginRoot);
+  await writeText(
+    join(pluginRoot, "agents", "builder.agent.ts"),
+    `import { VerdictSchema } from "../schemas";
+import type { AgentSource } from ${JSON.stringify(prismImportPath)};
+
+export default {
+  name: "builder",
+  description: "Builds scoped changes.",
+  identity: "builder",
+  model: { kind: "model-profile-ref", modelspace: "models", name: "default" },
+  traits: [{
+    trait: { kind: "trait-ref", name: "reviewable" },
+    tools: { submit_review: { slots: { verdict: VerdictSchema } } },
+  }],
+  access: {
+    tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
+    toolGroups: [{ kind: "tool-group-ref", toolspace: "workspace", name: "repo" }],
+    skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
+  },
+} satisfies AgentSource;
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const agent = registry.agents.get("builder");
+
+  expect(agent).toBeDefined();
+  expect(agent?.model).toBe("models/default");
+  expect(agent?.access).toEqual({
+    tools: ["workspace/run_shell"],
+    toolGroups: ["workspace#repo"],
+    skills: ["global/testing"],
+  });
+  expect(agent?.traits[0]?.ref).toBe("reviewable");
+  const slot = agent?.traits[0]?.tools.submit_review?.slots.verdict;
+  expect(slot && Schema.isSchema(slot.schema)).toBe(true);
+  expect(slot?.source).toEqual({
+    sourcePath: join(pluginRoot, "schemas.ts"),
+    exportName: "VerdictSchema",
+  });
+  expect(registry.traits.has("reviewable")).toBe(true);
+  expect(registry.tools.has("submit_review")).toBe(true);
+  expect(registry.toolspaces.get("workspace")?.groups.repo?.tools).toEqual([
+    "workspace/run_shell",
+  ]);
+  expect(registry.modelspaces.has("models")).toBe(true);
+  expect(registry.skillspaces.has("global")).toBe(true);
+  expect(registry.orbits.get("delivery")?.phases[0]?.agents).toEqual(["builder"]);
+  expect(registry.hooks.get("session-start")?.event).toBe("session.start");
+});
+
+test("noun-first trait binding aliases preserve imported slot provenance", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeManifest(pluginRoot);
+  await writeText(
+    join(pluginRoot, "schemas.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export const VerdictSchema = Schema.Struct({ summary: Schema.String });
+`,
+  );
+  await writeText(
+    join(pluginRoot, "agents", "builder.agent.ts"),
+    `import { VerdictSchema } from "../schemas";
+
+const reviewBinding = {
+  trait: "reviewable",
+  tools: { submit_review: { slots: { verdict: VerdictSchema } } },
+};
+
+export default {
+  name: "builder",
+  description: "Builds scoped changes.",
+  identity: "builder",
+  traits: [reviewBinding],
+};
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const slot = registry.agents.get("builder")?.traits[0]?.tools.submit_review?.slots.verdict;
+
+  expect(slot && Schema.isSchema(slot.schema)).toBe(true);
+  expect(slot?.source).toEqual({
+    sourcePath: join(pluginRoot, "schemas.ts"),
+    exportName: "VerdictSchema",
+  });
+});
+
+test("noun-first trait bindings reject inline slot schemas with field provenance", async () => {
+  const pluginRoot = await createTempRoot();
+  await writeManifest(pluginRoot);
+  await writeText(
+    join(pluginRoot, "agents", "builder.agent.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "builder",
+  description: "Builds scoped changes.",
+  identity: "builder",
+  traits: [{
+    trait: "reviewable",
+    tools: {
+      submit_review: {
+        slots: { verdict: Schema.Struct({ summary: Schema.String }) },
+      },
+    },
+  }],
+};
+`,
+  );
+
+  const exit = await Effect.runPromiseExit(loadPlugin(pluginRoot));
+  const failure = getFailure(exit);
+
+  expect(failure.name).toBe("SourceParseError");
+  expect(failure.message).toContain("traits[0].tools.submit_review.slots.verdict");
+  expect(failure.message).toContain("must be an imported schema identifier");
+});
+
+test("helper-based and noun-first agent sources produce equivalent normalized objects", async () => {
+  const helperRoot = await createTempRoot();
+  const nounRoot = await createTempRoot();
+  await writeManifest(helperRoot);
+  await writeManifest(nounRoot);
+  for (const pluginRoot of [helperRoot, nounRoot]) {
+    await writeText(
+      join(pluginRoot, "schemas.ts"),
+      `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export const VerdictSchema = Schema.Struct({ summary: Schema.String });
+`,
+    );
+  }
+
+  await writeText(
+    join(helperRoot, "agents", "builder.agent.ts"),
+    `import { defineAgent, bindTrait, modelProfileRef, skillspaceRef, toolGroupRef, toolRef } from ${JSON.stringify(prismImportPath)};
+import { VerdictSchema } from "../schemas";
+
+export default defineAgent({
+  name: "builder",
+  description: "Builds scoped changes.",
+  identity: "builder",
+  model: modelProfileRef("models", "default"),
+  traits: [bindTrait("reviewable", {
+    tools: { submit_review: { slots: { verdict: VerdictSchema } } },
+  })],
+  access: {
+    tools: [toolRef("workspace", "run_shell")],
+    toolGroups: [toolGroupRef("workspace", "repo")],
+    skills: [skillspaceRef("global", "testing")],
+  },
+  targets: { opencode: { mode: "primary" } },
+});
+`,
+  );
+  await writeText(
+    join(nounRoot, "agents", "builder.agent.ts"),
+    `import { VerdictSchema } from "../schemas";
+
+export default {
+  name: "builder",
+  description: "Builds scoped changes.",
+  identity: "builder",
+  model: { kind: "model-profile-ref", modelspace: "models", name: "default" },
+  traits: [{
+    trait: "reviewable",
+    tools: { submit_review: { slots: { verdict: VerdictSchema } } },
+  }],
+  access: {
+    tools: [{ kind: "tool-ref", toolspace: "workspace", name: "run_shell" }],
+    toolGroups: [{ kind: "tool-group-ref", toolspace: "workspace", name: "repo" }],
+    skills: [{ kind: "skillspace-ref", skillspace: "global", name: "testing" }],
+  },
+  targets: { opencode: { mode: "primary" } },
+};
+`,
+  );
+
+  const helperRegistry = await Effect.runPromise(loadPlugin(helperRoot));
+  const nounRegistry = await Effect.runPromise(loadPlugin(nounRoot));
+
+  expect(agentSnapshot(helperRegistry.agents.get("builder")!)).toEqual(
+    agentSnapshot(nounRegistry.agents.get("builder")!),
+  );
+});

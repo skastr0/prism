@@ -55,6 +55,8 @@ import {
   type NormalizedTraitBinding,
   type NormalizedTraitBindingToolSlot,
   type SkillRefInput,
+  type TraitBindingInput,
+  type TraitRefInput,
 } from "./sources.js";
 import {
   AgentNameMismatchError,
@@ -815,6 +817,22 @@ const propertyNameText = (name: TypeScript.PropertyName): string | undefined => 
   return undefined;
 };
 
+const unwrapExpression = (
+  value: TypeScript.Expression,
+): TypeScript.Expression => {
+  let expression = value;
+  while (
+    ts.isParenthesizedExpression(expression) ||
+    ts.isAsExpression(expression) ||
+    ts.isSatisfiesExpression(expression) ||
+    ts.isTypeAssertionExpression(expression) ||
+    ts.isNonNullExpression(expression)
+  ) {
+    expression = expression.expression;
+  }
+  return expression;
+};
+
 const objectProperty = (
   object: TypeScript.ObjectLiteralExpression | undefined,
   name: string,
@@ -830,13 +848,19 @@ const objectProperty = (
 
 const asObjectLiteral = (
   value: TypeScript.Expression | undefined,
-): TypeScript.ObjectLiteralExpression | undefined =>
-  value && ts.isObjectLiteralExpression(value) ? value : undefined;
+): TypeScript.ObjectLiteralExpression | undefined => {
+  if (!value) return undefined;
+  const expression = unwrapExpression(value);
+  return ts.isObjectLiteralExpression(expression) ? expression : undefined;
+};
 
 const asArrayLiteral = (
   value: TypeScript.Expression | undefined,
-): TypeScript.ArrayLiteralExpression | undefined =>
-  value && ts.isArrayLiteralExpression(value) ? value : undefined;
+): TypeScript.ArrayLiteralExpression | undefined => {
+  if (!value) return undefined;
+  const expression = unwrapExpression(value);
+  return ts.isArrayLiteralExpression(expression) ? expression : undefined;
+};
 
 const resolveImportedModuleSource = (
   sourcePath: string,
@@ -892,12 +916,22 @@ const collectBindingToolSlotSources = (
   const source = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true);
   const importedSymbols = collectImportedSchemaSymbols(sourcePath, source);
   const result: BindingToolSlotSources = new Map();
+  const declaredExpressions = new Map<string, TypeScript.Expression>();
 
-  const collectFromBindTrait = (
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name)) continue;
+      if (declaration.initializer) {
+        declaredExpressions.set(declaration.name.text, declaration.initializer);
+      }
+    }
+  }
+
+  const collectFromTraitOptions = (
     traitIndex: number,
-    call: TypeScript.CallExpression,
+    options: TypeScript.ObjectLiteralExpression | undefined,
   ): void => {
-    const options = asObjectLiteral(call.arguments[1]);
     const tools = asObjectLiteral(objectProperty(options, "tools"));
     if (!tools) return;
 
@@ -922,25 +956,109 @@ const collectBindingToolSlotSources = (
     result.set(traitIndex, byTool);
   };
 
+  const collectFromBindTrait = (
+    traitIndex: number,
+    call: TypeScript.CallExpression,
+  ): void => {
+    collectFromTraitOptions(traitIndex, asObjectLiteral(call.arguments[1]));
+  };
+
+  const collectFromTraitExpression = (
+    traitIndex: number,
+    value: TypeScript.Expression,
+    seenIdentifiers: Set<string> = new Set(),
+  ): void => {
+    const expression = unwrapExpression(value);
+    if (ts.isIdentifier(expression)) {
+      if (seenIdentifiers.has(expression.text)) return;
+      const declared = declaredExpressions.get(expression.text);
+      if (!declared) return;
+      collectFromTraitExpression(
+        traitIndex,
+        declared,
+        new Set([...seenIdentifiers, expression.text]),
+      );
+      return;
+    }
+
+    if (
+      ts.isCallExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      expression.expression.text === "bindTrait"
+    ) {
+      collectFromBindTrait(traitIndex, expression);
+      return;
+    }
+
+    const object = asObjectLiteral(expression);
+    if (object && objectProperty(object, "trait")) {
+      collectFromTraitOptions(traitIndex, object);
+    }
+  };
+
+  const collectFromTraitElement = (
+    traitIndex: number,
+    element: TypeScript.Expression | TypeScript.SpreadElement,
+  ): void => {
+    if (ts.isSpreadElement(element)) return;
+    collectFromTraitExpression(traitIndex, element);
+  };
+
+  const collectFromAgentObject = (
+    agent: TypeScript.ObjectLiteralExpression | undefined,
+  ): void => {
+    const traits = asArrayLiteral(objectProperty(agent, "traits"));
+    if (!traits) return;
+
+    for (const [traitIndex, element] of traits.elements.entries()) {
+      collectFromTraitElement(traitIndex, element);
+    }
+  };
+
+  const collectFromAgentExpression = (
+    expression: TypeScript.Expression,
+    seenIdentifiers: Set<string> = new Set(),
+  ): boolean => {
+    const unwrapped = unwrapExpression(expression);
+    if (
+      ts.isCallExpression(unwrapped) &&
+      ts.isIdentifier(unwrapped.expression) &&
+      unwrapped.expression.text === "defineAgent"
+    ) {
+      collectFromAgentObject(asObjectLiteral(unwrapped.arguments[0]));
+      return true;
+    }
+
+    if (ts.isObjectLiteralExpression(unwrapped)) {
+      collectFromAgentObject(unwrapped);
+      return true;
+    }
+
+    if (ts.isIdentifier(unwrapped)) {
+      if (seenIdentifiers.has(unwrapped.text)) return false;
+      const declared = declaredExpressions.get(unwrapped.text);
+      if (declared) {
+        return collectFromAgentExpression(
+          declared,
+          new Set([...seenIdentifiers, unwrapped.text]),
+        );
+      }
+    }
+
+    return false;
+  };
+
   const visit = (node: TypeScript.Node): void => {
+    if (ts.isExportAssignment(node)) {
+      if (collectFromAgentExpression(node.expression)) return;
+    }
+
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.expression.text === "defineAgent"
     ) {
-      const agent = asObjectLiteral(node.arguments[0]);
-      const traits = asArrayLiteral(objectProperty(agent, "traits"));
-      if (traits) {
-        for (const [traitIndex, element] of traits.elements.entries()) {
-          if (
-            ts.isCallExpression(element) &&
-            ts.isIdentifier(element.expression) &&
-            element.expression.text === "bindTrait"
-          ) {
-            collectFromBindTrait(traitIndex, element);
-          }
-        }
-      }
+      collectFromAgentExpression(node);
       return;
     }
 
@@ -1230,13 +1348,11 @@ const loadTraits = (
   });
 
 type AgentDefinitionInput = typeof AgentSchema.Type;
-type AgentTraitInput = NonNullable<AgentDefinitionInput["traits"]>[number];
-type AgentTraitBindingInput = Extract<
-  AgentTraitInput,
-  { readonly kind: "trait-binding" }
->;
-type AgentTraitBindingToolInput =
-  NonNullable<AgentTraitBindingInput["tools"]>[string];
+type AgentTraitInput = TraitRefInput | TraitBindingInput;
+type AgentTraitBindingInput = TraitBindingInput;
+type AgentTraitBindingToolInput = {
+  readonly slots?: Readonly<Record<string, unknown>>;
+};
 type NormalizedAgentTraitTools = Record<
   string,
   { slots: Record<string, NormalizedTraitBindingToolSlot> }
@@ -1280,7 +1396,7 @@ const validateAgentFileName = (
 const isAgentTraitBinding = (
   trait: AgentTraitInput,
 ): trait is AgentTraitBindingInput =>
-  typeof trait !== "string" && trait.kind !== "trait-ref";
+  typeof trait !== "string" && "trait" in trait;
 
 const agentTraitRefInput = (
   trait: AgentTraitInput,

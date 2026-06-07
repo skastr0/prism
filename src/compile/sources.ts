@@ -875,16 +875,30 @@ export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")(
 // Agent
 // ---------------------------------------------------------------------------
 
-export const TraitBindingInputSchema = Schema.Struct({
+const TraitBindingToolInputSchema = Schema.Struct({
+  slots: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+});
+
+const TraitBindingToolsInputSchema = Schema.Record({
+  key: Schema.String,
+  value: TraitBindingToolInputSchema,
+});
+
+export const KindedTraitBindingInputSchema = Schema.Struct({
   kind: Schema.Literal("trait-binding"),
   trait: TraitRefInputSchema,
-  tools: Schema.optional(Schema.Record({
-    key: Schema.String,
-    value: Schema.Struct({
-      slots: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
-    }),
-  })),
+  tools: Schema.optional(TraitBindingToolsInputSchema),
 });
+
+export const PlainTraitBindingInputSchema = Schema.Struct({
+  trait: TraitRefInputSchema,
+  tools: Schema.optional(TraitBindingToolsInputSchema),
+});
+
+export const TraitBindingInputSchema = Schema.Union(
+  KindedTraitBindingInputSchema,
+  PlainTraitBindingInputSchema,
+);
 export type TraitBindingInput = typeof TraitBindingInputSchema.Type;
 
 export const NormalizedTraitBindingToolSlotSchema = Schema.Struct({

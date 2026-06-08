@@ -52,7 +52,7 @@ const COMPILE_SOURCE_HARNESSES = [
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
   rules: ["antigravity-cli", "pi", "kimi-code"],
-  commands: ["amp-code", "claude-code", "pi", "kimi-code"],
+  commands: ["amp-code", "claude-code", "cursor", "pi", "kimi-code"],
   skills: ["pi", "kimi-code"],
 };
 

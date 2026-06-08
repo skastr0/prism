@@ -1385,6 +1385,7 @@ test("artifact target resolution filters unsupported preset members", async () =
   expect(getManifestArtifactTargets(manifest, "commands")).not.toContain("antigravity-cli");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("claude-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("amp-code");
+  expect(getManifestArtifactTargets(manifest, "commands")).toContain("cursor");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("kimi-code");
   expect(getManifestArtifactTargets(manifest, "commands")).toContain("pi");
   expect(getManifestArtifactTargets(manifest, "rules")).toContain("grok");
@@ -1398,7 +1399,7 @@ test("artifact target resolution filters unsupported preset members", async () =
   expect(manifestHasCompileTargets(manifest, "antigravity-cli")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "kimi-code")).toBe(true);
   expect(manifestHasCompileTargets(manifest, "pi")).toBe(true);
-  expect(manifestHasCompileTargets(manifest, "cursor")).toBe(false);
+  expect(manifestHasCompileTargets(manifest, "cursor")).toBe(true);
 });
 
 test("Cursor compile support is tools-only", async () => {

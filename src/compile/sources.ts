@@ -114,6 +114,8 @@ export type SkillRefInput = typeof SkillRefInputSchema.Type;
 export const HookEventSchema = Schema.Literal(
   "tool.before",
   "tool.after",
+  "prompt.submit",
+  "permission.request",
   "session.start",
   "session.end",
 );
@@ -167,6 +169,7 @@ export const HookDefinitionSchema = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
   event: HookEventSchema,
+  targets: Schema.optional(Schema.Array(Schema.String)),
   match: Schema.optional(HookMatchInputSchema),
   handle: Schema.Any,
 });
@@ -234,6 +237,26 @@ export const SessionStartEventPayloadSchema = Schema.Struct({
 });
 export type SessionStartEventPayload = typeof SessionStartEventPayloadSchema.Type;
 
+export const PromptSubmitEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("prompt.submit"),
+  target: HookTargetContextSchema,
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  prompt: Schema.String,
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type PromptSubmitEventPayload = typeof PromptSubmitEventPayloadSchema.Type;
+
+export const PermissionRequestEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("permission.request"),
+  target: HookTargetContextSchema,
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  tool: Schema.optional(HookToolContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type PermissionRequestEventPayload = typeof PermissionRequestEventPayloadSchema.Type;
+
 export const SessionEndEventPayloadSchema = Schema.Struct({
   event: Schema.Literal("session.end"),
   target: HookTargetContextSchema,
@@ -247,6 +270,8 @@ export type SessionEndEventPayload = typeof SessionEndEventPayloadSchema.Type;
 export const HookEventPayloadSchema = Schema.Union(
   ToolBeforeEventPayloadSchema,
   ToolAfterEventPayloadSchema,
+  PromptSubmitEventPayloadSchema,
+  PermissionRequestEventPayloadSchema,
   SessionStartEventPayloadSchema,
   SessionEndEventPayloadSchema,
 );
@@ -370,6 +395,77 @@ export const NativeSessionStartHookPayloadSchema = Schema.transform(
 );
 export type NativeSessionStartHookPayload = typeof NativeSessionStartHookPayloadSchema.Type;
 
+export const NativePromptSubmitHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    prompt: Schema.String,
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  PromptSubmitEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "prompt.submit" as const,
+      target: native.target,
+      cwd: native.cwd,
+      session: native.session,
+      prompt: native.prompt,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      cwd: payload.cwd,
+      session: payload.session,
+      prompt: payload.prompt,
+      native: payload.native,
+    }),
+  },
+);
+export type NativePromptSubmitHookPayload = typeof NativePromptSubmitHookPayloadSchema.Type;
+
+export const NativePermissionRequestHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    tool: Schema.optional(NativeToolBeforeContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  PermissionRequestEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "permission.request" as const,
+      target: native.target,
+      cwd: native.cwd,
+      session: native.session,
+      tool: native.tool
+        ? {
+            logical: native.tool.logical,
+            nativeName: native.tool.name,
+            input: native.tool.input,
+          }
+        : undefined,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      cwd: payload.cwd,
+      session: payload.session,
+      tool: payload.tool
+        ? {
+            logical: payload.tool.logical,
+            name: payload.tool.nativeName,
+            input: payload.tool.input,
+          }
+        : undefined,
+      native: payload.native,
+    }),
+  },
+);
+export type NativePermissionRequestHookPayload =
+  typeof NativePermissionRequestHookPayloadSchema.Type;
+
 export const NativeSessionEndHookPayloadSchema = Schema.transform(
   Schema.Struct({
     target: HookTargetContextSchema,
@@ -402,6 +498,8 @@ export type NativeSessionEndHookPayload = typeof NativeSessionEndHookPayloadSche
 export const NativeHookPayloadSchema = Schema.Union(
   NativeToolBeforeHookPayloadSchema,
   NativeToolAfterHookPayloadSchema,
+  NativePromptSubmitHookPayloadSchema,
+  NativePermissionRequestHookPayloadSchema,
   NativeSessionStartHookPayloadSchema,
   NativeSessionEndHookPayloadSchema,
 );
@@ -415,11 +513,26 @@ export type ToolBeforeHookResult = typeof ToolBeforeHookResultSchema.Type;
 
 export const ContinueHookResultSchema = Schema.Struct({
   decision: Schema.Literal("continue"),
+  systemMessage: Schema.optional(Schema.String),
+  additionalContext: Schema.optional(Schema.String),
 });
 export type ContinueHookResult = typeof ContinueHookResultSchema.Type;
 
 export const ObservationalHookResultSchema = ContinueHookResultSchema;
 export type ObservationalHookResult = ContinueHookResult;
+
+export const PermissionAllowHookResultSchema = Schema.Struct({
+  decision: Schema.Literal("allow"),
+  systemMessage: Schema.optional(Schema.String),
+});
+export type PermissionAllowHookResult = typeof PermissionAllowHookResultSchema.Type;
+
+export const PermissionRequestHookResultSchema = Schema.Union(
+  ContinueHookResultSchema,
+  PermissionAllowHookResultSchema,
+  Schema.Struct({ decision: Schema.Literal("block"), message: Schema.String }),
+);
+export type PermissionRequestHookResult = typeof PermissionRequestHookResultSchema.Type;
 
 export const HookEventResultSchema = Schema.Union(
   Schema.Struct({
@@ -429,6 +542,14 @@ export const HookEventResultSchema = Schema.Union(
   Schema.Struct({
     event: Schema.Literal("tool.after"),
     result: ObservationalHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("prompt.submit"),
+    result: ObservationalHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("permission.request"),
+    result: PermissionRequestHookResultSchema,
   }),
   Schema.Struct({
     event: Schema.Literal("session.start"),
@@ -443,6 +564,7 @@ export type HookEventResult = typeof HookEventResultSchema.Type;
 
 export const HookResultSchema = Schema.Union(
   ToolBeforeHookResultSchema,
+  PermissionRequestHookResultSchema,
   ObservationalHookResultSchema,
 );
 export type HookResult = typeof HookResultSchema.Type;
@@ -450,7 +572,11 @@ export type HookResult = typeof HookResultSchema.Type;
 export const hookResultSchemaForEvent = (
   event: HookEvent,
 ): Schema.Schema.AnyNoContext =>
-  event === "tool.before" ? ToolBeforeHookResultSchema : ObservationalHookResultSchema;
+  event === "tool.before"
+    ? ToolBeforeHookResultSchema
+    : event === "permission.request"
+      ? PermissionRequestHookResultSchema
+      : ObservationalHookResultSchema;
 
 export const decodeHookResultForEvent = (event: HookEvent, result: unknown) =>
   Schema.decodeUnknownEither(hookResultSchemaForEvent(event))(result);
@@ -463,6 +589,10 @@ export const nativeHookPayloadSchemaForEvent = (
       return NativeToolBeforeHookPayloadSchema;
     case "tool.after":
       return NativeToolAfterHookPayloadSchema;
+    case "prompt.submit":
+      return NativePromptSubmitHookPayloadSchema;
+    case "permission.request":
+      return NativePermissionRequestHookPayloadSchema;
     case "session.start":
       return NativeSessionStartHookPayloadSchema;
     case "session.end":
@@ -478,6 +608,7 @@ export class Hook extends Schema.Class<Hook>("Hook")({
   sourcePath: Schema.String,
   description: Schema.optional(Schema.String),
   event: HookEventSchema,
+  targets: Schema.Array(Schema.String),
   match: NormalizedHookMatchSchema,
   handle: Schema.Any,
 }) {}

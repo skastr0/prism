@@ -27,6 +27,15 @@ export const decodeNativeHookPayloadForEvent = (event, payload) => {
     if (!isObject(payload.tool) || typeof payload.tool.name !== "string") return left("tool.after payload tool is invalid");
     return right({ event, target, cwd: payload.cwd, session, native, tool: { logical: payload.tool.logical, nativeName: payload.tool.name, input: payload.tool.input, output: payload.tool.output, success: payload.tool.success } });
   }
+  if (event === "prompt.submit") {
+    if (typeof payload.prompt !== "string") return left("prompt.submit payload prompt is invalid");
+    return right({ event, target, cwd: payload.cwd, session, native, prompt: payload.prompt });
+  }
+  if (event === "permission.request") {
+    const tool = payload.tool === undefined ? undefined : payload.tool;
+    if (tool !== undefined && (!isObject(tool) || typeof tool.name !== "string")) return left("permission.request payload tool is invalid");
+    return right({ event, target, cwd: payload.cwd, session, native, tool: tool ? { logical: tool.logical, nativeName: tool.name, input: tool.input } : undefined });
+  }
   if (event === "session.start") {
     if (!isObject(session)) return left("session.start payload session is invalid");
     return right({ event, target, cwd: payload.cwd, session, native });
@@ -40,7 +49,16 @@ export const decodeNativeHookPayloadForEvent = (event, payload) => {
 export const decodeHookResultForEvent = (event, result) => {
   if (!isObject(result)) return left("hook result must be an object");
   if (event === "tool.before" && result.decision === "block" && typeof result.message === "string") return right(result);
-  if (result.decision === "continue") return right({ decision: "continue" });
+  if (event === "permission.request" && result.decision === "block" && typeof result.message === "string") return right(result);
+  if (event === "permission.request" && result.decision === "allow") return right({
+    decision: "allow",
+    systemMessage: typeof result.systemMessage === "string" ? result.systemMessage : undefined,
+  });
+  if (result.decision === "continue") return right({
+    decision: "continue",
+    systemMessage: typeof result.systemMessage === "string" ? result.systemMessage : undefined,
+    additionalContext: typeof result.additionalContext === "string" ? result.additionalContext : undefined,
+  });
   return left("invalid hook result for " + event);
 };
 `;

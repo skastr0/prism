@@ -160,6 +160,8 @@ export const nativeHookEventName = <Name extends string>(
   names: {
     readonly toolBefore: Name;
     readonly toolAfter: Name;
+    readonly promptSubmit?: Name;
+    readonly permissionRequest?: Name;
     readonly sessionStart: Name;
     readonly sessionEnd: Name;
   },
@@ -169,6 +171,12 @@ export const nativeHookEventName = <Name extends string>(
       return names.toolBefore;
     case "tool.after":
       return names.toolAfter;
+    case "prompt.submit":
+      if (names.promptSubmit) return names.promptSubmit;
+      throw new Error("prompt.submit hooks are not supported by this lowerer");
+    case "permission.request":
+      if (names.permissionRequest) return names.permissionRequest;
+      throw new Error("permission.request hooks are not supported by this lowerer");
     case "session.start":
       return names.sessionStart;
     case "session.end":
@@ -249,6 +257,18 @@ const renderHookWrapperNormalizePayload = (options: {
         session: nativeSession(input),
         native: input,
       };
+    case "prompt.submit":
+      return { target, cwd, session: nativeSession(input), prompt: String(input?.prompt ?? ""), native: input };
+    case "permission.request":
+      return {
+        target,
+        tool: nativeToolName(input)
+          ? { name: String(nativeToolName(input)), input: nativeToolInput(input) }
+          : undefined,
+        cwd,
+        session: nativeSession(input),
+        native: input,
+      };
     case "session.start":
       return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, native: input };
     case "session.end":
@@ -278,7 +298,7 @@ const result = unwrapDecode(
 const renderHookWrapperBlockHandling = (
   event: Hook["event"],
   blockDecisionSource: string,
-): string => `if (${JSON.stringify(event)} === "tool.before" && result.decision === "block") {
+): string => `if ((${JSON.stringify(event)} === "tool.before" || ${JSON.stringify(event)} === "permission.request") && result.decision === "block") {
 ${blockDecisionSource}
 }`;
 

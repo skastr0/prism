@@ -787,6 +787,7 @@ export default defineHook({
 
 const createOpenCodeHookFixture = async (options?: {
   sessionHook?: boolean;
+  promptAndPermissionHooks?: boolean;
 }): Promise<{
   pluginRoot: string;
   projectRoot: string;
@@ -877,6 +878,35 @@ export default defineHook({
   name: "session-end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`);
+  }
+  if (options?.promptAndPermissionHooks) {
+    await writeText(join(pluginRoot, "hooks", "prompt-context.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "prompt-context",
+  event: hookEvent.promptSubmit,
+  handle: (event) => Effect.succeed({
+    decision: "continue" as const,
+    additionalContext: "prompt:" + event.prompt,
+    systemMessage: "system:" + event.target.harness,
+  }),
+});
+`);
+    await writeText(join(pluginRoot, "hooks", "permission-guard.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "permission-guard",
+  event: hookEvent.permissionRequest,
+  match: { tool: hookTool.any() },
+  handle: (event) => Effect.succeed(
+    event.tool?.input?.metadata?.block
+      ? { decision: "block" as const, message: "permission-blocked" }
+      : { decision: "continue" as const },
+  ),
 });
 `);
   }
@@ -3584,6 +3614,44 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
   expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
   expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-runtime.ts"))).toBe(false);
   expect(await pathExists(join(generatedRoot, "src", "runtime", "hook-authoring-bridge.ts"))).toBe(false);
+});
+
+test("compilePluginForTarget lowers OpenCode prompt and permission hooks through plugin events", async () => {
+  const { pluginRoot, projectRoot } = await createOpenCodeHookFixture({
+    promptAndPermissionHooks: true,
+  });
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const generatedRoot = join(
+    projectRoot,
+    ".opencode",
+    "plugins",
+    "prism-generated-opencode-hook-demo",
+  );
+  const serverSource = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
+
+  expect(serverSource).toContain('"chat.message"');
+  expect(serverSource).toContain('"prompt.submit"');
+  expect(serverSource).toContain("promptText(output)");
+  expect(serverSource).toContain("appendPromptContext");
+  expect(serverSource).toContain('"permission.ask"');
+  expect(serverSource).toContain('"permission.request"');
+  expect(serverSource).toContain('output.status = "deny"');
+  expect(serverSource).toContain('output.status = "allow"');
+  expect(serverSource).toContain("additionalContext");
+  expect(serverSource).toContain("systemMessage");
+  expect(serverSource).toContain("permission-guard");
+  expect(serverSource).toContain("prompt-context");
+  expect(serverSource).not.toContain(prismImportPath);
 });
 
 test("compilePluginForTarget lowers executable canonical tools for opencode", async () => {

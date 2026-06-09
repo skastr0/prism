@@ -348,6 +348,8 @@ export type SkillspaceSource = SkillspaceDefinition;
 export const hookEvent = {
   toolBefore: "tool.before",
   toolAfter: "tool.after",
+  promptSubmit: "prompt.submit",
+  permissionRequest: "permission.request",
   sessionStart: "session.start",
   sessionEnd: "session.end",
 } as const;
@@ -399,6 +401,24 @@ export interface SessionStartHookEventDefinition {
   readonly native?: Record<string, unknown>;
 }
 
+export interface PromptSubmitHookEventDefinition {
+  readonly event: typeof hookEvent.promptSubmit;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly prompt: string;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface PermissionRequestHookEventDefinition {
+  readonly event: typeof hookEvent.permissionRequest;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly tool?: HookToolContextDefinition;
+  readonly native?: Record<string, unknown>;
+}
+
 export interface SessionEndHookEventDefinition {
   readonly event: typeof hookEvent.sessionEnd;
   readonly target: HookTargetContextDefinition;
@@ -411,6 +431,8 @@ export interface SessionEndHookEventDefinition {
 export type HookEventPayloadDefinition =
   | ToolBeforeHookEventDefinition
   | ToolAfterHookEventDefinition
+  | PromptSubmitHookEventDefinition
+  | PermissionRequestHookEventDefinition
   | SessionStartHookEventDefinition
   | SessionEndHookEventDefinition;
 
@@ -421,6 +443,8 @@ export type HookEventPayloadFor<E extends HookEvent> = Extract<
 
 export interface ContinueHookResultDefinition {
   readonly decision: "continue";
+  readonly systemMessage?: string;
+  readonly additionalContext?: string;
 }
 
 export interface BlockHookResultDefinition {
@@ -428,13 +452,25 @@ export interface BlockHookResultDefinition {
   readonly message: string;
 }
 
+export interface AllowHookResultDefinition {
+  readonly decision: "allow";
+  readonly systemMessage?: string;
+}
+
 export type ToolBeforeHookResultDefinition =
   | ContinueHookResultDefinition
   | BlockHookResultDefinition;
 
+export type PermissionRequestHookResultDefinition =
+  | ContinueHookResultDefinition
+  | AllowHookResultDefinition
+  | BlockHookResultDefinition;
+
 export type HookResultFor<E extends HookEvent> = E extends typeof hookEvent.toolBefore
   ? ToolBeforeHookResultDefinition
-  : ContinueHookResultDefinition;
+  : E extends typeof hookEvent.permissionRequest
+    ? PermissionRequestHookResultDefinition
+    : ContinueHookResultDefinition;
 
 export type HookHandlerDefinition<E extends HookEvent> = (
   event: HookEventPayloadFor<E>,
@@ -472,6 +508,7 @@ export interface ToolHookMatchDefinition {
 export type HookMatchDefinition<E extends HookEvent> = E extends
   | typeof hookEvent.toolBefore
   | typeof hookEvent.toolAfter
+  | typeof hookEvent.permissionRequest
   ? ToolHookMatchDefinition
   : never;
 
@@ -479,6 +516,7 @@ export interface HookDefinition<E extends HookEvent = HookEvent> {
   readonly name: string;
   readonly description?: string;
   readonly event: E;
+  readonly targets?: readonly string[];
   readonly match?: HookMatchDefinition<E>;
   readonly handle: HookHandlerDefinition<E>;
 }

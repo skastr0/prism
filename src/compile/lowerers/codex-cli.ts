@@ -513,6 +513,8 @@ const codexNativeHookEvent = (event: Hook["event"]): string =>
   nativeHookEventName(event, {
     toolBefore: "PreToolUse",
     toolAfter: "PostToolUse",
+    promptSubmit: "UserPromptSubmit",
+    permissionRequest: "PermissionRequest",
     sessionStart: "SessionStart",
     sessionEnd: "Stop",
   });
@@ -531,7 +533,7 @@ const hookMatcher = (
   canonicalToolNames: ReadonlyMap<string, string>,
 ): string | undefined => {
   const tool = resolved.tool;
-  if (nativeEvent === "Stop" || !tool) return undefined;
+  if (nativeEvent === "Stop" || nativeEvent === "SessionStart" || nativeEvent === "UserPromptSubmit" || !tool) return undefined;
   if (tool.kind === "any") return "*";
   if (tool.kind === "canonical-tool") return canonicalToolNames.get(tool.ref) ?? tool.ref;
   if (tool.names.length === 1) return regexEscape(tool.names[0]!);
@@ -542,8 +544,13 @@ const renderHookWrapperEntry = (
   hook: Hook,
   nativeEvent: string,
   hookRuntimePath: string,
-): string =>
-  renderPrePostSessionHookWrapperEntry({
+): string => {
+  const supportsAdditionalContext =
+    nativeEvent === "SessionStart" ||
+    nativeEvent === "PostToolUse" ||
+    nativeEvent === "UserPromptSubmit";
+
+  return renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
     harness: TARGET_ID,
@@ -552,9 +559,42 @@ const renderHookWrapperEntry = (
     fallbackSessionId: TARGET_ID,
     toolAfterOutputExpression:
       "input?.tool?.output ?? input?.tool_response ?? input?.toolResponse ?? input?.toolOutput ?? input?.tool_output ?? input?.output ?? input?.result",
-    blockDecisionSource: `  console.error(result.message);
-  process.exit(2);`,
+    resultHandlingSource: `const writeHookJson = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const output = {};
+if (result.systemMessage) output.systemMessage = result.systemMessage;
+if (${JSON.stringify(supportsAdditionalContext)} && result.additionalContext) {
+  output.hookSpecificOutput = {
+    hookEventName: ${JSON.stringify(nativeEvent)},
+    additionalContext: result.additionalContext,
+  };
+}
+if (${JSON.stringify(hook.event)} === "tool.before" && result.decision === "block") {
+  output.hookSpecificOutput = {
+    hookEventName: "PreToolUse",
+    permissionDecision: "deny",
+    permissionDecisionReason: result.message,
+  };
+}
+if (${JSON.stringify(hook.event)} === "permission.request" && result.decision === "block") {
+  output.hookSpecificOutput = {
+    hookEventName: "PermissionRequest",
+    decision: {
+      behavior: "deny",
+      message: result.message,
+    },
+  };
+}
+if (${JSON.stringify(hook.event)} === "permission.request" && result.decision === "allow") {
+  output.hookSpecificOutput = {
+    hookEventName: "PermissionRequest",
+    decision: {
+      behavior: "allow",
+    },
+  };
+}
+if (Object.keys(output).length > 0) writeHookJson(output);`,
   });
+};
 
 const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<string> => {
   return bundleGeneratedHookWrapper({

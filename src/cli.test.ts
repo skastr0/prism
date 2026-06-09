@@ -253,6 +253,48 @@ export default defineTool({
   return { pluginRoot, hermesRoot };
 };
 
+const createCliPackageFixture = async (): Promise<{
+  readonly pluginRoot: string;
+  readonly outRoot: string;
+  readonly prismHome: string;
+}> => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "cli-package-plugin");
+  const outRoot = join(root, "packaged");
+  const prismHome = join(root, "prism-home");
+
+  await mkdir(join(pluginRoot, "hooks"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "cli-package-plugin",
+        version: "0.1.0",
+        targets: { hooks: ["codex-cli"] },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeFile(
+    join(pluginRoot, "hooks", "prompt-context.hook.ts"),
+    `import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "prompt-context",
+  event: hookEvent.promptSubmit,
+  targets: ["codex-cli"],
+  handle: (event) => ({
+    decision: "continue",
+    additionalContext: "cli:" + event.prompt,
+  }),
+});
+`,
+  );
+
+  return { pluginRoot, outRoot, prismHome };
+};
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
@@ -403,6 +445,35 @@ test("compile writes Hermes MCP config to an explicit profile root", async () =>
       join(hermesRoot, "prism", "mcp", "prism_generated_cli_hermes_tools", "server.mjs"),
     ),
   ).toBe(true);
+});
+
+test("package CLI writes distributable payload without live harness ledger writes", async () => {
+  const { pluginRoot, outRoot, prismHome } = await createCliPackageFixture();
+
+  const result = await runCli([
+    "package",
+    pluginRoot,
+    "--harness",
+    "codex-cli",
+    "--out",
+    outRoot,
+  ], { PRISM_HOME: prismHome });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Packaging plugin: cli-package-plugin");
+  expect(result.stdout).toContain("codex-cli");
+  expect(result.stdout).toContain("prism.activation.json");
+
+  const packageRoot = join(outRoot, "codex-cli", "prism-generated-cli-package-plugin");
+  expect(await pathExists(join(packageRoot, ".prism-package.json"))).toBe(true);
+  expect(await pathExists(join(packageRoot, "payload", "hooks", "prompt-context.mjs"))).toBe(true);
+
+  const activation = await readFile(join(packageRoot, "prism.activation.json"), "utf8");
+  expect(activation).toContain("UserPromptSubmit");
+  expect(activation).toContain("config.toml");
+
+  const ledger = await readHarnessLedger("codex-cli", prismHome);
+  expect(ledger.entries).toEqual([]);
 });
 
 test("install runs Cursor lowerer cleanup when tools target is removed", async () => {

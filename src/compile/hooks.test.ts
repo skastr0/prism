@@ -2,10 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Effect, Schema } from "effect";
+import { GENERATED_HOOK_RUNTIME } from "./hook-runtime-bundle.js";
 import { loadPlugin } from "./load.js";
 import { resolveHookMatchForTarget } from "./hooks.js";
 import {
+  NativePermissionRequestHookPayloadSchema,
+  NativePromptSubmitHookPayloadSchema,
   NativeToolAfterHookPayloadSchema,
   NativeToolBeforeHookPayloadSchema,
   NativeSessionEndHookPayloadSchema,
@@ -187,13 +191,119 @@ test("native hook payload decoding is event-specific", () => {
   expect(sessionEnd.native).toEqual({ executionNum: 7, fullyIdle: true, error: "none" });
 });
 
+test("native hook payload schemas normalize prompt and permission events", () => {
+  const prompt = Schema.decodeUnknownSync(NativePromptSubmitHookPayloadSchema)({
+    target: { harness: "codex-cli", nativeEvent: "UserPromptSubmit" },
+    prompt: "summarize this diff",
+    cwd: "/repo",
+    session: { id: "session-1" },
+  });
+
+  expect(prompt).toEqual({
+    event: "prompt.submit",
+    target: { harness: "codex-cli", nativeEvent: "UserPromptSubmit" },
+    prompt: "summarize this diff",
+    cwd: "/repo",
+    session: { id: "session-1" },
+  });
+
+  const permission = Schema.decodeUnknownSync(NativePermissionRequestHookPayloadSchema)({
+    target: { harness: "codex-cli", nativeEvent: "PermissionRequest" },
+    tool: { logical: "shell", name: "bash", input: { command: "git status" } },
+    native: { approval_policy: "on-request" },
+  });
+
+  expect(permission).toEqual({
+    event: "permission.request",
+    target: { harness: "codex-cli", nativeEvent: "PermissionRequest" },
+    tool: { logical: "shell", nativeName: "bash", input: { command: "git status" } },
+    native: { approval_policy: "on-request" },
+  });
+
+  expect(
+    decodeNativeHookPayloadForEvent("prompt.submit", {
+      target: { harness: "codex-cli", nativeEvent: "UserPromptSubmit" },
+      prompt: "hello",
+    })._tag,
+  ).toBe("Right");
+
+  expect(
+    decodeNativeHookPayloadForEvent("permission.request", {
+      target: { harness: "codex-cli", nativeEvent: "PermissionRequest" },
+      tool: { name: "bash", input: {} },
+    })._tag,
+  ).toBe("Right");
+});
+
 test("hook result validation is event-specific and conservative", () => {
   expect(decodeHookResultForEvent("tool.before", { decision: "block", message: "No" })._tag)
     .toBe("Right");
   expect(decodeHookResultForEvent("tool.after", { decision: "block", message: "No" })._tag)
     .toBe("Left");
+  expect(decodeHookResultForEvent("permission.request", { decision: "block", message: "No" })._tag)
+    .toBe("Right");
+  expect(decodeHookResultForEvent("permission.request", { decision: "allow" })._tag)
+    .toBe("Right");
+  expect(decodeHookResultForEvent("prompt.submit", { decision: "block", message: "No" })._tag)
+    .toBe("Left");
+  expect(decodeHookResultForEvent("tool.before", { decision: "allow" })._tag)
+    .toBe("Left");
+  expect(
+    decodeHookResultForEvent("prompt.submit", {
+      decision: "continue",
+      systemMessage: "system",
+      additionalContext: "context",
+    })._tag,
+  ).toBe("Right");
   expect(decodeHookResultForEvent("session.end", { decision: "continue" })._tag)
     .toBe("Right");
+});
+
+test("generated hook runtime decodes prompt and permission event contracts", async () => {
+  const root = await createTempRoot();
+  const runtimePath = join(root, "hook-runtime.mjs");
+  await writeText(runtimePath, GENERATED_HOOK_RUNTIME);
+  const runtime = await import(pathToFileURL(runtimePath).href) as {
+    decodeNativeHookPayloadForEvent: (event: string, payload: unknown) => { _tag: string };
+    decodeHookResultForEvent: (event: string, result: unknown) => { _tag: string; right?: unknown };
+  };
+
+  expect(
+    runtime.decodeNativeHookPayloadForEvent("prompt.submit", {
+      target: { harness: "codex-cli", nativeEvent: "UserPromptSubmit" },
+      prompt: "hello",
+    })._tag,
+  ).toBe("Right");
+  expect(
+    runtime.decodeNativeHookPayloadForEvent("permission.request", {
+      target: { harness: "codex-cli", nativeEvent: "PermissionRequest" },
+      tool: { name: "bash", input: { command: "pwd" } },
+    })._tag,
+  ).toBe("Right");
+  expect(
+    runtime.decodeHookResultForEvent("permission.request", {
+      decision: "block",
+      message: "No",
+    })._tag,
+  ).toBe("Right");
+  expect(
+    runtime.decodeHookResultForEvent("permission.request", {
+      decision: "allow",
+    }).right,
+  ).toEqual({
+    decision: "allow",
+    systemMessage: undefined,
+  });
+  expect(
+    runtime.decodeHookResultForEvent("prompt.submit", {
+      decision: "continue",
+      additionalContext: "context",
+    }).right,
+  ).toEqual({
+    decision: "continue",
+    systemMessage: undefined,
+    additionalContext: "context",
+  });
 });
 
 test("hook V1 fails closed for agent-bound authoring attempts", async () => {

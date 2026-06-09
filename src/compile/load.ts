@@ -190,6 +190,8 @@ export const defineHook = (hook) => hook;
 export const hookEvent = {
   toolBefore: "tool.before",
   toolAfter: "tool.after",
+  promptSubmit: "prompt.submit",
+  permissionRequest: "permission.request",
   sessionStart: "session.start",
   sessionEnd: "session.end",
 };
@@ -761,11 +763,11 @@ const normalizeHookMatch = (
   match: { readonly tool?: HookToolMatcherInput } | undefined,
 ): NormalizedHookMatch | SourceParseError => {
   if (!match?.tool) return {};
-  if (event !== "tool.before" && event !== "tool.after") {
+  if (event !== "tool.before" && event !== "tool.after" && event !== "permission.request") {
     return new SourceParseError({
       sourcePath,
       kind: "hook",
-      message: `match.tool is only supported for tool.before and tool.after hooks`,
+      message: `match.tool is only supported for tool.before, tool.after, and permission.request hooks`,
     });
   }
 
@@ -2307,11 +2309,24 @@ const parseHook = (sourcePath: string): Effect.Effect<Hook, CompileError> =>
       return yield* Effect.fail(match);
     }
 
+    const targets = parsed.targets ?? [];
+    const unknownTarget = targets.find((target) => !isPluginTargetId(target));
+    if (unknownTarget !== undefined) {
+      return yield* Effect.fail(
+        new SourceParseError({
+          sourcePath,
+          kind: "hook",
+          message: `targets contains unknown target '${String(unknownTarget)}'`,
+        }),
+      );
+    }
+
     return new Hook({
       name: parsed.name,
       sourcePath,
       description: parsed.description,
       event: parsed.event,
+      targets,
       match,
       handle: parsed.handle,
     });

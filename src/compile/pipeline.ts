@@ -9,7 +9,7 @@ import { Effect } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import { expandPath } from "../fs.js";
-import type { HarnessId, HarnessScope } from "../types.js";
+import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
   instantiateOrbit,
@@ -78,6 +78,7 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
 import {
+  resolveManifestTargetsForSourceNoun,
   selectSourcesForTarget,
   sourceSelectionFromManifestTargets,
   type SourceNoun,
@@ -175,6 +176,7 @@ export interface CompileOptions {
   readonly mcpRoot?: string;
   readonly dryRun: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
+  readonly packageMode?: boolean;
 }
 
 export type CompileMcpLifecycleMode = "none" | "verify" | "serve";
@@ -191,6 +193,20 @@ export interface CompileResult {
   readonly backups: ReadonlyArray<string>;
   readonly built: ReadonlyArray<string>;
   readonly fromCache: ReadonlyArray<string>;
+}
+
+export interface PlannedCompileResult {
+  readonly target: string;
+  readonly scope: HarnessScope;
+  readonly outputRoot: string;
+  readonly cacheDir: string;
+  readonly composed: ReadonlyArray<ComposedAgent>;
+  readonly orbits: ReadonlyArray<Orbit>;
+  readonly operations: ReadonlyArray<LowerOperation>;
+  readonly built: ReadonlyArray<string>;
+  readonly fromCache: ReadonlyArray<string>;
+  readonly sourcePluginName: string;
+  readonly sourcePluginVersion?: string;
 }
 
 const SUPPORTED_TARGETS = [
@@ -559,7 +575,7 @@ const resolveCompileTargetContext = (
         outputRoot: root,
         mcpRuntimeRoot,
         cacheDir: getCacheDir(options.pluginPath),
-        useCache: !options.dryRun,
+        useCache: !options.dryRun && options.packageMode !== true,
       };
     }
     if (!outputRoot) {
@@ -578,7 +594,7 @@ const resolveCompileTargetContext = (
       outputRoot,
       mcpRuntimeRoot: options.mcpRoot ? expandPath(options.mcpRoot) : defaultMcpRuntimeRoot(),
       cacheDir: getCacheDir(options.pluginPath),
-      useCache: !options.dryRun,
+      useCache: !options.dryRun && options.packageMode !== true,
     };
   });
 
@@ -950,7 +966,15 @@ const selectTargetArtifacts = (
       ? [...registry.skills.values()].sort((left, right) => left.name.localeCompare(right.name))
       : [],
     hooks: surfaces.hooks
-      ? [...registry.hooks.values()].sort((left, right) => left.name.localeCompare(right.name))
+      ? [...registry.hooks.values()]
+          .filter((hook) =>
+            hook.targets.length === 0 ||
+            resolveManifestTargetsForSourceNoun(
+              hook.targets as readonly PluginTargetId[],
+              "hooks",
+            ).includes(targetId)
+          )
+          .sort((left, right) => left.name.localeCompare(right.name))
       : [],
   };
 };
@@ -1124,7 +1148,10 @@ const prepareLoweringInputs = (
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
-    const registry = yield* loadPlugin(options.pluginPath);
+    const loadedRegistry = yield* loadPlugin(options.pluginPath);
+    const registry = options.packageMode === true
+      ? registryWithStdioMcpRuntime(loadedRegistry)
+      : loadedRegistry;
     const surfaces = selectTargetSurfaces(registry, context.targetId, options.scope);
     yield* assertTargetSupportsAgents(options.target, surfaces.agents);
     yield* assertTargetSupportsHooks(options.target, surfaces.hooks);
@@ -1173,6 +1200,64 @@ const prepareLoweringInputs = (
       artifacts,
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
       ...(mcpBearerToken ? { mcpBearerToken } : {}),
+    };
+  });
+
+const registryWithStdioMcpRuntime = (registry: PluginRegistry): PluginRegistry => ({
+  ...registry,
+  runtime: {
+    ...registry.runtime,
+    mcp: Object.fromEntries(
+      Object.entries(registry.runtime.mcp ?? {}).map(([target, config]) => [
+        target,
+        { ...config, transport: "stdio" as const },
+      ]),
+    ),
+  },
+});
+
+export const planPluginForTarget = (
+  options: CompileOptions,
+): Effect.Effect<PlannedCompileResult, CompileError> =>
+  Effect.gen(function* () {
+    const {
+      context,
+      registry,
+      surfaces,
+      agentResult,
+      orbits,
+      composedForLowering,
+      artifacts,
+      mcpRuntimePort,
+      mcpBearerToken,
+    } = yield* prepareLoweringInputs(options);
+    const operations = yield* planTargetLowering({
+      targetId: context.targetId,
+      lowerer: context.lowerer,
+      surfaces,
+      agents: composedForLowering,
+      orbits,
+      artifacts,
+      registry,
+      scope: options.scope,
+      outputRoot: context.outputRoot,
+      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      ...(mcpBearerToken ? { mcpBearerToken } : {}),
+      ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
+    });
+
+    return {
+      target: options.target,
+      scope: options.scope,
+      outputRoot: context.outputRoot,
+      cacheDir: context.cacheDir,
+      composed: composedForLowering,
+      orbits,
+      operations,
+      built: agentResult.built,
+      fromCache: agentResult.fromCache,
+      sourcePluginName: registry.pluginName,
+      sourcePluginVersion: registry.pluginVersion,
     };
   });
 

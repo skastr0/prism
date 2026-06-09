@@ -170,7 +170,7 @@ export default defineHook({
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
-  handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
+  handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const, additionalContext: "unsupported-pretool-context" }),
 });
 `,
   );
@@ -321,16 +321,29 @@ export default defineTool({
   expect(hookWrapper?.content).toContain("result");
   expect(hookWrapper?.content).toContain('harness: "codex-cli"');
   expect(hookWrapper?.content).toContain("input?.cwd");
-  expect(hookWrapper?.content).toContain("console.error");
+  expect(hookWrapper?.content).toContain("permissionDecision");
   if (!hookWrapper) throw new Error("expected audit-shell wrapper");
   await writeText(hookWrapper.target, hookWrapper.content);
   const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
     tool: { name: "shell.command", input: { block: true } },
     cwd: pluginRoot,
   });
-  expect(blocked.exitCode).toBe(2);
-  expect(blocked.stdout).toBe("");
-  expect(blocked.stderr).toContain("blocked");
+  expect(blocked.exitCode).toBe(0);
+  expect(blocked.stderr).toBe("");
+  expect(JSON.parse(blocked.stdout)).toMatchObject({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: "blocked",
+    },
+  });
+  const continued = await runGeneratedHookWrapper(hookWrapper.target, {
+    tool: { name: "shell.command", input: {} },
+    cwd: pluginRoot,
+  });
+  expect(continued.exitCode).toBe(0);
+  expect(continued.stdout).toBe("");
+  expect(continued.stderr).toBe("");
 
   const afterHookWrapper = findContentOperation(
     operations,
@@ -346,6 +359,123 @@ export default defineTool({
   expect(afterResult.exitCode).toBe(0);
   expect(afterResult.stdout).toBe("");
   expect(afterResult.stderr).toBe("");
+});
+
+test("codex-cli lowerer emits prompt and permission request hook wrappers", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-hook-fixture");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-hook-fixture",
+        version: "0.1.0",
+        targets: { hooks: ["codex-cli"] },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "prompt-context.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "prompt-context",
+  event: hookEvent.promptSubmit,
+  handle: (event) => Effect.succeed({
+    decision: "continue" as const,
+    systemMessage: "system:" + event.target.harness,
+    additionalContext: "prompt:" + event.prompt,
+  }),
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "hooks", "permission-guard.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "permission-guard",
+  event: hookEvent.permissionRequest,
+  match: { tool: hookTool.any() },
+  handle: (event) => Effect.succeed(
+    event.tool?.input?.allow
+      ? { decision: "allow" as const, systemMessage: "approved" }
+      : { decision: "block" as const, message: "permission-blocked" },
+  ),
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const operations = await planLowering({
+    agents: [],
+    orbits: [],
+    tools: [],
+    skills: [],
+    hooks: [...registry.hooks.values()],
+    registry,
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "codex-hook-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const configToml = findContentOperation(operations, "config.toml");
+  expect(configToml?.content).toContain('[["hooks"."UserPromptSubmit"]]');
+  expect(configToml?.content).toContain('[["hooks"."PermissionRequest"]]');
+
+  const promptWrapper = findContentOperation(operations, join("hooks", "prompt-context.mjs"));
+  if (!promptWrapper) throw new Error("expected prompt-context wrapper");
+  await writeText(promptWrapper.target, promptWrapper.content);
+  const promptResult = await runGeneratedHookWrapper(promptWrapper.target, {
+    prompt: "hello",
+    cwd: pluginRoot,
+  });
+  expect(promptResult.exitCode).toBe(0);
+  expect(JSON.parse(promptResult.stdout)).toMatchObject({
+    systemMessage: "system:codex-cli",
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: "prompt:hello",
+    },
+  });
+
+  const permissionWrapper = findContentOperation(operations, join("hooks", "permission-guard.mjs"));
+  if (!permissionWrapper) throw new Error("expected permission-guard wrapper");
+  await writeText(permissionWrapper.target, permissionWrapper.content);
+  const allowed = await runGeneratedHookWrapper(permissionWrapper.target, {
+    tool: { name: "Bash", input: { allow: true } },
+    cwd: pluginRoot,
+  });
+  expect(allowed.exitCode).toBe(0);
+  expect(JSON.parse(allowed.stdout)).toMatchObject({
+    systemMessage: "approved",
+    hookSpecificOutput: {
+      hookEventName: "PermissionRequest",
+      decision: { behavior: "allow" },
+    },
+  });
+
+  const denied = await runGeneratedHookWrapper(permissionWrapper.target, {
+    tool: { name: "Bash", input: {} },
+    cwd: pluginRoot,
+  });
+  expect(denied.exitCode).toBe(0);
+  expect(JSON.parse(denied.stdout)).toMatchObject({
+    hookSpecificOutput: {
+      hookEventName: "PermissionRequest",
+      decision: { behavior: "deny", message: "permission-blocked" },
+    },
+  });
 });
 
 test("codex-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {

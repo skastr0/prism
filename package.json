@@ -10,7 +10,8 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./cli": "./src/cli.ts"
+    "./cli": "./src/cli.ts",
+    "./packager": "./src/packager.ts"
   },
   "scripts": {
     "dev": "bun run ./src/cli.ts",

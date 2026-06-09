@@ -52,6 +52,10 @@ import {
   type McpPortSelection,
 } from "./mcp/lifecycle.js";
 import { readHarnessLedger } from "./managed-ledger.js";
+import {
+  formatPackageOperations,
+  packagePluginForTarget,
+} from "./packager.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -300,6 +304,68 @@ program
       }
     } catch (error) {
       printCliError(error, "Compile error");
+      process.exit(1);
+    }
+  });
+
+// Package command - emit distributable harness package artifacts without live activation
+program
+  .command("package <plugin-path>")
+  .description("Package Prism source plugins into distributable per-harness artifacts")
+  .option("--harness <harnesses>", "Comma-separated list of harness IDs")
+  .option("--all", "Package all compile-targeted supported harnesses")
+  .option(
+    "--scope <scope>",
+    `Package output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global",
+  )
+  .option("-p, --project <path>", "Project root when packaging project-scope artifacts")
+  .option("--out <path>", "Override package output directory")
+  .option("--dry-run", "Preview package writes without writing", false)
+  .option("--force", "Allow writing into an existing unowned package output root", false)
+  .action(async (pluginPath: string, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const expanded = expandPath(pluginPath);
+      const manifest = await readManifest(expanded);
+      const requested = resolveRequestedHarnesses(options);
+      const harnesses = requested.filter((harnessId) =>
+        manifestHasCompileTargets(manifest, harnessId)
+      );
+
+      if (harnesses.length === 0) {
+        console.log("\nNo compile-targeted harnesses matched this plugin.");
+        return;
+      }
+
+      console.log(`\n📦 Packaging plugin: ${manifest.name}`);
+      console.log(`   Harnesses: ${harnesses.join(", ")}`);
+      if (options.out) console.log(`   Output: ${expandPath(options.out)}`);
+
+      for (const harnessId of harnesses) {
+        const result = await packagePluginForTarget({
+          pluginPath: expanded,
+          target: harnessId,
+          scope: options.scope,
+          projectPath: options.project,
+          out: options.out,
+          dryRun: options.dryRun,
+          force: options.force,
+          generatorVersion: prismVersion,
+        });
+
+        console.log(`\n   ${harnessId}: ${result.packageRoot}`);
+        console.log(`   Activation: ${result.activationPath}`);
+        const operationText = formatPackageOperations(result.operations);
+        if (operationText.trim().length > 0) {
+          console.log(indentBlock(operationText, "      "));
+        }
+      }
+
+      console.log(options.dryRun ? "\n🔍 Dry run — no writes performed." : "\n✅ Done.");
+    } catch (error) {
+      printCliError(error, "Package error");
       process.exit(1);
     }
   });

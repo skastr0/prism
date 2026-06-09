@@ -216,6 +216,11 @@ const ampNativeHookEvent = (hook: Hook): PlannedAmpHook["nativeEvent"] => {
       throw new Error(
         `Amp does not expose a native session.end plugin event; cannot lower Prism hook '${hook.name}'.`,
       );
+    case "prompt.submit":
+    case "permission.request":
+      throw new Error(
+        `Amp does not expose a native ${hook.event} plugin event; cannot lower Prism hook '${hook.name}'.`,
+      );
   }
 };
 

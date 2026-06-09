@@ -53,12 +53,18 @@ import {
 } from "./mcp/lifecycle.js";
 import { readHarnessLedger } from "./managed-ledger.js";
 
+declare const APP_VERSION: string | undefined;
+
 const program = new Command();
+const prismVersion =
+  typeof APP_VERSION === "string" && APP_VERSION.length > 0
+    ? APP_VERSION
+    : "0.0.0-dev";
 
 program
   .name("prism")
   .description("Unified plugin distribution for AI coding harnesses")
-  .version("0.1.0");
+  .version(prismVersion);
 
 // Install command
 program

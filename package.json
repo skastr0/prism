@@ -26,7 +26,10 @@
     "check:install-all-idempotency": "bun scripts/check-install-all-idempotency.ts",
     "test:guarded": "bun scripts/test-hygiene-guard.ts run -- bun test",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",
-    "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts"
+    "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
+    "acceptance:mcp-determinism": "bun scripts/acceptance/mcp-determinism.ts",
+    "acceptance:mcp-lifecycle": "bun scripts/acceptance/mcp-lifecycle.ts",
+    "acceptance:all": "bun scripts/acceptance/run-all.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

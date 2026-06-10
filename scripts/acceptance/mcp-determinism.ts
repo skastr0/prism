@@ -225,7 +225,7 @@ const main = async (): Promise<void> => {
     gates.push({
       gate: "mcp-determinism:cross-cwd",
       pass: crossCwd.equal && hashesRun1.size > 0 && compileFailures.length === 0,
-      expected: "FAIL",
+      expected: "PASS",
       detail:
         compileFailures.length > 0
           ? `compile failed: ${compileFailures.join(" | ")}`
@@ -240,7 +240,7 @@ const main = async (): Promise<void> => {
     gates.push({
       gate: "mcp-determinism:relocatability",
       pass: relocatability.pass,
-      expected: "FAIL",
+      expected: "PASS",
       detail: relocatability.detail,
     });
 

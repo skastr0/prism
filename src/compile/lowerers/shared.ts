@@ -1,3 +1,4 @@
+import { stripBundlerPathComments } from "../bundle-normalize.js";
 import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -368,7 +369,7 @@ export const bundleGeneratedHookWrapper = async (options: {
 };
 
 const normalizeBuiltHookWrapper = (content: string): string =>
-  content.replace(/^\/\/ .*\/prism-[^/\n]*hook-[^/\n]+\/[^\n]+\n/gm, "");
+  stripBundlerPathComments(content);
 
 export const planGeneratedPluginFilePruning = async (options: {
   readonly root: string;

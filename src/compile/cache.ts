@@ -37,7 +37,7 @@ export const CACHE_FORMAT_VERSION = 3;
  * fixes such as generated tool naming or permission-lowering changes.
  */
 export const COMPILER_SEMANTICS_VERSION =
-  "2026-04-28-opencode-skill-permissions-v1";
+  "2026-06-10-deterministic-bundle-banners-v1";
 
 type SourceLike =
   | Identity

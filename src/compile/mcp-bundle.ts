@@ -1,3 +1,4 @@
+import { stripBundlerPathComments } from "./bundle-normalize.js";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -1674,14 +1675,11 @@ const validateBuiltPiExtensionBundle = async (builtPath: string): Promise<void> 
   }
 };
 
-const normalizeBuiltAmpPluginBundle = (content: string): string =>
-  content.replace(/^\/\/ .*prism-amp-plugin-[^\n]*\n/gm, "");
+const normalizeBuiltAmpPluginBundle = stripBundlerPathComments;
 
-const normalizeBuiltPiExtensionBundle = (content: string): string =>
-  content.replace(/^\/\/ .*prism-pi-extension-[^\n]*\n/gm, "");
+const normalizeBuiltPiExtensionBundle = stripBundlerPathComments;
 
-const normalizeBuiltMcpServerBundle = (content: string): string =>
-  content.replace(/^\/\/ .*prism-mcp-bundle-[^\n]*\n/gm, "");
+const normalizeBuiltMcpServerBundle = stripBundlerPathComments;
 
 export const generateMcpServerBundle = async (
   options: McpServerBundleOptions,

@@ -28,6 +28,7 @@
  * lockfiles, and node_modules/.
  */
 
+import { stripBundlerPathComments } from "../bundle-normalize.js";
 import { mkdir, mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -1617,8 +1618,7 @@ const validateBuiltOpenCodeGeneratedPluginBundle = async (
   }
 };
 
-const normalizeBuiltOpenCodeGeneratedPluginBundle = (content: string): string =>
-  content.replace(/^\/\/ .*prism-opencode-plugin-[^\n]*\n/gm, "");
+const normalizeBuiltOpenCodeGeneratedPluginBundle = stripBundlerPathComments;
 
 const buildGeneratedOpenCodePluginBundle = async (options: {
   readonly root: string;

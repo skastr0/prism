@@ -1,16 +1,14 @@
 /** Hermes Agent lowerer. */
 
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
-import { generateMcpServerBundle } from "../mcp-bundle.js";
+import { mcpToolNamesForBindings } from "../mcp-bundle.js";
 import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
 import {
   generatedMcpServerName,
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
   type ResolvedMcpRuntime,
 } from "../mcp-runtime.js";
 import type { ComposedAgent } from "../compose.js";
@@ -27,7 +25,6 @@ import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
-  planSharedMcpRuntimePrune,
   planCompileOwnedTargetedSkillPruning,
   prismOwnerMarker,
   pushConfigPatchOperation as pushConfigPatch,
@@ -41,7 +38,8 @@ const TARGET_ID = "hermes" as const;
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -61,28 +59,6 @@ export interface LowerInput {
 
 const hermesSkillsRoot = (target: HermesLowerTarget): string =>
   join(target.root, "skills");
-
-const generatedMcpServerFile = (
-  target: HermesLowerTarget,
-  runtime?: ResolvedMcpRuntime,
-): string =>
-  runtimeMcpServerDescriptor(
-    runtime?.transport === "streamable-http" ? target.mcpRuntimeRoot ?? target.root : target.root,
-    target.sourcePluginName,
-  ).absolutePath;
-
-const generatedMcpServerRoot = (
-  target: HermesLowerTarget,
-  runtime?: ResolvedMcpRuntime,
-): string =>
-  dirname(generatedMcpServerFile(target, runtime));
-
-const usesSharedMcpRuntimeRoot = (
-  target: HermesLowerTarget,
-  runtime: ResolvedMcpRuntime,
-): boolean =>
-  runtime.transport === "streamable-http" &&
-  resolve(target.mcpRuntimeRoot ?? target.root) !== resolve(target.root);
 
 const configPath = (target: HermesLowerTarget): string =>
   join(target.root, "config.yaml");
@@ -217,13 +193,9 @@ const renderHermesMcpServerYaml = (options: {
     ];
   }
 
-  const bunCommand = /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath)
-    ? process.execPath
-    : "bun";
-
   return [
     `  ${options.serverName}:`,
-    `    command: ${yamlScalar(bunCommand)}`,
+    `    command: "bun"`,
     `    args:`,
     `      - ${yamlScalar(options.serverPath)}`,
     `    connect_timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.connectTimeoutMs)}`,
@@ -235,6 +207,8 @@ const renderHermesMcpServerYaml = (options: {
     `      PRISM_MCP_SERVER_NAME: ${yamlScalar(options.serverName)}`,
     `      PRISM_MCP_WORKING_DIRECTORY: ${yamlScalar(options.workingDirectory)}`,
     `      PRISM_MCP_REPO_ROOT: ${yamlScalar(options.workingDirectory)}`,
+    `      PRISM_MCP_TOOL_TIMEOUT_MS: ${yamlScalar(String(options.runtime.toolTimeoutMs))}`,
+    `      PRISM_MCP_ENABLED_TOOLS: ${yamlScalar(options.toolNames.join(","))}`,
     `    tools:`,
     `      include:`,
     ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
@@ -300,55 +274,25 @@ const replaceHermesMcpServerBlock = (
   return `${next.join("\n").trimEnd()}\n`;
 };
 
-const planMcpServer = async (
+const planMcpServer = (
   input: LowerInput,
-  operations: LowerOperation[],
-): Promise<{ serverName: string; toolNames: ReadonlyArray<string> }> => {
+): { serverName: string; toolNames: ReadonlyArray<string> } => {
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
+  resolveMcpRuntime(input.registry, TARGET_ID, {
     requirePort: bindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  const serverFile = generatedMcpServerFile(input.target, runtime);
 
-  if (bindings.length === 0) {
-    if (usesSharedMcpRuntimeRoot(input.target, runtime)) {
-      await planSharedMcpRuntimePrune(
-        operations,
-        serverFile,
-        {
-          harness: TARGET_ID,
-          scope: input.target.scope,
-          root: input.target.root,
-          sourcePluginName: input.target.sourcePluginName,
-        },
-        { protectSameHarnessOtherRoots: true },
-      );
-    } else if (await exists(generatedMcpServerRoot(input.target, runtime))) {
-      operations.push({
-        kind: "prune-plugin-path",
-        target: generatedMcpServerRoot(input.target, runtime),
-        targetType: "dir",
-        reason: "stale",
-      });
-    }
-    return { serverName, toolNames: [] };
+  if (bindings.length === 0) return { serverName, toolNames: [] };
+  if (!input.target.mcpServerPath) {
+    throw new Error("Hermes MCP lowering requires the canonical Prism MCP server bundle path.");
   }
 
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath ?? input.registry?.pluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
+  return {
     serverName,
-    version: input.target.sourcePluginVersion,
-    bundleId: serverName,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-
-  await pushWrite(operations, serverFile, bundle.content);
-  return { serverName, toolNames: bundle.toolNames };
+    toolNames: mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
+  };
 };
 
 const assertHermesLoweringInput = (input: LowerInput): void => {
@@ -401,7 +345,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     desiredRelativePaths: desiredTargetedSkillFiles,
   }));
 
-  const mcp = await planMcpServer(input, operations);
+  const mcp = planMcpServer(input);
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
     requirePort: mcp.toolNames.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
@@ -411,7 +355,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     : "";
   const nextConfig = replaceHermesMcpServerBlock(currentConfig, {
     serverName: mcp.serverName,
-    serverPath: generatedMcpServerFile(input.target, runtime),
+    serverPath: input.target.mcpServerPath ?? "",
     workingDirectory: input.target.root,
     runtime,
     bearerToken: input.target.mcpBearerToken,

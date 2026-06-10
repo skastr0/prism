@@ -260,12 +260,21 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "codex-mcp-fixture", "server.mjs"),
       sourcePluginName: "codex-mcp-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
     },
   });
 
+  const canonicalServerPath = join(
+    root,
+    "prism-home",
+    "runtime",
+    "mcp",
+    "codex-mcp-fixture",
+    "server.mjs",
+  );
   const agentToml = findContentOperation(operations, join("agents", "reviewer.toml"));
   expect(agentToml?.content).toContain('name = "reviewer"');
   expect(agentToml?.content).toContain('developer_instructions = "# Reviewer\\n\\nUse the generated MCP server."');
@@ -278,7 +287,7 @@ export default defineTool({
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
   expect(agentToml?.content).toContain('command = "bun"');
-  expect(agentToml?.content).toContain('args = ["mcp/prism_generated_codex_mcp_fixture/server.mjs"]');
+  expect(agentToml?.content).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
   expect(agentToml?.content).toContain(`cwd = ${JSON.stringify(outputRoot)}`);
   expect(agentToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
@@ -290,12 +299,12 @@ export default defineTool({
   expect(rules?.content).toContain('<!-- prism:rules source="global/context.md" -->');
   expect(rules?.content).toContain("Use project rules.");
 
-  const bundle = findContentOperation(
-    operations,
-    join("mcp", "prism_generated_codex_mcp_fixture", "server.mjs"),
+  // The MCP server bundle is written once to PRISM_HOME by the pipeline —
+  // the lowerer plans no bundle write inside the harness root.
+  const bundleOperation = operations.find((operation) =>
+    "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("codex_mcp_fixture_echo");
-  expect(bundle?.content).toContain("tools/list");
+  expect(bundleOperation).toBeUndefined();
 
   const configToml = findContentOperation(operations, "config.toml");
   expect(configToml?.kind).toBe("patch-config");
@@ -305,7 +314,7 @@ export default defineTool({
   expect(configToml?.content).not.toContain("stale = true");
   expect(configToml?.content).toContain("# --- prism codex-cli begin: codex-mcp-fixture ---");
   expect(configToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
-  expect(configToml?.content).not.toContain('args = ["mcp/prism_generated_codex_mcp_fixture/server.mjs"]');
+  expect(configToml?.content).not.toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
   expect(configToml?.content).not.toContain('default_tools_approval_mode = "approve"');
   expect(configToml?.content).not.toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');
@@ -560,7 +569,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpRuntimeRoot: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "codex-http-fixture", "server.mjs"),
       mcpBearerToken: "codex-static-token",
       sourcePluginName: "codex-http-fixture",
       sourcePluginVersion: "0.1.0",
@@ -590,13 +599,12 @@ export default defineTool({
   expect(configToml?.content).not.toContain("# --- prism codex-cli begin: codex-http-fixture ---");
   expect(configToml?.mode).toBe(0o600);
 
+  // HTTP daemons consume the canonical PRISM_HOME bundle; nothing is
+  // written into the harness root (or any shared runtime root) anymore.
   const bundle = operations.find(
-    (operation): operation is ContentOperation =>
-      isContentOperation(operation) &&
-      operation.target === join(outputRoot, "prism", "mcp", "prism_generated_codex_http_fixture", "server.mjs"),
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("codex_http_fixture_echo");
-  expect(bundle?.content).toContain("PRISM_MCP_CODEX_HTTP_TOKEN");
+  expect(bundle).toBeUndefined();
 });
 
 test("codex-cli lowerer prunes stale compile-owned targeted skill files", async () => {

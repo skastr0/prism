@@ -248,6 +248,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "grok-plugin-fixture", "server.mjs"),
       sourcePluginName: "grok-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -299,16 +300,25 @@ export default defineTool({
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");
   expect(mcpConfig?.content).toContain('"prism-generated-grok-plugin-fixture"');
-  expect(mcpConfig?.content).toContain(
-    JSON.stringify(join(outputRoot, "plugins", "prism-generated-grok-plugin-fixture", "mcp", "prism_generated_grok_plugin_fixture", "server.mjs")),
-  );
+  const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+  };
+  const grokEntry = mcpParsed.mcpServers?.["prism-generated-grok-plugin-fixture"];
+  expect(grokEntry?.command).toBe("bun");
+  expect(grokEntry?.args).toEqual([
+    join(root, "prism-home", "runtime", "mcp", "grok-plugin-fixture", "server.mjs"),
+  ]);
+  // Deny-by-default exposure: Grok has no client-side tool filter, so the
+  // per-harness tool names ride PRISM_MCP_ENABLED_TOOLS.
+  expect(grokEntry?.env).toEqual({
+    PRISM_MCP_ENABLED_TOOLS: "grok_plugin_fixture_echo",
+  });
 
-  const bundle = findContentOperation(
-    operations,
-    join("mcp", "prism_generated_grok_plugin_fixture", "server.mjs"),
+  // The bundle itself lives in PRISM_HOME — never in the generated plugin.
+  const bundle = operations.find(
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("grok_plugin_fixture_echo");
-  expect(bundle?.content).toContain("tools/list");
+  expect(bundle).toBeUndefined();
 
   const hookConfig = findContentOperation(operations, join("hooks", "hooks.json"));
   expect(hookConfig?.content).toContain('"PreToolUse"');

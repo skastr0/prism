@@ -223,6 +223,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "factory-plugin-fixture", "server.mjs"),
       sourcePluginName: "factory-plugin-fixture",
       sourcePluginVersion: "0.4.0",
       sourcePluginPath: pluginRoot,
@@ -262,15 +263,15 @@ export default defineTool({
   expect(mcpConfig?.content).toContain('"type": "stdio"');
   expect(mcpConfig?.content).toContain('"command": "bun"');
   expect(mcpConfig?.content).toContain(
-    '"${DROID_PLUGIN_ROOT}/mcp/prism_generated_factory_plugin_fixture/server.mjs"',
+    JSON.stringify(join(root, "prism-home", "runtime", "mcp", "factory-plugin-fixture", "server.mjs")),
   );
+  expect(mcpConfig?.content).toContain('"PRISM_MCP_ENABLED_TOOLS": "factory_plugin_fixture_echo"');
 
-  const bundle = findContentOperation(
-    operations,
-    join("mcp", "prism_generated_factory_plugin_fixture", "server.mjs"),
+  // The bundle lives at the canonical PRISM_HOME path — never in the bundle plan.
+  const bundle = operations.find(
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("factory_plugin_fixture_echo");
-  expect(bundle?.content).toContain("tools/list");
+  expect(bundle).toBeUndefined();
 
   const hookConfig = findContentOperation(operations, join("hooks", "hooks.json"));
   expect(hookConfig?.content).toContain('"PreToolUse"');

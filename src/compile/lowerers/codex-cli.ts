@@ -6,16 +6,14 @@ import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
-  generateMcpServerBundle,
   mcpToolNameForBinding,
+  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
   type ResolvedMcpRuntime,
 } from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
@@ -54,7 +52,8 @@ const TARGET_ID = "codex-cli" as const;
 export interface CodexCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -83,7 +82,7 @@ interface AgentMcpServerConfig {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
   readonly bearerToken?: string;
-  readonly bundlePath?: string;
+  readonly serverPath?: string;
   readonly root: string;
 }
 
@@ -409,7 +408,7 @@ const renderCodexMcpServerToml = (options: {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
   readonly bearerToken?: string;
-  readonly bundlePath?: string;
+  readonly serverPath?: string;
   readonly root: string;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => {
@@ -427,7 +426,7 @@ const renderCodexMcpServerToml = (options: {
       ]
     : [
         'command = "bun"',
-        `args = ${tomlArray([options.bundlePath ?? missingCodexMcpBundlePath()])}`,
+        `args = ${tomlArray([options.serverPath ?? missingCodexMcpBundlePath()])}`,
         `cwd = ${quote(options.root)}`,
       ];
 
@@ -442,7 +441,7 @@ const renderCodexMcpServerToml = (options: {
 };
 
 const missingCodexMcpBundlePath = (): never => {
-  throw new Error("Codex stdio MCP config requires a generated bundle path.");
+  throw new Error("Codex stdio MCP config requires the canonical Prism MCP server bundle path.");
 };
 
 const renderAgentToml = (
@@ -750,17 +749,16 @@ const renderManagedConfigBlock = (options: {
   return lines.join("\n");
 };
 
-const planMcpServer = async (
+const planMcpServer = (
   input: LowerInput,
-  operations: LowerOperation[],
-): Promise<{
+): {
   mcpServerName?: string;
-  mcpBundlePath?: string;
+  mcpServerPath?: string;
   mcpRuntime?: ResolvedMcpRuntime;
   mcpBearerToken?: string;
   toolNames: string[];
   globalToolNames: string[];
-}> => {
+} => {
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
@@ -771,38 +769,17 @@ const planMcpServer = async (
     resolvedPort: input.target.mcpRuntimePort,
   });
   if (bindings.length === 0) return { toolNames: [], globalToolNames: [] };
+  if (!input.target.mcpServerPath) missingCodexMcpBundlePath();
 
   const mcpServerName = generatedMcpServerName(input.target.sourcePluginName);
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    serverName: mcpServerName,
-    version: input.target.sourcePluginVersion,
-    bundleId: mcpServerName,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-
-  const serverTarget = runtime.transport === "streamable-http"
-    ? runtimeMcpServerDescriptor(
-        input.target.mcpRuntimeRoot ?? input.target.root,
-        input.target.sourcePluginName,
-      ).absolutePath
-    : join(input.target.root, ...bundle.relativePath.split("/"));
-
-  await pushWrite(
-    operations,
-    serverTarget,
-    bundle.content,
-  );
-
   return {
     mcpServerName,
-    ...(runtime.transport === "stdio" ? { mcpBundlePath: bundle.relativePath } : {}),
+    mcpServerPath: input.target.mcpServerPath,
     mcpRuntime: runtime,
     ...(input.target.mcpBearerToken ? { mcpBearerToken: input.target.mcpBearerToken } : {}),
-    toolNames: uniqueSorted(bundle.toolNames),
+    toolNames: uniqueSorted(
+      mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
+    ),
     globalToolNames: uniqueSorted(
       bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map((binding) =>
         mcpToolNameForBinding(input.target.sourcePluginName, binding),
@@ -811,7 +788,7 @@ const planMcpServer = async (
   };
 };
 
-type PlannedMcpServer = Awaited<ReturnType<typeof planMcpServer>>;
+type PlannedMcpServer = ReturnType<typeof planMcpServer>;
 
 const agentMcpServerConfig = (
   input: LowerInput,
@@ -822,7 +799,7 @@ const agentMcpServerConfig = (
         name: mcp.mcpServerName,
         runtime: mcp.mcpRuntime,
         ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
-        ...(mcp.mcpBundlePath ? { bundlePath: mcp.mcpBundlePath } : {}),
+        ...(mcp.mcpServerPath ? { serverPath: mcp.mcpServerPath } : {}),
         root: input.target.root,
       }
     : undefined;
@@ -944,7 +921,7 @@ const planConfigWrite = async (
       name: mcp.mcpServerName,
       runtime: mcp.mcpRuntime,
       ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
-      bundlePath: mcp.mcpBundlePath,
+      serverPath: mcp.mcpServerPath,
       root: input.target.root,
       enabledTools: mcp.globalToolNames,
     });
@@ -970,7 +947,7 @@ const planConfigWrite = async (
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   const operations: LowerOperation[] = [];
   const desiredGeneratedSkillFiles = new Set<string>();
-  const mcp = await planMcpServer(input, operations);
+  const mcp = planMcpServer(input);
 
   await planAgentWrites(input, operations, agentMcpServerConfig(input, mcp));
   const desiredManagedSkills = await planManagedSkillWrites(input, operations);

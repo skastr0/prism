@@ -97,12 +97,22 @@ import { writeLockfile } from "./lockfile.js";
 import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
 import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
-  defaultMcpRuntimeRoot,
   generatedMcpServerName,
   isStreamableHttpMcpRuntime,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
+import {
+  prismMcpServerPath,
+  writePrismMcpServerBundle,
+} from "./mcp-runtime-path.js";
+import {
+  generateMcpServerBundle,
+  mcpServerArtifactRelativePath,
+} from "./mcp-bundle.js";
+import { join as joinPath } from "node:path";
+import type { ResolvedContractBinding } from "./resolve.js";
 import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
+import { pushWriteOperation } from "./lowerers/shared.js";
 import { ensureMcpToken } from "../mcp/token-store.js";
 import { getFreePort } from "../mcp/ports.js";
 
@@ -117,7 +127,7 @@ interface LowererModule {
     readonly target: {
       readonly scope: HarnessScope;
       readonly root: string;
-      readonly mcpRuntimeRoot?: string;
+      readonly mcpServerPath?: string;
       readonly mcpBearerToken?: string;
       readonly mcpRuntimePort?: number;
       readonly sourcePluginName: string;
@@ -135,7 +145,7 @@ interface CompileTargetContext {
   readonly targetId: HarnessId;
   readonly lowerer: LowererModule;
   readonly outputRoot: string;
-  readonly mcpRuntimeRoot: string;
+  readonly prismHome: string;
   readonly cacheDir: string;
   readonly useCache: boolean;
 }
@@ -173,7 +183,8 @@ export interface CompileOptions {
   readonly scope: HarnessScope;
   readonly projectPath?: string;
   readonly root?: string;
-  readonly mcpRoot?: string;
+  /** Prism home directory, threaded from the CLI edge (no env fallback). */
+  readonly prismHome: string;
   readonly dryRun: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
   readonly packageMode?: boolean;
@@ -567,13 +578,11 @@ const resolveCompileTargetContext = (
       options.projectPath
     );
     if (options.root) {
-      const root = expandPath(options.root);
-      const mcpRuntimeRoot = options.mcpRoot ? expandPath(options.mcpRoot) : root;
       return {
         targetId: options.target as HarnessId,
         lowerer,
-        outputRoot: root,
-        mcpRuntimeRoot,
+        outputRoot: expandPath(options.root),
+        prismHome: expandPath(options.prismHome),
         cacheDir: getCacheDir(options.pluginPath),
         useCache: !options.dryRun && options.packageMode !== true,
       };
@@ -592,7 +601,7 @@ const resolveCompileTargetContext = (
       targetId: options.target as HarnessId,
       lowerer,
       outputRoot,
-      mcpRuntimeRoot: options.mcpRoot ? expandPath(options.mcpRoot) : defaultMcpRuntimeRoot(),
+      prismHome: expandPath(options.prismHome),
       cacheDir: getCacheDir(options.pluginPath),
       useCache: !options.dryRun && options.packageMode !== true,
     };
@@ -608,7 +617,6 @@ const renderMcpServeCommand = (options: {
   readonly targetId: HarnessId;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
-  readonly root?: string;
   readonly registry: PluginRegistry;
 }): string => {
   const configured = resolveMcpRuntime(options.registry, options.targetId);
@@ -622,20 +630,9 @@ const renderMcpServeCommand = (options: {
     "--scope",
     options.scope,
     ...(options.projectPath ? ["--project", shellQuote(options.projectPath)] : []),
-    ...(options.root ? ["--root", shellQuote(options.root)] : []),
     ...(configured?.port ? ["--port", String(configured.port)] : []),
     ...(configured?.tokenEnv ? ["--token-env", shellQuote(configured.tokenEnv)] : []),
   ].join(" ");
-};
-
-const findMcpServerSha256 = (
-  operations: ReadonlyArray<LowerOperation>,
-): string | undefined => {
-  const serverWrite = operations.find((operation) =>
-    operation.kind === "write-plugin-file" &&
-    /[/\\]prism[/\\]mcp[/\\][^/\\]+[/\\]server\.mjs$/u.test(operation.target)
-  );
-  return serverWrite?.kind === "write-plugin-file" ? sha256Hex(serverWrite.content) : undefined;
 };
 
 const mcpBindingsForTarget = (options: {
@@ -661,7 +658,7 @@ const resolveCompileMcpRuntimePort = (options: {
   readonly compileOptions: CompileOptions;
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
-  readonly mcpRuntimeRoot: string;
+  readonly prismHome: string;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
 }): Effect.Effect<number | undefined, CompileError> => {
@@ -684,7 +681,6 @@ const resolveCompileMcpRuntimePort = (options: {
     targetId: options.targetId,
     scope: options.compileOptions.scope,
     projectPath: options.compileOptions.projectPath,
-    root: options.mcpRuntimeRoot,
     registry: options.registry,
   });
 
@@ -700,7 +696,7 @@ const resolveCompileMcpRuntimePort = (options: {
           harness: options.targetId,
           scope: options.compileOptions.scope,
           projectPath: options.compileOptions.projectPath,
-          root: options.mcpRuntimeRoot,
+          prismHome: options.prismHome,
         });
         const port = portFromMcpMetadata(served.metadata);
         if (port !== undefined) return port;
@@ -714,7 +710,7 @@ const resolveCompileMcpRuntimePort = (options: {
         harness: options.targetId,
         scope: options.compileOptions.scope,
         projectPath: options.compileOptions.projectPath,
-        root: options.mcpRuntimeRoot,
+        prismHome: options.prismHome,
       });
       const port = status.state === "running" ? portFromMcpMetadata(status.metadata) : undefined;
       if (port !== undefined) return port;
@@ -736,10 +732,10 @@ const assertHttpMcpLifecycleGate = (options: {
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
   readonly outputRoot: string;
-  readonly mcpRuntimeRoot: string;
+  readonly prismHome: string;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
-  readonly operations: ReadonlyArray<LowerOperation>;
+  readonly expectedServerSha256?: string;
 }): Effect.Effect<void, CompileError> => {
   const bindings = mcpBindingsForTarget({
     registry: options.registry,
@@ -760,10 +756,9 @@ const assertHttpMcpLifecycleGate = (options: {
     targetId: options.targetId,
     scope: options.compileOptions.scope,
     projectPath: options.compileOptions.projectPath,
-    root: options.mcpRuntimeRoot,
     registry: options.registry,
   });
-  const expectedServerSha256 = findMcpServerSha256(options.operations);
+  const expectedServerSha256 = options.expectedServerSha256;
 
   return Effect.tryPromise({
     try: async () => {
@@ -773,7 +768,7 @@ const assertHttpMcpLifecycleGate = (options: {
           harness: options.targetId,
           scope: options.compileOptions.scope,
           projectPath: options.compileOptions.projectPath,
-          root: options.mcpRuntimeRoot,
+          prismHome: options.prismHome,
         });
       }
 
@@ -782,7 +777,7 @@ const assertHttpMcpLifecycleGate = (options: {
         harness: options.targetId,
         scope: options.compileOptions.scope,
         projectPath: options.compileOptions.projectPath,
-        root: options.mcpRuntimeRoot,
+        prismHome: options.prismHome,
         expectedServerSha256,
       });
       if (status.state === "running") return;
@@ -978,7 +973,7 @@ const resolveCompileMcpBearerToken = (options: {
   readonly targetId: HarnessId;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
-  readonly runtimeRoot: string;
+  readonly prismHome: string;
   readonly dryRun: boolean;
 }): Effect.Effect<string | undefined, CompileError> => {
   const bindings = mcpBindingsForAgentsAndTools(
@@ -999,7 +994,7 @@ const resolveCompileMcpBearerToken = (options: {
       const runtime = resolveMcpRuntime(options.registry, options.targetId);
       const preferredToken = process.env[runtime.tokenEnv];
       return ensureMcpToken(
-        options.runtimeRoot,
+        options.prismHome,
         generatedMcpServerName(options.registry.pluginName),
         {
           ...(preferredToken ? { preferredToken } : {}),
@@ -1012,6 +1007,127 @@ const resolveCompileMcpBearerToken = (options: {
   });
 };
 
+// ---------------------------------------------------------------------------
+// Union MCP bundle (overhaul WS3): ONE bundle per plugin, merging the canonical
+// tool bindings of every harness the plugin targets. Per-harness exposure
+// stays client-side (enabled_tools / tools.include / enabledTools /
+// PRISM_MCP_ENABLED_TOOLS) in the lowered configs.
+// ---------------------------------------------------------------------------
+
+const MCP_UNION_NOUNS = ["tools", "agents", "orbits"] as const;
+
+const unionMcpTargetHarnesses = (registry: PluginRegistry): HarnessId[] => {
+  const harnesses = new Set<HarnessId>();
+  for (const noun of MCP_UNION_NOUNS) {
+    for (const target of resolveManifestTargetsForSourceNoun(
+      (registry.targets[noun] ?? []) as readonly PluginTargetId[],
+      noun,
+    )) {
+      harnesses.add(target);
+    }
+  }
+  return [...harnesses].sort((left, right) => left.localeCompare(right));
+};
+
+const resolveUnionMcpBindings = (
+  registry: PluginRegistry,
+  scope: HarnessScope,
+): Effect.Effect<ReadonlyArray<ResolvedContractBinding>, CompileError> =>
+  Effect.gen(function* () {
+    const bindings: ResolvedContractBinding[] = [];
+    for (const harness of unionMcpTargetHarnesses(registry)) {
+      const surfaces = selectTargetSurfaces(registry, harness, scope);
+      const tools = surfaces.tools
+        ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
+        : [];
+      const agents: ComposedAgent[] = [];
+      if (surfaces.agents) {
+        for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) =>
+          a.localeCompare(b),
+        )) {
+          agents.push(composeAgent(yield* resolveAgent(agent, registry, harness)));
+        }
+      }
+      const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
+      const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
+      const agentsWithOrbitTools = applyOrbitToolPermissions(agents, orbitToolPermissions);
+      bindings.push(
+        ...mcpBindingsForAgentsAndTools(registry.pluginName, tools, agentsWithOrbitTools),
+      );
+    }
+    return bindings;
+  });
+
+interface PreparedMcpServer {
+  /** Absolute path harness configs reference (canonical PRISM_HOME path). */
+  readonly serverPath: string;
+  readonly serverSha256: string;
+  /** Package mode only: bundle bytes emitted as a plan operation instead. */
+  readonly packagedBundleContent?: string;
+}
+
+const prepareUnionMcpServer = (options: {
+  readonly compileOptions: CompileOptions;
+  readonly context: CompileTargetContext;
+  readonly registry: PluginRegistry;
+  readonly agents: ReadonlyArray<ComposedAgent>;
+  readonly artifacts: TargetArtifacts;
+}): Effect.Effect<PreparedMcpServer | undefined, CompileError> =>
+  Effect.gen(function* () {
+    const targetBindings = mcpBindingsForAgentsAndTools(
+      options.registry.pluginName,
+      options.artifacts.tools,
+      options.agents,
+    );
+    if (targetBindings.length === 0) return undefined;
+
+    const unionBindings = yield* resolveUnionMcpBindings(
+      options.registry,
+      options.compileOptions.scope,
+    );
+    const serverName = generatedMcpServerName(options.registry.pluginName);
+    const bundle = yield* Effect.promise(() =>
+      generateMcpServerBundle({
+        sourcePluginName: options.registry.pluginName,
+        sourcePluginRoot: options.registry.pluginPath,
+        dependencyPluginRoots: Object.entries(options.registry.dependencyPaths),
+        serverName,
+        version: options.registry.pluginVersion,
+        bundleId: serverName,
+        bindings: unionBindings,
+      }),
+    );
+
+    if (options.compileOptions.packageMode === true) {
+      // Packages stay self-contained: the bundle ships inside the package
+      // payload (an inert distributable, not a live harness root).
+      return {
+        serverPath: joinPath(
+          options.context.outputRoot,
+          ...mcpServerArtifactRelativePath(serverName).split("/"),
+        ),
+        serverSha256: sha256Hex(bundle.content),
+        packagedBundleContent: bundle.content,
+      };
+    }
+
+    if (options.compileOptions.dryRun) {
+      return {
+        serverPath: prismMcpServerPath(options.context.prismHome, options.registry.pluginName),
+        serverSha256: sha256Hex(bundle.content),
+      };
+    }
+
+    const write = yield* Effect.promise(() =>
+      writePrismMcpServerBundle(
+        options.context.prismHome,
+        options.registry.pluginName,
+        bundle.content,
+      ),
+    );
+    return { serverPath: write.path, serverSha256: write.sha256 };
+  });
+
 const planTargetLowering = (options: {
   readonly targetId: HarnessId;
   readonly lowerer: LowererModule;
@@ -1022,7 +1138,7 @@ const planTargetLowering = (options: {
   readonly registry: PluginRegistry;
   readonly scope: HarnessScope;
   readonly outputRoot: string;
-  readonly mcpRuntimeRoot: string;
+  readonly mcpServer?: PreparedMcpServer;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
 }): Effect.Effect<LowerOperation[], CompileError> => {
@@ -1037,8 +1153,8 @@ const planTargetLowering = (options: {
     return Effect.succeed([]);
   }
 
-  return Effect.promise(() =>
-    options.lowerer.planLowering({
+  return Effect.promise(async () => {
+    const operations = await options.lowerer.planLowering({
       agents: options.agents,
       orbits: options.orbits,
       tools: options.artifacts.tools,
@@ -1048,15 +1164,28 @@ const planTargetLowering = (options: {
       target: {
         scope: options.scope,
         root: options.outputRoot,
-        mcpRuntimeRoot: options.mcpRuntimeRoot,
+        ...(options.mcpServer ? { mcpServerPath: options.mcpServer.serverPath } : {}),
         ...(options.mcpBearerToken ? { mcpBearerToken: options.mcpBearerToken } : {}),
         ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
         sourcePluginPath: options.registry.pluginPath,
       },
-    })
-  );
+    });
+
+    // Package mode ships the bundle inside the package payload as a plan
+    // operation (live compiles write the canonical PRISM_HOME bundle instead).
+    if (options.mcpServer?.packagedBundleContent !== undefined) {
+      const bundleOperations: LowerOperation[] = [];
+      await pushWriteOperation(
+        bundleOperations,
+        options.mcpServer.serverPath,
+        options.mcpServer.packagedBundleContent,
+      );
+      return [...bundleOperations, ...operations];
+    }
+    return operations;
+  });
 };
 
 const executeTargetLowering = (
@@ -1134,6 +1263,7 @@ const prepareLoweringInputs = (
   readonly orbits: ReadonlyArray<Orbit>;
   readonly composedForLowering: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
+  readonly mcpServer?: PreparedMcpServer;
   readonly mcpRuntimePort?: number;
   readonly mcpBearerToken?: string;
 }, CompileError> =>
@@ -1164,11 +1294,20 @@ const prepareLoweringInputs = (
       orbits,
     });
     const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
+    // Build (and write) the canonical union bundle BEFORE any daemon
+    // lifecycle interaction so `prism mcp serve` reads compiled bytes.
+    const mcpServer = yield* prepareUnionMcpServer({
+      compileOptions: options,
+      context,
+      registry,
+      agents: composedForLowering,
+      artifacts,
+    });
     const mcpRuntimePort = yield* resolveCompileMcpRuntimePort({
       compileOptions: options,
       registry,
       targetId: context.targetId,
-      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      prismHome: context.prismHome,
       agents: composedForLowering,
       artifacts,
     });
@@ -1177,7 +1316,7 @@ const prepareLoweringInputs = (
       targetId: context.targetId,
       agents: composedForLowering,
       artifacts,
-      runtimeRoot: context.mcpRuntimeRoot,
+      prismHome: context.prismHome,
       dryRun: options.dryRun,
     });
 
@@ -1189,6 +1328,7 @@ const prepareLoweringInputs = (
       orbits,
       composedForLowering,
       artifacts,
+      ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
       ...(mcpBearerToken ? { mcpBearerToken } : {}),
     };
@@ -1219,6 +1359,7 @@ export const planPluginForTarget = (
       orbits,
       composedForLowering,
       artifacts,
+      mcpServer,
       mcpRuntimePort,
       mcpBearerToken,
     } = yield* prepareLoweringInputs(options);
@@ -1232,7 +1373,7 @@ export const planPluginForTarget = (
       registry,
       scope: options.scope,
       outputRoot: context.outputRoot,
-      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      ...(mcpServer ? { mcpServer } : {}),
       ...(mcpBearerToken ? { mcpBearerToken } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
@@ -1264,6 +1405,7 @@ export const compilePluginForTarget = (
       orbits,
       composedForLowering,
       artifacts,
+      mcpServer,
       mcpRuntimePort,
       mcpBearerToken,
     } = yield* prepareLoweringInputs(options);
@@ -1277,7 +1419,7 @@ export const compilePluginForTarget = (
       registry,
       scope: options.scope,
       outputRoot: context.outputRoot,
-      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      ...(mcpServer ? { mcpServer } : {}),
       ...(mcpBearerToken ? { mcpBearerToken } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
@@ -1286,10 +1428,10 @@ export const compilePluginForTarget = (
       registry,
       targetId: context.targetId,
       outputRoot: context.outputRoot,
-      mcpRuntimeRoot: context.mcpRuntimeRoot,
+      prismHome: context.prismHome,
       agents: composedForLowering,
       artifacts,
-      operations: allOps,
+      ...(mcpServer ? { expectedServerSha256: mcpServer.serverSha256 } : {}),
     });
     const backups = yield* executeTargetLowering(context.lowerer, allOps, {
       dryRun: options.dryRun,

@@ -289,7 +289,6 @@ const streamableCodexPluginPaths = async (pluginsRoot: string): Promise<string[]
 
 const stopStreamableCodexMcp = async (
   pluginPaths: readonly string[],
-  mcpRoot: string,
   env: Record<string, string>,
 ): Promise<void> => {
   for (const pluginPath of pluginPaths) {
@@ -304,8 +303,6 @@ const stopStreamableCodexMcp = async (
       "codex-cli",
       "--scope",
       "global",
-      "--root",
-      mcpRoot,
     ], env);
   }
 };
@@ -321,7 +318,6 @@ const main = async (): Promise<void> => {
   const homeRoot = join(tempRoot, "home");
   const prismHome = join(tempRoot, "prism-home");
   const xdgRoot = join(tempRoot, "xdg");
-  const mcpRoot = join(tempRoot, "mcp-runtime");
   const codexRoot = join(homeRoot, ".codex");
   const configPath = join(codexRoot, "config.toml");
   const ledgerPath = join(prismHome, "state", "codex-cli.ledger.json");
@@ -349,8 +345,6 @@ const main = async (): Promise<void> => {
       "--no-validate",
       "--mcp-lifecycle",
       "serve",
-      "--mcp-root",
-      mcpRoot,
     ];
 
     await run("Cold install-all over plugin corpus", command, { env });
@@ -369,7 +363,7 @@ const main = async (): Promise<void> => {
     failed = false;
     console.log("\nInstall-all idempotency gate passed.");
   } finally {
-    await stopStreamableCodexMcp(streamableMcpPlugins, mcpRoot, env);
+    await stopStreamableCodexMcp(streamableMcpPlugins, env);
     if (failed || args.keep) {
       console.error(`\nInstall-all idempotency workspace preserved: ${tempRoot}`);
     } else {

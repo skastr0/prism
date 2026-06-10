@@ -10,15 +10,13 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
-  generateMcpServerBundle,
   mcpToolNameForBinding,
+  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
 } from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
@@ -45,7 +43,6 @@ import {
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
-  pushWriteOperation as pushRawWrite,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
@@ -58,7 +55,8 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface ClaudeCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -326,35 +324,21 @@ const planMcpServer = async (
     return;
   }
 
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    serverName: pluginId,
-    version: input.target.sourcePluginVersion ?? "0.1.0",
-    bundleId: pluginId,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-
-  if (runtime.transport === "streamable-http") {
-    await pushRawWrite(
-      operations,
-      runtimeMcpServerDescriptor(
-        input.target.mcpRuntimeRoot ?? input.target.root,
-        input.target.sourcePluginName,
-      ).absolutePath,
-      bundle.content,
-    );
-  } else {
-    await pushWrite(
-      operations,
-      desiredRelativePaths,
-      input.target,
-      bundle.relativePath,
-      bundle.content,
-    );
+  if (!input.target.mcpServerPath) {
+    throw new Error("Claude Code MCP lowering requires the canonical Prism MCP server bundle path.");
   }
+
+  // The stdio entry references the canonical PRISM_HOME bundle by absolute
+  // path — the same standard mcpServers JSON shape cursor/grok/antigravity
+  // already use. If a real-root cutover ever disproves absolute paths in
+  // plugin .mcp.json, the documented fallback is a 2-line owned shim .mjs
+  // inside the generated plugin re-exporting the canonical bundle
+  // (docs/overhaul-one-writer-plan.md, Claude Code escape hatch).
+
+  // Claude Code has no client-side tool filter in .mcp.json, so the lowered
+  // stdio config passes the per-harness tool names as a deny-by-default
+  // PRISM_MCP_ENABLED_TOOLS filter to the union bundle.
+  const enabledTools = mcpToolNamesForBindings(input.target.sourcePluginName, bindings);
 
   await pushWrite(
     operations,
@@ -376,7 +360,8 @@ const planMcpServer = async (
             }
           : {
               command: "bun",
-              args: [`\${CLAUDE_PLUGIN_ROOT}/${bundle.relativePath}`],
+              args: [input.target.mcpServerPath],
+              env: { PRISM_MCP_ENABLED_TOOLS: enabledTools.join(",") },
             },
       },
     }),

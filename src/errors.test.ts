@@ -23,6 +23,7 @@ import {
   describePrismCause,
   isPrismError,
   LoweringOwnershipError,
+  McpBundleMissingError,
   PluginManifestError,
   PRISM_ERROR_TAGS,
   PrismConfigError,
@@ -102,6 +103,10 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
   new BundleBuildError({
     bundleKind: "MCP server",
     diagnostics: "error: could not resolve './missing.js'",
+  }),
+  new McpBundleMissingError({
+    pluginName: "demo",
+    bundlePath: "/tmp/prism-home/runtime/mcp/demo/server.mjs",
   }),
   new LoweringOwnershipError({
     reason: "drifted-target",

@@ -10,16 +10,14 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
-  generateMcpServerBundle,
   mcpToolNameForBinding,
+  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
-import { runtimeMcpServerPathForTarget } from "../mcp-runtime-path.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -40,10 +38,8 @@ import {
   planGeneratedPluginManifest,
   planGeneratedPluginPruning,
   planGeneratedPluginSkillWrites,
-  planSharedMcpRuntimePrune,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
-  pushWriteOperation as pushRawWrite,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
@@ -56,7 +52,8 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface FactoryDroidLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -311,15 +308,6 @@ const planMcpServer = async (
   });
   const pluginId = generatedPluginId(input.target);
 
-  if (runtime.transport !== "streamable-http" || bindings.length === 0) {
-    await planSharedMcpRuntimePrune(operations, runtimeMcpServerPathForTarget(input.target), {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    });
-  }
-
   if (bindings.length === 0) {
     await pushWrite(
       operations,
@@ -331,31 +319,8 @@ const planMcpServer = async (
     return;
   }
 
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    serverName: pluginId,
-    version: input.target.sourcePluginVersion ?? "0.1.0",
-    bundleId: pluginId,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-
-  if (runtime.transport === "streamable-http") {
-    await pushRawWrite(
-      operations,
-      runtimeMcpServerPathForTarget(input.target),
-      bundle.content,
-    );
-  } else {
-    await pushWrite(
-      operations,
-      desiredRelativePaths,
-      input.target,
-      bundle.relativePath,
-      bundle.content,
-    );
+  if (!input.target.mcpServerPath) {
+    throw new Error("Factory Droid MCP lowering requires the canonical Prism MCP server bundle path.");
   }
 
   await pushWrite(
@@ -379,7 +344,15 @@ const planMcpServer = async (
           : {
               type: "stdio",
               command: "bun",
-              args: [`\${DROID_PLUGIN_ROOT}/${bundle.relativePath}`],
+              args: [input.target.mcpServerPath],
+              // Factory mcp.json has no per-server tool allowlist, so the
+              // union bundle is filtered via PRISM_MCP_ENABLED_TOOLS.
+              env: {
+                PRISM_MCP_ENABLED_TOOLS: mcpToolNamesForBindings(
+                  input.target.sourcePluginName,
+                  bindings,
+                ).join(","),
+              },
             },
       },
     }),
@@ -398,12 +371,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     generatedPath(input.target, relativePath);
 
   if (!hasFactoryOutput(input)) {
-    await planSharedMcpRuntimePrune(state.operations, runtimeMcpServerPathForTarget(input.target), {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    });
     await planGeneratedPluginPruning({
       state,
       root: generatedPluginRoot(input.target),

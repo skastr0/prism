@@ -1,19 +1,14 @@
 /** Cursor lowerer. */
 
 import { join } from "node:path";
-import {
-  generateMcpServerBundle,
-  mcpServerArtifactRelativePath,
-} from "../mcp-bundle.js";
+import { mcpToolNamesForBindings } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
 } from "../mcp-runtime.js";
-import { runtimeMcpServerPathForTarget } from "../mcp-runtime-path.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -32,9 +27,7 @@ import type { HarnessScope } from "../../types.js";
 import type { LowerOperation } from "./opencode.js";
 import {
   executeStandardLowering,
-  planSharedMcpRuntimePrune,
   pushConfigPatchOperation as pushConfigPatch,
-  pushWriteOperation as pushWrite,
 } from "./shared.js";
 
 const TARGET_ID = "cursor" as const;
@@ -42,7 +35,8 @@ const TARGET_ID = "cursor" as const;
 export interface CursorLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -65,6 +59,7 @@ type CursorMcpServerEntry =
       readonly type: "stdio";
       readonly command: "bun";
       readonly args: readonly [string];
+      readonly env: { readonly PRISM_MCP_ENABLED_TOOLS: string };
     }
   | {
       readonly url: string;
@@ -73,11 +68,6 @@ type CursorMcpServerEntry =
 
 const configPath = (target: CursorLowerTarget): string =>
   join(target.root, "mcp.json");
-
-const localStdioServerPath = (
-  target: CursorLowerTarget,
-  serverName = generatedMcpServerName(target.sourcePluginName),
-): string => join(target.root, ...mcpServerArtifactRelativePath(serverName).split("/"));
 
 const json = (value: unknown): string =>
   `${JSON.stringify(value, null, 2)}\n`;
@@ -174,6 +164,7 @@ const renderCursorMcpServerEntry = (options: {
   readonly target: CursorLowerTarget;
   readonly serverPath: string;
   readonly runtime: ResolvedMcpRuntime;
+  readonly toolNames: ReadonlyArray<string>;
 }): CursorMcpServerEntry =>
   options.runtime.transport === "streamable-http"
     ? {
@@ -189,67 +180,17 @@ const renderCursorMcpServerEntry = (options: {
         type: "stdio",
         command: "bun",
         args: [options.serverPath],
+        // Cursor mcp.json has no per-server tool allowlist, so the union
+        // bundle is filtered deny-by-default via PRISM_MCP_ENABLED_TOOLS.
+        env: { PRISM_MCP_ENABLED_TOOLS: options.toolNames.join(",") },
       };
 
-const planStaleRuntimePruning = async (
+const planMcpServer = (
   input: LowerInput,
-  operations: LowerOperation[],
-  options: {
-    readonly bindingsLength: number;
-    readonly transport: "stdio" | "streamable-http";
-    readonly allowCleanupPrune: boolean;
-  },
-): Promise<void> => {
-  if (!options.allowCleanupPrune) return;
-
-  const localPath = localStdioServerPath(input.target);
-  const sharedPath = runtimeMcpServerPathForTarget(input.target);
-
-  if (
-    (options.transport === "stdio" || options.bindingsLength === 0) &&
-    await cursorCurrentTargetIsLedgerOwned(input.target, sharedPath, "file")
-  ) {
-    await planSharedMcpRuntimePrune(operations, sharedPath, {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    });
-  }
-
-  if (
-    (options.transport === "streamable-http" || options.bindingsLength === 0) &&
-    await exists(localPath) &&
-    await cursorCurrentTargetIsLedgerOwned(input.target, localPath, "file")
-  ) {
-    operations.push({
-      kind: "prune-plugin-path",
-      target: localPath,
-      targetType: "file",
-      reason: "stale",
-    });
-  }
-};
-
-const cursorConfigAllowsStaleRuntimePrune = async (
-  target: CursorLowerTarget,
-  serverName: string,
-): Promise<boolean> => {
-  const targetPath = configPath(target);
-  if (!(await exists(targetPath))) return true;
-
-  const current = await readFile(targetPath);
-  if (!cursorMcpConfigHasServer(current, targetPath, serverName)) return true;
-  return cursorCurrentTargetIsLedgerOwned(target, targetPath, "config");
-};
-
-const planMcpServer = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-): Promise<{
+): {
   readonly serverName: string;
   readonly entry?: CursorMcpServerEntry;
-}> => {
+} => {
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
@@ -260,39 +201,19 @@ const planMcpServer = async (
     requirePort: bindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  const allowCleanupPrune = bindings.length > 0 ||
-    await cursorConfigAllowsStaleRuntimePrune(input.target, serverName);
-
-  await planStaleRuntimePruning(input, operations, {
-    bindingsLength: bindings.length,
-    transport: runtime.transport,
-    allowCleanupPrune,
-  });
 
   if (bindings.length === 0) return { serverName };
-
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    serverName,
-    version: input.target.sourcePluginVersion,
-    bundleId: serverName,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-  const serverPath = runtime.transport === "streamable-http"
-    ? runtimeMcpServerPathForTarget(input.target)
-    : localStdioServerPath(input.target, serverName);
-
-  await pushWrite(operations, serverPath, bundle.content);
+  if (!input.target.mcpServerPath) {
+    throw new Error("Cursor MCP lowering requires the canonical Prism MCP server bundle path.");
+  }
 
   return {
     serverName,
     entry: renderCursorMcpServerEntry({
       target: input.target,
-      serverPath,
+      serverPath: input.target.mcpServerPath,
       runtime,
+      toolNames: mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
     }),
   };
 };
@@ -300,7 +221,7 @@ const planMcpServer = async (
 const planMcpConfig = async (
   input: LowerInput,
   operations: LowerOperation[],
-  server: Awaited<ReturnType<typeof planMcpServer>>,
+  server: ReturnType<typeof planMcpServer>,
 ): Promise<void> => {
   const target = configPath(input.target);
   const hasConfig = await exists(target);
@@ -350,7 +271,7 @@ const assertCursorLoweringInput = (input: LowerInput): void => {
 export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
   assertCursorLoweringInput(input);
   const operations: LowerOperation[] = [];
-  const server = await planMcpServer(input, operations);
+  const server = planMcpServer(input);
   await planMcpConfig(input, operations, server);
   return operations;
 };

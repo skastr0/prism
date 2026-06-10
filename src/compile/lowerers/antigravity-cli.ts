@@ -11,15 +11,13 @@ import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import {
-  generateMcpServerBundle,
   mcpToolNameForBinding,
+  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
 } from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
@@ -54,7 +52,8 @@ const PLUGIN_PREFIX = "prism-generated";
 export interface AntigravityCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -313,11 +312,7 @@ const planHooks = async (
   await pushWrite(operations, configTarget, json(config));
 };
 
-const planMcpBundle = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  desired: Set<string>,
-): Promise<Record<string, unknown>> => {
+const planMcpServers = (input: LowerInput): Record<string, unknown> => {
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
@@ -328,28 +323,11 @@ const planMcpBundle = async (
     resolvedPort: input.target.mcpRuntimePort,
   });
   if (bindings.length === 0) return {};
+  if (!input.target.mcpServerPath) {
+    throw new Error("Antigravity MCP lowering requires the canonical Prism MCP server bundle path.");
+  }
 
   const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    serverName: pluginId,
-    version: input.target.sourcePluginVersion,
-    bundleId: pluginId,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-
-  const target = runtime.transport === "streamable-http"
-    ? runtimeMcpServerDescriptor(
-        input.target.mcpRuntimeRoot ?? input.target.root,
-        input.target.sourcePluginName,
-      ).absolutePath
-    : join(pluginRoot(input.target), bundle.relativePath);
-  if (runtime.transport === "stdio") desired.add(bundle.relativePath);
-  await pushWrite(operations, target, bundle.content);
-
   return {
     [pluginId]: runtime.transport === "streamable-http"
       ? {
@@ -363,7 +341,15 @@ const planMcpBundle = async (
         }
       : {
           command: "bun",
-          args: [join(pluginRoot(input.target), bundle.relativePath)],
+          args: [input.target.mcpServerPath],
+          // mcp_config.json has no per-server tool allowlist, so the union
+          // bundle is filtered deny-by-default via PRISM_MCP_ENABLED_TOOLS.
+          env: {
+            PRISM_MCP_ENABLED_TOOLS: mcpToolNamesForBindings(
+              input.target.sourcePluginName,
+              bindings,
+            ).join(","),
+          },
         },
   };
 };
@@ -431,7 +417,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     }
   }
 
-  const mcpServers = await planMcpBundle(input, operations, desired);
+  const mcpServers = planMcpServers(input);
   await planHooks(input, operations, desired);
 
   const manifest: Record<string, unknown> = {

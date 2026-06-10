@@ -66,14 +66,6 @@ type McpAdapterSpec =
       readonly contractRelativePath: string;
     };
 
-export type McpServerBundleTransport = "stdio" | "streamable-http";
-
-export interface McpHttpServerOptions {
-  readonly host?: string;
-  readonly port?: number;
-  readonly tokenEnv?: string;
-}
-
 export interface McpServerBundleOptions {
   readonly sourcePluginName: string;
   readonly sourcePluginRoot?: string;
@@ -81,9 +73,6 @@ export interface McpServerBundleOptions {
   readonly serverName: string;
   readonly version?: string;
   readonly bundleId?: string;
-  readonly transport?: McpServerBundleTransport;
-  readonly http?: McpHttpServerOptions;
-  readonly toolTimeoutMs?: number;
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
 }
 
@@ -891,6 +880,14 @@ if (process.env.PRISM_MCP_VALIDATE === "1") {
   process.exit(0);
 }
 
+// Deny-by-default exposure filter: harness configs that cannot filter tools
+// client-side pass PRISM_MCP_ENABLED_TOOLS so the union bundle only exposes
+// the tool names bound for that harness.
+const enabledToolsEnv = process.env.PRISM_MCP_ENABLED_TOOLS;
+const enabledToolNames = enabledToolsEnv === undefined
+  ? undefined
+  : new Set(enabledToolsEnv.split(",").map((name) => name.trim()).filter((name) => name.length > 0));
+
 const configuredMaxConcurrentToolCalls = Number(process.env.PRISM_MCP_MAX_CONCURRENT_CALLS ?? "16");
 const maxConcurrentToolCalls = Number.isFinite(configuredMaxConcurrentToolCalls) && configuredMaxConcurrentToolCalls > 0
   ? configuredMaxConcurrentToolCalls
@@ -915,6 +912,7 @@ const withToolConcurrency = async <A>(
 
 const registerPrismTools = (server: McpServer): void => {
   for (const [name, tool] of Object.entries(tools)) {
+    if (enabledToolNames !== undefined && !enabledToolNames.has(name)) continue;
     server.registerTool(
       name,
       {
@@ -973,19 +971,23 @@ process.stdin.on("close", () => void stopStdioServer(0));
 
 await server.connect(transport);`;
 
-const MCP_SDK_HTTP_RUNTIME = `const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? __PRISM_HTTP_HOST__;
+const MCP_SDK_HTTP_RUNTIME = `// Runtime identity is never baked into bundle bytes: the daemon supervisor
+// passes host/port/token via environment when it spawns this server.
+const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? "127.0.0.1";
 const isLoopbackBindHost = (value: string): boolean =>
   value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
 if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
   throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
 }
-const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? __PRISM_HTTP_PORT__);
+const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? "0");
+if (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535) {
+  throw new Error("Prism MCP Streamable HTTP server requires env PRISM_MCP_HTTP_PORT (1-65535)");
+}
 const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
 const httpHealthPath = process.env.PRISM_MCP_HTTP_HEALTH_PATH ?? "/healthz";
-const httpTokenEnvName = __PRISM_HTTP_TOKEN_ENV__;
-const httpToken = process.env[httpTokenEnvName] ?? process.env.PRISM_MCP_HTTP_TOKEN;
+const httpToken = process.env.PRISM_MCP_HTTP_TOKEN ?? process.env.PRISM_MCP_TOKEN;
 if (!httpToken) {
-  throw new Error(\`Prism MCP Streamable HTTP server requires token env '\${httpTokenEnvName}'\`);
+  throw new Error("Prism MCP Streamable HTTP server requires env PRISM_MCP_HTTP_TOKEN (or PRISM_MCP_TOKEN)");
 }
 const serverStartedAt = Date.now();
 const serverSha256 = process.env.PRISM_MCP_SERVER_SHA256;
@@ -1441,25 +1443,16 @@ const renderToolSurfaceBindings = (
   return { imports: imports.join("\n"), entries: entries.join("\n") };
 };
 
-const renderMcpRpcRuntime = (options: {
-  readonly serverName: string;
-  readonly version: string;
-  readonly toolEntries: string;
-}): string =>
-  joinGeneratedSections([
-    replaceTemplateTokens(MCP_SDK_SERVER_FACTORY_RUNTIME, {
-      __PRISM_TOOL_ENTRIES__: options.toolEntries,
-      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
-      __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
-    }),
-    MCP_SDK_STDIO_RUNTIME,
-  ]);
+const indentGeneratedBlock = (source: string, indent: string): string =>
+  source
+    .split("\n")
+    .map((line) => (line.length > 0 ? `${indent}${line}` : line))
+    .join("\n");
 
-const renderMcpHttpRuntime = (options: {
+const renderMcpTransportRuntime = (options: {
   readonly serverName: string;
   readonly version: string;
   readonly toolEntries: string;
-  readonly http?: McpHttpServerOptions;
 }): string =>
   joinGeneratedSections([
     replaceTemplateTokens(MCP_SDK_SERVER_FACTORY_RUNTIME, {
@@ -1467,13 +1460,26 @@ const renderMcpHttpRuntime = (options: {
       __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
       __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
     }),
-    replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
-      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
-      __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
-      __PRISM_HTTP_HOST__: JSON.stringify(options.http?.host ?? "127.0.0.1"),
-      __PRISM_HTTP_PORT__: JSON.stringify(String(options.http?.port ?? 0)),
-      __PRISM_HTTP_TOKEN_ENV__: JSON.stringify(options.http?.tokenEnv ?? "PRISM_MCP_HTTP_TOKEN"),
-    }),
+    `const runStdioServer = async (): Promise<void> => {
+${indentGeneratedBlock(MCP_SDK_STDIO_RUNTIME, "  ")}
+};
+
+const runHttpServer = async (): Promise<void> => {
+${indentGeneratedBlock(
+      replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
+        __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+      }),
+      "  ",
+    )}
+};
+
+// Transport is selected at startup: the MCP daemon supervisor sets
+// PRISM_MCP_TRANSPORT=streamable-http; harness stdio configs leave it unset.
+if (process.env.PRISM_MCP_TRANSPORT === "streamable-http") {
+  await runHttpServer();
+} else {
+  await runStdioServer();
+}`,
   ]);
 
 const renderAmpToolRegistrationRuntime = (
@@ -1498,33 +1504,24 @@ const renderMcpServerEntry = (options: {
   readonly serverName: string;
   readonly version: string;
   readonly specs: ReadonlyArray<McpAdapterSpec>;
-  readonly transport: McpServerBundleTransport;
-  readonly http?: McpHttpServerOptions;
-  readonly toolTimeoutMs: number;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
     (spec, ident) =>
       `  ${JSON.stringify(spec.mcpName)}: createTool(${JSON.stringify(spec.mcpName)}, ${ident} as ToolSurface),`,
   );
-  const runtime =
-    options.transport === "streamable-http"
-      ? renderMcpHttpRuntime({
-          serverName: options.serverName,
-          version: options.version,
-          toolEntries: entries,
-          http: options.http,
-        })
-      : renderMcpRpcRuntime({
-          serverName: options.serverName,
-          version: options.version,
-          toolEntries: entries,
-        });
+  const runtime = renderMcpTransportRuntime({
+    serverName: options.serverName,
+    version: options.version,
+    toolEntries: entries,
+  });
 
   return joinGeneratedSections([
     `#!/usr/bin/env bun
 // GENERATED by prism — do not edit.
-// Standalone MCP ${options.transport} server for compiled canonical tool bindings.`,
+// Standalone MCP server for compiled canonical tool bindings.
+// Transport (stdio default, streamable-http via PRISM_MCP_TRANSPORT) and HTTP
+// identity (host/port/token) are read from the environment at startup.`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
     `import { StdioServerTransport } from ${JSON.stringify(mcpSdkStdioBundleImportPath())};`,
@@ -1534,7 +1531,9 @@ const renderMcpServerEntry = (options: {
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),
     replaceTemplateTokens(MCP_TOOL_FACTORY_RUNTIME, {
-      __PRISM_TOOL_TIMEOUT_MS__: String(options.toolTimeoutMs),
+      // The default is a compile-time constant (never per-harness identity):
+      // harnesses override at runtime via PRISM_MCP_TOOL_TIMEOUT_MS.
+      __PRISM_TOOL_TIMEOUT_MS__: String(DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS),
     }),
     runtime,
   ]);
@@ -1681,6 +1680,16 @@ const normalizeBuiltPiExtensionBundle = stripBundlerPathComments;
 
 const normalizeBuiltMcpServerBundle = stripBundlerPathComments;
 
+/**
+ * Sorted, deduped MCP tool names for a binding set — the same names the
+ * generated server registers, computable without building the bundle.
+ */
+export const mcpToolNamesForBindings = (
+  sourcePluginName: string,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+): string[] =>
+  adapterSpecsForBindings(sourcePluginName, bindings).map((spec) => spec.mcpName);
+
 export const generateMcpServerBundle = async (
   options: McpServerBundleOptions,
 ): Promise<McpServerBundle> => {
@@ -1705,9 +1714,6 @@ export const generateMcpServerBundle = async (
       serverName: options.serverName,
       version,
       specs,
-      transport: options.transport ?? "stdio",
-      http: options.http,
-      toolTimeoutMs: options.toolTimeoutMs ?? DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
     });
     const entryPath = await writeTempBundleSources({
       tempRoot,

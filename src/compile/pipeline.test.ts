@@ -9,7 +9,9 @@ import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
-import { runtimeMcpServerDescriptor } from "./mcp-runtime.js";
+import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
+import { generateMcpServerBundle } from "./mcp-bundle.js";
+import { bindingFromToolSource } from "./tool-bindings.js";
 import { compilePluginForTarget, type CompileResult } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
@@ -34,6 +36,7 @@ import {
   resolveManifestTargets,
 } from "../manifest.js";
 import { computeContentHash } from "../content-hash.js";
+import { resolvePrismHome } from "../prism-home.js";
 import { managedEntryId, readHarnessLedger, writeHarnessLedger } from "../managed-ledger.js";
 import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 
@@ -47,6 +50,9 @@ const createTempRoot = async (): Promise<string> => {
   process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
+
+/** The sandboxed PRISM_HOME for the current test root (set by createTempRoot). */
+const testPrismHome = (): string => resolvePrismHome();
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -238,6 +244,27 @@ export default defineTool({
   );
 
   return { pluginRoot, hermesRoot };
+};
+
+/**
+ * Build the canonical PRISM_HOME union bundle for a hermes http fixture —
+ * what `prism install`/compile produces — so `prism mcp serve` can consume it.
+ */
+const prebuildHermesCanonicalBundle = async (
+  pluginRoot: string,
+  pluginName: string,
+): Promise<string> => {
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: pluginName,
+    sourcePluginRoot: pluginRoot,
+    serverName: `prism-generated-${pluginName}`,
+    bundleId: `prism-generated-${pluginName}`,
+    bindings: [
+      bindingFromToolSource(pluginName, join(pluginRoot, "tools", "echo.tool.ts")),
+    ],
+  });
+  const write = await writePrismMcpServerBundle(testPrismHome(), pluginName, bundle.content);
+  return write.path;
 };
 
 const skillPermissionAction = (
@@ -1617,6 +1644,7 @@ export default defineAgent({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -1649,6 +1677,7 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -1971,6 +2000,7 @@ test("compilePluginForTarget dry-run leaves lowerer outputs cache and lockfile u
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -1999,6 +2029,7 @@ test("compilePluginForTarget does not persist cache or lockfile after lowering f
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "opencode",
         scope: "project",
@@ -2017,6 +2048,7 @@ test("orbit phase validation succeeds when assigned agents satisfy requirements"
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2048,6 +2080,7 @@ test("orbit phase validation succeeds when assigned agents satisfy requirements"
 
   const warmOpencode = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2071,6 +2104,7 @@ test("orbit validation fails when assigned agents do not satisfy requirements", 
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2377,6 +2411,7 @@ test("orbit orchestrator validation fails when the orchestrator agent does not e
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2398,6 +2433,7 @@ test("orbit skill renders orchestrator section and grants the orbit skill to the
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2453,6 +2489,7 @@ export default defineOrbit({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2514,6 +2551,7 @@ export default defineOrbit({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2539,6 +2577,7 @@ test("slot-filled trait tools fail closed on inline schemas", async () => {
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2559,6 +2598,7 @@ test("slot-filled trait tools fail closed on undeclared slots", async () => {
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2579,6 +2619,7 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -2782,6 +2823,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "antigravity-cli",
       scope: "project",
@@ -2804,13 +2846,16 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   });
 
   const mcpConfig = JSON.parse(await readFile(join(outputPluginRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[]; trust?: unknown }>;
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string>; trust?: unknown }>;
   };
   expect(mcpConfig).toEqual({
     mcpServers: {
       "prism-generated-antigravity-plugin-demo": {
         command: "bun",
-        args: [join(outputPluginRoot, "mcp", "prism_generated_antigravity_plugin_demo", "server.mjs")],
+        args: [prismMcpServerPath(testPrismHome(), "antigravity_plugin.demo")],
+        env: {
+          PRISM_MCP_ENABLED_TOOLS: "antigravity_plugin_demo_submit_work",
+        },
       },
     },
   });
@@ -2842,7 +2887,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   expect(orbitSkill).toContain("# delivery");
   expect(orbitSkill).toContain("### 1. Build — agent `worker`");
 
-  expect(await pathExists(join(outputPluginRoot, "mcp", "prism_generated_antigravity_plugin_demo", "server.mjs"))).toBe(true);
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "antigravity_plugin.demo"))).toBe(true);
 
   const hookConfig = JSON.parse(await readFile(join(outputPluginRoot, "hooks.json"), "utf8")) as {
     "audit-read": { PreToolUse: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
@@ -2941,7 +2986,6 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
     join(outputPluginRoot, "agents", "worker.md"),
     join(outputPluginRoot, "skills", "testing", "SKILL.md"),
     join(outputPluginRoot, "skills", "delivery", "SKILL.md"),
-    join(outputPluginRoot, "mcp", "prism_generated_antigravity_plugin_demo", "server.mjs"),
     join(outputPluginRoot, "hooks.json"),
     join(outputPluginRoot, "hooks", "audit-read.mjs"),
     join(outputPluginRoot, "hooks", "audit-submit.mjs"),
@@ -2967,6 +3011,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "antigravity-cli",
       scope: "project",
@@ -3007,6 +3052,7 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   for (const target of targets) {
     await Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target,
         scope: "project",
@@ -3017,92 +3063,231 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   }
 
   const expectedToolName = "tool_only_demo_echo_message";
+  const canonicalServerPath = prismMcpServerPath(testPrismHome(), "tool-only-demo");
+
+  // UNION BUNDLE: six harness compiles of one plugin converge on a single
+  // canonical PRISM_HOME bundle file with a single hash.
+  const unionBundle = await readFile(canonicalServerPath, "utf8");
+  expect(unionBundle).toContain(expectedToolName);
+  expect(unionBundle).toContain("tools/list");
+  const bundleEntries = await readdir(join(testPrismHome(), "runtime", "mcp"), {
+    withFileTypes: true,
+  });
+  expect(
+    bundleEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+  ).toEqual(["tool-only-demo"]);
 
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
   expect(codexConfig).toContain('["mcp_servers"."prism-generated-tool-only-demo"]');
   expect(codexConfig).toContain('enabled_tools = ["tool_only_demo_echo_message"]');
-  const codexBundle = await readFile(
-    join(projectRoot, ".codex", "mcp", "prism_generated_tool_only_demo", "server.mjs"),
-    "utf8",
-  );
-  expect(codexBundle).toContain(expectedToolName);
-  expect(codexBundle).toContain("tools/list");
+  expect(codexConfig).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
+  expect(await pathExists(join(projectRoot, ".codex", "mcp"))).toBe(false);
 
   const claudeRoot = join(projectRoot, ".claude", "skills", "prism-generated-tool-only-demo");
   const claudeMcp = JSON.parse(await readFile(join(claudeRoot, ".mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[] }>;
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
   };
   expect(claudeMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
     command: "bun",
-    args: ["${CLAUDE_PLUGIN_ROOT}/mcp/prism_generated_tool_only_demo/server.mjs"],
+    args: [canonicalServerPath],
+    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
   });
-  const claudeBundle = await readFile(
-    join(claudeRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
-    "utf8",
-  );
-  expect(claudeBundle).toContain(expectedToolName);
-  expect(claudeBundle).toContain("tools/list");
+  expect(await pathExists(join(claudeRoot, "mcp"))).toBe(false);
 
   const antigravityRoot = join(projectRoot, ".agents", "plugins", "prism-generated-tool-only-demo");
   const antigravityMcpConfig = JSON.parse(await readFile(join(antigravityRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[] }>;
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
   };
   expect(antigravityMcpConfig.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
     command: "bun",
-    args: [join(antigravityRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs")],
+    args: [canonicalServerPath],
+    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
   });
-  const antigravityBundle = await readFile(
-    join(antigravityRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
-    "utf8",
-  );
-  expect(antigravityBundle).toContain(expectedToolName);
-  expect(antigravityBundle).toContain("tools/list");
+  expect(await pathExists(join(antigravityRoot, "mcp"))).toBe(false);
 
   const grokRoot = join(projectRoot, ".grok", "plugins", "prism-generated-tool-only-demo");
   const grokMcp = JSON.parse(await readFile(join(grokRoot, ".mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[] }>;
+    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
   };
-  expect(grokMcp.mcpServers?.["prism-generated-tool-only-demo"]?.command).toBe("bun");
-  expect(grokMcp.mcpServers?.["prism-generated-tool-only-demo"]?.args).toEqual([
-    join(grokRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
-  ]);
-  const grokBundle = await readFile(
-    join(grokRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
-    "utf8",
-  );
-  expect(grokBundle).toContain(expectedToolName);
-  expect(grokBundle).toContain("tools/list");
+  expect(grokMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
+    command: "bun",
+    args: [canonicalServerPath],
+    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
+  });
+  expect(await pathExists(join(grokRoot, "mcp"))).toBe(false);
 
   const factoryRoot = join(projectRoot, ".factory", "plugins", "prism-generated-tool-only-demo");
   const factoryMcp = JSON.parse(await readFile(join(factoryRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type: string; command: string; args: string[] }>;
+    mcpServers?: Record<string, { type: string; command: string; args: string[]; env?: Record<string, string> }>;
   };
   expect(factoryMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
     type: "stdio",
     command: "bun",
-    args: ["${DROID_PLUGIN_ROOT}/mcp/prism_generated_tool_only_demo/server.mjs"],
+    args: [canonicalServerPath],
+    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
   });
-  const factoryBundle = await readFile(
-    join(factoryRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"),
-    "utf8",
-  );
-  expect(factoryBundle).toContain(expectedToolName);
-  expect(factoryBundle).toContain("tools/list");
+  expect(await pathExists(join(factoryRoot, "mcp"))).toBe(false);
 
   const cursorConfig = JSON.parse(await readFile(join(projectRoot, ".cursor", "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type: string; command: string; args: string[] }>;
+    mcpServers?: Record<string, { type: string; command: string; args: string[]; env?: Record<string, string> }>;
   };
   expect(cursorConfig.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
     type: "stdio",
     command: "bun",
-    args: [join(projectRoot, ".cursor", "mcp", "prism_generated_tool_only_demo", "server.mjs")],
+    args: [canonicalServerPath],
+    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
   });
-  const cursorBundle = await readFile(
-    join(projectRoot, ".cursor", "mcp", "prism_generated_tool_only_demo", "server.mjs"),
+  expect(await pathExists(join(projectRoot, ".cursor", "mcp"))).toBe(false);
+
+  // Byte-identical across harness compiles: recompiling another harness must
+  // not change the canonical bundle bytes.
+  const firstHash = computeContentHash(unionBundle);
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "codex-cli",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  expect(computeContentHash(await readFile(canonicalServerPath, "utf8"))).toBe(firstHash);
+});
+
+test("union MCP bundle keeps per-harness exposure deny-by-default", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "exposure-demo");
+  const coreRoot = join(root, "exposure-core");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(coreRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "exposure-core",
+      version: "0.1.0",
+      targets: { tools: ["codex-cli"] },
+    }, null, 2)}\n`,
+  );
+  await writeText(
+    join(coreRoot, "tools", "agent-only.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "agent-only",
+  description: "Bound only through the codex agent",
+  input: Schema.Struct({ value: Schema.String }),
+  output: Schema.Struct({ value: Schema.String }),
+  async handle(input) {
+    return { value: input.value };
+  },
+});
+`,
+  );
+  await writeText(
+    join(coreRoot, "traits", "agent-bound.trait.ts"),
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "agent-bound",
+  description: "Grants the agent-only tool",
+  tools: { agent_only: { ref: "agent-only" } },
+  require: { tools: ["agent_only"] },
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "exposure-demo",
+      version: "0.1.0",
+      deps: { core: "../exposure-core" },
+      targets: {
+        tools: ["codex-cli", "claude-code"],
+        agents: ["codex-cli"],
+      },
+    }, null, 2)}\n`,
+  );
+  await writeText(
+    join(pluginRoot, "tools", "shared.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "shared",
+  description: "Exposed on both harnesses",
+  input: Schema.Struct({ value: Schema.String }),
+  output: Schema.Struct({ value: Schema.String }),
+  async handle(input) {
+    return { value: input.value };
+  },
+});
+`,
+  );
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    "---\ndescription: Worker identity\n---\n\n# Worker\n",
+  );
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Codex worker",
+  identity: "worker",
+  traits: ["core:agent-bound"],
+});
+`,
+  );
+
+  for (const target of ["codex-cli", "claude-code"] as const) {
+    await Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target,
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+      }),
+    );
+  }
+
+  // ONE union bundle per plugin: it contains the agent-bound dependency tool
+  // even though only codex exposes it.
+  const unionBundle = await readFile(
+    prismMcpServerPath(testPrismHome(), "exposure-demo"),
     "utf8",
   );
-  expect(cursorBundle).toContain(expectedToolName);
-  expect(cursorBundle).toContain("tools/list");
+  expect(unionBundle).toContain("exposure_core_agent_only");
+  expect(unionBundle).toContain("exposure_demo_shared");
+
+  // Codex (harness A): the agent TOML exposes the agent-bound tool, the
+  // global table stays canonical-tools-only.
+  const codexAgent = await readFile(
+    join(projectRoot, ".codex", "agents", "worker.toml"),
+    "utf8",
+  );
+  expect(codexAgent).toContain('"exposure_core_agent_only"');
+  const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
+  expect(codexConfig).toContain('enabled_tools = ["exposure_demo_shared"]');
+  expect(codexConfig).not.toContain('enabled_tools = ["exposure_core_agent_only"');
+
+  // Claude (harness B): deny-by-default — the agent-bound tool from harness A
+  // is NOT exposed in the .mcp.json env filter.
+  const claudeMcp = JSON.parse(
+    await readFile(
+      join(projectRoot, ".claude", "skills", "prism-generated-exposure-demo", ".mcp.json"),
+      "utf8",
+    ),
+  ) as { mcpServers?: Record<string, { env?: Record<string, string> }> };
+  const claudeEnv = claudeMcp.mcpServers?.["prism-generated-exposure-demo"]?.env;
+  expect(claudeEnv?.PRISM_MCP_ENABLED_TOOLS).toBe("exposure_demo_shared");
+  expect(claudeEnv?.PRISM_MCP_ENABLED_TOOLS).not.toContain("exposure_core_agent_only");
 });
 
 test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async () => {
@@ -3112,6 +3297,7 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "cursor",
       scope: "global",
@@ -3128,14 +3314,20 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
     }),
   );
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type: string; command: string; args: string[] }>;
+    mcpServers?: Record<string, { type: string; command: string; args: string[]; env?: Record<string, string> }>;
   };
   expect(config.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
     type: "stdio",
     command: "bun",
-    args: [join(cursorRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs")],
+    args: [prismMcpServerPath(testPrismHome(), "tool-only-demo")],
+    env: { PRISM_MCP_ENABLED_TOOLS: "tool_only_demo_echo_message" },
   });
-  expect(await pathExists(join(cursorRoot, "mcp", "prism_generated_tool_only_demo", "server.mjs"))).toBe(true);
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "tool-only-demo"))).toBe(true);
+  // The canonical bundle is pipeline-owned: harness ledgers no longer record
+  // bundle paths for new compiles.
+  expect((await readHarnessLedger("cursor")).entries.some((entry) =>
+    entry.targetPath.endsWith("server.mjs")
+  )).toBe(false);
   expect((await readHarnessLedger("cursor")).entries.some((entry) =>
     entry.pluginName === "tool-only-demo" &&
     entry.targetPath === join(cursorRoot, "mcp.json") &&
@@ -3143,7 +3335,7 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
   )).toBe(true);
 });
 
-test("compilePluginForTarget prunes stale Cursor MCP outputs when tools target is removed", async () => {
+test("compilePluginForTarget removes the stale Cursor MCP config entry when tools target is removed", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-empty-cleanup");
   const cursorRoot = join(root, "cursor-home");
@@ -3225,6 +3417,7 @@ test("compilePluginForTarget prunes stale Cursor MCP outputs when tools target i
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "cursor",
       scope: "global",
@@ -3233,21 +3426,17 @@ test("compilePluginForTarget prunes stale Cursor MCP outputs when tools target i
     }),
   );
 
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: staleServerPath,
-      targetType: "file",
-    }),
-  );
-  expect(await pathExists(staleServerPath)).toBe(false);
+  // The config entry is removed; stale in-root bundle files are NOT pruned
+  // by the lowerer anymore — old-layout leftovers are WS8 teardown's job.
+  expect(result.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(await pathExists(staleServerPath)).toBe(true);
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
     mcpServers?: Record<string, unknown>;
   };
   expect(config.mcpServers?.["prism-generated-cursor-empty-cleanup"]).toBeUndefined();
   expect(config.mcpServers?.userServer).toEqual({ url: "https://example.com/mcp" });
   const entries = (await readHarnessLedger("cursor")).entries;
-  expect(entries.some((entry) => entry.id === serverEntryId)).toBe(false);
+  expect(entries.some((entry) => entry.id === serverEntryId)).toBe(true);
   expect(entries.some((entry) => entry.id === configEntryId)).toBe(true);
 });
 
@@ -3255,13 +3444,10 @@ test("compilePluginForTarget leaves unrelated Cursor MCP config untouched withou
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-noop-cleanup");
   const cursorRoot = join(root, "cursor-home");
-  const mcpRoot = join(root, "mcp-runtime");
   const configPath = join(cursorRoot, "mcp.json");
   const collidingServerPath = join(cursorRoot, "mcp", "prism_generated_cursor_noop_cleanup", "server.mjs");
   const originalConfig = `{"mcpServers":{"prism-generated-cursor-noop-cleanup":{"type":"stdio","command":"bun","args":["${collidingServerPath}"]},"userServer":{"url":"https://example.com/mcp"}}}\n`;
   const collidingServerContent = "console.log('user-owned collision');\n";
-  const sharedServerPath = runtimeMcpServerDescriptor(mcpRoot, "cursor-noop-cleanup").absolutePath;
-  const sharedServerContent = "console.log('user-owned shared collision');\n";
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({
@@ -3272,15 +3458,14 @@ test("compilePluginForTarget leaves unrelated Cursor MCP config untouched withou
   );
   await writeText(configPath, originalConfig);
   await writeText(collidingServerPath, collidingServerContent);
-  await writeText(sharedServerPath, sharedServerContent);
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "cursor",
       scope: "global",
       root: cursorRoot,
-      mcpRoot,
       dryRun: false,
     }),
   );
@@ -3289,7 +3474,6 @@ test("compilePluginForTarget leaves unrelated Cursor MCP config untouched withou
   expect(result.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
   expect(await readFile(configPath, "utf8")).toBe(originalConfig);
   expect(await readFile(collidingServerPath, "utf8")).toBe(collidingServerContent);
-  expect(await readFile(sharedServerPath, "utf8")).toBe(sharedServerContent);
 });
 
 test("compilePluginForTarget leaves Cursor skills to install while lowering tools", async () => {
@@ -3330,6 +3514,7 @@ export default defineTool({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "cursor",
       scope: "global",
@@ -3436,6 +3621,7 @@ test("compilePluginForTarget skips Cursor config deletion when ledger content dr
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "cursor",
       scope: "global",
@@ -3457,7 +3643,6 @@ test("compilePluginForTarget lowers Cursor Streamable HTTP MCP config", async ()
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-http-demo");
   const cursorRoot = join(root, "cursor-home");
-  const mcpRoot = join(root, "mcp-runtime");
   const port = await getFreePort("127.0.0.1");
   const tokenEnv = "PRISM_MCP_CURSOR_TOKEN";
   await mkdir(pluginRoot, { recursive: true });
@@ -3504,11 +3689,11 @@ export default defineTool({
   try {
     result = await Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "cursor",
         scope: "global",
         root: cursorRoot,
-        mcpRoot,
         dryRun: false,
         mcpLifecycle: "serve",
       }),
@@ -3518,18 +3703,18 @@ export default defineTool({
       pluginPath: pluginRoot,
       harness: "cursor",
       scope: "global",
-      root: mcpRoot,
+      prismHome: testPrismHome(),
       tokenEnv,
     }).catch(() => undefined);
   }
 
-  const serverPath = runtimeMcpServerDescriptor(mcpRoot, "cursor-http-demo").absolutePath;
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "write-plugin-file",
-      target: serverPath,
-    }),
-  );
+  // The union bundle is written once to the canonical PRISM_HOME path — it
+  // never appears as a lowered harness-root operation.
+  const serverPath = prismMcpServerPath(testPrismHome(), "cursor-http-demo");
+  expect(await pathExists(serverPath)).toBe(true);
+  expect(result.operations.some((operation) =>
+    "target" in operation && operation.target.endsWith("server.mjs"),
+  )).toBe(false);
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
     mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
   };
@@ -3546,6 +3731,7 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "codex-cli",
       scope: "project",
@@ -3571,7 +3757,8 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
   expect(agent).toContain('name = "reviewer"');
   expect(agent).toContain('["mcp_servers"."prism-generated-codex-project-demo"]');
 
-  expect(await pathExists(join(codexRoot, "mcp", "prism_generated_codex_project_demo", "server.mjs"))).toBe(true);
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "codex-project-demo"))).toBe(true);
+  expect(await pathExists(join(codexRoot, "mcp"))).toBe(false);
   expect(await pathExists(join(codexRoot, "hooks", "audit-shell.mjs"))).toBe(true);
   expect(await readFile(join(codexRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
   expect(await readFile(join(codexRoot, "AGENTS.md"), "utf8")).toContain("Use project-local Codex guidance.");
@@ -3582,6 +3769,7 @@ test("compilePluginForTarget lowers OpenCode session hooks through plugin events
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -3623,6 +3811,7 @@ test("compilePluginForTarget lowers OpenCode prompt and permission hooks through
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -3659,6 +3848,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
 
   const opencode = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -3856,6 +4046,7 @@ export default defineTool({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -4003,6 +4194,7 @@ export default defineHook({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -4131,6 +4323,7 @@ export default defineHook({
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -4196,6 +4389,7 @@ Review the current branch and report findings first.
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -4258,6 +4452,7 @@ Review the current branch and report findings first.
   const sourceHash = computeContentHash(source);
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -4277,6 +4472,7 @@ Review the current branch and report findings first.
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "amp-code",
         scope: "project",
@@ -4290,6 +4486,7 @@ Review the current branch and report findings first.
   await writeFile(pluginPath, source);
   const pruneCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -4336,6 +4533,7 @@ test("compilePluginForTarget lowers Claude commands into skills-dir plugin bundl
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "claude-code",
       scope: "project",
@@ -4382,6 +4580,7 @@ test("compilePluginForTarget rejects Amp command id collisions", async () => {
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "amp-code",
         scope: "project",
@@ -4428,6 +4627,7 @@ export default defineHook({
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "amp-code",
         scope: "project",
@@ -4482,6 +4682,7 @@ export default defineTool({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "hermes",
       scope: "global",
@@ -4490,13 +4691,7 @@ export default defineTool({
   );
 
   const hermesRoot = join(homedir(), ".hermes/");
-  const serverPath = join(
-    hermesRoot,
-    "prism",
-    "mcp",
-    "prism_generated_hermes_tool_demo",
-    "server.mjs",
-  );
+  const serverPath = prismMcpServerPath(testPrismHome(), "hermes-tool-demo");
   expect(result.outputRoot).toBe(hermesRoot);
 
   const skillWrite = result.operations.find(
@@ -4509,14 +4704,11 @@ export default defineTool({
     expect(skillWrite.content).toContain("# Hermes Demo");
   }
 
-  const serverWrite = result.operations.find(
-    (operation) => operation.kind === "write-plugin-file" && operation.target === serverPath,
-  );
-  expect(serverWrite?.kind).toBe("write-plugin-file");
-  if (serverWrite?.kind === "write-plugin-file") {
-    expect(serverWrite.content).toContain("hermes_tool_demo_echo");
-    expect(serverWrite.content).toContain("Echo a message through Hermes MCP.");
-  }
+  // The bundle is written to PRISM_HOME by the pipeline, never planned as a
+  // harness-root operation.
+  expect(result.operations.some(
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+  )).toBe(false);
 
   const configWrite = result.operations.find(
     (operation) =>
@@ -4525,13 +4717,9 @@ export default defineTool({
   );
   expect(configWrite?.kind).toBe("patch-config");
   if (configWrite?.kind === "patch-config") {
-    const expectedBunCommand = /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath)
-      ? process.execPath
-      : "bun";
-
     expect(configWrite.content).toContain("mcp_servers:");
     expect(configWrite.content).toContain("prism-generated-hermes-tool-demo:");
-    expect(configWrite.content).toContain(`command: ${JSON.stringify(expectedBunCommand)}`);
+    expect(configWrite.content).toContain('command: "bun"');
     expect(configWrite.content).toContain(JSON.stringify(serverPath));
     expect(configWrite.content).toContain("connect_timeout: 10");
     expect(configWrite.content).toContain("timeout: 120");
@@ -4539,6 +4727,9 @@ export default defineTool({
     expect(configWrite.content).toContain("enabled: false");
     expect(configWrite.content).toContain("PRISM_MCP_WORKING_DIRECTORY");
     expect(configWrite.content).toContain(`PRISM_MCP_REPO_ROOT: ${JSON.stringify(hermesRoot)}`);
+    expect(configWrite.content).toContain(
+      'PRISM_MCP_ENABLED_TOOLS: "hermes_tool_demo_echo"',
+    );
     expect(configWrite.content).toContain("hermes_tool_demo_echo");
   }
 });
@@ -4592,6 +4783,7 @@ export default defineTool({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "hermes",
       scope: "global",
@@ -4600,24 +4792,11 @@ export default defineTool({
   );
 
   const hermesRoot = join(homedir(), ".hermes/");
-  const serverPath = join(
-    homedir(),
-    ".config",
-    "prism",
-    "mcp",
-    "prism_generated_hermes_http_demo",
-    "server.mjs",
-  );
-  const serverWrite = result.operations.find(
-    (operation) => operation.kind === "write-plugin-file" && operation.target === serverPath,
-  );
-  expect(serverWrite?.kind).toBe("write-plugin-file");
-  if (serverWrite?.kind === "write-plugin-file") {
-    expect(serverWrite.content).toContain("Bun.serve");
-    expect(serverWrite.content).toContain("PRISM_MCP_TOKEN");
-    expect(serverWrite.content).toContain('PRISM_MCP_TOOL_TIMEOUT_MS ?? "90000"');
-    expect(serverWrite.content).toContain("hermes_http_demo_echo");
-  }
+  // No bundle write is planned into any root — the union bundle is a
+  // pipeline-owned PRISM_HOME artifact (skipped entirely in dry-run).
+  expect(result.operations.some(
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+  )).toBe(false);
 
   const configWrite = result.operations.find(
     (operation) =>
@@ -4651,6 +4830,7 @@ test("compilePluginForTarget serves Hermes HTTP MCP by default before config wri
     try {
       const result = await Effect.runPromise(
         compilePluginForTarget({
+          prismHome: testPrismHome(),
           pluginPath: pluginRoot,
           target: "hermes",
           scope: "global",
@@ -4676,168 +4856,22 @@ test("compilePluginForTarget serves Hermes HTTP MCP by default before config wri
       expect(configWrite?.mode).toBe(0o600);
       expect(
         await pathExists(
-          join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_gate_demo", "runtime.json"),
+          join(testPrismHome(), "runtime", "mcp", "hermes-http-gate-demo", "runtime.json"),
         ),
+      ).toBe(true);
+      expect(
+        await pathExists(prismMcpServerPath(testPrismHome(), "hermes-http-gate-demo")),
       ).toBe(true);
     } finally {
       await stopMcp({
         pluginPath: pluginRoot,
         harness: "hermes",
         scope: "global",
-        root: hermesRoot,
+        prismHome: testPrismHome(),
         tokenEnv,
       }).catch(() => undefined);
     }
   });
-});
-
-test("compilePluginForTarget can write harness config to a profile root while sharing an MCP runtime root", async () => {
-  const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_COMPILE_SPLIT_ROOT_TOKEN";
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-split-root-demo",
-    tokenEnv,
-    port,
-  });
-  const root = await createTempRoot();
-  const runtimeRoot = join(root, "shared-runtime-root");
-
-  await withEnv(tokenEnv, compileTestToken, async () => {
-    try {
-      const result = await Effect.runPromise(
-        compilePluginForTarget({
-          pluginPath: pluginRoot,
-          target: "hermes",
-          scope: "global",
-          root: hermesRoot,
-          mcpRoot: runtimeRoot,
-          dryRun: false,
-        }),
-      );
-
-      expect(result.outputRoot).toBe(hermesRoot);
-      const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-      expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
-      expect(config).toContain(`Authorization: "Bearer ${compileTestToken}"`);
-      expect(
-        await pathExists(
-          join(runtimeRoot, "prism", "mcp", "prism_generated_hermes_http_split_root_demo", "runtime.json"),
-        ),
-      ).toBe(true);
-      expect(
-        await pathExists(
-          join(runtimeRoot, "prism", "mcp", "prism_generated_hermes_http_split_root_demo", "server.mjs"),
-        ),
-      ).toBe(true);
-      expect(await pathExists(join(runtimeRoot, "prism", "tokens.json"))).toBe(true);
-      expect(
-        await pathExists(
-          join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_split_root_demo", "runtime.json"),
-        ),
-      ).toBe(false);
-      expect(
-        await pathExists(
-          join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_split_root_demo", "server.mjs"),
-        ),
-      ).toBe(false);
-      expect(await pathExists(join(hermesRoot, "prism", "tokens.json"))).toBe(false);
-    } finally {
-      await stopMcp({
-        pluginPath: pluginRoot,
-        harness: "hermes",
-        scope: "global",
-        root: runtimeRoot,
-        tokenEnv,
-      }).catch(() => undefined);
-    }
-  });
-});
-
-test("compilePluginForTarget keeps Hermes shared MCP runtime owned by another profile root", async () => {
-  const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_HERMES_SHARED_PROFILE_TOKEN";
-  const pluginName = "hermes-shared-profile-runtime";
-  const { pluginRoot, hermesRoot: profileRootA } = await createHermesHttpToolPlugin({
-    pluginName,
-    tokenEnv,
-    port,
-  });
-  const root = dirname(pluginRoot);
-  const profileRootB = join(root, "hermes-profile-b");
-  const runtimeRoot = join(root, "shared-runtime-root");
-  const serverPath = runtimeMcpServerDescriptor(runtimeRoot, pluginName).absolutePath;
-
-  await mkdir(profileRootB, { recursive: true });
-
-  await withEnv(tokenEnv, compileTestToken, async () => {
-    await Effect.runPromise(
-      compilePluginForTarget({
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: profileRootA,
-        mcpRoot: runtimeRoot,
-        dryRun: false,
-      }),
-    );
-    await Effect.runPromise(
-      compilePluginForTarget({
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: profileRootB,
-        mcpRoot: runtimeRoot,
-        dryRun: false,
-      }),
-    );
-  });
-
-  expect(await pathExists(serverPath)).toBe(true);
-  await rm(join(pluginRoot, "tools", "echo.tool.ts"));
-
-  const cleanup = await Effect.runPromise(
-    compilePluginForTarget({
-      pluginPath: pluginRoot,
-      target: "hermes",
-      scope: "global",
-      root: profileRootA,
-      mcpRoot: runtimeRoot,
-      dryRun: false,
-      mcpLifecycle: "none",
-    }),
-  );
-
-  expect(cleanup.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: serverPath,
-      targetType: "file",
-      shared: true,
-    }),
-  );
-  expect(await pathExists(serverPath)).toBe(true);
-  expect(await readFile(join(profileRootA, "config.yaml"), "utf8")).not.toContain(
-    "prism-generated-hermes-shared-profile-runtime",
-  );
-  expect(await readFile(join(profileRootB, "config.yaml"), "utf8")).toContain(
-    "prism-generated-hermes-shared-profile-runtime",
-  );
-
-  const ledger = await readHarnessLedger("hermes");
-  expect(
-    ledger.entries.some(
-      (entry) =>
-        resolve(entry.root) === resolve(profileRootA) &&
-        resolve(entry.targetPath) === resolve(serverPath),
-    ),
-  ).toBe(false);
-  expect(
-    ledger.entries.some(
-      (entry) =>
-        resolve(entry.root) === resolve(profileRootB) &&
-        resolve(entry.targetPath) === resolve(serverPath),
-    ),
-  ).toBe(true);
 });
 
 test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async () => {
@@ -4852,6 +4886,7 @@ test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async
   try {
     const result = await Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "hermes",
         scope: "global",
@@ -4866,13 +4901,13 @@ test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async
     expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
     expect(config).toContain('Authorization: "Bearer ');
     expect(config).not.toContain("${");
-    expect(await pathExists(join(hermesRoot, "prism", "tokens.json"))).toBe(true);
+    expect(await pathExists(join(testPrismHome(), "runtime", "mcp", "tokens.json"))).toBe(true);
   } finally {
     await stopMcp({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
-      root: hermesRoot,
+      prismHome: testPrismHome(),
       tokenEnv,
     }).catch(() => undefined);
   }
@@ -4888,16 +4923,18 @@ test("compilePluginForTarget verifies a running Hermes HTTP MCP daemon before co
   });
 
   await withEnv(tokenEnv, compileTestToken, async () => {
+    await prebuildHermesCanonicalBundle(pluginRoot, "hermes-http-verify-demo");
     await serveMcp({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
-      root: hermesRoot,
+      prismHome: testPrismHome(),
       tokenEnv,
     });
     try {
       const result = await Effect.runPromise(
         compilePluginForTarget({
+          prismHome: testPrismHome(),
           pluginPath: pluginRoot,
           target: "hermes",
           scope: "global",
@@ -4916,7 +4953,7 @@ test("compilePluginForTarget verifies a running Hermes HTTP MCP daemon before co
         pluginPath: pluginRoot,
         harness: "hermes",
         scope: "global",
-        root: hermesRoot,
+        prismHome: testPrismHome(),
         tokenEnv,
       }).catch(() => undefined);
     }
@@ -4933,11 +4970,12 @@ test("compilePluginForTarget rejects stale Hermes HTTP daemons before config wri
   });
 
   await withEnv(tokenEnv, compileTestToken, async () => {
+    await prebuildHermesCanonicalBundle(pluginRoot, "hermes-http-stale-demo");
     await serveMcp({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
-      root: hermesRoot,
+      prismHome: testPrismHome(),
       tokenEnv,
     });
     try {
@@ -4952,6 +4990,7 @@ test("compilePluginForTarget rejects stale Hermes HTTP daemons before config wri
       await expect(
         Effect.runPromise(
           compilePluginForTarget({
+            prismHome: testPrismHome(),
             pluginPath: pluginRoot,
             target: "hermes",
             scope: "global",
@@ -4968,7 +5007,7 @@ test("compilePluginForTarget rejects stale Hermes HTTP daemons before config wri
         pluginPath: pluginRoot,
         harness: "hermes",
         scope: "global",
-        root: hermesRoot,
+        prismHome: testPrismHome(),
         tokenEnv,
       }).catch(() => undefined);
     }
@@ -4988,6 +5027,7 @@ test("compilePluginForTarget can start Hermes HTTP MCP before config write", asy
     try {
       const result = await Effect.runPromise(
         compilePluginForTarget({
+          prismHome: testPrismHome(),
           pluginPath: pluginRoot,
           target: "hermes",
           scope: "global",
@@ -5001,7 +5041,7 @@ test("compilePluginForTarget can start Hermes HTTP MCP before config write", asy
       expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(true);
       expect(
         await pathExists(
-          join(hermesRoot, "prism", "mcp", "prism_generated_hermes_http_serve_demo", "runtime.json"),
+          join(testPrismHome(), "runtime", "mcp", "hermes-http-serve-demo", "runtime.json"),
         ),
       ).toBe(true);
     } finally {
@@ -5009,7 +5049,7 @@ test("compilePluginForTarget can start Hermes HTTP MCP before config write", asy
         pluginPath: pluginRoot,
         harness: "hermes",
         scope: "global",
-        root: hermesRoot,
+        prismHome: testPrismHome(),
         tokenEnv,
       }).catch(() => undefined);
     }
@@ -5028,6 +5068,7 @@ test("compilePluginForTarget can auto-select a Hermes HTTP MCP port before confi
     try {
       const result = await Effect.runPromise(
         compilePluginForTarget({
+          prismHome: testPrismHome(),
           pluginPath: pluginRoot,
           target: "hermes",
           scope: "global",
@@ -5048,10 +5089,10 @@ test("compilePluginForTarget can auto-select a Hermes HTTP MCP port before confi
       const runtime = JSON.parse(
         await readFile(
           join(
-            hermesRoot,
-            "prism",
+            testPrismHome(),
+            "runtime",
             "mcp",
-            "prism_generated_hermes_http_auto_port_demo",
+            "hermes-http-auto-port-demo",
             "runtime.json",
           ),
           "utf8",
@@ -5063,7 +5104,7 @@ test("compilePluginForTarget can auto-select a Hermes HTTP MCP port before confi
         pluginPath: pluginRoot,
         harness: "hermes",
         scope: "global",
-        root: hermesRoot,
+        prismHome: testPrismHome(),
         tokenEnv,
       }).catch(() => undefined);
     }
@@ -5078,6 +5119,7 @@ test("compilePluginForTarget previews an auto-selected Hermes HTTP MCP port in d
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "hermes",
       scope: "global",
@@ -5098,10 +5140,10 @@ test("compilePluginForTarget previews an auto-selected Hermes HTTP MCP port in d
   expect(
     await pathExists(
       join(
-        hermesRoot,
-        "prism",
+        testPrismHome(),
+        "runtime",
         "mcp",
-        "prism_generated_hermes_http_auto_port_dry_run_demo",
+        "hermes-http-auto-port-dry-run-demo",
         "runtime.json",
       ),
     ),
@@ -5117,11 +5159,12 @@ test("compilePluginForTarget verifies an existing auto-port Hermes HTTP MCP daem
   });
 
   await withEnv(tokenEnv, compileTestToken, async () => {
+    await prebuildHermesCanonicalBundle(pluginRoot, "hermes-http-auto-port-verify-demo");
     const served = await serveMcp({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
-      root: hermesRoot,
+      prismHome: testPrismHome(),
       tokenEnv,
     });
     try {
@@ -5130,6 +5173,7 @@ test("compilePluginForTarget verifies an existing auto-port Hermes HTTP MCP daem
 
       const result = await Effect.runPromise(
         compilePluginForTarget({
+          prismHome: testPrismHome(),
           pluginPath: pluginRoot,
           target: "hermes",
           scope: "global",
@@ -5147,7 +5191,7 @@ test("compilePluginForTarget verifies an existing auto-port Hermes HTTP MCP daem
         pluginPath: pluginRoot,
         harness: "hermes",
         scope: "global",
-        root: hermesRoot,
+        prismHome: testPrismHome(),
         tokenEnv,
       }).catch(() => undefined);
     }
@@ -5163,6 +5207,7 @@ test("compilePluginForTarget rejects omitted Hermes HTTP MCP port with lifecycle
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "hermes",
         scope: "global",
@@ -5205,6 +5250,7 @@ test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind",
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "hermes",
       scope: "global",
@@ -5226,6 +5272,7 @@ test("compilePluginForTarget leaves Hermes stdio MCP fallback ungated", async ()
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "hermes",
       scope: "global",
@@ -5289,6 +5336,7 @@ export default defineTool({
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "hermes",
         scope: "global",
@@ -5340,6 +5388,7 @@ export default defineAgent({
 
   const agentExit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: agentPluginRoot,
       target: "hermes",
       scope: "global",
@@ -5380,6 +5429,7 @@ export default defineHook({
 
   const hookExit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: hookPluginRoot,
       target: "hermes",
       scope: "global",
@@ -5491,6 +5541,7 @@ export default defineAgent({
 
   const firstCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -5538,6 +5589,7 @@ export default defineAgent({
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -5577,6 +5629,7 @@ export default defineSkillspace({
 
   const skillspaceChangedCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -5674,6 +5727,7 @@ export default defineAgent({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -5820,6 +5874,7 @@ export default defineAgent({
 
     const exit = await Effect.runPromiseExit(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "opencode",
         scope: "project",
@@ -5941,6 +5996,7 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6021,6 +6077,7 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "claude-code",
       scope: "project",
@@ -6112,6 +6169,7 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6202,6 +6260,7 @@ export default defineAgent({
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "antigravity-cli",
       scope: "project",
@@ -6292,6 +6351,7 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "factory-droid",
       scope: "project",
@@ -6314,6 +6374,7 @@ test("trait-orbit example lowers assigned traits and orbit skill into opencode p
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6558,6 +6619,7 @@ export default defineAgent({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6678,6 +6740,7 @@ export default defineAgent({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6782,6 +6845,7 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: missingPluginRoot,
       target: "opencode",
       scope: "project",
@@ -6803,6 +6867,7 @@ test("external permission-only consumers do not emit empty generated plugin shel
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6874,6 +6939,7 @@ test("opencode tools-only plugins bundle runtime helper imports from declared de
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -6899,6 +6965,7 @@ test("Cursor tools-only plugins bundle runtime helper imports from declared deps
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "cursor",
       scope: "project",
@@ -6908,7 +6975,7 @@ test("Cursor tools-only plugins bundle runtime helper imports from declared deps
   );
 
   const server = await readFile(
-    join(projectRoot, ".cursor", "mcp", "prism_generated_signal_core", "server.mjs"),
+    prismMcpServerPath(testPrismHome(), "signal-core"),
     "utf8",
   );
   expect(server).toContain("signal_core_record_signal");
@@ -6920,6 +6987,7 @@ test("Amp tools-only plugins bundle runtime helper imports from declared deps", 
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "amp-code",
       scope: "project",
@@ -6941,6 +7009,7 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: protocolRoot,
       target: "opencode",
       scope: "project",
@@ -6984,6 +7053,7 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -7066,6 +7136,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
 
   const claude = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "claude-code",
       scope: "project",
@@ -7091,13 +7162,13 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   expect(mcpConfig).toContain('"prism-generated-canonical-compile-fixture"');
   expect(mcpConfig).toContain('"command": "bun"');
   expect(mcpConfig).toContain(
-    '"${CLAUDE_PLUGIN_ROOT}/mcp/prism_generated_canonical_compile_fixture/server.mjs"',
+    JSON.stringify(prismMcpServerPath(testPrismHome(), "canonical-compile-fixture")),
   );
+  expect(mcpConfig).toContain('"PRISM_MCP_ENABLED_TOOLS"');
   expect(
-    await pathExists(
-      join(pluginRootPath, "mcp", "prism_generated_canonical_compile_fixture", "server.mjs"),
-    ),
+    await pathExists(prismMcpServerPath(testPrismHome(), "canonical-compile-fixture")),
   ).toBe(true);
+  expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
 });
 
@@ -7194,6 +7265,7 @@ export default defineAgent({
 
   const grok = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "grok",
       scope: "project",
@@ -7218,19 +7290,14 @@ export default defineAgent({
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
   expect(mcpConfig).toContain('"prism-generated-grok-pipeline-demo"');
-  expect(mcpConfig).toContain(
-    join(
-      pluginRootPath,
-      "mcp",
-      "prism_generated_grok_pipeline_demo",
-      "server.mjs",
-    ),
-  );
+  expect(mcpConfig).toContain(prismMcpServerPath(testPrismHome(), "grok-pipeline-demo"));
+  expect(mcpConfig).toContain('"PRISM_MCP_ENABLED_TOOLS": "grok_pipeline_demo_submit_work"');
   const mcpServer = await readFile(
-    join(pluginRootPath, "mcp", "prism_generated_grok_pipeline_demo", "server.mjs"),
+    prismMcpServerPath(testPrismHome(), "grok-pipeline-demo"),
     "utf8",
   );
   expect(mcpServer).toContain("grok_pipeline_demo_submit_work");
+  expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   expect(await pathExists(join(projectRoot, ".grok", "agents", "worker.md"))).toBe(false);
 });
 
@@ -7367,6 +7434,7 @@ export default defineHook({
 
   const factory = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "factory-droid",
       scope: "project",
@@ -7396,13 +7464,15 @@ export default defineHook({
   const mcpConfig = await readFile(join(pluginRootPath, "mcp.json"), "utf8");
   expect(mcpConfig).toContain('"prism-generated-factory-pipeline-demo"');
   expect(mcpConfig).toContain(
-    '"${DROID_PLUGIN_ROOT}/mcp/prism_generated_factory_pipeline_demo/server.mjs"',
+    JSON.stringify(prismMcpServerPath(testPrismHome(), "factory-pipeline-demo")),
   );
+  expect(mcpConfig).toContain('"PRISM_MCP_ENABLED_TOOLS": "factory_pipeline_demo_submit_work"');
   const mcpServer = await readFile(
-    join(pluginRootPath, "mcp", "prism_generated_factory_pipeline_demo", "server.mjs"),
+    prismMcpServerPath(testPrismHome(), "factory-pipeline-demo"),
     "utf8",
   );
   expect(mcpServer).toContain("factory_pipeline_demo_submit_work");
+  expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   const hookConfig = await readFile(join(pluginRootPath, "hooks", "hooks.json"), "utf8");
   expect(hookConfig).toContain('"PreToolUse"');
   expect(hookConfig).toContain('"matcher": "Read"');
@@ -7469,7 +7539,6 @@ export default defineHook({
     join(pluginRootPath, "skills", "testing", "SKILL.md"),
     join(pluginRootPath, "skills", "delivery", "SKILL.md"),
     join(pluginRootPath, "mcp.json"),
-    join(pluginRootPath, "mcp", "prism_generated_factory_pipeline_demo", "server.mjs"),
     join(pluginRootPath, "hooks", "hooks.json"),
     join(pluginRootPath, "hooks", "audit-read.mjs"),
     join(pluginRootPath, "hooks", "audit-submit.mjs"),
@@ -7495,6 +7564,7 @@ export default defineHook({
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "factory-droid",
       scope: "project",
@@ -7652,6 +7722,7 @@ export default defineHook({
 
   const compiled = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "pi",
       scope: "project",
@@ -7802,6 +7873,7 @@ export default defineHook({
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "pi",
       scope: "project",
@@ -7910,6 +7982,7 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "pi",
       scope: "project",
@@ -7956,6 +8029,7 @@ test("compilePluginForTarget leaves absent Pi cleanup settings absent", async ()
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "pi",
       scope: "global",
@@ -8010,6 +8084,7 @@ export default defineAgent({
 
   const compiled = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "pi",
       scope: "global",
@@ -8147,6 +8222,7 @@ export default defineHook({
 
   const compiled = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "kimi-code",
       scope: "global",
@@ -8177,10 +8253,12 @@ export default defineHook({
   });
   expect(manifest.mcpServers?.[kimiServerName]).toMatchObject({
     command: "bun",
-    args: ["./mcp/prism_generated_kimi_pipeline_demo/server.mjs"],
-    cwd: "./",
+    args: [prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo")],
     enabledTools: [kimiToolName],
   });
+  expect(manifest.mcpServers?.[kimiServerName]?.cwd).toBeUndefined();
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"))).toBe(true);
+  expect(await pathExists(join(pluginOutputRoot, "mcp"))).toBe(false);
   const installed = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
     plugins?: Array<Record<string, unknown>>;
   };
@@ -8231,7 +8309,7 @@ export default defineHook({
   expect(await pathExists(join(pluginOutputRoot, "skills", "delivery", "SKILL.md"))).toBe(true);
   expect(await pathExists(join(pluginOutputRoot, "skills", "prism-command-review", "SKILL.md"))).toBe(true);
   expect(await readFile(join(pluginOutputRoot, "skills", "prism-context", "SKILL.md"), "utf8")).toContain("Kimi context");
-  expect(await readFile(join(pluginOutputRoot, "mcp", "prism_generated_kimi_pipeline_demo", "server.mjs"), "utf8")).toContain("kimi_pipeline_demo_submit_work");
+  expect(await readFile(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"), "utf8")).toContain("kimi_pipeline_demo_submit_work");
 
   const config = await readFile(join(kimiRoot, "config.toml"), "utf8");
   expect(config).toContain("# --- prism kimi-code begin: kimi-pipeline-demo ---");
@@ -8288,6 +8366,7 @@ export default defineHook({
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "kimi-code",
       scope: "global",
@@ -8339,6 +8418,7 @@ export default defineHook({
   );
   const pruneCompile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "kimi-code",
       scope: "global",
@@ -8388,6 +8468,7 @@ test("compilePluginForTarget rejects Kimi Code project scope", async () => {
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "kimi-code",
       scope: "project",
@@ -8404,182 +8485,11 @@ test("compilePluginForTarget rejects Kimi Code project scope", async () => {
   });
 });
 
-test("compilePluginForTarget leaves absent Kimi cleanup files absent", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "kimi-empty-cleanup");
-  const kimiRoot = join(root, "kimi-home");
-  const mcpRoot = join(root, "mcp-runtime");
-  const staleRuntimePath = runtimeMcpServerDescriptor(mcpRoot, "kimi-empty-cleanup").absolutePath;
-  const staleRuntimeContent = "console.log('stale Kimi runtime');\n";
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({
-      name: "kimi-empty-cleanup",
-      version: "0.1.0",
-      targets: {},
-    })}\n`,
-  );
-  await writeText(staleRuntimePath, staleRuntimeContent);
-  const staleRuntimeEntryId = managedEntryId({
-    harness: "kimi-code",
-    scope: "global",
-    root: kimiRoot,
-    pluginName: "kimi-empty-cleanup",
-    artifact: "compile",
-    targetPath: staleRuntimePath,
-    kind: "file",
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("kimi-code")),
-    entries: [{
-      id: staleRuntimeEntryId,
-      pluginName: "kimi-empty-cleanup",
-      pluginVersion: "0.1.0",
-      pluginPath: pluginRoot,
-      harness: "kimi-code",
-      scope: "global",
-      root: kimiRoot,
-      artifact: "compile",
-      targetPath: staleRuntimePath,
-      kind: "file",
-      contentHash: computeContentHash(staleRuntimeContent),
-      updatedAt: new Date().toISOString(),
-    }],
-  });
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      pluginPath: pluginRoot,
-      target: "kimi-code",
-      scope: "global",
-      root: kimiRoot,
-      mcpRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(result.operations.some((operation) =>
-    operation.kind === "patch-config" &&
-    (operation.target === join(kimiRoot, "config.toml") ||
-      operation.target === join(kimiRoot, "plugins", "installed.json"))
-  )).toBe(false);
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: staleRuntimePath,
-      targetType: "file",
-      shared: true,
-    }),
-  );
-  expect(await pathExists(join(kimiRoot, "config.toml"))).toBe(false);
-  expect(await pathExists(join(kimiRoot, "plugins", "installed.json"))).toBe(false);
-  expect(await pathExists(staleRuntimePath)).toBe(false);
-  expect((await readHarnessLedger("kimi-code")).entries.some((entry) => entry.id === staleRuntimeEntryId)).toBe(false);
-});
-
-test("compilePluginForTarget drops stale Kimi shared MCP ledger when runtime file is already missing", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "kimi-shared-runtime");
-  const kimiRoot = join(root, "kimi-home");
-  const claudeRoot = join(root, "claude-home");
-  const mcpRoot = join(root, "mcp-runtime");
-  const targetPath = runtimeMcpServerDescriptor(mcpRoot, "kimi-shared-runtime").absolutePath;
-  const content = "console.log('shared runtime');\n";
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({
-      name: "kimi-shared-runtime",
-      version: "0.1.0",
-      targets: { agents: ["kimi-code"] },
-    })}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    "---\ndescription: Kimi worker\n---\n\n# Worker\n\nKimi worker.\n",
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
-  name: "worker",
-  description: "Kimi worker",
-  identity: "worker",
-  traits: [],
-});
-`,
-  );
-  await writeText(targetPath, content);
-
-  const kimiEntryId = managedEntryId({
-    harness: "kimi-code",
-    scope: "global",
-    root: kimiRoot,
-    pluginName: "kimi-shared-runtime",
-    artifact: "compile",
-    targetPath,
-    kind: "file",
-  });
-  const claudeEntryId = managedEntryId({
-    harness: "claude-code",
-    scope: "global",
-    root: claudeRoot,
-    pluginName: "kimi-shared-runtime",
-    artifact: "compile",
-    targetPath,
-    kind: "file",
-  });
-  const sharedEntry = {
-    pluginName: "kimi-shared-runtime",
-    pluginVersion: "0.1.0",
-    pluginPath: pluginRoot,
-    scope: "global" as const,
-    artifact: "compile",
-    targetPath,
-    kind: "file" as const,
-    contentHash: computeContentHash(content),
-    updatedAt: new Date().toISOString(),
-  };
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("kimi-code")),
-    entries: [{ ...sharedEntry, id: kimiEntryId, harness: "kimi-code", root: kimiRoot }],
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("claude-code")),
-    entries: [{ ...sharedEntry, id: claudeEntryId, harness: "claude-code", root: claudeRoot }],
-  });
-  await rm(targetPath);
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      pluginPath: pluginRoot,
-      target: "kimi-code",
-      scope: "global",
-      root: kimiRoot,
-      mcpRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(await pathExists(targetPath)).toBe(false);
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: targetPath,
-      targetType: "file",
-      shared: true,
-    }),
-  );
-  expect((await readHarnessLedger("kimi-code")).entries.some((entry) => entry.id === kimiEntryId)).toBe(false);
-  expect((await readHarnessLedger("claude-code")).entries.some((entry) => entry.id === claudeEntryId)).toBe(true);
-});
-
 test("compilePluginForTarget gates Factory HTTP MCP for agent-bound dependency tools", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "factory-http-agent-demo");
   const coreRoot = join(root, "factory-tool-core");
   const factoryRoot = join(root, "factory-root");
-  const mcpRoot = join(root, "mcp-root");
   const port = await getFreePort("127.0.0.1");
 
   await writeText(
@@ -8681,11 +8591,11 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "factory-droid",
       scope: "global",
       root: factoryRoot,
-      mcpRoot,
       dryRun: false,
       mcpLifecycle: "none",
     }),
@@ -8701,25 +8611,31 @@ export default defineAgent({
   try {
     const compiled = await Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target: "factory-droid",
         scope: "global",
         root: factoryRoot,
-        mcpRoot,
         dryRun: false,
         mcpLifecycle: "serve",
       }),
     );
+    // The union bundle carries the agent-bound dependency tool and lives at
+    // the canonical PRISM_HOME path.
+    const bundleContent = await readFile(
+      prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"),
+      "utf8",
+    );
+    expect(bundleContent).toContain("factory_tool_core_submit_work");
     expect(compiled.operations.some((operation) =>
-      operation.kind === "write-plugin-file" &&
-      operation.content.includes("factory_tool_core_submit_work")
-    )).toBe(true);
+      "target" in operation && operation.target.endsWith("server.mjs")
+    )).toBe(false);
   } finally {
     await stopMcp({
       pluginPath: pluginRoot,
       harness: "factory-droid",
       scope: "global",
-      root: mcpRoot,
+      prismHome: testPrismHome(),
       tokenEnv: "PRISM_MCP_FACTORY_AGENT_TOKEN",
     }).catch(() => undefined);
   }
@@ -8797,6 +8713,7 @@ export default defineOrbit({
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "factory-droid",
       scope: "project",
@@ -8814,107 +8731,6 @@ export default defineOrbit({
   );
   expect(await directoryExists(generatedRoot)).toBe(false);
   expect((await readHarnessLedger("factory-droid")).entries).toHaveLength(0);
-});
-
-test("compilePluginForTarget forgets stale Factory shared MCP runtime when another harness owns it", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "factory-shared-runtime");
-  const projectRoot = join(root, "project");
-  const mcpRoot = join(root, "mcp-runtime");
-  const factoryRoot = join(projectRoot, ".factory");
-  const claudeRoot = join(projectRoot, ".claude");
-  const targetPath = runtimeMcpServerDescriptor(mcpRoot, "factory-shared-runtime").absolutePath;
-  const content = "console.log('shared runtime');\n";
-  await mkdir(projectRoot, { recursive: true });
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({
-      name: "factory-shared-runtime",
-      version: "0.1.0",
-      targets: { agents: ["factory-droid"] },
-    })}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "identities", "worker.identity.md"),
-    "---\ndescription: Factory worker\n---\n\n# Worker\n\nFactory worker.\n",
-  );
-  await writeText(
-    join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
-  name: "worker",
-  description: "Factory worker",
-  identity: "worker",
-  traits: [],
-  targets: {
-    "factory-droid": { tools: ["Read"] },
-  },
-});
-`,
-  );
-  await writeText(targetPath, content);
-
-  const factoryEntryId = managedEntryId({
-    harness: "factory-droid",
-    scope: "project",
-    root: factoryRoot,
-    pluginName: "factory-shared-runtime",
-    artifact: "compile",
-    targetPath,
-    kind: "file",
-  });
-  const claudeEntryId = managedEntryId({
-    harness: "claude-code",
-    scope: "project",
-    root: claudeRoot,
-    pluginName: "factory-shared-runtime",
-    artifact: "compile",
-    targetPath,
-    kind: "file",
-  });
-  const sharedEntry = {
-    pluginName: "factory-shared-runtime",
-    pluginVersion: "0.1.0",
-    pluginPath: pluginRoot,
-    scope: "project" as const,
-    artifact: "compile",
-    targetPath,
-    kind: "file" as const,
-    contentHash: computeContentHash(content),
-    updatedAt: new Date().toISOString(),
-  };
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("factory-droid")),
-    entries: [{ ...sharedEntry, id: factoryEntryId, harness: "factory-droid", root: factoryRoot }],
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("claude-code")),
-    entries: [{ ...sharedEntry, id: claudeEntryId, harness: "claude-code", root: claudeRoot }],
-  });
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      pluginPath: pluginRoot,
-      target: "factory-droid",
-      scope: "project",
-      projectPath: projectRoot,
-      mcpRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(result.operations).toContainEqual(
-    expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: targetPath,
-      targetType: "file",
-      shared: true,
-    }),
-  );
-  expect(await readFile(targetPath, "utf8")).toBe(content);
-  expect((await readHarnessLedger("factory-droid")).entries.some((entry) => entry.id === factoryEntryId)).toBe(false);
-  expect((await readHarnessLedger("claude-code")).entries.some((entry) => entry.id === claudeEntryId)).toBe(true);
 });
 
 test("compilePluginForTarget keeps plugin skills out of Factory orbit-only bundles", async () => {
@@ -8951,6 +8767,7 @@ export default defineOrbit({
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "factory-droid",
       scope: "project",
@@ -8976,6 +8793,7 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
 
   const claude = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "claude-code",
       scope: "project",
@@ -9056,6 +8874,7 @@ test("compilePluginForTarget does not lower runtime artifacts for metadata-only 
   for (const target of ["opencode", "claude-code", "antigravity-cli", "codex-cli"] as const) {
     const result = await Effect.runPromise(
       compilePluginForTarget({
+        prismHome: testPrismHome(),
         pluginPath: pluginRoot,
         target,
         scope: "project",
@@ -9139,6 +8958,7 @@ export default defineAgent({
 
   const exit = await Effect.runPromiseExit(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -9164,6 +8984,7 @@ test("derived orbit skill deduplicates traits and renders multi-agent phase sub-
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -9235,6 +9056,7 @@ export default defineOrbit({
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -9681,6 +9503,7 @@ export default defineOrbit({
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -9987,6 +9810,7 @@ export default defineOrbit({
   // unit-style invocation by compiling and asserting the skill is NOT emitted.
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -10007,6 +9831,7 @@ test("derived orbit skill renders trait sections from description + bound-by + g
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -10103,6 +9928,7 @@ test("derived orbit skill drops the closure-discipline section", async () => {
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -10124,6 +9950,7 @@ test("derived orbit skill drops the input-shape placeholder line", async () => {
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -10147,6 +9974,7 @@ test("derived orbit skill agent sub-sections do not render a duplicated **Identi
 
   await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",

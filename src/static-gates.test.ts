@@ -36,6 +36,27 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     reason:
       "deleted in WS0 — companion of mergeCodexAgentConfig in the dead codex agent-role install path",
   },
+  {
+    pattern: /writeServerBundle/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in WS3 — the MCP lifecycle consumes the compiled canonical bundle at " +
+      "PRISM_HOME/runtime/mcp/<plugin>/server.mjs; it never writes (or snapshots/restores) bundles",
+  },
+  {
+    pattern: /defaultMcpRuntimeRoot/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in WS3 — the ~/.config dual MCP runtime root died with the canonical " +
+      "PRISM_HOME/runtime/mcp relocation (no --mcp-root, no per-harness in-root bundles)",
+  },
+  {
+    pattern: /__PRISM_HTTP_PORT__/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in WS3 — HTTP identity (host/port/token) is never baked into bundle bytes; " +
+      "the server reads PRISM_MCP_HTTP_HOST/PRISM_MCP_HTTP_PORT/PRISM_MCP_HTTP_TOKEN at startup",
+  },
 ];
 
 const SRC_ROOT = import.meta.dir;

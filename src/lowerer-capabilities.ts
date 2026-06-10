@@ -108,8 +108,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<generated-plugin>/.mcp.json",
-        summary: "Canonical tools lower through a plugin-local generated MCP server.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced from the plugin .mcp.json.",
       },
       hooks: {
         kind: "native-plugin-bundle",
@@ -213,8 +213,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<hermes-root>/prism/mcp/prism_generated_<plugin>/server.mjs",
-        summary: "Canonical tools lower to a generated MCP server.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced from config.yaml.",
       },
       hooks: unsupported("Hermes native hooks are not lowered by Prism yet."),
       mcpConfig: {
@@ -253,8 +253,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<codex-root>/mcp/prism_generated_<plugin>/server.mjs or <mcp-runtime-root>/prism/mcp/prism_generated_<plugin>/server.mjs",
-        summary: "Canonical tools lower to a generated MCP server; Streamable HTTP mode uses the shared Prism runtime path.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced from config.toml.",
       },
       hooks: {
         kind: "config-patch",
@@ -301,8 +301,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<generated-plugin>/mcp_config.json",
-        summary: "Canonical tools lower to a generated MCP server referenced by plugin config.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced by plugin config.",
       },
       hooks: {
         kind: "native-plugin-bundle",
@@ -353,8 +353,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<generated-plugin>/kimi.plugin.json#mcpServers",
-        summary: "Canonical tools lower to a generated MCP server declared by the Kimi plugin manifest.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server declared by the Kimi plugin manifest.",
       },
       hooks: {
         kind: "config-patch",
@@ -459,8 +459,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<cursor-root>/mcp/prism_generated_<plugin>/server.mjs or <mcp-runtime-root>/prism/mcp/prism_generated_<plugin>/server.mjs",
-        summary: "Canonical tools lower to a generated MCP server referenced by Cursor mcp.json.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced by Cursor mcp.json.",
       },
       hooks: unsupported(),
       mcpConfig: {
@@ -509,8 +509,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<generated-plugin>/mcp.json",
-        summary: "Canonical tools lower to plugin-local generated MCP servers.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced by the plugin mcp.json.",
       },
       hooks: {
         kind: "native-plugin-bundle",
@@ -609,8 +609,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<generated-plugin>/.mcp.json",
-        summary: "Canonical tools lower to plugin-local generated MCP servers.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced by the plugin .mcp.json.",
       },
       hooks: {
         kind: "native-plugin-bundle",

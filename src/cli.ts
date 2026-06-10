@@ -56,6 +56,7 @@ import {
   type McpPortSelection,
 } from "./mcp/lifecycle.js";
 import { readHarnessLedger } from "./managed-ledger.js";
+import { resolvePrismHome } from "./prism-home.js";
 import {
   formatPackageOperations,
   packagePluginForTarget,
@@ -91,7 +92,6 @@ program
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .option("--compile-root <path>", "Override compile output root")
-  .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
@@ -124,7 +124,6 @@ program
   .option("--no-validate", "Skip plugin validation before install")
   .option("--dry-run", "Preview operations without executing", false)
   .option("--compile-root <path>", "Override compile output root")
-  .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
@@ -149,7 +148,6 @@ program
         scope: options.scope,
         projectPath: options.project,
         compileRoot: options.compileRoot,
-        mcpRoot: options.mcpRoot,
         mcpLifecycle: options.mcpLifecycle,
         validate: options.validate,
         dryRun: options.dryRun,
@@ -238,7 +236,6 @@ program
   .option("--dry-run", "Preview operations without writing", false)
   .option("--clean", "Clear compile cache before compiling", false)
   .option("--root <path>", "Override harness output root")
-  .option("--mcp-root <path>", "Override generated HTTP MCP runtime root")
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior (none|verify|serve)",
@@ -266,7 +263,7 @@ program
         scope: options.scope,
         projectPath: options.project,
         root: options.root,
-        mcpRoot: options.mcpRoot,
+        prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
         mcpLifecycle: options.mcpLifecycle,
       });
@@ -389,7 +386,6 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override Prism MCP runtime root")
   .option("--host <host>", "HTTP bind host")
   .option("--port <port>", "HTTP port or 'auto'")
   .option("--token-env <name>", "Environment variable name used by the generated MCP server")
@@ -402,7 +398,7 @@ mcpCommand
         harness: options.harness,
         scope: options.scope,
         projectPath: options.project,
-        root: options.root,
+        prismHome: resolvePrismHome(),
         host: options.host,
         port: parseMcpPortSelection(options.port),
         tokenEnv: options.tokenEnv,
@@ -426,7 +422,6 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override Prism MCP runtime root")
   .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -437,7 +432,7 @@ mcpCommand
           harness: options.harness,
           scope: options.scope,
           projectPath: options.project,
-          root: options.root,
+          prismHome: resolvePrismHome(),
           tokenEnv: options.tokenEnv,
         });
         console.log(formatMcpStatus(status));
@@ -448,7 +443,7 @@ mcpCommand
         harness: options.harness,
         scope: options.scope,
         projectPath: options.project,
-        root: options.root,
+        prismHome: resolvePrismHome(),
         tokenEnv: options.tokenEnv,
       });
       if (statuses.length === 0) {
@@ -475,7 +470,6 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override Prism MCP runtime root")
   .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string, options) => {
     try {
@@ -485,7 +479,7 @@ mcpCommand
         harness: options.harness,
         scope: options.scope,
         projectPath: options.project,
-        root: options.root,
+        prismHome: resolvePrismHome(),
         tokenEnv: options.tokenEnv,
       });
       console.log(formatMcpStopResult(result));
@@ -506,7 +500,6 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--root <path>", "Override Prism MCP runtime root")
   .option("--host <host>", "HTTP bind host")
   .option("--port <port>", "HTTP port or 'auto'")
   .option("--token-env <name>", "Environment variable name used by the generated MCP server")
@@ -518,7 +511,7 @@ mcpCommand
         harness: options.harness,
         scope: options.scope,
         projectPath: options.project,
-        root: options.root,
+        prismHome: resolvePrismHome(),
         host: options.host,
         port: parseMcpPortSelection(options.port),
         tokenEnv: options.tokenEnv,
@@ -697,7 +690,6 @@ type InstallCommandOptions = {
   validate?: boolean;
   dryRun?: boolean;
   compileRoot?: string;
-  mcpRoot?: string;
   mcpLifecycle?: CompileMcpLifecycleMode;
 };
 
@@ -710,7 +702,6 @@ type NormalizedInstallOptions = {
   validate?: boolean;
   dryRun: boolean;
   compileRoot?: string;
-  mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
 };
 
@@ -753,7 +744,6 @@ type InstallAllRefreshOptions = {
   scope: HarnessScope;
   projectPath?: string;
   compileRoot?: string;
-  mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
   validate?: boolean;
   dryRun: boolean;
@@ -788,7 +778,6 @@ async function runInstallCommand(
     scope: context.options.scope,
     projectPath: context.options.project,
     compileRoot: context.options.compileRoot,
-    mcpRoot: context.options.mcpRoot,
     mcpLifecycle: context.options.mcpLifecycle,
     dryRun: context.options.dryRun,
   });
@@ -1030,7 +1019,6 @@ async function refreshDiscoveredPlugin(
     scope: options.scope,
     projectPath: options.projectPath,
     compileRoot: options.compileRoot,
-    mcpRoot: options.mcpRoot,
     mcpLifecycle: options.mcpLifecycle,
     dryRun: options.dryRun,
   });
@@ -1405,7 +1393,6 @@ async function runCompilePhaseForPlugin(options: {
   scope: HarnessScope;
   projectPath?: string;
   compileRoot?: string;
-  mcpRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
   dryRun: boolean;
   indent?: string;
@@ -1426,7 +1413,7 @@ async function runCompilePhaseForPlugin(options: {
         scope: options.scope,
         projectPath: options.projectPath,
         root: options.compileRoot,
-        mcpRoot: options.mcpRoot,
+        prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
         mcpLifecycle: options.mcpLifecycle,
       })

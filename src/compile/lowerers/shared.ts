@@ -1267,52 +1267,6 @@ export const planGeneratedPluginHookWrites = async <
   });
 };
 
-export const planSharedMcpRuntimePrune = async (
-  operations: LowerOperation[],
-  target: string,
-  owner?: {
-    readonly harness: HarnessId;
-    readonly scope: HarnessScope;
-    readonly root: string;
-    readonly sourcePluginName: string;
-  },
-  options: {
-    readonly protectSameHarnessOtherRoots?: boolean;
-  } = {},
-): Promise<void> => {
-  const hasTarget = await exists(target);
-  const hasLedgerEntry = owner ? await hasSharedMcpRuntimeLedgerEntry(owner, target) : false;
-  if (!hasTarget && !hasLedgerEntry) return;
-  operations.push({
-    kind: "prune-plugin-path",
-    target,
-    targetType: "file",
-    shared: true,
-    ...(options.protectSameHarnessOtherRoots ? { protectSameHarnessOtherRoots: true } : {}),
-    reason: "stale",
-  } as LowerOperation);
-};
-
-const hasSharedMcpRuntimeLedgerEntry = async (
-  owner: {
-    readonly harness: HarnessId;
-    readonly scope: HarnessScope;
-    readonly root: string;
-    readonly sourcePluginName: string;
-  },
-  target: string,
-): Promise<boolean> => {
-  const ledger = await readHarnessLedger(owner.harness);
-  return ledger.entries.some((entry) =>
-    entry.pluginName === owner.sourcePluginName &&
-    entry.scope === owner.scope &&
-    resolve(entry.root) === resolve(owner.root) &&
-    entry.artifact === "compile" &&
-    entry.kind === "file" &&
-    resolve(entry.targetPath) === resolve(target)
-  );
-};
-
 export const planGeneratedPluginPruning = async (options: {
   readonly state: GeneratedPluginPlanState;
   readonly root: string;

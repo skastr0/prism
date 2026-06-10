@@ -28,11 +28,16 @@ export interface McpTokenStore {
   readonly tokens: Record<string, McpStoredToken>;
 }
 
-export const prismConfigDir = (runtimeRoot: string): string =>
-  join(runtimeRoot, "prism");
+/**
+ * Token store location under PRISM_HOME (overhaul WS3): the `runtimeRoot`
+ * argument across this module is the Prism home directory, threaded
+ * explicitly from the edge — never an env read, never a harness root.
+ */
+const prismMcpStateDir = (prismHome: string): string =>
+  join(prismHome, "runtime", "mcp");
 
-export const mcpTokenStorePath = (runtimeRoot: string): string =>
-  join(prismConfigDir(runtimeRoot), "tokens.json");
+export const mcpTokenStorePath = (prismHome: string): string =>
+  join(prismMcpStateDir(prismHome), "tokens.json");
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -75,7 +80,7 @@ const writeTokenStore = async (
   runtimeRoot: string,
   store: McpTokenStore,
 ): Promise<void> => {
-  await mkdir(prismConfigDir(runtimeRoot), { recursive: true, mode: 0o700 });
+  await mkdir(prismMcpStateDir(runtimeRoot), { recursive: true, mode: 0o700 });
   const path = mcpTokenStorePath(runtimeRoot);
   await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
   await chmod(path, 0o600).catch(() => undefined);

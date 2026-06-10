@@ -12,6 +12,9 @@ import {
   readHarnessLedger,
   writeHarnessLedger,
 } from "./managed-ledger.js";
+import { generateMcpServerBundle } from "./compile/mcp-bundle.js";
+import { writePrismMcpServerBundle } from "./compile/mcp-runtime-path.js";
+import { bindingFromToolSource } from "./compile/tool-bindings.js";
 
 const tempRoots: string[] = [];
 const cliTestToken = "prism-cli-test-token-with-enough-entropy";
@@ -199,12 +202,15 @@ const createCliMcpFixture = async (options?: {
 }): Promise<{
   pluginRoot: string;
   hermesRoot: string;
+  prismHome: string;
 }> => {
   const root = await createTempRoot();
   const harness = options?.harness ?? "hermes";
   const pluginRoot = join(root, "cli-hermes-tools");
   const hermesRoot = join(root, "hermes-root");
+  const prismHome = join(root, "prism-home");
   await mkdir(hermesRoot, { recursive: true });
+  await mkdir(prismHome, { recursive: true });
   await writeFile(join(hermesRoot, "config.yaml"), "existing: true\n");
   await mkdir(pluginRoot, { recursive: true });
   await writeFile(
@@ -250,7 +256,24 @@ export default defineTool({
 });
 `,
   );
-  return { pluginRoot, hermesRoot };
+  return { pluginRoot, hermesRoot, prismHome };
+};
+
+/** What `prism install` produces: the canonical PRISM_HOME union bundle. */
+const prebuildCliCanonicalBundle = async (
+  pluginRoot: string,
+  prismHome: string,
+): Promise<void> => {
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "cli-hermes-tools",
+    sourcePluginRoot: pluginRoot,
+    serverName: "prism-generated-cli-hermes-tools",
+    bundleId: "prism-generated-cli-hermes-tools",
+    bindings: [
+      bindingFromToolSource("cli-hermes-tools", join(pluginRoot, "tools", "echo.tool.ts")),
+    ],
+  });
+  await writePrismMcpServerBundle(prismHome, "cli-hermes-tools", bundle.content);
 };
 
 const createCliPackageFixture = async (): Promise<{
@@ -344,15 +367,14 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   expect(await pathExists(join(pluginRoot, "README.md"))).toBe(false);
 });
 
-test("mcp serve/status/stop manages a Hermes daemon under an override root", async () => {
-  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
-  const env = { PRISM_MCP_CLI_TEST_TOKEN: cliTestToken };
+test("mcp serve/status/stop manages a Hermes daemon under a sandboxed PRISM_HOME", async () => {
+  const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
+  await prebuildCliCanonicalBundle(pluginRoot, prismHome);
+  const env = { PRISM_MCP_CLI_TEST_TOKEN: cliTestToken, PRISM_HOME: prismHome };
   const common = [
     pluginRoot,
     "--harness",
     "hermes",
-    "--root",
-    hermesRoot,
     "--token-env",
     "PRISM_MCP_CLI_TEST_TOKEN",
   ];
@@ -373,8 +395,6 @@ test("mcp serve/status/stop manages a Hermes daemon under an override root", asy
       "status",
       "--harness",
       "hermes",
-      "--root",
-      hermesRoot,
       "--token-env",
       "PRISM_MCP_CLI_TEST_TOKEN",
     ], env);
@@ -406,7 +426,7 @@ test("mcp serve/status/stop manages a Hermes daemon under an override root", asy
 }, 15_000);
 
 test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => {
-  const { pluginRoot, hermesRoot } = await createCliMcpFixture({ harness: "cursor" });
+  const { pluginRoot, prismHome } = await createCliMcpFixture({ harness: "cursor" });
 
   const status = await runCli([
     "mcp",
@@ -414,9 +434,7 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
     pluginRoot,
     "--harness",
     "cursor",
-    "--root",
-    hermesRoot,
-  ], {});
+  ], { PRISM_HOME: prismHome });
 
   expect(status.exitCode).toBe(0);
   expect(status.stdout).toContain("stopped");
@@ -424,7 +442,7 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
 });
 
 test("compile writes Hermes MCP config to an explicit profile root", async () => {
-  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
+  const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
 
   const result = await runCli([
     "compile",
@@ -433,18 +451,19 @@ test("compile writes Hermes MCP config to an explicit profile root", async () =>
     "hermes",
     "--root",
     hermesRoot,
-  ], {});
+  ], { PRISM_HOME: prismHome });
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain(`Output root: ${hermesRoot}`);
   const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
   expect(config).toContain("mcp_servers:");
   expect(config).toContain("prism-generated-cli-hermes-tools:");
+  expect(config).toContain('command: "bun"');
   expect(
-    await pathExists(
-      join(hermesRoot, "prism", "mcp", "prism_generated_cli_hermes_tools", "server.mjs"),
-    ),
+    await pathExists(join(prismHome, "runtime", "mcp", "cli-hermes-tools", "server.mjs")),
   ).toBe(true);
+  // The bundle never lands inside the harness root.
+  expect(await pathExists(join(hermesRoot, "prism", "mcp"))).toBe(false);
 });
 
 test("package CLI writes distributable payload without live harness ledger writes", async () => {
@@ -593,7 +612,9 @@ test("install runs Cursor lowerer cleanup when tools target is removed", async (
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("Compile (cursor, global)");
-  expect(await pathExists(serverPath)).toBe(false);
+  // Stale in-root bundle files are no longer pruned by the lowerer — old
+  // layout leftovers are WS8 teardown's job. The config entry is removed.
+  expect(await pathExists(serverPath)).toBe(true);
   const config = JSON.parse(await readFile(configPath, "utf8")) as {
     mcpServers?: Record<string, unknown>;
   };
@@ -603,7 +624,7 @@ test("install runs Cursor lowerer cleanup when tools target is removed", async (
     (await readHarnessLedger("cursor", prismHome)).entries.some(
       (entry) => entry.id === serverEntryId,
     ),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 test("install serves Hermes HTTP MCP by default", async () => {
@@ -639,8 +660,6 @@ test("install serves Hermes HTTP MCP by default", async () => {
       pluginRoot,
       "--harness",
       "hermes",
-      "--root",
-      hermesRoot,
       "--token-env",
       tokenEnv,
     ], env).catch(() => undefined);
@@ -648,7 +667,7 @@ test("install serves Hermes HTTP MCP by default", async () => {
 }, 20_000);
 
 test("install-all compiles Hermes child plugins into an explicit profile root", async () => {
-  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
+  const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
 
   const result = await runCli([
     "install-all",
@@ -658,7 +677,7 @@ test("install-all compiles Hermes child plugins into an explicit profile root", 
     "--compile-root",
     hermesRoot,
     "--no-validate",
-  ], {});
+  ], { PRISM_HOME: prismHome });
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("Compile (hermes, global)");
@@ -668,10 +687,9 @@ test("install-all compiles Hermes child plugins into an explicit profile root", 
   expect(config).toContain("mcp_servers:");
   expect(config).toContain("prism-generated-cli-hermes-tools:");
   expect(
-    await pathExists(
-      join(hermesRoot, "prism", "mcp", "prism_generated_cli_hermes_tools", "server.mjs"),
-    ),
+    await pathExists(join(prismHome, "runtime", "mcp", "cli-hermes-tools", "server.mjs")),
   ).toBe(true);
+  expect(await pathExists(join(hermesRoot, "prism", "mcp"))).toBe(false);
 });
 
 test("init --with-agent scaffolds TypeScript agent sources, not source markdown agents", async () => {

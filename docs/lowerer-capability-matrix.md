@@ -26,6 +26,15 @@ patched into a config file.
 
 ## Matrix
 
+All `generated-mcp` surfaces reference ONE canonical union bundle per source
+plugin at `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` (never inside harness
+roots). Per-harness tool exposure stays client-side: codex `enabled_tools`,
+hermes `tools.include`, kimi `enabledTools`, and a deny-by-default
+`PRISM_MCP_ENABLED_TOOLS` env filter for harnesses without a native filter
+field (Claude Code, Cursor, Antigravity, Factory Droid, Grok). Streamable HTTP
+daemons expose the full union bundle to every connected harness — the bearer
+token is the trust boundary there.
+
 | Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle |

@@ -230,6 +230,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "claude-plugin-fixture", "server.mjs"),
       sourcePluginName: "claude-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -272,16 +273,25 @@ export default defineTool({
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");
   expect(mcpConfig?.content).toContain('"prism-generated-claude-plugin-fixture"');
-  expect(mcpConfig?.content).toContain(
-    '"${CLAUDE_PLUGIN_ROOT}/mcp/prism_generated_claude_plugin_fixture/server.mjs"',
-  );
+  const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+  };
+  const stdioEntry = mcpParsed.mcpServers?.["prism-generated-claude-plugin-fixture"];
+  expect(stdioEntry?.command).toBe("bun");
+  expect(stdioEntry?.args).toEqual([
+    join(root, "prism-home", "runtime", "mcp", "claude-plugin-fixture", "server.mjs"),
+  ]);
+  // Deny-by-default exposure: Claude has no client-side tool filter, so the
+  // per-harness tool names ride PRISM_MCP_ENABLED_TOOLS.
+  expect(stdioEntry?.env).toEqual({
+    PRISM_MCP_ENABLED_TOOLS: "claude_plugin_fixture_echo",
+  });
 
-  const bundle = findContentOperation(
-    operations,
-    join("mcp", "prism_generated_claude_plugin_fixture", "server.mjs"),
+  // The bundle itself lives in PRISM_HOME — never in the generated plugin.
+  const bundle = operations.find(
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("claude_plugin_fixture_echo");
-  expect(bundle?.content).toContain("tools/list");
+  expect(bundle).toBeUndefined();
 
   const hookConfig = findContentOperation(operations, join("hooks", "hooks.json"));
   expect(hookConfig?.content).toContain('"PreToolUse"');
@@ -389,7 +399,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpRuntimeRoot: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "claude-http-fixture", "server.mjs"),
       mcpBearerToken: "claude-static-token",
       sourcePluginName: "claude-http-fixture",
       sourcePluginVersion: "0.1.0",
@@ -412,13 +422,12 @@ export default defineTool({
   expect(mcpConfig?.content).not.toContain('"args"');
   expect(mcpConfig?.mode).toBe(0o600);
 
+  // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
+  // plans no bundle write anywhere.
   const bundle = operations.find(
-    (operation): operation is ContentOperation =>
-      isContentOperation(operation) &&
-      operation.target === join(outputRoot, "prism", "mcp", "prism_generated_claude_http_fixture", "server.mjs"),
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("claude_http_fixture_echo");
-  expect(bundle?.content).toContain("PRISM_MCP_CLAUDE_HTTP_TOKEN");
+  expect(bundle).toBeUndefined();
 });
 
 test("claude-code lowerer fails closed when hook matcher has no Claude target mapping", async () => {

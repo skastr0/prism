@@ -424,7 +424,9 @@ export const packagePluginForTarget = async (
       scope,
       projectPath: options.projectPath,
       root: plannedPaths.planRoot,
-      mcpRoot: plannedPaths.planRoot,
+      // Package mode never touches PRISM_HOME (the MCP bundle ships inside
+      // the package payload); the plan root doubles as an inert home.
+      prismHome: plannedPaths.planRoot,
       dryRun: true,
       mcpLifecycle: "none" satisfies CompileMcpLifecycleMode,
       packageMode: true,

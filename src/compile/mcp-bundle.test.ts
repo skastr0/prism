@@ -10,6 +10,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { compilePluginForTarget } from "./pipeline.js";
 import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "./mcp-bundle.js";
 import { Contract } from "./sources.js";
+import { resolvePrismHome } from "../prism-home.js";
 
 const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;
@@ -31,6 +32,9 @@ const createTempRoot = async (): Promise<string> => {
   process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
+
+/** The sandboxed PRISM_HOME for the current test root (set by createTempRoot). */
+const testPrismHome = (): string => resolvePrismHome();
 
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -423,6 +427,7 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -511,6 +516,7 @@ test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -556,6 +562,7 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -571,12 +578,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     sourcePluginName: "forge",
     serverName: "prism-mcp-forge",
     bundleId: "forge",
-    transport: "streamable-http",
-    http: {
-      host: "127.0.0.1",
-      port,
-      tokenEnv: "PRISM_MCP_TOKEN",
-    },
     bindings: builder?.toolBindings ?? [],
   });
   expect(bundle.content).toContain("Bun.serve");
@@ -594,6 +595,8 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     cwd: projectRoot,
     env: {
       ...process.env,
+      PRISM_MCP_TRANSPORT: "streamable-http",
+      PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_SERVER_SHA256: "f".repeat(64),
     },
@@ -775,6 +778,7 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
   const token = "sdk-client-token";
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -790,12 +794,6 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
     serverName: "prism-mcp-forge",
     bundleId: "forge",
     bindings: builder.toolBindings,
-    transport: "streamable-http",
-    http: {
-      host: "127.0.0.1",
-      port,
-      tokenEnv: "PRISM_MCP_TEST_HTTP_TOKEN",
-    },
   });
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
@@ -804,7 +802,9 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_TEST_HTTP_TOKEN: token,
+      PRISM_MCP_TRANSPORT: "streamable-http",
+      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_HTTP_TOKEN: token,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -846,6 +846,7 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -861,12 +862,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     sourcePluginName: "forge",
     serverName: "prism-mcp-forge",
     bundleId: "forge",
-    transport: "streamable-http",
-    http: {
-      host: "127.0.0.1",
-      port,
-      tokenEnv: "PRISM_MCP_TOKEN",
-    },
     bindings: builder?.toolBindings ?? [],
   });
 
@@ -876,6 +871,8 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     cwd: projectRoot,
     env: {
       ...process.env,
+      PRISM_MCP_TRANSPORT: "streamable-http",
+      PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
     },
@@ -934,6 +931,7 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -949,12 +947,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
     sourcePluginName: "forge",
     serverName: "prism-mcp-forge",
     bundleId: "forge",
-    transport: "streamable-http",
-    http: {
-      host: "127.0.0.1",
-      port,
-      tokenEnv: "PRISM_MCP_TOKEN",
-    },
     bindings: builder?.toolBindings ?? [],
   });
 
@@ -964,6 +956,8 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
     cwd: projectRoot,
     env: {
       ...process.env,
+      PRISM_MCP_TRANSPORT: "streamable-http",
+      PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
       PRISM_MCP_TOOL_TIMEOUT_MS: "50",
@@ -1025,6 +1019,7 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -1040,12 +1035,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
     sourcePluginName: "forge",
     serverName: "prism-mcp-forge",
     bundleId: "forge",
-    transport: "streamable-http",
-    http: {
-      host: "127.0.0.1",
-      port,
-      tokenEnv: "PRISM_MCP_TOKEN",
-    },
     bindings: builder?.toolBindings ?? [],
   });
 
@@ -1055,6 +1044,8 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
     cwd: projectRoot,
     env: {
       ...process.env,
+      PRISM_MCP_TRANSPORT: "streamable-http",
+      PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_SESSIONS: "1",
       PRISM_MCP_MAX_REQUEST_BYTES: "512",
@@ -1107,6 +1098,7 @@ test("MCP bundle stdio exits when stdin closes", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",
@@ -1140,6 +1132,7 @@ test("MCP bundle stdio exits on SIGTERM", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
+      prismHome: testPrismHome(),
       pluginPath: pluginRoot,
       target: "opencode",
       scope: "project",

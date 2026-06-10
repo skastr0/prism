@@ -12,28 +12,19 @@
  * Why it is a stub today — sandboxability audit of src/mcp/lifecycle.ts +
  * src/mcp/launchd.ts (2026-06-10):
  *
- *   - serve IS sandboxable: with `--root <sandbox>` (any path other than
- *     defaultMcpRuntimeRoot() = ~/.config), shouldUseLaunchAgent() returns
- *     false, so serveMcpResolved spawns a detached `bun server.mjs` child
- *     (spawnDaemon) instead of installing a LaunchAgent; bundle, token store,
- *     runtime.json and logs all stay under the sandbox root. Belt-and-braces
+ *   - serve IS sandboxable: with a sandboxed PRISM_HOME (any path other than
+ *     ~/.prism), launchAgentEligible() returns false, so serveMcpResolved
+ *     spawns a detached `bun server.mjs` child (spawnDaemon) instead of
+ *     installing a LaunchAgent; bundle, token store, runtime.json and logs
+ *     all stay under PRISM_HOME/runtime. Belt-and-braces
  *     PRISM_MCP_DISABLE_LAUNCHD=1 also forces the spawn path.
  *
- *   - stop/restart are NOT sandboxable: stopMcpResolved unconditionally runs
- *     `launchctl bootout gui/<uid>/com.prism.mcp.<serverName>` on darwin
- *     (lifecycle.ts ~line 1419 -> stopLaunchAgent in launchd.ts). There is no
- *     root guard and no PRISM_MCP_DISABLE_LAUNCHD guard on the stop path —
- *     the env var is only consulted by shouldUseLaunchAgent on the serve
- *     side. The label is derived purely from the plugin name, so serving a
- *     corpus plugin in a sandbox and stopping it would bootout the REAL
- *     registered launch agent of the same plugin on this machine. Even with
- *     a randomized plugin name, every restart still invokes launchctl against
- *     the real user gui domain. serveMcpResolved's stale-build branch calls
- *     the same stop path, so a restart loop multiplies the exposure 5x.
- *
- *   Real-machine launchctl side effects therefore cannot be ruled out for the
- *   restart/stop half of the gate -> per the acceptance-net rules this lands
- *   as a stub that exits 0 and reports blocked.
+ *   - WS3 update: stop/restart now share the launchAgentEligible(prismHome)
+ *     predicate with serve — a sandboxed PRISM_HOME never touches launchctl,
+ *     and serve consumes the compiled canonical bundle (it never rewrites
+ *     bundles). The remaining blocker is WS6 scope: stable port + token
+ *     identity across restarts (the byte-identical-configs assertion) and the
+ *     supervisor-owned runtime.json writes.
  *
  * What WS6 must change to make this gate executable (tracked requirements,
  * mirrored in the JSON below):
@@ -61,18 +52,17 @@ const summary = {
   pass: null,
   expected: null,
   blocked:
-    "stopMcpResolved unconditionally runs `launchctl bootout gui/<uid>/com.prism.mcp.<serverName>` on darwin " +
-    "(src/mcp/lifecycle.ts -> stopLaunchAgent in src/mcp/launchd.ts) with no sandbox-root or " +
-    "PRISM_MCP_DISABLE_LAUNCHD guard; the label derives from the plugin name alone, so a sandboxed " +
-    "restart/stop cycle would bootout real registered launch agents (or at best hammer the real gui " +
-    "domain 5x). Real-machine launchctl side effects cannot be ruled out until WS6's supervisor lands.",
+    "WS3 removed the launchctl hazard (serve/stop/restart all gate launchctl behind " +
+    "launchAgentEligible(prismHome), and serve consumes the compiled canonical bundle instead of " +
+    "rewriting it). The gate stays a stub until WS6 lands its assertions' subject: stable " +
+    "port + token identity across restarts and the supervisor as sole runtime.json writer.",
   details: {
     sandboxable: {
       serve:
-        "yes — --root <sandbox> != defaultMcpRuntimeRoot() makes shouldUseLaunchAgent() false; " +
-        "spawnDaemon runs a detached bun child with state under the sandbox root",
-      stop: "no — unconditional launchctl bootout on darwin",
-      restart: "no — restart = stop + serve; the stale-build serve branch also calls stop",
+        "yes — sandboxed PRISM_HOME makes launchAgentEligible() false; " +
+        "spawnDaemon runs a detached bun child with state under PRISM_HOME/runtime",
+      stop: "yes — stop shares the launchAgentEligible(prismHome) predicate since WS3",
+      restart: "yes — restart = stop + serve under the same predicate",
     },
     ws6Requirements: [
       "gate every launchctl call behind an injectable launchd service (Live darwin layer + no-op sandbox layer), or apply the serve-side sandbox predicate to stop/restart",

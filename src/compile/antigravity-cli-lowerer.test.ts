@@ -359,7 +359,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpRuntimeRoot: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "antigravity-http-fixture", "server.mjs"),
       mcpBearerToken: "antigravity-static-token",
       sourcePluginName: "antigravity-http-fixture",
       sourcePluginVersion: "0.1.0",
@@ -385,11 +385,10 @@ export default defineTool({
   });
   expect(mcpConfig?.mode).toBe(0o600);
 
+  // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
+  // plans no bundle write anywhere.
   const bundle = operations.find(
-    (operation): operation is ContentOperation =>
-      isContentOperation(operation) &&
-      operation.target === join(outputRoot, "prism", "mcp", "prism_generated_antigravity_http_fixture", "server.mjs"),
+    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
   );
-  expect(bundle?.content).toContain("antigravity_http_fixture_echo");
-  expect(bundle?.content).toContain("PRISM_MCP_ANTIGRAVITY_HTTP_TOKEN");
+  expect(bundle).toBeUndefined();
 });

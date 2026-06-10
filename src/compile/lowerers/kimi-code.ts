@@ -6,17 +6,15 @@ import type { ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
-  generateMcpServerBundle,
   mcpToolNameForBinding,
+  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
-import { runtimeMcpServerPathForTarget } from "../mcp-runtime-path.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -36,9 +34,7 @@ import {
   nativeHookEventName,
   normalizeBundleSegment,
   planGeneratedPluginPruning,
-  planSharedMcpRuntimePrune,
   pushConfigPatchOperation as pushConfigPatch,
-  pushWriteOperation,
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
@@ -52,7 +48,8 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface KimiCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimeRoot?: string;
+  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
+  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -80,7 +77,6 @@ interface PlannedHook {
 interface PlannedMcpServer {
   readonly serverName?: string;
   readonly toolNames: ReadonlyArray<string>;
-  readonly runtimeServerPath?: string;
   readonly manifestEntry?: Record<string, unknown>;
 }
 
@@ -526,8 +522,7 @@ const planContextSkillWrite = async (
 
 const renderKimiMcpServerEntry = (options: {
   readonly runtime: ReturnType<typeof resolveMcpRuntime>;
-  readonly bundleRelativePath?: string;
-  readonly runtimeServerPath?: string;
+  readonly serverPath?: string;
   readonly bearerToken?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): Record<string, unknown> => {
@@ -555,23 +550,18 @@ const renderKimiMcpServerEntry = (options: {
     };
   }
 
-  if (!options.bundleRelativePath) {
-    throw new Error("Kimi stdio MCP config requires a generated bundle path.");
+  if (!options.serverPath) {
+    throw new Error("Kimi stdio MCP config requires the canonical Prism MCP server bundle path.");
   }
 
   return {
     ...base,
     command: "bun",
-    args: [`./${options.bundleRelativePath}`],
-    cwd: "./",
+    args: [options.serverPath],
   };
 };
 
-const planMcpServer = async (
-  input: LowerInput,
-  desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
-): Promise<PlannedMcpServer> => {
+const planMcpServer = (input: LowerInput): PlannedMcpServer => {
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools ?? [],
@@ -581,45 +571,20 @@ const planMcpServer = async (
     requirePort: bindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  if (runtime.transport !== "streamable-http" || bindings.length === 0) {
-    await planSharedMcpRuntimePrune(operations, runtimeMcpServerPathForTarget(input.target), {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    });
-  }
   if (bindings.length === 0) return { toolNames: [] };
 
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    serverName,
-    version: input.target.sourcePluginVersion,
-    bundleId: serverName,
-    ...mcpServerBundleRuntimeOptions(runtime),
-    bindings,
-  });
-
-  const runtimeServerPath = runtime.transport === "streamable-http"
-    ? runtimeMcpServerPathForTarget(input.target)
-    : undefined;
-  const targetPath = runtimeServerPath ?? generatedPath(input.target, bundle.relativePath);
-  await pushWriteOperation(operations, targetPath, bundle.content);
-  if (!runtimeServerPath) desiredRelativePaths.add(bundle.relativePath);
-
+  const toolNames = uniqueSorted(
+    mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
+  );
   return {
     serverName,
-    toolNames: uniqueSorted(bundle.toolNames),
-    ...(runtimeServerPath ? { runtimeServerPath } : {}),
+    toolNames,
     manifestEntry: renderKimiMcpServerEntry({
       runtime,
-      ...(runtime.transport === "stdio" ? { bundleRelativePath: bundle.relativePath } : {}),
-      ...(runtimeServerPath ? { runtimeServerPath } : {}),
+      ...(input.target.mcpServerPath ? { serverPath: input.target.mcpServerPath } : {}),
       ...(input.target.mcpBearerToken ? { bearerToken: input.target.mcpBearerToken } : {}),
-      toolNames: uniqueSorted(bundle.toolNames),
+      toolNames,
     }),
   };
 };
@@ -802,12 +767,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
   const contexts = await collectContextFiles(input);
 
   if (!hasPluginOutput(input, contexts)) {
-    await planSharedMcpRuntimePrune(state.operations, runtimeMcpServerPathForTarget(input.target), {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    });
     await planConfigPatch(input, state.operations, []);
     await planInstalledPluginRegistration(input, state.operations, false);
     await planGeneratedPluginPruning({
@@ -824,7 +783,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     return state.operations;
   }
 
-  const mcp = await planMcpServer(input, state.desiredRelativePaths, state.operations);
+  const mcp = planMcpServer(input);
   await planTargetedSkillWrites(input, state.desiredRelativePaths, state.operations);
   await planAgentRoleSkills(input, state.desiredRelativePaths, state.operations, mcp.serverName);
   await planOrbitSkillWrites(input, state.desiredRelativePaths, state.operations);

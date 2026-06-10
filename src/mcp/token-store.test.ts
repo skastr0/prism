@@ -47,7 +47,7 @@ test("MCP token store ignores reserved process environment values as bearer toke
 
 test("MCP token store rotates weak stored tokens", async () => {
   const root = await createTempRoot();
-  await mkdir(join(root, "prism"), { recursive: true });
+  await mkdir(join(root, "runtime", "mcp"), { recursive: true });
   await writeFile(
     mcpTokenStorePath(root),
     `${JSON.stringify({

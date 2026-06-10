@@ -1,11 +1,4 @@
-import { join } from "node:path";
-import { homedir } from "node:os";
 import type { HarnessId, PluginRuntimeMcpHarnessConfig } from "../types.js";
-import {
-  mcpServerArtifactRelativePath,
-  type McpHttpServerOptions,
-  type McpServerBundleTransport,
-} from "./mcp-bundle.js";
 import {
   DEFAULT_MCP_CONNECT_TIMEOUT_MS,
   DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
@@ -18,6 +11,8 @@ const DEFAULT_HTTP_HOST = "127.0.0.1";
 const DEFAULT_TOKEN_ENV = ["PRISM", "MCP", "TOKEN"].join("_");
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
+export type McpRuntimeTransport = "stdio" | "streamable-http";
+
 export type McpHttpSupportState = "supported" | "unsupported";
 
 export interface McpHttpTargetSupport {
@@ -28,28 +23,13 @@ export interface McpHttpTargetSupport {
 
 export interface ResolvedMcpRuntime {
   readonly targetId: HarnessId;
-  readonly transport: McpServerBundleTransport;
+  readonly transport: McpRuntimeTransport;
   readonly host: string;
   readonly port?: number;
   readonly tokenEnv: string;
   readonly connectTimeoutMs: number;
   readonly toolTimeoutMs: number;
 }
-
-export interface RuntimeMcpServerDescriptor {
-  readonly serverName: string;
-  readonly relativePath: string;
-  readonly absolutePath: string;
-}
-
-export interface McpServerBundleRuntimeOptions {
-  readonly transport: McpServerBundleTransport;
-  readonly http?: McpHttpServerOptions;
-  readonly toolTimeoutMs: number;
-}
-
-export const defaultMcpRuntimeRoot = (): string =>
-  join(homedir(), ".config");
 
 const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
   hermes: {
@@ -90,21 +70,6 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
 
 export const generatedMcpServerName = (pluginName: string): string =>
   `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
-
-export const runtimeMcpServerRelativePath = (pluginName: string): string =>
-  `prism/${mcpServerArtifactRelativePath(generatedMcpServerName(pluginName))}`;
-
-export const runtimeMcpServerDescriptor = (
-  harnessRoot: string,
-  pluginName: string,
-): RuntimeMcpServerDescriptor => {
-  const relativePath = runtimeMcpServerRelativePath(pluginName);
-  return {
-    serverName: generatedMcpServerName(pluginName),
-    relativePath,
-    absolutePath: join(harnessRoot, ...relativePath.split("/")),
-  };
-};
 
 export const getMcpHttpTargetSupport = (targetId: HarnessId): McpHttpTargetSupport =>
   HTTP_SUPPORT[targetId] ?? {
@@ -244,21 +209,6 @@ export const renderMcpBearerAuthorization = (options: {
   readonly token?: string;
 }): string =>
   options.token ? `Bearer ${options.token}` : renderMcpBearerAuthorizationTemplate(options.tokenEnv);
-
-export const mcpServerBundleRuntimeOptions = (
-  runtime: ResolvedMcpRuntime,
-): McpServerBundleRuntimeOptions =>
-  runtime.transport === "streamable-http"
-    ? {
-        transport: runtime.transport,
-        toolTimeoutMs: runtime.toolTimeoutMs,
-        http: {
-          host: runtime.host,
-          ...(runtime.port !== undefined ? { port: runtime.port } : {}),
-          tokenEnv: runtime.tokenEnv,
-        },
-      }
-    : { transport: "stdio", toolTimeoutMs: runtime.toolTimeoutMs };
 
 export const isStreamableHttpMcpRuntime = (
   registry: PluginRegistry,

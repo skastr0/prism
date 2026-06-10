@@ -6,12 +6,11 @@ import {
 } from "./mcp-policy.js";
 import {
   getMcpHttpTargetSupport,
-  mcpServerBundleRuntimeOptions,
   renderMcpBearerAuthorizationTemplate,
   renderMcpHttpUrl,
   resolveMcpRuntime,
-  runtimeMcpServerDescriptor,
 } from "./mcp-runtime.js";
+import { prismMcpServerPath } from "./mcp-runtime-path.js";
 
 const registry = (runtime: PluginRegistry["runtime"] = {}): PluginRegistry => ({
   pluginName: "demo-tools",
@@ -76,15 +75,6 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
   expect(renderMcpBearerAuthorizationTemplate(runtime.tokenEnv)).toBe(
     "Bearer ${PRISM_MCP_CODEX_TOKEN}",
   );
-  expect(mcpServerBundleRuntimeOptions(runtime)).toEqual({
-    transport: "streamable-http",
-    toolTimeoutMs: 90_000,
-    http: {
-      host: "localhost",
-      port: 38464,
-      tokenEnv: "PRISM_MCP_CODEX_TOKEN",
-    },
-  });
 });
 
 test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
@@ -278,10 +268,8 @@ test("MCP runtime rejects invalid timeout config", () => {
   ).toThrow(/connectTimeoutMs must be a positive integer/);
 });
 
-test("MCP runtime daemon path is shared across HTTP-capable targets", () => {
-  expect(runtimeMcpServerDescriptor("/tmp/harness", "Demo Tools")).toEqual({
-    serverName: "prism-generated-demo-tools",
-    relativePath: "prism/mcp/prism_generated_demo_tools/server.mjs",
-    absolutePath: "/tmp/harness/prism/mcp/prism_generated_demo_tools/server.mjs",
-  });
+test("canonical MCP server bundle path lives under PRISM_HOME/runtime/mcp", () => {
+  expect(prismMcpServerPath("/tmp/prism-home", "Demo Tools")).toBe(
+    "/tmp/prism-home/runtime/mcp/demo-tools/server.mjs",
+  );
 });

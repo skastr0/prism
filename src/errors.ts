@@ -96,6 +96,28 @@ export class BundleBuildError extends Schema.TaggedError<BundleBuildError>()(
 }
 
 // ---------------------------------------------------------------------------
+// McpBundleMissingError — the MCP daemon lifecycle consumes (never builds)
+// the canonical compiled bundle at PRISM_HOME/runtime/mcp/<plugin>/server.mjs.
+// Serving without a compiled bundle is a typed, hinted failure.
+// ---------------------------------------------------------------------------
+
+export class McpBundleMissingError extends Schema.TaggedError<McpBundleMissingError>()(
+  "McpBundleMissingError",
+  {
+    pluginName: Schema.String,
+    bundlePath: Schema.String,
+  },
+) {
+  get hint(): string {
+    return `refresh the plugin first (prism install <plugin-path> --harness <id>) so the canonical MCP bundle exists, then retry`;
+  }
+
+  override get message(): string {
+    return `Compiled MCP server bundle for plugin '${this.pluginName}' is missing: ${this.bundlePath}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // LoweringOwnershipError — INTERIM, deleted in WS5.
 //
 // Drift-as-error dies with the sync engine: the one-writer model converges
@@ -160,6 +182,7 @@ export type PrismError =
   | CompileError
   | PrismConfigError
   | BundleBuildError
+  | McpBundleMissingError
   | LoweringOwnershipError;
 
 export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
@@ -178,6 +201,7 @@ export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "PluginManifestError",
   "PrismConfigError",
   "BundleBuildError",
+  "McpBundleMissingError",
   "LoweringOwnershipError",
 ]);
 
@@ -234,6 +258,12 @@ export const describePrismError = (error: PrismError): PrismErrorRender => {
           .map((line) => line.trim())
           .filter((line) => line.length > 0),
         hint: "fix the reported bundler diagnostics in the plugin source, then re-run",
+      };
+    case "McpBundleMissingError":
+      return {
+        headline: error.message,
+        hint: error.hint,
+        path: error.bundlePath,
       };
     case "LoweringOwnershipError":
       return {

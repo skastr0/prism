@@ -140,7 +140,7 @@ export const installLaunchAgent = async (
   }
 
   await mkdir(userLaunchAgentDir(), { recursive: true });
-  await mkdir(join(spec.workingDirectory, "prism", "logs"), { recursive: true, mode: 0o700 });
+  await mkdir(join(spec.workingDirectory, "runtime", "logs"), { recursive: true, mode: 0o700 });
   await writeFile(plistPath, desiredPlist, { mode: 0o600 });
   await chmod(plistPath, 0o600).catch(() => undefined);
 

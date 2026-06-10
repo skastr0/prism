@@ -160,6 +160,42 @@ describe("sync engine — owned files", () => {
   });
 });
 
+describe("sync engine — prune scoping", () => {
+  test("a single-plugin compile cannot prune another plugin's outputs", async () => {
+    const a = join(root, "skills", "a", "SKILL.md");
+    const b = join(root, "skills", "b", "SKILL.md");
+    await refresh(desiredWith({
+      files: [
+        { targetPath: a, content: "a\n", plugin: "plugin-a" },
+        { targetPath: b, content: "b\n", plugin: "plugin-b" },
+      ],
+    }));
+
+    // Recompile ONLY plugin-a with plugin-b's file absent from desired state.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    const plan = await planSync({
+      desired: desiredWith({ files: [{ targetPath: a, content: "a\n", plugin: "plugin-a" }] }),
+      snapshot: snapshot.manifest,
+      scopePlugins: new Set(["plugin-a"]),
+    });
+    const report = await applySync({ prismHome: home, plan });
+
+    expect(report.ops.some((op) => op.kind === "prune")).toBe(false);
+    expect(await exists(b)).toBe(true);
+    const after = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(after.manifest.entries.map((entry) => entry.targetPath).sort()).toEqual([a, b].sort());
+
+    // An unscoped (whole-world) plan with the same desired state DOES prune b.
+    const worldPlan = await planSync({
+      desired: desiredWith({ files: [{ targetPath: a, content: "a\n", plugin: "plugin-a" }] }),
+      snapshot: after.manifest,
+    });
+    const worldReport = await applySync({ prismHome: home, plan: worldPlan });
+    expect(worldReport.ops.some((op) => op.kind === "prune")).toBe(true);
+    expect(await exists(b)).toBe(false);
+  });
+});
+
 describe("sync engine — shared-file regions", () => {
   const configPath = () => join(root, "config.toml");
   const userContent = [

@@ -39,10 +39,6 @@ export const mintRunId = (now: Date = new Date()): string =>
     .toString(36)
     .slice(2, 8)}`;
 
-const isMutation = (op: SyncOp): boolean =>
-  op.kind === "create" || op.kind === "repair" || op.kind === "patch-regions" ||
-  op.kind === "prune" || op.kind === "chmod";
-
 const executeOp = async (
   op: SyncOp,
   context: { readonly prismHome: string; readonly runId: string; readonly root: string },
@@ -127,17 +123,14 @@ export const applySync = async (options: {
     ...failures.map((failure) => failure.op.targetPath),
     ...blocked.map((op) => op.targetPath),
   ]);
-  const mutatedOrSeen = new Set(
-    plan.ops.filter((op) => isMutation(op) || op.kind === "skip" || op.kind === "skip-regions")
-      .map((op) => op.targetPath),
-  );
   const manifest: SnapshotManifest = {
     version: 1,
     harness: plan.harness,
     root: plan.root,
-    entries: plan.nextEntries.filter(
-      (entry) => !failedPaths.has(entry.targetPath) && mutatedOrSeen.has(entry.targetPath),
-    ),
+    entries: [
+      ...plan.carriedEntries,
+      ...plan.nextEntries.filter((entry) => !failedPaths.has(entry.targetPath)),
+    ],
   };
   await commitSnapshot({ prismHome: options.prismHome, manifest });
 

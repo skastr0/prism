@@ -40,8 +40,10 @@ export interface SyncPlan {
   readonly harness: string;
   readonly root: string;
   readonly ops: ReadonlyArray<SyncOp>;
-  /** Snapshot entries describing the post-apply desired world. */
+  /** Snapshot entries describing the post-apply desired world (in scope). */
   readonly nextEntries: ReadonlyArray<SnapshotEntry>;
+  /** Out-of-scope entries carried into the next manifest untouched. */
+  readonly carriedEntries: ReadonlyArray<SnapshotEntry>;
   readonly degradedOwnership: boolean;
 }
 
@@ -204,21 +206,34 @@ export const planSync = async (options: {
   readonly desired: DesiredRoot;
   readonly snapshot: SnapshotManifest;
   readonly degradedOwnership?: boolean;
+  /**
+   * Prune scope: when set, only snapshot entries attributed to these plugins
+   * are eligible for pruning/region-removal; entries owned by out-of-scope
+   * plugins are carried into the next manifest untouched. A whole-corpus
+   * refresh omits this (full-world prune semantics); a single-plugin compile
+   * passes that plugin so it cannot prune its neighbors' outputs.
+   */
+  readonly scopePlugins?: ReadonlySet<string>;
 }): Promise<SyncPlan> => {
   const degradedOwnership = options.degradedOwnership ?? false;
+  const inScope = (plugin: string): boolean =>
+    options.scopePlugins === undefined || options.scopePlugins.has(plugin);
   const ops: SyncOp[] = [];
   const nextEntries: SnapshotEntry[] = [];
 
-  const snapshotOwned = new Map(
-    options.snapshot.entries
-      .filter((entry) => entry.mode === "owned")
-      .map((entry) => [entry.targetPath, entry] as const),
-  );
-  const snapshotRegions = new Map(
-    options.snapshot.entries
-      .filter((entry) => entry.mode === "region")
-      .map((entry) => [`${entry.targetPath} ${entry.regionKey ?? ""}`, entry] as const),
-  );
+  const carriedEntries: SnapshotEntry[] = [];
+  const snapshotOwned = new Map<string, SnapshotEntry>();
+  const snapshotRegions = new Map<string, SnapshotEntry>();
+  for (const entry of options.snapshot.entries) {
+    if (entry.mode === "owned") {
+      if (inScope(entry.plugin)) snapshotOwned.set(entry.targetPath, entry);
+      else carriedEntries.push(entry);
+    } else if (inScope(entry.plugin)) {
+      snapshotRegions.set(`${entry.targetPath} ${entry.regionKey ?? ""}`, entry);
+    } else {
+      carriedEntries.push(entry);
+    }
+  }
 
   // Owned files.
   const desiredPaths = new Set<string>();
@@ -253,7 +268,7 @@ export const planSync = async (options: {
     regionsByFile.set(region.targetPath, group);
   }
   const desiredRegionRefs = new Set(
-    options.desired.regions.map((region) => `${region.targetPath} ${serializeRegionRef(region)}`),
+    options.desired.regions.map((region) => `${region.targetPath} ${serializeRegionRef(region)}`),
   );
   const orphanedByFile = new Map<string, string[]>();
   for (const [key, entry] of snapshotRegions) {
@@ -287,6 +302,7 @@ export const planSync = async (options: {
     root: options.desired.root,
     ops,
     nextEntries,
+    carriedEntries,
     degradedOwnership,
   };
 };

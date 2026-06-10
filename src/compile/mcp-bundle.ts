@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { BundleBuildError } from "../errors.js";
 import type { Contract } from "./sources.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import {
@@ -202,18 +203,6 @@ interface PluginMirrorCollectionState {
     { pluginRoot: string; entries: Map<string, MirrorFile> }
   >;
   readonly generatedFiles: Map<string, Map<string, string>>;
-}
-
-class BundleBuildError extends Error {
-  readonly bundleKind: string;
-  readonly diagnostics: string;
-
-  constructor(kind: string, diagnostics: string) {
-    super(`failed to build ${kind} bundle: ${diagnostics}`);
-    this.name = "BundleBuildError";
-    this.bundleKind = kind;
-    this.diagnostics = diagnostics;
-  }
 }
 
 const createPluginMirrorCollectionState = (
@@ -1743,7 +1732,7 @@ export const generateMcpServerBundle = async (
 
     if (!build.success) {
       const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new BundleBuildError("MCP server", diagnostics);
+      throw new BundleBuildError({ bundleKind: "MCP server", diagnostics });
     }
 
     const builtPath = join(outdir, "server.mjs");
@@ -1806,7 +1795,7 @@ export const generateAmpPluginBundle = async (
 
     if (!build.success) {
       const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new BundleBuildError("Amp plugin", diagnostics);
+      throw new BundleBuildError({ bundleKind: "Amp plugin", diagnostics });
     }
 
     const builtPath = join(outdir, "plugin.mjs");
@@ -1867,7 +1856,7 @@ export const generatePiExtensionBundle = async (
 
     if (!build.success) {
       const diagnostics = build.logs.map((log) => log.message).join("\n");
-      throw new BundleBuildError("Pi extension", diagnostics);
+      throw new BundleBuildError({ bundleKind: "Pi extension", diagnostics });
     }
 
     const builtPath = join(outdir, "extension.js");

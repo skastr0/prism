@@ -1,8 +1,14 @@
 /**
  * Typed compile errors for the structured compile-language pipeline.
+ *
+ * These tags are members of the `PrismError` union in src/errors.ts; the CLI
+ * edge renders them via `renderPrismError`/`renderPrismCause`. The canonical
+ * `PluginManifestError` lives in src/errors.ts (type-only import here keeps
+ * the modules cycle-free at runtime).
  */
 
 import { Schema } from "effect";
+import type { PluginManifestError } from "../errors.js";
 
 export class SourceParseError extends Schema.TaggedError<SourceParseError>()(
   "SourceParseError",
@@ -59,14 +65,6 @@ export class DependencyCycleError extends Schema.TaggedError<DependencyCycleErro
   "DependencyCycleError",
   {
     cycle: Schema.Array(Schema.String),
-  },
-) {}
-
-export class PluginManifestError extends Schema.TaggedError<PluginManifestError>()(
-  "PluginManifestError",
-  {
-    pluginPath: Schema.String,
-    message: Schema.String,
   },
 ) {}
 
@@ -208,6 +206,6 @@ export const formatCompileError = (error: CompileError): string => {
     case "DependencyCycleError":
       return `dependency cycle detected: ${error.cycle.join(" → ")}`;
     case "PluginManifestError":
-      return `${error.pluginPath}: ${error.message}`;
+      return `${error.pluginPath}: ${error.summary}`;
   }
 };

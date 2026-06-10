@@ -9,13 +9,13 @@ import {
   removeFile,
   writeFile,
 } from "./fs.js";
+import { renderPrismCause } from "./errors.js";
 import { readManifest } from "./manifest.js";
 import { normalizeGeneratedPluginName } from "./compile/generated-plugin.js";
 import {
   planPluginForTarget,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
-import { formatCompileError, type CompileError } from "./compile/errors.js";
 import type { LowerOperation } from "./compile/lowerers/opencode.js";
 import { readPrismProjectConfig } from "./project-config.js";
 import type { HarnessId, HarnessScope } from "./types.js";
@@ -145,25 +145,6 @@ const activationOperation = (
     kind: operation.kind,
     ...(target ? { target } : {}),
   };
-};
-
-const compileCauseMessage = (cause: unknown): string => {
-  let rendered: string | undefined;
-  const walk = (node: unknown): void => {
-    if (rendered || !node || typeof node !== "object") return;
-    const record = node as Record<string, unknown>;
-    if (typeof record._tag === "string" && record._tag.endsWith("Error")) {
-      rendered = formatCompileError(record as unknown as CompileError);
-      return;
-    }
-    if (record._tag === "Die" && record.defect instanceof Error) {
-      rendered = record.defect.message;
-      return;
-    }
-    for (const value of Object.values(record)) walk(value);
-  };
-  walk(cause);
-  return rendered ?? (cause instanceof Error ? cause.message : String(cause));
 };
 
 const plannedPackagePaths = async (options: PackageTargetOptions): Promise<{
@@ -451,7 +432,7 @@ export const packagePluginForTarget = async (
   );
 
   if (compileExit._tag === "Failure") {
-    throw new Error(compileCauseMessage(compileExit.cause));
+    throw new Error(renderPrismCause(compileExit.cause));
   }
 
   const desired = buildDesiredFiles({

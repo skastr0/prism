@@ -11,6 +11,10 @@ import {
   writeFile,
 } from "../../fs.js";
 import { backupManagedTarget } from "../../managed-backups.js";
+// INTERIM (dies in WS5): drift-as-error leaves with the sync engine; until
+// then the ownership gates below raise the tagged LoweringOwnershipError so
+// the CLI edge can render a structured, hinted failure instead of a stack.
+import { LoweringOwnershipError } from "../../errors.js";
 import {
   hasOtherManagedCompileOwners,
   isSharedMcpRuntimeServerPath,
@@ -572,14 +576,25 @@ const assertLoweringConfigPatchAuthority = async (
   const desiredHash = computeContentHash(operation.content);
   if (currentHash === desiredHash) return;
   if (operation.baseContentHash === undefined) {
-    throw new LoweringOwnershipError(
-      `Compile config patch lacks base content hash: ${operation.target}`,
-    );
+    throw new LoweringOwnershipError({
+      reason: "missing-base-hash",
+      targetPath: operation.target,
+      plugin: target.sourcePluginName,
+      harness: target.harness,
+      currentHash,
+      hint: "re-run the command so the config patch is planned against the current file",
+    });
   }
   if (currentHash !== operation.baseContentHash) {
-    throw new LoweringOwnershipError(
-      `Compile config target changed while Prism was patching it: ${operation.target}`,
-    );
+    throw new LoweringOwnershipError({
+      reason: "stale-base-hash",
+      targetPath: operation.target,
+      plugin: target.sourcePluginName,
+      harness: target.harness,
+      ledgerHash: operation.baseContentHash,
+      currentHash,
+      hint: "the config changed between planning and writing — re-run the command",
+    });
   }
 };
 
@@ -637,13 +652,6 @@ export interface ExecuteLoweringOptions {
   readonly target?: LowerExecutionTargetContext;
 }
 
-class LoweringOwnershipError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "LoweringOwnershipError";
-  }
-}
-
 const assertLoweringWriteAuthority = async (input: {
   readonly targetPath: string;
   readonly desiredContent: string;
@@ -666,15 +674,27 @@ const assertLoweringWriteAuthority = async (input: {
     input.kind,
   );
   if (!ledgerEntry) {
-    throw new LoweringOwnershipError(
-      `Compile target exists but is not owned by Prism: ${input.targetPath}`,
-    );
+    throw new LoweringOwnershipError({
+      reason: "unowned-target",
+      targetPath: input.targetPath,
+      plugin: input.target.sourcePluginName,
+      harness: input.target.harness,
+      currentHash,
+      hint: "Prism never overwrites foreign files — delete or move the file, then re-run",
+    });
   }
 
   if (currentHash !== ledgerEntry.contentHash) {
-    throw new LoweringOwnershipError(
-      `Managed compile target changed outside Prism: ${input.targetPath}`,
-    );
+    throw new LoweringOwnershipError({
+      reason: "drifted-target",
+      targetPath: input.targetPath,
+      plugin: input.target.sourcePluginName,
+      harness: input.target.harness,
+      ledgerHash: ledgerEntry.contentHash,
+      ledgerUpdatedAt: ledgerEntry.updatedAt,
+      currentHash,
+      hint: "the file was edited outside Prism — back up and remove the edited file, then re-run",
+    });
   }
 };
 
@@ -704,16 +724,27 @@ const assertLoweringFilePruneAuthority = async (
 ): Promise<void> => {
   const ledgerEntry = findCurrentLoweringEntry(ledger, target, targetPath, "file");
   if (!ledgerEntry) {
-    throw new LoweringOwnershipError(
-      `Compile prune target is not owned by Prism: ${targetPath}`,
-    );
+    throw new LoweringOwnershipError({
+      reason: "unowned-prune-target",
+      targetPath,
+      plugin: target.sourcePluginName,
+      harness: target.harness,
+      hint: "Prism only prunes files it generated — remove the stale file manually if unwanted",
+    });
   }
 
   const currentHash = await currentLoweringTargetHash(targetPath);
   if (!currentHash || currentHash === ledgerEntry.contentHash) return;
-  throw new LoweringOwnershipError(
-    `Managed compile prune target changed outside Prism: ${targetPath}`,
-  );
+  throw new LoweringOwnershipError({
+    reason: "drifted-prune-target",
+    targetPath,
+    plugin: target.sourcePluginName,
+    harness: target.harness,
+    ledgerHash: ledgerEntry.contentHash,
+    ledgerUpdatedAt: ledgerEntry.updatedAt,
+    currentHash,
+    hint: "the file was edited outside Prism — back it up and delete it manually, then re-run",
+  });
 };
 
 export const backupLoweringTarget = async (

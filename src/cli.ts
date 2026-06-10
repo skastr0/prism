@@ -15,13 +15,18 @@ import { install, planInstallation } from "./installer.js";
 import {
   formatManifestTargets,
   manifestHasCompileTargets,
-  PluginManifestError,
   readManifest,
   validatePluginSkills,
   validatePluginAgents,
   manifestTargetsHarness,
   manifestTargetsArtifact,
 } from "./manifest.js";
+import {
+  describePrismCause,
+  PluginManifestError,
+  renderPrismCause,
+} from "./errors.js";
+import { EXIT_CODES, exitWith } from "./exit.js";
 import { exists, expandPath } from "./fs.js";
 import { HARNESS_SCOPES } from "./types.js";
 import type {
@@ -36,7 +41,6 @@ import {
   formatOperations,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
-import { formatCompileError, type CompileError } from "./compile/errors.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
 import {
@@ -99,7 +103,7 @@ program
       await runInstallCommand(pluginPath, options);
     } catch (error) {
       printCliError(error, "Error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -161,13 +165,13 @@ program
 
       if (hasFailures) {
         console.log("\n⚠️  Some plugins failed validation, compile, or install");
-        process.exit(1);
+        exitWith(EXIT_CODES.domainFailure);
       }
 
       console.log("\n✅ All plugin refreshes completed successfully!");
     } catch (error) {
       printCliError(error, "Error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -271,8 +275,8 @@ program
 
       if (exit._tag === "Failure") {
         console.error(`\n❌ Compile failed:`);
-        console.error(`   ${renderCompileError(exit.cause)}`);
-        process.exit(1);
+        console.error(indentBlock(renderPrismCause(exit.cause), "   "));
+        exitWith(EXIT_CODES.domainFailure);
       }
 
       const result = exit.value;
@@ -304,7 +308,7 @@ program
       }
     } catch (error) {
       printCliError(error, "Compile error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -720,12 +724,19 @@ type InvalidPluginManifest = {
   error: unknown;
 };
 
+type RefreshFailure = {
+  readonly harness?: string;
+  readonly path?: string;
+  readonly headline: string;
+  readonly hint?: string;
+};
+
 type PluginRefreshResult = {
   pluginPath: string;
   name: string;
   success: boolean;
   operations: FileOperation[];
-  errors: string[];
+  errors: RefreshFailure[];
   backups: string[];
 };
 
@@ -766,7 +777,7 @@ async function runInstallCommand(
       })
     ) {
       console.log("\nUse --no-validate to skip validation.");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   }
 
@@ -782,7 +793,7 @@ async function runInstallCommand(
     dryRun: context.options.dryRun,
   });
   if (!compilePhase.success) {
-    process.exit(1);
+    exitWith(EXIT_CODES.domainFailure);
   }
 
   await planOrRunInstallCommand(context, compilePhase.backups);
@@ -869,7 +880,7 @@ async function planOrRunInstallCommand(
 
   printInstallCommandResult(result.operations, result.backups, result.errors, compileBackups);
   if (result.errors.length > 0) {
-    process.exit(1);
+    exitWith(EXIT_CODES.domainFailure);
   }
 
   console.log("\n✅ Done!");
@@ -906,7 +917,7 @@ async function requireInstallAllDirectory(expandedDir: string): Promise<void> {
   if (await exists(expandedDir)) return;
 
   console.error(`Directory not found: ${expandedDir}`);
-  process.exit(1);
+  exitWith(EXIT_CODES.usage);
 }
 
 async function discoverPluginPaths(expandedDir: string): Promise<string[]> {
@@ -1009,7 +1020,7 @@ async function refreshDiscoveredPlugin(
   });
 
   if (!(await validatePluginBeforeRefresh(plugin, options))) {
-    return failedPluginRefresh(plugin, "Validation failed", []);
+    return failedPluginRefresh(plugin, { headline: "Validation failed" }, []);
   }
 
   const compilePhase = await runCompilePhaseForPlugin({
@@ -1025,7 +1036,7 @@ async function refreshDiscoveredPlugin(
   });
 
   if (!compilePhase.success) {
-    return failedPluginRefresh(plugin, compilePhase.error, compilePhase.backups);
+    return failedPluginRefresh(plugin, compilePhase.failure, compilePhase.backups);
   }
 
   return planOrRunPluginInstall(plugin, options, compilePhase.backups);
@@ -1139,7 +1150,11 @@ async function planOrRunPluginInstall(
     name: plugin.manifest.name,
     success: result.success,
     operations: result.operations,
-    errors: result.errors.map((error) => `${error.operation.target}: ${error.message}`),
+    errors: result.errors.map((error) => ({
+      harness: error.operation.harness,
+      path: error.operation.target,
+      headline: error.message,
+    })),
     backups: [...compileBackups, ...result.backups],
   };
 }
@@ -1172,7 +1187,7 @@ function printPluginInstallResult(
 
 function failedPluginRefresh(
   plugin: LoadedPlugin,
-  error: string,
+  failure: RefreshFailure,
   backups: string[]
 ): PluginRefreshResult {
   return {
@@ -1180,7 +1195,7 @@ function failedPluginRefresh(
     name: plugin.manifest.name,
     success: false,
     operations: [],
-    errors: [error],
+    errors: [failure],
     backups,
   };
 }
@@ -1228,8 +1243,18 @@ function printFailedRefreshSummary(results: PluginRefreshResult[]): void {
 
   console.log(`   Failed refreshes: ${results.length}`);
   for (const result of results) {
-    console.log(`      • ${result.name}: ${result.errors.join(", ")}`);
+    for (const failure of result.errors) {
+      console.log(`      • ${formatRefreshFailureLine(result.name, failure)}`);
+    }
   }
+}
+
+function formatRefreshFailureLine(plugin: string, failure: RefreshFailure): string {
+  const location = [plugin, failure.harness, failure.path]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(" › ");
+  const line = `${location} — ${failure.headline}`;
+  return failure.hint ? `${line} → ${failure.hint}` : line;
 }
 
 function printInvalidManifestSummary(
@@ -1322,7 +1347,7 @@ function resolveRequestedHarnesses(options: {
       if (!isValidHarnessId(harness)) {
         console.error(`Unknown harness ID: ${harness}`);
         console.error(`Valid harness IDs: ${getAllHarnessIds().join(", ")}`);
-        process.exit(1);
+        exitWith(EXIT_CODES.usage);
       }
     }
 
@@ -1330,7 +1355,7 @@ function resolveRequestedHarnesses(options: {
   }
 
   console.error("Please specify --harness <ids> or --all");
-  process.exit(1);
+  exitWith(EXIT_CODES.usage);
 }
 
 function printPluginRefreshContext(options: {
@@ -1386,7 +1411,7 @@ async function runCompilePhaseForPlugin(options: {
   indent?: string;
 }): Promise<
   | { success: true; backups: string[] }
-  | { success: false; backups: string[]; error: string }
+  | { success: false; backups: string[]; failure: RefreshFailure }
 > {
   const indent = options.indent ?? "";
   const compileBackups: string[] = [];
@@ -1408,12 +1433,23 @@ async function runCompilePhaseForPlugin(options: {
     );
 
     if (compileExit._tag === "Failure") {
-      const error = `Compile failed for ${harnessId}: ${renderCompileError(compileExit.cause)}`;
-      console.log(`\n${indent}❌ ${error}`);
+      const described = describePrismCause(compileExit.cause);
+      console.log(`\n${indent}❌ Compile failed for ${harnessId}: ${described.headline}`);
+      for (const detail of described.detail ?? []) {
+        console.log(`${indent}   ${detail}`);
+      }
+      if (described.hint) {
+        console.log(`${indent}   hint: ${described.hint}`);
+      }
       return {
         success: false,
         backups: compileBackups,
-        error,
+        failure: {
+          harness: harnessId,
+          ...(described.path ? { path: described.path } : {}),
+          headline: described.headline,
+          ...(described.hint ? { hint: described.hint } : {}),
+        },
       };
     }
 
@@ -1573,48 +1609,6 @@ function indentBlock(text: string, indent: string): string {
     .split("\n")
     .map((line) => `${indent}${line}`)
     .join("\n");
-}
-
-const COMPILE_ERROR_TAGS = new Set([
-  "SourceParseError",
-  "UnknownReferenceError",
-  "UnknownTargetError",
-  "InvalidTargetScopeError",
-  "DuplicateNameError",
-  "BundleNameMismatchError",
-  "MissingTargetResolutionError",
-  "UnknownDependencyError",
-  "DependencyCycleError",
-  "PluginManifestError",
-]);
-
-function renderCompileError(cause: unknown): string {
-  let rendered: string | undefined;
-  const walk = (node: unknown): void => {
-    if (rendered) return;
-    if (!node || typeof node !== "object") return;
-    const n = node as Record<string, unknown>;
-    if (n._tag === "Die" && n.defect instanceof Error) {
-      rendered = n.defect.stack ?? n.defect.message;
-      return;
-    }
-    if (n._tag === "Die" && n.defect !== undefined) {
-      rendered =
-        typeof n.defect === "string"
-          ? n.defect
-          : JSON.stringify(n.defect, Object.getOwnPropertyNames(n.defect), 2);
-      return;
-    }
-    if (typeof n._tag === "string" && COMPILE_ERROR_TAGS.has(n._tag)) {
-      rendered = formatCompileError(n as unknown as CompileError);
-      return;
-    }
-    for (const value of Object.values(n)) {
-      walk(value);
-    }
-  };
-  walk(cause);
-  return rendered ?? (cause instanceof Error ? cause.message : JSON.stringify(cause, null, 2));
 }
 
 function printCliError(error: unknown, fallbackLabel: string): void {

@@ -71,9 +71,9 @@ import {
   UnsupportedTargetCapabilityError,
   UnknownTargetError,
   AgentValidationError,
-  PluginManifestError,
   type CompileError,
 } from "./errors.js";
+import { PluginManifestError } from "../errors.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
@@ -727,10 +727,7 @@ const resolveCompileMcpRuntimePort = (options: {
       );
     },
     catch: (error) =>
-      new PluginManifestError({
-        pluginPath: options.compileOptions.pluginPath,
-        message: error instanceof Error ? error.message : String(error),
-      }),
+      PluginManifestError.forPlugin(options.compileOptions.pluginPath, error instanceof Error ? error.message : String(error)),
   });
 };
 
@@ -798,10 +795,7 @@ const assertHttpMcpLifecycleGate = (options: {
       );
     },
     catch: (error) =>
-      new PluginManifestError({
-        pluginPath: options.compileOptions.pluginPath,
-        message: error instanceof Error ? error.message : String(error),
-      }),
+      PluginManifestError.forPlugin(options.compileOptions.pluginPath, error instanceof Error ? error.message : String(error)),
   });
 };
 
@@ -1014,10 +1008,7 @@ const resolveCompileMcpBearerToken = (options: {
       );
     },
     catch: (error) =>
-      new PluginManifestError({
-        pluginPath: options.registry.pluginPath,
-        message: error instanceof Error ? error.message : String(error),
-      }),
+      PluginManifestError.forPlugin(options.registry.pluginPath, error instanceof Error ? error.message : String(error)),
   });
 };
 

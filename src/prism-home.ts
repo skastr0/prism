@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Schema } from "effect";
+import { PrismConfigError } from "./errors.js";
 import { exists, readFile } from "./fs.js";
 
 export const PRISM_CONFIG_SCHEMA_VERSION = 1;
@@ -31,13 +32,16 @@ export interface PrismConfig {
   readonly backup: PrismBackupConfig;
 }
 
-export class PrismConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PrismConfigError";
-  }
-}
-
+/**
+ * Resolve the Prism home directory from an override or the environment.
+ *
+ * WS2+: new code must NOT call this from library modules — consume the
+ * `PrismHome` Context.Tag from src/services/prism-env.ts instead; the env
+ * read happens exactly once at the CLI edge layer. The default-argument
+ * fallbacks below are confined to modules scheduled for deletion
+ * (managed-ledger dies in WS4, installer write path in WS5, MCP lifecycle
+ * write paths in WS6) and are intentionally not retrofitted.
+ */
 export const resolvePrismHome = (override?: string): string => {
   const configured = override ?? process.env.PRISM_HOME;
   if (configured && configured.trim().length > 0) {
@@ -60,7 +64,7 @@ export const prismBackupDir = (prismHome = resolvePrismHome()): string =>
 
 const assertPositiveInteger = (value: number, field: string): number => {
   if (!Number.isInteger(value) || value <= 0) {
-    throw new PrismConfigError(`Prism config '${field}' must be a positive integer.`);
+    throw new PrismConfigError({ message: `Prism config '${field}' must be a positive integer.` });
   }
   return value;
 };
@@ -84,7 +88,7 @@ const decodeRawPrismConfig = (value: unknown): RawPrismConfig => {
     return Schema.decodeUnknownSync(RawPrismConfigSchema)(value);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new PrismConfigError(`Prism config is invalid: ${message}`);
+    throw new PrismConfigError({ message: `Prism config is invalid: ${message}` });
   }
 };
 
@@ -99,7 +103,7 @@ export const readPrismConfig = async (
     parsed = JSON.parse(await readFile(path));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new PrismConfigError(`Prism config is not valid JSON: ${message}`);
+    throw new PrismConfigError({ message: `Prism config is not valid JSON: ${message}` });
   }
 
   return normalizePrismConfig(decodeRawPrismConfig(parsed));

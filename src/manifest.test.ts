@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { SKILL_VALIDATION } from "./types.js";
-import { PluginManifestError, readManifest, validateSkill } from "./manifest.js";
+import { PluginManifestError } from "./errors.js";
+import { readManifest, validateSkill } from "./manifest.js";
 
 const tempRoots: string[] = [];
 

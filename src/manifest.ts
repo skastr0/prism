@@ -2,7 +2,7 @@
  * Plugin manifest parsing and validation
  */
 
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import matter from "gray-matter";
 import {
   exists,
@@ -31,6 +31,7 @@ import {
 } from "./types.js";
 import type { CompileArtifactType } from "./types.js";
 import { getAllHarnessIds, isValidHarnessId } from "./harnesses.js";
+import { PluginManifestError } from "./errors.js";
 import {
   getCompileManagedPluginArtifactTargets,
   isPluginTargetId,
@@ -84,10 +85,6 @@ const manifestHasCompileManagedPluginArtifactTargets = (
   return false;
 };
 
-function formatManifestErrors(errors: string[]): string {
-  return errors.map((error) => `- ${error}`).join("\n");
-}
-
 function getManifestPluginName(manifest: unknown): string | undefined {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     return undefined;
@@ -97,37 +94,6 @@ function getManifestPluginName(manifest: unknown): string | undefined {
   return typeof name === "string" && name.length > 0 ? name : undefined;
 }
 
-export class PluginManifestError extends Error {
-  readonly pluginPath: string;
-  readonly manifestPath: string;
-  readonly pluginLabel: string;
-  readonly summary: string;
-  readonly details: string[];
-
-  constructor(
-    pluginPath: string,
-    summary: string,
-    details: string[] = [],
-    options: { pluginName?: string; cause?: unknown } = {}
-  ) {
-    const expandedPluginPath = expandPath(pluginPath);
-    const manifestPath = join(expandedPluginPath, MANIFEST_FILE);
-    const pluginLabel = options.pluginName || basename(expandedPluginPath);
-    const detailBlock = details.length > 0 ? `:\n${formatManifestErrors(details)}` : "";
-
-    super(
-      `${summary} for plugin '${pluginLabel}' (${manifestPath})${detailBlock}`,
-      options.cause === undefined ? undefined : { cause: options.cause }
-    );
-
-    this.name = "PluginManifestError";
-    this.pluginPath = expandedPluginPath;
-    this.manifestPath = manifestPath;
-    this.pluginLabel = pluginLabel;
-    this.summary = summary;
-    this.details = details;
-  }
-}
 
 function isPluginArtifactType(value: string): value is PluginArtifactType {
   return PLUGIN_ARTIFACT_TYPES.includes(value as PluginArtifactType);
@@ -231,7 +197,7 @@ export async function collectArtifactSourceFiles(
     });
     if (!rootInspection.exists) continue;
     if (rootInspection.error) {
-      throw new PluginManifestError(pluginPath, "Artifact source escaped plugin root", [
+      throw PluginManifestError.forPlugin(pluginPath, "Artifact source escaped plugin root", [
         rootInspection.error,
       ]);
     }
@@ -244,7 +210,7 @@ export async function collectArtifactSourceFiles(
       const sourcePath = join(layer.rootPath, relativePath);
       const realSourcePath = await realPathContainedBy(pluginPath, sourcePath);
       if (!realSourcePath) {
-        throw new PluginManifestError(pluginPath, "Artifact source escaped plugin root", [
+        throw PluginManifestError.forPlugin(pluginPath, "Artifact source escaped plugin root", [
           `Symlinked artifact file ${artifactSourceDisplayPath(artifact, layer.scope, harnessId, relativePath)} resolves outside plugin root`,
         ]);
       }
@@ -634,7 +600,7 @@ export async function readManifest(pluginPath: string): Promise<PluginManifest> 
   const manifestPath = join(expandedPluginPath, MANIFEST_FILE);
 
   if (!(await exists(manifestPath))) {
-    throw new PluginManifestError(expandedPluginPath, "Plugin manifest not found");
+    throw PluginManifestError.forPlugin(expandedPluginPath, "Plugin manifest not found");
   }
 
   let manifest: PluginManifest;
@@ -642,13 +608,12 @@ export async function readManifest(pluginPath: string): Promise<PluginManifest> 
   try {
     manifest = await readJson<PluginManifest>(manifestPath);
   } catch (error) {
-    throw new PluginManifestError(
+    throw PluginManifestError.forPlugin(
       expandedPluginPath,
       error instanceof SyntaxError
         ? "Plugin manifest is not valid JSON"
         : "Plugin manifest could not be read",
       [error instanceof Error ? error.message : String(error)],
-      { cause: error }
     );
   }
 
@@ -668,7 +633,7 @@ const throwManifestValidationErrors = (
   errors: string[]
 ): void => {
   if (errors.length === 0) return;
-  throw new PluginManifestError(pluginPath, "Manifest validation failed", errors, {
+  throw PluginManifestError.forPlugin(pluginPath, "Manifest validation failed", errors, {
     pluginName,
   });
 };
@@ -807,7 +772,7 @@ async function validateManifest(
   pluginName?: string
 ): Promise<void> {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    throw new PluginManifestError(pluginPath, "Invalid manifest: must be an object", [], {
+    throw PluginManifestError.forPlugin(pluginPath, "Invalid manifest: must be an object", [], {
       pluginName,
     });
   }

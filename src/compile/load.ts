@@ -62,10 +62,10 @@ import {
   AgentNameMismatchError,
   DependencyCycleError,
   DuplicateNameError,
-  PluginManifestError,
   SourceParseError,
   type CompileError,
 } from "./errors.js";
+import { PluginManifestError } from "../errors.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { typescriptBundleImportPath } from "./runtime-deps.js";
@@ -2379,10 +2379,7 @@ const validatePluginManifestTargetsForLoad = (
     for (const key of Object.keys(rawTargets)) {
       if (sourceNounSet.has(key)) continue;
       return yield* Effect.fail(
-        new PluginManifestError({
-          pluginPath,
-          message: `Unknown targets key '${key}'. Expected one of: ${sourceNounList}`,
-        }),
+        PluginManifestError.forPlugin(pluginPath, `Unknown targets key '${key}'. Expected one of: ${sourceNounList}`),
       );
     }
 
@@ -2392,39 +2389,27 @@ const validatePluginManifestTargetsForLoad = (
 
       if (!Array.isArray(declaredTargets)) {
         return yield* Effect.fail(
-          new PluginManifestError({
-            pluginPath,
-            message: `targets.${noun} must be an array of harness IDs and/or preset IDs`,
-          }),
+          PluginManifestError.forPlugin(pluginPath, `targets.${noun} must be an array of harness IDs and/or preset IDs`),
         );
       }
 
       if (declaredTargets.length === 0) {
         return yield* Effect.fail(
-          new PluginManifestError({
-            pluginPath,
-            message: `targets.${noun} must not be empty`,
-          }),
+          PluginManifestError.forPlugin(pluginPath, `targets.${noun} must not be empty`),
         );
       }
 
       const unknownTarget = declaredTargets.find((target) => !isPluginTargetId(target));
       if (unknownTarget !== undefined) {
         return yield* Effect.fail(
-          new PluginManifestError({
-            pluginPath,
-            message: `targets.${noun} contains unknown target '${String(unknownTarget)}'`,
-          }),
+          PluginManifestError.forPlugin(pluginPath, `targets.${noun} contains unknown target '${String(unknownTarget)}'`),
         );
       }
 
       const supportErrors = validateSourceTargetSupport(noun as SourceNoun, declaredTargets);
       if (supportErrors.length > 0) {
         return yield* Effect.fail(
-          new PluginManifestError({
-            pluginPath,
-            message: supportErrors.join("\n"),
-          }),
+          PluginManifestError.forPlugin(pluginPath, supportErrors.join("\n")),
         );
       }
     }
@@ -2438,33 +2423,26 @@ const readPluginManifest = (
     const raw = yield* Effect.tryPromise({
       try: () => Bun.file(manifestPath).json(),
       catch: (cause) =>
-        new PluginManifestError({
+        PluginManifestError.forPlugin(
           pluginPath,
-          message:
-            cause instanceof Error
-              ? `failed to read plugin.json: ${cause.message}`
-              : "failed to read plugin.json",
-        }),
+          cause instanceof Error
+            ? `failed to read plugin.json: ${cause.message}`
+            : "failed to read plugin.json",
+        ),
     });
 
     const data = raw as Record<string, unknown>;
     const name = typeof data.name === "string" ? data.name : undefined;
     if (!name) {
       return yield* Effect.fail(
-        new PluginManifestError({
-          pluginPath,
-          message: "plugin.json is missing 'name' field",
-        }),
+        PluginManifestError.forPlugin(pluginPath, "plugin.json is missing 'name' field"),
       );
     }
 
     const version = typeof data.version === "string" ? data.version : undefined;
     if (!version) {
       return yield* Effect.fail(
-        new PluginManifestError({
-          pluginPath,
-          message: "plugin.json is missing 'version' field",
-        }),
+        PluginManifestError.forPlugin(pluginPath, "plugin.json is missing 'version' field"),
       );
     }
 
@@ -2473,20 +2451,14 @@ const readPluginManifest = (
     if (rawDeps !== undefined) {
       if (rawDeps === null || typeof rawDeps !== "object" || Array.isArray(rawDeps)) {
         return yield* Effect.fail(
-          new PluginManifestError({
-            pluginPath,
-            message: "plugin.json 'deps' must be an object of {depName: localPath}",
-          }),
+          PluginManifestError.forPlugin(pluginPath, "plugin.json 'deps' must be an object of {depName: localPath}"),
         );
       }
 
       for (const [depName, depValue] of Object.entries(rawDeps as Record<string, unknown>)) {
         if (typeof depValue !== "string") {
           return yield* Effect.fail(
-            new PluginManifestError({
-              pluginPath,
-              message: `plugin.json dep '${depName}' must be a string local path`,
-            }),
+            PluginManifestError.forPlugin(pluginPath, `plugin.json dep '${depName}' must be a string local path`),
           );
         }
         deps[depName] = depValue;
@@ -2505,10 +2477,7 @@ const readPluginManifest = (
     if (rawRuntime !== undefined) {
       if (rawRuntime === null || typeof rawRuntime !== "object" || Array.isArray(rawRuntime)) {
         return yield* Effect.fail(
-          new PluginManifestError({
-            pluginPath,
-            message: "plugin.json 'runtime' must be an object",
-          }),
+          PluginManifestError.forPlugin(pluginPath, "plugin.json 'runtime' must be an object"),
         );
       }
       runtime = rawRuntime as PluginRuntimeConfig;

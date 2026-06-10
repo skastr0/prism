@@ -1,0 +1,5 @@
+[test]
+# Isolates every `bun test` run from the real ~/.prism: creates a fresh
+# mkdtemp PRISM_HOME before any test module loads and hard-fails if the
+# resolved Prism home is the real one. See scripts/test-preload.ts.
+preload = ["./scripts/test-preload.ts"]

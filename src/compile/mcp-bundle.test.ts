@@ -12,6 +12,7 @@ import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "./mcp-bu
 import { Contract } from "./sources.js";
 
 const tempRoots: string[] = [];
+const originalPrismHome = process.env.PRISM_HOME;
 
 const effectImportPath = join(
   process.cwd(),
@@ -27,6 +28,7 @@ const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-mcp-test-"));
   tempRoots.push(root);
+  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
 
@@ -411,6 +413,7 @@ class RpcClient {
 }
 
 afterEach(async () => {
+  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );

@@ -371,7 +371,7 @@ const bunAbsolutePathForPlist = async (): Promise<string> => {
 
 /**
  * The lifecycle CONSUMES the compiled canonical bundle — it never builds or
- * rewrites bundles. Compile (`prism install` / `prism compile`) is the only
+ * rewrites bundles. Refresh (`prism refresh`) is the only
  * producer of `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs`.
  */
 const readCanonicalServerBundleSha = async (

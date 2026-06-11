@@ -219,15 +219,17 @@ const main = async (): Promise<void> => {
       },
     );
     await run(
-      "Compiling canonical tool fixture with installed Prism CLI",
+      "Refreshing canonical tool fixture with installed Prism CLI",
       [
         "node",
         prismBin,
-        "compile",
+        "refresh",
+        "--plugin",
         pluginRoot,
         "--harness",
         "hermes",
-        "--root",
+        "--compile-only",
+        "--compile-root",
         hermesRoot,
         "--mcp-lifecycle",
         "none",

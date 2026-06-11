@@ -13,7 +13,7 @@ This plugin vendors Anthropic's official `skill-creator` skill and its supportin
 ## Installation
 
 ```bash
-prism install ./plugins/skill-creator --all
+prism refresh --plugin ./plugins/skill-creator --all
 ```
 
 ## Runtime expectations

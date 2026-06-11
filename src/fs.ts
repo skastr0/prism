@@ -10,11 +10,12 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
  * Expand ~ to home directory
  */
 export function expandPath(path: string): string {
+  const home = process.env.HOME ?? homedir();
   if (path.startsWith("~/")) {
-    return join(homedir(), path.slice(2));
+    return join(home, path.slice(2));
   }
   if (path === "~") {
-    return homedir();
+    return home;
   }
   return resolve(path);
 }

@@ -109,7 +109,7 @@ export class McpBundleMissingError extends Schema.TaggedError<McpBundleMissingEr
   },
 ) {
   get hint(): string {
-    return `refresh the plugin first (prism install <plugin-path> --harness <id>) so the canonical MCP bundle exists, then retry`;
+    return `refresh the plugin first (prism refresh --plugin <plugin-path> --harness <id>) so the canonical MCP bundle exists, then retry`;
   }
 
   override get message(): string {

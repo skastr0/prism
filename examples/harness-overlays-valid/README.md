@@ -43,8 +43,8 @@ harness-overlays-valid/
 
 ```bash
 prism validate ./examples/harness-overlays-valid
-prism install ./examples/harness-overlays-valid --harness opencode --dry-run
-prism install ./examples/harness-overlays-valid --harness openclaw --dry-run
+prism plan --plugin ./examples/harness-overlays-valid --harness opencode
+prism plan --plugin ./examples/harness-overlays-valid --harness openclaw
 ```
 
 There are no file-level `targets:` blocks in this fixture. The shared/overlay layout plus `plugin.json` targets define the plan.

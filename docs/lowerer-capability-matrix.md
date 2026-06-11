@@ -132,7 +132,7 @@ frontmatter documents `tools` but not a per-droid skill allowlist.
 
 Hermes profile-local MCP is intentionally expressed through the existing root
 override rather than a new target. Hermes profiles are separate Hermes homes, so
-`prism compile ./plugin --harness hermes --root ~/.hermes/profiles/<name>` writes
+`prism refresh --plugin ./plugin --harness hermes --compile-only --compile-root ~/.hermes/profiles/<name>` writes
 skills and `config.yaml#mcp_servers` into that profile root. `--mcp-root` remains
 the explicit split when a generated HTTP runtime should live outside the profile
 root. See `docs/hermes-profile-mcp.md` for the collision and non-goal contract:

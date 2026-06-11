@@ -84,6 +84,18 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
       "deleted in WS5 — owner markers and their prune-time readers are gone; ownership is " +
       "snapshot-manifest membership",
   },
+  {
+    pattern: /readHarnessLedger|writeHarnessLedger|managedEntryId|managed-ledger/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in WS7 — refresh uses snapshot manifests through the sync engine, not per-harness ledgers",
+  },
+  {
+    pattern: /planInstallation|executeInstallation|executePlannedOperation/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in WS7 — direct artifacts now lower to DesiredRoot and sync through src/sync/apply.ts",
+  },
 ];
 
 const SRC_ROOT = import.meta.dir;
@@ -114,10 +126,9 @@ test("tombstoned relics do not reappear in src/", async () => {
 });
 
 /**
- * One-writer gate: among compile-path modules (src/sync/** and src/compile/**),
+ * One-writer gate: among compile/sync modules plus the direct refresh planner,
  * only src/sync/apply.ts may import harness-root write primitives from fs.ts.
- * installer.ts stays allowed until WS7 by scoping the gate to compile-path
- * modules; PRISM_HOME-side writers (compile cache, lockfile, canonical MCP
+ * PRISM_HOME-side writers (compile cache, lockfile, canonical MCP
  * bundle) are explicitly allowlisted — they never touch harness roots.
  *
  * Lowerer modules get an additional stricter check below: even temp build
@@ -140,7 +151,8 @@ const MCP_BARE_WRITE_CALLS = [
   { name: ".writeFile", pattern: /\.writeFile\s*\(/gu },
 ] as const;
 
-const COMPILE_PATH_PREFIXES = ["sync/", "compile/"] as const;
+const WRITE_GATED_PATH_PREFIXES = ["sync/", "compile/"] as const;
+const WRITE_GATED_FILES: ReadonlySet<string> = new Set(["refresh.ts"]);
 
 const WRITE_PRIMITIVE_ALLOWLIST: ReadonlySet<string> = new Set([
   "sync/apply.ts",
@@ -208,7 +220,12 @@ test("only src/sync/apply.ts imports harness-root write primitives among compile
   const violations: string[] = [];
 
   for (const relativePath of await listSourceFiles()) {
-    if (!COMPILE_PATH_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) continue;
+    if (
+      !WRITE_GATED_FILES.has(relativePath) &&
+      !WRITE_GATED_PATH_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+    ) {
+      continue;
+    }
     if (relativePath.endsWith(".test.ts")) continue;
     if (WRITE_PRIMITIVE_ALLOWLIST.has(relativePath)) continue;
 
@@ -270,6 +287,31 @@ test("MCP source writes route through the supervisor", async () => {
       ) {
         violations.push(`${relativePath}: uses bare ${call.name} call`);
       }
+    }
+  }
+
+  expect(violations).toEqual([]);
+});
+
+test("process.exit is confined to exit helper and generated MCP runtime strings", async () => {
+  const allowed = new Set([
+    "exit.ts",
+    "compile/mcp-bundle.ts",
+    "compile/lowerers/claude-code.ts",
+    "compile/lowerers/factory-droid.ts",
+    "compile/lowerers/grok.ts",
+    "compile/lowerers/kimi-code.ts",
+    GATE_FILE,
+  ]);
+  const violations: string[] = [];
+
+  for (const relativePath of await listSourceFiles()) {
+    if (relativePath.endsWith(".test.ts") && relativePath !== GATE_FILE) continue;
+    if (allowed.has(relativePath)) continue;
+
+    const content = await readFile(join(SRC_ROOT, relativePath), "utf8");
+    if (/\bprocess\.exit\s*\(/u.test(content)) {
+      violations.push(`${relativePath}: calls process.exit directly`);
     }
   }
 

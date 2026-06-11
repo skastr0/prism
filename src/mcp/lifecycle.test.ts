@@ -330,8 +330,8 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
           "Echo from changed lifecycle tests.",
         ),
       );
-      // The lifecycle consumes compiled bundles: recompiling the canonical
-      // bundle (what `prism install` does) makes the running daemon stale.
+      // The lifecycle consumes compiled bundles: rebuilding the canonical
+      // bundle makes the running daemon stale.
       await rebuildBundle();
       const rebuilt = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
       expect(rebuilt.state).toBe("started");
@@ -846,6 +846,6 @@ test("MCP lifecycle serve fails typed when the compiled canonical bundle is miss
     expect(String((failure as Error).message)).toContain(
       "Compiled MCP server bundle for plugin 'hermes-tools' is missing",
     );
-    expect(String((failure as { hint?: string }).hint)).toContain("prism install");
+    expect(String((failure as { hint?: string }).hint)).toContain("prism refresh");
   });
 }, 15_000);

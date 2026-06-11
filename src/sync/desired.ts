@@ -34,6 +34,7 @@ export type DesiredRegion =
       readonly targetPath: string;
       readonly regionKey: string;
       readonly commentPrefix: string;
+      readonly commentSuffix?: string;
       readonly content: string;
       /**
        * Optional structural anchor line (exact, trim-compared). When a new

@@ -32,10 +32,9 @@ import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
 import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
 import type { LowerOutput } from "./lowerers/shared.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "../sync/desired.js";
-import { planSync, type SyncOp } from "../sync/plan.js";
-import { applySync, type SyncOpFailure, type SyncReport } from "../sync/apply.js";
-import { readSnapshot } from "../state/store.js";
-import { withSnapshotLock } from "../state/lock.js";
+import type { SyncOp } from "../sync/plan.js";
+import type { SyncOpFailure } from "../sync/apply.js";
+import { blockedTargetErrors, syncDesiredRoot } from "../sync/run.js";
 import {
   InvalidTargetScopeError,
   UnsupportedTargetCapabilityError,
@@ -1167,53 +1166,6 @@ const planTargetLowering = (options: {
   });
 };
 
-/**
- * The compile-side sync wiring: build the DesiredRoot for this (plugin,
- * harness, root), plan against the snapshot scoped to the compiled plugin
- * (so it can never prune a neighbor plugin's outputs), and apply under the
- * PRISM_HOME snapshot lock. Dry runs plan without locking or writing.
- */
-const syncDesiredRoot = (options: {
-  readonly prismHome: string;
-  readonly desired: DesiredRoot;
-  readonly scopePlugin: string;
-  readonly dryRun: boolean;
-}): Promise<SyncReport> => {
-  const plan = async () => {
-    const snapshot = await readSnapshot({
-      prismHome: options.prismHome,
-      harness: options.desired.harness,
-      root: options.desired.root,
-    });
-    return planSync({
-      desired: options.desired,
-      snapshot: snapshot.manifest,
-      degradedOwnership: snapshot.quarantinedPath !== undefined,
-      scopePlugins: new Set([options.scopePlugin]),
-    });
-  };
-
-  if (options.dryRun) {
-    return plan().then((planned) =>
-      applySync({ prismHome: options.prismHome, plan: planned, dryRun: true }),
-    );
-  }
-
-  return withSnapshotLock(options.prismHome, async () =>
-    applySync({ prismHome: options.prismHome, plan: await plan() }),
-  );
-};
-
-const blockedTargetErrors = (report: SyncReport): BlockedTargetError[] =>
-  report.blocked.map(
-    (op) =>
-      new BlockedTargetError({
-        targetPath: op.targetPath,
-        plugin: op.plugin,
-        hint: op.hint,
-      }),
-  );
-
 const persistCompileOutputs = (options: {
   readonly pluginPath: string;
   readonly registry: PluginRegistry;
@@ -1441,7 +1393,7 @@ export const compilePluginForTarget = (
           files: lowered.files,
           regions: lowered.regions,
         },
-        scopePlugin: registry.pluginName,
+        scopePlugins: new Set([registry.pluginName]),
         dryRun: options.dryRun || options.packageMode === true,
       }),
     );

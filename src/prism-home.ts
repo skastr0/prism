@@ -37,10 +37,7 @@ export interface PrismConfig {
  *
  * WS2+: new code must NOT call this from library modules — consume the
  * `PrismHome` Context.Tag from src/services/prism-env.ts instead; the env
- * read happens exactly once at the CLI edge layer. The default-argument
- * fallbacks below are confined to modules scheduled for deletion
- * (managed-ledger dies in WS4, installer write path in WS5, MCP lifecycle
- * write paths in WS6) and are intentionally not retrofitted.
+ * read happens exactly once at the CLI edge layer.
  */
 export const resolvePrismHome = (override?: string): string => {
   const configured = override ?? process.env.PRISM_HOME;

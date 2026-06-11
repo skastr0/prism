@@ -2,7 +2,7 @@
  * Process exit-code contract (docs/overhaul-one-writer-plan.md, WS2).
  *
  *   0 — success / already converged
- *   1 — domain failure (compile, validation, install, sync)
+ *   1 — domain failure (compile, validation, refresh, sync)
  *   2 — usage error (bad flags, missing arguments)
  *   3 — environment failure (missing tools, unreadable PRISM_HOME, …)
  *

@@ -72,6 +72,13 @@ const arrayMemberIdentity = (
 export const serializeRegionRef = (region: DesiredRegion): string => {
   switch (region.kind) {
     case "marker":
+      if (region.commentSuffix !== undefined) {
+        return `marker-v2 ${JSON.stringify({
+          prefix: region.commentPrefix,
+          suffix: region.commentSuffix,
+          key: region.regionKey,
+        })}`;
+      }
       return `marker ${region.commentPrefix} ${region.regionKey}`;
     case "json-key":
       return `json ${region.regionKey} ${JSON.stringify(region.jsonPath)}`;
@@ -87,7 +94,12 @@ export const serializeRegionRef = (region: DesiredRegion): string => {
 export const parseRegionRef = (
   ref: string,
 ):
-  | { readonly kind: "marker"; readonly commentPrefix: string; readonly regionKey: string }
+  | {
+      readonly kind: "marker";
+      readonly commentPrefix: string;
+      readonly commentSuffix?: string;
+      readonly regionKey: string;
+    }
   | { readonly kind: "json"; readonly regionKey: string; readonly jsonPath: ReadonlyArray<string | number> }
   | {
       readonly kind: "json-array";
@@ -97,6 +109,26 @@ export const parseRegionRef = (
       readonly identity: unknown;
     }
   | undefined => {
+  const markerV2 = ref.match(/^marker-v2 (\{.*\})$/);
+  if (markerV2) {
+    try {
+      const parsed = JSON.parse(markerV2[1]!) as {
+        readonly prefix?: unknown;
+        readonly suffix?: unknown;
+        readonly key?: unknown;
+      };
+      if (typeof parsed.prefix === "string" && typeof parsed.key === "string") {
+        return {
+          kind: "marker",
+          commentPrefix: parsed.prefix,
+          ...(typeof parsed.suffix === "string" ? { commentSuffix: parsed.suffix } : {}),
+          regionKey: parsed.key,
+        };
+      }
+    } catch {
+      return undefined;
+    }
+  }
   const marker = ref.match(/^marker (\S+) (.+)$/);
   if (marker) return { kind: "marker", commentPrefix: marker[1]!, regionKey: marker[2]! };
   const json = ref.match(/^json (\S+) (\[.*\])$/);

@@ -33,7 +33,7 @@ An example plugin that demonstrates shared artifact targeting from `plugin.json`
 prism validate ./examples/my-standards
 
 # Preview the shared install plan
-prism install ./examples/my-standards --all --dry-run
+prism plan --plugin ./examples/my-standards --all
 ```
 
 ## Notes

@@ -6,7 +6,7 @@ Scope: PQ-040 activated the SDK-backed generated MCP runtime for the live `tower
 
 ## Live Results
 
-- `tower` and `grok-agent` were reinstalled with `prism install` for `hermes,codex-cli,claude-code,antigravity-cli`.
+- `tower` and `grok-agent` were refreshed with `prism refresh` for `hermes,codex-cli,claude-code,antigravity-cli`.
 - The second run settled idempotently for both plugins across all four harnesses.
 - `tower` has exactly one shared HTTP daemon: `prism_generated_tower/server.mjs`, pid `35641`, `http://127.0.0.1:38463/mcp`.
 - `grok-agent` has exactly one shared HTTP daemon: `prism_generated_grok_agent/server.mjs`, pid `38271`, `http://127.0.0.1:38473/mcp`.
@@ -31,7 +31,7 @@ Scope: PQ-040 activated the SDK-backed generated MCP runtime for the live `tower
 - Codex MCP TOML table removal now removes the whole table body until the next TOML table header. The previous implementation could remove only the table header and leave orphan `url`, `http_headers`, and `enabled_tools` keys behind.
 - Codex MCP patching now removes orphaned generated MCP body fragments left by the older bug only when the intermediate TOML is not parse-valid, keeping valid neighboring MCP tables intact.
 - Empty Codex managed hook marker blocks are no longer emitted. This prevents different no-hook plugins from deleting and re-adding each other's empty marker blocks on alternating runs.
-- The installer now skips file-router skill copies when a compile-active lowerer already owns targeted plugin skills. This removes false drift between compile-owned direct/plugin-bundle skills and install-phase skill normalization.
+- Refresh now skips file-router skill copies when a compile-active lowerer already owns targeted plugin skills. This removes false drift between compile-owned direct/plugin-bundle skills and direct skill normalization.
 - Direct-skill compile lowerers now prune stale compile-owned targeted skill files when a source skill or skill support file is removed.
 
 ## Follow-up Pressure

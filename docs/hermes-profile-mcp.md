@@ -38,20 +38,13 @@ contract that is better for generated Prism outputs.
 
 Prism does not need a first-class `profile` target concept yet.
 
-A Hermes profile is a root. Prism should express profile-local MCP by compiling
+A Hermes profile is a root. Prism should express profile-local MCP by refreshing
 the normal `hermes` target against the selected profile root:
 
 ```bash
-prism compile ./my-plugin \
+prism refresh --plugin ./my-plugin \
   --harness hermes \
-  --root ~/.hermes/profiles/coder
-```
-
-For `install` / `install-all`, the equivalent is:
-
-```bash
-prism install ./my-plugin \
-  --harness hermes \
+  --compile-only \
   --compile-root ~/.hermes/profiles/coder
 ```
 
@@ -81,20 +74,19 @@ write the config entry into the profile root while serving the generated HTTP
 runtime from a separate runtime root:
 
 ```bash
-prism compile ./my-plugin \
+prism refresh --plugin ./my-plugin \
   --harness hermes \
-  --root ~/.hermes/profiles/coder \
-  --mcp-root ~/.config
+  --compile-only \
+  --compile-root ~/.hermes/profiles/coder
 ```
 
 That split lets multiple Hermes profiles point at the same Prism-managed
 runtime when the generated tool surface is identical.
 
-The CLI root flags are intentionally not interchangeable. In `prism compile`,
-`--root` means the Hermes profile/config root and `--mcp-root` means the shared
-generated HTTP runtime root. In `prism mcp serve/status/stop/restart`, `--root`
-means the runtime root because those commands manage only the Prism-generated
-daemon, not the Hermes profile config.
+The CLI root flags are intentionally not interchangeable. In `prism refresh`,
+`--compile-root` means the Hermes profile/config root. In
+`prism mcp serve/status/stop/restart`, lifecycle flags manage only the
+Prism-generated daemon, not the Hermes profile config.
 
 ## Ownership, Pruning, and Idempotency
 

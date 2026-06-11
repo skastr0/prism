@@ -95,23 +95,36 @@ prism init <name> [options]
   --with-skill      Include example skill scaffold (preset targets for coding + claw harnesses)
   --minimal         Create minimal plugin (manifest only)
 
-# Install a plugin
-prism install <plugin-path> [options]
+# Refresh a plugin
+prism refresh <plugin-path> [options]
   --harness <ids>   Comma-separated harness IDs
-  --all             Install to all supported harnesses
+  --all             Refresh all supported harnesses
+  --project <path>  Project path for project-specific rules
+  --scope <scope>   Compile output scope: global or project
+  --overwrite       Overwrite existing files
+  --dry-run         Preview the refresh plan without writing
+
+# Preview refresh changes
+prism plan <plugin-path> [options]
+  --harness <ids>   Comma-separated harness IDs
+  --all             Plan all supported harnesses
+  --json            Print a machine-readable JSON envelope
+
+# Refresh every child plugin in a directory
+prism refresh --plugins <directory> [options]
+  --harness <ids>   Comma-separated list of harness IDs
+  --all             Refresh all supported harnesses
   --project <path>  Project path for project-specific rules
   --scope <scope>   Compile output scope: global or project
   --overwrite       Overwrite existing files
   --dry-run         Preview operations without executing
 
-# Install every child plugin in a directory
-prism install-all <directory> [options]
-  --harness <ids>   Comma-separated harness IDs
-  --all             Install to all supported harnesses
-  --project <path>  Project path for project-specific rules
-  --scope <scope>   Compile output scope: global or project
-  --overwrite       Overwrite existing files
-  --dry-run         Preview operations without executing
+# Diagnose harness config and refresh-plan health
+prism doctor <plugin-path> [options]
+  --harness <ids>   Comma-separated list of harness IDs
+  --all             Check all supported harnesses
+  --fix             Apply refresh changes when possible
+  --json            Print a machine-readable JSON report
 
 # Validate plugin structure
 prism validate <plugin-path>
@@ -126,8 +139,8 @@ Prism stores cross-harness state in Prism home, defaulting to `~/.prism` and ove
 
 - `~/.prism/config.json` controls managed behavior. The current config shape is `{ "version": 1, "backup": { "mode": "always" | "never", "retentionPerTarget": 3 } }`.
 - `~/.prism/backups/` stores managed backups outside harness config trees. Prism preserves original filenames and does not create sibling `.bak` files.
-- `~/.prism/state/<harness>.ledger.json` records files and rule sections Prism owns for each harness.
-- Re-running `prism install` or `prism compile` is the sync operation. There is no separate install/sync fork; `install` compiles first where relevant, writes desired outputs, skips unchanged content, fails closed on drift, and prunes stale ledger-owned outputs.
+- `~/.prism/state/roots/*.json` records files and rule sections Prism owns for each harness root.
+- Re-running `prism refresh` is the sync operation. It compiles first where relevant, writes desired outputs, skips unchanged content, fails closed on drift, and prunes stale Prism-owned outputs.
 - Existing files that Prism does not own are not silently adopted. Use `--overwrite` when deliberately replacing an unmanaged whole-file artifact.
 
 ## Project Structure
@@ -141,7 +154,10 @@ prism/
 │   ├── lowerer-capabilities.ts # Typed lowerer surface-kind contract
 │   ├── fs.ts           # Filesystem utilities (Bun APIs)
 │   ├── manifest.ts     # Plugin manifest and frontmatter parsing
-│   ├── installer.ts    # Core installation logic (file-router phase)
+│   ├── refresh.ts      # Unified file-router refresh planning
+│   ├── doctor.ts       # Harness config and refresh-plan diagnostics
+│   ├── sync/           # Desired-state planner and one-writer apply engine
+│   ├── state/          # Per-root snapshot manifests
 │   └── compile/        # Agent-language compiler (OpenCode v0.1)
 │       ├── sources.ts           # Effect Schema source models
 │       ├── registry.ts          # Per-plugin indexes
@@ -583,38 +599,38 @@ Notes:
 ### CLI
 
 ```bash
-# Compile a plugin's source artifacts to OpenCode outputs
-prism compile ./my-plugin --harness opencode
+# Refresh a plugin's source artifacts into OpenCode outputs
+prism refresh ./my-plugin --harness opencode
 
-# Compile a plugin's source artifacts to Claude Code outputs
-prism compile ./my-plugin --harness claude-code
+# Refresh a plugin's source artifacts into Claude Code outputs
+prism refresh ./my-plugin --harness claude-code
 
-# Compile canonical tools into a Hermes MCP server and config entry
-prism compile ./my-plugin --harness hermes
+# Refresh canonical tools into a Hermes MCP server and config entry
+prism refresh ./my-plugin --harness hermes
 
-# Compile Antigravity agents, skills, hooks, rules, and canonical tools into a generated plugin bundle
-prism compile ./my-plugin --harness antigravity-cli
+# Refresh Antigravity agents, skills, hooks, rules, and canonical tools into a generated plugin bundle
+prism refresh ./my-plugin --harness antigravity-cli
 
-# Compile Grok agents, skills, hooks, and canonical tools into a generated Grok plugin bundle
-prism compile ./my-plugin --harness grok
+# Refresh Grok agents, skills, hooks, and canonical tools into a generated Grok plugin bundle
+prism refresh ./my-plugin --harness grok
 
-# Compile Factory Droid agents, skills, hooks, and canonical tools into a generated Factory plugin bundle
-prism compile ./my-plugin --harness factory-droid
+# Refresh Factory Droid agents, skills, hooks, and canonical tools into a generated Factory plugin bundle
+prism refresh ./my-plugin --harness factory-droid
 
-# Compile Pi agents, prompt templates, hooks, and canonical tools into generated Pi surfaces
-prism compile ./my-plugin --harness pi
+# Refresh Pi agents, prompt templates, hooks, and canonical tools into generated Pi surfaces
+prism refresh ./my-plugin --harness pi
 
-# Compile Kimi role skills, plugin MCP, and hooks into generated Kimi surfaces
-prism compile ./my-plugin --harness kimi-code
+# Refresh Kimi role skills, plugin MCP, and hooks into generated Kimi surfaces
+prism refresh ./my-plugin --harness kimi-code
 
-# Compile canonical tools into Cursor mcp.json
-prism compile ./my-plugin --harness cursor
+# Refresh canonical tools into Cursor mcp.json
+prism refresh ./my-plugin --harness cursor
 
-# Compile into a project-local OpenCode root for a business/app repo
-prism compile ./my-plugin --harness opencode --scope project --project ~/code/my-app
+# Refresh into a project-local OpenCode root for a business/app repo
+prism refresh ./my-plugin --harness opencode --scope project --project ~/code/my-app
 
-# Dry run
-prism compile ./my-plugin --harness claude-code --dry-run
+# Plan without writing
+prism plan ./my-plugin --harness claude-code
 ```
 
 ### Lowered outputs
@@ -641,7 +657,7 @@ prism compile ./my-plugin --harness claude-code --dry-run
 - Writes concrete orbit instances into `<hermes-root>/skills/<orbit-name>/SKILL.md`
 - Emits canonical `tools/*.tool.ts` as a generated MCP stdio server at `<hermes-root>/prism/mcp/prism_generated_<source-plugin>/server.mjs`, or as a Prism-managed Streamable HTTP runtime when configured
 - Patches `<hermes-root>/config.yaml` with a compiler-owned `mcp_servers.prism-generated-<source-plugin>` entry using `bun <server.mjs>` for stdio or a managed loopback `url` for Streamable HTTP; omitted HTTP ports are selected before config write
-- A Hermes profile is treated as a harness root: use `--root ~/.hermes/profiles/<name>` for `compile` or `--compile-root ~/.hermes/profiles/<name>` for `install` / `install-all`
+- A Hermes profile is treated as a harness root: use `--compile-root ~/.hermes/profiles/<name>` for `refresh` or `plan`
 - Fails closed for compiled agents and hooks; SOUL/personality lowering, runtime delegation, and native Hermes Python plugins are intentionally out of scope
 
 #### Antigravity CLI
@@ -723,17 +739,17 @@ Orbit source artifacts are source-language constructs. For the current supported
 3. Declare the harness surface contract in `src/lowerer-capabilities.ts`, including compile target capabilities and whether the lowerer uses native plugin APIs, native plugin bundles, generated MCP, direct files, config patches, or unsupported surfaces
 4. Ensure canonical toolspace/modelspace bindings have a corresponding `targets.<id>` block for the new harness
 
-### Install + compile unified
+### Refresh + compile unified
 
-`prism install <plugin>` runs compile first (if the plugin has compile-phase targets for that harness) and then install.
+`prism refresh <plugin>` runs compile first (if the plugin has compile-phase targets for that harness) and then reconciles file-router artifacts.
 
-`prism install-all <directory>` applies the same compile-first behavior to each discovered child plugin and honors the same `--scope` / `--project` compile options.
+`prism refresh --plugins <directory>` applies the same compile-first behavior to each discovered child plugin and honors the same `--scope` / `--project` compile options.
 
 For project-local OpenCode compilation via the unified command:
 
 ```bash
-prism install ./my-plugin --harness opencode --scope project --project ~/code/my-app
-prism install-all ./plugins --harness opencode,claude-code --scope project --project ~/code/my-app
+prism refresh ./my-plugin --harness opencode --scope project --project ~/code/my-app
+prism refresh --plugins ./plugins --harness opencode,claude-code --scope project --project ~/code/my-app
 ```
 
 Reserved for future:
@@ -966,29 +982,29 @@ You are a code review specialist...
 
 - Wrap CLI actions in try/catch
 - Provide clear error messages with context
-- Use `process.exit(1)` for fatal errors
+- Use `exitWith()` for fatal CLI exits
 
-### Installation Logic
+### Sync Logic
 
-- Plan operations first (`planInstallation`)
-- Execute planned operations (`executeInstallation`)
-- Return structured results (`InstallResult`)
+- Build `DesiredRoot` values first
+- Plan through `planSync()` and write only through `applySync()`
+- Return structured refresh or compile results
 - Support dry-run mode at all stages
 
 ### Adding New Harnesses
 
 1. Add the harness ID to `HarnessId` in `types.ts`
 2. Add the harness config to the `HARNESSES` registry in `harnesses.ts`
-3. Add harness-specific transformations in `installer.ts` if needed
+3. Add harness-specific file-router transformations in `refresh.ts` if needed
 4. Update frontmatter type in `types.ts`
 
 ### Adding New Artifact Types
 
-1. Add to `artifact` union type in `FileOperation`
+1. Add the artifact source model and manifest target support
 2. Add support flag to `HarnessConfig` (e.g., `supportsX`)
 3. Add directory field to `HarnessConfig` (e.g., `xDir`)
-4. Create `planXInstallation()` function in `installer.ts`
-5. Call it from `planInstallation()` main function
+4. Create the corresponding desired-state planning in `refresh.ts` or a compile lowerer
+5. Route writes through the sync engine
 6. Update `init` command to generate examples
 
 ## Development Workflow
@@ -1009,10 +1025,10 @@ prism init test-plugin --with-agent --with-skill
 prism validate ./test-plugin
 
 # Dry run to preview
-prism install ./test-plugin --all --dry-run
+prism plan ./test-plugin --all
 
 # Install for real
-prism install ./test-plugin --all
+prism refresh ./test-plugin --all
 ```
 
 ## Creating Skills

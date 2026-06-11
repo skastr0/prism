@@ -4,7 +4,7 @@
  * Builds a SYNTHETIC codex-like harness root in a temp dir — a user-styled
  * config.toml with comments, blank lines inside tables, trailing commas in
  * multi-line arrays, and a foreign [mcp_servers.user-thing] block — puts it
- * under git, then runs the current prism compile pipeline against it twice
+ * under git, then runs `prism refresh --compile-only` against it twice
  * with a sandboxed PRISM_HOME and asserts:
  *
  *   1. both runs exit 0
@@ -124,11 +124,13 @@ const main = async (): Promise<void> => {
     const compileArgs = [
       "bun",
       CLI_PATH,
-      "compile",
+      "refresh",
+      "--plugin",
       pluginDir,
       "--harness",
       HARNESS,
-      "--root",
+      "--compile-only",
+      "--compile-root",
       rootDir,
       "--mcp-lifecycle",
       "none",

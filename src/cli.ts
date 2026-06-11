@@ -11,7 +11,6 @@ import {
   isValidHarnessId,
   resolveHarnessRoot,
 } from "./harnesses.js";
-import { install, planInstallation } from "./installer.js";
 import {
   formatManifestTargets,
   manifestHasCompileTargets,
@@ -31,7 +30,6 @@ import { EXIT_CODES, exitWith } from "./exit.js";
 import { exists, expandPath } from "./fs.js";
 import { HARNESS_SCOPES } from "./types.js";
 import type {
-  FileOperation,
   HarnessId,
   HarnessScope,
   PluginManifest,
@@ -40,6 +38,7 @@ import { basename, join } from "node:path";
 import {
   compilePluginForTarget,
   formatOperations,
+  type CompileResult,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
@@ -63,6 +62,14 @@ import {
   formatPackageOperations,
   packagePluginForTarget,
 } from "./packager.js";
+import {
+  formatRefreshRootPlan,
+  refreshPlanJsonEnvelope,
+  refreshPlugin,
+  type RefreshResult,
+} from "./refresh.js";
+import type { SyncReport } from "./sync/apply.js";
+import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -77,12 +84,14 @@ program
   .description("Unified plugin distribution for AI coding harnesses")
   .version(prismVersion);
 
-// Install command
+// Refresh command
 program
-  .command("install <plugin-path>")
-  .description("Install a plugin to one or more harnesses")
+  .command("refresh [plugin-path]")
+  .description("Converge a plugin's targeted harness outputs")
+  .option("--plugin <path>", "Plugin path to refresh")
+  .option("--plugins <directory>", "Directory of child plugins to refresh (shallow scan)")
   .option("--harness <harnesses>", "Comma-separated list of harness IDs")
-  .option("--all", "Install to all supported harnesses")
+  .option("--all", "Refresh all supported harnesses")
   .option("-p, --project <path>", "Project path for project-specific rules")
   .option(
     "--scope <scope>",
@@ -91,8 +100,10 @@ program
     "global"
   )
   .option("--overwrite", "Overwrite existing files", false)
-  .option("--no-validate", "Skip plugin validation before install")
-  .option("--dry-run", "Preview operations without executing", false)
+  .option("--no-validate", "Skip plugin validation before refresh")
+  .option("--dry-run", "Preview the refresh plan without writing", false)
+  .option("--compile-only", "Only run compile-phase lowering")
+  .option("--clean", "Clear compile cache before compiling", false)
   .option("--compile-root <path>", "Override compile output root")
   .option(
     "--mcp-lifecycle <mode>",
@@ -100,21 +111,23 @@ program
     parseMcpLifecycleMode,
     "serve"
   )
-  .action(async (pluginPath: string, options) => {
+  .action(async (pluginPath: string | undefined, options) => {
     try {
-      await runInstallCommand(pluginPath, options);
+      await runRefreshCommand("refresh", pluginPath, options);
     } catch (error) {
       printCliError(error, "Error");
       exitWith(EXIT_CODES.domainFailure);
     }
   });
 
-// Install-all command - discover and install all plugins in a directory
+// Plan command
 program
-  .command("install-all <directory>")
-  .description("Discover and refresh all plugins found in a directory (shallow scan)")
+  .command("plan [plugin-path]")
+  .description("Preview Prism refresh changes without writing")
+  .option("--plugin <path>", "Plugin path to plan")
+  .option("--plugins <directory>", "Directory of child plugins to plan (shallow scan)")
   .option("--harness <harnesses>", "Comma-separated list of harness IDs")
-  .option("--all", "Install to all supported harnesses")
+  .option("--all", "Plan all supported harnesses")
   .option("-p, --project <path>", "Project path for project-specific rules")
   .option(
     "--scope <scope>",
@@ -123,52 +136,20 @@ program
     "global"
   )
   .option("--overwrite", "Overwrite existing files", false)
-  .option("--no-validate", "Skip plugin validation before install")
-  .option("--dry-run", "Preview operations without executing", false)
+  .option("--no-validate", "Skip plugin validation before planning")
+  .option("--compile-only", "Only plan compile-phase lowering")
+  .option("--clean", "Plan compile cache cleanup")
   .option("--compile-root <path>", "Override compile output root")
+  .option("--json", "Print a machine-readable JSON envelope", false)
   .option(
     "--mcp-lifecycle <mode>",
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
     "serve"
   )
-  .action(async (directory: string, options) => {
+  .action(async (pluginPath: string | undefined, options) => {
     try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      const harnesses = resolveRequestedHarnesses(options);
-      const expandedDir = expandPath(directory);
-
-      await requireInstallAllDirectory(expandedDir);
-      const pluginPaths = await discoverPluginPaths(expandedDir);
-      if (!printInstallAllDiscovery(expandedDir, pluginPaths)) return;
-
-      const { validPlugins, invalidPlugins } = await loadPluginManifests(pluginPaths);
-      printInstallAllManifestResults(validPlugins, invalidPlugins);
-
-      const results = await refreshValidPlugins(validPlugins, {
-        harnesses,
-        scope: options.scope,
-        projectPath: options.project,
-        compileRoot: options.compileRoot,
-        mcpLifecycle: options.mcpLifecycle,
-        validate: options.validate,
-        dryRun: options.dryRun,
-        overwrite: options.overwrite,
-      });
-
-      const hasFailures = printInstallAllSummary({
-        pluginPaths,
-        validPlugins,
-        invalidPlugins,
-        results,
-      });
-
-      if (hasFailures) {
-        console.log("\n⚠️  Some plugins failed validation, compile, or install");
-        exitWith(EXIT_CODES.domainFailure);
-      }
-
-      console.log("\n✅ All plugin refreshes completed successfully!");
+      await runRefreshCommand("plan", pluginPath, options);
     } catch (error) {
       printCliError(error, "Error");
       exitWith(EXIT_CODES.domainFailure);
@@ -190,7 +171,7 @@ program
 
       if (await exists(targetDir)) {
         console.error(`Directory already exists: ${targetDir}`);
-        process.exit(1);
+        exitWith(EXIT_CODES.domainFailure);
       }
 
       console.log(`\n📦 Creating plugin: ${name}`);
@@ -212,112 +193,9 @@ program
       console.log("\n✅ Plugin created successfully!");
       console.log(`\nNext steps:`);
       console.log(`   cd ${name}`);
-      console.log(`   prism install . --all --dry-run`);
+      console.log(`   prism plan --plugin . --all`);
     } catch (error) {
       printCliError(error, "Error");
-      process.exit(1);
-    }
-  });
-
-// Compile command - run the agent language compiler for a plugin
-program
-  .command("compile <plugin-path>")
-  .description("Compile agent language sources into per-harness artifacts")
-  .option(
-    "--harness <id>",
-    "Target harness ID ('opencode', 'claude-code', 'antigravity-cli', 'codex-cli', 'amp-code', 'hermes', 'grok', 'factory-droid', 'pi', or 'kimi-code')",
-    "opencode"
-  )
-  .option(
-    "--scope <scope>",
-    `Output scope (${HARNESS_SCOPES.join("|")})`,
-    parseHarnessScope,
-    "global"
-  )
-  .option("-p, --project <path>", "Project root when compiling with --scope project")
-  .option("--dry-run", "Preview operations without writing", false)
-  .option("--clean", "Clear compile cache before compiling", false)
-  .option("--root <path>", "Override harness output root")
-  .option(
-    "--mcp-lifecycle <mode>",
-    "Generated HTTP MCP lifecycle behavior (none|verify|serve)",
-    parseMcpLifecycleMode,
-    "serve"
-  )
-  .action(async (pluginPath: string, options) => {
-    try {
-      const expanded = expandPath(pluginPath);
-      assertProjectPathForProjectScope(options.scope, options.project);
-
-      if (options.clean) {
-        const cacheDir = getCacheDir(expanded);
-        if (options.dryRun) {
-          console.log(`\n🧹 Dry run — would clear compile cache: ${cacheDir}`);
-        } else {
-          await cleanCache(cacheDir);
-          console.log(`\n🧹 Cleared compile cache: ${cacheDir}`);
-        }
-      }
-
-      const program = compilePluginForTarget({
-        pluginPath: expanded,
-        target: options.harness,
-        scope: options.scope,
-        projectPath: options.project,
-        root: options.root,
-        prismHome: resolvePrismHome(),
-        dryRun: options.dryRun,
-        mcpLifecycle: options.mcpLifecycle,
-      });
-
-      const exit = await Effect.runPromiseExit(program);
-
-      if (exit._tag === "Failure") {
-        console.error(`\n❌ Compile failed:`);
-        console.error(indentBlock(renderPrismCause(exit.cause), "   "));
-        exitWith(EXIT_CODES.domainFailure);
-      }
-
-      const result = exit.value;
-      console.log(`\n🛠  Compiled ${result.composed.length} agent(s) for '${result.target}' (${result.scope}):`);
-      console.log(`   Output root: ${result.outputRoot}`);
-      console.log(`   Cache dir: ${result.cacheDir}`);
-      console.log(`   Built: ${result.built.length > 0 ? result.built.join(", ") : "(none)"}`);
-      console.log(
-        `   From cache: ${result.fromCache.length > 0 ? result.fromCache.join(", ") : "(none)"}`
-      );
-      if (result.lockfilePath) {
-        console.log(`   Lockfile: ${result.lockfilePath}`);
-      }
-      for (const agent of result.composed) {
-        console.log(`   - ${agent.name}`);
-      }
-      console.log(`\n📋 Operations:\n`);
-      console.log(formatOperations(result.operations));
-      if (result.backups.length > 0) {
-        console.log(`\n💾 Backups:`);
-        for (const b of result.backups) {
-          console.log(`   ${b}`);
-        }
-      }
-      for (const blocked of result.blocked) {
-        console.error(`\n⛔ ${renderPrismError(blocked)}`);
-      }
-      for (const failure of result.failures) {
-        console.error(`\n❌ ${failure.op.kind} ${failure.op.targetPath}: ${failure.message}`);
-      }
-      if (options.dryRun) {
-        console.log(`\n🔍 Dry run — no writes performed.`);
-      } else if (result.blocked.length > 0 || result.failures.length > 0) {
-        console.error(`\n❌ Compile finished with unapplied targets.`);
-        exitWith(EXIT_CODES.domainFailure);
-      } else if (result.converged) {
-        console.log(`\n✅ Already converged — nothing written.`);
-      } else {
-        console.log(`\n✅ Done.`);
-      }
-    } catch (error) {
-      printCliError(error, "Compile error");
       exitWith(EXIT_CODES.domainFailure);
     }
   });
@@ -380,7 +258,7 @@ program
       console.log(options.dryRun ? "\n🔍 Dry run — no writes performed." : "\n✅ Done.");
     } catch (error) {
       printCliError(error, "Package error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -420,7 +298,7 @@ mcpCommand
       console.log(formatMcpServeResult(result));
     } catch (error) {
       printCliError(error, "MCP serve error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -468,7 +346,7 @@ mcpCommand
       }
     } catch (error) {
       printCliError(error, "MCP status error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -498,7 +376,7 @@ mcpCommand
       console.log(formatMcpStopResult(result));
     } catch (error) {
       printCliError(error, "MCP stop error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -532,7 +410,7 @@ mcpCommand
       console.log(formatMcpServeResult(result));
     } catch (error) {
       printCliError(error, "MCP restart error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -562,7 +440,45 @@ mcpCommand
       console.log(formatMcpRotateTokenResult(result));
     } catch (error) {
       printCliError(error, "MCP rotate-token error");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+program
+  .command("doctor [plugin-path]")
+  .description("Diagnose Prism refresh state and harness config health")
+  .option("--harness <harnesses>", "Comma-separated list of harness IDs")
+  .option("--all", "Check all supported harnesses")
+  .option(
+    "--scope <scope>",
+    `Harness output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global",
+  )
+  .option("-p, --project <path>", "Project root when checking project scope")
+  .option("--fix", "Converge fixable refresh findings", false)
+  .option("--json", "Print a machine-readable JSON report", false)
+  .action(async (pluginPath: string | undefined, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const report = await runDoctor({
+        ...(pluginPath ? { pluginPath } : {}),
+        harnesses: resolveRequestedHarnesses(options),
+        scope: options.scope,
+        ...(options.project ? { projectPath: options.project } : {}),
+        prismHome: resolvePrismHome(),
+        fix: options.fix,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(formatDoctorReport(report));
+      }
+      const code = doctorExitCode(report);
+      if (code !== EXIT_CODES.success) exitWith(code);
+    } catch (error) {
+      printCliError(error, "Doctor error");
+      exitWith(EXIT_CODES.usage);
     }
   });
 
@@ -594,7 +510,7 @@ program
       await runValidateCommand(pluginPath, options);
     } catch (error) {
       printCliError(error, "Invalid plugin");
-      process.exit(1);
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 
@@ -711,7 +627,7 @@ function finishValidateCommand(
   console.log();
   if (status.hasErrors) {
     console.log("❌ Validation failed with errors");
-    process.exit(1);
+    exitWith(EXIT_CODES.domainFailure);
   } else if (status.hasWarnings && !options.verbose) {
     console.log("✅ Plugin is valid (run with --verbose to see warnings)");
   } else {
@@ -724,33 +640,43 @@ type LoadedPlugin = {
   manifest: PluginManifest;
 };
 
-type InstallCommandOptions = {
+type RefreshCommandOptions = {
   all?: boolean;
   harness?: string;
+  plugin?: string;
+  plugins?: string;
   project?: string;
   scope?: HarnessScope;
   overwrite?: boolean;
   validate?: boolean;
   dryRun?: boolean;
+  json?: boolean;
+  compileOnly?: boolean;
+  clean?: boolean;
   compileRoot?: string;
   mcpLifecycle?: CompileMcpLifecycleMode;
 };
 
-type NormalizedInstallOptions = {
+type NormalizedRefreshOptions = {
   all?: boolean;
   harness?: string;
+  plugin?: string;
+  plugins?: string;
   project?: string;
   scope: HarnessScope;
   overwrite: boolean;
   validate?: boolean;
   dryRun: boolean;
+  json: boolean;
+  compileOnly: boolean;
+  clean: boolean;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
 };
 
-type InstallCommandContext = LoadedPlugin & {
+type RefreshCommandContext = LoadedPlugin & {
   harnesses: HarnessId[];
-  options: NormalizedInstallOptions;
+  options: NormalizedRefreshOptions;
 };
 
 type InvalidPluginManifest = {
@@ -769,7 +695,8 @@ type PluginRefreshResult = {
   pluginPath: string;
   name: string;
   success: boolean;
-  operations: FileOperation[];
+  reports: ReadonlyArray<SyncReport>;
+  compileResults: ReadonlyArray<CompileResult>;
   errors: RefreshFailure[];
   backups: string[];
 };
@@ -782,7 +709,7 @@ type PluginValidationResult = {
   errors: string[];
 };
 
-type InstallAllRefreshOptions = {
+type DirectoryRefreshOptions = {
   harnesses: HarnessId[];
   scope: HarnessScope;
   projectPath?: string;
@@ -791,13 +718,39 @@ type InstallAllRefreshOptions = {
   validate?: boolean;
   dryRun: boolean;
   overwrite: boolean;
+  compileOnly: boolean;
+  clean: boolean;
 };
 
-async function runInstallCommand(
-  pluginPath: string,
-  rawOptions: InstallCommandOptions
+type RefreshMode = "refresh" | "plan";
+
+type RefreshSelection =
+  | { readonly kind: "single"; readonly pluginPath: string }
+  | { readonly kind: "directory"; readonly directory: string };
+
+async function runRefreshCommand(
+  mode: RefreshMode,
+  positionalPluginPath: string | undefined,
+  rawOptions: RefreshCommandOptions
 ): Promise<void> {
-  const context = await loadInstallCommandContext(pluginPath, rawOptions);
+  const options = normalizeRefreshCommandOptions(rawOptions, mode);
+  assertProjectPathForProjectScope(options.scope, options.project);
+  const selection = resolveRefreshSelection(positionalPluginPath, options);
+
+  if (selection.kind === "directory") {
+    await runRefreshDirectoryCommand(mode, selection.directory, options);
+    return;
+  }
+
+  await runRefreshSingleCommand(mode, selection.pluginPath, options);
+}
+
+async function runRefreshSingleCommand(
+  mode: RefreshMode,
+  pluginPath: string,
+  options: NormalizedRefreshOptions,
+): Promise<void> {
+  const context = await loadRefreshCommandContext(pluginPath, options, mode);
 
   if (context.options.validate !== false) {
     const validation = await collectTargetedValidationResults(context);
@@ -822,48 +775,105 @@ async function runInstallCommand(
     projectPath: context.options.project,
     compileRoot: context.options.compileRoot,
     mcpLifecycle: context.options.mcpLifecycle,
+    clean: context.options.clean,
     dryRun: context.options.dryRun,
   });
   if (!compilePhase.success) {
     exitWith(EXIT_CODES.domainFailure);
   }
 
-  await planOrRunInstallCommand(context, compilePhase.backups);
+  const refreshResult = context.options.compileOnly
+    ? undefined
+    : await runDirectRefreshForPlugin(context, "   ");
+
+  if (context.options.json) {
+    console.log(JSON.stringify(commandJsonEnvelope({
+      mode,
+      plugin: context.manifest.name,
+      compileResults: compilePhase.results,
+      ...(refreshResult ? { refreshResult } : {}),
+    }), null, 2));
+  }
+
+  printRefreshCommandResult({
+    mode,
+    compileResults: compilePhase.results,
+    compileBackups: compilePhase.backups,
+    ...(refreshResult ? { refreshResult } : {}),
+  });
+
+  const failOnUnapplied = !context.options.dryRun;
+  if (failOnUnapplied && refreshResult && !refreshResult.success) {
+    exitWith(EXIT_CODES.domainFailure);
+  }
+  if (
+    failOnUnapplied &&
+    compilePhase.results.some((result) => result.blocked.length > 0 || result.failures.length > 0)
+  ) {
+    exitWith(EXIT_CODES.domainFailure);
+  }
 }
 
-async function loadInstallCommandContext(
+async function loadRefreshCommandContext(
   pluginPath: string,
-  rawOptions: InstallCommandOptions
-): Promise<InstallCommandContext> {
-  const options = normalizeInstallCommandOptions(rawOptions);
-  assertProjectPathForProjectScope(options.scope, options.project);
+  options: NormalizedRefreshOptions,
+  mode: RefreshMode,
+): Promise<RefreshCommandContext> {
   const harnesses = resolveRequestedHarnesses(options);
   const manifest = await readManifest(pluginPath);
 
-  console.log(`\n📦 Installing plugin: ${manifest.name} v${manifest.version}`);
-  printPluginRefreshContext({
-    manifest,
-    harnesses,
-    scope: options.scope,
-    projectPath: options.project,
-  });
+  if (!options.json) {
+    console.log(
+      `\n📦 ${mode === "plan" || options.dryRun ? "Planning" : "Refreshing"} plugin: ${manifest.name} v${manifest.version}`,
+    );
+  }
+  if (!options.json) {
+    printPluginRefreshContext({
+      manifest,
+      harnesses,
+      scope: options.scope,
+      projectPath: options.project,
+    });
+  }
 
   return { pluginPath, manifest, harnesses, options };
 }
 
-function normalizeInstallCommandOptions(
-  options: InstallCommandOptions
-): NormalizedInstallOptions {
+function normalizeRefreshCommandOptions(
+  options: RefreshCommandOptions,
+  mode: RefreshMode,
+): NormalizedRefreshOptions {
   return {
     ...options,
     scope: options.scope ?? "global",
     overwrite: options.overwrite ?? false,
-    dryRun: options.dryRun ?? false,
+    dryRun: mode === "plan" || options.dryRun === true,
+    json: options.json ?? false,
+    compileOnly: options.compileOnly ?? false,
+    clean: options.clean ?? false,
     mcpLifecycle: options.mcpLifecycle ?? "serve",
   };
 }
 
-async function collectTargetedValidationResults(context: InstallCommandContext): Promise<{
+function resolveRefreshSelection(
+  positionalPluginPath: string | undefined,
+  options: NormalizedRefreshOptions,
+): RefreshSelection {
+  const pluginCandidates = [positionalPluginPath, options.plugin]
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  const directoryCandidates = [options.plugins]
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (pluginCandidates.length + directoryCandidates.length !== 1) {
+    throw new Error("Specify exactly one plugin path or --plugins <directory>");
+  }
+  if (directoryCandidates[0]) {
+    return { kind: "directory", directory: directoryCandidates[0] };
+  }
+  return { kind: "single", pluginPath: pluginCandidates[0]! };
+}
+
+async function collectTargetedValidationResults(context: RefreshCommandContext): Promise<{
   skillResults: PluginValidationResult[];
   agentResults: PluginValidationResult[];
 }> {
@@ -884,52 +894,39 @@ async function collectTargetedValidationResults(context: InstallCommandContext):
   };
 }
 
-async function planOrRunInstallCommand(
-  context: InstallCommandContext,
-  compileBackups: string[]
-): Promise<void> {
-  const operations = await planInstallation({
+async function runDirectRefreshForPlugin(
+  context: RefreshCommandContext,
+  indent = "",
+): Promise<RefreshResult> {
+  const result = await refreshPlugin({
     pluginPath: context.pluginPath,
     harnesses: context.harnesses,
     projectPath: context.options.project,
+    prismHome: resolvePrismHome(),
     overwrite: context.options.overwrite,
     dryRun: context.options.dryRun,
   });
 
-  if (context.options.dryRun) {
-    console.log("\n🔍 Dry run - operations that would be performed:\n");
-    printOperations(operations);
-    return;
+  if (!context.options.json) {
+    printRefreshReports(result, indent);
   }
-
-  const result = await install({
-    pluginPath: context.pluginPath,
-    harnesses: context.harnesses,
-    projectPath: context.options.project,
-    overwrite: context.options.overwrite,
-    dryRun: false,
-  });
-
-  printInstallCommandResult(result.operations, result.backups, result.errors, compileBackups);
-  if (result.errors.length > 0) {
-    exitWith(EXIT_CODES.domainFailure);
-  }
-
-  console.log("\n✅ Done!");
+  return result;
 }
 
-function printInstallCommandResult(
-  operations: FileOperation[],
-  backups: string[],
-  errors: Array<{ operation: FileOperation; message: string }>,
-  compileBackups: string[]
-): void {
-  if (operations.length > 0) {
-    console.log("\n📋 Install:\n");
-    printOperations(operations);
+function printRefreshCommandResult(options: {
+  readonly mode: RefreshMode;
+  readonly compileResults: ReadonlyArray<CompileResult>;
+  readonly compileBackups: ReadonlyArray<string>;
+  readonly refreshResult?: RefreshResult;
+}): void {
+  if (options.refreshResult) {
+    printRefreshDiagnostics(options.refreshResult);
   }
 
-  const allBackups = [...compileBackups, ...backups];
+  const allBackups = [
+    ...options.compileBackups,
+    ...(options.refreshResult?.backups ?? []),
+  ];
   if (allBackups.length > 0) {
     console.log("\n💾 Backups created:");
     for (const backup of allBackups) {
@@ -937,19 +934,188 @@ function printInstallCommandResult(
     }
   }
 
-  if (errors.length > 0) {
-    console.log("\n❌ Errors:");
-    for (const error of errors) {
-      console.log(`   ${error.operation.target}: ${error.message}`);
-    }
+  const compileHasUnapplied = options.compileResults.some(
+    (result) => result.blocked.length > 0 || result.failures.length > 0,
+  );
+  if (compileHasUnapplied || (options.refreshResult && !options.refreshResult.success)) {
+    console.log(`\n❌ ${options.mode === "plan" ? "Plan found unapplied targets." : "Refresh finished with unapplied targets."}`);
+    return;
+  }
+
+  if (options.mode === "plan") {
+    console.log("\n✅ Plan completed.");
+  } else if (options.refreshResult?.converged && options.compileResults.every((result) => result.converged)) {
+    console.log("\n✅ Already converged — nothing written.");
+  } else {
+    console.log("\n✅ Done.");
   }
 }
 
-async function requireInstallAllDirectory(expandedDir: string): Promise<void> {
+function printRefreshReports(result: RefreshResult, indent = ""): void {
+  if (result.reports.length === 0) return;
+  console.log(`\n${indent}📋 Refresh plan:\n`);
+  const formatted = formatRefreshRootPlan(result.reports);
+  if (formatted.trim().length > 0) {
+    console.log(indentBlock(formatted, indent));
+  }
+}
+
+function printRefreshDiagnostics(result: RefreshResult): void {
+  for (const warning of result.warnings) {
+    console.log(`\n⚠️  ${warning.harness} ${warning.targetPath}: ${warning.reason}`);
+  }
+  for (const blocked of result.blocked) {
+    console.error(`\n⛔ ${renderPrismError(blocked)}`);
+  }
+  for (const failure of result.failures) {
+    console.error(`\n❌ ${failure.op.kind} ${failure.op.targetPath}: ${failure.message}`);
+  }
+}
+
+function commandJsonEnvelope(options: {
+  readonly mode: RefreshMode;
+  readonly plugin: string;
+  readonly compileResults: ReadonlyArray<CompileResult>;
+  readonly refreshResult?: RefreshResult;
+}): unknown {
+  return {
+    schema: "prism.plan.v1",
+    mode: options.mode,
+    plugin: options.plugin,
+    compile: options.compileResults.map(compileResultJsonEnvelope),
+    ...(options.refreshResult ? { refresh: refreshPlanJsonEnvelope(options.refreshResult) } : {}),
+    success:
+      options.compileResults.every(
+        (result) => result.blocked.length === 0 && result.failures.length === 0,
+      ) && (options.refreshResult?.success ?? true),
+  };
+}
+
+function pluginResultJsonEnvelope(
+  mode: RefreshMode,
+  result: PluginRefreshResult,
+): unknown {
+  return {
+    schema: "prism.plan.plugin.v1",
+    mode,
+    pluginPath: result.pluginPath,
+    plugin: result.name,
+    success: result.success,
+    compile: result.compileResults.map(compileResultJsonEnvelope),
+    refresh: {
+      roots: result.reports.map((report) => ({
+        harness: report.harness,
+        root: report.root,
+        converged: report.converged,
+        counts: report.ops.reduce<Record<string, number>>((acc, op) => {
+          acc[op.kind] = (acc[op.kind] ?? 0) + 1;
+          return acc;
+        }, {}),
+        operations: report.ops.map((op) => ({
+          kind: op.kind,
+          targetPath: op.targetPath,
+          ...("reason" in op ? { reason: op.reason } : {}),
+          ...(op.kind === "blocked" ? { hint: op.hint } : {}),
+        })),
+      })),
+    },
+    errors: result.errors,
+  };
+}
+
+function compileResultJsonEnvelope(result: CompileResult): unknown {
+  return {
+    target: result.target,
+    scope: result.scope,
+    root: result.outputRoot,
+    converged: result.converged,
+    counts: result.operations.reduce<Record<string, number>>((acc, op) => {
+      acc[op.kind] = (acc[op.kind] ?? 0) + 1;
+      return acc;
+    }, {}),
+    operations: result.operations.map((op) => ({
+      kind: op.kind,
+      targetPath: op.targetPath,
+      ...("reason" in op ? { reason: op.reason } : {}),
+      ...(op.kind === "blocked" ? { hint: op.hint } : {}),
+    })),
+    failures: result.failures.map((failure) => ({
+      kind: failure.op.kind,
+      targetPath: failure.op.targetPath,
+      message: failure.message,
+    })),
+    blocked: result.blocked.map((blocked) => ({
+      targetPath: blocked.targetPath,
+      message: blocked.message,
+      hint: blocked.hint,
+    })),
+  };
+}
+
+async function requireRefreshDirectory(expandedDir: string): Promise<void> {
   if (await exists(expandedDir)) return;
 
   console.error(`Directory not found: ${expandedDir}`);
   exitWith(EXIT_CODES.usage);
+}
+
+async function runRefreshDirectoryCommand(
+  mode: RefreshMode,
+  directory: string,
+  options: NormalizedRefreshOptions,
+): Promise<void> {
+  const harnesses = resolveRequestedHarnesses(options);
+  const expandedDir = expandPath(directory);
+
+  await requireRefreshDirectory(expandedDir);
+  const pluginPaths = await discoverPluginPaths(expandedDir);
+  if (!printRefreshDirectoryDiscovery(expandedDir, pluginPaths)) return;
+
+  const { validPlugins, invalidPlugins } = await loadPluginManifests(pluginPaths);
+  if (!options.json) printRefreshDirectoryManifestResults(validPlugins, invalidPlugins);
+
+  const results = await refreshValidPlugins(validPlugins, {
+    harnesses,
+    scope: options.scope,
+    projectPath: options.project,
+    compileRoot: options.compileRoot,
+    mcpLifecycle: options.mcpLifecycle,
+    validate: options.validate,
+    dryRun: options.dryRun,
+    overwrite: options.overwrite,
+    compileOnly: options.compileOnly,
+    clean: options.clean,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      schema: "prism.plan.collection.v1",
+      mode,
+      plugins: results.map((result) => pluginResultJsonEnvelope(mode, result)),
+      invalidPlugins: invalidPlugins.map(({ pluginPath, error }) => ({
+        pluginPath,
+        message: formatManifestLoadError(pluginPath, error),
+      })),
+    }, null, 2));
+  }
+
+  const hasFailures = printRefreshDirectorySummary({
+    pluginPaths,
+    validPlugins,
+    invalidPlugins,
+    results,
+  });
+
+  if (hasFailures) {
+    console.log(`\n⚠️  Some plugins failed validation, compile, or refresh`);
+    exitWith(EXIT_CODES.domainFailure);
+  }
+
+  console.log(
+    mode === "plan"
+      ? "\n✅ All plugin plans completed successfully!"
+      : "\n✅ All plugin refreshes completed successfully!",
+  );
 }
 
 async function discoverPluginPaths(expandedDir: string): Promise<string[]> {
@@ -970,7 +1136,7 @@ async function discoverPluginPaths(expandedDir: string): Promise<string[]> {
   return pluginPaths;
 }
 
-function printInstallAllDiscovery(
+function printRefreshDirectoryDiscovery(
   expandedDir: string,
   pluginPaths: string[]
 ): boolean {
@@ -1003,7 +1169,7 @@ async function loadPluginManifests(pluginPaths: string[]): Promise<{
   return { validPlugins, invalidPlugins };
 }
 
-function printInstallAllManifestResults(
+function printRefreshDirectoryManifestResults(
   validPlugins: LoadedPlugin[],
   invalidPlugins: InvalidPluginManifest[]
 ): void {
@@ -1027,7 +1193,7 @@ function printInstallAllManifestResults(
 
 async function refreshValidPlugins(
   validPlugins: LoadedPlugin[],
-  options: InstallAllRefreshOptions
+  options: DirectoryRefreshOptions
 ): Promise<PluginRefreshResult[]> {
   const results: PluginRefreshResult[] = [];
 
@@ -1040,9 +1206,9 @@ async function refreshValidPlugins(
 
 async function refreshDiscoveredPlugin(
   plugin: LoadedPlugin,
-  options: InstallAllRefreshOptions
+  options: DirectoryRefreshOptions
 ): Promise<PluginRefreshResult> {
-  console.log(`\n📦 Installing plugin: ${plugin.manifest.name} v${plugin.manifest.version}`);
+  console.log(`\n📦 Refreshing plugin: ${plugin.manifest.name} v${plugin.manifest.version}`);
   printPluginRefreshContext({
     manifest: plugin.manifest,
     harnesses: options.harnesses,
@@ -1063,6 +1229,7 @@ async function refreshDiscoveredPlugin(
     projectPath: options.projectPath,
     compileRoot: options.compileRoot,
     mcpLifecycle: options.mcpLifecycle,
+    clean: options.clean,
     dryRun: options.dryRun,
   });
 
@@ -1070,12 +1237,44 @@ async function refreshDiscoveredPlugin(
     return failedPluginRefresh(plugin, compilePhase.failure, compilePhase.backups);
   }
 
-  return planOrRunPluginInstall(plugin, options, compilePhase.backups);
+  if (options.compileOnly) {
+    return successfulPluginRefresh(plugin, [], compilePhase.results, compilePhase.backups);
+  }
+
+  const result = await refreshPlugin({
+    pluginPath: plugin.pluginPath,
+    harnesses: options.harnesses,
+    projectPath: options.projectPath,
+    prismHome: resolvePrismHome(),
+    overwrite: options.overwrite,
+    dryRun: options.dryRun,
+  });
+  printRefreshReports(result, "   ");
+  printRefreshDiagnostics(result);
+  return {
+    pluginPath: plugin.pluginPath,
+    name: plugin.manifest.name,
+    success: result.success,
+    reports: result.reports,
+    compileResults: compilePhase.results,
+    errors: [
+      ...result.blocked.map((blocked) => ({
+        path: blocked.targetPath,
+        headline: blocked.message,
+        hint: blocked.hint,
+      })),
+      ...result.failures.map((failure) => ({
+        path: failure.op.targetPath,
+        headline: `${failure.op.kind} failed: ${failure.message}`,
+      })),
+    ],
+    backups: [...compilePhase.backups, ...result.backups],
+  };
 }
 
 async function validatePluginBeforeRefresh(
   plugin: LoadedPlugin,
-  options: InstallAllRefreshOptions
+  options: DirectoryRefreshOptions
 ): Promise<boolean> {
   if (options.validate === false) return true;
 
@@ -1148,74 +1347,6 @@ function printValidationFailures(
   }
 }
 
-async function planOrRunPluginInstall(
-  plugin: LoadedPlugin,
-  options: InstallAllRefreshOptions,
-  compileBackups: string[]
-): Promise<PluginRefreshResult> {
-  const operations = await planInstallation({
-    pluginPath: plugin.pluginPath,
-    harnesses: options.harnesses,
-    projectPath: options.projectPath,
-    overwrite: options.overwrite,
-    dryRun: options.dryRun,
-  });
-
-  if (options.dryRun) {
-    console.log("\n   🔍 Operations that would be performed:\n");
-    printOperations(operations, "      ");
-    return successfulPluginRefresh(plugin, operations, compileBackups);
-  }
-
-  const result = await install({
-    pluginPath: plugin.pluginPath,
-    harnesses: options.harnesses,
-    projectPath: options.projectPath,
-    overwrite: options.overwrite,
-    dryRun: false,
-  });
-
-  printPluginInstallResult(result.operations, result.backups, result.errors, compileBackups);
-  return {
-    pluginPath: plugin.pluginPath,
-    name: plugin.manifest.name,
-    success: result.success,
-    operations: result.operations,
-    errors: result.errors.map((error) => ({
-      harness: error.operation.harness,
-      path: error.operation.target,
-      headline: error.message,
-    })),
-    backups: [...compileBackups, ...result.backups],
-  };
-}
-
-function printPluginInstallResult(
-  operations: FileOperation[],
-  backups: string[],
-  errors: Array<{ operation: FileOperation; message: string }>,
-  compileBackups: string[]
-): void {
-  if (operations.length > 0) {
-    console.log("\n   📋 Installation results:\n");
-    printOperations(operations, "      ");
-  }
-
-  if (compileBackups.length + backups.length > 0) {
-    console.log("\n   💾 Backups created:");
-    for (const backup of [...compileBackups, ...backups]) {
-      console.log(`      ${backup}`);
-    }
-  }
-
-  if (errors.length > 0) {
-    console.log("\n   ❌ Errors:");
-    for (const error of errors) {
-      console.log(`      ${error.operation.target}: ${error.message}`);
-    }
-  }
-}
-
 function failedPluginRefresh(
   plugin: LoadedPlugin,
   failure: RefreshFailure,
@@ -1225,7 +1356,8 @@ function failedPluginRefresh(
     pluginPath: plugin.pluginPath,
     name: plugin.manifest.name,
     success: false,
-    operations: [],
+    reports: [],
+    compileResults: [],
     errors: [failure],
     backups,
   };
@@ -1233,20 +1365,22 @@ function failedPluginRefresh(
 
 function successfulPluginRefresh(
   plugin: LoadedPlugin,
-  operations: FileOperation[],
+  reports: SyncReport[],
+  compileResults: CompileResult[],
   backups: string[]
 ): PluginRefreshResult {
   return {
     pluginPath: plugin.pluginPath,
     name: plugin.manifest.name,
     success: true,
-    operations,
+    reports,
+    compileResults,
     errors: [],
     backups,
   };
 }
 
-function printInstallAllSummary(options: {
+function printRefreshDirectorySummary(options: {
   pluginPaths: string[];
   validPlugins: LoadedPlugin[];
   invalidPlugins: InvalidPluginManifest[];
@@ -1298,67 +1432,6 @@ function printInvalidManifestSummary(
     console.log(`      • ${getManifestErrorLabel(pluginPath, error)}`);
   }
 }
-
-/**
- * Print operations in a readable format
- */
-function printOperations(operations: FileOperation[], indent = ""): void {
-  const byHarness = new Map<HarnessId, FileOperation[]>();
-
-  for (const op of operations) {
-    const list = byHarness.get(op.harness) || [];
-    list.push(op);
-    byHarness.set(op.harness, list);
-  }
-
-  for (const [harness, ops] of byHarness) {
-    console.log(`${indent}   ${harness}:`);
-    for (const op of ops) {
-      const isUpdate = isRuleSectionUpdate(op);
-      const icon = operationIcon(op, isUpdate);
-      const displayType = operationDisplayType(op, isUpdate);
-      const status = operationStatus(op, isUpdate);
-      console.log(`${indent}      ${icon} ${displayType.padEnd(6)} ${op.artifact}: ${op.target}${status}`);
-    }
-  }
-}
-
-const isRuleSectionUpdate = (op: FileOperation): boolean =>
-  op.type === "append" && op.reason === "Updating existing section";
-
-const operationIcon = (op: FileOperation, isUpdate: boolean): string => {
-  switch (op.type) {
-    case "copy":
-      return "📄";
-    case "append":
-      return isUpdate ? "🔄" : "📝";
-    case "skip":
-      return "⏭️";
-    case "prune":
-      return "🧹";
-    case "drift":
-      return "⚠️";
-    case "merge":
-      return "🔀";
-  }
-};
-
-const operationDisplayType = (op: FileOperation, isUpdate: boolean): string =>
-  isUpdate ? "update" : op.type;
-
-const operationStatus = (op: FileOperation, isUpdate: boolean): string => {
-  if (isUpdate) return ` (${op.reason})`;
-  switch (op.type) {
-    case "skip":
-    case "prune":
-    case "drift":
-      return ` (${op.reason})`;
-    case "copy":
-    case "append":
-    case "merge":
-      return "";
-  }
-};
 
 function resolveRequestedHarnesses(options: {
   all?: boolean;
@@ -1437,14 +1510,26 @@ async function runCompilePhaseForPlugin(options: {
   projectPath?: string;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
+  clean?: boolean;
   dryRun: boolean;
   indent?: string;
 }): Promise<
-  | { success: true; backups: string[] }
-  | { success: false; backups: string[]; failure: RefreshFailure }
+  | { success: true; backups: string[]; results: CompileResult[] }
+  | { success: false; backups: string[]; results: CompileResult[]; failure: RefreshFailure }
 > {
   const indent = options.indent ?? "";
   const compileBackups: string[] = [];
+  const results: CompileResult[] = [];
+
+  if (options.clean && options.harnesses.some((id) => manifestHasCompileTargets(options.manifest, id))) {
+    const cacheDir = getCacheDir(expandPath(options.pluginPath));
+    if (options.dryRun) {
+      console.log(`\n${indent}🧹 Plan — would clear compile cache: ${cacheDir}`);
+    } else {
+      await cleanCache(cacheDir);
+      console.log(`\n${indent}🧹 Cleared compile cache: ${cacheDir}`);
+    }
+  }
 
   for (const harnessId of options.harnesses) {
     if (!manifestHasCompileTargets(options.manifest, harnessId)) continue;
@@ -1474,6 +1559,7 @@ async function runCompilePhaseForPlugin(options: {
       return {
         success: false,
         backups: compileBackups,
+        results,
         failure: {
           harness: harnessId,
           ...(described.path ? { path: described.path } : {}),
@@ -1483,6 +1569,7 @@ async function runCompilePhaseForPlugin(options: {
       };
     }
 
+    results.push(compileExit.value);
     console.log(`\n${indent}🛠  Compile (${harnessId}, ${compileExit.value.scope}):`);
     console.log(`${indent}   Root: ${compileExit.value.outputRoot}`);
     console.log(
@@ -1512,6 +1599,7 @@ async function runCompilePhaseForPlugin(options: {
       return {
         success: false,
         backups: compileBackups,
+        results,
         failure: {
           harness: harnessId,
           path: firstBlocked.targetPath,
@@ -1528,6 +1616,7 @@ async function runCompilePhaseForPlugin(options: {
       return {
         success: false,
         backups: compileBackups,
+        results,
         failure: {
           harness: harnessId,
           path: firstFailure.op.targetPath,
@@ -1537,7 +1626,7 @@ async function runCompilePhaseForPlugin(options: {
     }
   }
 
-  return { success: true, backups: compileBackups };
+  return { success: true, backups: compileBackups, results };
 }
 
 function parseHarnessScope(value: string): HarnessScope {

@@ -127,61 +127,12 @@ const snapshotTree = async (root: string): Promise<ReadonlyArray<readonly [strin
   return snapshot;
 };
 
-const ledgerEntryMap = (value: unknown): Map<string, Record<string, unknown>> | undefined => {
-  if (typeof value !== "string") return undefined;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!isRecord(parsed) || !Array.isArray(parsed.entries)) return undefined;
-    const entries = new Map<string, Record<string, unknown>>();
-    for (const entry of parsed.entries) {
-      if (!isRecord(entry) || typeof entry.id !== "string") continue;
-      entries.set(entry.id, entry);
-    }
-    return entries;
-  } catch {
-    return undefined;
-  }
-};
-
-const changedFields = (
-  left: Record<string, unknown>,
-  right: Record<string, unknown>,
-): string[] => {
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-  return [...keys]
-    .filter((key) => JSON.stringify(left[key]) !== JSON.stringify(right[key]))
-    .sort((a, b) => a.localeCompare(b));
-};
-
-const ledgerDifferenceSummary = (left: unknown, right: unknown): string | undefined => {
-  const leftEntries = ledgerEntryMap(left);
-  const rightEntries = ledgerEntryMap(right);
-  if (!leftEntries || !rightEntries) return undefined;
-
-  const added = [...rightEntries.keys()].filter((id) => !leftEntries.has(id));
-  const removed = [...leftEntries.keys()].filter((id) => !rightEntries.has(id));
-  const changed = [...rightEntries.entries()]
-    .flatMap(([id, entry]) => {
-      const previous = leftEntries.get(id);
-      if (!previous) return [];
-      const fields = changedFields(previous, entry);
-      return fields.length > 0 ? [`${id} (${fields.join(", ")})`] : [];
-    });
-
-  return [
-    added.length > 0 ? `added=${added.slice(0, 3).join(" | ")}` : undefined,
-    removed.length > 0 ? `removed=${removed.slice(0, 3).join(" | ")}` : undefined,
-    changed.length > 0 ? `changed=${changed.slice(0, 3).join(" | ")}` : undefined,
-  ].filter((part): part is string => part !== undefined).join("; ");
-};
-
 const assertEqual = (label: string, left: unknown, right: unknown): void => {
   const leftJson = JSON.stringify(left, null, 2);
   const rightJson = JSON.stringify(right, null, 2);
   if (leftJson !== rightJson) {
-    const summary = label === "Codex ledger" ? ledgerDifferenceSummary(left, right) : undefined;
     throw new Error(
-      `${label} changed across warm install-all pass${summary ? `: ${summary}` : ""}`,
+      `${label} changed across warm refresh pass`,
     );
   }
 };
@@ -192,7 +143,7 @@ const assertWarmOutputHasNoChurn = (stdout: string): void => {
     [/^\s*(?:new|changed)\s+config\b/mu, "new or changed compile config operation"],
     [/^\s*(?:new|changed)\s+plugin\b/mu, "new or changed compile plugin file"],
     [/^\s*(?:new|changed)\s+md\b/mu, "new or changed compile markdown file"],
-    [/^\s*(?:📄|📝|🔄|🧹|🔀|⚠️)/mu, "non-skip install mutation"],
+    [/^\s*(?:create|repair|patch-regions|prune|blocked)\b/mu, "non-skip refresh mutation"],
   ];
 
   for (const [pattern, label] of forbiddenPatterns) {
@@ -201,7 +152,7 @@ const assertWarmOutputHasNoChurn = (stdout: string): void => {
     const lineStart = stdout.lastIndexOf("\n", match.index) + 1;
     const lineEnd = stdout.indexOf("\n", match.index);
     const line = stdout.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
-    throw new Error(`Warm install-all emitted ${label}: ${line}`);
+    throw new Error(`Warm refresh emitted ${label}: ${line}`);
   }
 };
 
@@ -313,14 +264,14 @@ const main = async (): Promise<void> => {
     throw new Error(`Plugin corpus not found: ${args.pluginsRoot}`);
   }
 
-  const tempRootPrefix = ["prism", "install", "all", "idempotency", ""].join("-");
+  const tempRootPrefix = ["prism", "refresh", "idempotency", ""].join("-");
   const tempRoot = await mkdtemp(join(tmpdir(), tempRootPrefix));
   const homeRoot = join(tempRoot, "home");
   const prismHome = join(tempRoot, "prism-home");
   const xdgRoot = join(tempRoot, "xdg");
   const codexRoot = join(homeRoot, ".codex");
   const configPath = join(codexRoot, "config.toml");
-  const ledgerPath = join(prismHome, "state", "codex-cli.ledger.json");
+  const snapshotsRoot = join(prismHome, "state", "roots");
   const backupsRoot = join(prismHome, "backups");
   const streamableMcpPlugins = await streamableCodexPluginPaths(args.pluginsRoot);
   const env = {
@@ -338,7 +289,8 @@ const main = async (): Promise<void> => {
       "bun",
       "run",
       join(repoRoot, "src", "cli.ts"),
-      "install-all",
+      "refresh",
+      "--plugins",
       args.pluginsRoot,
       "--harness",
       "codex-cli",
@@ -347,25 +299,25 @@ const main = async (): Promise<void> => {
       "serve",
     ];
 
-    await run("Cold install-all over plugin corpus", command, { env });
+    await run("Cold refresh over plugin corpus", command, { env });
     await assertCodexConfigHealthy(configPath);
     const firstConfig = await readOptionalText(configPath);
-    const firstLedger = await readOptionalText(ledgerPath);
+    const firstSnapshots = await snapshotTree(snapshotsRoot);
     const firstBackups = await snapshotTree(backupsRoot);
 
-    const warmStdout = await run("Warm install-all over plugin corpus", command, { env });
+    const warmStdout = await run("Warm refresh over plugin corpus", command, { env });
     await assertCodexConfigHealthy(configPath);
     assertWarmOutputHasNoChurn(warmStdout);
     assertEqual("Codex config", firstConfig, await readOptionalText(configPath));
-    assertEqual("Codex ledger", firstLedger, await readOptionalText(ledgerPath));
+    assertEqual("Prism snapshots", firstSnapshots, await snapshotTree(snapshotsRoot));
     assertEqual("Prism backups", firstBackups, await snapshotTree(backupsRoot));
 
     failed = false;
-    console.log("\nInstall-all idempotency gate passed.");
+    console.log("\nRefresh idempotency gate passed.");
   } finally {
     await stopStreamableCodexMcp(streamableMcpPlugins, env);
     if (failed || args.keep) {
-      console.error(`\nInstall-all idempotency workspace preserved: ${tempRoot}`);
+      console.error(`\nRefresh idempotency workspace preserved: ${tempRoot}`);
     } else {
       await rm(tempRoot, { recursive: true, force: true });
     }

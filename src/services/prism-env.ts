@@ -9,8 +9,7 @@
  * structurally unable to touch real state — they provide `PrismHomeTest`.
  *
  * Do not add `resolvePrismHome()` default-argument fallbacks to new modules;
- * that pattern is confined to modules scheduled for deletion (managed-ledger
- * dies in WS4, installer write path in WS5, MCP lifecycle write paths in WS6).
+ * thread this service instead.
  */
 
 import { Context, Effect, Layer } from "effect";

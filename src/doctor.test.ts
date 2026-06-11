@@ -1,0 +1,206 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { doctorExitCode, runDoctor } from "./doctor.js";
+import { EXIT_CODES } from "./exit.js";
+import { computeContentHash } from "./content-hash.js";
+import { commitSnapshot, snapshotPath } from "./state/store.js";
+
+let root: string;
+let originalHome: string | undefined;
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), "prism-doctor-"));
+  originalHome = process.env.HOME;
+  process.env.HOME = join(root, "home");
+});
+
+afterEach(async () => {
+  process.env.HOME = originalHome;
+  await rm(root, { recursive: true, force: true });
+});
+
+const writeText = async (path: string, content: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+};
+
+test("doctor reports invalid Codex TOML and literal bearer tokens", async () => {
+  const configPath = join(process.env.HOME!, ".codex", "config.toml");
+  await writeText(configPath, `[mcp_servers.demo]\nAuthorization = "Bearer secret"\n=\n`);
+
+  const report = await runDoctor({
+    harnesses: ["codex-cli"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: false,
+  });
+
+  expect(report.schema).toBe("prism.doctor.report.v1");
+  expect(report.findings.map((finding) => finding.code)).toContain("config.toml.invalid");
+  expect(report.findings.map((finding) => finding.code)).toContain("config.literal-bearer-token");
+  expect(doctorExitCode(report)).toBe(EXIT_CODES.domainFailure);
+});
+
+test("doctor exit code is success for a clean report", async () => {
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: false,
+  });
+
+  expect(report.findings).toEqual([]);
+  expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
+});
+
+test("doctor --fix returns environment failure when convergence remains blocked", async () => {
+  const pluginRoot = join(root, "blocked-plugin");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "blocked-plugin",
+      version: "0.1.0",
+      targets: { commands: ["opencode"] },
+    }, null, 2)}\n`,
+  );
+  await writeText(join(pluginRoot, "commands", "review.md"), "managed\n");
+  await writeText(
+    join(process.env.HOME!, ".config", "opencode", "commands", "review.md"),
+    "foreign\n",
+  );
+
+  const report = await runDoctor({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: true,
+  });
+
+  expect(report.findings.map((finding) => finding.code)).toContain("sync.blocked");
+  expect(doctorExitCode(report)).toBe(EXIT_CODES.environment);
+});
+
+test("doctor reports snapshot drift region integrity and namespace strays", async () => {
+  const prismHome = join(root, "prism-home");
+  const harnessRoot = join(process.env.HOME!, ".config", "opencode");
+  const ownedPath = join(harnessRoot, "agents", "reviewer.md");
+  const configPath = join(harnessRoot, "AGENTS.md");
+  const marker =
+    "<!-- --- prism:demo.region begin --- -->\nmanaged\n<!-- --- prism:demo.region end --- -->";
+  await writeText(ownedPath, "drifted\n");
+  await writeText(configPath, `${marker}\n\n${marker}\n`);
+  await writeText(join(harnessRoot, "plugins", "prism-generated-stray", "dist", "server.mjs"), "x\n");
+
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "opencode",
+      root: harnessRoot,
+      entries: [
+        {
+          targetPath: ownedPath,
+          contentHash: computeContentHash("managed\n"),
+          mode: "owned",
+          plugin: "demo",
+        },
+        {
+          targetPath: configPath,
+          contentHash: computeContentHash(marker),
+          mode: "region",
+          regionKey: 'marker-v2 {"prefix":"<!--","suffix":" -->","key":"demo.region"}',
+          plugin: "demo",
+        },
+      ],
+    },
+  });
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const codes = report.findings.map((finding) => finding.code);
+  expect(codes).toContain("snapshot.owned-drift");
+  expect(codes).toContain("region.marker-count");
+  expect(codes).toContain("namespace.unowned-prism-path");
+});
+
+test("doctor --fix drops snapshots for dead roots", async () => {
+  const prismHome = join(root, "prism-home");
+  const deadRoot = join(root, "dead-opencode-root");
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "opencode",
+      root: deadRoot,
+      entries: [],
+    },
+  });
+
+  const path = snapshotPath(prismHome, deadRoot);
+  expect(await Bun.file(path).exists()).toBe(true);
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+
+  expect(report.findings.map((finding) => finding.code)).toContain("snapshot.dead-root-dropped");
+  expect(await Bun.file(path).exists()).toBe(false);
+});
+
+test("doctor validates generated harness config references", async () => {
+  const bundlePath = join(root, "bundle", "server.mjs");
+  await writeText(bundlePath, "known_tool\n");
+  await writeText(
+    join(process.env.HOME!, ".codex", "config.toml"),
+    [
+      '["mcp_servers"."prism-generated-demo"]',
+      'command = "bun"',
+      'args = ["/missing/prism/server.mjs"]',
+      'enabled_tools = "not-an-array"',
+      "",
+      '["mcp_servers"."prism-generated-filter"]',
+      'command = "bun"',
+      `args = [${JSON.stringify(bundlePath)}]`,
+      'enabled_tools = ["missing_tool"]',
+      "",
+    ].join("\n"),
+  );
+  await writeText(
+    join(process.env.HOME!, ".config", "opencode", "opencode.json"),
+    `${JSON.stringify({ plugin: ["file:///missing/prism-generated-demo"] }, null, 2)}\n`,
+  );
+  await writeText(
+    join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
+    `${JSON.stringify({ mcpServers: { "prism-generated-demo": { command: "bun", args: ["/missing/server.mjs"] } } }, null, 2)}\n`,
+  );
+  await writeText(
+    join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", "hooks", "hooks.json"),
+    `${JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/missing.mjs"' }] }] } }, null, 2)}\n`,
+  );
+
+  const report = await runDoctor({
+    harnesses: ["codex-cli", "opencode", "claude-code"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: false,
+  });
+
+  const codes = report.findings.map((finding) => finding.code);
+  expect(codes).toContain("config.codex-mcp-bundle-missing");
+  expect(codes).toContain("config.codex-enabled-tools-invalid");
+  expect(codes).toContain("config.enabled-tool-missing-from-bundle");
+  expect(codes).toContain("config.opencode-plugin-missing");
+  expect(codes).toContain("config.claude-mcp-bundle-missing");
+  expect(codes).toContain("config.claude-hook-command-missing");
+});

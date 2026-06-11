@@ -6,17 +6,9 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismOxlintPluginJs } from "./init-templates.js";
-import { computeContentHash } from "./content-hash.js";
-import {
-  managedEntryId,
-  readHarnessLedger,
-  writeHarnessLedger,
-} from "./managed-ledger.js";
 import { generateMcpServerBundle } from "./compile/mcp-bundle.js";
 import { writePrismMcpServerBundle } from "./compile/mcp-runtime-path.js";
 import { bindingFromToolSource } from "./compile/tool-bindings.js";
-import { commitSnapshot } from "./state/store.js";
-import { serializeRegionRef } from "./sync/plan.js";
 
 const tempRoots: string[] = [];
 const cliTestToken = "prism-cli-test-token-with-enough-entropy";
@@ -91,18 +83,14 @@ const getFreePort = (host: string): Promise<number> =>
     });
   });
 
-test("install and compile help use managed backup policy instead of a per-run backup flag", async () => {
-  for (const command of ["install", "install-all", "compile"]) {
+test("refresh and plan help use managed backup policy instead of a per-run backup flag", async () => {
+  for (const command of ["refresh", "plan"]) {
     const result = await runCli([command, "--help"], {});
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("--dry-run");
+    expect(result.stdout).toContain(command === "refresh" ? "--dry-run" : "--json");
     expect(result.stdout).not.toContain("--backup");
     expect(result.stdout).not.toContain(".bak");
-    if (command === "compile") {
-      expect(result.stdout).toContain("'pi'");
-      expect(result.stdout).toContain("'kimi-code'");
-    }
   }
 });
 
@@ -261,7 +249,7 @@ export default defineTool({
   return { pluginRoot, hermesRoot, prismHome };
 };
 
-/** What `prism install` produces: the canonical PRISM_HOME union bundle. */
+/** What `prism refresh` produces: the canonical PRISM_HOME union bundle. */
 const prebuildCliCanonicalBundle = async (
   pluginRoot: string,
   prismHome: string,
@@ -458,20 +446,22 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
   expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
 });
 
-test("compile writes Hermes MCP config to an explicit profile root", async () => {
+test("refresh compile-only writes Hermes MCP config to an explicit profile root", async () => {
   const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
 
   const result = await runCli([
-    "compile",
+    "refresh",
+    "--plugin",
     pluginRoot,
     "--harness",
     "hermes",
-    "--root",
+    "--compile-only",
+    "--compile-root",
     hermesRoot,
   ], { PRISM_HOME: prismHome });
 
   expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain(`Output root: ${hermesRoot}`);
+  expect(result.stdout).toContain(`Root: ${hermesRoot}`);
   const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
   expect(config).toContain("mcp_servers:");
   expect(config).toContain("prism-generated-cli-hermes-tools:");
@@ -483,7 +473,7 @@ test("compile writes Hermes MCP config to an explicit profile root", async () =>
   expect(await pathExists(join(hermesRoot, "prism", "mcp"))).toBe(false);
 });
 
-test("package CLI writes distributable payload without live harness ledger writes", async () => {
+test("package CLI writes distributable payload", async () => {
   const { pluginRoot, outRoot, prismHome } = await createCliPackageFixture();
 
   const result = await runCli([
@@ -508,173 +498,9 @@ test("package CLI writes distributable payload without live harness ledger write
   expect(activation).toContain("UserPromptSubmit");
   expect(activation).toContain("config.toml");
 
-  const ledger = await readHarnessLedger("codex-cli", prismHome);
-  expect(ledger.entries).toEqual([]);
 });
 
-test("install does not force Cursor compile cleanup from old ledger entries", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "cursor-cleanup-plugin");
-  const homeRoot = join(root, "home");
-  const prismHome = join(root, "prism-home");
-  const cursorRoot = join(homeRoot, ".cursor");
-  const configPath = join(cursorRoot, "mcp.json");
-  const serverPath = join(
-    cursorRoot,
-    "mcp",
-    "prism_generated_cursor_cleanup_plugin",
-    "server.mjs",
-  );
-  const serverContent = "console.log('stale Cursor MCP runtime');\n";
-
-  await mkdir(pluginRoot, { recursive: true });
-  await mkdir(join(cursorRoot, "mcp", "prism_generated_cursor_cleanup_plugin"), {
-    recursive: true,
-  });
-  await writeFile(
-    join(pluginRoot, "plugin.json"),
-    JSON.stringify(
-      {
-        name: "cursor-cleanup-plugin",
-        version: "0.1.0",
-        targets: {},
-      },
-      null,
-      2,
-    ),
-  );
-  await writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        mcpServers: {
-          "prism-generated-cursor-cleanup-plugin": {
-            type: "stdio",
-            command: "bun",
-            args: [serverPath],
-          },
-          userServer: { url: "https://example.com/mcp" },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeFile(serverPath, serverContent);
-
-  const configEntryId = managedEntryId({
-    harness: "cursor",
-    scope: "global",
-    root: cursorRoot,
-    pluginName: "cursor-cleanup-plugin",
-    artifact: "compile",
-    targetPath: configPath,
-    kind: "config",
-  });
-  const serverEntryId = managedEntryId({
-    harness: "cursor",
-    scope: "global",
-    root: cursorRoot,
-    pluginName: "cursor-cleanup-plugin",
-    artifact: "compile",
-    targetPath: serverPath,
-    kind: "file",
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("cursor", prismHome)),
-    entries: [
-      {
-        id: configEntryId,
-        pluginName: "cursor-cleanup-plugin",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        artifact: "compile",
-        targetPath: configPath,
-        kind: "config",
-        contentHash: computeContentHash(await readFile(configPath, "utf8")),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: serverEntryId,
-        pluginName: "cursor-cleanup-plugin",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        artifact: "compile",
-        targetPath: serverPath,
-        kind: "file",
-        contentHash: computeContentHash(serverContent),
-        updatedAt: new Date().toISOString(),
-      },
-    ],
-  }, prismHome);
-
-  // The compile phase prunes via snapshot membership: seed the region the
-  // previous compile would have recorded for the mcp.json server entry.
-  await commitSnapshot({
-    prismHome,
-    manifest: {
-      version: 1,
-      harness: "cursor",
-      root: cursorRoot,
-      entries: [{
-        targetPath: configPath,
-        contentHash: "stale",
-        mode: "region",
-        regionKey: serializeRegionRef({
-          kind: "json-key",
-          targetPath: configPath,
-          regionKey: "mcpServers.prism-generated-cursor-cleanup-plugin",
-          jsonPath: ["mcpServers", "prism-generated-cursor-cleanup-plugin"],
-          value: undefined,
-          plugin: "cursor-cleanup-plugin",
-        }),
-        plugin: "cursor-cleanup-plugin",
-      }],
-    },
-  });
-
-  const result = await runCli(
-    [
-      "install",
-      pluginRoot,
-      "--harness",
-      "cursor",
-      "--compile-root",
-      cursorRoot,
-      "--no-validate",
-    ],
-    { HOME: homeRoot, PRISM_HOME: prismHome },
-  );
-
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).not.toContain("Compile (cursor, global)");
-  // Old ledger/snapshot cleanup is WS8 teardown's job. A plugin manifest with
-  // no compile targets must not resurrect compile just because stale ledger
-  // entries exist from the pre-snapshot model.
-  expect(await pathExists(serverPath)).toBe(true);
-  const config = JSON.parse(await readFile(configPath, "utf8")) as {
-    mcpServers?: Record<string, unknown>;
-  };
-  expect(config.mcpServers?.["prism-generated-cursor-cleanup-plugin"]).toEqual({
-    type: "stdio",
-    command: "bun",
-    args: [serverPath],
-  });
-  expect(config.mcpServers?.userServer).toEqual({ url: "https://example.com/mcp" });
-  expect(
-    (await readHarnessLedger("cursor", prismHome)).entries.some(
-      (entry) => entry.id === serverEntryId,
-    ),
-  ).toBe(true);
-});
-
-test("install serves Hermes HTTP MCP by default", async () => {
+test("refresh serves Hermes HTTP MCP by default", async () => {
   const port = await getFreePort("127.0.0.1");
   const tokenEnv = "PRISM_MCP_CLI_INSTALL_GATE_TOKEN";
   const { pluginRoot, hermesRoot } = await createCliMcpFixture({
@@ -684,7 +510,8 @@ test("install serves Hermes HTTP MCP by default", async () => {
   });
   const env = { [tokenEnv]: cliTestToken };
   const common = [
-    "install",
+    "refresh",
+    "--plugin",
     pluginRoot,
     "--harness",
     "hermes",
@@ -713,11 +540,12 @@ test("install serves Hermes HTTP MCP by default", async () => {
   }
 }, 20_000);
 
-test("install-all compiles Hermes child plugins into an explicit profile root", async () => {
+test("refresh --plugins compiles Hermes child plugins into an explicit profile root", async () => {
   const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
 
   const result = await runCli([
-    "install-all",
+    "refresh",
+    "--plugins",
     dirname(pluginRoot),
     "--harness",
     "hermes",
@@ -1026,9 +854,9 @@ test("generated Oxlint rule rejects trait-owned slots and tool input/output repl
   ]);
 });
 
-test("install requires --project when project scope is requested", async () => {
+test("refresh requires --project when project scope is requested", async () => {
   const result = await runCli(
-    ["install", ".", "--harness", "opencode", "--scope", "project"],
+    ["refresh", "--plugin", ".", "--harness", "opencode", "--scope", "project"],
     {}
   );
 
@@ -1036,7 +864,17 @@ test("install requires --project when project scope is requested", async () => {
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
 });
 
-test("install compiles Antigravity rules into a generated plugin bundle", async () => {
+test("doctor returns usage exit code for invalid invocation", async () => {
+  const result = await runCli(
+    ["doctor", "--harness", "opencode", "--scope", "project"],
+    {}
+  );
+
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr).toContain("Project-local scope requires --project <path>");
+});
+
+test("refresh compiles Antigravity rules into a generated plugin bundle", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "antigravity-rules-plugin");
   const homeRoot = join(root, "home");
@@ -1060,7 +898,7 @@ test("install compiles Antigravity rules into a generated plugin bundle", async 
   await writeFile(rulePath, "Always prefer managed Antigravity plugin rules.\n");
 
   const result = await runCli(
-    ["install", pluginRoot, "--harness", "antigravity-cli", "--dry-run"],
+    ["refresh", "--plugin", pluginRoot, "--harness", "antigravity-cli", "--dry-run"],
     { HOME: homeRoot, PRISM_HOME: prismHome },
   );
 
@@ -1080,7 +918,7 @@ test("install compiles Antigravity rules into a generated plugin bundle", async 
   );
 });
 
-test("install CLI stores managed backups under Prism home", async () => {
+test("refresh CLI stores managed backups under Prism home", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "managed-rules-plugin");
   const homeRoot = join(root, "home");
@@ -1105,21 +943,21 @@ test("install CLI stores managed backups under Prism home", async () => {
   await writeFile(rulePath, "First managed rule.\n");
 
   const env = { HOME: homeRoot, PRISM_HOME: prismHome };
-  const first = await runCli(["install", pluginRoot, "--harness", "opencode"], env);
+  const first = await runCli(["refresh", "--plugin", pluginRoot, "--harness", "opencode"], env);
   expect(first.exitCode).toBe(0);
 
   await writeFile(rulePath, "Second managed rule.\n");
-  const second = await runCli(["install", pluginRoot, "--harness", "opencode"], env);
+  const second = await runCli(["refresh", "--plugin", pluginRoot, "--harness", "opencode"], env);
 
   expect(second.exitCode).toBe(0);
   expect(second.stdout).toContain("Backups created");
-  expect(second.stdout).toContain(join(prismHome, "backups", "opencode"));
+  expect(second.stdout).toContain(join(prismHome, "backups"));
   expect(second.stdout).not.toContain(".bak");
   expect(await pathExists(`${opencodeRulesPath}.bak`)).toBe(false);
   expect(await readFile(opencodeRulesPath, "utf8")).toContain("Second managed rule.");
 });
 
-test("install dry-run reports unmanaged target drift reasons", async () => {
+test("refresh dry-run reports unmanaged target blocked reasons", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "managed-command-plugin");
   const homeRoot = join(root, "home");
@@ -1144,22 +982,23 @@ test("install dry-run reports unmanaged target drift reasons", async () => {
   await writeFile(commandTarget, "User-owned review command.\n");
 
   const result = await runCli(
-    ["install", pluginRoot, "--harness", "opencode", "--dry-run"],
+    ["refresh", "--plugin", pluginRoot, "--harness", "opencode", "--dry-run"],
     { HOME: homeRoot, PRISM_HOME: prismHome },
   );
 
   expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("drift");
-  expect(result.stdout).toContain("Target exists but is not owned by Prism");
+  expect(result.stdout).toContain("blocked");
+  expect(result.stdout).toContain("a file Prism has never managed already exists");
 });
 
-test("install dry-run compiles targeted plugin with project scope", async () => {
+test("refresh dry-run compiles targeted plugin with project scope", async () => {
   const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
   const pluginRoot = join(monorepoRoot, "trait-orbit-contracts");
 
   const result = await runCli(
     [
-      "install",
+      "refresh",
+      "--plugin",
       pluginRoot,
       "--harness",
       "opencode",
@@ -1173,17 +1012,17 @@ test("install dry-run compiles targeted plugin with project scope", async () => 
   );
 
   expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("Installing plugin: canonical-compile-fixture");
+  expect(result.stdout).toContain("Planning plugin: canonical-compile-fixture");
   expect(result.stdout).toContain("Matching requested harnesses: opencode");
   expect(result.stdout).toContain("Compile output scope: project");
   expect(result.stdout).toContain("Compile (opencode, project)");
-  expect(result.stdout).toContain("Dry run - operations that would be performed");
+  expect(result.stdout).toContain("Refresh plan");
   expect(
     await pathExists(join(projectRoot, ".opencode", "agents", "builder.md"))
   ).toBe(false);
 });
 
-test("install dry-run compiles Claude command-only plugins into skills-dir plugin bundles", async () => {
+test("refresh dry-run compiles Claude command-only plugins into skills-dir plugin bundles", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "claude-command-plugin");
   const homeRoot = join(root, "home");
@@ -1205,7 +1044,7 @@ test("install dry-run compiles Claude command-only plugins into skills-dir plugi
   await writeFile(join(pluginRoot, "commands", "review.md"), "# Review\n\nReview the change.\n");
 
   const result = await runCli(
-    ["install", pluginRoot, "--harness", "claude-code", "--dry-run"],
+    ["refresh", "--plugin", pluginRoot, "--harness", "claude-code", "--dry-run"],
     { HOME: homeRoot, PRISM_HOME: prismHome },
   );
 
@@ -1227,11 +1066,11 @@ test("install dry-run compiles Claude command-only plugins into skills-dir plugi
   expect(await pathExists(directCommandPath)).toBe(false);
 });
 
-test("install-all requires --project when project scope is requested", async () => {
+test("refresh --plugins requires --project when project scope is requested", async () => {
   const { monorepoRoot, homeRoot } = await createInstallAllFixture();
 
   const result = await runCli(
-    ["install-all", monorepoRoot, "--harness", "opencode", "--scope", "project"],
+    ["refresh", "--plugins", monorepoRoot, "--harness", "opencode", "--scope", "project"],
     { HOME: homeRoot }
   );
 
@@ -1239,12 +1078,13 @@ test("install-all requires --project when project scope is requested", async () 
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
 });
 
-test("install-all compiles discovered child plugins with project scope", async () => {
+test("refresh --plugins compiles discovered child plugins with project scope", async () => {
   const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
 
   const result = await runCli(
     [
-      "install-all",
+      "refresh",
+      "--plugins",
       monorepoRoot,
       "--harness",
       "opencode,claude-code",
@@ -1308,7 +1148,7 @@ test("install-all compiles discovered child plugins with project scope", async (
   ).toBe(false);
 });
 
-test("install-all skips skill validation when skills are not targeted", async () => {
+test("refresh --plugins skips skill validation when skills are not targeted", async () => {
   const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
 
   await mkdir(
@@ -1318,7 +1158,8 @@ test("install-all skips skill validation when skills are not targeted", async ()
 
   const result = await runCli(
     [
-      "install-all",
+      "refresh",
+      "--plugins",
       monorepoRoot,
       "--harness",
       "opencode",

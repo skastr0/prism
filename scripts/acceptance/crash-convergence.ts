@@ -1,9 +1,9 @@
 /**
  * Acceptance gate: crash-convergence (overhaul WS1 regression net).
  *
- * For N=5 random kill points: starts a prism compile against a sandboxed
+ * For N=5 random kill points: starts `prism refresh --compile-only` against a sandboxed
  * harness root + PRISM_HOME, kill -9s the process mid-run, re-runs the same
- * compile to completion, and asserts the harness root is byte-identical
+ * refresh to completion, and asserts the harness root is byte-identical
  * (diff -r) to the output of a clean single run.
  *
  * Failures here are findings about the current pipeline, not bugs in the
@@ -69,11 +69,13 @@ const run = async (
 const compileArgs = (pluginDir: string, rootDir: string): string[] => [
   "bun",
   CLI_PATH,
-  "compile",
+  "refresh",
+  "--plugin",
   pluginDir,
   "--harness",
   HARNESS,
-  "--root",
+  "--compile-only",
+  "--compile-root",
   rootDir,
   "--mcp-lifecycle",
   "none",

@@ -23,7 +23,7 @@
     "verify": "bun run typecheck && bun run build",
     "pack:npm-cli:dry-run": "npm pack --dry-run --workspace packages/npm/prism-darwin-arm64 --workspace packages/npm/prism-darwin-x64 --workspace packages/npm/prism-linux-arm64 --workspace packages/npm/prism-linux-x64 --workspace packages/npm/prism",
     "smoke:npm-cli": "bun run build:npm-cli && bun run pack:npm-cli:dry-run && bun scripts/smoke-npm-cli.ts --skip-build",
-    "check:install-all-idempotency": "bun scripts/check-install-all-idempotency.ts",
+    "check:refresh-idempotency": "bun scripts/check-refresh-idempotency.ts",
     "test:guarded": "bun scripts/test-hygiene-guard.ts run -- bun test",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",

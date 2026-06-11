@@ -4,13 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { backupManagedTarget, managedBackupTargetRoot } from "./managed-backups.js";
 import {
-  emptyHarnessLedger,
-  managedEntryId,
-  readHarnessLedger,
-  upsertLedgerEntries,
-  writeHarnessLedger,
-} from "./managed-ledger.js";
-import {
   defaultPrismConfig,
   prismConfigPath,
   readPrismConfig,
@@ -59,58 +52,6 @@ test("readPrismConfig validates config shape and positive retention", async () =
   );
 
   await expect(readPrismConfig(root)).rejects.toThrow(/positive integer/);
-});
-
-test("harness ledger read and write are schema validated", async () => {
-  const root = await createTempRoot();
-  const ledger = emptyHarnessLedger("opencode");
-  const entryId = managedEntryId({
-    harness: "opencode",
-    scope: "global",
-    root: "/tmp/opencode",
-    pluginName: "demo",
-    artifact: "skill",
-    kind: "file",
-    sourcePath: "skills/demo/SKILL.md",
-    targetPath: "/tmp/opencode/skills/demo/SKILL.md",
-  });
-
-  await writeHarnessLedger(
-    upsertLedgerEntries(ledger, [
-      {
-        id: entryId,
-        pluginName: "demo",
-        pluginVersion: "0.1.0",
-        pluginPath: "/plugins/demo",
-        harness: "opencode",
-        scope: "global",
-        root: "/tmp/opencode",
-        artifact: "skill",
-        sourcePath: "skills/demo/SKILL.md",
-        targetPath: "/tmp/opencode/skills/demo/SKILL.md",
-        kind: "file",
-        contentHash: "abc123",
-        updatedAt: "2026-05-29T00:00:00.000Z",
-      },
-    ]),
-    root,
-  );
-
-  expect(await readHarnessLedger("opencode", root)).toMatchObject({
-    version: 1,
-    harness: "opencode",
-    entries: [{ id: entryId, contentHash: "abc123" }],
-  });
-});
-
-test("readHarnessLedger fails closed on harness mismatch", async () => {
-  const root = await createTempRoot();
-  await writeText(
-    join(root, "state", "opencode.ledger.json"),
-    `${JSON.stringify({ version: 1, harness: "claude-code", entries: [] })}\n`,
-  );
-
-  await expect(readHarnessLedger("opencode", root)).rejects.toThrow(/harness mismatch/);
 });
 
 test("backupManagedTarget stores original filenames under Prism home and rolls retention", async () => {

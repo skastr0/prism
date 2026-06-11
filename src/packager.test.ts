@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { computeContentHash } from "./content-hash.js";
 import { packagePluginForTarget } from "./packager.js";
-import { readHarnessLedger } from "./managed-ledger.js";
 
 const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;
@@ -99,7 +98,7 @@ export default defineHook({
   return pluginRoot;
 };
 
-test("packagePluginForTarget writes package payload and activation manifest without harness ledger writes", async () => {
+test("packagePluginForTarget writes package payload and activation manifest", async () => {
   const root = await createTempRoot();
   const pluginRoot = await createCodexPromptPlugin(root);
 
@@ -120,8 +119,6 @@ test("packagePluginForTarget writes package payload and activation manifest with
   expect(activation).toContain("UserPromptSubmit");
   expect(activation).toContain("config.toml");
 
-  const ledger = await readHarnessLedger("codex-cli");
-  expect(ledger.entries).toEqual([]);
 });
 
 test("packaged Codex prompt hook emits additional context JSON", async () => {

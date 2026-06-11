@@ -19,8 +19,12 @@
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import type { DesiredRegion } from "./desired.js";
 
-const markerLine = (prefix: string, key: string, edge: "begin" | "end"): string =>
-  `${prefix} --- prism:${key} ${edge} ---`;
+const markerLine = (
+  prefix: string,
+  key: string,
+  edge: "begin" | "end",
+  suffix = "",
+): string => `${prefix} --- prism:${key} ${edge} ---${suffix}`;
 
 const escapeRegex = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 
@@ -31,9 +35,9 @@ export interface RegionPatchOutcome {
 
 export const renderMarkerRegion = (region: Extract<DesiredRegion, { kind: "marker" }>): string =>
   [
-    markerLine(region.commentPrefix, region.regionKey, "begin"),
+    markerLine(region.commentPrefix, region.regionKey, "begin", region.commentSuffix),
     region.content.replace(/\n+$/, ""),
-    markerLine(region.commentPrefix, region.regionKey, "end"),
+    markerLine(region.commentPrefix, region.regionKey, "end", region.commentSuffix),
   ].join("\n");
 
 export const applyMarkerRegion = (
@@ -41,8 +45,13 @@ export const applyMarkerRegion = (
   region: Extract<DesiredRegion, { kind: "marker" }>,
 ): RegionPatchOutcome => {
   const rendered = renderMarkerRegion(region);
-  const begin = markerLine(region.commentPrefix, region.regionKey, "begin");
-  const end = markerLine(region.commentPrefix, region.regionKey, "end");
+  const begin = markerLine(
+    region.commentPrefix,
+    region.regionKey,
+    "begin",
+    region.commentSuffix,
+  );
+  const end = markerLine(region.commentPrefix, region.regionKey, "end", region.commentSuffix);
   const fence = new RegExp(`${escapeRegex(begin)}[\\s\\S]*?${escapeRegex(end)}`);
 
   if (fence.test(fileContent)) {
@@ -78,10 +87,19 @@ export const applyMarkerRegion = (
 
 export const removeMarkerRegion = (
   fileContent: string,
-  options: { readonly commentPrefix: string; readonly regionKey: string },
+  options: {
+    readonly commentPrefix: string;
+    readonly commentSuffix?: string;
+    readonly regionKey: string;
+  },
 ): RegionPatchOutcome => {
-  const begin = markerLine(options.commentPrefix, options.regionKey, "begin");
-  const end = markerLine(options.commentPrefix, options.regionKey, "end");
+  const begin = markerLine(
+    options.commentPrefix,
+    options.regionKey,
+    "begin",
+    options.commentSuffix,
+  );
+  const end = markerLine(options.commentPrefix, options.regionKey, "end", options.commentSuffix);
   const fence = new RegExp(`\\n?${escapeRegex(begin)}[\\s\\S]*?${escapeRegex(end)}\\n?`);
   if (!fence.test(fileContent)) return { content: fileContent, changed: false };
   return { content: fileContent.replace(fence, "\n"), changed: true };

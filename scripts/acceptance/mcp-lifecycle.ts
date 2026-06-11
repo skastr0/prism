@@ -145,14 +145,16 @@ const compile = async (
   harness: "hermes" | "codex-cli",
   root: string,
 ): Promise<void> => {
-  await runOk(`compile ${harness}`, [
+  await runOk(`refresh ${harness}`, [
     "bun",
     CLI_PATH,
-    "compile",
+    "refresh",
+    "--plugin",
     pluginRoot,
     "--harness",
     harness,
-    "--root",
+    "--compile-only",
+    "--compile-root",
     root,
   ], { env: { PRISM_HOME: prismHome } });
 };

@@ -251,7 +251,7 @@ export default defineTool({
 
 /**
  * Build the canonical PRISM_HOME union bundle for a hermes http fixture —
- * what `prism install`/compile produces — so `prism mcp serve` can consume it.
+ * what `prism refresh` produces — so `prism mcp serve` can consume it.
  */
 const prebuildHermesCanonicalBundle = async (
   pluginRoot: string,

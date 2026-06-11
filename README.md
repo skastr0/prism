@@ -13,7 +13,7 @@ bun install
 bun run verify
 bun run typecheck
 bun run build
-bun run check:install-all-idempotency
+bun run check:refresh-idempotency
 ```
 
 ## Managed State
@@ -22,21 +22,21 @@ Prism uses `~/.prism` for durable install and compile state. Set `PRISM_HOME` to
 
 - `config.json` controls managed backups, currently `backup.mode` (`always` or `never`) and `backup.retentionPerTarget`.
 - `backups/` stores backups outside harness config directories and does not create sibling `.bak` files.
-- `state/<harness>.ledger.json` tracks Prism-owned outputs so repeated installs can skip unchanged files, fail closed on drift, and prune stale managed files.
+- `state/roots/*.json` tracks Prism-owned outputs per harness root so repeated refreshes can skip unchanged files, fail closed on drift, and prune stale managed files.
 
-`prism install` is the unified refresh path. It compiles first when a plugin has compile targets for the selected harnesses, then reconciles install-phase artifacts; there is no separate sync command.
+`prism refresh` is the unified convergence path. It compiles first when a plugin has compile targets for the selected harnesses, then reconciles file-router artifacts through the same sync engine. `prism plan` previews the same work without writing, and `prism doctor` reports config and refresh-plan problems.
 
 For corpus-level Codex CLI idempotency, run:
 
 ```bash
-bun run check:install-all-idempotency
+bun run check:refresh-idempotency
 ```
 
-The gate runs `install-all ../prism-plugins --harness codex-cli` twice in
+The gate runs `refresh --plugins ../prism-plugins --harness codex-cli` twice in
 isolated `HOME`, `PRISM_HOME`, and MCP runtime roots. Streamable HTTP MCP
 plugins are served on temporary loopback ports and stopped before cleanup. The
 gate fails on warm-run stale prunes, config churn, duplicate MCP tables, orphan
-hook blocks, ledger churn, or backup churn.
+hook blocks, snapshot churn, or backup churn.
 
 ## Lowerer Capabilities
 

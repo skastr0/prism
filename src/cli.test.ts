@@ -860,7 +860,7 @@ test("refresh requires --project when project scope is requested", async () => {
     {}
   );
 
-  expect(result.exitCode).toBe(1);
+  expect(result.exitCode).toBe(2);
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
 });
 
@@ -872,6 +872,16 @@ test("doctor returns usage exit code for invalid invocation", async () => {
 
   expect(result.exitCode).toBe(2);
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
+});
+
+test("commands return usage exit code for invalid scope values", async () => {
+  const result = await runCli(
+    ["plan", "--plugin", ".", "--harness", "opencode", "--scope", "banana"],
+    {},
+  );
+
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr).toContain("Invalid scope 'banana'");
 });
 
 test("refresh compiles Antigravity rules into a generated plugin bundle", async () => {
@@ -1022,6 +1032,44 @@ test("refresh dry-run compiles targeted plugin with project scope", async () => 
   ).toBe(false);
 });
 
+test("plan --json prints a parseable machine-readable envelope", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "json-plan-plugin");
+  const projectRoot = join(root, "project-root");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+
+  await createCanonicalCompileFixture({
+    pluginRoot,
+    projectRoot,
+    withCanonicalToolBindings: false,
+  });
+
+  const result = await runCli(
+    [
+      "plan",
+      "--plugin",
+      pluginRoot,
+      "--harness",
+      "opencode",
+      "--scope",
+      "project",
+      "--project",
+      projectRoot,
+      "--json",
+    ],
+    { HOME: homeRoot, PRISM_HOME: prismHome },
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  const parsed = JSON.parse(result.stdout) as JsonObject;
+  expect(parsed.schema).toBe("prism.plan.v1");
+  expect(parsed.mode).toBe("plan");
+  expect(result.stdout).not.toContain("Compile (");
+  expect(result.stdout).not.toContain("Plan completed");
+});
+
 test("refresh dry-run compiles Claude command-only plugins into skills-dir plugin bundles", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "claude-command-plugin");
@@ -1074,7 +1122,7 @@ test("refresh --plugins requires --project when project scope is requested", asy
     { HOME: homeRoot }
   );
 
-  expect(result.exitCode).toBe(1);
+  expect(result.exitCode).toBe(2);
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
 });
 

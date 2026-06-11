@@ -54,8 +54,7 @@ This keeps Prism's model unified:
 - scope remains `global` unless Prism is intentionally writing a project-local
   harness root
 - the selected profile home is just the harness root override
-- `--mcp-root` remains the explicit split when the generated HTTP runtime should
-  live outside the profile root
+- `PRISM_HOME` remains the explicit runtime root for generated MCP bundles
 
 No new install/sync fork, source-language target family, or profile-only
 artifact namespace is introduced.
@@ -66,12 +65,13 @@ For a selected profile root `<profile-root>`, Hermes lowering writes:
 
 - targeted skills to `<profile-root>/skills/`
 - generated orbit skills to `<profile-root>/skills/<orbit>/SKILL.md`
-- stdio MCP bundles to `<profile-root>/prism/mcp/prism_generated_<plugin>/`
-- profile-local MCP config into `<profile-root>/config.yaml#mcp_servers`
+- generated MCP bundles to `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs`
+- profile-local MCP config into `<profile-root>/config.yaml#mcp_servers`,
+  pointing at the canonical bundle
 
 When `plugin.json -> runtime.mcp.hermes.transport` is Streamable HTTP, Prism can
 write the config entry into the profile root while serving the generated HTTP
-runtime from a separate runtime root:
+runtime from the Prism-managed runtime root:
 
 ```bash
 prism refresh --plugin ./my-plugin \

@@ -33,7 +33,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
-Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated Bun MCP stdio server under `~/.hermes/prism/mcp/` and Prism patches `~/.hermes/config.yaml -> mcp_servers`. Hermes profile-local MCP is expressed by compiling the normal `hermes` target against a profile home such as `~/.hermes/profiles/coder` with `--root` / `--compile-root`; `--mcp-root` remains the explicit split for shared HTTP runtimes. Prism does not lower Hermes rules, commands, custom agents, SOUL/personality files, runtime delegation, or native Python plugins.
+Hermes first-party support is skills plus generated MCP tools. Shared skill files plus matching `harness/hermes/skills/...` overlay files install into `~/.hermes/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into Prism's canonical generated MCP bundle under `<PRISM_HOME>/runtime/mcp/<source-plugin>/server.mjs`, and Prism patches `~/.hermes/config.yaml -> mcp_servers` to reference that bundle. Hermes profile-local MCP is expressed by compiling the normal `hermes` target against a profile home such as `~/.hermes/profiles/coder` with `--root` / `--compile-root`. Prism does not lower Hermes rules, commands, custom agents, SOUL/personality files, runtime delegation, or native Python plugins.
 
 Claude Code is part of the `coding-harness` preset with compile-phase skills-directory plugin support. Prism emits one generated plugin under `<claude-root>/skills/prism-generated-<source-plugin>/` with `.claude-plugin/plugin.json` plus root-level `commands/`, `agents/`, `skills/`, `hooks/`, and `.mcp.json` components. This is Prism's canonical generated-local Claude surface: it uses Claude's documented in-place skills-directory plugin autoload path instead of writing marketplace cache internals. Plugin skills and commands are namespaced by the generated plugin name, so Prism does not write direct `~/.claude/commands/` files for command artifacts. Skills-only plugins may still install shared skills directly into `~/.claude/skills/`; when a plugin also targets Claude compile surfaces, targeted skills are bundled into the generated plugin to avoid double-loading Prism-owned skill files.
 
@@ -47,7 +47,7 @@ Kimi Code is part of the `coding-harness` preset with compile-phase generated pl
 
 Amp Code is part of the `coding-harness` preset with compile-phase native TypeScript plugin support. Prism emits one generated plugin under `.amp/plugins/prism-generated-<source-plugin>.ts` for project scope or `<amp-root>/plugins/prism-generated-<source-plugin>.ts` for global/system scope, lowers markdown commands with Amp's `registerCommand` API by appending the command prompt to the active thread, registers canonical tools with Amp's `registerTool` API, and lowers supported Prism hooks through Amp's `amp.on(...)` plugin events. Prism maps `tool.before -> tool.call`, `tool.after -> tool.result`, and `session.start -> session.start`; `session.end` fails closed because Amp does not expose a native session-end event. Compiled agents still lower as generated role skills rather than experimental custom Amp agent modes.
 
-Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts lower into a generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json` and `commands/` component discovery. Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into a generated MCP server and Prism patches one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry in `~/.cursor/mcp.json` globally or `.cursor/mcp.json` for project scope. Stdio mode writes the server under `<cursor-root>/mcp/`; Streamable HTTP mode writes the shared Prism MCP runtime under `<mcp-runtime-root>/prism/mcp/` and uses Cursor's `url` plus `headers` MCP shape. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
+Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts lower into a generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json` and `commands/` component discovery. Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into Prism's canonical generated MCP bundle under `<PRISM_HOME>/runtime/mcp/<source-plugin>/server.mjs`, and Prism patches one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry in `~/.cursor/mcp.json` globally or `.cursor/mcp.json` for project scope. Stdio mode references the canonical bundle with `bun <server.mjs>`; Streamable HTTP mode uses Cursor's `url` plus `headers` MCP shape. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
 
 Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
@@ -528,18 +528,8 @@ The generated layout is:
 
 ```text
 prism-generated-<source-plugin>/
-├── package.json
-└── src/
-    ├── server.ts
-    ├── runtime/
-    │   └── schema-bridge.ts
-    ├── adapters/
-    │   └── <source-plugin>/<name>.adapter.ts
-    └── plugins/
-        └── <source-plugin>/
-            ├── contracts/*.contract.ts
-            ├── schemas/*.ts
-            └── tools/*.tool.ts
+└── dist/
+    └── server.mjs
 ```
 
 Synthetic tool names are scoped by source plugin + agent: `<source-plugin>_<agent-name>_<logical-tool-name>`.
@@ -655,7 +645,7 @@ prism plan ./my-plugin --harness claude-code
 
 - Writes targeted plugin skills into `<hermes-root>/skills/<skill-name>/...`
 - Writes concrete orbit instances into `<hermes-root>/skills/<orbit-name>/SKILL.md`
-- Emits canonical `tools/*.tool.ts` as a generated MCP stdio server at `<hermes-root>/prism/mcp/prism_generated_<source-plugin>/server.mjs`, or as a Prism-managed Streamable HTTP runtime when configured
+- Emits canonical `tools/*.tool.ts` as Prism's canonical generated MCP bundle at `<PRISM_HOME>/runtime/mcp/<source-plugin>/server.mjs`
 - Patches `<hermes-root>/config.yaml` with a compiler-owned `mcp_servers.prism-generated-<source-plugin>` entry using `bun <server.mjs>` for stdio or a managed loopback `url` for Streamable HTTP; omitted HTTP ports are selected before config write
 - A Hermes profile is treated as a harness root: use `--compile-root ~/.hermes/profiles/<name>` for `refresh` or `plan`
 - Fails closed for compiled agents and hooks; SOUL/personality lowering, runtime delegation, and native Hermes Python plugins are intentionally out of scope

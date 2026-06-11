@@ -3,7 +3,7 @@
  * prism CLI - Unified plugin distribution for AI coding harnesses
  */
 
-import { Command, InvalidArgumentError } from "commander";
+import { Command, CommanderError, InvalidArgumentError } from "commander";
 import { Effect } from "effect";
 import {
   getAllHarnessIds,
@@ -26,7 +26,7 @@ import {
   renderPrismCause,
   renderPrismError,
 } from "./errors.js";
-import { EXIT_CODES, exitWith } from "./exit.js";
+import { EXIT_CODES, exitWith, type ExitCode } from "./exit.js";
 import { exists, expandPath } from "./fs.js";
 import { HARNESS_SCOPES } from "./types.js";
 import type {
@@ -84,6 +84,10 @@ program
   .description("Unified plugin distribution for AI coding harnesses")
   .version(prismVersion);
 
+class CliUsageError extends Error {
+  override readonly name = "CliUsageError";
+}
+
 // Refresh command
 program
   .command("refresh [plugin-path]")
@@ -116,7 +120,7 @@ program
       await runRefreshCommand("refresh", pluginPath, options);
     } catch (error) {
       printCliError(error, "Error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -152,7 +156,7 @@ program
       await runRefreshCommand("plan", pluginPath, options);
     } catch (error) {
       printCliError(error, "Error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -258,7 +262,7 @@ program
       console.log(options.dryRun ? "\n🔍 Dry run — no writes performed." : "\n✅ Done.");
     } catch (error) {
       printCliError(error, "Package error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -298,7 +302,7 @@ mcpCommand
       console.log(formatMcpServeResult(result));
     } catch (error) {
       printCliError(error, "MCP serve error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -346,7 +350,7 @@ mcpCommand
       }
     } catch (error) {
       printCliError(error, "MCP status error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -376,7 +380,7 @@ mcpCommand
       console.log(formatMcpStopResult(result));
     } catch (error) {
       printCliError(error, "MCP stop error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -410,7 +414,7 @@ mcpCommand
       console.log(formatMcpServeResult(result));
     } catch (error) {
       printCliError(error, "MCP restart error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -440,7 +444,7 @@ mcpCommand
       console.log(formatMcpRotateTokenResult(result));
     } catch (error) {
       printCliError(error, "MCP rotate-token error");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -478,7 +482,7 @@ program
       if (code !== EXIT_CODES.success) exitWith(code);
     } catch (error) {
       printCliError(error, "Doctor error");
-      exitWith(EXIT_CODES.usage);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -720,6 +724,7 @@ type DirectoryRefreshOptions = {
   overwrite: boolean;
   compileOnly: boolean;
   clean: boolean;
+  json: boolean;
 };
 
 type RefreshMode = "refresh" | "plan";
@@ -754,15 +759,16 @@ async function runRefreshSingleCommand(
 
   if (context.options.validate !== false) {
     const validation = await collectTargetedValidationResults(context);
-    if (
-      !printPluginValidationResult(validation.skillResults, validation.agentResults, {
+    const valid = context.options.json
+      ? pluginValidationResultIsValid(validation.skillResults, validation.agentResults)
+      : printPluginValidationResult(validation.skillResults, validation.agentResults, {
         header: "\n❌ Plugin validation failed:\n",
         labelIndent: "   ",
         itemIndent: "      ",
         errorIndent: "         ",
-      })
-    ) {
-      console.log("\nUse --no-validate to skip validation.");
+      });
+    if (!valid) {
+      if (!context.options.json) console.log("\nUse --no-validate to skip validation.");
       exitWith(EXIT_CODES.domainFailure);
     }
   }
@@ -777,6 +783,7 @@ async function runRefreshSingleCommand(
     mcpLifecycle: context.options.mcpLifecycle,
     clean: context.options.clean,
     dryRun: context.options.dryRun,
+    quiet: context.options.json,
   });
   if (!compilePhase.success) {
     exitWith(EXIT_CODES.domainFailure);
@@ -793,14 +800,14 @@ async function runRefreshSingleCommand(
       compileResults: compilePhase.results,
       ...(refreshResult ? { refreshResult } : {}),
     }), null, 2));
+  } else {
+    printRefreshCommandResult({
+      mode,
+      compileResults: compilePhase.results,
+      compileBackups: compilePhase.backups,
+      ...(refreshResult ? { refreshResult } : {}),
+    });
   }
-
-  printRefreshCommandResult({
-    mode,
-    compileResults: compilePhase.results,
-    compileBackups: compilePhase.backups,
-    ...(refreshResult ? { refreshResult } : {}),
-  });
 
   const failOnUnapplied = !context.options.dryRun;
   if (failOnUnapplied && refreshResult && !refreshResult.success) {
@@ -1069,7 +1076,20 @@ async function runRefreshDirectoryCommand(
 
   await requireRefreshDirectory(expandedDir);
   const pluginPaths = await discoverPluginPaths(expandedDir);
-  if (!printRefreshDirectoryDiscovery(expandedDir, pluginPaths)) return;
+  if (pluginPaths.length === 0) {
+    if (options.json) {
+      console.log(JSON.stringify({
+        schema: "prism.plan.collection.v1",
+        mode,
+        plugins: [],
+        invalidPlugins: [],
+      }, null, 2));
+    } else {
+      printRefreshDirectoryDiscovery(expandedDir, pluginPaths);
+    }
+    return;
+  }
+  if (!options.json) printRefreshDirectoryDiscovery(expandedDir, pluginPaths);
 
   const { validPlugins, invalidPlugins } = await loadPluginManifests(pluginPaths);
   if (!options.json) printRefreshDirectoryManifestResults(validPlugins, invalidPlugins);
@@ -1085,6 +1105,7 @@ async function runRefreshDirectoryCommand(
     overwrite: options.overwrite,
     compileOnly: options.compileOnly,
     clean: options.clean,
+    json: options.json,
   });
 
   if (options.json) {
@@ -1097,6 +1118,10 @@ async function runRefreshDirectoryCommand(
         message: formatManifestLoadError(pluginPath, error),
       })),
     }, null, 2));
+    if (results.some((result) => !result.success) || invalidPlugins.length > 0) {
+      exitWith(EXIT_CODES.domainFailure);
+    }
+    return;
   }
 
   const hasFailures = printRefreshDirectorySummary({
@@ -1208,14 +1233,16 @@ async function refreshDiscoveredPlugin(
   plugin: LoadedPlugin,
   options: DirectoryRefreshOptions
 ): Promise<PluginRefreshResult> {
-  console.log(`\n📦 Refreshing plugin: ${plugin.manifest.name} v${plugin.manifest.version}`);
-  printPluginRefreshContext({
-    manifest: plugin.manifest,
-    harnesses: options.harnesses,
-    scope: options.scope,
-    projectPath: options.projectPath,
-    indent: "   ",
-  });
+  if (!options.json) {
+    console.log(`\n📦 Refreshing plugin: ${plugin.manifest.name} v${plugin.manifest.version}`);
+    printPluginRefreshContext({
+      manifest: plugin.manifest,
+      harnesses: options.harnesses,
+      scope: options.scope,
+      projectPath: options.projectPath,
+      indent: "   ",
+    });
+  }
 
   if (!(await validatePluginBeforeRefresh(plugin, options))) {
     return failedPluginRefresh(plugin, { headline: "Validation failed" }, []);
@@ -1231,6 +1258,7 @@ async function refreshDiscoveredPlugin(
     mcpLifecycle: options.mcpLifecycle,
     clean: options.clean,
     dryRun: options.dryRun,
+    quiet: options.json,
   });
 
   if (!compilePhase.success) {
@@ -1249,8 +1277,10 @@ async function refreshDiscoveredPlugin(
     overwrite: options.overwrite,
     dryRun: options.dryRun,
   });
-  printRefreshReports(result, "   ");
-  printRefreshDiagnostics(result);
+  if (!options.json) {
+    printRefreshReports(result, "   ");
+    printRefreshDiagnostics(result);
+  }
   return {
     pluginPath: plugin.pluginPath,
     name: plugin.manifest.name,
@@ -1291,7 +1321,16 @@ async function validatePluginBeforeRefresh(
     ? await validatePluginAgents(plugin.pluginPath)
     : [];
 
+  if (options.json) return pluginValidationResultIsValid(skillResults, agentResults);
   return printPluginValidationResult(skillResults, agentResults);
+}
+
+function pluginValidationResultIsValid(
+  skillResults: PluginValidationResult[],
+  agentResults: PluginValidationResult[],
+): boolean {
+  return skillResults.every((result) => result.valid) &&
+    agentResults.every((result) => result.valid);
 }
 
 function printPluginValidationResult(
@@ -1502,6 +1541,77 @@ function printPluginRefreshContext(options: {
   console.log();
 }
 
+type CompilePhaseOutcome =
+  | { success: true; backups: string[]; results: CompileResult[] }
+  | { success: false; backups: string[]; results: CompileResult[]; failure: RefreshFailure };
+
+type DescribedPrismCause = ReturnType<typeof describePrismCause>;
+type CompileBlocked = CompileResult["blocked"][number];
+type CompileApplyFailure = CompileResult["failures"][number];
+
+function refreshFailureFromCause(harness: HarnessId, described: DescribedPrismCause): RefreshFailure {
+  return {
+    harness,
+    ...(described.path ? { path: described.path } : {}),
+    headline: described.headline,
+    ...(described.hint ? { hint: described.hint } : {}),
+  };
+}
+
+function refreshFailureFromBlocked(harness: HarnessId, blocked: CompileBlocked): RefreshFailure {
+  return {
+    harness,
+    path: blocked.targetPath,
+    headline: blocked.message,
+    hint: blocked.hint,
+  };
+}
+
+function refreshFailureFromApplyFailure(
+  harness: HarnessId,
+  failure: CompileApplyFailure,
+): RefreshFailure {
+  return {
+    harness,
+    path: failure.op.targetPath,
+    headline: `${failure.op.kind} failed: ${failure.message}`,
+  };
+}
+
+function printCompileCause(harness: HarnessId, described: DescribedPrismCause, indent: string): void {
+  console.log(`\n${indent}❌ Compile failed for ${harness}: ${described.headline}`);
+  for (const detail of described.detail ?? []) {
+    console.log(`${indent}   ${detail}`);
+  }
+  if (described.hint) {
+    console.log(`${indent}   hint: ${described.hint}`);
+  }
+}
+
+function printCompileResult(result: CompileResult, harness: HarnessId, indent: string): void {
+  console.log(`\n${indent}🛠  Compile (${harness}, ${result.scope}):`);
+  console.log(`${indent}   Root: ${result.outputRoot}`);
+  console.log(`${indent}   Built: ${result.built.length > 0 ? result.built.join(", ") : "(none)"}`);
+  console.log(
+    `${indent}   From cache: ${result.fromCache.length > 0 ? result.fromCache.join(", ") : "(none)"}`
+  );
+  if (result.lockfilePath) {
+    console.log(`${indent}   Lockfile: ${result.lockfilePath}`);
+  }
+  const operationText = formatOperations(result.operations);
+  if (operationText.trim().length > 0) {
+    console.log(indentBlock(operationText, indent.length > 0 ? `${indent}   ` : ""));
+  }
+}
+
+function compilePhaseFailure(
+  backups: string[],
+  results: CompileResult[],
+  failure: RefreshFailure,
+): CompilePhaseOutcome {
+  return { success: false, backups, results, failure };
+}
+
 async function runCompilePhaseForPlugin(options: {
   pluginPath: string;
   manifest: PluginManifest;
@@ -1513,10 +1623,8 @@ async function runCompilePhaseForPlugin(options: {
   clean?: boolean;
   dryRun: boolean;
   indent?: string;
-}): Promise<
-  | { success: true; backups: string[]; results: CompileResult[] }
-  | { success: false; backups: string[]; results: CompileResult[]; failure: RefreshFailure }
-> {
+  quiet?: boolean;
+}): Promise<CompilePhaseOutcome> {
   const indent = options.indent ?? "";
   const compileBackups: string[] = [];
   const results: CompileResult[] = [];
@@ -1524,10 +1632,10 @@ async function runCompilePhaseForPlugin(options: {
   if (options.clean && options.harnesses.some((id) => manifestHasCompileTargets(options.manifest, id))) {
     const cacheDir = getCacheDir(expandPath(options.pluginPath));
     if (options.dryRun) {
-      console.log(`\n${indent}🧹 Plan — would clear compile cache: ${cacheDir}`);
+      if (!options.quiet) console.log(`\n${indent}🧹 Plan — would clear compile cache: ${cacheDir}`);
     } else {
       await cleanCache(cacheDir);
-      console.log(`\n${indent}🧹 Cleared compile cache: ${cacheDir}`);
+      if (!options.quiet) console.log(`\n${indent}🧹 Cleared compile cache: ${cacheDir}`);
     }
   }
 
@@ -1549,80 +1657,41 @@ async function runCompilePhaseForPlugin(options: {
 
     if (compileExit._tag === "Failure") {
       const described = describePrismCause(compileExit.cause);
-      console.log(`\n${indent}❌ Compile failed for ${harnessId}: ${described.headline}`);
-      for (const detail of described.detail ?? []) {
-        console.log(`${indent}   ${detail}`);
-      }
-      if (described.hint) {
-        console.log(`${indent}   hint: ${described.hint}`);
-      }
-      return {
-        success: false,
-        backups: compileBackups,
+      if (!options.quiet) printCompileCause(harnessId, described, indent);
+      return compilePhaseFailure(
+        compileBackups,
         results,
-        failure: {
-          harness: harnessId,
-          ...(described.path ? { path: described.path } : {}),
-          headline: described.headline,
-          ...(described.hint ? { hint: described.hint } : {}),
-        },
-      };
+        refreshFailureFromCause(harnessId, described),
+      );
     }
 
     results.push(compileExit.value);
-    console.log(`\n${indent}🛠  Compile (${harnessId}, ${compileExit.value.scope}):`);
-    console.log(`${indent}   Root: ${compileExit.value.outputRoot}`);
-    console.log(
-      `${indent}   Built: ${
-        compileExit.value.built.length > 0 ? compileExit.value.built.join(", ") : "(none)"
-      }`
-    );
-    console.log(
-      `${indent}   From cache: ${
-        compileExit.value.fromCache.length > 0
-          ? compileExit.value.fromCache.join(", ")
-          : "(none)"
-      }`
-    );
-    if (compileExit.value.lockfilePath) {
-      console.log(`${indent}   Lockfile: ${compileExit.value.lockfilePath}`);
-    }
-    const operationText = formatOperations(compileExit.value.operations);
-    if (operationText.trim().length > 0) {
-      console.log(indentBlock(operationText, indent.length > 0 ? `${indent}   ` : ""));
-    }
+    if (!options.quiet) printCompileResult(compileExit.value, harnessId, indent);
     compileBackups.push(...compileExit.value.backups);
 
     const firstBlocked = compileExit.value.blocked[0];
     if (firstBlocked) {
-      console.log(`\n${indent}⛔ ${indentBlock(renderPrismError(firstBlocked), `${indent}   `).trimStart()}`);
-      return {
-        success: false,
-        backups: compileBackups,
+      if (!options.quiet) {
+        console.log(`\n${indent}⛔ ${indentBlock(renderPrismError(firstBlocked), `${indent}   `).trimStart()}`);
+      }
+      return compilePhaseFailure(
+        compileBackups,
         results,
-        failure: {
-          harness: harnessId,
-          path: firstBlocked.targetPath,
-          headline: firstBlocked.message,
-          hint: firstBlocked.hint,
-        },
-      };
+        refreshFailureFromBlocked(harnessId, firstBlocked),
+      );
     }
     const firstFailure = compileExit.value.failures[0];
     if (firstFailure) {
-      console.log(
-        `\n${indent}❌ ${firstFailure.op.kind} ${firstFailure.op.targetPath}: ${firstFailure.message}`,
-      );
-      return {
-        success: false,
-        backups: compileBackups,
+      if (!options.quiet) {
+        console.log(
+          `\n${indent}❌ ${firstFailure.op.kind} ${firstFailure.op.targetPath}: ${firstFailure.message}`,
+        );
+      }
+      return compilePhaseFailure(
+        compileBackups,
         results,
-        failure: {
-          harness: harnessId,
-          path: firstFailure.op.targetPath,
-          headline: `${firstFailure.op.kind} failed: ${firstFailure.message}`,
-        },
-      };
+        refreshFailureFromApplyFailure(harnessId, firstFailure),
+      );
     }
   }
 
@@ -1666,7 +1735,7 @@ function assertProjectPathForProjectScope(
   projectPath?: string
 ): void {
   if (scope === "project" && !projectPath) {
-    throw new Error("Project-local scope requires --project <path>");
+    throw new CliUsageError("Project-local scope requires --project <path>");
   }
 }
 
@@ -1720,4 +1789,29 @@ function printCliError(error: unknown, fallbackLabel: string): void {
   console.error(`\n❌ ${fallbackLabel}: ${error instanceof Error ? error.message : error}`);
 }
 
-program.parse();
+function exitCodeForCliError(error: unknown, fallback: ExitCode): ExitCode {
+  if (
+    error instanceof CliUsageError ||
+    error instanceof InvalidArgumentError ||
+    error instanceof CommanderError
+  ) {
+    return EXIT_CODES.usage;
+  }
+  return fallback;
+}
+
+function installExitOverride(command: Command): void {
+  command.exitOverride();
+  for (const child of command.commands) installExitOverride(child);
+}
+
+installExitOverride(program);
+try {
+  await program.parseAsync();
+} catch (error) {
+  if (error instanceof CommanderError) {
+    exitWith(error.exitCode === 0 ? EXIT_CODES.success : EXIT_CODES.usage);
+  }
+  printCliError(error, "Error");
+  exitWith(EXIT_CODES.domainFailure);
+}

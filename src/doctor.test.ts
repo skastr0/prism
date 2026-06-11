@@ -6,6 +6,7 @@ import { doctorExitCode, runDoctor } from "./doctor.js";
 import { EXIT_CODES } from "./exit.js";
 import { computeContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
+import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 
 let root: string;
 let originalHome: string | undefined;
@@ -81,6 +82,73 @@ test("doctor --fix returns environment failure when convergence remains blocked"
 
   expect(report.findings.map((finding) => finding.code)).toContain("sync.blocked");
   expect(doctorExitCode(report)).toBe(EXIT_CODES.environment);
+});
+
+test("doctor --fix exits success after converging direct refresh outputs", async () => {
+  const pluginRoot = join(root, "direct-plugin");
+  const commandPath = join(process.env.HOME!, ".config", "opencode", "commands", "review.md");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "direct-plugin",
+      version: "0.1.0",
+      targets: { commands: ["opencode"] },
+    }, null, 2)}\n`,
+  );
+  await writeText(join(pluginRoot, "commands", "review.md"), "managed\n");
+
+  const report = await runDoctor({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: true,
+  });
+
+  expect(await Bun.file(commandPath).exists()).toBe(true);
+  expect(report.findings).toEqual([]);
+  expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
+});
+
+test("doctor --fix compiles targeted plugin outputs before refresh inspection", async () => {
+  const pluginRoot = join(root, "compile-plugin");
+  const projectRoot = join(root, "project-root");
+  await createCanonicalCompileFixture({
+    pluginRoot,
+    projectRoot,
+    withCanonicalToolBindings: false,
+  });
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify({
+      name: "canonical-compile-fixture",
+      version: "0.1.0",
+      deps: {
+        "agent-core": "./deps/agent-core",
+        "protocol-core": "./deps/protocol-core",
+      },
+      targets: {
+        agents: ["opencode"],
+        orbits: ["opencode"],
+        toolspaces: ["opencode"],
+        modelspaces: ["opencode"],
+      },
+    }, null, 2)}\n`,
+  );
+
+  const report = await runDoctor({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: true,
+  });
+
+  expect(
+    await Bun.file(join(process.env.HOME!, ".config", "opencode", "agents", "builder.md")).exists(),
+  ).toBe(true);
+  expect(report.findings).toEqual([]);
+  expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
 });
 
 test("doctor reports snapshot drift region integrity and namespace strays", async () => {

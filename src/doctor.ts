@@ -55,6 +55,7 @@ export interface DoctorReport {
   readonly schema: "prism.doctor.report.v1";
   readonly pluginPath?: string;
   readonly fix: boolean;
+  readonly fixFailed?: boolean;
   readonly findings: ReadonlyArray<DoctorFinding>;
   readonly refresh?: RefreshResult;
 }
@@ -915,6 +916,17 @@ const findingsFromRefresh = (result: RefreshResult): DoctorFinding[] =>
     }),
   );
 
+const findingsFromRefreshFailures = (result: RefreshResult): DoctorFinding[] =>
+  result.failures.map((failure) =>
+    finding({
+      severity: "error",
+      family: "sync.plan",
+      code: "sync.apply-failed",
+      message: failure.message,
+      path: failure.op.targetPath,
+    })
+  );
+
 const gitTrackedFiles = async (root: string): Promise<string[]> => {
   const proc = Bun.spawn(["git", "-C", root, "ls-files"], {
     stdout: "pipe",
@@ -1072,9 +1084,148 @@ const validateDeterminismSelfcheck = async (options: {
   })];
 };
 
+const runCompileFixes = async (options: DoctorOptions): Promise<{
+  readonly findings: DoctorFinding[];
+  readonly failed: boolean;
+}> => {
+  if (!options.pluginPath) return { findings: [], failed: false };
+  const manifest = await readManifest(options.pluginPath);
+  const findings: DoctorFinding[] = [];
+
+  for (const harness of options.harnesses) {
+    if (!manifestHasCompileTargets(manifest, harness)) continue;
+    const result = await Effect.runPromiseExit(
+      compilePluginForTarget({
+        pluginPath: expandPath(options.pluginPath),
+        target: harness,
+        scope: options.scope,
+        projectPath: options.projectPath,
+        prismHome: options.prismHome,
+        dryRun: false,
+        mcpLifecycle: "serve",
+      }),
+    );
+
+    if (result._tag === "Failure") {
+      const described = describePrismCause(result.cause);
+      findings.push(finding({
+        severity: "error",
+        family: "sync.plan",
+        code: "compile.failed",
+        message: `Compile failed for ${harness}: ${described.headline}`,
+        harness,
+        plugin: manifest.name,
+        ...(described.path ? { path: described.path } : {}),
+        fix: "manual",
+        data: {
+          detail: described.detail ?? [],
+          ...(described.hint ? { hint: described.hint } : {}),
+        },
+      }));
+      continue;
+    }
+
+    for (const blocked of result.value.blocked) {
+      findings.push(finding({
+        severity: "error",
+        family: "sync.plan",
+        code: "compile.blocked",
+        message: blocked.message,
+        harness,
+        plugin: manifest.name,
+        path: blocked.targetPath,
+        fix: "manual",
+        ...(blocked.hint ? { data: { hint: blocked.hint } } : {}),
+      }));
+    }
+    for (const failure of result.value.failures) {
+      findings.push(finding({
+        severity: "error",
+        family: "sync.plan",
+        code: "compile.apply-failed",
+        message: failure.message,
+        harness,
+        plugin: manifest.name,
+        path: failure.op.targetPath,
+        fix: "manual",
+      }));
+    }
+  }
+
+  return { findings, failed: findings.length > 0 };
+};
+
+const inspectPlugin = async (options: DoctorOptions): Promise<{
+  readonly findings: DoctorFinding[];
+  readonly refresh?: RefreshResult;
+  readonly fixFailed: boolean;
+}> => {
+  if (!options.pluginPath) return { findings: [], fixFailed: false };
+  const findings: DoctorFinding[] = [];
+  let refresh: RefreshResult | undefined;
+  let fixFailed = false;
+
+  findings.push(...(await validateTrackedLiteralTokens(options.pluginPath)));
+  if (options.fix) {
+    const compileFix = await runCompileFixes(options);
+    findings.push(...compileFix.findings);
+    fixFailed = fixFailed || compileFix.failed;
+  }
+  findings.push(
+    ...(await validateMcpHealth({
+      pluginPath: options.pluginPath,
+      harnesses: options.harnesses,
+      scope: options.scope,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      prismHome: options.prismHome,
+    })),
+  );
+  findings.push(
+    ...(await validateDeterminismSelfcheck({
+      pluginPath: options.pluginPath,
+      harnesses: options.harnesses,
+      scope: options.scope,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      prismHome: options.prismHome,
+    })),
+  );
+
+  if (options.fix) {
+    const applied = await refreshPlugin({
+      pluginPath: options.pluginPath,
+      harnesses: options.harnesses,
+      projectPath: options.projectPath,
+      prismHome: options.prismHome,
+      overwrite: false,
+      dryRun: false,
+    });
+    fixFailed = fixFailed || !applied.success;
+    findings.push(...findingsFromRefreshFailures(applied));
+  }
+
+  refresh = await refreshPlugin({
+    pluginPath: options.pluginPath,
+    harnesses: options.harnesses,
+    projectPath: options.projectPath,
+    prismHome: options.prismHome,
+    overwrite: false,
+    dryRun: true,
+  });
+  if (options.fix) fixFailed = fixFailed || !refresh.success;
+  findings.push(...findingsFromRefresh(refresh));
+  findings.push(...findingsFromRefreshFailures(refresh));
+
+  return {
+    findings,
+    fixFailed,
+    ...(refresh ? { refresh } : {}),
+  };
+};
+
 export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> => {
   const findings: DoctorFinding[] = [];
   let refresh: RefreshResult | undefined;
+  let fixFailed = false;
 
   if (options.fix) {
     findings.push(...(await runSnapshotGcFix(options.prismHome)));
@@ -1114,57 +1265,25 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
     })),
   );
 
-  if (options.pluginPath) {
-    findings.push(...(await validateTrackedLiteralTokens(options.pluginPath)));
-    findings.push(
-      ...(await validateMcpHealth({
-        pluginPath: options.pluginPath,
-        harnesses: options.harnesses,
-        scope: options.scope,
-        ...(options.projectPath ? { projectPath: options.projectPath } : {}),
-        prismHome: options.prismHome,
-      })),
-    );
-    findings.push(
-      ...(await validateDeterminismSelfcheck({
-        pluginPath: options.pluginPath,
-        harnesses: options.harnesses,
-        scope: options.scope,
-        ...(options.projectPath ? { projectPath: options.projectPath } : {}),
-        prismHome: options.prismHome,
-      })),
-    );
-    refresh = await refreshPlugin({
-      pluginPath: options.pluginPath,
-      harnesses: options.harnesses,
-      projectPath: options.projectPath,
-      prismHome: options.prismHome,
-      overwrite: false,
-      dryRun: !options.fix,
-    });
-    findings.push(...findingsFromRefresh(refresh));
-    for (const failure of refresh.failures) {
-      findings.push(finding({
-        severity: "error",
-        family: "sync.plan",
-        code: "sync.apply-failed",
-        message: failure.message,
-        path: failure.op.targetPath,
-      }));
-    }
-  }
+  const pluginInspection = await inspectPlugin(options);
+  findings.push(...pluginInspection.findings);
+  refresh = pluginInspection.refresh;
+  fixFailed = fixFailed || pluginInspection.fixFailed;
 
   return {
     schema: "prism.doctor.report.v1",
     ...(options.pluginPath ? { pluginPath: options.pluginPath } : {}),
     fix: options.fix,
+    ...(options.fix && fixFailed ? { fixFailed } : {}),
     findings,
     ...(refresh ? { refresh } : {}),
   };
 };
 
 export const doctorExitCode = (report: DoctorReport): ExitCode => {
-  if (report.fix && report.refresh && !report.refresh.success) return EXIT_CODES.environment;
+  if (report.fix && (report.fixFailed || (report.refresh && !report.refresh.success))) {
+    return EXIT_CODES.environment;
+  }
   return report.findings.length === 0 ? EXIT_CODES.success : EXIT_CODES.domainFailure;
 };
 

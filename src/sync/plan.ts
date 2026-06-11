@@ -262,7 +262,10 @@ const planSharedFileRegions = async (options: {
   readonly desired: ReadonlyArray<DesiredRegion>;
   readonly orphanedRefs: ReadonlyArray<string>;
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
-}): Promise<SyncOp[]> => {
+}): Promise<{
+  readonly ops: ReadonlyArray<SyncOp>;
+  readonly materializedRegionRefs: ReadonlyArray<string>;
+}> => {
   const fileExists = await exists(options.targetPath);
   let original = "";
   if (fileExists) {
@@ -273,18 +276,22 @@ const planSharedFileRegions = async (options: {
         options.desired[0]?.plugin ??
         [...options.snapshotByRegion.values()][0]?.plugin ??
         "unknown";
-      return [{
-        kind: "blocked",
-        targetPath: options.targetPath,
-        plugin,
-        hint: "the shared config target exists but is not a readable file (directory or permission problem) — delete or move it, then refresh",
-      }];
+      return {
+        ops: [{
+          kind: "blocked",
+          targetPath: options.targetPath,
+          plugin,
+          hint: "the shared config target exists but is not a readable file (directory or permission problem) — delete or move it, then refresh",
+        }],
+        materializedRegionRefs: [],
+      };
     }
   }
 
   let content = original;
   const changedRegions: string[] = [];
   const skippedRegions: string[] = [];
+  const materializedRegionRefs: string[] = [];
 
   for (const region of options.desired) {
     let outcome: ReturnType<typeof applyRegion>;
@@ -293,18 +300,22 @@ const planSharedFileRegions = async (options: {
     } catch (error) {
       // A structurally incompatible shared file (e.g. a non-array where the
       // region expects an array) classifies as blocked — collect, don't throw.
-      return [{
-        kind: "blocked",
-        targetPath: options.targetPath,
-        plugin: region.plugin,
-        hint:
-          `cannot patch region '${region.regionKey}': ` +
-          `${error instanceof Error ? error.message : String(error)} — ` +
-          "fix or move the file, then refresh",
-      }];
+      return {
+        ops: [{
+          kind: "blocked",
+          targetPath: options.targetPath,
+          plugin: region.plugin,
+          hint:
+            `cannot patch region '${region.regionKey}': ` +
+            `${error instanceof Error ? error.message : String(error)} — ` +
+            "fix or move the file, then refresh",
+        }],
+        materializedRegionRefs,
+      };
     }
     if (outcome.changed) changedRegions.push(region.regionKey);
     else skippedRegions.push(region.regionKey);
+    if (outcome.materialized !== false) materializedRegionRefs.push(serializeRegionRef(region));
     content = outcome.content;
   }
 
@@ -318,20 +329,91 @@ const planSharedFileRegions = async (options: {
   }
 
   if (content === original) {
-    return skippedRegions.length > 0
-      ? [{ kind: "skip-regions", targetPath: options.targetPath, regionKeys: skippedRegions }]
-      : [];
+    return {
+      ops: skippedRegions.length > 0
+        ? [{ kind: "skip-regions", targetPath: options.targetPath, regionKeys: skippedRegions }]
+        : [],
+      materializedRegionRefs,
+    };
   }
 
-  return [{
-    kind: "patch-regions",
-    targetPath: options.targetPath,
-    content,
-    changedRegions,
-    removedRegions,
-    backup: fileExists,
-    create: !fileExists,
-  }];
+  return {
+    ops: [{
+      kind: "patch-regions",
+      targetPath: options.targetPath,
+      content,
+      changedRegions,
+      removedRegions,
+      backup: fileExists,
+      create: !fileExists,
+    }],
+    materializedRegionRefs,
+  };
+};
+
+const groupRegionsByFile = (
+  regions: ReadonlyArray<DesiredRegion>,
+): Map<string, DesiredRegion[]> => {
+  const regionsByFile = new Map<string, DesiredRegion[]>();
+  for (const region of regions) {
+    const group = regionsByFile.get(region.targetPath) ?? [];
+    group.push(region);
+    regionsByFile.set(region.targetPath, group);
+  }
+  return regionsByFile;
+};
+
+const groupOrphanedRegionRefsByFile = (
+  desiredRegions: ReadonlyArray<DesiredRegion>,
+  snapshotRegions: ReadonlyMap<string, SnapshotEntry>,
+  protectedRegionKeys: ReadonlySet<string>,
+): Map<string, string[]> => {
+  const desiredRegionRefs = new Set(
+    desiredRegions.map((region) => `${region.targetPath} ${serializeRegionRef(region)}`),
+  );
+  const orphanedByFile = new Map<string, string[]>();
+  for (const [key, entry] of snapshotRegions) {
+    if (desiredRegionRefs.has(key)) continue;
+    if (protectedRegionKeys.has(key)) continue;
+    const refs = orphanedByFile.get(entry.targetPath) ?? [];
+    refs.push(entry.regionKey ?? "");
+    orphanedByFile.set(entry.targetPath, refs);
+  }
+  return orphanedByFile;
+};
+
+const planSharedRegions = async (options: {
+  readonly desiredRegions: ReadonlyArray<DesiredRegion>;
+  readonly snapshotRegions: ReadonlyMap<string, SnapshotEntry>;
+  readonly protectedRegionKeys: ReadonlySet<string>;
+}): Promise<{
+  readonly ops: ReadonlyArray<SyncOp>;
+  readonly materializedRegionKeys: ReadonlySet<string>;
+}> => {
+  const regionsByFile = groupRegionsByFile(options.desiredRegions);
+  const orphanedByFile = groupOrphanedRegionRefsByFile(
+    options.desiredRegions,
+    options.snapshotRegions,
+    options.protectedRegionKeys,
+  );
+  const sharedFiles = new Set([...regionsByFile.keys(), ...orphanedByFile.keys()]);
+  const ops: SyncOp[] = [];
+  const materializedRegionKeys = new Set<string>();
+
+  for (const targetPath of [...sharedFiles].sort()) {
+    const sharedPlan = await planSharedFileRegions({
+      targetPath,
+      desired: regionsByFile.get(targetPath) ?? [],
+      orphanedRefs: orphanedByFile.get(targetPath) ?? [],
+      snapshotByRegion: options.snapshotRegions,
+    });
+    ops.push(...sharedPlan.ops);
+    for (const ref of sharedPlan.materializedRegionRefs) {
+      materializedRegionKeys.add(`${targetPath} ${ref}`);
+    }
+  }
+
+  return { ops, materializedRegionKeys };
 };
 
 export const planSync = async (options: {
@@ -354,6 +436,7 @@ export const planSync = async (options: {
   const nextEntries: SnapshotEntry[] = [];
 
   const carriedEntries: SnapshotEntry[] = [];
+  const carriedRegionKeys = new Set<string>();
   const snapshotOwned = new Map<string, SnapshotEntry>();
   const snapshotRegions = new Map<string, SnapshotEntry>();
   for (const entry of options.snapshot.entries) {
@@ -364,6 +447,7 @@ export const planSync = async (options: {
       snapshotRegions.set(`${entry.targetPath} ${entry.regionKey ?? ""}`, entry);
     } else {
       carriedEntries.push(entry);
+      carriedRegionKeys.add(`${entry.targetPath} ${entry.regionKey ?? ""}`);
     }
   }
 
@@ -393,38 +477,22 @@ export const planSync = async (options: {
   }
 
   // Shared-file regions, coalesced one write per file.
-  const regionsByFile = new Map<string, DesiredRegion[]>();
+  const sharedRegionPlan = await planSharedRegions({
+    desiredRegions: options.desired.regions,
+    snapshotRegions,
+    protectedRegionKeys: carriedRegionKeys,
+  });
+  ops.push(...sharedRegionPlan.ops);
   for (const region of options.desired.regions) {
-    const group = regionsByFile.get(region.targetPath) ?? [];
-    group.push(region);
-    regionsByFile.set(region.targetPath, group);
-  }
-  const desiredRegionRefs = new Set(
-    options.desired.regions.map((region) => `${region.targetPath} ${serializeRegionRef(region)}`),
-  );
-  const orphanedByFile = new Map<string, string[]>();
-  for (const [key, entry] of snapshotRegions) {
-    if (desiredRegionRefs.has(key)) continue;
-    const refs = orphanedByFile.get(entry.targetPath) ?? [];
-    refs.push(entry.regionKey ?? "");
-    orphanedByFile.set(entry.targetPath, refs);
-  }
-
-  const sharedFiles = new Set([...regionsByFile.keys(), ...orphanedByFile.keys()]);
-  for (const targetPath of [...sharedFiles].sort()) {
-    ops.push(...(await planSharedFileRegions({
-      targetPath,
-      desired: regionsByFile.get(targetPath) ?? [],
-      orphanedRefs: orphanedByFile.get(targetPath) ?? [],
-      snapshotByRegion: snapshotRegions,
-    })));
-  }
-  for (const region of options.desired.regions) {
+    const regionKey = serializeRegionRef(region);
+    if (!sharedRegionPlan.materializedRegionKeys.has(`${region.targetPath} ${regionKey}`)) {
+      continue;
+    }
     nextEntries.push({
       targetPath: region.targetPath,
       contentHash: regionContentHash(region),
       mode: "region",
-      regionKey: serializeRegionRef(region),
+      regionKey,
       plugin: region.plugin,
     });
   }

@@ -11,7 +11,6 @@ import {
 } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
-  renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
 } from "../mcp-runtime.js";
@@ -167,20 +166,11 @@ const renderCodexMcpServerToml = (options: {
   readonly root: string;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => {
-  const transportLines = options.runtime.transport === "streamable-http"
-    ? [
-        `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
-        `bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`,
-      ]
-    : [
-        'command = "bun"',
-        `args = ${tomlArray([options.serverPath ?? missingCodexMcpBundlePath()])}`,
-        `cwd = ${quote(options.root)}`,
-      ];
-
   return [
     tomlDottedTable(["mcp_servers", options.name]),
-    ...transportLines,
+    'command = "bun"',
+    `args = ${tomlArray([options.serverPath ?? missingCodexMcpBundlePath()])}`,
+    `cwd = ${quote(options.root)}`,
     "enabled = true",
     "required = false",
     'default_tools_approval_mode = "approve"',
@@ -579,6 +569,7 @@ const planConfigRegions = (
       commentPrefix: "#",
       anchor: "[features]",
       content: "hooks = true",
+      skipIfTomlScalarExists: { table: "features", key: "hooks", value: true },
       plugin,
     });
   }

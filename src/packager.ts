@@ -296,7 +296,7 @@ const assertPackageRootIsWritable = async (
   const files = await listDirRecursive(packageRoot);
   if (files.length === 0) return;
   throw new Error(
-    `Package output root exists but is not owned by Prism: ${packageRoot}. Use --force to write into it.`,
+    `Package output root already contains unmanaged files: ${packageRoot}. Use --force to write into it.`,
   );
 };
 

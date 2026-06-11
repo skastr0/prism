@@ -12,7 +12,7 @@ import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generateMcpServerBundle } from "./mcp-bundle.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
-import { compilePluginForTarget, type CompileResult } from "./pipeline.js";
+import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
 import {
@@ -38,6 +38,7 @@ import {
 import { computeContentHash } from "../content-hash.js";
 import { resolvePrismHome } from "../prism-home.js";
 import { commitSnapshot, readSnapshot } from "../state/store.js";
+import type { DesiredRegion } from "../sync/desired.js";
 import { serializeRegionRef } from "../sync/plan.js";
 import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 
@@ -188,7 +189,7 @@ const getFreePort = (host: string): Promise<number> =>
   });
 
 const createHermesHttpToolPlugin = async (options?: {
-  readonly target?: "hermes" | "codex-cli";
+  readonly target?: "hermes" | "codex-cli" | "claude-code";
   readonly pluginName?: string;
   readonly tokenEnv?: string;
   readonly transport?: "stdio" | "streamable-http";
@@ -199,7 +200,10 @@ const createHermesHttpToolPlugin = async (options?: {
   const target = options?.target ?? "hermes";
   const pluginName = options?.pluginName ?? "hermes-http-demo";
   const pluginRoot = join(root, pluginName);
-  const hermesRoot = join(root, target === "hermes" ? "hermes-root" : "codex-root");
+  const hermesRoot = join(
+    root,
+    target === "hermes" ? "hermes-root" : target === "codex-cli" ? "codex-root" : "claude-root",
+  );
   await mkdir(hermesRoot, { recursive: true });
   const runtime = options?.transport === "stdio"
     ? undefined
@@ -4824,12 +4828,12 @@ test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async
   }
 });
 
-test("compilePluginForTarget requires token env for Codex HTTP MCP config", async () => {
+test("compilePluginForTarget renders Codex MCP config as stdio without token env", async () => {
   const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_COMPILE_CODEX_REQUIRED_TOKEN";
+  const tokenEnv = "PRISM_MCP_COMPILE_CODEX_STDIO_TOKEN";
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
-    pluginName: "codex-http-env-required-demo",
+    pluginName: "codex-http-to-stdio-demo",
     tokenEnv,
     port,
   });
@@ -4837,7 +4841,7 @@ test("compilePluginForTarget requires token env for Codex HTTP MCP config", asyn
   delete process.env[tokenEnv];
 
   try {
-    const failure = await Effect.runPromise(
+    const result = await Effect.runPromise(
       compilePluginForTarget({
         prismHome: testPrismHome(),
         pluginPath: pluginRoot,
@@ -4846,25 +4850,132 @@ test("compilePluginForTarget requires token env for Codex HTTP MCP config", asyn
         root: codexRoot,
         dryRun: false,
       }),
-    ).then(
-      () => undefined,
-      (error: unknown) => error,
     );
 
-    expect(failure).toBeDefined();
-    expect(String((failure as Error).message)).toContain(
-      `MCP token env '${tokenEnv}' must be set to a usable bearer token`,
-    );
+    expect(result.outputRoot).toBe(codexRoot);
+    const canonicalServerPath = prismMcpServerPath(testPrismHome(), "codex-http-to-stdio-demo");
+    const config = await readFile(join(codexRoot, "config.toml"), "utf8");
+    expect(config).toContain('["mcp_servers"."prism-generated-codex-http-to-stdio-demo"]');
+    expect(config).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
+    expect(config).toContain('command = "bun"');
+    expect(config).not.toContain("url = ");
+    expect(config).not.toContain("bearer_token_env_var");
+    expect(config).not.toContain("http_headers");
+    expect(config).not.toContain(String(port));
+    expect(await pathExists(canonicalServerPath)).toBe(true);
+    expect(
+      await pathExists(join(testPrismHome(), "runtime", "mcp", "codex-http-to-stdio-demo", "runtime.json")),
+    ).toBe(false);
+    expect(
+      await pathExists(join(testPrismHome(), "runtime", "mcp", "tokens.json")),
+    ).toBe(false);
+    expect(
+      result.operations.some((operation) => operation.targetPath.endsWith("server.mjs")),
+    ).toBe(false);
+    expect(
+      await pathExists(join(codexRoot, "mcp")),
+    ).toBe(false);
   } finally {
     if (previous === undefined) delete process.env[tokenEnv];
     else process.env[tokenEnv] = previous;
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "codex-cli",
-      scope: "global",
-      prismHome: testPrismHome(),
-      tokenEnv,
-    }).catch(() => undefined);
+  }
+});
+
+test("planPluginForTarget renders Codex MCP config as stdio without token env", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_PLAN_CODEX_STDIO_TOKEN";
+  const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
+    target: "codex-cli",
+    pluginName: "codex-http-plan-to-stdio-demo",
+    tokenEnv,
+    port,
+  });
+  const previous = process.env[tokenEnv];
+  delete process.env[tokenEnv];
+
+  try {
+    const result = await Effect.runPromise(
+      planPluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "codex-cli",
+        scope: "global",
+        root: codexRoot,
+        dryRun: false,
+      }),
+    );
+
+    const canonicalServerPath = prismMcpServerPath(testPrismHome(), "codex-http-plan-to-stdio-demo");
+    const configRegion = result.regions.find((region): region is Extract<DesiredRegion, { kind: "marker" }> =>
+      region.kind === "marker" &&
+      region.regionKey === "codex.mcp.prism-generated-codex-http-plan-to-stdio-demo"
+    );
+    expect(configRegion?.content).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
+    expect(configRegion?.content).toContain('command = "bun"');
+    expect(configRegion?.content).not.toContain("url = ");
+    expect(configRegion?.content).not.toContain("bearer_token_env_var");
+    expect(configRegion?.content).not.toContain(String(port));
+  } finally {
+    if (previous === undefined) delete process.env[tokenEnv];
+    else process.env[tokenEnv] = previous;
+  }
+});
+
+test("compilePluginForTarget renders Claude MCP config as stdio without token env", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_CLAUDE_STDIO_TOKEN";
+  const { pluginRoot, hermesRoot: claudeRoot } = await createHermesHttpToolPlugin({
+    target: "claude-code",
+    pluginName: "claude-http-to-stdio-demo",
+    tokenEnv,
+    port,
+  });
+  const previous = process.env[tokenEnv];
+  delete process.env[tokenEnv];
+
+  try {
+    const result = await Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "claude-code",
+        scope: "global",
+        root: claudeRoot,
+        dryRun: false,
+      }),
+    );
+
+    expect(result.outputRoot).toBe(claudeRoot);
+    const canonicalServerPath = prismMcpServerPath(testPrismHome(), "claude-http-to-stdio-demo");
+    const config = JSON.parse(
+      await readFile(
+        join(claudeRoot, "skills", "prism-generated-claude-http-to-stdio-demo", ".mcp.json"),
+        "utf8",
+      ),
+    ) as {
+      mcpServers?: Record<string, {
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+        url?: string;
+        headers?: Record<string, string>;
+      }>;
+    };
+    expect(config.mcpServers?.["prism-generated-claude-http-to-stdio-demo"]).toEqual({
+      command: "bun",
+      args: [canonicalServerPath],
+      env: { PRISM_MCP_ENABLED_TOOLS: "claude_http_to_stdio_demo_echo" },
+    });
+    expect(JSON.stringify(config)).not.toContain("url");
+    expect(JSON.stringify(config)).not.toContain("Authorization");
+    expect(JSON.stringify(config)).not.toContain(String(port));
+    expect(await pathExists(canonicalServerPath)).toBe(true);
+    expect(
+      await pathExists(join(testPrismHome(), "runtime", "mcp", "claude-http-to-stdio-demo", "runtime.json")),
+    ).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env[tokenEnv];
+    else process.env[tokenEnv] = previous;
   }
 });
 

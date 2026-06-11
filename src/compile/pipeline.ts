@@ -1220,7 +1220,12 @@ const prepareLoweringInputs = (
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
     const loadedRegistry = yield* loadPlugin(options.pluginPath);
-    const registry = options.packageMode === true
+    // Config repos must stay durable: no per-run HTTP ports or bearer tokens
+    // are serialized into tracked Codex/Claude config. Use stdio against the
+    // canonical PRISM_HOME bundle for those targets.
+    const configRepoStdioTarget =
+      context.targetId === "codex-cli" || context.targetId === "claude-code";
+    const registry = options.packageMode === true || configRepoStdioTarget
       ? registryWithStdioMcpRuntime(loadedRegistry)
       : loadedRegistry;
     const surfaces = selectTargetSurfaces(registry, context.targetId, options.scope);

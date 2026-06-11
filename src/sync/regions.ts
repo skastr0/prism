@@ -31,7 +31,38 @@ const escapeRegex = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]
 export interface RegionPatchOutcome {
   readonly content: string;
   readonly changed: boolean;
+  readonly materialized?: boolean;
 }
+
+const renderTomlScalarValue = (value: string | number | boolean): string =>
+  typeof value === "string" ? JSON.stringify(value) : String(value);
+
+const readObjectPath = (
+  value: unknown,
+  path: ReadonlyArray<string>,
+): unknown => {
+  let cursor: unknown = value;
+  for (const segment of path) {
+    if (cursor === null || typeof cursor !== "object") return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
+};
+
+const tomlScalarStatus = (
+  content: string,
+  options: NonNullable<Extract<DesiredRegion, { kind: "marker" }>["skipIfTomlScalarExists"]>,
+): "absent" | "matches" | "conflicts" => {
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(content);
+  } catch {
+    return "absent";
+  }
+  const value = readObjectPath(parsed, [...options.table.split("."), options.key]);
+  if (value === undefined) return "absent";
+  return Object.is(value, options.value) ? "matches" : "conflicts";
+};
 
 export const renderMarkerRegion = (region: Extract<DesiredRegion, { kind: "marker" }>): string =>
   [
@@ -53,6 +84,29 @@ export const applyMarkerRegion = (
   );
   const end = markerLine(region.commentPrefix, region.regionKey, "end", region.commentSuffix);
   const fence = new RegExp(`${escapeRegex(begin)}[\\s\\S]*?${escapeRegex(end)}`);
+
+  if (region.skipIfTomlScalarExists !== undefined) {
+    const withoutFence = fileContent.replace(fence, "");
+    const status = tomlScalarStatus(withoutFence, region.skipIfTomlScalarExists);
+    if (status === "matches") {
+      if (!fence.test(fileContent)) {
+        return { content: fileContent, changed: false, materialized: false };
+      }
+      const next = removeMarkerRegion(fileContent, {
+        commentPrefix: region.commentPrefix,
+        ...(region.commentSuffix === undefined ? {} : { commentSuffix: region.commentSuffix }),
+        regionKey: region.regionKey,
+      }).content;
+      return { content: next, changed: next !== fileContent, materialized: false };
+    }
+    if (status === "conflicts") {
+      const { table, key, value } = region.skipIfTomlScalarExists;
+      throw new Error(
+        `TOML scalar ${table}.${key} already exists with a different value; ` +
+          `set it to ${renderTomlScalarValue(value)} or remove it`,
+      );
+    }
+  }
 
   if (fence.test(fileContent)) {
     const next = fileContent.replace(fence, rendered);

@@ -194,6 +194,42 @@ describe("sync engine — prune scoping", () => {
     expect(worldReport.ops.some((op) => op.kind === "prune")).toBe(true);
     expect(await exists(b)).toBe(false);
   });
+
+  test("a single-plugin compile cannot prune a shared marker still owned out of scope", async () => {
+    const configToml = join(root, "config.toml");
+    const sharedMarker = (plugin: string) => ({
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: "codex.features.hooks",
+      commentPrefix: "#",
+      anchor: "[features]",
+      content: "hooks = true",
+      plugin,
+    });
+
+    await nodeWriteFile(configToml, "[features]\nmodel_widget = true\n");
+    await refresh(desiredWith({ regions: [sharedMarker("plugin-a"), sharedMarker("plugin-b")] }));
+
+    const first = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(first.manifest.entries.filter((entry) =>
+      entry.regionKey?.includes("codex.features.hooks")
+    )).toHaveLength(2);
+
+    const scopedPlan = await planSync({
+      desired: desiredWith({ regions: [] }),
+      snapshot: first.manifest,
+      scopePlugins: new Set(["plugin-b"]),
+    });
+    const report = await applySync({ prismHome: home, plan: scopedPlan });
+
+    expect(report.ops.some((op) => op.kind === "patch-regions")).toBe(false);
+    expect(await readFile(configToml)).toContain("prism:codex.features.hooks");
+    const after = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    const remainingOwners = after.manifest.entries
+      .filter((entry) => entry.regionKey?.includes("codex.features.hooks"))
+      .map((entry) => entry.plugin);
+    expect(remainingOwners).toEqual(["plugin-a"]);
+  });
 });
 
 describe("sync engine — shared-file regions", () => {
@@ -353,6 +389,73 @@ describe("sync engine — shared-file regions", () => {
     expect(after).toContain(
       "mcp_servers:\n# --- prism:hermes.mcp.prism-generated-demo begin ---",
     );
+  });
+
+  test("anchored TOML scalar marker skips when user config already satisfies it", async () => {
+    const configToml = join(root, "config.toml");
+    const desired = desiredWith({
+      regions: [{
+        kind: "marker" as const,
+        targetPath: configToml,
+        regionKey: "codex.features.hooks",
+        commentPrefix: "#",
+        anchor: "[features]",
+        content: "hooks = true",
+        skipIfTomlScalarExists: { table: "features", key: "hooks", value: true },
+        plugin: "demo",
+      }],
+    });
+
+    await nodeWriteFile(configToml, "[features]\nhooks = true\nmodel_widget = true\n");
+    const first = await refresh(desired);
+    expect(kinds(first)).toEqual(["skip-regions"]);
+    const unchanged = await readFile(configToml);
+    expect(unchanged).not.toContain("prism:codex.features.hooks");
+    expect(unchanged.match(/^hooks = true$/gm) ?? []).toHaveLength(1);
+    const snapshotAfterSkip = await readSnapshot({
+      prismHome: home,
+      harness: "codex-cli",
+      root,
+    });
+    expect(
+      snapshotAfterSkip.manifest.entries.some((entry) =>
+        entry.regionKey?.includes("codex.features.hooks")
+      ),
+    ).toBe(false);
+
+    await nodeWriteFile(
+      configToml,
+      [
+        "[features]",
+        "# --- prism:codex.features.hooks begin ---",
+        "hooks = true",
+        "# --- prism:codex.features.hooks end ---",
+        "hooks = true",
+        "model_widget = true",
+        "",
+      ].join("\n"),
+    );
+    const repaired = await refresh(desired);
+    expect(kinds(repaired)).toEqual(["patch-regions"]);
+    const afterRepair = await readFile(configToml);
+    expect(afterRepair).not.toContain("prism:codex.features.hooks");
+    expect(afterRepair.match(/^hooks = true$/gm) ?? []).toHaveLength(1);
+
+    await nodeWriteFile(configToml, "[features]\n\"hooks\" = true\n");
+    const quoted = await refresh(desired);
+    expect(kinds(quoted)).toEqual(["skip-regions"]);
+    expect(await readFile(configToml)).not.toContain("prism:codex.features.hooks");
+
+    await nodeWriteFile(configToml, "features.hooks = true\n");
+    const dotted = await refresh(desired);
+    expect(kinds(dotted)).toEqual(["skip-regions"]);
+    expect(await readFile(configToml)).not.toContain("prism:codex.features.hooks");
+
+    await nodeWriteFile(configToml, "[features]\nhooks = false\n");
+    const conflicted = await refresh(desired);
+    expect(conflicted.blocked).toHaveLength(1);
+    expect(conflicted.blocked[0]?.hint).toContain("features.hooks");
+    expect(await readFile(configToml)).not.toContain("prism:codex.features.hooks");
   });
 
   test("json-array-member region owns one element and never rewrites neighbors", async () => {

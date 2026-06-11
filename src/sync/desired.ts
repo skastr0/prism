@@ -46,6 +46,17 @@ export type DesiredRegion =
        * fence. Without an anchor, new fences append at EOF.
        */
       readonly anchor?: string;
+      /**
+       * Optional TOML scalar satisfaction guard for shared user config files.
+       * When the same scalar already exists outside this marker fence, Prism
+       * treats the region as converged and removes any stale fence for it
+       * instead of emitting a duplicate key.
+       */
+      readonly skipIfTomlScalarExists?: {
+        readonly table: string;
+        readonly key: string;
+        readonly value: string | number | boolean;
+      };
       readonly plugin: string;
     }
   | {

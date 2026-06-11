@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/claude-code.js";
-import type { LowerOperation } from "./lowerers/opencode.js";
+import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
 
@@ -32,19 +32,11 @@ const writeText = async (path: string, content: string): Promise<void> => {
   await writeFile(path, content);
 };
 
-type ContentOperation = Extract<LowerOperation, { readonly content: string }>;
-
-const isContentOperation = (operation: LowerOperation): operation is ContentOperation =>
-  "content" in operation;
-
 const findContentOperation = (
-  operations: ReadonlyArray<LowerOperation>,
+  files: ReadonlyArray<DesiredFile>,
   suffix: string,
-): ContentOperation | undefined =>
-  operations.find(
-    (operation): operation is ContentOperation =>
-      isContentOperation(operation) && operation.target.endsWith(suffix),
-  );
+): DesiredFile | undefined =>
+  files.find((file) => file.targetPath.endsWith(suffix));
 
 const runGeneratedHookWrapper = (
   wrapperPath: string,
@@ -191,7 +183,7 @@ export default defineTool({
   if (!canonicalHook) throw new Error("expected audit-echo hook");
   if (!sessionEndHook) throw new Error("expected session-ended hook");
 
-  const operations = await planLowering({
+  const { files: operations } = await planLowering({
     agents: [
       {
         name: "reviewer",
@@ -241,13 +233,13 @@ export default defineTool({
     operations,
     join(".claude-plugin", "plugin.json"),
   );
-  expect(pluginManifest?.target).toContain(
+  expect(pluginManifest?.targetPath).toContain(
     join(".claude", "skills", "prism-generated-claude-plugin-fixture"),
   );
   expect(pluginManifest?.content).toContain('"name": "prism-generated-claude-plugin-fixture"');
 
   const agent = findContentOperation(operations, join("agents", "reviewer.md"));
-  expect(agent?.target).toContain(
+  expect(agent?.targetPath).toContain(
     join(".claude", "skills", "prism-generated-claude-plugin-fixture", "agents"),
   );
   expect(agent?.content).toContain('description: "Claude plugin reviewer"');
@@ -289,7 +281,7 @@ export default defineTool({
 
   // The bundle itself lives in PRISM_HOME — never in the generated plugin.
   const bundle = operations.find(
-    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+    (operation) => operation.targetPath.endsWith("server.mjs"),
   );
   expect(bundle).toBeUndefined();
 
@@ -311,8 +303,8 @@ export default defineTool({
   expect(hookWrapper?.content).toContain("workspace?.cwd");
   expect(hookWrapper?.content).toContain("console.error");
   if (!hookWrapper) throw new Error("expected audit-shell wrapper");
-  await writeText(hookWrapper.target, hookWrapper.content);
-  const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
+  await writeText(hookWrapper.targetPath, hookWrapper.content);
+  const blocked = await runGeneratedHookWrapper(hookWrapper.targetPath, {
     tool: { name: "Bash", input: { block: true } },
     workspace: { cwd: pluginRoot },
   });
@@ -369,7 +361,7 @@ export default defineTool({
   );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const operations = await planLowering({
+  const { files: operations } = await planLowering({
     agents: [
       {
         name: "reviewer",
@@ -425,7 +417,7 @@ export default defineTool({
   // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
   // plans no bundle write anywhere.
   const bundle = operations.find(
-    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+    (operation) => operation.targetPath.endsWith("server.mjs"),
   );
   expect(bundle).toBeUndefined();
 });

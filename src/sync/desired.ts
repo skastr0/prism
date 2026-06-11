@@ -35,6 +35,16 @@ export type DesiredRegion =
       readonly regionKey: string;
       readonly commentPrefix: string;
       readonly content: string;
+      /**
+       * Optional structural anchor line (exact, trim-compared). When a new
+       * fence is inserted into a file that already contains the anchor line
+       * (e.g. a user-owned `mcp_servers:` YAML key or `[features]` TOML
+       * table header), the fence is placed directly after it so the region
+       * content lands inside that structure instead of at EOF. When the
+       * anchor is absent the anchor line itself is appended before the
+       * fence. Without an anchor, new fences append at EOF.
+       */
+      readonly anchor?: string;
       readonly plugin: string;
     }
   | {
@@ -44,6 +54,25 @@ export type DesiredRegion =
       readonly jsonPath: ReadonlyArray<string | number>;
       readonly value: unknown;
       readonly plugin: string;
+    }
+  | {
+      /**
+       * Membership of one element in a JSON/JSONC array Prism does not own
+       * wholesale (opencode.json `plugin`, kimi installed.json `plugins`,
+       * pi settings.json `packages`). The region owns exactly one element,
+       * identified by `memberKey` path inside the element (object members)
+       * or by whole-value equality (string members). Other elements are
+       * never rewritten.
+       */
+      readonly kind: "json-array-member";
+      readonly targetPath: string;
+      readonly regionKey: string;
+      /** Path of the array itself. */
+      readonly jsonPath: ReadonlyArray<string | number>;
+      readonly value: unknown;
+      /** Identity path within the element; omitted = whole-value equality. */
+      readonly memberKey?: ReadonlyArray<string>;
+      readonly plugin: string;
     };
 
 export interface DesiredRoot {
@@ -52,6 +81,3 @@ export interface DesiredRoot {
   readonly files: ReadonlyArray<DesiredFile>;
   readonly regions: ReadonlyArray<DesiredRegion>;
 }
-
-export const regionId = (region: DesiredRegion): string =>
-  `${region.targetPath} ${region.regionKey}`;

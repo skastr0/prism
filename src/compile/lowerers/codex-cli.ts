@@ -1,6 +1,6 @@
 /** Codex CLI lowerer. */
 
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
@@ -25,26 +25,19 @@ import {
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
-import {
-  exists,
-  listDirRecursive,
-  readFile,
-} from "../../fs.js";
+import { readFile } from "../../fs.js";
 import type { HarnessScope, PluginArtifactType, PluginTargetId } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
-  executeStandardLowering,
-  prismOwnerMarker,
   nativeHookEventName,
-  planCompileOwnedTargetedSkillPruning,
   normalizeBundleSegment,
-  pushConfigPatchOperation as pushConfigPatch,
-  pushWriteOperation as pushWrite,
+  pushDesiredFile,
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
   uniqueSorted,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
@@ -96,240 +89,6 @@ const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
 
 const tomlDottedArrayTable = (segments: ReadonlyArray<string>): string =>
   `[[${segments.map((segment) => quote(segment)).join(".")}]]`;
-
-const isTomlTableHeader = (line: string): boolean => /^\s*\[.*\]\s*(?:#.*)?$/u.test(line);
-
-const isFeaturesTableHeader = (line: string): boolean => /^\s*\[features\]\s*(?:#.*)?$/u.test(line);
-
-const isCodexHooksFeature = (line: string): boolean => /^\s*codex_hooks\s*=/u.test(line);
-
-const isHooksFeature = (line: string): boolean => /^\s*hooks\s*=/u.test(line);
-
-const managedBlockBegin = (pluginName: string): string =>
-  `# --- prism codex-cli begin: ${pluginName} ---`;
-
-const managedBlockEnd = (pluginName: string): string =>
-  `# --- prism codex-cli end: ${pluginName} ---`;
-
-const isManagedBlockMarker = (line: string): boolean =>
-  /^\s*# --- prism codex-cli (?:begin|end):/u.test(line);
-
-const parseMcpServerTableHeader = (line: string): string | undefined => {
-  const match = /^\s*\[\s*(?:"mcp_servers"|mcp_servers)\s*\.\s*(["'])([^"']+)\1\s*\]\s*(?:#.*)?$/u.exec(line);
-  return match?.[2];
-};
-
-/**
- * Name-based removal of any `["mcp_servers"."prism-generated-..."]` dotted table.
- * Used as the deletion half of our structural ownership strategy.
- */
-export const removeMcpServerTable = (current: string, serverName: string): string => {
-  if (!serverName) return current;
-
-  const lines = current.split(/\r?\n/u);
-  const out: string[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    if (parseMcpServerTableHeader(line) === serverName) {
-      i += 1;
-      while (i < lines.length) {
-        const nextLine = lines[i] ?? "";
-        const trimmed = nextLine.trim();
-        if (isManagedBlockMarker(nextLine)) break;
-        if (!trimmed) { i += 1; continue; }
-        if (isTomlTableHeader(nextLine)) break;
-        i += 1;
-      }
-      continue;
-    }
-    out.push(line);
-    i += 1;
-  }
-  return out.join("\n");
-};
-
-const replaceMcpServerTable = (
-  current: string,
-  serverName: string,
-  renderedTable: string,
-): { readonly content: string; readonly replaced: boolean } => {
-  const lines = current.split(/\r?\n/u);
-  const renderedLines = renderedTable.trimEnd().split(/\r?\n/u);
-  const out: string[] = [];
-  let replaced = false;
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    if (parseMcpServerTableHeader(line) === serverName) {
-      if (!replaced) {
-        out.push(...renderedLines);
-        replaced = true;
-      }
-
-      i += 1;
-      while (i < lines.length) {
-        const nextLine = lines[i] ?? "";
-        const trimmed = nextLine.trim();
-        if (isManagedBlockMarker(nextLine)) break;
-        if (!trimmed) break;
-        if (isTomlTableHeader(nextLine)) break;
-        i += 1;
-      }
-      continue;
-    }
-
-    out.push(line);
-    i += 1;
-  }
-
-  return { content: out.join("\n"), replaced };
-};
-
-/**
- * Structural mcp_servers update for Codex config.toml using Bun.TOML.parse
- * for reliable understanding of the document + name-based delete + controlled insert.
- *
- * This is the "proper TOML" ownership path. The generated table lives as a normal
- * top-level TOML entry (not inside a Prism comment marker block).
- */
-export const countMcpServerTableOccurrences = (content: string, serverName: string): number => {
-  if (!serverName) return 0;
-  return content
-    .split(/\r?\n/u)
-    .filter((line) => parseMcpServerTableHeader(line) === serverName).length;
-};
-
-const uniqueMcpServerBodyMarkers = (renderedTable: string): string[] =>
-  renderedTable
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(
-      (line) =>
-        line.startsWith("url = ") ||
-        line.startsWith("server_url = ") ||
-        line.startsWith("command = ") ||
-        line.startsWith("args = "),
-    );
-
-const previousNonEmptyLine = (lines: readonly string[], index: number): string | undefined => {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const line = lines[cursor];
-    if (line !== undefined && line.trim().length > 0) return line;
-  }
-  return undefined;
-};
-
-const tomlKeyName = (line: string): string | undefined => {
-  const match = line.trim().match(/^([A-Za-z0-9_.-]+)\s*=/u);
-  return match?.[1];
-};
-
-const shouldRemoveOrphanedMcpLine = (options: {
-  readonly markers: ReadonlyArray<string>;
-  readonly trimmed: string;
-  readonly previous: string | undefined;
-  readonly activeTable: boolean;
-  readonly key: string | undefined;
-  readonly seenKeys: ReadonlySet<string>;
-}): boolean =>
-  options.markers.includes(options.trimmed) &&
-  options.previous !== undefined &&
-  !isTomlTableHeader(options.previous) &&
-  (!options.activeTable || (options.key !== undefined && options.seenKeys.has(options.key)));
-
-const nextLineAfterOrphanedMcpBody = (lines: readonly string[], start: number): number => {
-  let cursor = start + 1;
-  while (cursor < lines.length) {
-    const nextLine = lines[cursor] ?? "";
-    if (!nextLine.trim()) return cursor + 1;
-    if (isManagedBlockMarker(nextLine)) return cursor;
-    if (isTomlTableHeader(nextLine)) return cursor;
-    cursor += 1;
-  }
-  return cursor;
-};
-
-const removeOrphanedMcpServerBody = (current: string, renderedTable: string | undefined): string => {
-  if (!renderedTable) return current;
-  const markers = uniqueMcpServerBodyMarkers(renderedTable);
-  if (markers.length === 0) return current;
-
-  const lines = current.split(/\r?\n/u);
-  const out: string[] = [];
-  let activeTable = false;
-  let seenKeys = new Set<string>();
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    const trimmed = line.trim();
-    if (isTomlTableHeader(line)) {
-      activeTable = true;
-      seenKeys = new Set();
-      out.push(line);
-      i += 1;
-      continue;
-    }
-
-    const key = tomlKeyName(line);
-    const previous = previousNonEmptyLine(lines, i);
-    if (shouldRemoveOrphanedMcpLine({ markers, trimmed, previous, activeTable, key, seenKeys })) {
-      i = nextLineAfterOrphanedMcpBody(lines, i);
-      continue;
-    }
-
-    if (key) seenKeys.add(key);
-    out.push(line);
-    i += 1;
-  }
-
-  return out.join("\n");
-};
-
-export const applyCodexMcpServerUpdate = (
-  current: string,
-  serverName: string | undefined,
-  renderedTable: string | undefined, // the full ["mcp_servers"."name"]... block text, or undefined = delete only
-): string => {
-  if (!serverName) return current;
-
-  // Deletion is always safe and name-driven. Orphan cleanup is intentionally
-  // parse-failure gated so a valid neighboring table that happens to share a
-  // generated URL or tool-list line is not treated as stale Prism debris.
-  if (!renderedTable) return removeMcpServerTable(current, serverName);
-
-  const replaced = replaceMcpServerTable(current, serverName, renderedTable);
-  let text = replaced.content;
-  if (!codexTomlParses(text)) {
-    text = removeOrphanedMcpServerBody(text, renderedTable);
-  }
-
-  if (replaced.replaced) return text;
-
-  // Insertion point: before the first Prism hook marker block if present,
-  // otherwise at end of file. This keeps mcp entries in the natural TOML area.
-  const hookBlock = text.indexOf("# --- prism codex-cli begin:");
-  if (hookBlock >= 0) {
-    const prefix = text.slice(0, hookBlock).trimEnd();
-    const suffix = text.slice(hookBlock);
-    return `${prefix}\n\n${renderedTable.trimEnd()}\n\n${suffix}`;
-  }
-
-  const trimmed = text.trimEnd();
-  return trimmed ? `${trimmed}\n\n${renderedTable.trimEnd()}\n` : `${renderedTable.trimEnd()}\n`;
-};
-
-const codexTomlParses = (content: string): boolean => {
-  try {
-    Bun.TOML.parse(content);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 const manifestTargetsCodex = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
@@ -607,7 +366,7 @@ const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<strin
 
 const planHooks = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
 ): Promise<PlannedHook[]> => {
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
   if (!input.registry) return [];
@@ -627,11 +386,11 @@ const planHooks = async (
     const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, input.registry, TARGET_ID));
     const relativePath = `hooks/${normalizeBundleSegment(hook.name, "hook")}.mjs`;
 
-    await pushWrite(
-      operations,
-      join(input.target.root, ...relativePath.split("/")),
-      await bundleHookWrapper(hook, nativeEvent),
-    );
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, ...relativePath.split("/")),
+      content: await bundleHookWrapper(hook, nativeEvent),
+      plugin: input.target.sourcePluginName,
+    });
 
     plannedHooks.push({
       hook,
@@ -658,96 +417,6 @@ const renderHooksConfig = (
     `statusMessage = ${quote(`prism hook ${hook.hook.name}`)}`,
     "",
   ]);
-
-const removeAdjacentOrphanManagedBlock = (beforeMarker: string, trimmedBlock: string): string => {
-  if (!trimmedBlock) return beforeMarker;
-  const orphanStart = beforeMarker.lastIndexOf(trimmedBlock);
-  if (orphanStart < 0) return beforeMarker;
-  const betweenOrphanAndMarker = beforeMarker.slice(orphanStart + trimmedBlock.length);
-  if (betweenOrphanAndMarker.trim().length > 0) return beforeMarker;
-  return beforeMarker.slice(0, orphanStart);
-};
-
-export const replaceManagedBlock = (current: string, pluginName: string, block: string): string => {
-  const begin = managedBlockBegin(pluginName);
-  const end = managedBlockEnd(pluginName);
-  const trimmedBlock = block.trimEnd();
-  const start = current.indexOf(begin);
-  let base = current;
-
-  if (start >= 0) {
-    const finish = current.indexOf(end, start);
-    if (finish >= 0) {
-      base = removeAdjacentOrphanManagedBlock(
-        current.slice(0, start),
-        trimmedBlock,
-      ) + current.slice(finish + end.length);
-    } else {
-      base = removeAdjacentOrphanManagedBlock(current.slice(0, start), trimmedBlock);
-    }
-  } else {
-    const strayFinish = current.indexOf(end);
-    if (strayFinish >= 0) {
-      const beforeEnd = current.slice(0, strayFinish);
-      base = removeAdjacentOrphanManagedBlock(beforeEnd, trimmedBlock)
-        + current.slice(strayFinish + end.length);
-    }
-  }
-
-  const trimmedBase = base.trimEnd();
-  if (!trimmedBlock) return trimmedBase ? `${trimmedBase}\n` : "";
-  return `${trimmedBase}${trimmedBase ? "\n\n" : ""}${begin}\n${trimmedBlock}\n${end}\n`;
-};
-
-const renderConfigWithHookFeature = (current: string, enableHooks: boolean): string => {
-  const lines = current.split(/\r?\n/u);
-  const featuresStart = lines.findIndex(isFeaturesTableHeader);
-
-  if (featuresStart < 0) {
-    if (!enableHooks) {
-      return lines.filter((line) => !isCodexHooksFeature(line)).join("\n");
-    }
-
-    const trimmed = current.trimEnd();
-    return `${trimmed}${trimmed ? "\n\n" : ""}[features]\nhooks = true\n`;
-  }
-
-  let featuresEnd = lines.length;
-  for (let index = featuresStart + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line !== undefined && isTomlTableHeader(line)) {
-      featuresEnd = index;
-      break;
-    }
-  }
-
-  const before = lines.slice(0, featuresStart);
-  const featureLines = lines.slice(featuresStart, featuresEnd).filter((line) => !isCodexHooksFeature(line));
-  const after = lines.slice(featuresEnd);
-  const hooksLine = featureLines.findIndex(isHooksFeature);
-
-  if (enableHooks) {
-    if (hooksLine >= 0) {
-      featureLines[hooksLine] = "hooks = true";
-    } else {
-      featureLines.splice(1, 0, "hooks = true");
-    }
-  }
-
-  return [...before, ...featureLines, ...after].join("\n");
-};
-
-const renderManagedConfigBlock = (options: {
-  readonly root: string;
-  readonly hooks: ReadonlyArray<PlannedHook>;
-}): string => {
-  // mcp_servers tables are now emitted structurally via applyCodexMcpServerUpdate
-  // (Bun.TOML.parse for understanding + name-based delete/insert).
-  // The marker block is kept only for hook registrations.
-  const lines: string[] = [];
-  lines.push(...renderHooksConfig(options.root, options.hooks));
-  return lines.join("\n");
-};
 
 const planMcpServer = (
   input: LowerInput,
@@ -804,169 +473,145 @@ const agentMcpServerConfig = (
       }
     : undefined;
 
-const planAgentWrites = async (
+const planAgentWrites = (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   agentMcpServer?: AgentMcpServerConfig,
-): Promise<void> => {
+): void => {
   for (const agent of input.agents) {
-    await pushWrite(
-      operations,
-      join(input.target.root, "agents", `${agent.name}.toml`),
-      renderAgentToml(agent, input.target, agentMcpServer),
-      "write-md",
-      { mode: agentMcpServer?.bearerToken ? 0o600 : undefined },
-    );
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, "agents", `${agent.name}.toml`),
+      content: renderAgentToml(agent, input.target, agentMcpServer),
+      plugin: input.target.sourcePluginName,
+      ...(agentMcpServer?.bearerToken ? { mode: 0o600 } : {}),
+    });
   }
 };
 
 const planManagedSkillWrites = async (
   input: LowerInput,
-  operations: LowerOperation[],
-): Promise<ReadonlySet<string>> => {
-  const desired = new Set<string>();
-  if (!artifactTargetsCodex(input.registry, "skills")) return desired;
+  files: DesiredFile[],
+): Promise<void> => {
+  if (!artifactTargetsCodex(input.registry, "skills")) return;
 
   for (const skill of input.skills ?? []) {
-    desired.add(`${skill.name}/SKILL.md`);
-    await pushWrite(
-      operations,
-      join(input.target.root, "skills", skill.name, "SKILL.md"),
-      await readFile(skill.sourcePath),
-      "write-md",
-    );
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, "skills", skill.name, "SKILL.md"),
+      content: await readFile(skill.sourcePath),
+      plugin: input.target.sourcePluginName,
+    });
   }
-  return desired;
 };
 
-const planOrbitWrites = async (
+const planOrbitWrites = (
   input: LowerInput,
-  operations: LowerOperation[],
-  desiredRelativePaths: Set<string>,
-): Promise<void> => {
+  files: DesiredFile[],
+): void => {
   for (const orbit of input.orbits) {
-    const relativeSkill = `${orbit.name}/SKILL.md`;
-    desiredRelativePaths.add(relativeSkill);
-    await pushWrite(
-      operations,
-      join(input.target.root, "skills", relativeSkill),
-      renderStandardOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
-      "write-md",
-    );
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, "skills", `${orbit.name}/SKILL.md`),
+      content: renderStandardOrbitSkill(orbit, input.registry),
+      plugin: input.target.sourcePluginName,
+    });
 
     for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      const relativeReference = `${orbit.name}/references/${reference.filename}`;
-      desiredRelativePaths.add(relativeReference);
-      await pushWrite(
-        operations,
-        join(input.target.root, "skills", relativeReference),
-        reference.content,
-        "write-md",
-      );
+      pushDesiredFile(files, {
+        targetPath: join(
+          input.target.root,
+          "skills",
+          `${orbit.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin: input.target.sourcePluginName,
+      });
     }
   }
 };
 
-const planGeneratedOrbitSkillPruning = async (
-  input: LowerInput,
-  desiredRelativePaths: ReadonlySet<string>,
-): Promise<LowerOperation[]> => {
-  const skillsRoot = join(input.target.root, "skills");
-  if (!(await exists(skillsRoot))) return [];
-
-  const operations: LowerOperation[] = [];
-  const marker = prismOwnerMarker("orbit-skill", input.target.sourcePluginName);
-  for (const relativeFile of await listDirRecursive(skillsRoot)) {
-    if (!relativeFile.endsWith("SKILL.md")) continue;
-    if (desiredRelativePaths.has(relativeFile)) continue;
-
-    const absoluteFile = join(skillsRoot, relativeFile);
-    const content = await readFile(absoluteFile);
-    if (!content.includes(marker)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: dirname(absoluteFile),
-      targetType: "dir",
-      reason: "stale",
-    });
-  }
-  return operations;
-};
-
 const planRulesWrite = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
 ): Promise<void> => {
   const rules = await renderRules(input);
   if (rules) {
-    await pushWrite(operations, join(input.target.root, "AGENTS.md"), rules, "write-md");
+    pushDesiredFile(files, {
+      targetPath: join(input.target.root, "AGENTS.md"),
+      content: rules,
+      plugin: input.target.sourcePluginName,
+    });
   }
 };
 
-const planConfigWrite = async (
+/**
+ * config.toml is user-shared; Prism owns only fenced fragments inside it
+ * (one region per concern per plugin, sync-engine marker grammar):
+ *  - the plugin's `["mcp_servers"."<name>"]` table (enabled_tools inside),
+ *  - the plugin's hook registrations (`[[hooks.<Event>]]` array tables),
+ *  - `hooks = true` inside the user's `[features]` table, anchored to the
+ *    `[features]` header so a duplicate table is never created. The region
+ *    key is shared across plugins (the flag is a single TOML key — per-plugin
+ *    fences would emit duplicate `hooks` keys, which is invalid TOML).
+ */
+const planConfigRegions = (
   input: LowerInput,
-  operations: LowerOperation[],
   mcp: PlannedMcpServer,
   hooks: ReadonlyArray<PlannedHook>,
-): Promise<void> => {
+): DesiredRegion[] => {
   const configTarget = join(input.target.root, "config.toml");
-  const currentConfig = (await exists(configTarget)) ? await readFile(configTarget) : "";
-  const migratedConfig = renderConfigWithHookFeature(currentConfig, hooks.length > 0);
+  const plugin = input.target.sourcePluginName;
+  const regions: DesiredRegion[] = [];
 
-  // Structural mcp_servers handling (Bun.TOML.parse for understanding the document,
-  // name-based delete via removeMcpServerTable, controlled insert outside markers).
-  let afterMcpUpdate: string;
   if (mcp.mcpServerName && mcp.mcpRuntime && mcp.globalToolNames.length > 0) {
-    const tableLines = renderCodexMcpServerToml({
-      name: mcp.mcpServerName,
-      runtime: mcp.mcpRuntime,
-      ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
-      serverPath: mcp.mcpServerPath,
-      root: input.target.root,
-      enabledTools: mcp.globalToolNames,
+    regions.push({
+      kind: "marker",
+      targetPath: configTarget,
+      regionKey: `codex.mcp.${mcp.mcpServerName}`,
+      commentPrefix: "#",
+      content: renderCodexMcpServerToml({
+        name: mcp.mcpServerName,
+        runtime: mcp.mcpRuntime,
+        ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
+        serverPath: mcp.mcpServerPath,
+        root: input.target.root,
+        enabledTools: mcp.globalToolNames,
+      }).join("\n"),
+      plugin,
     });
-    afterMcpUpdate = applyCodexMcpServerUpdate(migratedConfig, mcp.mcpServerName, tableLines.join("\n"));
-  } else if (mcp.mcpServerName) {
-    // Delete any stale entry we may have left in a previous run.
-    afterMcpUpdate = applyCodexMcpServerUpdate(migratedConfig, mcp.mcpServerName, undefined);
-  } else {
-    afterMcpUpdate = migratedConfig;
   }
 
-  // The marker block is now hooks-only.
-  const hookBlock = renderManagedConfigBlock({ root: input.target.root, hooks });
+  if (hooks.length > 0) {
+    regions.push({
+      kind: "marker",
+      targetPath: configTarget,
+      regionKey: `codex.hooks.${normalizeBundleSegment(plugin)}`,
+      commentPrefix: "#",
+      content: renderHooksConfig(input.target.root, hooks).join("\n").trimEnd(),
+      plugin,
+    });
+    regions.push({
+      kind: "marker",
+      targetPath: configTarget,
+      regionKey: "codex.features.hooks",
+      commentPrefix: "#",
+      anchor: "[features]",
+      content: "hooks = true",
+      plugin,
+    });
+  }
 
-  await pushConfigPatch(
-    operations,
-    configTarget,
-    replaceManagedBlock(afterMcpUpdate, input.target.sourcePluginName, hookBlock),
-    { mode: mcp.globalToolNames.length > 0 && mcp.mcpBearerToken ? 0o600 : undefined },
-  );
+  return regions;
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desiredGeneratedSkillFiles = new Set<string>();
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
+  const files: DesiredFile[] = [];
   const mcp = planMcpServer(input);
 
-  await planAgentWrites(input, operations, agentMcpServerConfig(input, mcp));
-  const desiredManagedSkills = await planManagedSkillWrites(input, operations);
-  await planOrbitWrites(input, operations, desiredGeneratedSkillFiles);
-  await planRulesWrite(input, operations);
-  const hooks = await planHooks(input, operations);
-  await planConfigWrite(input, operations, mcp, hooks);
-  operations.push(...await planGeneratedOrbitSkillPruning(input, desiredGeneratedSkillFiles));
-  const desiredSkillFiles = new Set([
-    ...desiredManagedSkills,
-    ...desiredGeneratedSkillFiles,
-  ]);
-  operations.push(...await planCompileOwnedTargetedSkillPruning({
-    target: { ...input.target, harness: TARGET_ID },
-    skillsRoot: join(input.target.root, "skills"),
-    desiredRelativePaths: desiredSkillFiles,
-  }));
+  planAgentWrites(input, files, agentMcpServerConfig(input, mcp));
+  await planManagedSkillWrites(input, files);
+  planOrbitWrites(input, files);
+  await planRulesWrite(input, files);
+  const hooks = await planHooks(input, files);
+  const regions = planConfigRegions(input, mcp, hooks);
 
-  return operations;
+  return { files, regions };
 };
-
-export const executeLowering = executeStandardLowering;

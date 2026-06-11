@@ -19,53 +19,23 @@ import {
   validateOrbit,
 } from "./resolve.js";
 import { composeAgent, type ComposedAgent } from "./compose.js";
-import {
-  describeOperation,
-  executeLowering as executeOpenCodeLowering,
-  planLowering as planOpenCodeLowering,
-  type LowerOperation,
-} from "./lowerers/opencode.js";
-import {
-  executeLowering as executeClaudeCodeLowering,
-  planLowering as planClaudeCodeLowering,
-} from "./lowerers/claude-code.js";
-import {
-  executeLowering as executeAntigravityCliLowering,
-  planLowering as planAntigravityCliLowering,
-} from "./lowerers/antigravity-cli.js";
-import {
-  executeLowering as executeCodexCliLowering,
-  planLowering as planCodexCliLowering,
-} from "./lowerers/codex-cli.js";
-import {
-  executeLowering as executeAmpCodeLowering,
-  planLowering as planAmpCodeLowering,
-} from "./lowerers/amp-code.js";
-import {
-  executeLowering as executeHermesLowering,
-  planLowering as planHermesLowering,
-} from "./lowerers/hermes.js";
-import {
-  executeLowering as executeGrokLowering,
-  planLowering as planGrokLowering,
-} from "./lowerers/grok.js";
-import {
-  executeLowering as executeFactoryDroidLowering,
-  planLowering as planFactoryDroidLowering,
-} from "./lowerers/factory-droid.js";
-import {
-  executeLowering as executePiLowering,
-  planLowering as planPiLowering,
-} from "./lowerers/pi.js";
-import {
-  executeLowering as executeKimiCodeLowering,
-  planLowering as planKimiCodeLowering,
-} from "./lowerers/kimi-code.js";
-import {
-  executeLowering as executeCursorLowering,
-  planLowering as planCursorLowering,
-} from "./lowerers/cursor.js";
-import type { ExecuteLoweringOptions } from "./lowerers/shared.js";
+import { planLowering as planOpenCodeLowering } from "./lowerers/opencode.js";
+import { planLowering as planClaudeCodeLowering } from "./lowerers/claude-code.js";
+import { planLowering as planAntigravityCliLowering } from "./lowerers/antigravity-cli.js";
+import { planLowering as planCodexCliLowering } from "./lowerers/codex-cli.js";
+import { planLowering as planAmpCodeLowering } from "./lowerers/amp-code.js";
+import { planLowering as planHermesLowering } from "./lowerers/hermes.js";
+import { planLowering as planGrokLowering } from "./lowerers/grok.js";
+import { planLowering as planFactoryDroidLowering } from "./lowerers/factory-droid.js";
+import { planLowering as planPiLowering } from "./lowerers/pi.js";
+import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
+import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
+import type { LowerOutput } from "./lowerers/shared.js";
+import type { DesiredFile, DesiredRegion, DesiredRoot } from "../sync/desired.js";
+import { planSync, type SyncOp } from "../sync/plan.js";
+import { applySync, type SyncOpFailure, type SyncReport } from "../sync/apply.js";
+import { readSnapshot } from "../state/store.js";
+import { withSnapshotLock } from "../state/lock.js";
 import {
   InvalidTargetScopeError,
   UnsupportedTargetCapabilityError,
@@ -73,7 +43,7 @@ import {
   AgentValidationError,
   type CompileError,
 } from "./errors.js";
-import { PluginManifestError } from "../errors.js";
+import { BlockedTargetError, PluginManifestError } from "../errors.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
 import { getCompileTargetCapabilities } from "./target-capabilities.js";
@@ -112,7 +82,6 @@ import {
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
-import { pushWriteOperation } from "./lowerers/shared.js";
 import { ensureMcpToken } from "../mcp/token-store.js";
 import { getFreePort } from "../mcp/ports.js";
 
@@ -134,11 +103,7 @@ interface LowererModule {
       readonly sourcePluginVersion?: string;
       readonly sourcePluginPath?: string;
     };
-  }) => Promise<LowerOperation[]>;
-  readonly executeLowering: (
-    operations: LowerOperation[],
-    options: ExecuteLoweringOptions,
-  ) => Promise<{ backups: string[] }>;
+  }) => Promise<LowerOutput>;
 }
 
 interface CompileTargetContext {
@@ -200,8 +165,18 @@ export interface CompileResult {
   readonly lockfilePath: string | null;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
-  readonly operations: ReadonlyArray<LowerOperation>;
+  /** Desired state produced by the (pure) lowerer. */
+  readonly files: ReadonlyArray<DesiredFile>;
+  readonly regions: ReadonlyArray<DesiredRegion>;
+  /** Sync plan classification (applied unless dry-run). */
+  readonly operations: ReadonlyArray<SyncOp>;
+  /** Per-op apply failures — collected, never thrown mid-batch. */
+  readonly failures: ReadonlyArray<SyncOpFailure>;
+  /** Foreign-file placements the engine refused (collect, don't throw). */
+  readonly blocked: ReadonlyArray<BlockedTargetError>;
   readonly backups: ReadonlyArray<string>;
+  /** True when the run wrote nothing — every op was a skip. */
+  readonly converged: boolean;
   readonly built: ReadonlyArray<string>;
   readonly fromCache: ReadonlyArray<string>;
 }
@@ -213,7 +188,8 @@ export interface PlannedCompileResult {
   readonly cacheDir: string;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly orbits: ReadonlyArray<Orbit>;
-  readonly operations: ReadonlyArray<LowerOperation>;
+  readonly files: ReadonlyArray<DesiredFile>;
+  readonly regions: ReadonlyArray<DesiredRegion>;
   readonly built: ReadonlyArray<string>;
   readonly fromCache: ReadonlyArray<string>;
   readonly sourcePluginName: string;
@@ -237,60 +213,27 @@ const SUPPORTED_TARGETS = [
 const getLowerer = (target: string): LowererModule => {
   switch (target) {
     case "opencode":
-      return {
-        planLowering: planOpenCodeLowering,
-        executeLowering: executeOpenCodeLowering,
-      };
+      return { planLowering: planOpenCodeLowering };
     case "claude-code":
-      return {
-        planLowering: planClaudeCodeLowering,
-        executeLowering: executeClaudeCodeLowering,
-      };
+      return { planLowering: planClaudeCodeLowering };
     case "antigravity-cli":
-      return {
-        planLowering: planAntigravityCliLowering,
-        executeLowering: executeAntigravityCliLowering,
-      };
+      return { planLowering: planAntigravityCliLowering };
     case "codex-cli":
-      return {
-        planLowering: planCodexCliLowering,
-        executeLowering: executeCodexCliLowering,
-      };
+      return { planLowering: planCodexCliLowering };
     case "amp-code":
-      return {
-        planLowering: planAmpCodeLowering,
-        executeLowering: executeAmpCodeLowering,
-      };
+      return { planLowering: planAmpCodeLowering };
     case "hermes":
-      return {
-        planLowering: planHermesLowering,
-        executeLowering: executeHermesLowering,
-      };
+      return { planLowering: planHermesLowering };
     case "grok":
-      return {
-        planLowering: planGrokLowering,
-        executeLowering: executeGrokLowering,
-      };
+      return { planLowering: planGrokLowering };
     case "factory-droid":
-      return {
-        planLowering: planFactoryDroidLowering,
-        executeLowering: executeFactoryDroidLowering,
-      };
+      return { planLowering: planFactoryDroidLowering };
     case "pi":
-      return {
-        planLowering: planPiLowering,
-        executeLowering: executePiLowering,
-      };
+      return { planLowering: planPiLowering };
     case "kimi-code":
-      return {
-        planLowering: planKimiCodeLowering,
-        executeLowering: executeKimiCodeLowering,
-      };
+      return { planLowering: planKimiCodeLowering };
     case "cursor":
-      return {
-        planLowering: planCursorLowering,
-        executeLowering: executeCursorLowering,
-      };
+      return { planLowering: planCursorLowering };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
   }
@@ -307,20 +250,19 @@ const isAgentMarkdownTarget = (target: string, agentName: string): boolean =>
 
 const collectCacheOutputs = (
   agentName: string,
-  operations: ReadonlyArray<LowerOperation>,
+  lowered: LowerOutput,
 ): Record<string, string> => {
   const outputs: Record<string, string> = {};
 
-  for (const operation of operations) {
-    if (operation.kind === "write-md" && isAgentMarkdownTarget(operation.target, agentName)) {
-      outputs[operation.target] = computeContentHash(operation.content);
-      continue;
+  for (const file of lowered.files) {
+    if (isAgentMarkdownTarget(file.targetPath, agentName)) {
+      outputs[file.targetPath] = computeContentHash(file.content);
     }
+  }
 
-    if (operation.kind === "patch-json" && operation.agentName === agentName) {
-      outputs[`${operation.target}#agent.${agentName}`] = computeStableHash(
-        operation.nextBlock,
-      );
+  for (const region of lowered.regions) {
+    if (region.kind === "json-key" && region.regionKey.startsWith(`agent.${agentName}.`)) {
+      outputs[`${region.targetPath}#${region.regionKey}`] = computeStableHash(region.value);
     }
   }
 
@@ -1141,7 +1083,7 @@ const planTargetLowering = (options: {
   readonly mcpServer?: PreparedMcpServer;
   readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
-}): Effect.Effect<LowerOperation[], CompileError> => {
+}): Effect.Effect<LowerOutput, CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
     options.targetId !== "amp-code" &&
@@ -1150,11 +1092,11 @@ const planTargetLowering = (options: {
     options.targetId !== "kimi-code" &&
     options.targetId !== "cursor"
   ) {
-    return Effect.succeed([]);
+    return Effect.succeed({ files: [], regions: [] });
   }
 
   return Effect.promise(async () => {
-    const operations = await options.lowerer.planLowering({
+    const lowered = await options.lowerer.planLowering({
       agents: options.agents,
       orbits: options.orbits,
       tools: options.artifacts.tools,
@@ -1173,48 +1115,71 @@ const planTargetLowering = (options: {
       },
     });
 
-    // Package mode ships the bundle inside the package payload as a plan
-    // operation (live compiles write the canonical PRISM_HOME bundle instead).
+    // Package mode ships the bundle inside the package payload as a desired
+    // file (live compiles write the canonical PRISM_HOME bundle instead).
     if (options.mcpServer?.packagedBundleContent !== undefined) {
-      const bundleOperations: LowerOperation[] = [];
-      await pushWriteOperation(
-        bundleOperations,
-        options.mcpServer.serverPath,
-        options.mcpServer.packagedBundleContent,
-      );
-      return [...bundleOperations, ...operations];
+      return {
+        files: [
+          {
+            targetPath: options.mcpServer.serverPath,
+            content: options.mcpServer.packagedBundleContent,
+            plugin: options.registry.pluginName,
+          },
+          ...lowered.files,
+        ],
+        regions: lowered.regions,
+      };
     }
-    return operations;
+    return lowered;
   });
 };
 
-const executeTargetLowering = (
-  lowerer: LowererModule,
-  operations: ReadonlyArray<LowerOperation>,
-  options: Pick<CompileOptions, "dryRun" | "scope"> & {
-    readonly context: CompileTargetContext;
-    readonly registry: PluginRegistry;
-  },
-): Effect.Effect<string[], CompileError> => {
-  if (options.dryRun) return Effect.succeed([]);
+/**
+ * The compile-side sync wiring: build the DesiredRoot for this (plugin,
+ * harness, root), plan against the snapshot scoped to the compiled plugin
+ * (so it can never prune a neighbor plugin's outputs), and apply under the
+ * PRISM_HOME snapshot lock. Dry runs plan without locking or writing.
+ */
+const syncDesiredRoot = (options: {
+  readonly prismHome: string;
+  readonly desired: DesiredRoot;
+  readonly scopePlugin: string;
+  readonly dryRun: boolean;
+}): Promise<SyncReport> => {
+  const plan = async () => {
+    const snapshot = await readSnapshot({
+      prismHome: options.prismHome,
+      harness: options.desired.harness,
+      root: options.desired.root,
+    });
+    return planSync({
+      desired: options.desired,
+      snapshot: snapshot.manifest,
+      degradedOwnership: snapshot.quarantinedPath !== undefined,
+      scopePlugins: new Set([options.scopePlugin]),
+    });
+  };
 
-  return Effect.gen(function* () {
-    const result = yield* Effect.promise(() =>
-      lowerer.executeLowering([...operations], {
-        dryRun: false,
-        target: {
-          harness: options.context.targetId,
-          scope: options.scope,
-          root: options.context.outputRoot,
-          sourcePluginName: options.registry.pluginName,
-          sourcePluginVersion: options.registry.pluginVersion,
-          sourcePluginPath: options.registry.pluginPath,
-        },
-      })
+  if (options.dryRun) {
+    return plan().then((planned) =>
+      applySync({ prismHome: options.prismHome, plan: planned, dryRun: true }),
     );
-    return result.backups;
-  });
+  }
+
+  return withSnapshotLock(options.prismHome, async () =>
+    applySync({ prismHome: options.prismHome, plan: await plan() }),
+  );
 };
+
+const blockedTargetErrors = (report: SyncReport): BlockedTargetError[] =>
+  report.blocked.map(
+    (op) =>
+      new BlockedTargetError({
+        targetPath: op.targetPath,
+        plugin: op.plugin,
+        hint: op.hint,
+      }),
+  );
 
 const persistCompileOutputs = (options: {
   readonly pluginPath: string;
@@ -1224,7 +1189,7 @@ const persistCompileOutputs = (options: {
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly built: ReadonlyArray<string>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
-  readonly operations: ReadonlyArray<LowerOperation>;
+  readonly lowered: LowerOutput;
 }): Effect.Effect<string | null, CompileError> =>
   Effect.gen(function* () {
     if (!options.useCache) return null;
@@ -1242,7 +1207,7 @@ const persistCompileOutputs = (options: {
           sourceHash: descriptor.sourceHash,
           contextHash: descriptor.contextHash,
           composed: agent,
-          outputs: collectCacheOutputs(agent.name, options.operations),
+          outputs: collectCacheOutputs(agent.name, options.lowered),
           timestamp: new Date().toISOString(),
         })
       );
@@ -1363,7 +1328,7 @@ export const planPluginForTarget = (
       mcpRuntimePort,
       mcpBearerToken,
     } = yield* prepareLoweringInputs(options);
-    const operations = yield* planTargetLowering({
+    const lowered = yield* planTargetLowering({
       targetId: context.targetId,
       lowerer: context.lowerer,
       surfaces,
@@ -1385,7 +1350,8 @@ export const planPluginForTarget = (
       cacheDir: context.cacheDir,
       composed: composedForLowering,
       orbits,
-      operations,
+      files: lowered.files,
+      regions: lowered.regions,
       built: agentResult.built,
       fromCache: agentResult.fromCache,
       sourcePluginName: registry.pluginName,
@@ -1409,7 +1375,7 @@ export const compilePluginForTarget = (
       mcpRuntimePort,
       mcpBearerToken,
     } = yield* prepareLoweringInputs(options);
-    const allOps = yield* planTargetLowering({
+    const lowered = yield* planTargetLowering({
       targetId: context.targetId,
       lowerer: context.lowerer,
       surfaces,
@@ -1433,12 +1399,19 @@ export const compilePluginForTarget = (
       artifacts,
       ...(mcpServer ? { expectedServerSha256: mcpServer.serverSha256 } : {}),
     });
-    const backups = yield* executeTargetLowering(context.lowerer, allOps, {
-      dryRun: options.dryRun,
-      scope: options.scope,
-      context,
-      registry,
-    });
+    const report = yield* Effect.promise(() =>
+      syncDesiredRoot({
+        prismHome: context.prismHome,
+        desired: {
+          harness: context.targetId,
+          root: context.outputRoot,
+          files: lowered.files,
+          regions: lowered.regions,
+        },
+        scopePlugin: registry.pluginName,
+        dryRun: options.dryRun || options.packageMode === true,
+      }),
+    );
     const lockfilePath = yield* persistCompileOutputs({
       pluginPath: options.pluginPath,
       registry,
@@ -1447,7 +1420,7 @@ export const compilePluginForTarget = (
       composed: agentResult.composed,
       built: agentResult.built,
       cacheDescriptors: agentResult.cacheDescriptors,
-      operations: allOps,
+      lowered,
     });
 
     return {
@@ -1458,13 +1431,39 @@ export const compilePluginForTarget = (
       lockfilePath,
       composed: composedForLowering,
       orbits,
-      operations: allOps,
-      backups,
+      files: lowered.files,
+      regions: lowered.regions,
+      operations: report.ops,
+      failures: report.failures,
+      blocked: blockedTargetErrors(report),
+      backups: report.backups,
+      converged: report.converged,
       built: agentResult.built,
       fromCache: agentResult.fromCache,
     };
   });
 
+const describeSyncOp = (op: SyncOp): string => {
+  switch (op.kind) {
+    case "create":
+      return `create    ${op.targetPath} (${op.reason})`;
+    case "repair":
+      return `repair    ${op.targetPath} (${op.reason})`;
+    case "skip":
+      return `skip      ${op.targetPath}`;
+    case "chmod":
+      return `chmod     ${op.targetPath} (${op.mode.toString(8)})`;
+    case "patch-regions":
+      return `patch     ${op.targetPath} [${[...op.changedRegions, ...op.removedRegions.map((key) => `-${key}`)].join(", ")}]`;
+    case "skip-regions":
+      return `skip      ${op.targetPath} [${op.regionKeys.join(", ")}]`;
+    case "prune":
+      return `prune     ${op.targetPath} (${op.reason})`;
+    case "blocked":
+      return `blocked   ${op.targetPath} — ${op.hint}`;
+  }
+};
+
 export const formatOperations = (
-  operations: ReadonlyArray<LowerOperation>
-): string => operations.map(describeOperation).join("\n");
+  operations: ReadonlyArray<SyncOp>
+): string => operations.map(describeSyncOp).join("\n");

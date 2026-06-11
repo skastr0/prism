@@ -1,10 +1,10 @@
 /**
  * Derived orbit skill rendering.
  *
- * The four harness lowerers each emit a SKILL.md per concrete orbit. The
- * structured content of that SKILL.md is identical across harnesses; only the
- * frontmatter format and owner-marker comment vary. This module owns the
- * structured body so all four lowerers stay aligned.
+ * Harness lowerers each emit a SKILL.md per concrete orbit. The structured
+ * content of that SKILL.md is identical across harnesses; only the frontmatter
+ * format varies. This module owns the structured body so all lowerers stay
+ * aligned.
  *
  * The body is composed from data the compiler already resolved: the orbit
  * itself, the agents assigned to its phases, their identities, personalities,
@@ -575,8 +575,8 @@ const renderParametricStub = (orbit: Orbit, lines: string[]): void => {
  * compiler registry.
  *
  * The output starts with `# <name>` and the description and ends with the
- * free-form body content (when present). Frontmatter and harness-specific
- * owner markers are the lowerer's responsibility.
+ * free-form body content (when present). Frontmatter is the lowerer's
+ * responsibility.
  */
 export const renderDerivedOrbitSkillBody = (
   orbit: Orbit,

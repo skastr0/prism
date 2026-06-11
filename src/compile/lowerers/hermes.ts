@@ -16,21 +16,14 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { bindingsFromCanonicalTools } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
-import {
-  exists,
-  listDirRecursive,
-  readFile,
-} from "../../fs.js";
+import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
-  executeStandardLowering,
-  planCompileOwnedTargetedSkillPruning,
-  prismOwnerMarker,
-  pushConfigPatchOperation as pushConfigPatch,
-  pushWriteOperation as pushWrite,
+  pushDesiredFile,
   renderGeneratedOrbitSkill,
   yamlScalar,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "hermes" as const;
@@ -63,9 +56,6 @@ const hermesSkillsRoot = (target: HermesLowerTarget): string =>
 const configPath = (target: HermesLowerTarget): string =>
   join(target.root, "config.yaml");
 
-const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  prismOwnerMarker("hermes-orbit-skill", sourcePluginName);
-
 const targetIncludesHermes = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
 
@@ -76,93 +66,29 @@ const artifactTargetsHermes = (
 
 const renderHermesOrbitSkillMarkdown = (
   orbit: Orbit,
-  sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string =>
   renderGeneratedOrbitSkill({
     orbit,
-    sourcePluginName,
     registry,
-    ownerKind: "hermes-orbit-skill",
     trailingNewline: true,
   });
 
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,
-  operations: LowerOperation[],
-): Promise<ReadonlySet<string>> => {
-  const desired = new Set<string>();
+  files: DesiredFile[],
+): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsHermes(input.registry, "skills")) return desired;
+  if (!pluginPath || !artifactTargetsHermes(input.registry, "skills")) return;
 
-  const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
-  for (const file of files) {
-    desired.add(file.relativePath);
-    await pushWrite(
-      operations,
-      join(hermesSkillsRoot(input.target), file.relativePath),
-      await readFile(file.sourcePath),
-      file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file",
-    );
-  }
-  return desired;
-};
-
-const planGeneratedOrbitSkillPruning = async (
-  target: HermesLowerTarget,
-  desiredRelativeSkillFiles: ReadonlySet<string>,
-): Promise<LowerOperation[]> => {
-  const root = hermesSkillsRoot(target);
-  if (!(await exists(root))) return [];
-
-  const operations: LowerOperation[] = [];
-  const marker = orbitSkillOwnerMarker(target.sourcePluginName);
-  for (const relativeFile of await listDirRecursive(root)) {
-    if (!relativeFile.endsWith("SKILL.md")) continue;
-    if (desiredRelativeSkillFiles.has(relativeFile)) continue;
-
-    const absoluteFile = join(root, relativeFile);
-    const content = await readFile(absoluteFile);
-    if (!content.includes(marker)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: dirname(absoluteFile),
-      targetType: "dir",
-      reason: "stale",
+  const sourceFiles = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
+  for (const file of sourceFiles) {
+    pushDesiredFile(files, {
+      targetPath: join(hermesSkillsRoot(input.target), file.relativePath),
+      content: await readFile(file.sourcePath),
+      plugin: input.target.sourcePluginName,
     });
   }
-  return operations;
-};
-
-const isTopLevelKey = (line: string): boolean =>
-  /^[A-Za-z0-9_.-]+:\s*(?:#.*)?$/.test(line) ||
-  /^[A-Za-z0-9_.-]+:\s+\S/.test(line);
-
-const topLevelKeyName = (line: string): string | undefined => {
-  const match = /^([A-Za-z0-9_.-]+):\s*(?:.*)?$/u.exec(line);
-  return match?.[1];
-};
-
-const findTopLevelBlock = (
-  lines: string[],
-  key: string,
-): { start: number; end: number } | undefined => {
-  const start = lines.findIndex((line) => topLevelKeyName(line) === key);
-  if (start === -1) return undefined;
-
-  let end = lines.length;
-  for (let index = start + 1; index < lines.length; index++) {
-    if (isTopLevelKey(lines[index] ?? "")) {
-      end = index;
-      break;
-    }
-  }
-  return { start, end };
-};
-
-const childBlockKeyName = (line: string): string | undefined => {
-  const match = /^  ([^\s#][^:]*):\s*(?:.*)?$/u.exec(line);
-  return match?.[1];
 };
 
 const renderHermesMcpServerYaml = (options: {
@@ -215,65 +141,6 @@ const renderHermesMcpServerYaml = (options: {
   ];
 };
 
-const replaceHermesMcpServerBlock = (
-  currentConfig: string,
-  options: {
-    readonly serverName: string;
-    readonly serverPath: string;
-    readonly workingDirectory: string;
-    readonly runtime: ResolvedMcpRuntime;
-    readonly bearerToken?: string;
-    readonly toolNames: ReadonlyArray<string>;
-  },
-): string => {
-  const normalizedCurrent = currentConfig.trimEnd();
-  const lines = normalizedCurrent.length > 0 ? normalizedCurrent.split(/\r?\n/u) : [];
-  const mcpBlock = findTopLevelBlock(lines, "mcp_servers");
-  const serverBlock =
-    options.toolNames.length > 0 ? renderHermesMcpServerYaml(options) : [];
-
-  if (!mcpBlock) {
-    if (serverBlock.length === 0) return currentConfig;
-    const next = [
-      ...lines,
-      ...(lines.length > 0 ? [""] : []),
-      "mcp_servers:",
-      ...serverBlock,
-    ];
-    return `${next.join("\n").trimEnd()}\n`;
-  }
-
-  const before = lines.slice(0, mcpBlock.start);
-  const body = lines.slice(mcpBlock.start + 1, mcpBlock.end);
-  const after = lines.slice(mcpBlock.end);
-  const childStart = body.findIndex((line) => childBlockKeyName(line) === options.serverName);
-  const nextBody = [...body];
-
-  if (childStart !== -1) {
-    let childEnd = nextBody.length;
-    for (let index = childStart + 1; index < nextBody.length; index++) {
-      if (/^  [^\s#][^:]*:\s*(?:.*)?$/u.test(nextBody[index] ?? "")) {
-        childEnd = index;
-        break;
-      }
-    }
-    nextBody.splice(childStart, childEnd - childStart, ...serverBlock);
-  } else if (serverBlock.length > 0) {
-    if (nextBody.length > 0 && nextBody[nextBody.length - 1]?.trim() !== "") {
-      nextBody.push("");
-    }
-    nextBody.push(...serverBlock);
-  }
-
-  const next = [
-    ...before,
-    "mcp_servers:",
-    ...nextBody,
-    ...after,
-  ];
-  return `${next.join("\n").trimEnd()}\n`;
-};
-
 const planMcpServer = (
   input: LowerInput,
 ): { serverName: string; toolNames: ReadonlyArray<string> } => {
@@ -308,66 +175,62 @@ const assertHermesLoweringInput = (input: LowerInput): void => {
   }
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desiredGeneratedSkillFiles = new Set<string>();
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
+  const files: DesiredFile[] = [];
+  const regions: DesiredRegion[] = [];
+  const plugin = input.target.sourcePluginName;
 
   assertHermesLoweringInput(input);
 
-  const desiredTargetedSkillFiles = await copyTargetedSkillArtifacts(input, operations);
+  await copyTargetedSkillArtifacts(input, files);
 
   for (const orbit of input.orbits) {
-    const relativeSkill = `${orbit.name}/SKILL.md`;
-    desiredGeneratedSkillFiles.add(relativeSkill);
-    await pushWrite(
-      operations,
-      join(hermesSkillsRoot(input.target), relativeSkill),
-      renderHermesOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
-      "write-md",
-    );
+    pushDesiredFile(files, {
+      targetPath: join(hermesSkillsRoot(input.target), `${orbit.name}/SKILL.md`),
+      content: renderHermesOrbitSkillMarkdown(orbit, input.registry),
+      plugin,
+    });
 
     for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      const relativeReference = `${orbit.name}/references/${reference.filename}`;
-      desiredGeneratedSkillFiles.add(relativeReference);
-      await pushWrite(
-        operations,
-        join(hermesSkillsRoot(input.target), relativeReference),
-        reference.content,
-        "write-md",
-      );
+      pushDesiredFile(files, {
+        targetPath: join(
+          hermesSkillsRoot(input.target),
+          `${orbit.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin,
+      });
     }
   }
-
-  operations.push(...await planGeneratedOrbitSkillPruning(input.target, desiredGeneratedSkillFiles));
-  operations.push(...await planCompileOwnedTargetedSkillPruning({
-    target: { ...input.target, harness: TARGET_ID },
-    skillsRoot: hermesSkillsRoot(input.target),
-    desiredRelativePaths: desiredTargetedSkillFiles,
-  }));
 
   const mcp = planMcpServer(input);
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
     requirePort: mcp.toolNames.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  const currentConfig = (await exists(configPath(input.target)))
-    ? await readFile(configPath(input.target))
-    : "";
-  const nextConfig = replaceHermesMcpServerBlock(currentConfig, {
-    serverName: mcp.serverName,
-    serverPath: input.target.mcpServerPath ?? "",
-    workingDirectory: input.target.root,
-    runtime,
-    bearerToken: input.target.mcpBearerToken,
-    toolNames: mcp.toolNames,
-  });
-  if (nextConfig !== currentConfig || input.target.mcpBearerToken) {
-    await pushConfigPatch(operations, configPath(input.target), nextConfig, {
-      mode: input.target.mcpBearerToken ? 0o600 : undefined,
+
+  // The hermes MCP wiring is one child mapping inside the user-shared
+  // top-level `mcp_servers:` key of config.yaml. The fence is anchored to
+  // that key so the region content lands inside the mapping (the anchor line
+  // is created when absent); the rest of config.yaml is never rewritten.
+  if (mcp.toolNames.length > 0) {
+    regions.push({
+      kind: "marker",
+      targetPath: configPath(input.target),
+      regionKey: `hermes.mcp.${mcp.serverName}`,
+      commentPrefix: "#",
+      anchor: "mcp_servers:",
+      content: renderHermesMcpServerYaml({
+        serverName: mcp.serverName,
+        serverPath: input.target.mcpServerPath ?? "",
+        workingDirectory: input.target.root,
+        runtime,
+        bearerToken: input.target.mcpBearerToken,
+        toolNames: mcp.toolNames,
+      }).join("\n"),
+      plugin,
     });
   }
 
-  return operations;
+  return { files, regions };
 };
-
-export const executeLowering = executeStandardLowering;

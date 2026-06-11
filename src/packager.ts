@@ -16,7 +16,7 @@ import {
   planPluginForTarget,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
-import type { LowerOperation } from "./compile/lowerers/opencode.js";
+import type { DesiredFile, DesiredRegion } from "./sync/desired.js";
 import { readPrismProjectConfig } from "./project-config.js";
 import type { HarnessId, HarnessScope } from "./types.js";
 
@@ -49,7 +49,8 @@ export interface PackageResult {
   readonly activationPath: string;
   readonly manifestPath: string;
   readonly operations: ReadonlyArray<PackageWriteOperation>;
-  readonly compileOperations: ReadonlyArray<LowerOperation>;
+  readonly compileFiles: ReadonlyArray<DesiredFile>;
+  readonly compileRegions: ReadonlyArray<DesiredRegion>;
 }
 
 interface DesiredPackageFile {
@@ -124,28 +125,13 @@ const validatePreviousManifestFiles = (
   return manifest;
 };
 
-const isWriteOperation = (
-  operation: LowerOperation,
-): operation is Extract<LowerOperation, { readonly kind: "write-md" | "write-plugin-file" }> =>
-  operation.kind === "write-md" || operation.kind === "write-plugin-file";
-
-const activationOperation = (
-  operation: LowerOperation,
+const activationRegionEntry = (
+  region: DesiredRegion,
   planRoot: string,
-): Record<string, unknown> | undefined => {
-  if (isWriteOperation(operation)) return undefined;
-  if (operation.kind === "prune-plugin-path") return undefined;
-
-  const target = "target" in operation
-    ? relativePathInsideRoot(planRoot, operation.target) ?? operation.target
-    : undefined;
-
-  return {
-    ...operation,
-    kind: operation.kind,
-    ...(target ? { target } : {}),
-  };
-};
+): Record<string, unknown> => ({
+  ...region,
+  targetPath: relativePathInsideRoot(planRoot, region.targetPath) ?? region.targetPath,
+});
 
 const plannedPackagePaths = async (options: PackageTargetOptions): Promise<{
   readonly pluginPath: string;
@@ -180,33 +166,32 @@ const buildDesiredFiles = (options: {
   readonly generatorVersion: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
-  readonly compileOperations: ReadonlyArray<LowerOperation>;
+  readonly compileFiles: ReadonlyArray<DesiredFile>;
+  readonly compileRegions: ReadonlyArray<DesiredRegion>;
 }): Map<string, DesiredPackageFile> => {
   const desired = new Map<string, DesiredPackageFile>();
   const copiedFiles: Array<{ source: string; target: string; mode?: number }> = [];
   const activation: Record<string, unknown>[] = [];
 
-  for (const operation of options.compileOperations) {
-    if (isWriteOperation(operation)) {
-      const target = relativePathInsideRoot(options.planned.planRoot, operation.target);
-      if (!target) continue;
-      const packagePath = `${PAYLOAD_ROOT}/${target}`;
-      desired.set(packagePath, {
-        path: packagePath,
-        content: operation.content,
-        mode: operation.mode,
-        role: "payload",
-      });
-      copiedFiles.push({
-        source: packagePath,
-        target,
-        ...(operation.mode !== undefined ? { mode: operation.mode } : {}),
-      });
-      continue;
-    }
+  for (const file of options.compileFiles) {
+    const target = relativePathInsideRoot(options.planned.planRoot, file.targetPath);
+    if (!target) continue;
+    const packagePath = `${PAYLOAD_ROOT}/${target}`;
+    desired.set(packagePath, {
+      path: packagePath,
+      content: file.content,
+      mode: file.mode,
+      role: "payload",
+    });
+    copiedFiles.push({
+      source: packagePath,
+      target,
+      ...(file.mode !== undefined ? { mode: file.mode } : {}),
+    });
+  }
 
-    const entry = activationOperation(operation, options.planned.planRoot);
-    if (entry) activation.push(entry);
+  for (const region of options.compileRegions) {
+    activation.push(activationRegionEntry(region, options.planned.planRoot));
   }
 
   const activationContent = renderJson({
@@ -444,7 +429,8 @@ export const packagePluginForTarget = async (
     generatorVersion,
     sourcePluginName: compileExit.value.sourcePluginName,
     sourcePluginVersion: compileExit.value.sourcePluginVersion,
-    compileOperations: compileExit.value.operations,
+    compileFiles: compileExit.value.files,
+    compileRegions: compileExit.value.regions,
   });
   const previous = await readPreviousManifest(
     plannedPaths.packageRoot,
@@ -471,7 +457,8 @@ export const packagePluginForTarget = async (
     activationPath: join(plannedPaths.packageRoot, ACTIVATION_MANIFEST),
     manifestPath: join(plannedPaths.packageRoot, PACKAGE_MANIFEST),
     operations,
-    compileOperations: compileExit.value.operations,
+    compileFiles: compileExit.value.files,
+    compileRegions: compileExit.value.regions,
   };
 };
 

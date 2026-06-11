@@ -1,25 +1,18 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
-import { computeContentHash } from "../content-hash.js";
-import { readHarnessLedger } from "../managed-ledger.js";
 import { loadPlugin } from "./load.js";
-import { Orbit } from "./sources.js";
-import {
-  applyCodexMcpServerUpdate,
-  countMcpServerTableOccurrences,
-  executeLowering,
-  planLowering,
-  removeMcpServerTable,
-  replaceManagedBlock,
-} from "./lowerers/codex-cli.js";
-import type { LowerOperation } from "./lowerers/opencode.js";
+import { planLowering } from "./lowerers/codex-cli.js";
+import { applySync } from "../sync/apply.js";
+import { planSync } from "../sync/plan.js";
+import { readSnapshot } from "../state/store.js";
+import { emptySnapshotManifest } from "../state/snapshot.js";
+import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
-const originalPrismHome = process.env.PRISM_HOME;
 
 const effectImportPath = join(
   process.cwd(),
@@ -35,7 +28,6 @@ const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-codex-mcp-test-"));
   tempRoots.push(root);
-  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
 };
 
@@ -44,28 +36,20 @@ const writeText = async (path: string, content: string): Promise<void> => {
   await writeFile(path, content);
 };
 
-type ContentOperation = Extract<LowerOperation, { readonly content: string }>;
-
-const isContentOperation = (operation: LowerOperation): operation is ContentOperation =>
-  "content" in operation;
-
-const findContentOperation = (
-  operations: ReadonlyArray<LowerOperation>,
+const findFile = (
+  files: ReadonlyArray<DesiredFile>,
   suffix: string,
-): ContentOperation | undefined =>
-  operations.find(
-    (operation): operation is ContentOperation =>
-      isContentOperation(operation) && operation.target.endsWith(suffix),
-  );
+): DesiredFile | undefined => files.find((file) => file.targetPath.endsWith(suffix));
 
-const pathExists = async (path: string): Promise<boolean> =>
-  access(path).then(
-    () => true,
-    () => false,
-  );
+const findRegion = (
+  regions: ReadonlyArray<DesiredRegion>,
+  regionKey: string,
+): DesiredRegion | undefined => regions.find((region) => region.regionKey === regionKey);
 
-const countSubstring = (content: string, value: string): number =>
-  content.split(value).length - 1;
+const markerContent = (region: DesiredRegion | undefined): string => {
+  if (!region || region.kind !== "marker") throw new Error("expected a marker region");
+  return region.content;
+};
 
 const runGeneratedHookWrapper = (
   wrapperPath: string,
@@ -93,13 +77,12 @@ const runGeneratedHookWrapper = (
   });
 
 afterEach(async () => {
-  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
-test("codex-cli lowerer emits MCP server bundle and managed config", async () => {
+test("codex-cli lowerer emits desired files plus config.toml regions", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".codex");
   const pluginRoot = join(root, "codex-mcp-fixture");
@@ -121,20 +104,6 @@ test("codex-cli lowerer emits MCP server bundle and managed config", async () =>
       null,
       2,
     )}\n`,
-  );
-
-  await writeText(
-    join(outputRoot, "config.toml"),
-    `model = "codex-default"
-
-[features]
-codex_hooks = true
-model_widget = true
-
-# --- prism codex-cli begin: codex-mcp-fixture ---
-stale = true
-# --- prism codex-cli end: codex-mcp-fixture ---
-`,
   );
 
   await writeText(
@@ -229,7 +198,16 @@ export default defineTool({
   if (!afterHook) throw new Error("expected audit-shell-after hook");
   if (!sessionEndHook) throw new Error("expected session-ended hook");
 
-  const operations = await planLowering({
+  const canonicalServerPath = join(
+    root,
+    "prism-home",
+    "runtime",
+    "mcp",
+    "codex-mcp-fixture",
+    "server.mjs",
+  );
+
+  const lowered = await planLowering({
     agents: [
       {
         name: "reviewer",
@@ -260,22 +238,14 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "codex-mcp-fixture", "server.mjs"),
+      mcpServerPath: canonicalServerPath,
       sourcePluginName: "codex-mcp-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
     },
   });
 
-  const canonicalServerPath = join(
-    root,
-    "prism-home",
-    "runtime",
-    "mcp",
-    "codex-mcp-fixture",
-    "server.mjs",
-  );
-  const agentToml = findContentOperation(operations, join("agents", "reviewer.toml"));
+  const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
   expect(agentToml?.content).toContain('name = "reviewer"');
   expect(agentToml?.content).toContain('developer_instructions = "# Reviewer\\n\\nUse the generated MCP server."');
   expect(agentToml?.content).toContain('model = "gpt-5"');
@@ -292,48 +262,50 @@ export default defineTool({
   expect(agentToml?.content).toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
 
-  const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
+  const skill = findFile(lowered.files, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
 
-  const rules = findContentOperation(operations, "AGENTS.md");
+  const rules = findFile(lowered.files, "AGENTS.md");
   expect(rules?.content).toContain('<!-- prism:rules source="global/context.md" -->');
   expect(rules?.content).toContain("Use project rules.");
 
   // The MCP server bundle is written once to PRISM_HOME by the pipeline —
   // the lowerer plans no bundle write inside the harness root.
-  const bundleOperation = operations.find((operation) =>
-    "target" in operation && operation.target.endsWith("server.mjs"),
-  );
-  expect(bundleOperation).toBeUndefined();
+  expect(findFile(lowered.files, "server.mjs")).toBeUndefined();
 
-  const configToml = findContentOperation(operations, "config.toml");
-  expect(configToml?.kind).toBe("patch-config");
-  expect(configToml?.content).toContain('model = "codex-default"');
-  expect(configToml?.content).toContain("[features]\nhooks = true\nmodel_widget = true");
-  expect(configToml?.content).not.toContain("codex_hooks");
-  expect(configToml?.content).not.toContain("stale = true");
-  expect(configToml?.content).toContain("# --- prism codex-cli begin: codex-mcp-fixture ---");
-  expect(configToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
-  expect(configToml?.content).not.toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
-  expect(configToml?.content).not.toContain('default_tools_approval_mode = "approve"');
-  expect(configToml?.content).not.toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
-  expect(configToml?.content).toContain('[["hooks"."PreToolUse"]]');
-  expect(configToml?.content).toContain('[["hooks"."PostToolUse"]]');
-  expect(configToml?.content).toContain('[["hooks"."Stop"]]');
-  expect(configToml?.content).toContain('matcher = "shell\\\\.command"');
-  expect(configToml?.content).toContain('statusMessage = "prism hook audit-shell"');
+  // config.toml is never a whole-file write: only regions.
+  expect(findFile(lowered.files, "config.toml")).toBeUndefined();
+  for (const region of lowered.regions) {
+    expect(region.targetPath).toBe(join(outputRoot, "config.toml"));
+    expect(region.kind).toBe("marker");
+  }
 
-  const hookWrapper = findContentOperation(operations, join("hooks", "audit-shell.mjs"));
+  // No global canonical tools here, so no mcp region — agent-level tables only.
+  expect(findRegion(lowered.regions, "codex.mcp.prism-generated-codex-mcp-fixture")).toBeUndefined();
+
+  const hooksRegion = markerContent(findRegion(lowered.regions, "codex.hooks.codex-mcp-fixture"));
+  expect(hooksRegion).toContain('[["hooks"."PreToolUse"]]');
+  expect(hooksRegion).toContain('[["hooks"."PostToolUse"]]');
+  expect(hooksRegion).toContain('[["hooks"."Stop"]]');
+  expect(hooksRegion).toContain('matcher = "shell\\\\.command"');
+  expect(hooksRegion).toContain('statusMessage = "prism hook audit-shell"');
+
+  const featuresRegion = findRegion(lowered.regions, "codex.features.hooks");
+  expect(featuresRegion?.kind).toBe("marker");
+  if (featuresRegion?.kind !== "marker") throw new Error("unreachable");
+  expect(featuresRegion.anchor).toBe("[features]");
+  expect(featuresRegion.content).toBe("hooks = true");
+
+  const hookWrapper = findFile(lowered.files, join("hooks", "audit-shell.mjs"));
   expect(hookWrapper?.content).toContain("input?.tool_response");
   expect(hookWrapper?.content).toContain("native payload");
   expect(hookWrapper?.content).toContain("validation failed");
-  expect(hookWrapper?.content).toContain("result");
   expect(hookWrapper?.content).toContain('harness: "codex-cli"');
   expect(hookWrapper?.content).toContain("input?.cwd");
   expect(hookWrapper?.content).toContain("permissionDecision");
   if (!hookWrapper) throw new Error("expected audit-shell wrapper");
-  await writeText(hookWrapper.target, hookWrapper.content);
-  const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
+  await writeText(hookWrapper.targetPath, hookWrapper.content);
+  const blocked = await runGeneratedHookWrapper(hookWrapper.targetPath, {
     tool: { name: "shell.command", input: { block: true } },
     cwd: pluginRoot,
   });
@@ -346,7 +318,7 @@ export default defineTool({
       permissionDecisionReason: "blocked",
     },
   });
-  const continued = await runGeneratedHookWrapper(hookWrapper.target, {
+  const continued = await runGeneratedHookWrapper(hookWrapper.targetPath, {
     tool: { name: "shell.command", input: {} },
     cwd: pluginRoot,
   });
@@ -354,13 +326,10 @@ export default defineTool({
   expect(continued.stdout).toBe("");
   expect(continued.stderr).toBe("");
 
-  const afterHookWrapper = findContentOperation(
-    operations,
-    join("hooks", "audit-shell-after.mjs"),
-  );
+  const afterHookWrapper = findFile(lowered.files, join("hooks", "audit-shell-after.mjs"));
   if (!afterHookWrapper) throw new Error("expected audit-shell-after wrapper");
-  await writeText(afterHookWrapper.target, afterHookWrapper.content);
-  const afterResult = await runGeneratedHookWrapper(afterHookWrapper.target, {
+  await writeText(afterHookWrapper.targetPath, afterHookWrapper.content);
+  const afterResult = await runGeneratedHookWrapper(afterHookWrapper.targetPath, {
     tool: { name: "shell.command", input: {} },
     tool_response: { ok: true },
     cwd: pluginRoot,
@@ -368,6 +337,198 @@ export default defineTool({
   expect(afterResult.exitCode).toBe(0);
   expect(afterResult.stdout).toBe("");
   expect(afterResult.stderr).toBe("");
+});
+
+test("codex-cli config regions preserve user config.toml bytes outside fences", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const prismHome = join(root, "prism-home");
+  const configTarget = join(outputRoot, "config.toml");
+
+  await writeText(
+    configTarget,
+    `model = "codex-default"
+
+[features]
+model_widget = true
+
+[projects."/Users/someone/code"]
+trust_level = "trusted"
+`,
+  );
+
+  const regions: DesiredRegion[] = [
+    {
+      kind: "marker",
+      targetPath: configTarget,
+      regionKey: "codex.hooks.fixture",
+      commentPrefix: "#",
+      content: '[["hooks"."Stop"]]\ntype = "command"\ncommand = "node hook.mjs"',
+      plugin: "fixture",
+    },
+    {
+      kind: "marker",
+      targetPath: configTarget,
+      regionKey: "codex.features.hooks",
+      commentPrefix: "#",
+      anchor: "[features]",
+      content: "hooks = true",
+      plugin: "fixture",
+    },
+  ];
+
+  const plan = await planSync({
+    desired: { harness: "codex-cli", root: outputRoot, files: [], regions },
+    snapshot: emptySnapshotManifest({ harness: "codex-cli", root: outputRoot }),
+  });
+  await applySync({ prismHome, plan });
+
+  const next = await readFile(configTarget, "utf8");
+  // User content byte-preserved.
+  expect(next).toContain('model = "codex-default"');
+  expect(next).toContain("model_widget = true");
+  expect(next).toContain('[projects."/Users/someone/code"]\ntrust_level = "trusted"');
+  // The features fence is anchored directly under the user's [features]
+  // header — no duplicate [features] table is ever created.
+  expect(next).toContain(
+    "[features]\n# --- prism:codex.features.hooks begin ---\nhooks = true\n# --- prism:codex.features.hooks end ---",
+  );
+  expect(next.split("[features]").length - 1).toBe(1);
+  // Hooks fence appended with the sync engine grammar.
+  expect(next).toContain("# --- prism:codex.hooks.fixture begin ---");
+  expect(Bun.TOML.parse(next)).toBeTruthy();
+
+  // Orphan removal: dropping the hooks region removes only its fence.
+  const snapshot = await readSnapshot({ prismHome, harness: "codex-cli", root: outputRoot });
+  const removalPlan = await planSync({
+    desired: { harness: "codex-cli", root: outputRoot, files: [], regions: [regions[1]!] },
+    snapshot: snapshot.manifest,
+  });
+  await applySync({ prismHome, plan: removalPlan });
+  const afterRemoval = await readFile(configTarget, "utf8");
+  expect(afterRemoval).not.toContain("codex.hooks.fixture");
+  expect(afterRemoval).toContain("hooks = true");
+  expect(afterRemoval).toContain('trust_level = "trusted"');
+});
+
+test("codex-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-http-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-http-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["codex-cli"],
+        },
+        runtime: {
+          mcp: {
+            "codex-cli": {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: 38464,
+              tokenEnv: "PRISM_MCP_CODEX_HTTP_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo over HTTP",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const tool = registry.tools.get("echo");
+  if (!tool) throw new Error("expected echo tool");
+
+  const lowered = await planLowering({
+    agents: [
+      {
+        name: "reviewer",
+        description: "Reviews through Codex HTTP MCP",
+        body: "# Reviewer",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [
+          {
+            kind: "permission",
+            logicalName: "echo",
+            toolPluginName: "codex-http-fixture",
+            toolName: "echo",
+            toolSourcePath: toolPath,
+          },
+        ],
+      },
+    ],
+    orbits: [],
+    tools: [tool],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "codex-http-fixture", "server.mjs"),
+      mcpBearerToken: "codex-static-token",
+      sourcePluginName: "codex-http-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
+  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
+  expect(agentToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
+  expect(agentToml?.content).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(agentToml?.content).not.toContain('command = "bun"');
+  expect(agentToml?.content).not.toContain("args = ");
+  expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(agentToml?.mode).toBe(0o600);
+
+  const mcpRegion = markerContent(
+    findRegion(lowered.regions, "codex.mcp.prism-generated-codex-http-fixture"),
+  );
+  expect(mcpRegion).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  expect(mcpRegion).toContain('url = "http://127.0.0.1:38464/mcp"');
+  expect(mcpRegion).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
+  expect(mcpRegion).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(mcpRegion).not.toContain('command = "bun"');
+  expect(mcpRegion).not.toContain("args = ");
+  expect(mcpRegion).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+
+  // No hooks: no hooks region and no features region.
+  expect(findRegion(lowered.regions, "codex.hooks.codex-http-fixture")).toBeUndefined();
+  expect(findRegion(lowered.regions, "codex.features.hooks")).toBeUndefined();
+
+  // HTTP daemons consume the canonical PRISM_HOME bundle; nothing is
+  // written into the harness root (or any shared runtime root) anymore.
+  expect(findFile(lowered.files, "server.mjs")).toBeUndefined();
 });
 
 test("codex-cli lowerer emits prompt and permission request hook wrappers", async () => {
@@ -422,7 +583,7 @@ export default defineHook({
   );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const operations = await planLowering({
+  const lowered = await planLowering({
     agents: [],
     orbits: [],
     tools: [],
@@ -438,14 +599,14 @@ export default defineHook({
     },
   });
 
-  const configToml = findContentOperation(operations, "config.toml");
-  expect(configToml?.content).toContain('[["hooks"."UserPromptSubmit"]]');
-  expect(configToml?.content).toContain('[["hooks"."PermissionRequest"]]');
+  const hooksRegion = markerContent(findRegion(lowered.regions, "codex.hooks.codex-hook-fixture"));
+  expect(hooksRegion).toContain('[["hooks"."UserPromptSubmit"]]');
+  expect(hooksRegion).toContain('[["hooks"."PermissionRequest"]]');
 
-  const promptWrapper = findContentOperation(operations, join("hooks", "prompt-context.mjs"));
+  const promptWrapper = findFile(lowered.files, join("hooks", "prompt-context.mjs"));
   if (!promptWrapper) throw new Error("expected prompt-context wrapper");
-  await writeText(promptWrapper.target, promptWrapper.content);
-  const promptResult = await runGeneratedHookWrapper(promptWrapper.target, {
+  await writeText(promptWrapper.targetPath, promptWrapper.content);
+  const promptResult = await runGeneratedHookWrapper(promptWrapper.targetPath, {
     prompt: "hello",
     cwd: pluginRoot,
   });
@@ -458,10 +619,10 @@ export default defineHook({
     },
   });
 
-  const permissionWrapper = findContentOperation(operations, join("hooks", "permission-guard.mjs"));
+  const permissionWrapper = findFile(lowered.files, join("hooks", "permission-guard.mjs"));
   if (!permissionWrapper) throw new Error("expected permission-guard wrapper");
-  await writeText(permissionWrapper.target, permissionWrapper.content);
-  const allowed = await runGeneratedHookWrapper(permissionWrapper.target, {
+  await writeText(permissionWrapper.targetPath, permissionWrapper.content);
+  const allowed = await runGeneratedHookWrapper(permissionWrapper.targetPath, {
     tool: { name: "Bash", input: { allow: true } },
     cwd: pluginRoot,
   });
@@ -474,7 +635,7 @@ export default defineHook({
     },
   });
 
-  const denied = await runGeneratedHookWrapper(permissionWrapper.target, {
+  const denied = await runGeneratedHookWrapper(permissionWrapper.targetPath, {
     tool: { name: "Bash", input: {} },
     cwd: pluginRoot,
   });
@@ -485,333 +646,6 @@ export default defineHook({
       decision: { behavior: "deny", message: "permission-blocked" },
     },
   });
-});
-
-test("codex-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".codex");
-  const pluginRoot = join(root, "codex-http-fixture");
-  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "codex-http-fixture",
-        version: "0.1.0",
-        targets: {
-          tools: ["codex-cli"],
-        },
-        runtime: {
-          mcp: {
-            "codex-cli": {
-              transport: "streamable-http",
-              host: "127.0.0.1",
-              port: 38464,
-              tokenEnv: "PRISM_MCP_CODEX_HTTP_TOKEN",
-            },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    toolPath,
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "echo",
-  description: "Echo over HTTP",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
-    return { message: input.message };
-  },
-});
-`,
-  );
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const tool = registry.tools.get("echo");
-  if (!tool) throw new Error("expected echo tool");
-
-  const operations = await planLowering({
-    agents: [
-      {
-        name: "reviewer",
-        description: "Reviews through Codex HTTP MCP",
-        body: "# Reviewer",
-        color: undefined,
-        model: {},
-        targetOverride: {},
-        skills: [],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: [
-          {
-            kind: "permission",
-            logicalName: "echo",
-            toolPluginName: "codex-http-fixture",
-            toolName: "echo",
-            toolSourcePath: toolPath,
-          },
-        ],
-      },
-    ],
-    orbits: [],
-    tools: [tool],
-    skills: [],
-    hooks: [],
-    registry,
-    target: {
-      scope: "project",
-      root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "codex-http-fixture", "server.mjs"),
-      mcpBearerToken: "codex-static-token",
-      sourcePluginName: "codex-http-fixture",
-      sourcePluginVersion: "0.1.0",
-      sourcePluginPath: pluginRoot,
-    },
-  });
-
-  const agentToml = findContentOperation(operations, join("agents", "reviewer.toml"));
-  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
-  expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(agentToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
-  expect(agentToml?.content).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
-  expect(agentToml?.content).not.toContain('command = "bun"');
-  expect(agentToml?.content).not.toContain("args = ");
-  expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
-  expect(agentToml?.mode).toBe(0o600);
-
-  const configToml = findContentOperation(operations, "config.toml");
-  expect(configToml?.kind).toBe("patch-config");
-  expect(configToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
-  expect(configToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(configToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
-  expect(configToml?.content).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
-  expect(configToml?.content).not.toContain('command = "bun"');
-  expect(configToml?.content).not.toContain("args = ");
-  expect(configToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
-  expect(configToml?.content).not.toContain("# --- prism codex-cli begin: codex-http-fixture ---");
-  expect(configToml?.mode).toBe(0o600);
-
-  // HTTP daemons consume the canonical PRISM_HOME bundle; nothing is
-  // written into the harness root (or any shared runtime root) anymore.
-  const bundle = operations.find(
-    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
-  );
-  expect(bundle).toBeUndefined();
-});
-
-test("codex-cli lowerer prunes stale compile-owned targeted skill files", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".codex");
-  const pluginRoot = join(root, "codex-skill-prune");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: outputRoot,
-    sourcePluginName: "codex-skill-prune",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: pluginRoot,
-  };
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "codex-skill-prune",
-        version: "0.1.0",
-        targets: {
-          skills: ["codex-cli"],
-          tools: ["codex-cli"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "skills", "current", "SKILL.md"),
-    "---\nname: current\ndescription: Current skill\n---\n\n# Current\n",
-  );
-  await writeText(
-    join(pluginRoot, "skills", "old", "SKILL.md"),
-    "---\nname: old\ndescription: Old skill\n---\n\n# Old\n",
-  );
-
-  const firstRegistry = await Effect.runPromise(loadPlugin(pluginRoot));
-  await executeLowering(
-    await planLowering({
-      agents: [],
-      orbits: [],
-      tools: [],
-      skills: [...firstRegistry.skills.values()],
-      hooks: [],
-      registry: firstRegistry,
-      target,
-    }),
-    { dryRun: false, target },
-  );
-  expect(await pathExists(join(outputRoot, "skills", "old", "SKILL.md"))).toBe(true);
-
-  await rm(join(pluginRoot, "skills", "old"), { recursive: true, force: true });
-  const secondRegistry = await Effect.runPromise(loadPlugin(pluginRoot));
-  await executeLowering(
-    await planLowering({
-      agents: [],
-      orbits: [],
-      tools: [],
-      skills: [...secondRegistry.skills.values()],
-      hooks: [],
-      registry: secondRegistry,
-      target,
-    }),
-    { dryRun: false, target },
-  );
-
-  expect(await pathExists(join(outputRoot, "skills", "current", "SKILL.md"))).toBe(true);
-  expect(await pathExists(join(outputRoot, "skills", "old", "SKILL.md"))).toBe(false);
-  expect((await readHarnessLedger("codex-cli")).entries).not.toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ targetPath: join(outputRoot, "skills", "old", "SKILL.md") }),
-    ]),
-  );
-});
-
-test("codex-cli lowerer keeps generated orbit reference files on warm runs", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".codex");
-  const pluginRoot = join(root, "codex-orbit-reference-warm-run");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: outputRoot,
-    sourcePluginName: "codex-orbit-reference-warm-run",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: pluginRoot,
-  };
-  const orbit = new Orbit({
-    name: "delivery",
-    sourcePath: join(pluginRoot, "orbits", "delivery.orbit.ts"),
-    description: "Delivery orbit",
-    parameters: [],
-    phases: [
-      {
-        name: "brief",
-        agents: [],
-        requires: [],
-        telos: "Set up the work.",
-        real_world_change: "Reference file exists.",
-        cold_pickup_test: "A warm compile leaves the reference in place.",
-        body: "Full phase reference body.",
-      },
-    ],
-    tool_permissions: [],
-    pulsar_checkpoints: [],
-    body: "Run the delivery orbit.",
-  });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "codex-orbit-reference-warm-run",
-        version: "0.1.0",
-        targets: { orbits: ["codex-cli"] },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  await executeLowering(
-    await planLowering({
-      agents: [],
-      orbits: [orbit],
-      tools: [],
-      skills: [],
-      hooks: [],
-      target,
-    }),
-    { dryRun: false, target },
-  );
-
-  const referencePath = join(outputRoot, "skills", "delivery", "references", "brief.md");
-  expect(await pathExists(referencePath)).toBe(true);
-
-  const warmOperations = await planLowering({
-    agents: [],
-    orbits: [orbit],
-    tools: [],
-    skills: [],
-    hooks: [],
-    target,
-  });
-  expect(warmOperations).not.toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        kind: "prune-plugin-path",
-        target: referencePath,
-      }),
-    ]),
-  );
-
-  await executeLowering(warmOperations, { dryRun: false, target });
-  expect(await pathExists(referencePath)).toBe(true);
-});
-
-test("codex-cli config ledger entries share the latest config hash", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".codex");
-  const configTarget = join(outputRoot, "config.toml");
-  const alphaTarget = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: outputRoot,
-    sourcePluginName: "alpha",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "alpha"),
-  };
-  const betaTarget = {
-    ...alphaTarget,
-    sourcePluginName: "beta",
-    sourcePluginPath: join(root, "beta"),
-  };
-  const alphaConfig = "[features]\nhooks = true\n";
-  const betaConfig = `${alphaConfig}\n[\"mcp_servers\".\"prism-generated-beta\"]\ncommand = \"bun\"\n`;
-
-  await executeLowering([
-    {
-      kind: "patch-config",
-      target: configTarget,
-      content: alphaConfig,
-      reason: "new",
-    },
-  ], { dryRun: false, target: alphaTarget });
-  await executeLowering([
-    {
-      kind: "patch-config",
-      target: configTarget,
-      content: betaConfig,
-      baseContentHash: computeContentHash(alphaConfig),
-      reason: "changed",
-    },
-  ], { dryRun: false, target: betaTarget });
-
-  const finalHash = computeContentHash(betaConfig);
-  const entries = (await readHarnessLedger("codex-cli")).entries.filter((entry) =>
-    entry.kind === "config" && entry.targetPath === configTarget
-  );
-  expect(entries).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ pluginName: "alpha", contentHash: finalHash }),
-      expect.objectContaining({ pluginName: "beta", contentHash: finalHash }),
-    ]),
-  );
 });
 
 test("codex-cli lowerer fails closed for unsupported model config keys", async () => {
@@ -847,186 +681,3 @@ test("codex-cli lowerer fails closed for unsupported model config keys", async (
     }),
   ).rejects.toThrow("unsupported Codex model config key 'temperature'");
 });
-
-// ---------------------------------------------------------------------------
-// Focused tests for the structural (Bun.TOML.parse + name-based) mcp_servers path
-// ---------------------------------------------------------------------------
-
-test("applyCodexMcpServerUpdate removes duplicates and inserts exactly one copy", () => {
-  const server = "prism-generated-grok-agent";
-
-  const poisoned = `
-[mcp_servers."${server}"]
-command = "bun"
-enabled_tools = ["stale1"]
-
-["mcp_servers"."${server}"]
-command = "bun"
-enabled_tools = ["stale2"]
-
-[mcp_servers.other]
-command = "other"
-url = "http://127.0.0.1:38473/mcp"
-enabled_tools = ["grok_agent_grok_invoke"]
-
-url = "http://127.0.0.1:38473/mcp"
-http_headers = { Authorization = "Bearer stale" }
-enabled = true
-enabled_tools = ["grok_agent_grok_invoke"]
-
-[features]
-hooks = false
-`;
-
-  const freshTable = `["mcp_servers"."${server}"]
-url = "http://127.0.0.1:38473/mcp"
-http_headers = { Authorization = "Bearer fresh" }
-enabled = true
-required = false
-default_tools_approval_mode = "approve"
-enabled_tools = ["fresh_tool"]
-`;
-
-  const result = applyCodexMcpServerUpdate(poisoned, server, freshTable);
-
-  // The core guarantee: exactly one copy of our server table after structural update.
-  expect(countMcpServerTableOccurrences(result, server)).toBe(1);
-  expect(result).toContain('enabled_tools = ["fresh_tool"]');
-  expect(result).not.toContain("stale1");
-  expect(result).not.toContain("stale2");
-  expect(result).not.toContain("Bearer stale");
-  expect(() => Bun.TOML.parse(result)).not.toThrow();
-  const parsed = Bun.TOML.parse(result) as {
-    readonly mcp_servers?: {
-      readonly other?: {
-        readonly command?: string;
-        readonly url?: string;
-        readonly enabled_tools?: readonly string[];
-      };
-    };
-  };
-  expect(parsed.mcp_servers?.other?.command).toBe("other");
-  expect(parsed.mcp_servers?.other?.url).toBe("http://127.0.0.1:38473/mcp");
-  expect(parsed.mcp_servers?.other?.enabled_tools).toEqual(["grok_agent_grok_invoke"]);
-});
-
-test("applyCodexMcpServerUpdate preserves existing MCP table position", () => {
-  const tower = "prism-generated-tower";
-  const grok = "prism-generated-grok-agent";
-  const sessionWatch = "prism-generated-session-watch";
-  const current = `[features]
-hooks = true
-
-["mcp_servers"."${tower}"]
-url = "http://127.0.0.1:11111/mcp"
-enabled_tools = ["old_tower"]
-
-["mcp_servers"."${grok}"]
-url = "http://127.0.0.1:22222/mcp"
-enabled_tools = ["grok_agent_grok_invoke"]
-
-["mcp_servers"."${sessionWatch}"]
-command = "bun"
-enabled_tools = ["session_watch_emit_session_event"]
-
-# --- prism codex-cli begin: session-watch ---
-hooks = true
-# --- prism codex-cli end: session-watch ---
-`;
-
-  const freshTower = `["mcp_servers"."${tower}"]
-url = "http://127.0.0.1:33333/mcp"
-enabled_tools = ["fresh_tower"]
-`;
-
-  const result = applyCodexMcpServerUpdate(current, tower, freshTower);
-
-  expect(countMcpServerTableOccurrences(result, tower)).toBe(1);
-  expect(result).toContain('enabled_tools = ["fresh_tower"]');
-  expect(result).not.toContain("old_tower");
-  expect(result.indexOf(`["mcp_servers"."${tower}"]`)).toBeLessThan(
-    result.indexOf(`["mcp_servers"."${grok}"]`),
-  );
-  expect(result.indexOf(`["mcp_servers"."${grok}"]`)).toBeLessThan(
-    result.indexOf(`["mcp_servers"."${sessionWatch}"]`),
-  );
-  expect(() => Bun.TOML.parse(result)).not.toThrow();
-});
-
-test("applyCodexMcpServerUpdate preserves adjacent managed hook block markers", () => {
-  const server = "prism-generated-session-watch";
-  const begin = "# --- prism codex-cli begin: session-watch ---";
-  const end = "# --- prism codex-cli end: session-watch ---";
-  const current = `["mcp_servers"."${server}"]
-command = "bun"
-enabled_tools = ["old_session_watch"]
-
-${begin}
-[["hooks"."Stop"]]
-[["hooks"."Stop"."hooks"]]
-type = "command"
-command = "node \\"old.mjs\\""
-${end}
-`;
-  const freshTable = `["mcp_servers"."${server}"]
-command = "bun"
-enabled_tools = ["session_watch_emit_session_event"]
-`;
-
-  const afterMcpUpdate = applyCodexMcpServerUpdate(current, server, freshTable);
-  expect(afterMcpUpdate).toContain(begin);
-  expect(afterMcpUpdate).toContain(end);
-  expect(afterMcpUpdate).not.toContain("old_session_watch");
-
-  const result = replaceManagedBlock(
-    afterMcpUpdate,
-    "session-watch",
-    '[["hooks"."Stop"]]\n[["hooks"."Stop"."hooks"]]\ntype = "command"\ncommand = "node \\"fresh.mjs\\""',
-  );
-
-  expect(countSubstring(result, begin)).toBe(1);
-  expect(countSubstring(result, end)).toBe(1);
-  expect(result).toContain('command = "node \\"fresh.mjs\\""');
-  expect(result).not.toContain("old.mjs");
-  expect(() => Bun.TOML.parse(result)).not.toThrow();
-});
-
-test("replaceManagedBlock removes orphaned hook body when begin marker is missing", () => {
-  const begin = "# --- prism codex-cli begin: session-watch ---";
-  const end = "# --- prism codex-cli end: session-watch ---";
-  const hookBlock = '[["hooks"."Stop"]]\n[["hooks"."Stop"."hooks"]]\ntype = "command"\ncommand = "node \\"fresh.mjs\\""';
-  const corrupted = `[features]
-hooks = true
-
-${hookBlock}
-${end}
-`;
-
-  const result = replaceManagedBlock(corrupted, "session-watch", hookBlock);
-
-  expect(countSubstring(result, '[["hooks"."Stop"]]')).toBe(1);
-  expect(countSubstring(result, begin)).toBe(1);
-  expect(countSubstring(result, end)).toBe(1);
-  expect(() => Bun.TOML.parse(result)).not.toThrow();
-
-  const duplicated = `[features]
-hooks = true
-
-${hookBlock}
-
-${begin}
-${hookBlock}
-${end}
-`;
-  const deduped = replaceManagedBlock(duplicated, "session-watch", hookBlock);
-
-  expect(countSubstring(deduped, '[["hooks"."Stop"]]')).toBe(1);
-  expect(countSubstring(deduped, begin)).toBe(1);
-  expect(countSubstring(deduped, end)).toBe(1);
-  expect(() => Bun.TOML.parse(deduped)).not.toThrow();
-});
-
-// (The full planLowering + poisoned config integration test was removed for now
-// because constructing a minimal valid registry for mcp-runtime is brittle.
-// The direct applyCodexMcpServerUpdate test above + the existing lowerer tests
-// provide good coverage of the structural path.)

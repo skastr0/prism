@@ -6,12 +6,14 @@
  *  - every write is atomic temp-sibling + rename (fs.ts),
  *  - one backup per target per run, taken before the first mutation,
  *  - per-op failures are collected, never thrown — one bad target cannot
- *    abort the batch (the executeStandardLowering failure mode),
+ *    abort the batch (the legacy lowering executor's failure mode),
  *  - the snapshot manifest commits LAST, once, after all ops; a crash at any
  *    point converges on re-run (skip-before-blocked reclassifies pre-crash
  *    writes as skips).
  */
 
+import { readdir, rmdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { chmodFile, removeFile, writeFile } from "../fs.js";
 import { backupOnceForRun } from "../state/run-backups.js";
 import { commitSnapshot } from "../state/store.js";
@@ -33,6 +35,25 @@ export interface SyncReport {
   /** True when the run wrote nothing: every op was a skip (or no ops). */
   readonly converged: boolean;
 }
+
+/**
+ * After pruning a file, sweep now-empty parent directories up to (never
+ * including) the harness root, so uninstalling a plugin leaves no skeleton
+ * directory trees behind.
+ */
+const removeEmptyParentDirs = async (targetPath: string, root: string): Promise<void> => {
+  const boundary = resolve(root);
+  let current = dirname(resolve(targetPath));
+  while (current !== boundary && current.startsWith(`${boundary}/`)) {
+    try {
+      if ((await readdir(current)).length > 0) return;
+      await rmdir(current);
+    } catch {
+      return;
+    }
+    current = dirname(current);
+  }
+};
 
 export const mintRunId = (now: Date = new Date()): string =>
   `${now.toISOString().replace(/[-:]/g, "").replace(/\..+/, "")}-${Math.random()
@@ -70,6 +91,7 @@ const executeOp = async (
     case "prune":
       await backup(op.backup, op.targetPath);
       await removeFile(op.targetPath);
+      await removeEmptyParentDirs(op.targetPath, context.root);
       return;
     case "chmod":
       await chmodFile(op.targetPath, op.mode);

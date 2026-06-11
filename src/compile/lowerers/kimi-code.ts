@@ -23,23 +23,21 @@ import {
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
-import { exists, readFile } from "../../fs.js";
+import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginPlanState,
   createGeneratedPluginWritePusher,
-  executeStandardLowering,
   nativeHookEventName,
   normalizeBundleSegment,
-  planGeneratedPluginPruning,
-  pushConfigPatchOperation as pushConfigPatch,
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
   uniqueSorted,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "kimi-code" as const;
@@ -86,16 +84,7 @@ interface InstalledPluginRecord {
   readonly source: "local-path" | "zip-url" | "github";
   readonly enabled: boolean;
   readonly installedAt: string;
-  readonly updatedAt?: string;
   readonly originalSource?: string;
-  readonly capabilities?: {
-    readonly mcpServers?: Record<string, { readonly enabled: boolean }>;
-  };
-}
-
-interface InstalledPluginsFile {
-  readonly version: 1;
-  readonly plugins: ReadonlyArray<Record<string, unknown>>;
 }
 
 const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
@@ -178,141 +167,48 @@ const kimiMcpToolName = (
   );
 };
 
-const managedBlockBegin = (pluginName: string): string =>
-  `# --- prism kimi-code begin: ${pluginName} ---`;
-
-const managedBlockEnd = (pluginName: string): string =>
-  `# --- prism kimi-code end: ${pluginName} ---`;
-
-const replaceManagedBlock = (current: string, pluginName: string, block: string): string => {
-  const begin = managedBlockBegin(pluginName);
-  const end = managedBlockEnd(pluginName);
-  const start = current.indexOf(begin);
-  let base = current;
-
-  if (start >= 0) {
-    const finish = current.indexOf(end, start);
-    if (finish >= 0) {
-      base = current.slice(0, start) + current.slice(finish + end.length);
-    }
-  }
-
-  const trimmedBase = base.trimEnd();
-  const trimmedBlock = block.trimEnd();
-  if (!trimmedBlock) return trimmedBase ? `${trimmedBase}\n` : "";
-  return `${trimmedBase}${trimmedBase ? "\n\n" : ""}${begin}\n${trimmedBlock}\n${end}\n`;
-};
-
 const installedPluginsPath = (target: KimiCodeLowerTarget): string =>
   join(target.root, "plugins", "installed.json");
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * Deterministic stand-in for the install timestamp Kimi's own installer
+ * writes. Compile output is a pure function of source — minting wall-clock
+ * timestamps would make converged runs dirty, so the generated registration
+ * carries a fixed epoch instead.
+ */
+const GENERATED_INSTALLED_AT = "1970-01-01T00:00:00.000Z";
 
-const readInstalledPlugins = async (
-  target: KimiCodeLowerTarget,
-): Promise<InstalledPluginsFile> => {
-  const targetPath = installedPluginsPath(target);
-  if (!(await exists(targetPath))) return { version: 1, plugins: [] };
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(targetPath));
-  } catch (error) {
-    throw new Error(`Failed to parse ${targetPath}: ${(error as Error).message}`, { cause: error });
-  }
-  if (!isRecord(parsed) || !Array.isArray(parsed.plugins)) {
-    throw new Error(`${targetPath} is not a valid Kimi installed.json file`);
-  }
-  if (!parsed.plugins.every(isRecord)) {
-    throw new Error(`${targetPath} contains an invalid plugin record`);
-  }
-  return {
-    version: 1,
-    plugins: parsed.plugins,
-  };
-};
-
-const stringField = (record: Record<string, unknown>, field: string): string | undefined =>
-  typeof record[field] === "string" ? record[field] : undefined;
-
-const booleanField = (record: Record<string, unknown>, field: string): boolean | undefined =>
-  typeof record[field] === "boolean" ? record[field] : undefined;
-
-const currentMcpState = (
-  current: Record<string, unknown> | undefined,
-  serverName: string,
-): { readonly enabled: boolean } | undefined => {
-  if (!current || !isRecord(current.capabilities)) return undefined;
-  if (!isRecord(current.capabilities.mcpServers)) return undefined;
-  const server = current.capabilities.mcpServers[serverName];
-  if (!isRecord(server) || typeof server.enabled !== "boolean") return undefined;
-  return { enabled: server.enabled };
-};
-
-const installedPluginRecord = (
-  input: LowerInput,
-  current: Record<string, unknown> | undefined,
-  serverNames: ReadonlyArray<string>,
-): InstalledPluginRecord => {
-  const now = new Date().toISOString();
-  const capabilitiesMcpServers: Record<string, { readonly enabled: boolean }> = {};
-  for (const serverName of serverNames) {
-    const serverState = currentMcpState(current, serverName);
-    if (serverState) capabilitiesMcpServers[serverName] = serverState;
-  }
-  const capabilities =
-    Object.keys(capabilitiesMcpServers).length > 0
-      ? { mcpServers: capabilitiesMcpServers }
-      : undefined;
+const installedPluginRecord = (input: LowerInput): InstalledPluginRecord => {
   const originalSource = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-
   return {
     id: generatedPluginId(input.target),
     root: generatedPluginRoot(input.target),
     source: "local-path",
-    enabled: booleanField(current ?? {}, "enabled") ?? true,
-    installedAt: stringField(current ?? {}, "installedAt") ?? now,
-    updatedAt:
-      stringField(current ?? {}, "updatedAt") ??
-      stringField(current ?? {}, "installedAt") ??
-      now,
+    enabled: true,
+    installedAt: GENERATED_INSTALLED_AT,
     ...(originalSource ? { originalSource } : {}),
-    ...(capabilities ? { capabilities } : {}),
   };
 };
 
-const planInstalledPluginRegistration = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  desiredPresent: boolean,
-  serverNames: ReadonlyArray<string> = [],
-): Promise<void> => {
-  const installedPath = installedPluginsPath(input.target);
-  const current = await readInstalledPlugins(input.target);
-  const pluginId = generatedPluginId(input.target);
-  const currentRecord = current.plugins.find((record) => record.id === pluginId);
-
-  if (!desiredPresent) {
-    if (!currentRecord) return;
-    await pushConfigPatch(operations, installedPath, json({
-      version: 1,
-      plugins: current.plugins.filter((record) => record.id !== pluginId),
-    }));
-    return;
-  }
-
-  const nextRecord = installedPluginRecord(input, currentRecord, serverNames);
-  let replaced = false;
-  const plugins = current.plugins.map((record) => {
-    if (record.id !== pluginId) return record;
-    replaced = true;
-    return nextRecord;
-  });
-  if (!replaced) plugins.push(nextRecord);
-
-  await pushConfigPatch(operations, installedPath, json({ version: 1, plugins }));
-};
+const installedPluginRegions = (input: LowerInput): DesiredRegion[] => [
+  {
+    kind: "json-key",
+    targetPath: installedPluginsPath(input.target),
+    regionKey: "installed.version",
+    jsonPath: ["version"],
+    value: 1,
+    plugin: input.target.sourcePluginName,
+  },
+  {
+    kind: "json-array-member",
+    targetPath: installedPluginsPath(input.target),
+    regionKey: `installed.${generatedPluginId(input.target)}`,
+    jsonPath: ["plugins"],
+    value: installedPluginRecord(input),
+    memberKey: ["id"],
+    plugin: input.target.sourcePluginName,
+  },
+];
 
 const renderSkill = (frontmatter: Record<string, unknown>, body: string): string =>
   `${serializeFrontmatter(frontmatter)}\n\n${body.trimEnd()}\n`;
@@ -417,66 +313,61 @@ const renderContextSkill = (contexts: ReadonlyArray<{ label: string; content: st
 const planTargetedSkillWrites = async (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
+  files: DesiredFile[],
 ): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
   if (!pluginPath || !artifactTargetsKimi(input.registry, "skills")) return;
 
-  const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
-  for (const file of files) {
-    const relativePath = `skills/${file.relativePath}`;
-    await pushWrite(
-      operations,
+  const sourceFiles = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
+  for (const file of sourceFiles) {
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
-      relativePath,
+      `skills/${file.relativePath}`,
       await readFile(file.sourcePath),
-      file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file",
     );
   }
 };
 
-const planAgentRoleSkills = async (
+const planAgentRoleSkills = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   mcpServerName?: string,
-): Promise<void> => {
+): void => {
   for (const agent of input.agents) {
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       `skills/${roleSkillName(agent.name)}/SKILL.md`,
       renderKimiAgentRoleSkill(agent, input.target, mcpServerName),
-      "write-md",
     );
   }
 };
 
-const planOrbitSkillWrites = async (
+const planOrbitSkillWrites = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
-): Promise<void> => {
+  files: DesiredFile[],
+): void => {
   for (const orbit of input.orbits) {
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       `skills/${orbit.name}/SKILL.md`,
-      renderStandardOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
-      "write-md",
+      renderStandardOrbitSkill(orbit, input.registry),
     );
 
     for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      await pushWrite(
-        operations,
+      pushWrite(
+        files,
         desiredRelativePaths,
         input.target,
         `skills/${orbit.name}/references/${reference.filename}`,
         reference.content,
-        "write-md",
       );
     }
   }
@@ -485,38 +376,36 @@ const planOrbitSkillWrites = async (
 const planCommandSkillWrites = async (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
+  files: DesiredFile[],
 ): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
   if (!pluginPath || !artifactTargetsKimi(input.registry, "commands")) return;
 
-  const files = await collectArtifactSourceFiles(pluginPath, "commands", TARGET_ID);
-  for (const file of files.filter((entry) => entry.relativePath.endsWith(".md"))) {
-    await pushWrite(
-      operations,
+  const sourceFiles = await collectArtifactSourceFiles(pluginPath, "commands", TARGET_ID);
+  for (const file of sourceFiles.filter((entry) => entry.relativePath.endsWith(".md"))) {
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       `skills/${commandSkillName(file.relativePath)}/SKILL.md`,
       renderCommandSkill(file.relativePath, await readFile(file.sourcePath)),
-      "write-md",
     );
   }
 };
 
-const planContextSkillWrite = async (
+const planContextSkillWrite = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   contexts: ReadonlyArray<{ label: string; content: string }>,
-): Promise<void> => {
+): void => {
   if (contexts.length === 0) return;
-  await pushWrite(
-    operations,
+  pushWrite(
+    files,
     desiredRelativePaths,
     input.target,
     "skills/prism-context/SKILL.md",
     renderContextSkill(contexts),
-    "write-md",
   );
 };
 
@@ -644,7 +533,7 @@ const bundleHookWrapper = (hook: Hook, nativeEvent: string): Promise<string> =>
 const planHooks = async (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   mcpServerName?: string,
 ): Promise<PlannedHook[]> => {
   const bindings = mcpBindingsForAgentsAndTools(
@@ -662,13 +551,12 @@ const planHooks = async (
   for (const hook of [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name))) {
     const nativeEvent = kimiNativeHookEvent(hook.event);
     const relativePath = `hooks/${normalizeBundleSegment(hook.name, "hook")}.mjs`;
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       relativePath,
       await bundleHookWrapper(hook, nativeEvent),
-      "write-plugin-file",
       { mode: 0o755 },
     );
     planned.push({
@@ -699,25 +587,19 @@ const renderHooksConfig = (
   return lines.join("\n").trimEnd();
 };
 
-const planConfigPatch = async (
+const hooksConfigRegion = (
   input: LowerInput,
-  operations: LowerOperation[],
   hooks: ReadonlyArray<PlannedHook>,
-): Promise<void> => {
-  const configTarget = join(input.target.root, "config.toml");
-  const configExists = await exists(configTarget);
-  const current = configExists ? await readFile(configTarget) : "";
-  const next = replaceManagedBlock(
-    current,
-    input.target.sourcePluginName,
-    renderHooksConfig(input.target, hooks),
-  );
-  if (!configExists && next.length === 0) return;
-  await pushConfigPatch(
-    operations,
-    configTarget,
-    next,
-  );
+): DesiredRegion | undefined => {
+  if (hooks.length === 0) return undefined;
+  return {
+    kind: "marker",
+    targetPath: join(input.target.root, "config.toml"),
+    regionKey: `kimi.hooks.${normalizeBundleSegment(input.target.sourcePluginName)}`,
+    commentPrefix: "#",
+    content: renderHooksConfig(input.target, hooks),
+    plugin: input.target.sourcePluginName,
+  };
 };
 
 const renderManifest = (
@@ -761,63 +643,35 @@ const hasPluginOutput = (
   artifactTargetsKimi(input.registry, "commands") ||
   contexts.length > 0;
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
-  const resolveTarget = (relativePath: string): string => generatedPath(input.target, relativePath);
   const contexts = await collectContextFiles(input);
 
   if (!hasPluginOutput(input, contexts)) {
-    await planConfigPatch(input, state.operations, []);
-    await planInstalledPluginRegistration(input, state.operations, false);
-    await planGeneratedPluginPruning({
-      state,
-      root: generatedPluginRoot(input.target),
-      resolveTarget,
-      owner: {
-        harness: TARGET_ID,
-        scope: input.target.scope,
-        root: input.target.root,
-        sourcePluginName: input.target.sourcePluginName,
-      },
-    });
-    return state.operations;
+    // No plugin output: the sync engine prunes the previously managed plugin
+    // files plus the orphaned installed.json and config.toml regions.
+    return { files: [], regions: [] };
   }
 
   const mcp = planMcpServer(input);
-  await planTargetedSkillWrites(input, state.desiredRelativePaths, state.operations);
-  await planAgentRoleSkills(input, state.desiredRelativePaths, state.operations, mcp.serverName);
-  await planOrbitSkillWrites(input, state.desiredRelativePaths, state.operations);
-  await planCommandSkillWrites(input, state.desiredRelativePaths, state.operations);
-  await planContextSkillWrite(input, state.desiredRelativePaths, state.operations, contexts);
-  const hooks = await planHooks(input, state.desiredRelativePaths, state.operations, mcp.serverName);
+  await planTargetedSkillWrites(input, state.desiredRelativePaths, state.files);
+  planAgentRoleSkills(input, state.desiredRelativePaths, state.files, mcp.serverName);
+  planOrbitSkillWrites(input, state.desiredRelativePaths, state.files);
+  await planCommandSkillWrites(input, state.desiredRelativePaths, state.files);
+  planContextSkillWrite(input, state.desiredRelativePaths, state.files, contexts);
+  const hooks = await planHooks(input, state.desiredRelativePaths, state.files, mcp.serverName);
 
-  await pushWrite(
-    state.operations,
+  pushWrite(
+    state.files,
     state.desiredRelativePaths,
     input.target,
     "kimi.plugin.json",
     renderManifest(input, state.desiredRelativePaths, contexts, mcp),
   );
-  await planInstalledPluginRegistration(
-    input,
-    state.operations,
-    true,
-    mcp.serverName ? [mcp.serverName] : [],
-  );
-  await planConfigPatch(input, state.operations, hooks);
-  await planGeneratedPluginPruning({
-    state,
-    root: generatedPluginRoot(input.target),
-    resolveTarget,
-    owner: {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    },
-  });
 
-  return state.operations;
+  const regions: DesiredRegion[] = [...installedPluginRegions(input)];
+  const hooksRegion = hooksConfigRegion(input, hooks);
+  if (hooksRegion) regions.push(hooksRegion);
+
+  return { files: state.files, regions };
 };
-
-export const executeLowering = executeStandardLowering;

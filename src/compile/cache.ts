@@ -37,7 +37,7 @@ export const CACHE_FORMAT_VERSION = 3;
  * fixes such as generated tool naming or permission-lowering changes.
  */
 export const COMPILER_SEMANTICS_VERSION =
-  "2026-06-10-canonical-union-mcp-bundles-v1";
+  "2026-06-10-sync-engine-desired-state-lowering-v1";
 
 type SourceLike =
   | Identity

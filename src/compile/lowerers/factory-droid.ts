@@ -26,17 +26,15 @@ import {
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginPlanState,
   createGeneratedPluginWritePusher,
-  executeStandardLowering,
   matcherForResolvedToolHook,
   normalizeBundleSegment,
   planGeneratedPluginHookWrites,
   planGeneratedPluginManifest,
-  planGeneratedPluginPruning,
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
@@ -44,6 +42,7 @@ import {
   stringArray,
   uniqueSorted,
   yamlScalar,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "factory-droid" as const;
@@ -206,17 +205,16 @@ const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
 const planDroidWrites = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
   for (const agent of input.agents) {
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       `droids/${agent.name}.md`,
       renderDroidMarkdown(agent, input.target),
-      "write-md",
     );
   }
 };
@@ -294,7 +292,7 @@ const factoryBundleOwnsPluginSkills = (input: LowerInput): boolean =>
 
 const planMcpServer = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
   const bindings = mcpBindingsForAgentsAndTools(
@@ -309,8 +307,8 @@ const planMcpServer = async (
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       "mcp.json",
@@ -323,8 +321,8 @@ const planMcpServer = async (
     throw new Error("Factory Droid MCP lowering requires the canonical Prism MCP server bundle path.");
   }
 
-  await pushWrite(
-    operations,
+  pushWrite(
+    files,
     desiredRelativePaths,
     input.target,
     "mcp.json",
@@ -356,7 +354,6 @@ const planMcpServer = async (
             },
       },
     }),
-    "write-plugin-file",
     {
       mode: runtime.transport === "streamable-http" && input.target.mcpBearerToken
         ? 0o600
@@ -365,24 +362,14 @@ const planMcpServer = async (
   );
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
 
   if (!hasFactoryOutput(input)) {
-    await planGeneratedPluginPruning({
-      state,
-      root: generatedPluginRoot(input.target),
-      resolveTarget,
-      owner: {
-        harness: TARGET_ID,
-        scope: input.target.scope,
-        root: input.target.root,
-        sourcePluginName: input.target.sourcePluginName,
-      },
-    });
-    return state.operations;
+    // No desired output: the sync engine prunes any previously managed files.
+    return { files: [], regions: [] };
   }
 
   await planGeneratedPluginManifest({
@@ -393,7 +380,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     json,
     relativePath: ".factory-plugin/plugin.json",
   });
-  await planDroidWrites(input, state.operations, state.desiredRelativePaths);
+  await planDroidWrites(input, state.files, state.desiredRelativePaths);
   if (factoryBundleOwnsPluginSkills(input)) {
     await planGeneratedPluginSkillWrites({ input, state, pushWrite });
   }
@@ -402,7 +389,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     state,
     pushWrite,
   });
-  await planMcpServer(input, state.operations, state.desiredRelativePaths);
+  await planMcpServer(input, state.files, state.desiredRelativePaths);
   await planGeneratedPluginHookWrites({
     input,
     state,
@@ -410,19 +397,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     bundleHookWrapper,
     resolveTarget,
   });
-  await planGeneratedPluginPruning({
-    state,
-    root: generatedPluginRoot(input.target),
-    resolveTarget,
-    owner: {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    },
-  });
 
-  return state.operations;
+  return { files: state.files, regions: [] };
 };
-
-export const executeLowering = executeStandardLowering;

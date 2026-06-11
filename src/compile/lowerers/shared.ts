@@ -1,34 +1,18 @@
+/**
+ * Shared lowerer plumbing (one-writer overhaul, WS5).
+ *
+ * Lowerers are PURE planners: `(registry, capabilities, paths) → LowerOutput`
+ * — desired whole files plus desired shared-file regions. They never read
+ * target state and never write harness roots; the sync engine
+ * (src/sync/plan.ts + src/sync/apply.ts) classifies and applies everything,
+ * deriving prunes from snapshot-vs-desired membership. Ownership is snapshot
+ * manifest membership; marker-based ownership and ledgers do not live here.
+ */
+
 import { stripBundlerPathComments } from "../bundle-normalize.js";
-import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import {
-  chmodFile,
-  exists,
-  listDirRecursive,
-  readFile,
-  removeDir,
-  removeFile,
-  writeFile,
-} from "../../fs.js";
-import { backupManagedTarget } from "../../managed-backups.js";
-// INTERIM (dies in WS5): drift-as-error leaves with the sync engine; until
-// then the ownership gates below raise the tagged LoweringOwnershipError so
-// the CLI edge can render a structured, hinted failure instead of a stack.
-import { LoweringOwnershipError } from "../../errors.js";
-import {
-  hasOtherManagedCompileOwners,
-  isSharedMcpRuntimeServerPath,
-  managedEntryId,
-  readHarnessLedger,
-  removeLedgerEntries,
-  upsertLedgerEntries,
-  writeHarnessLedger,
-  type HarnessLedger,
-  type ManagedLedgerEntry,
-} from "../../managed-ledger.js";
-import type { HarnessId, HarnessScope } from "../../types.js";
-import { computeContentHash } from "../../content-hash.js";
+import { join } from "node:path";
+import { readFile } from "../../fs.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import type { ComposedAgent } from "../compose.js";
 import {
   renderDerivedOrbitPhaseReferences,
@@ -41,8 +25,18 @@ import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
+import {
+  makeTempBuildRoot,
+  removeTempBuildRoot,
+  writeTempBuildFile,
+} from "../temp-build-fs.js";
 import { mcpBindingsForAgentsAndTools } from "../tool-bindings.js";
-import type { LowerOperation } from "./opencode.js";
+
+/** What every lowerer produces: desired whole files + shared-file regions. */
+export interface LowerOutput {
+  readonly files: ReadonlyArray<DesiredFile>;
+  readonly regions: ReadonlyArray<DesiredRegion>;
+}
 
 export const uniqueSorted = (
   values: ReadonlyArray<string>,
@@ -90,16 +84,9 @@ export const serializeSimpleFrontmatter = (values: Record<string, unknown>): str
   return lines.join("\n");
 };
 
-export const prismOwnerMarker = (
-  ownerKind: string,
-  sourcePluginName: string,
-): string => `<!-- prism:${ownerKind} owner=${JSON.stringify(sourcePluginName)} -->`;
-
 export const renderGeneratedOrbitSkill = (options: {
   readonly orbit: Orbit;
-  readonly sourcePluginName: string;
   readonly registry: PluginRegistry | undefined;
-  readonly ownerKind: string;
   readonly trailingNewline: boolean;
   readonly renderFrontmatter?: (values: {
     readonly name: string;
@@ -112,8 +99,6 @@ export const renderGeneratedOrbitSkill = (options: {
   };
   const lines: string[] = [
     options.renderFrontmatter?.(frontmatter) ?? serializeSimpleFrontmatter(frontmatter),
-    "",
-    prismOwnerMarker(options.ownerKind, options.sourcePluginName),
     "",
   ];
   if (options.registry) {
@@ -131,14 +116,11 @@ export const renderGeneratedOrbitSkill = (options: {
 
 export const renderStandardOrbitSkill = (
   orbit: Orbit,
-  sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string =>
   renderGeneratedOrbitSkill({
     orbit,
-    sourcePluginName,
     registry,
-    ownerKind: "orbit-skill",
     trailingNewline: false,
   });
 
@@ -350,13 +332,19 @@ export const bundleGeneratedHookWrapper = async (options: {
   readonly buildLabel: string;
   readonly renderEntry: (hook: Hook, hookRuntimePath: string) => string;
 }): Promise<string> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), options.tempPrefix));
+  const tempRoot = await makeTempBuildRoot(options.tempPrefix);
 
   try {
-    const entry = join(tempRoot, "hook-entry.ts");
-    const hookRuntimePath = join(tempRoot, "hook-runtime.mjs");
-    await nodeWriteFile(hookRuntimePath, GENERATED_HOOK_RUNTIME);
-    await nodeWriteFile(entry, options.renderEntry(options.hook, hookRuntimePath));
+    const hookRuntimePath = await writeTempBuildFile(
+      tempRoot,
+      "hook-runtime.mjs",
+      GENERATED_HOOK_RUNTIME,
+    );
+    const entry = await writeTempBuildFile(
+      tempRoot,
+      "hook-entry.ts",
+      options.renderEntry(options.hook, hookRuntimePath),
+    );
 
     const outdir = join(tempRoot, "dist");
     await buildHookWrapperWithBun(entry, outdir, options.buildLabel);
@@ -364,749 +352,84 @@ export const bundleGeneratedHookWrapper = async (options: {
     const built = normalizeBuiltHookWrapper(await readFile(join(outdir, "wrapper.mjs")));
     return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    await removeTempBuildRoot(tempRoot);
   }
 };
 
 const normalizeBuiltHookWrapper = (content: string): string =>
   stripBundlerPathComments(content);
 
-export const planGeneratedPluginFilePruning = async (options: {
-  readonly root: string;
-  readonly desiredRelativePaths: ReadonlySet<string>;
-  readonly resolveTarget: (relativePath: string) => string;
-  readonly owner?: {
-    readonly harness: HarnessId;
-    readonly scope: HarnessScope;
-    readonly root: string;
-    readonly sourcePluginName: string;
-  };
-}): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  if (options.desiredRelativePaths.size === 0) {
-    if (
-      await exists(options.root) ||
-      (options.owner && await hasGeneratedPluginLedgerEntries(options.owner, options.root))
-    ) {
-      operations.push({
-        kind: "prune-plugin-path",
-        target: options.root,
-        targetType: "dir",
-        reason: "stale",
-      });
-    }
-    return operations;
-  }
+// ---------------------------------------------------------------------------
+// Desired-file plumbing
+// ---------------------------------------------------------------------------
 
-  const existingFiles = await listDirRecursive(options.root);
+export interface DesiredFileOptions {
+  readonly mode?: number;
+}
 
-  for (const relativePath of existingFiles.sort((left, right) => left.localeCompare(right))) {
-    if (options.desiredRelativePaths.has(relativePath)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: options.resolveTarget(relativePath),
-      targetType: "file",
-      reason: "stale",
-    });
-  }
-
-  return operations;
-};
-
-const hasGeneratedPluginLedgerEntries = async (
-  owner: {
-    readonly harness: HarnessId;
-    readonly scope: HarnessScope;
-    readonly root: string;
-    readonly sourcePluginName: string;
+export const pushDesiredFile = (
+  files: DesiredFile[],
+  options: {
+    readonly targetPath: string;
+    readonly content: string;
+    readonly plugin: string;
+    readonly mode?: number;
   },
-  generatedRoot: string,
-): Promise<boolean> => {
-  const ledger = await readHarnessLedger(owner.harness);
-  return ledger.entries.some((entry) =>
-    entry.pluginName === owner.sourcePluginName &&
-    entry.scope === owner.scope &&
-    resolve(entry.root) === resolve(owner.root) &&
-    entry.artifact === "compile" &&
-    relativePathInsideRoot(generatedRoot, entry.targetPath) !== undefined
-  );
-};
-
-export const executeStandardLowering = async (
-  operations: LowerOperation[],
-  options: ExecuteLoweringOptions,
-): Promise<{ backups: string[] }> => {
-  const backups: string[] = [];
-  if (options.dryRun) return { backups };
-  const ledger = options.target ? await readHarnessLedger(options.target.harness) : undefined;
-
-  for (const operation of operations) {
-    const backup = await executeLoweringOperation(operation, options, ledger);
-    if (backup) backups.push(backup);
-  }
-
-  if (ledger) await writeHarnessLedger(ledger);
-  return { backups };
-};
-
-type LowerWriteOperation = Extract<
-  LowerOperation,
-  { readonly kind: "write-md" | "write-plugin-file" }
->;
-
-type LowerConfigPatchOperation = Extract<LowerOperation, { readonly kind: "patch-config" }>;
-
-type LowerPruneOperation = Extract<LowerOperation, { readonly kind: "prune-plugin-path" }>;
-
-const isLowerWriteOperation = (operation: LowerOperation): operation is LowerWriteOperation =>
-  operation.kind === "write-md" || operation.kind === "write-plugin-file";
-
-const isLowerConfigPatchOperation = (
-  operation: LowerOperation,
-): operation is LowerConfigPatchOperation => operation.kind === "patch-config";
-
-const executeLoweringOperation = async (
-  operation: LowerOperation,
-  options: ExecuteLoweringOptions,
-  ledger: HarnessLedger | undefined,
-): Promise<string | null> => {
-  if (isLowerConfigPatchOperation(operation)) {
-    return executeLoweringConfigPatch(operation, options, ledger);
-  }
-  if (operation.reason === "unchanged") {
-    await applyUnchangedMode(operation);
-    if (
-      isLowerWriteOperation(operation) &&
-      ledger &&
-      options.target &&
-      !hasCurrentLoweringEntryForContent(
-        ledger,
-        options.target,
-        operation.target,
-        "file",
-        operation.content,
-      )
-    ) {
-      upsertLoweringEntry(ledger, options.target, operation.target, "file", operation.content);
-    }
-    return null;
-  }
-  if (isLowerWriteOperation(operation)) {
-    return executeLoweringWrite(operation, options, ledger);
-  }
-  if (operation.kind === "prune-plugin-path") {
-    await executeLoweringPrune(operation, options.target, ledger);
-  }
-  return null;
-};
-
-const applyUnchangedMode = async (operation: LowerOperation): Promise<void> => {
-  if (
-    (isLowerWriteOperation(operation) || isLowerConfigPatchOperation(operation)) &&
-    operation.mode !== undefined
-  ) {
-    await chmodFile(operation.target, operation.mode);
-  }
-};
-
-const executeLoweringWrite = async (
-  operation: LowerWriteOperation,
-  options: ExecuteLoweringOptions,
-  ledger: HarnessLedger | undefined,
-): Promise<string | null> => {
-  await assertLoweringWriteAuthority({
-    targetPath: operation.target,
-    desiredContent: operation.content,
-    kind: "file",
-    target: options.target,
-    ledger,
-  });
-  const backup =
-    operation.kind === "write-md"
-      ? await backupLoweringTarget(operation.target, options, "write")
-      : null;
-  await writeFile(operation.target, operation.content, { mode: operation.mode });
-  if (ledger && options.target) {
-    upsertLoweringEntry(ledger, options.target, operation.target, "file", operation.content);
-  }
-  return backup;
-};
-
-const executeLoweringConfigPatch = async (
-  operation: LowerConfigPatchOperation,
-  options: ExecuteLoweringOptions,
-  ledger: HarnessLedger | undefined,
-): Promise<string | null> => {
-  await assertLoweringConfigPatchAuthority(operation, options.target);
-  if (operation.reason === "unchanged") {
-    await applyUnchangedMode(operation);
-    if (ledger && options.target) {
-      removeLoweringEntry(ledger, options.target, operation.target, "file");
-      if (
-        !hasCurrentLoweringEntryForContent(
-          ledger,
-          options.target,
-          operation.target,
-          "config",
-          operation.content,
-        )
-      ) {
-        upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
-      }
-    }
-    return null;
-  }
-
-  const backup = await backupLoweringTarget(operation.target, options, "patch");
-  await writeFile(operation.target, operation.content, { mode: operation.mode });
-  if (ledger && options.target) {
-    removeLoweringEntry(ledger, options.target, operation.target, "file");
-    upsertLoweringEntry(ledger, options.target, operation.target, "config", operation.content);
-  }
-  return backup;
-};
-
-const assertLoweringConfigPatchAuthority = async (
-  operation: LowerConfigPatchOperation,
-  target: LowerExecutionTargetContext | undefined,
-): Promise<void> => {
-  if (!target) return;
-  const currentHash = await currentLoweringTargetHash(operation.target);
-  if (!currentHash) return;
-
-  const desiredHash = computeContentHash(operation.content);
-  if (currentHash === desiredHash) return;
-  if (operation.baseContentHash === undefined) {
-    throw new LoweringOwnershipError({
-      reason: "missing-base-hash",
-      targetPath: operation.target,
-      plugin: target.sourcePluginName,
-      harness: target.harness,
-      currentHash,
-      hint: "re-run the command so the config patch is planned against the current file",
-    });
-  }
-  if (currentHash !== operation.baseContentHash) {
-    throw new LoweringOwnershipError({
-      reason: "stale-base-hash",
-      targetPath: operation.target,
-      plugin: target.sourcePluginName,
-      harness: target.harness,
-      ledgerHash: operation.baseContentHash,
-      currentHash,
-      hint: "the config changed between planning and writing — re-run the command",
-    });
-  }
-};
-
-const executeLoweringPrune = async (
-  operation: LowerPruneOperation,
-  target: LowerExecutionTargetContext | undefined,
-  ledger: HarnessLedger | undefined,
-): Promise<void> => {
-  if (await shouldForgetSharedPrune(operation, target)) {
-    if (ledger && target) {
-      removeCurrentLoweringEntry(ledger, target, operation.target, "file");
-    }
-    return;
-  }
-
-  await assertLoweringPruneAuthority(operation, target, ledger);
-  if (operation.targetType === "dir") await removeDir(operation.target);
-  else await removeFile(operation.target);
-  if (ledger && target) {
-    removeLoweringEntry(ledger, target, operation.target, operation.targetType);
-  }
-};
-
-const shouldForgetSharedPrune = async (
-  operation: LowerPruneOperation,
-  target: LowerExecutionTargetContext | undefined,
-): Promise<boolean> => {
-  const shared = (operation as LowerPruneOperation & { readonly shared?: boolean }).shared;
-  if (!shared || !target || operation.targetType !== "file") return false;
-  if (!isSharedMcpRuntimeServerPath(operation.target)) return false;
-  return hasOtherManagedCompileOwners({
-    currentHarness: target.harness,
-    currentEntryId: lowerLedgerEntryId(target, operation.target, "file"),
-    pluginName: target.sourcePluginName,
-    targetPath: operation.target,
-    kind: "file",
-    includeCurrentHarnessOtherRoots:
-      (operation as LowerPruneOperation & { readonly protectSameHarnessOtherRoots?: boolean })
-        .protectSameHarnessOtherRoots === true,
-    currentRoot: target.root,
-  });
-};
-
-export interface LowerExecutionTargetContext {
-  readonly harness: HarnessId;
-  readonly scope: HarnessScope;
-  readonly root: string;
-  readonly sourcePluginName: string;
-  readonly sourcePluginVersion?: string;
-  readonly sourcePluginPath?: string;
-}
-
-export interface ExecuteLoweringOptions {
-  readonly dryRun: boolean;
-  readonly target?: LowerExecutionTargetContext;
-}
-
-const assertLoweringWriteAuthority = async (input: {
-  readonly targetPath: string;
-  readonly desiredContent: string;
-  readonly kind: "file" | "config";
-  readonly target: LowerExecutionTargetContext | undefined;
-  readonly ledger?: HarnessLedger;
-}): Promise<void> => {
-  if (!input.target || !input.ledger) return;
-
-  const currentHash = await currentLoweringTargetHash(input.targetPath);
-  if (!currentHash) return;
-
-  const desiredHash = computeContentHash(input.desiredContent);
-  if (currentHash === desiredHash) return;
-
-  const ledgerEntry = findCurrentLoweringEntry(
-    input.ledger,
-    input.target,
-    input.targetPath,
-    input.kind,
-  );
-  if (!ledgerEntry) {
-    throw new LoweringOwnershipError({
-      reason: "unowned-target",
-      targetPath: input.targetPath,
-      plugin: input.target.sourcePluginName,
-      harness: input.target.harness,
-      currentHash,
-      hint: "Prism never overwrites foreign files — delete or move the file, then re-run",
-    });
-  }
-
-  if (currentHash !== ledgerEntry.contentHash) {
-    throw new LoweringOwnershipError({
-      reason: "drifted-target",
-      targetPath: input.targetPath,
-      plugin: input.target.sourcePluginName,
-      harness: input.target.harness,
-      ledgerHash: ledgerEntry.contentHash,
-      ledgerUpdatedAt: ledgerEntry.updatedAt,
-      currentHash,
-      hint: "the file was edited outside Prism — back up and remove the edited file, then re-run",
-    });
-  }
-};
-
-const assertLoweringPruneAuthority = async (
-  operation: LowerPruneOperation,
-  target: LowerExecutionTargetContext | undefined,
-  ledger: HarnessLedger | undefined,
-): Promise<void> => {
-  if (!target || !ledger) return;
-  if (!(await exists(operation.target))) return;
-
-  if (operation.targetType === "file") {
-    await assertLoweringFilePruneAuthority(operation.target, target, ledger);
-    return;
-  }
-
-  const relativeFiles = await listDirRecursive(operation.target);
-  for (const relativeFile of relativeFiles) {
-    await assertLoweringFilePruneAuthority(join(operation.target, relativeFile), target, ledger);
-  }
-};
-
-const assertLoweringFilePruneAuthority = async (
-  targetPath: string,
-  target: LowerExecutionTargetContext,
-  ledger: HarnessLedger,
-): Promise<void> => {
-  const ledgerEntry = findCurrentLoweringEntry(ledger, target, targetPath, "file");
-  if (!ledgerEntry) {
-    throw new LoweringOwnershipError({
-      reason: "unowned-prune-target",
-      targetPath,
-      plugin: target.sourcePluginName,
-      harness: target.harness,
-      hint: "Prism only prunes files it generated — remove the stale file manually if unwanted",
-    });
-  }
-
-  const currentHash = await currentLoweringTargetHash(targetPath);
-  if (!currentHash || currentHash === ledgerEntry.contentHash) return;
-  throw new LoweringOwnershipError({
-    reason: "drifted-prune-target",
-    targetPath,
-    plugin: target.sourcePluginName,
-    harness: target.harness,
-    ledgerHash: ledgerEntry.contentHash,
-    ledgerUpdatedAt: ledgerEntry.updatedAt,
-    currentHash,
-    hint: "the file was edited outside Prism — back it up and delete it manually, then re-run",
-  });
-};
-
-export const backupLoweringTarget = async (
-  targetPath: string,
-  options: ExecuteLoweringOptions,
-  operation: "write" | "prune" | "patch",
-): Promise<string | null> => {
-  if (!options.target) return null;
-  return backupManagedTarget({
-    harness: options.target.harness,
-    scope: options.target.scope,
-    targetPath,
-    operation,
-  });
-};
-
-const lowerLedgerEntryId = (
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  kind: "file" | "directory" | "config",
-): string =>
-  managedEntryId({
-    harness: target.harness,
-    scope: target.scope,
-    root: target.root,
-    pluginName: target.sourcePluginName,
-    artifact: "compile",
-    targetPath,
-    kind,
-  });
-
-const findCurrentLoweringEntry = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  kind: "file" | "directory" | "config",
-): ManagedLedgerEntry | undefined => {
-  const resolvedRoot = resolve(target.root);
-  const resolvedTargetPath = resolve(targetPath);
-  return ledger.entries.find((entry) =>
-    entry.pluginName === target.sourcePluginName &&
-    entry.artifact === "compile" &&
-    entry.kind === kind &&
-    entry.scope === target.scope &&
-    resolve(entry.root) === resolvedRoot &&
-    resolve(entry.targetPath) === resolvedTargetPath
-  );
-};
-
-const currentLoweringTargetHash = async (targetPath: string): Promise<string | undefined> => {
-  if (!(await exists(targetPath))) return undefined;
-  return computeContentHash(await readFile(targetPath));
-};
-
-const upsertLoweringEntry = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  kind: "file" | "config",
-  content: string,
 ): void => {
-  const now = new Date().toISOString();
-  const contentHash = computeContentHash(content);
-  const entry: ManagedLedgerEntry = {
-    id: lowerLedgerEntryId(target, targetPath, kind),
-    pluginName: target.sourcePluginName,
-    ...(target.sourcePluginVersion ? { pluginVersion: target.sourcePluginVersion } : {}),
-    pluginPath: target.sourcePluginPath ?? target.root,
-    harness: target.harness,
-    scope: target.scope,
-    root: target.root,
-    artifact: "compile",
-    targetPath,
-    kind,
-    contentHash,
-    updatedAt: now,
-  };
-  const baseLedger = kind === "config"
-    ? refreshSiblingConfigEntries(ledger, target, targetPath, contentHash, now)
-    : ledger;
-  Object.assign(ledger, upsertLedgerEntries(baseLedger, [entry]));
-};
-
-const refreshSiblingConfigEntries = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  contentHash: string,
-  updatedAt: string,
-): HarnessLedger => {
-  const resolvedRoot = resolve(target.root);
-  const resolvedTargetPath = resolve(targetPath);
-  return {
-    ...ledger,
-    entries: ledger.entries.map((entry) => {
-      if (entry.artifact !== "compile") return entry;
-      if (entry.kind !== "config") return entry;
-      if (entry.scope !== target.scope) return entry;
-      if (resolve(entry.root) !== resolvedRoot) return entry;
-      if (resolve(entry.targetPath) !== resolvedTargetPath) return entry;
-      if (entry.contentHash === contentHash) return entry;
-      return { ...entry, contentHash, updatedAt };
-    }),
-  };
-};
-
-const removeLoweringEntry = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  targetType: "file" | "dir",
-): void => {
-  const kind = targetType === "dir" ? "directory" : "file";
-  const entryIds = new Set([lowerLedgerEntryId(target, targetPath, kind)]);
-  const resolvedPruneRoot = targetType === "dir" ? resolve(targetPath) : undefined;
-  for (const entry of ledger.entries) {
-    if (entry.pluginName !== target.sourcePluginName || entry.artifact !== "compile") continue;
-    if (targetType === "file" && entry.kind === kind && entry.targetPath === targetPath) {
-      entryIds.add(entry.id);
-      continue;
-    }
-    if (targetType !== "dir" || !resolvedPruneRoot) continue;
-    const entryRelativePath = relative(resolvedPruneRoot, resolve(entry.targetPath));
-    if (
-      entryRelativePath === "" ||
-      (
-        entryRelativePath !== ".." &&
-        !entryRelativePath.startsWith(`..${sep}`) &&
-        !isAbsolute(entryRelativePath)
-      )
-    ) {
-      entryIds.add(entry.id);
-    }
-  }
-  Object.assign(
-    ledger,
-    removeLedgerEntries(ledger, entryIds),
-  );
-};
-
-const removeCurrentLoweringEntry = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  kind: "file" | "directory" | "config",
-): void => {
-  const entryIds = new Set([lowerLedgerEntryId(target, targetPath, kind)]);
-  const resolvedRoot = resolve(target.root);
-  const resolvedTargetPath = resolve(targetPath);
-  for (const entry of ledger.entries) {
-    if (entry.pluginName !== target.sourcePluginName) continue;
-    if (entry.artifact !== "compile") continue;
-    if (entry.kind !== kind) continue;
-    if (entry.scope !== target.scope) continue;
-    if (resolve(entry.root) !== resolvedRoot) continue;
-    if (resolve(entry.targetPath) !== resolvedTargetPath) continue;
-    entryIds.add(entry.id);
-  }
-  Object.assign(
-    ledger,
-    removeLedgerEntries(ledger, entryIds),
-  );
-};
-
-const hasCurrentLoweringEntry = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  kind: "file" | "directory" | "config",
-): boolean => {
-  return findCurrentLoweringEntry(ledger, target, targetPath, kind) !== undefined;
-};
-
-const hasCurrentLoweringEntryForContent = (
-  ledger: HarnessLedger,
-  target: LowerExecutionTargetContext,
-  targetPath: string,
-  kind: "file" | "config",
-  content: string,
-): boolean =>
-  findCurrentLoweringEntry(ledger, target, targetPath, kind)?.contentHash ===
-  computeContentHash(content);
-
-export const recordLoweringConfigPatch = async (
-  targetPath: string,
-  content: string,
-  options: ExecuteLoweringOptions,
-): Promise<void> => {
-  if (!options.target) return;
-  const ledger = await readHarnessLedger(options.target.harness);
-  removeLoweringEntry(ledger, options.target, targetPath, "file");
-  upsertLoweringEntry(ledger, options.target, targetPath, "config", content);
-  await writeHarnessLedger(ledger);
-};
-
-export type LowerWriteKind = "write-md" | "write-plugin-file";
-export interface LowerWriteOptions {
-  readonly mode?: number;
-}
-
-export const writeReason = async (
-  target: string,
-  content: string,
-): Promise<"new" | "changed" | "unchanged"> => {
-  if (!(await exists(target))) return "new";
-  return (await readFile(target)) === content ? "unchanged" : "changed";
-};
-
-const relativePathInsideRoot = (root: string, targetPath: string): string | undefined => {
-  const relativePath = relative(resolve(root), resolve(targetPath));
-  if (
-    relativePath === "" ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  ) {
-    return undefined;
-  }
-  return relativePath.split(sep).join("/");
-};
-
-const hasGeneratedSkillOwnerMarker = (content: string, sourcePluginName: string): boolean =>
-  content.includes("<!-- prism:") && content.includes(`owner=${JSON.stringify(sourcePluginName)}`);
-
-export const planCompileOwnedTargetedSkillPruning = async (options: {
-  readonly target: LowerExecutionTargetContext;
-  readonly skillsRoot: string;
-  readonly desiredRelativePaths: ReadonlySet<string>;
-}): Promise<LowerOperation[]> => {
-  const ledger = await readHarnessLedger(options.target.harness);
-  const operations: LowerOperation[] = [];
-
-  for (const entry of ledger.entries) {
-    if (entry.pluginName !== options.target.sourcePluginName) continue;
-    if (entry.scope !== options.target.scope) continue;
-    if (resolve(entry.root) !== resolve(options.target.root)) continue;
-    if (entry.artifact !== "compile" || entry.kind !== "file") continue;
-
-    const relativePath = relativePathInsideRoot(options.skillsRoot, entry.targetPath);
-    if (!relativePath || options.desiredRelativePaths.has(relativePath)) continue;
-
-    if (await exists(entry.targetPath)) {
-      const content = await readFile(entry.targetPath);
-      if (hasGeneratedSkillOwnerMarker(content, options.target.sourcePluginName)) continue;
-    }
-
-    operations.push({
-      kind: "prune-plugin-path",
-      target: entry.targetPath,
-      targetType: "file",
-      reason: "stale",
-    });
-  }
-
-  return operations;
-};
-
-export const pushWriteOperation = async (
-  operations: LowerOperation[],
-  target: string,
-  content: string,
-  kind: LowerWriteKind = "write-plugin-file",
-  options: LowerWriteOptions = {},
-): Promise<void> => {
-  operations.push({
-    kind,
-    target,
-    content,
+  files.push({
+    targetPath: options.targetPath,
+    content: options.content,
+    plugin: options.plugin,
     ...(options.mode !== undefined ? { mode: options.mode } : {}),
-    reason: await writeReason(target, content),
   });
 };
-
-export const pushConfigPatchOperation = async (
-  operations: LowerOperation[],
-  target: string,
-  content: string,
-  options: LowerWriteOptions = {},
-): Promise<void> => {
-  const currentContent = (await exists(target)) ? await readFile(target) : undefined;
-  operations.push({
-    kind: "patch-config",
-    target,
-    content,
-    ...(options.mode !== undefined ? { mode: options.mode } : {}),
-    ...(currentContent === undefined
-      ? {}
-      : { baseContentHash: computeContentHash(currentContent) }),
-    reason:
-      currentContent === undefined
-        ? "new"
-        : currentContent === content
-          ? "unchanged"
-          : "changed",
-  });
-};
-
-export const pushGeneratedPluginWrite = async (options: {
-  readonly operations: LowerOperation[];
-  readonly desiredRelativePaths: Set<string>;
-  readonly relativePath: string;
-  readonly target: string;
-  readonly content: string;
-  readonly kind?: LowerWriteKind;
-  readonly mode?: number;
-}): Promise<void> => {
-  options.desiredRelativePaths.add(options.relativePath);
-  await pushWriteOperation(
-    options.operations,
-    options.target,
-    options.content,
-    options.kind,
-    { mode: options.mode },
-  );
-};
-
-export const createGeneratedPluginWritePusher =
-  <Target>(
-    resolveTarget: (target: Target, relativePath: string) => string,
-  ): ((
-    operations: LowerOperation[],
-    desiredRelativePaths: Set<string>,
-    target: Target,
-    relativePath: string,
-    content: string,
-    kind?: LowerWriteKind,
-    options?: LowerWriteOptions,
-  ) => Promise<void>) =>
-  async (
-    operations: LowerOperation[],
-    desiredRelativePaths: Set<string>,
-    target: Target,
-    relativePath: string,
-    content: string,
-    kind: LowerWriteKind = "write-plugin-file",
-    options: LowerWriteOptions = {},
-  ): Promise<void> => {
-    await pushGeneratedPluginWrite({
-      operations,
-      desiredRelativePaths,
-      relativePath,
-      target: resolveTarget(target, relativePath),
-      content,
-      kind,
-      ...options,
-    });
-  };
-
-export type GeneratedPluginWritePusher<Target> = ReturnType<
-  typeof createGeneratedPluginWritePusher<Target>
->;
 
 export interface GeneratedPluginPlanState {
-  readonly operations: LowerOperation[];
+  readonly files: DesiredFile[];
+  /** Package-relative paths, kept for manifest rendering (kimi/pi). */
   readonly desiredRelativePaths: Set<string>;
 }
+
+export const createGeneratedPluginPlanState = (): GeneratedPluginPlanState => ({
+  files: [],
+  desiredRelativePaths: new Set(),
+});
 
 export interface GeneratedPluginPlanTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
 }
+
+export const createGeneratedPluginWritePusher =
+  <Target extends GeneratedPluginPlanTarget>(
+    resolveTarget: (target: Target, relativePath: string) => string,
+  ): ((
+    files: DesiredFile[],
+    desiredRelativePaths: Set<string>,
+    target: Target,
+    relativePath: string,
+    content: string,
+    options?: DesiredFileOptions,
+  ) => void) =>
+  (
+    files: DesiredFile[],
+    desiredRelativePaths: Set<string>,
+    target: Target,
+    relativePath: string,
+    content: string,
+    options: DesiredFileOptions = {},
+  ): void => {
+    desiredRelativePaths.add(relativePath);
+    pushDesiredFile(files, {
+      targetPath: resolveTarget(target, relativePath),
+      content,
+      plugin: target.sourcePluginName,
+      ...(options.mode !== undefined ? { mode: options.mode } : {}),
+    });
+  };
+
+export type GeneratedPluginWritePusher<Target extends GeneratedPluginPlanTarget> =
+  ReturnType<typeof createGeneratedPluginWritePusher<Target>>;
 
 export interface GeneratedPluginPlanInput<Target extends GeneratedPluginPlanTarget> {
   readonly agents: ReadonlyArray<ComposedAgent>;
@@ -1118,11 +441,6 @@ export interface GeneratedPluginPlanInput<Target extends GeneratedPluginPlanTarg
   readonly target: Target;
 }
 
-export const createGeneratedPluginPlanState = (): GeneratedPluginPlanState => ({
-  operations: [],
-  desiredRelativePaths: new Set(),
-});
-
 export const planGeneratedPluginManifest = async <
   Target extends GeneratedPluginPlanTarget,
 >(options: {
@@ -1133,8 +451,8 @@ export const planGeneratedPluginManifest = async <
   readonly json: (value: unknown) => string;
   readonly relativePath?: string;
 }): Promise<void> => {
-  await options.pushWrite(
-    options.state.operations,
+  options.pushWrite(
+    options.state.files,
     options.state.desiredRelativePaths,
     options.input.target,
     options.relativePath ?? ".claude-plugin/plugin.json",
@@ -1155,13 +473,12 @@ export const planGeneratedPluginAgentWrites = async <
   readonly renderAgentMarkdown: (agent: ComposedAgent) => string;
 }): Promise<void> => {
   for (const agent of options.input.agents) {
-    await options.pushWrite(
-      options.state.operations,
+    options.pushWrite(
+      options.state.files,
       options.state.desiredRelativePaths,
       options.input.target,
       `agents/${agent.name}.md`,
       options.renderAgentMarkdown(agent),
-      "write-md",
     );
   }
 };
@@ -1174,13 +491,12 @@ export const planGeneratedPluginSkillWrites = async <
   readonly pushWrite: GeneratedPluginWritePusher<Target>;
 }): Promise<void> => {
   for (const skill of options.input.skills ?? []) {
-    await options.pushWrite(
-      options.state.operations,
+    options.pushWrite(
+      options.state.files,
       options.state.desiredRelativePaths,
       options.input.target,
       `skills/${skill.name}/SKILL.md`,
       await readFile(skill.sourcePath),
-      "write-md",
     );
   }
 };
@@ -1194,23 +510,21 @@ export const planGeneratedPluginOrbitSkillWrites = async <
   readonly renderOrbitSkill: (orbit: Orbit) => string;
 }): Promise<void> => {
   for (const orbit of options.input.orbits) {
-    await options.pushWrite(
-      options.state.operations,
+    options.pushWrite(
+      options.state.files,
       options.state.desiredRelativePaths,
       options.input.target,
       `skills/${orbit.name}/SKILL.md`,
       options.renderOrbitSkill(orbit),
-      "write-md",
     );
 
     for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      await options.pushWrite(
-        options.state.operations,
+      options.pushWrite(
+        options.state.files,
         options.state.desiredRelativePaths,
         options.input.target,
         `skills/${orbit.name}/references/${reference.filename}`,
         reference.content,
-        "write-md",
       );
     }
   }
@@ -1226,11 +540,7 @@ export const planStandardGeneratedPluginOrbitSkillWrites = async <
   await planGeneratedPluginOrbitSkillWrites({
     ...options,
     renderOrbitSkill: (orbit) =>
-      renderStandardOrbitSkill(
-        orbit,
-        options.input.target.sourcePluginName,
-        options.input.registry,
-      ),
+      renderStandardOrbitSkill(orbit, options.input.registry),
   });
 };
 
@@ -1249,8 +559,9 @@ export const planGeneratedPluginHookWrites = async <
   readonly resolveTarget: (relativePath: string) => string;
 }): Promise<void> => {
   await planGeneratedPluginHooks({
-    operations: options.state.operations,
+    files: options.state.files,
     desiredRelativePaths: options.state.desiredRelativePaths,
+    plugin: options.input.target.sourcePluginName,
     hooks: options.input.hooks ?? [],
     hooksJson: await options.renderHooksJson(
       options.input.hooks ?? [],
@@ -1267,51 +578,29 @@ export const planGeneratedPluginHookWrites = async <
   });
 };
 
-export const planGeneratedPluginPruning = async (options: {
-  readonly state: GeneratedPluginPlanState;
-  readonly root: string;
-  readonly resolveTarget: (relativePath: string) => string;
-  readonly owner?: {
-    readonly harness: HarnessId;
-    readonly scope: HarnessScope;
-    readonly root: string;
-    readonly sourcePluginName: string;
-  };
-}): Promise<void> => {
-  options.state.operations.push(
-    ...(await planGeneratedPluginFilePruning({
-      root: options.root,
-      desiredRelativePaths: options.state.desiredRelativePaths,
-      resolveTarget: options.resolveTarget,
-      owner: options.owner,
-    })),
-  );
-};
-
 export const planGeneratedPluginHooks = async (options: {
-  readonly operations: LowerOperation[];
+  readonly files: DesiredFile[];
   readonly desiredRelativePaths: Set<string>;
+  readonly plugin: string;
   readonly hooks: ReadonlyArray<Hook>;
   readonly hooksJson: string;
   readonly bundleHookWrapper: (hook: Hook) => Promise<string>;
   readonly resolveTarget: (relativePath: string) => string;
 }): Promise<void> => {
-  await pushGeneratedPluginWrite({
-    operations: options.operations,
-    desiredRelativePaths: options.desiredRelativePaths,
-    relativePath: "hooks/hooks.json",
-    target: options.resolveTarget("hooks/hooks.json"),
+  options.desiredRelativePaths.add("hooks/hooks.json");
+  pushDesiredFile(options.files, {
+    targetPath: options.resolveTarget("hooks/hooks.json"),
     content: options.hooksJson,
+    plugin: options.plugin,
   });
 
   for (const hook of options.hooks) {
     const relativePath = `hooks/${hook.name}.mjs`;
-    await pushGeneratedPluginWrite({
-      operations: options.operations,
-      desiredRelativePaths: options.desiredRelativePaths,
-      relativePath,
-      target: options.resolveTarget(relativePath),
+    options.desiredRelativePaths.add(relativePath);
+    pushDesiredFile(options.files, {
+      targetPath: options.resolveTarget(relativePath),
       content: await options.bundleHookWrapper(hook),
+      plugin: options.plugin,
     });
   }
 };

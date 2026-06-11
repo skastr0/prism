@@ -25,6 +25,7 @@ import {
   describePrismCause,
   PluginManifestError,
   renderPrismCause,
+  renderPrismError,
 } from "./errors.js";
 import { EXIT_CODES, exitWith } from "./exit.js";
 import { exists, expandPath } from "./fs.js";
@@ -55,7 +56,6 @@ import {
   type McpLifecycleHarness,
   type McpPortSelection,
 } from "./mcp/lifecycle.js";
-import { readHarnessLedger } from "./managed-ledger.js";
 import { resolvePrismHome } from "./prism-home.js";
 import {
   formatPackageOperations,
@@ -298,8 +298,19 @@ program
           console.log(`   ${b}`);
         }
       }
+      for (const blocked of result.blocked) {
+        console.error(`\n⛔ ${renderPrismError(blocked)}`);
+      }
+      for (const failure of result.failures) {
+        console.error(`\n❌ ${failure.op.kind} ${failure.op.targetPath}: ${failure.message}`);
+      }
       if (options.dryRun) {
         console.log(`\n🔍 Dry run — no writes performed.`);
+      } else if (result.blocked.length > 0 || result.failures.length > 0) {
+        console.error(`\n❌ Compile finished with unapplied targets.`);
+        exitWith(EXIT_CODES.domainFailure);
+      } else if (result.converged) {
+        console.log(`\n✅ Already converged — nothing written.`);
       } else {
         console.log(`\n✅ Done.`);
       }
@@ -1404,7 +1415,7 @@ async function runCompilePhaseForPlugin(options: {
   const compileBackups: string[] = [];
 
   for (const harnessId of options.harnesses) {
-    if (!(await shouldRunCompilePhaseForHarness(options, harnessId))) continue;
+    if (!manifestHasCompileTargets(options.manifest, harnessId)) continue;
 
     const compileExit = await Effect.runPromiseExit(
       compilePluginForTarget({
@@ -1462,60 +1473,40 @@ async function runCompilePhaseForPlugin(options: {
       console.log(indentBlock(operationText, indent.length > 0 ? `${indent}   ` : ""));
     }
     compileBackups.push(...compileExit.value.backups);
+
+    const firstBlocked = compileExit.value.blocked[0];
+    if (firstBlocked) {
+      console.log(`\n${indent}⛔ ${indentBlock(renderPrismError(firstBlocked), `${indent}   `).trimStart()}`);
+      return {
+        success: false,
+        backups: compileBackups,
+        failure: {
+          harness: harnessId,
+          path: firstBlocked.targetPath,
+          headline: firstBlocked.message,
+          hint: firstBlocked.hint,
+        },
+      };
+    }
+    const firstFailure = compileExit.value.failures[0];
+    if (firstFailure) {
+      console.log(
+        `\n${indent}❌ ${firstFailure.op.kind} ${firstFailure.op.targetPath}: ${firstFailure.message}`,
+      );
+      return {
+        success: false,
+        backups: compileBackups,
+        failure: {
+          harness: harnessId,
+          path: firstFailure.op.targetPath,
+          headline: `${firstFailure.op.kind} failed: ${firstFailure.message}`,
+        },
+      };
+    }
   }
 
   return { success: true, backups: compileBackups };
 }
-
-const LOWERER_OWNED_STALE_CONFIG_CLEANUP_HARNESSES = new Set<HarnessId>(["cursor"]);
-
-const compileOutputRootForHarness = (options: {
-  readonly harnessId: HarnessId;
-  readonly scope: HarnessScope;
-  readonly projectPath?: string;
-  readonly compileRoot?: string;
-}): string | null =>
-  options.compileRoot
-    ? expandPath(options.compileRoot)
-    : resolveHarnessRoot(getHarness(options.harnessId), options.scope, options.projectPath);
-
-const hasLowererOwnedStaleCompileConfig = async (options: {
-  readonly manifest: PluginManifest;
-  readonly harnessId: HarnessId;
-  readonly scope: HarnessScope;
-  readonly projectPath?: string;
-  readonly compileRoot?: string;
-}): Promise<boolean> => {
-  if (!LOWERER_OWNED_STALE_CONFIG_CLEANUP_HARNESSES.has(options.harnessId)) {
-    return false;
-  }
-
-  const outputRoot = compileOutputRootForHarness(options);
-  if (!outputRoot) return false;
-
-  const normalizedRoot = expandPath(outputRoot);
-  const ledger = await readHarnessLedger(options.harnessId);
-  return ledger.entries.some(
-    (entry) =>
-      entry.pluginName === options.manifest.name &&
-      entry.artifact === "compile" &&
-      entry.kind === "config" &&
-      entry.scope === options.scope &&
-      expandPath(entry.root) === normalizedRoot,
-  );
-};
-
-const shouldRunCompilePhaseForHarness = async (
-  options: {
-    readonly manifest: PluginManifest;
-    readonly scope: HarnessScope;
-    readonly projectPath?: string;
-    readonly compileRoot?: string;
-  },
-  harnessId: HarnessId,
-): Promise<boolean> =>
-  manifestHasCompileTargets(options.manifest, harnessId) ||
-  await hasLowererOwnedStaleCompileConfig({ ...options, harnessId });
 
 function parseHarnessScope(value: string): HarnessScope {
   if ((HARNESS_SCOPES as readonly string[]).includes(value)) {

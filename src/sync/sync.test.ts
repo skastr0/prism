@@ -284,4 +284,192 @@ describe("sync engine — shared-file regions", () => {
     expect(final).toContain("user-thing");
     expect(final).toContain("// user comment survives");
   });
+
+  test("anchored marker region lands inside the user's structure, never duplicating it", async () => {
+    const configYaml = join(root, "config.yaml");
+    await nodeWriteFile(configYaml, [
+      "log_level: info",
+      "mcp_servers:",
+      "  user-server:",
+      "    url: https://example.com/mcp",
+      "rooms:",
+      "  - lobby",
+      "",
+    ].join("\n"));
+
+    const anchored = desiredWith({
+      regions: [{
+        kind: "marker" as const,
+        targetPath: configYaml,
+        regionKey: "hermes.mcp.prism-generated-demo",
+        commentPrefix: "#",
+        anchor: "mcp_servers:",
+        content: "  prism-generated-demo:\n    command: \"bun\"",
+        plugin: "demo",
+      }],
+    });
+
+    const first = await refresh(anchored);
+    expect(kinds(first)).toEqual(["patch-regions"]);
+    const after = await readFile(configYaml);
+    // Fence inserted directly under the user's existing mcp_servers: key —
+    // no second mcp_servers: line is ever created.
+    expect(after.match(/^mcp_servers:$/gm) ?? []).toHaveLength(1);
+    expect(after).toContain(
+      "mcp_servers:\n# --- prism:hermes.mcp.prism-generated-demo begin ---",
+    );
+    expect(after).toContain("user-server:");
+    expect(after).toContain("rooms:");
+
+    const second = await refresh(anchored);
+    expect(second.converged).toBe(true);
+
+    const removed = await refresh(desiredWith({}));
+    expect(kinds(removed)).toEqual(["patch-regions"]);
+    const final = await readFile(configYaml);
+    expect(final).not.toContain("prism-generated-demo");
+    expect(final).toContain("user-server:");
+  });
+
+  test("anchored marker region creates the anchor line when absent", async () => {
+    const configYaml = join(root, "config.yaml");
+    await nodeWriteFile(configYaml, "log_level: info\n");
+
+    await refresh(desiredWith({
+      regions: [{
+        kind: "marker" as const,
+        targetPath: configYaml,
+        regionKey: "hermes.mcp.prism-generated-demo",
+        commentPrefix: "#",
+        anchor: "mcp_servers:",
+        content: "  prism-generated-demo:\n    command: \"bun\"",
+        plugin: "demo",
+      }],
+    }));
+
+    const after = await readFile(configYaml);
+    expect(after).toContain("log_level: info");
+    expect(after.match(/^mcp_servers:$/gm) ?? []).toHaveLength(1);
+    expect(after).toContain(
+      "mcp_servers:\n# --- prism:hermes.mcp.prism-generated-demo begin ---",
+    );
+  });
+
+  test("json-array-member region owns one element and never rewrites neighbors", async () => {
+    const settings = join(root, "settings.json");
+    await nodeWriteFile(settings, `${JSON.stringify({
+      packages: ["./packages/user-package"],
+      theme: "dark",
+    }, null, 2)}\n`);
+
+    const member = (value: string) => desiredWith({
+      regions: [{
+        kind: "json-array-member" as const,
+        targetPath: settings,
+        regionKey: "packages.prism-generated-demo",
+        jsonPath: ["packages"],
+        value,
+        plugin: "demo",
+      }],
+    });
+
+    const first = await refresh(member("./packages/prism-generated-demo"));
+    expect(kinds(first)).toEqual(["patch-regions"]);
+    const after = JSON.parse(await readFile(settings)) as { packages: string[]; theme: string };
+    expect(after.packages).toEqual(["./packages/user-package", "./packages/prism-generated-demo"]);
+    expect(after.theme).toBe("dark");
+
+    const second = await refresh(member("./packages/prism-generated-demo"));
+    expect(second.converged).toBe(true);
+
+    const removed = await refresh(desiredWith({}));
+    expect(kinds(removed)).toEqual(["patch-regions"]);
+    const final = JSON.parse(await readFile(settings)) as { packages: string[] };
+    expect(final.packages).toEqual(["./packages/user-package"]);
+  });
+
+  test("json-array-member region with memberKey replaces the identified record", async () => {
+    const installed = join(root, "plugins", "installed.json");
+    await mkdir(join(root, "plugins"), { recursive: true });
+    await nodeWriteFile(installed, `${JSON.stringify({
+      version: 1,
+      plugins: [
+        { id: "user-plugin", enabled: true },
+        { id: "prism-generated-demo", enabled: false, stale: true },
+      ],
+    }, null, 2)}\n`);
+
+    const record = { id: "prism-generated-demo", enabled: true, source: "local-path" };
+    const first = await refresh(desiredWith({
+      regions: [{
+        kind: "json-array-member" as const,
+        targetPath: installed,
+        regionKey: "installed.prism-generated-demo",
+        jsonPath: ["plugins"],
+        value: record,
+        memberKey: ["id"],
+        plugin: "demo",
+      }],
+    }));
+    expect(kinds(first)).toEqual(["patch-regions"]);
+    const after = JSON.parse(await readFile(installed)) as {
+      plugins: Array<Record<string, unknown>>;
+    };
+    expect(after.plugins).toEqual([
+      { id: "user-plugin", enabled: true },
+      record,
+    ]);
+
+    const removed = await refresh(desiredWith({}));
+    expect(kinds(removed)).toEqual(["patch-regions"]);
+    const final = JSON.parse(await readFile(installed)) as {
+      plugins: Array<Record<string, unknown>>;
+    };
+    expect(final.plugins).toEqual([{ id: "user-plugin", enabled: true }]);
+  });
+
+  test("structurally incompatible shared files classify as blocked, not thrown", async () => {
+    const settings = join(root, "settings.json");
+    await nodeWriteFile(settings, `${JSON.stringify({ packages: "not-an-array" }, null, 2)}\n`);
+
+    const report = await refresh(desiredWith({
+      regions: [{
+        kind: "json-array-member" as const,
+        targetPath: settings,
+        regionKey: "packages.prism-generated-demo",
+        jsonPath: ["packages"],
+        value: "./packages/prism-generated-demo",
+        plugin: "demo",
+      }],
+    }));
+    expect(kinds(report)).toEqual(["blocked"]);
+    expect(report.blocked[0]?.hint).toContain("packages.prism-generated-demo");
+    expect(await readFile(settings)).toContain("not-an-array");
+  });
+
+  test("a directory at a shared config target classifies as blocked; other ops land", async () => {
+    const settings = join(root, "settings.json");
+    await mkdir(settings, { recursive: true });
+    const skill = join(root, "skills", "ok", "SKILL.md");
+
+    const report = await refresh(desiredWith({
+      files: [{ targetPath: skill, content: "ok\n", plugin: "ok" }],
+      regions: [{
+        kind: "json-key" as const,
+        targetPath: settings,
+        regionKey: "mcpServers.prism-generated-demo",
+        jsonPath: ["mcpServers", "prism-generated-demo"],
+        value: { command: "bun" },
+        plugin: "demo",
+      }],
+    }));
+
+    expect(report.blocked).toHaveLength(1);
+    expect(report.blocked[0]?.hint).toContain("shared config target");
+    expect(report.failures).toEqual([]);
+    expect(await readFile(skill)).toBe("ok\n");
+
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(snapshot.manifest.entries.map((entry) => entry.targetPath)).toEqual([skill]);
+  });
 });

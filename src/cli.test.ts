@@ -15,6 +15,8 @@ import {
 import { generateMcpServerBundle } from "./compile/mcp-bundle.js";
 import { writePrismMcpServerBundle } from "./compile/mcp-runtime-path.js";
 import { bindingFromToolSource } from "./compile/tool-bindings.js";
+import { commitSnapshot } from "./state/store.js";
+import { serializeRegionRef } from "./sync/plan.js";
 
 const tempRoots: string[] = [];
 const cliTestToken = "prism-cli-test-token-with-enough-entropy";
@@ -495,7 +497,7 @@ test("package CLI writes distributable payload without live harness ledger write
   expect(ledger.entries).toEqual([]);
 });
 
-test("install runs Cursor lowerer cleanup when tools target is removed", async () => {
+test("install does not force Cursor compile cleanup from old ledger entries", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-cleanup-plugin");
   const homeRoot = join(root, "home");
@@ -597,6 +599,31 @@ test("install runs Cursor lowerer cleanup when tools target is removed", async (
     ],
   }, prismHome);
 
+  // The compile phase prunes via snapshot membership: seed the region the
+  // previous compile would have recorded for the mcp.json server entry.
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "cursor",
+      root: cursorRoot,
+      entries: [{
+        targetPath: configPath,
+        contentHash: "stale",
+        mode: "region",
+        regionKey: serializeRegionRef({
+          kind: "json-key",
+          targetPath: configPath,
+          regionKey: "mcpServers.prism-generated-cursor-cleanup-plugin",
+          jsonPath: ["mcpServers", "prism-generated-cursor-cleanup-plugin"],
+          value: undefined,
+          plugin: "cursor-cleanup-plugin",
+        }),
+        plugin: "cursor-cleanup-plugin",
+      }],
+    },
+  });
+
   const result = await runCli(
     [
       "install",
@@ -611,14 +638,19 @@ test("install runs Cursor lowerer cleanup when tools target is removed", async (
   );
 
   expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("Compile (cursor, global)");
-  // Stale in-root bundle files are no longer pruned by the lowerer — old
-  // layout leftovers are WS8 teardown's job. The config entry is removed.
+  expect(result.stdout).not.toContain("Compile (cursor, global)");
+  // Old ledger/snapshot cleanup is WS8 teardown's job. A plugin manifest with
+  // no compile targets must not resurrect compile just because stale ledger
+  // entries exist from the pre-snapshot model.
   expect(await pathExists(serverPath)).toBe(true);
   const config = JSON.parse(await readFile(configPath, "utf8")) as {
     mcpServers?: Record<string, unknown>;
   };
-  expect(config.mcpServers?.["prism-generated-cursor-cleanup-plugin"]).toBeUndefined();
+  expect(config.mcpServers?.["prism-generated-cursor-cleanup-plugin"]).toEqual({
+    type: "stdio",
+    command: "bun",
+    args: [serverPath],
+  });
   expect(config.mcpServers?.userServer).toEqual({ url: "https://example.com/mcp" });
   expect(
     (await readHarnessLedger("cursor", prismHome)).entries.some(

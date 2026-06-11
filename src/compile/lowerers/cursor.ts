@@ -13,22 +13,9 @@ import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { mcpBindingsForAgentsAndTools } from "../tool-bindings.js";
-import {
-  exists,
-  readFile,
-} from "../../fs.js";
-import { computeContentHash } from "../../content-hash.js";
-import {
-  managedEntryId,
-  readHarnessLedger,
-  type ManagedLedgerEntry,
-} from "../../managed-ledger.js";
 import type { HarnessScope } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
-import {
-  executeStandardLowering,
-  pushConfigPatchOperation as pushConfigPatch,
-} from "./shared.js";
+import type { DesiredRegion } from "../../sync/desired.js";
+import type { LowerOutput } from "./shared.js";
 
 const TARGET_ID = "cursor" as const;
 
@@ -68,97 +55,6 @@ type CursorMcpServerEntry =
 
 const configPath = (target: CursorLowerTarget): string =>
   join(target.root, "mcp.json");
-
-const json = (value: unknown): string =>
-  `${JSON.stringify(value, null, 2)}\n`;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const parseCursorMcpConfig = (content: string, target: string): Record<string, unknown> => {
-  if (content.trim().length === 0) return {};
-  const parsed = JSON.parse(content) as unknown;
-  if (!isRecord(parsed)) {
-    throw new Error(`Cursor MCP config '${target}' must be a JSON object.`);
-  }
-  return parsed;
-};
-
-const cursorMcpServers = (
-  config: Record<string, unknown>,
-  target: string,
-): Record<string, unknown> => {
-  if (config.mcpServers === undefined) return {};
-  if (!isRecord(config.mcpServers)) {
-    throw new Error(`Cursor MCP config '${target}' mcpServers must be a JSON object.`);
-  }
-  return config.mcpServers;
-};
-
-const cursorMcpConfigHasServer = (
-  currentConfig: string,
-  target: string,
-  serverName: string,
-): boolean => {
-  if (!currentConfig.includes(serverName)) return false;
-  const config = parseCursorMcpConfig(currentConfig, target);
-  return Object.prototype.hasOwnProperty.call(cursorMcpServers(config, target), serverName);
-};
-
-const cursorLedgerEntry = async (
-  target: CursorLowerTarget,
-  targetPath: string,
-  kind: "file" | "config",
-): Promise<ManagedLedgerEntry | undefined> => {
-  const ledger = await readHarnessLedger(TARGET_ID);
-  const entryId = managedEntryId({
-    harness: TARGET_ID,
-    scope: target.scope,
-    root: target.root,
-    pluginName: target.sourcePluginName,
-    artifact: "compile",
-    targetPath,
-    kind,
-  });
-  return ledger.entries.find((entry) => entry.id === entryId);
-};
-
-const currentContentHash = async (targetPath: string): Promise<string | undefined> =>
-  (await exists(targetPath)) ? computeContentHash(await readFile(targetPath)) : undefined;
-
-const cursorCurrentTargetIsLedgerOwned = async (
-  target: CursorLowerTarget,
-  targetPath: string,
-  kind: "file" | "config",
-): Promise<boolean> => {
-  const entry = await cursorLedgerEntry(target, targetPath, kind);
-  if (!entry) return false;
-  const currentHash = await currentContentHash(targetPath);
-  return currentHash === undefined || currentHash === entry.contentHash;
-};
-
-export const applyCursorMcpServerUpdate = (
-  currentConfig: string,
-  target: string,
-  serverName: string,
-  entry: CursorMcpServerEntry | undefined,
-): string => {
-  const config = parseCursorMcpConfig(currentConfig, target);
-  const hadServers = Object.prototype.hasOwnProperty.call(config, "mcpServers");
-  const currentServers = cursorMcpServers(config, target);
-  const nextServers: Record<string, unknown> = { ...currentServers };
-
-  if (entry) nextServers[serverName] = entry;
-  else delete nextServers[serverName];
-
-  if (Object.keys(nextServers).length > 0 || hadServers) {
-    config.mcpServers = nextServers;
-  } else {
-    delete config.mcpServers;
-  }
-
-  return json(config);
-};
 
 const renderCursorMcpServerEntry = (options: {
   readonly target: CursorLowerTarget;
@@ -218,33 +114,6 @@ const planMcpServer = (
   };
 };
 
-const planMcpConfig = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  server: ReturnType<typeof planMcpServer>,
-): Promise<void> => {
-  const target = configPath(input.target);
-  const hasConfig = await exists(target);
-  if (!server.entry && !hasConfig) return;
-
-  const current = hasConfig ? await readFile(target) : "";
-  if (
-    !server.entry &&
-    (
-      !cursorMcpConfigHasServer(current, target, server.serverName) ||
-      !(await cursorCurrentTargetIsLedgerOwned(input.target, target, "config"))
-    )
-  ) {
-    return;
-  }
-  const next = applyCursorMcpServerUpdate(current, target, server.serverName, server.entry);
-  if (next === current && !input.target.mcpBearerToken) return;
-
-  await pushConfigPatch(operations, target, next, {
-    mode: input.target.mcpBearerToken ? 0o600 : undefined,
-  });
-};
-
 const assertCursorLoweringInput = (input: LowerInput): void => {
   if (input.agents.length > 0) {
     throw new Error(
@@ -268,12 +137,21 @@ const assertCursorLoweringInput = (input: LowerInput): void => {
   }
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   assertCursorLoweringInput(input);
-  const operations: LowerOperation[] = [];
   const server = planMcpServer(input);
-  await planMcpConfig(input, operations, server);
-  return operations;
-};
+  const regions: DesiredRegion[] = [];
 
-export const executeLowering = executeStandardLowering;
+  if (server.entry) {
+    regions.push({
+      kind: "json-key",
+      targetPath: configPath(input.target),
+      regionKey: `mcpServers.${server.serverName}`,
+      jsonPath: ["mcpServers", server.serverName],
+      value: server.entry,
+      plugin: input.target.sourcePluginName,
+    });
+  }
+
+  return { files: [], regions };
+};

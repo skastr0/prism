@@ -29,10 +29,8 @@
  */
 
 import { stripBundlerPathComments } from "../bundle-normalize.js";
-import { mkdir, mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
@@ -41,6 +39,7 @@ import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { CanonicalTool, Contract, Hook, Orbit } from "../sources.js";
 import type { PluginRegistry } from "../registry.js";
 import type { HarnessScope } from "../../types.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   collectRelativeImportSpecifiers,
   NODE_BUILTIN_EXTERNALS,
@@ -62,26 +61,25 @@ import {
 } from "../generated-plugin.js";
 import { opencodePluginBundleImportPath } from "../runtime-deps.js";
 import {
+  makeTempBuildRoot,
+  removeTempBuildRoot,
+  writeTempBuildFile,
+} from "../temp-build-fs.js";
+import {
   bindingFromToolSource,
   bindingsFromCanonicalTools,
 } from "../tool-bindings.js";
 import {
-  backupLoweringTarget,
-  executeStandardLowering,
   nativeHookEventName,
-  prismOwnerMarker,
-  recordLoweringConfigPatch,
+  pushDesiredFile,
   renderGeneratedOrbitSkill,
-  type ExecuteLoweringOptions,
-  writeReason,
+  type LowerOutput,
 } from "./shared.js";
 import {
   exists as fileExists,
   readFile,
-  writeFile,
   listDirRecursive,
 } from "../../fs.js";
-import { computeContentHash } from "../../content-hash.js";
 
 // Keys at agent.<name>.* that the compiler owns. Other keys on an existing
 // block are preserved verbatim during patching.
@@ -148,40 +146,6 @@ const generatedPluginEntryForName = (
     generatedPluginRootForName(target, pluginName)
   ).href;
 
-const staleGeneratedPluginSourceEntryForName = (
-  target: OpenCodeLowerTarget,
-  pluginName: string,
-): string =>
-  pathToFileURL(
-    join(generatedPluginRootForName(target, pluginName), "src", "server.ts")
-  ).href;
-
-const isStaleGeneratedPluginEntry = (
-  entry: unknown,
-  target: OpenCodeLowerTarget,
-): entry is string => {
-  if (typeof entry !== "string") return false;
-  if (entry.startsWith(`${GENERATED_PLUGIN_PREFIX}-`)) return true;
-
-  let pathname: string;
-  try {
-    const url = new URL(entry);
-    if (url.protocol !== "file:") return false;
-    pathname = fileURLToPath(url);
-  } catch {
-    return false;
-  }
-
-  const relativePluginPath = relative(join(target.root, "plugins"), pathname).replace(/\\/g, "/");
-  return (
-    !relativePluginPath.startsWith("../") &&
-    !relativePluginPath.startsWith("/") &&
-    relativePluginPath.startsWith(`${GENERATED_PLUGIN_PREFIX}-`) &&
-    (relativePluginPath.endsWith("/src/server.ts") ||
-      relativePluginPath.endsWith("/dist/server.mjs"))
-  );
-};
-
 const generatedToolDenyPatternForName = (pluginName: string): string =>
   `${generatedToolNamespace(pluginName)}_*`;
 
@@ -190,61 +154,6 @@ const rewriteGeneratedOpenCodeRuntimeImportsForBundle = (source: string): string
     rewriteBareEffectImportsForBundle(source),
     new Map([["@opencode-ai/plugin", opencodePluginBundleImportPath()]]),
   );
-
-// ---------------------------------------------------------------------------
-// Operation shape
-// ---------------------------------------------------------------------------
-
-export type LowerOperation =
-  | {
-      readonly kind: "write-md";
-      readonly target: string;
-      readonly content: string;
-      readonly mode?: number;
-      readonly reason: "new" | "changed" | "unchanged";
-    }
-  | {
-      readonly kind: "patch-json";
-      readonly target: string;
-      readonly agentName: string;
-      readonly nextBlock: Record<string, unknown>;
-      readonly reason: "new" | "changed" | "unchanged";
-    }
-  | {
-      readonly kind: "write-plugin-file";
-      readonly target: string;
-      readonly content: string;
-      readonly mode?: number;
-      readonly reason: "new" | "changed" | "unchanged";
-    }
-  | {
-      readonly kind: "patch-config";
-      readonly target: string;
-      readonly content: string;
-      readonly mode?: number;
-      readonly baseContentHash?: string;
-      readonly reason: "new" | "changed" | "unchanged";
-    }
-  | {
-      readonly kind: "patch-opencode-plugins";
-      readonly target: string;
-      readonly pluginEntry: string;
-      readonly desiredPresent: boolean;
-      readonly reason: "new" | "changed" | "unchanged";
-    }
-  | {
-      readonly kind: "patch-opencode-permission";
-      readonly target: string;
-      readonly permissionKey: string;
-      readonly desiredAction: "allow" | "ask" | "deny" | undefined;
-      readonly reason: "new" | "changed" | "unchanged";
-    }
-  | {
-      readonly kind: "prune-plugin-path";
-      readonly target: string;
-      readonly targetType: "file" | "dir";
-      readonly reason: "stale";
-    };
 
 // ---------------------------------------------------------------------------
 // Agent markdown
@@ -361,22 +270,22 @@ const renderAgentMarkdown = (
 };
 
 // ---------------------------------------------------------------------------
-// opencode.json patching
+// opencode.json regions
+//
+// opencode.json is user-shared. Prism owns:
+//  - per compiled agent, each compiler-owned key at agent.<name>.<key>
+//    (one json-key region per key — hand-authored sibling keys are never
+//    touched, and a key the compiler stops emitting is removed as an
+//    orphaned region),
+//  - the generated-plugin entries inside the `plugin` array (one
+//    json-array-member region per entry),
+//  - the deny-by-default `permission."<ns>_*"` keys for generated tool
+//    namespaces (one json-key region per namespace).
 // ---------------------------------------------------------------------------
 
-const composeAgentBlock = (
-  agent: ComposedAgent,
-  existing: Record<string, unknown> | undefined
-): Record<string, unknown> => {
+/** Compiler-owned agent config keys, derived purely from the composed agent. */
+const composeAgentOwnedBlock = (agent: ComposedAgent): Record<string, unknown> => {
   const next: Record<string, unknown> = {};
-
-  if (existing) {
-    for (const [key, value] of Object.entries(existing)) {
-      if (!(COMPILER_OWNED_KEYS as readonly string[]).includes(key)) {
-        next[key] = value;
-      }
-    }
-  }
 
   if (agent.model) {
     for (const [key, value] of Object.entries(agent.model)) {
@@ -401,81 +310,6 @@ const composeAgentBlock = (
 
   return next;
 };
-
-const deepEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) return true;
-  if (typeof a !== typeof b) return false;
-  if (a === null || b === null) return false;
-  if (typeof a !== "object") return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    return a.every((item, idx) => deepEqual(item, b[idx]));
-  }
-  const ao = a as Record<string, unknown>;
-  const bo = b as Record<string, unknown>;
-  const keysA = Object.keys(ao).sort();
-  const keysB = Object.keys(bo).sort();
-  if (keysA.length !== keysB.length) return false;
-  if (keysA.some((k, i) => k !== keysB[i])) return false;
-  return keysA.every((k) => deepEqual(ao[k], bo[k]));
-};
-
-const readJson = async <T>(path: string): Promise<T> => {
-  return Bun.file(path).json() as Promise<T>;
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const getPermissionBlock = (
-  config: Record<string, unknown>,
-): Record<string, unknown> =>
-  isRecord(config.permission) ? config.permission : {};
-
-const permissionPatchReason = (
-  config: Record<string, unknown>,
-  permissionKey: string,
-  desiredAction: "allow" | "ask" | "deny" | undefined,
-): "new" | "changed" | "unchanged" => {
-  const permissions = getPermissionBlock(config);
-  const hasKey = Object.prototype.hasOwnProperty.call(permissions, permissionKey);
-
-  if (desiredAction === undefined) {
-    return hasKey ? "changed" : "unchanged";
-  }
-
-  if (!hasKey) return "new";
-  return permissions[permissionKey] === desiredAction ? "unchanged" : "changed";
-};
-
-const normalizePermissionBlockForWrite = (
-  config: Record<string, unknown>,
-): Record<string, unknown> => {
-  if (isRecord(config.permission)) {
-    return { ...config.permission };
-  }
-  if (
-    config.permission === "allow" ||
-    config.permission === "ask" ||
-    config.permission === "deny"
-  ) {
-    return { "*": config.permission };
-  }
-  return {};
-};
-
-// ---------------------------------------------------------------------------
-// Orbit skill rendering
-// ---------------------------------------------------------------------------
-
-const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  prismOwnerMarker("orbit-skill", sourcePluginName);
-
-const isOwnedOrbitSkill = (
-  content: string,
-  sourcePluginName: string
-): boolean => content.includes(orbitSkillOwnerMarker(sourcePluginName));
 
 // ---------------------------------------------------------------------------
 // Generated plugin emission
@@ -514,155 +348,6 @@ type AdapterSpec =
        */
       readonly contractRelativePath: string;
     };
-
-interface PluginTree {
-  readonly files: ReadonlyArray<string>;
-  readonly dirs: ReadonlyArray<string>;
-}
-
-const isRuntimeManagedPluginPath = (_relativePath: string): boolean => false;
-
-const collectPluginTree = async (root: string): Promise<PluginTree> => {
-  if (!(await fileExists(root))) {
-    return { files: [], dirs: [] };
-  }
-
-  const fs = await import("node:fs/promises");
-  const files: string[] = [];
-  const dirs: string[] = [];
-
-  const walk = async (dir: string, prefix = ""): Promise<void> => {
-    let entries: Array<{ readonly name: string; isDirectory(): boolean }>;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (isRuntimeManagedPluginPath(relativePath)) continue;
-
-      if (entry.isDirectory()) {
-        dirs.push(relativePath);
-        await walk(join(dir, entry.name), relativePath);
-      } else {
-        files.push(relativePath);
-      }
-    }
-  };
-
-  await walk(root);
-  return { files, dirs };
-};
-
-const collectDesiredPluginDirs = (
-  desiredFiles: ReadonlySet<string>
-): Set<string> => {
-  const dirs = new Set<string>();
-  for (const file of desiredFiles) {
-    const segments = file.split("/");
-    let current = "";
-    for (let i = 0; i < segments.length - 1; i++) {
-      current = current ? `${current}/${segments[i]}` : segments[i]!;
-      dirs.add(current);
-    }
-  }
-  return dirs;
-};
-
-const relativePathDepth = (relativePath: string): number =>
-  relativePath.split("/").length;
-
-const planPluginPruning = async (
-  root: string,
-  desiredFiles: ReadonlySet<string>
-): Promise<LowerOperation[]> => {
-  if (desiredFiles.size === 0) {
-    if (!(await fileExists(root))) return [];
-    return [
-      {
-        kind: "prune-plugin-path",
-        target: root,
-        targetType: "dir",
-        reason: "stale",
-      },
-    ];
-  }
-
-  const existing = await collectPluginTree(root);
-  const desiredDirs = collectDesiredPluginDirs(desiredFiles);
-  const operations: LowerOperation[] = [];
-
-  for (const relativePath of existing.files) {
-    if (desiredFiles.has(relativePath)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: join(root, relativePath),
-      targetType: "file",
-      reason: "stale",
-    });
-  }
-
-  const staleDirs = [...existing.dirs]
-    .filter((relativePath) => !desiredDirs.has(relativePath))
-    .sort(
-      (a, b) =>
-        relativePathDepth(b) - relativePathDepth(a) || b.localeCompare(a)
-    );
-
-  for (const relativePath of staleDirs) {
-    operations.push({
-      kind: "prune-plugin-path",
-      target: join(root, relativePath),
-      targetType: "dir",
-      reason: "stale",
-    });
-  }
-
-  return operations;
-};
-
-const planOrbitSkillPruning = async (
-  target: OpenCodeLowerTarget,
-  desiredSkillFiles: ReadonlySet<string>,
-): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const skillsRoot = join(target.root, "skills");
-  if (!(await fileExists(skillsRoot))) {
-    return operations;
-  }
-
-  const existingSkillFiles = await listDirRecursive(skillsRoot);
-  for (const relativePath of existingSkillFiles) {
-    const rootRelativePath = `skills/${relativePath}`;
-    if (desiredSkillFiles.has(rootRelativePath)) continue;
-
-    const absolutePath = join(skillsRoot, relativePath);
-    const current = await readFile(absolutePath);
-    if (!isOwnedOrbitSkill(current, target.sourcePluginName)) continue;
-
-    operations.push({
-      kind: "prune-plugin-path",
-      target: absolutePath,
-      targetType: "file",
-      reason: "stale",
-    });
-
-    const skillDir = dirname(absolutePath);
-    const remainingFiles = await listDirRecursive(skillDir);
-    if (remainingFiles.length === 1 && remainingFiles[0] === "SKILL.md") {
-      operations.push({
-        kind: "prune-plugin-path",
-        target: skillDir,
-        targetType: "dir",
-        reason: "stale",
-      });
-    }
-  }
-
-  return operations;
-};
 
 const normalizeRelativePath = (path: string): string => path.replace(/\\/g, "/");
 
@@ -1521,17 +1206,6 @@ const expandBundleMirrors = async (
   return mergePluginMirrors([...mirrors, ...supplemental]);
 };
 
-const writeTempSource = async (
-  tempRoot: string,
-  relativePath: string,
-  content: string,
-): Promise<string> => {
-  const target = join(tempRoot, relativePath);
-  await mkdir(dirname(target), { recursive: true });
-  await nodeWriteFile(target, content);
-  return target;
-};
-
 const writeTempGeneratedPluginSources = async (options: {
   readonly tempRoot: string;
   readonly pluginId: string;
@@ -1542,19 +1216,19 @@ const writeTempGeneratedPluginSources = async (options: {
   readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<string> => {
-  await writeTempSource(
-    options.tempRoot,
-    "runtime/schema-bridge.ts",
-    rewriteGeneratedOpenCodeRuntimeImportsForBundle(await getSchemaBridgeSource()),
+    await writeTempBuildFile(
+      options.tempRoot,
+      "runtime/schema-bridge.ts",
+      rewriteGeneratedOpenCodeRuntimeImportsForBundle(await getSchemaBridgeSource()),
   );
 
   if ((options.hookRegistrations?.length ?? 0) > 0) {
-    await writeTempSource(
+    await writeTempBuildFile(
       options.tempRoot,
       "runtime/hook-authoring-bridge.ts",
       GENERATED_HOOK_AUTHORING_BRIDGE,
     );
-    await writeTempSource(
+    await writeTempBuildFile(
       options.tempRoot,
       "runtime/hook-runtime.ts",
       GENERATED_HOOK_RUNTIME,
@@ -1572,7 +1246,7 @@ const writeTempGeneratedPluginSources = async (options: {
         source: raw,
         importPluginRoots: options.importPluginRoots,
       });
-      await writeTempSource(
+      await writeTempBuildFile(
         options.tempRoot,
         `plugins/${mirror.pluginName}/${file.relativePath}`,
         normalized,
@@ -1582,14 +1256,14 @@ const writeTempGeneratedPluginSources = async (options: {
 
   for (const spec of options.adapters) {
     const adapterName = spec.kind === "synthetic" ? spec.contractName : spec.toolName;
-    await writeTempSource(
+    await writeTempBuildFile(
       options.tempRoot,
       `adapters/${spec.pluginName}/${adapterName}.adapter.ts`,
       rewriteGeneratedOpenCodeRuntimeImportsForBundle(renderToolAdapter(spec)),
     );
   }
 
-  return writeTempSource(
+  return writeTempBuildFile(
     options.tempRoot,
     "server.ts",
     rewriteGeneratedOpenCodeRuntimeImportsForBundle(
@@ -1631,7 +1305,7 @@ const buildGeneratedOpenCodePluginBundle = async (options: {
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
 }): Promise<string> => {
   const tempRootPrefix = ["prism", "opencode", "plugin", ""].join("-");
-  const tempRoot = await mkdtemp(join(tmpdir(), tempRootPrefix));
+  const tempRoot = await makeTempBuildRoot(tempRootPrefix);
   try {
     const mirrors = await expandBundleMirrors(options.mirrors, options.importPluginRoots);
     const entryPath = await writeTempGeneratedPluginSources({
@@ -1666,7 +1340,7 @@ const buildGeneratedOpenCodePluginBundle = async (options: {
     await validateBuiltOpenCodeGeneratedPluginBundle(builtPath, options.pluginId);
     return normalizeBuiltOpenCodeGeneratedPluginBundle(await readFile(builtPath));
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    await removeTempBuildRoot(tempRoot);
   }
 };
 
@@ -1679,28 +1353,14 @@ const planGeneratedPluginFiles = async (options: {
   readonly adapters: ReadonlyArray<AdapterSpec>;
   readonly serverBindings: ReadonlyArray<ComposedAgent["toolBindings"][number]>;
   readonly hookRegistrations?: ReadonlyArray<HookRegistration>;
-}): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desiredPluginFiles = new Set<string>(["dist/server.mjs"]);
-  const bundleTarget = join(options.root, "dist", "server.mjs");
-  const desiredBundle = await buildGeneratedOpenCodePluginBundle(options);
-  let bundleReason: "new" | "changed" | "unchanged";
-  if (await fileExists(bundleTarget)) {
-    const current = await readFile(bundleTarget);
-    bundleReason = current === desiredBundle ? "unchanged" : "changed";
-  } else {
-    bundleReason = "new";
-  }
-  operations.push({
-    kind: "write-plugin-file",
-    target: bundleTarget,
-    content: desiredBundle,
-    reason: bundleReason,
-  });
-
-  operations.push(...(await planPluginPruning(options.root, desiredPluginFiles)));
-  return operations;
-};
+  readonly plugin: string;
+}): Promise<DesiredFile[]> => [
+  {
+    targetPath: join(options.root, "dist", "server.mjs"),
+    content: await buildGeneratedOpenCodePluginBundle(options),
+    plugin: options.plugin,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Planning
@@ -1757,18 +1417,12 @@ interface OpenCodeRuntimeContext {
   readonly ownerPlugins: ReadonlyMap<string, OwnerRuntimePlugin>;
   readonly inventory: SyntheticToolInventory;
   readonly ownedGeneratedPluginId: string;
-  readonly ownedGeneratedPluginEntry: string;
 }
 
 interface GeneratedRuntimePluginState {
-  readonly desiredGeneratedPluginEntries: Set<string>;
-  readonly staleGeneratedPluginEntriesToPrune: Set<string>;
-  readonly desiredGeneratedPermissionNamespaces: Set<string>;
-  readonly generatedPermissionNamespacesToTouch: Set<string>;
+  /** Source-plugin names whose generated runtime plugin is desired. */
+  readonly desiredGeneratedPluginNames: Set<string>;
 }
-
-const readOpenCodeConfig = async (jsonTarget: string): Promise<Record<string, unknown>> =>
-  await fileExists(jsonTarget) ? await readJson<Record<string, unknown>>(jsonTarget) : {};
 
 const collectOwnerRuntimePlugins = async (
   input: LowerInput,
@@ -1829,133 +1483,84 @@ const collectOpenCodeRuntimeContext = async (
       generatedOwnerToolNames,
     ),
     ownedGeneratedPluginId: generatedPluginId(input.target),
-    ownedGeneratedPluginEntry: generatedPluginEntryForName(
-      input.target,
-      input.target.sourcePluginName,
-    ),
   };
 };
 
-const planAgentMarkdownWrites = async (
+const planAgentMarkdownWrites = (
   input: LowerInput,
   inventory: SyntheticToolInventory,
-): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
+  files: DesiredFile[],
+): void => {
   for (const agent of input.agents) {
-    const target = agentMdPath(input.target, agent.name);
-    const content = renderAgentMarkdown(agent, inventory);
-    operations.push({
-      kind: "write-md",
-      target,
-      content,
-      reason: await writeReason(target, content),
+    pushDesiredFile(files, {
+      targetPath: agentMdPath(input.target, agent.name),
+      content: renderAgentMarkdown(agent, inventory),
+      plugin: input.target.sourcePluginName,
     });
   }
-  return operations;
 };
 
-const planAgentJsonPatches = (
+const planAgentConfigRegions = (
   input: LowerInput,
   jsonTarget: string,
-  config: Record<string, unknown>,
-): LowerOperation[] => {
-  const agentsMap = (config.agent as Record<string, unknown> | undefined) || {};
-  return input.agents.map((agent) => {
-    const existingBlock = agentsMap[agent.name] as Record<string, unknown> | undefined;
-    const nextBlock = composeAgentBlock(agent, existingBlock);
-    const reason = !existingBlock
-      ? "new"
-      : deepEqual(existingBlock, nextBlock)
-        ? "unchanged"
-        : "changed";
-    return {
-      kind: "patch-json",
-      target: jsonTarget,
-      agentName: agent.name,
-      nextBlock,
-      reason,
-    };
-  });
-};
-
-const planOrbitSkillWrites = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const desiredOrbitSkillFiles = new Set<string>();
-  const operations: LowerOperation[] = [];
-
-  for (const orbit of input.orbits) {
-    const target = orbitSkillMdPath(input.target, orbit.name);
-    desiredOrbitSkillFiles.add(orbitSkillRelativePath(orbit.name));
-    const content = renderGeneratedOrbitSkill({
-      orbit,
-      sourcePluginName: input.target.sourcePluginName,
-      registry: input.registry,
-      ownerKind: "orbit-skill",
-      trailingNewline: false,
-      renderFrontmatter: (values) => serializeFrontmatter(values, {}),
-    });
-    operations.push({
-      kind: "write-md",
-      target,
-      content,
-      reason: await writeReason(target, content),
-    });
-
-    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      const referenceRelative = `skills/${orbit.name}/references/${reference.filename}`;
-      const referenceTarget = join(input.target.root, referenceRelative);
-      desiredOrbitSkillFiles.add(referenceRelative);
-      operations.push({
-        kind: "write-md",
-        target: referenceTarget,
-        content: reference.content,
-        reason: await writeReason(referenceTarget, reference.content),
+): DesiredRegion[] => {
+  const regions: DesiredRegion[] = [];
+  for (const agent of input.agents) {
+    const owned = composeAgentOwnedBlock(agent);
+    for (const [key, value] of Object.entries(owned).sort(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
+      regions.push({
+        kind: "json-key",
+        targetPath: jsonTarget,
+        regionKey: `agent.${agent.name}.${key}`,
+        jsonPath: ["agent", agent.name, key],
+        value,
+        plugin: input.target.sourcePluginName,
       });
     }
   }
-
-  operations.push(
-    ...(await planOrbitSkillPruning(input.target, desiredOrbitSkillFiles)),
-  );
-  return operations;
+  return regions;
 };
 
-const createGeneratedRuntimePluginState = (
+const planOrbitSkillWrites = (
   input: LowerInput,
-  runtime: OpenCodeRuntimeContext,
-  config: Record<string, unknown>,
-): GeneratedRuntimePluginState => {
-  const staleGeneratedPluginEntriesToPrune = new Set<string>([
-    runtime.ownedGeneratedPluginId,
-    staleGeneratedPluginSourceEntryForName(input.target, input.target.sourcePluginName),
-  ]);
-  for (const pluginEntry of Array.isArray(config.plugin) ? config.plugin : []) {
-    if (isStaleGeneratedPluginEntry(pluginEntry, input.target)) {
-      staleGeneratedPluginEntriesToPrune.add(pluginEntry);
+  files: DesiredFile[],
+): void => {
+  for (const orbit of input.orbits) {
+    pushDesiredFile(files, {
+      targetPath: orbitSkillMdPath(input.target, orbit.name),
+      content: renderGeneratedOrbitSkill({
+        orbit,
+        registry: input.registry,
+        trailingNewline: false,
+        renderFrontmatter: (values) => serializeFrontmatter(values, {}),
+      }),
+      plugin: input.target.sourcePluginName,
+    });
+
+    for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
+      pushDesiredFile(files, {
+        targetPath: join(
+          input.target.root,
+          `skills/${orbit.name}/references/${reference.filename}`,
+        ),
+        content: reference.content,
+        plugin: input.target.sourcePluginName,
+      });
     }
   }
-
-  return {
-    desiredGeneratedPluginEntries: new Set<string>(),
-    staleGeneratedPluginEntriesToPrune,
-    desiredGeneratedPermissionNamespaces: new Set<string>(),
-    generatedPermissionNamespacesToTouch: new Set<string>([
-      input.target.sourcePluginName,
-    ]),
-  };
 };
 
+const createGeneratedRuntimePluginState = (): GeneratedRuntimePluginState => ({
+  desiredGeneratedPluginNames: new Set<string>(),
+});
+
 const rememberDesiredGeneratedPlugin = (
-  input: LowerInput,
   state: GeneratedRuntimePluginState,
   pluginName: string,
 ): void => {
-  state.desiredGeneratedPluginEntries.add(generatedPluginEntryForName(input.target, pluginName));
-  state.staleGeneratedPluginEntriesToPrune.add(generatedPluginIdForName(pluginName));
-  state.staleGeneratedPluginEntriesToPrune.add(
-    staleGeneratedPluginSourceEntryForName(input.target, pluginName),
-  );
-  state.desiredGeneratedPermissionNamespaces.add(pluginName);
-  state.generatedPermissionNamespacesToTouch.add(pluginName);
+  state.desiredGeneratedPluginNames.add(pluginName);
 };
 
 const collectGeneratedPluginImportRoots = (
@@ -1989,9 +1594,9 @@ const planSourceGeneratedRuntimePlugin = async (
     readonly importPluginRoots: ReadonlyMap<string, string>;
     readonly sourceRuntimeBindings: ReadonlyArray<ToolBinding>;
   },
-): Promise<LowerOperation[]> => {
+): Promise<DesiredFile[]> => {
   if (options.sourceRuntimeBindings.length > 0 || runtime.hasAnyHook) {
-    rememberDesiredGeneratedPlugin(input, state, input.target.sourcePluginName);
+    rememberDesiredGeneratedPlugin(state, input.target.sourcePluginName);
     return planGeneratedPluginFiles({
       root: generatedPluginRoot(input.target),
       pluginId: runtime.ownedGeneratedPluginId,
@@ -2006,10 +1611,11 @@ const planSourceGeneratedRuntimePlugin = async (
       ),
       serverBindings: options.sourceRuntimeBindings,
       hookRegistrations: runtime.hookRegistrations,
+      plugin: input.target.sourcePluginName,
     });
   }
 
-  return planPluginPruning(generatedPluginRoot(input.target), new Set<string>());
+  return [];
 };
 
 const planOwnerGeneratedRuntimePlugins = async (
@@ -2017,16 +1623,16 @@ const planOwnerGeneratedRuntimePlugins = async (
   runtime: OpenCodeRuntimeContext,
   state: GeneratedRuntimePluginState,
   importPluginRoots: ReadonlyMap<string, string>,
-): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
+): Promise<DesiredFile[]> => {
+  const files: DesiredFile[] = [];
   for (const [pluginName, owner] of runtime.ownerPlugins) {
-    rememberDesiredGeneratedPlugin(input, state, pluginName);
+    rememberDesiredGeneratedPlugin(state, pluginName);
     const ownerMirror = await planRuntimePluginMirrors(
       pluginName,
       owner.pluginRoot,
       owner.bindings,
     );
-    operations.push(
+    files.push(
       ...(await planGeneratedPluginFiles({
         root: generatedPluginRootForName(input.target, pluginName),
         pluginId: generatedPluginIdForName(pluginName),
@@ -2036,17 +1642,18 @@ const planOwnerGeneratedRuntimePlugins = async (
         adapters: planAdaptersForBindings(pluginName, owner.bindings),
         serverBindings: owner.bindings,
         hookRegistrations: [],
+        plugin: input.target.sourcePluginName,
       })),
     );
   }
-  return operations;
+  return files;
 };
 
 const planGeneratedRuntimePlugins = async (
   input: LowerInput,
   runtime: OpenCodeRuntimeContext,
   state: GeneratedRuntimePluginState,
-): Promise<LowerOperation[]> => {
+): Promise<DesiredFile[]> => {
   if (
     !runtime.hasAnyTool &&
     runtime.sourceCanonicalToolBindings.length === 0 &&
@@ -2098,251 +1705,48 @@ const planGeneratedRuntimePlugins = async (
   ];
 };
 
-const planGeneratedPluginConfigPatches = (
+const planGeneratedPluginConfigRegions = (
   input: LowerInput,
   jsonTarget: string,
-  config: Record<string, unknown>,
-  runtime: OpenCodeRuntimeContext,
   state: GeneratedRuntimePluginState,
-): LowerOperation[] => {
-  const plugins = Array.isArray(config.plugin) ? config.plugin : [];
-  return [...new Set([
-    runtime.ownedGeneratedPluginId,
-    runtime.ownedGeneratedPluginEntry,
-    ...state.desiredGeneratedPluginEntries,
-    ...state.staleGeneratedPluginEntriesToPrune,
-  ])].map((pluginEntry) => {
-    const desiredPresent = state.desiredGeneratedPluginEntries.has(pluginEntry);
-    const already = plugins.includes(pluginEntry);
-    const reason = desiredPresent
-      ? already
-        ? "unchanged"
-        : "new"
-      : already
-        ? "changed"
-        : "unchanged";
-    return {
-      kind: "patch-opencode-plugins",
-      target: jsonTarget,
-      pluginEntry,
-      desiredPresent,
-      reason,
-    };
-  });
-};
-
-const planGeneratedPermissionPatches = (
-  input: LowerInput,
-  jsonTarget: string,
-  config: Record<string, unknown>,
-  state: GeneratedRuntimePluginState,
-): LowerOperation[] =>
-  [...state.generatedPermissionNamespacesToTouch]
+): DesiredRegion[] =>
+  [...state.desiredGeneratedPluginNames]
     .sort((left, right) => left.localeCompare(right))
-    .map((pluginName) => {
-      const desiredAction = state.desiredGeneratedPermissionNamespaces.has(pluginName)
-        ? "deny"
-        : undefined;
-      const permissionKey = generatedToolDenyPatternForName(pluginName);
-      return {
-        kind: "patch-opencode-permission",
-        target: jsonTarget,
-        permissionKey,
-        desiredAction,
-        reason: permissionPatchReason(config, permissionKey, desiredAction),
-      };
-    });
+    .flatMap((pluginName): DesiredRegion[] => [
+      {
+        kind: "json-array-member",
+        targetPath: jsonTarget,
+        regionKey: `plugin.${generatedPluginIdForName(pluginName)}`,
+        jsonPath: ["plugin"],
+        value: generatedPluginEntryForName(input.target, pluginName),
+        plugin: input.target.sourcePluginName,
+      },
+      {
+        kind: "json-key",
+        targetPath: jsonTarget,
+        regionKey: `permission.${generatedPluginIdForName(pluginName)}`,
+        jsonPath: ["permission", generatedToolDenyPatternForName(pluginName)],
+        value: "deny",
+        plugin: input.target.sourcePluginName,
+      },
+    ]);
 
 export const planLowering = async (
   input: LowerInput
-): Promise<LowerOperation[]> => {
+): Promise<LowerOutput> => {
   const jsonTarget = opencodeJsonPath(input.target);
-  const config = await readOpenCodeConfig(jsonTarget);
   const runtime = await collectOpenCodeRuntimeContext(input);
-  const generatedRuntimeState = createGeneratedRuntimePluginState(input, runtime, config);
+  const generatedRuntimeState = createGeneratedRuntimePluginState();
+  const files: DesiredFile[] = [];
 
-  return [
-    ...(await planAgentMarkdownWrites(input, runtime.inventory)),
-    ...planAgentJsonPatches(input, jsonTarget, config),
-    ...(await planOrbitSkillWrites(input)),
-    ...(await planGeneratedRuntimePlugins(input, runtime, generatedRuntimeState)),
-    ...planGeneratedPluginConfigPatches(input, jsonTarget, config, runtime, generatedRuntimeState),
-    ...planGeneratedPermissionPatches(input, jsonTarget, config, generatedRuntimeState),
+  planAgentMarkdownWrites(input, runtime.inventory, files);
+  planOrbitSkillWrites(input, files);
+  files.push(...(await planGeneratedRuntimePlugins(input, runtime, generatedRuntimeState)));
+
+  const regions: DesiredRegion[] = [
+    ...planAgentConfigRegions(input, jsonTarget),
+    ...planGeneratedPluginConfigRegions(input, jsonTarget, generatedRuntimeState),
   ];
-};
 
-// ---------------------------------------------------------------------------
-// Execution
-// ---------------------------------------------------------------------------
-
-type OpenCodeJsonPatchOperation = Extract<
-  LowerOperation,
-  | { readonly kind: "patch-json" }
-  | { readonly kind: "patch-opencode-plugins" }
-  | { readonly kind: "patch-opencode-permission" }
->;
-
-const isOpenCodeJsonPatchOperation = (
-  operation: LowerOperation,
-): operation is OpenCodeJsonPatchOperation =>
-  operation.kind === "patch-json" ||
-  operation.kind === "patch-opencode-plugins" ||
-  operation.kind === "patch-opencode-permission";
-
-const shouldApplyLowerOperation = (operation: LowerOperation): boolean =>
-  operation.reason !== "unchanged";
-
-const collectOpenCodeJsonPatchOperations = (
-  operations: ReadonlyArray<LowerOperation>,
-): OpenCodeJsonPatchOperation[] =>
-  operations.filter(
-    (operation): operation is OpenCodeJsonPatchOperation =>
-      shouldApplyLowerOperation(operation) && isOpenCodeJsonPatchOperation(operation),
-  );
-
-const readOpenCodeConfigTextForWrite = async (
-  jsonTarget: string,
-): Promise<string | undefined> =>
-  (await fileExists(jsonTarget)) ? await readFile(jsonTarget) : undefined;
-
-const parseOpenCodeConfigForWrite = (
-  content: string | undefined,
-): Record<string, unknown> =>
-  content === undefined ? {} : JSON.parse(content) as Record<string, unknown>;
-
-const assertOpenCodeConfigBaseUnchanged = async (
-  jsonTarget: string,
-  baseContentHash: string | undefined,
-): Promise<void> => {
-  if (baseContentHash === undefined) return;
-  const currentHash = computeContentHash(await readFile(jsonTarget));
-  if (currentHash !== baseContentHash) {
-    throw new Error(`OpenCode config changed while Prism was patching it: ${jsonTarget}`);
-  }
-};
-
-const agentConfigMapForWrite = (
-  config: Record<string, unknown>,
-): Record<string, unknown> =>
-  (config.agent as Record<string, unknown> | undefined) || {};
-
-const applyOpenCodePluginPatch = (
-  config: Record<string, unknown>,
-  operation: Extract<LowerOperation, { readonly kind: "patch-opencode-plugins" }>,
-): void => {
-  const hadPluginKey = Object.prototype.hasOwnProperty.call(config, "plugin");
-  const plugins = Array.isArray(config.plugin) ? [...(config.plugin as unknown[])] : [];
-
-  if (operation.desiredPresent) {
-    if (!plugins.includes(operation.pluginEntry)) {
-      plugins.push(operation.pluginEntry);
-    }
-  } else {
-    const nextPlugins = plugins.filter(
-      (pluginEntry) => pluginEntry !== operation.pluginEntry,
-    );
-    plugins.length = 0;
-    plugins.push(...nextPlugins);
-  }
-
-  if (plugins.length > 0 || hadPluginKey) {
-    config.plugin = plugins;
-  } else {
-    delete config.plugin;
-  }
-};
-
-const applyOpenCodePermissionPatch = (
-  config: Record<string, unknown>,
-  operation: Extract<LowerOperation, { readonly kind: "patch-opencode-permission" }>,
-): void => {
-  const permissions = normalizePermissionBlockForWrite(config);
-  if (operation.desiredAction === undefined) {
-    delete permissions[operation.permissionKey];
-  } else {
-    permissions[operation.permissionKey] = operation.desiredAction;
-  }
-
-  if (Object.keys(permissions).length > 0) {
-    config.permission = permissions;
-  } else {
-    delete config.permission;
-  }
-};
-
-const applyOpenCodeJsonPatchOperation = (
-  config: Record<string, unknown>,
-  agentsMap: Record<string, unknown>,
-  operation: OpenCodeJsonPatchOperation,
-): void => {
-  if (operation.kind === "patch-json") {
-    agentsMap[operation.agentName] = operation.nextBlock;
-  } else if (operation.kind === "patch-opencode-plugins") {
-    applyOpenCodePluginPatch(config, operation);
-  } else {
-    applyOpenCodePermissionPatch(config, operation);
-  }
-};
-
-const executeOpenCodeJsonPatchOperations = async (
-  operations: ReadonlyArray<OpenCodeJsonPatchOperation>,
-  options: ExecuteLoweringOptions,
-  backups: string[],
-): Promise<void> => {
-  if (operations.length === 0) return;
-
-  const jsonTarget = operations[0]!.target;
-  const baseContent = await readOpenCodeConfigTextForWrite(jsonTarget);
-  const baseContentHash = baseContent === undefined ? undefined : computeContentHash(baseContent);
-  const backup = await backupLoweringTarget(jsonTarget, options, "patch");
-  if (backup) backups.push(backup);
-
-  const config = parseOpenCodeConfigForWrite(baseContent);
-  const agentsMap = agentConfigMapForWrite(config);
-
-  for (const operation of operations) {
-    applyOpenCodeJsonPatchOperation(config, agentsMap, operation);
-  }
-  config.agent = agentsMap;
-
-  const serialized = JSON.stringify(config, null, 2) + "\n";
-  await assertOpenCodeConfigBaseUnchanged(jsonTarget, baseContentHash);
-  await writeFile(jsonTarget, serialized);
-  await recordLoweringConfigPatch(jsonTarget, serialized, options);
-};
-
-export const executeLowering = async (
-  operations: LowerOperation[],
-  options: ExecuteLoweringOptions,
-): Promise<{ backups: string[] }> => {
-  const backups: string[] = [];
-  if (options.dryRun) return { backups };
-
-  backups.push(...(await executeStandardLowering(operations, options)).backups);
-  await executeOpenCodeJsonPatchOperations(
-    collectOpenCodeJsonPatchOperations(operations),
-    options,
-    backups,
-  );
-
-  return { backups };
-};
-
-export const describeOperation = (op: LowerOperation): string => {
-  switch (op.kind) {
-    case "write-md":
-      return `${op.reason.padEnd(9)} md     ${op.target}`;
-    case "patch-json":
-      return `${op.reason.padEnd(9)} json   ${op.target} [agent.${op.agentName}]`;
-    case "write-plugin-file":
-      return `${op.reason.padEnd(9)} plugin ${op.target}`;
-    case "patch-config":
-      return `${op.reason.padEnd(9)} config ${op.target}`;
-    case "patch-opencode-plugins":
-      return `${op.reason.padEnd(9)} json   ${op.target} [plugin ${op.desiredPresent ? "+=" : "-="} ${op.pluginEntry}]`;
-    case "patch-opencode-permission":
-      return `${op.reason.padEnd(9)} json   ${op.target} [permission ${op.desiredAction === undefined ? "-=" : "="} ${op.permissionKey}]`;
-    case "prune-plugin-path":
-      return `${op.reason.padEnd(9)} prune  ${op.target}${op.targetType === "dir" ? " [dir]" : ""}`;
-  }
+  return { files, regions };
 };

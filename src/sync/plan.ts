@@ -24,7 +24,13 @@ import { computeContentHash } from "../content-hash.js";
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
-import { applyRegion, removeJsonKeyRegion, removeMarkerRegion, renderMarkerRegion } from "./regions.js";
+import {
+  applyRegion,
+  removeJsonArrayMemberRegion,
+  removeJsonKeyRegion,
+  removeMarkerRegion,
+  renderMarkerRegion,
+} from "./regions.js";
 
 export type SyncOp =
   | { readonly kind: "create"; readonly targetPath: string; readonly content: string; readonly mode?: number; readonly plugin: string; readonly reason: "new" }
@@ -51,16 +57,45 @@ export interface SyncPlan {
  * Region refs are serialized into the snapshot's `regionKey` so orphaned
  * regions can be removed without re-deriving lowerer knowledge.
  */
-export const serializeRegionRef = (region: DesiredRegion): string =>
-  region.kind === "marker"
-    ? `marker ${region.commentPrefix} ${region.regionKey}`
-    : `json ${region.regionKey} ${JSON.stringify(region.jsonPath)}`;
+const arrayMemberIdentity = (
+  region: Extract<DesiredRegion, { kind: "json-array-member" }>,
+): unknown => {
+  if (region.memberKey === undefined) return region.value;
+  let cursor: unknown = region.value;
+  for (const segment of region.memberKey) {
+    if (cursor === null || typeof cursor !== "object") return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
+};
+
+export const serializeRegionRef = (region: DesiredRegion): string => {
+  switch (region.kind) {
+    case "marker":
+      return `marker ${region.commentPrefix} ${region.regionKey}`;
+    case "json-key":
+      return `json ${region.regionKey} ${JSON.stringify(region.jsonPath)}`;
+    case "json-array-member":
+      return `json-array ${region.regionKey} ${JSON.stringify({
+        path: region.jsonPath,
+        ...(region.memberKey === undefined ? {} : { memberKey: region.memberKey }),
+        identity: arrayMemberIdentity(region),
+      })}`;
+  }
+};
 
 export const parseRegionRef = (
   ref: string,
 ):
   | { readonly kind: "marker"; readonly commentPrefix: string; readonly regionKey: string }
   | { readonly kind: "json"; readonly regionKey: string; readonly jsonPath: ReadonlyArray<string | number> }
+  | {
+      readonly kind: "json-array";
+      readonly regionKey: string;
+      readonly jsonPath: ReadonlyArray<string | number>;
+      readonly memberKey?: ReadonlyArray<string>;
+      readonly identity: unknown;
+    }
   | undefined => {
   const marker = ref.match(/^marker (\S+) (.+)$/);
   if (marker) return { kind: "marker", commentPrefix: marker[1]!, regionKey: marker[2]! };
@@ -71,6 +106,25 @@ export const parseRegionRef = (
         kind: "json",
         regionKey: json[1]!,
         jsonPath: JSON.parse(json[2]!) as ReadonlyArray<string | number>,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  const jsonArray = ref.match(/^json-array (\S+) (\{.*\})$/);
+  if (jsonArray) {
+    try {
+      const parsed = JSON.parse(jsonArray[2]!) as {
+        readonly path: ReadonlyArray<string | number>;
+        readonly memberKey?: ReadonlyArray<string>;
+        readonly identity: unknown;
+      };
+      return {
+        kind: "json-array",
+        regionKey: jsonArray[1]!,
+        jsonPath: parsed.path,
+        ...(parsed.memberKey === undefined ? {} : { memberKey: parsed.memberKey }),
+        identity: parsed.identity,
       };
     } catch {
       return undefined;
@@ -91,6 +145,24 @@ const regionContentHash = (region: DesiredRegion): string =>
   computeContentHash(
     region.kind === "marker" ? renderMarkerRegion(region) : JSON.stringify(region.value),
   );
+
+const removeOrphanedRegion = (
+  content: string,
+  parsed: NonNullable<ReturnType<typeof parseRegionRef>>,
+): ReturnType<typeof removeMarkerRegion> => {
+  switch (parsed.kind) {
+    case "marker":
+      return removeMarkerRegion(content, parsed);
+    case "json":
+      return removeJsonKeyRegion(content, parsed.jsonPath);
+    case "json-array":
+      return removeJsonArrayMemberRegion(content, {
+        jsonPath: parsed.jsonPath,
+        identity: parsed.identity,
+        ...(parsed.memberKey === undefined ? {} : { memberKey: parsed.memberKey }),
+      });
+  }
+};
 
 const planOwnedFile = async (options: {
   readonly desired: DesiredFile;
@@ -160,14 +232,45 @@ const planSharedFileRegions = async (options: {
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
 }): Promise<SyncOp[]> => {
   const fileExists = await exists(options.targetPath);
-  const original = fileExists ? await readFile(options.targetPath) : "";
+  let original = "";
+  if (fileExists) {
+    try {
+      original = await readFile(options.targetPath);
+    } catch {
+      const plugin =
+        options.desired[0]?.plugin ??
+        [...options.snapshotByRegion.values()][0]?.plugin ??
+        "unknown";
+      return [{
+        kind: "blocked",
+        targetPath: options.targetPath,
+        plugin,
+        hint: "the shared config target exists but is not a readable file (directory or permission problem) — delete or move it, then refresh",
+      }];
+    }
+  }
 
   let content = original;
   const changedRegions: string[] = [];
   const skippedRegions: string[] = [];
 
   for (const region of options.desired) {
-    const outcome = applyRegion(content, region);
+    let outcome: ReturnType<typeof applyRegion>;
+    try {
+      outcome = applyRegion(content, region);
+    } catch (error) {
+      // A structurally incompatible shared file (e.g. a non-array where the
+      // region expects an array) classifies as blocked — collect, don't throw.
+      return [{
+        kind: "blocked",
+        targetPath: options.targetPath,
+        plugin: region.plugin,
+        hint:
+          `cannot patch region '${region.regionKey}': ` +
+          `${error instanceof Error ? error.message : String(error)} — ` +
+          "fix or move the file, then refresh",
+      }];
+    }
     if (outcome.changed) changedRegions.push(region.regionKey);
     else skippedRegions.push(region.regionKey);
     content = outcome.content;
@@ -177,10 +280,7 @@ const planSharedFileRegions = async (options: {
   for (const ref of options.orphanedRefs) {
     const parsed = parseRegionRef(ref);
     if (!parsed) continue;
-    const outcome =
-      parsed.kind === "marker"
-        ? removeMarkerRegion(content, parsed)
-        : removeJsonKeyRegion(content, parsed.jsonPath);
+    const outcome = removeOrphanedRegion(content, parsed);
     if (outcome.changed) removedRegions.push(parsed.regionKey);
     content = outcome.content;
   }

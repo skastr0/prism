@@ -1,6 +1,6 @@
 /** Amp Code lowerer. */
 
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
@@ -23,24 +23,16 @@ import {
   parseMarkdownFile,
   resolveManifestTargets,
 } from "../../manifest.js";
-import {
-  exists,
-  listDirRecursive,
-  readFile,
-} from "../../fs.js";
-import { computeContentHash } from "../../content-hash.js";
-import { readHarnessLedger } from "../../managed-ledger.js";
+import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile } from "../../sync/desired.js";
 import {
-  executeStandardLowering,
   matcherForResolvedToolHook,
-  planCompileOwnedTargetedSkillPruning,
-  prismOwnerMarker,
-  pushWriteOperation as pushWrite,
+  pushDesiredFile,
   renderGeneratedOrbitSkill,
   normalizeBundleSegment,
   serializeSimpleFrontmatter as serializeFrontmatter,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "amp-code" as const;
@@ -89,12 +81,6 @@ const generatedAgentSkillRelativePath = (agentName: string): string =>
 
 const generatedOrbitSkillRelativePath = (orbitName: string): string =>
   `${orbitName}/SKILL.md`;
-
-const agentSkillOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:amp-agent-skill owner=${JSON.stringify(sourcePluginName)} -->`;
-
-const orbitSkillOwnerMarker = (sourcePluginName: string): string =>
-  prismOwnerMarker("amp-orbit-skill", sourcePluginName);
 
 const targetIncludesAmp = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
@@ -435,8 +421,6 @@ const renderAmpAgentSkillMarkdown = (
       description: `Use when you need the compiled Prism agent role '${agent.name}': ${agent.description}`,
     }),
     "",
-    agentSkillOwnerMarker(target.sourcePluginName),
-    "",
     `# ${agent.name}`,
     "",
     "Amp does not expose a native custom-agent surface through the plugin SDK, so Prism lowers this compiled agent into a role skill. Treat this as role guidance, not an isolated subagent sandbox.",
@@ -475,79 +459,40 @@ const renderAmpAgentSkillMarkdown = (
 
 const renderAmpOrbitSkillMarkdown = (
   orbit: Orbit,
-  sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string =>
   renderGeneratedOrbitSkill({
     orbit,
-    sourcePluginName,
     registry,
-    ownerKind: "amp-orbit-skill",
     trailingNewline: true,
   });
 
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,
-  operations: LowerOperation[],
-): Promise<ReadonlySet<string>> => {
-  const desired = new Set<string>();
+  files: DesiredFile[],
+): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
-  if (!pluginPath || !artifactTargetsAmp(input.registry, "skills")) return desired;
+  if (!pluginPath || !artifactTargetsAmp(input.registry, "skills")) return;
 
-  const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
-  for (const file of files) {
-    const target = join(ampSkillsRoot(input.target), file.relativePath);
-    const content = await readFile(file.sourcePath);
-    desired.add(file.relativePath);
-    await pushWrite(
-      operations,
-      target,
-      content,
-      file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file",
-    );
-  }
-  return desired;
-};
-
-const planGeneratedSkillPruning = async (
-  target: AmpCodeLowerTarget,
-  desiredRelativeSkillFiles: ReadonlySet<string>,
-): Promise<LowerOperation[]> => {
-  const root = ampSkillsRoot(target);
-  if (!(await exists(root))) return [];
-
-  const operations: LowerOperation[] = [];
-  const ownerMarkers = [
-    agentSkillOwnerMarker(target.sourcePluginName),
-    orbitSkillOwnerMarker(target.sourcePluginName),
-  ];
-  for (const relativeFile of await listDirRecursive(root)) {
-    if (!relativeFile.endsWith("SKILL.md")) continue;
-    if (desiredRelativeSkillFiles.has(relativeFile)) continue;
-
-    const absoluteFile = join(root, relativeFile);
-    const content = await readFile(absoluteFile);
-    if (!ownerMarkers.some((marker) => content.includes(marker))) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: dirname(absoluteFile),
-      targetType: "dir",
-      reason: "stale",
+  const sourceFiles = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
+  for (const file of sourceFiles) {
+    pushDesiredFile(files, {
+      targetPath: join(ampSkillsRoot(input.target), file.relativePath),
+      content: await readFile(file.sourcePath),
+      plugin: input.target.sourcePluginName,
     });
   }
-  return operations;
 };
 
 const planAmpPlugin = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
 ): Promise<void> => {
   const bindings = collectAmpBindings(input);
   const hooks = await planAmpHooks(input, bindings);
   const commands = await collectAmpCommands(input);
-  const target = generatedPluginPath(input.target);
   if (bindings.length === 0 && hooks.length === 0 && commands.length === 0) {
-    await planGeneratedPluginFilePrune(input, operations, target);
+    // Nothing desired: the sync engine prunes a previously managed plugin file.
     return;
   }
 
@@ -560,89 +505,43 @@ const planAmpPlugin = async (
     setupImports: renderAmpHookImports(hooks),
     setupSource: joinAmpSetupSections(commands, hooks),
   });
-  await pushWrite(operations, target, bundle.content);
-};
-
-const planGeneratedPluginFilePrune = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  target: string,
-): Promise<void> => {
-  const ledger = await readHarnessLedger(TARGET_ID);
-  const entry = ledger.entries.find((candidate) =>
-    candidate.pluginName === input.target.sourcePluginName &&
-    candidate.scope === input.target.scope &&
-    resolve(candidate.root) === resolve(input.target.root) &&
-    candidate.artifact === "compile" &&
-    candidate.kind === "file" &&
-    resolve(candidate.targetPath) === resolve(target)
-  );
-  if (!entry) return;
-
-  if (await exists(target)) {
-    const currentHash = computeContentHash(await readFile(target));
-    if (currentHash !== entry.contentHash) {
-      throw new Error(
-        `Refusing to prune drifted Amp generated plugin '${target}'; target changed outside Prism.`,
-      );
-    }
-  }
-
-  operations.push({
-    kind: "prune-plugin-path",
-    target,
-    targetType: "file",
-    reason: "stale",
+  pushDesiredFile(files, {
+    targetPath: generatedPluginPath(input.target),
+    content: bundle.content,
+    plugin: input.target.sourcePluginName,
   });
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desiredGeneratedSkillFiles = new Set<string>();
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
+  const files: DesiredFile[] = [];
+  const plugin = input.target.sourcePluginName;
 
   for (const agent of input.agents) {
-    const relativeSkill = generatedAgentSkillRelativePath(agent.name);
-    desiredGeneratedSkillFiles.add(relativeSkill);
-    await pushWrite(
-      operations,
-      join(ampSkillsRoot(input.target), relativeSkill),
-      renderAmpAgentSkillMarkdown(agent, input.target),
-      "write-md",
-    );
+    pushDesiredFile(files, {
+      targetPath: join(ampSkillsRoot(input.target), generatedAgentSkillRelativePath(agent.name)),
+      content: renderAmpAgentSkillMarkdown(agent, input.target),
+      plugin,
+    });
   }
 
-  const desiredTargetedSkillFiles = await copyTargetedSkillArtifacts(input, operations);
+  await copyTargetedSkillArtifacts(input, files);
 
   for (const orbit of input.orbits) {
-    const relativeSkill = generatedOrbitSkillRelativePath(orbit.name);
-    desiredGeneratedSkillFiles.add(relativeSkill);
-    await pushWrite(
-      operations,
-      join(ampSkillsRoot(input.target), relativeSkill),
-      renderAmpOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
-      "write-md",
-    );
+    pushDesiredFile(files, {
+      targetPath: join(ampSkillsRoot(input.target), generatedOrbitSkillRelativePath(orbit.name)),
+      content: renderAmpOrbitSkillMarkdown(orbit, input.registry),
+      plugin,
+    });
 
     for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      const relativeReference = `${orbit.name}/references/${reference.filename}`;
-      desiredGeneratedSkillFiles.add(relativeReference);
-      await pushWrite(
-        operations,
-        join(ampSkillsRoot(input.target), relativeReference),
-        reference.content,
-        "write-md",
-      );
+      pushDesiredFile(files, {
+        targetPath: join(ampSkillsRoot(input.target), `${orbit.name}/references/${reference.filename}`),
+        content: reference.content,
+        plugin,
+      });
     }
   }
 
-  operations.push(...await planGeneratedSkillPruning(input.target, desiredGeneratedSkillFiles));
-  operations.push(...await planCompileOwnedTargetedSkillPruning({
-    target: { ...input.target, harness: TARGET_ID },
-    skillsRoot: ampSkillsRoot(input.target),
-    desiredRelativePaths: desiredTargetedSkillFiles,
-  }));
-  await planAmpPlugin(input, operations);
-  return operations;
+  await planAmpPlugin(input, files);
+  return { files, regions: [] };
 };
-
-export const executeLowering = executeStandardLowering;

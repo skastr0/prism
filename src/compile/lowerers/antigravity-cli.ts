@@ -28,22 +28,18 @@ import {
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
-import {
-  exists,
-  listDirRecursive,
-  readFile,
-} from "../../fs.js";
-import type { LowerOperation } from "./opencode.js";
+import { readFile } from "../../fs.js";
+import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
-  executeStandardLowering,
   nativeHookEventName,
-  pushWriteOperation as pushWrite,
+  pushDesiredFile,
   renderPrePostSessionHookWrapperEntry,
   regexEscape,
   renderStandardOrbitSkill,
   serializeSimpleFrontmatter as serializeFrontmatter,
   uniqueSorted,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "antigravity-cli" as const;
@@ -135,18 +131,19 @@ const artifactTargetsAntigravity = (
 
 const copyTargetedSkillArtifacts = async (
   input: LowerInput,
-  operations: LowerOperation[],
-  desired: Set<string>,
+  files: DesiredFile[],
 ): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
   if (!pluginPath || !artifactTargetsAntigravity(input.registry, "skills")) return;
 
-  const files = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
-  for (const file of files) {
+  const sourceFiles = await collectArtifactSourceFiles(pluginPath, "skills", TARGET_ID);
+  for (const file of sourceFiles) {
     const target = join(pluginRoot(input.target), "skills", file.relativePath);
-    const content = await readFile(file.sourcePath);
-    desired.add(pluginRelativePath(input.target, target));
-    await pushWrite(operations, target, content, file.relativePath.endsWith(".md") ? "write-md" : "write-plugin-file");
+    pushDesiredFile(files, {
+      targetPath: target,
+      content: await readFile(file.sourcePath),
+      plugin: input.target.sourcePluginName,
+    });
   }
 };
 
@@ -267,8 +264,7 @@ const bundleHookWrapper = (hook: Hook, nativeEvent: string): Promise<string> =>
 
 const planHooks = async (
   input: LowerInput,
-  operations: LowerOperation[],
-  desired: Set<string>,
+  files: DesiredFile[],
 ): Promise<void> => {
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
   if (hooks.length === 0 || !input.registry || !artifactTargetsAntigravity(input.registry, "hooks")) return;
@@ -289,8 +285,11 @@ const planHooks = async (
     const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, input.registry, TARGET_ID));
     const wrapperRelativePath = `hooks/${normalizeBundleSegment(hook.name, "hook")}.mjs`;
     const wrapperTarget = join(pluginRoot(input.target), wrapperRelativePath);
-    desired.add(wrapperRelativePath);
-    await pushWrite(operations, wrapperTarget, await bundleHookWrapper(hook, nativeEvent));
+    pushDesiredFile(files, {
+      targetPath: wrapperTarget,
+      content: await bundleHookWrapper(hook, nativeEvent),
+      plugin: input.target.sourcePluginName,
+    });
 
     const command = {
       type: "command",
@@ -307,9 +306,11 @@ const planHooks = async (
     }
   }
 
-  const configTarget = join(pluginRoot(input.target), "hooks.json");
-  desired.add("hooks.json");
-  await pushWrite(operations, configTarget, json(config));
+  pushDesiredFile(files, {
+    targetPath: join(pluginRoot(input.target), "hooks.json"),
+    content: json(config),
+    plugin: input.target.sourcePluginName,
+  });
 };
 
 const planMcpServers = (input: LowerInput): Record<string, unknown> => {
@@ -354,91 +355,67 @@ const planMcpServers = (input: LowerInput): Record<string, unknown> => {
   };
 };
 
-const planPluginPruning = async (
-  target: AntigravityCliLowerTarget,
-  desired: ReadonlySet<string>,
-): Promise<LowerOperation[]> => {
-  const root = pluginRoot(target);
-  if (!(await exists(root))) return [];
-  const existingFiles = (await listDirRecursive(root)).sort((left, right) => left.localeCompare(right));
-  const operations: LowerOperation[] = [];
-  for (const file of existingFiles) {
-    if (desired.has(file)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: join(root, file),
-      targetType: "file",
-      reason: "stale",
-    });
-  }
-  return operations;
-};
-
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
-  const operations: LowerOperation[] = [];
-  const desired = new Set<string>();
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
+  const files: DesiredFile[] = [];
+  const plugin = input.target.sourcePluginName;
   const root = pluginRoot(input.target);
 
   const contextFiles = await collectContextFiles(input);
   if (contextFiles.length > 0) {
-    const target = join(root, "rules", "context.md");
-    desired.add("rules/context.md");
-    await pushWrite(operations, target, renderContext(contextFiles), "write-md");
+    pushDesiredFile(files, {
+      targetPath: join(root, "rules", "context.md"),
+      content: renderContext(contextFiles),
+      plugin,
+    });
   }
 
   for (const agent of input.agents) {
-    const target = join(root, "agents", `${agent.name}.md`);
-    desired.add(pluginRelativePath(input.target, target));
-    await pushWrite(operations, target, renderAntigravityAgentMarkdown(agent, input.target), "write-md");
+    pushDesiredFile(files, {
+      targetPath: join(root, "agents", `${agent.name}.md`),
+      content: renderAntigravityAgentMarkdown(agent, input.target),
+      plugin,
+    });
   }
 
-  await copyTargetedSkillArtifacts(input, operations, desired);
+  await copyTargetedSkillArtifacts(input, files);
 
   for (const orbit of input.orbits) {
-    const target = join(root, "skills", orbit.name, "SKILL.md");
-    desired.add(pluginRelativePath(input.target, target));
-    await pushWrite(
-      operations,
-      target,
-      renderStandardOrbitSkill(orbit, input.target.sourcePluginName, input.registry),
-      "write-md",
-    );
+    pushDesiredFile(files, {
+      targetPath: join(root, "skills", orbit.name, "SKILL.md"),
+      content: renderStandardOrbitSkill(orbit, input.registry),
+      plugin,
+    });
 
     for (const reference of renderDerivedOrbitPhaseReferences(orbit)) {
-      const referenceTarget = join(
-        root,
-        "skills",
-        orbit.name,
-        "references",
-        reference.filename,
-      );
-      desired.add(pluginRelativePath(input.target, referenceTarget));
-      await pushWrite(operations, referenceTarget, reference.content, "write-md");
+      pushDesiredFile(files, {
+        targetPath: join(root, "skills", orbit.name, "references", reference.filename),
+        content: reference.content,
+        plugin,
+      });
     }
   }
 
   const mcpServers = planMcpServers(input);
-  await planHooks(input, operations, desired);
+  await planHooks(input, files);
 
   const manifest: Record<string, unknown> = {
     name: pluginIdForPlugin(input.target.sourcePluginName),
     version: input.target.sourcePluginVersion ?? "0.1.0",
   };
-
-  const manifestTarget = join(root, "plugin.json");
-  desired.add("plugin.json");
-  await pushWrite(operations, manifestTarget, json(manifest));
+  pushDesiredFile(files, {
+    targetPath: join(root, "plugin.json"),
+    content: json(manifest),
+    plugin,
+  });
 
   if (Object.keys(mcpServers).length > 0) {
-    const mcpConfigTarget = join(root, "mcp_config.json");
-    desired.add("mcp_config.json");
-    await pushWrite(operations, mcpConfigTarget, json({ mcpServers }), "write-plugin-file", {
-      mode: input.target.mcpBearerToken ? 0o600 : undefined,
+    pushDesiredFile(files, {
+      targetPath: join(root, "mcp_config.json"),
+      content: json({ mcpServers }),
+      plugin,
+      ...(input.target.mcpBearerToken ? { mode: 0o600 } : {}),
     });
   }
 
-  operations.push(...await planPluginPruning(input.target, desired));
-  return operations;
+  return { files, regions: [] };
 };
-
-export const executeLowering = executeStandardLowering;

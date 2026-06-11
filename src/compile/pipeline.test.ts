@@ -37,7 +37,8 @@ import {
 } from "../manifest.js";
 import { computeContentHash } from "../content-hash.js";
 import { resolvePrismHome } from "../prism-home.js";
-import { managedEntryId, readHarnessLedger, writeHarnessLedger } from "../managed-ledger.js";
+import { commitSnapshot, readSnapshot } from "../state/store.js";
+import { serializeRegionRef } from "../sync/plan.js";
 import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 
 const tempRoots: string[] = [];
@@ -2022,25 +2023,43 @@ test("compilePluginForTarget dry-run leaves lowerer outputs cache and lockfile u
   );
 });
 
-test("compilePluginForTarget does not persist cache or lockfile after lowering failure", async () => {
+test("compilePluginForTarget collects per-op failures instead of aborting the batch", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
   await writeText(join(projectRoot, ".opencode", "agents"), "not a directory\n");
 
-  await expect(
-    Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "opencode",
-        scope: "project",
-        projectPath: projectRoot,
-        dryRun: false,
-      }),
-    ),
-  ).rejects.toThrow();
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
-  expect(await pathExists(join(pluginRoot, "prism.lock"))).toBe(false);
-  expect(await directoryExists(join(pluginRoot, "dist", ".prism-cache"))).toBe(false);
+  // Agent markdown writes under the foreign `agents` file fail, but the rest
+  // of the batch (skills, generated plugin, opencode.json regions) lands.
+  expect(result.failures.length).toBeGreaterThan(0);
+  expect(result.failures.every((failure) =>
+    failure.op.targetPath.includes(join(".opencode", "agents")),
+  )).toBe(true);
+  expect(await pathExists(
+    join(projectRoot, ".opencode", "skills", "delivery-contract", "SKILL.md"),
+  )).toBe(true);
+
+  // Failed targets are withheld from the snapshot so the next run retries
+  // them from disk truth.
+  const snapshot = await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "opencode",
+    root: result.outputRoot,
+  });
+  for (const failure of result.failures) {
+    expect(snapshot.manifest.entries.some(
+      (entry) => entry.targetPath === failure.op.targetPath,
+    )).toBe(false);
+  }
 });
 
 test("orbit phase validation succeeds when assigned agents satisfy requirements", async () => {
@@ -2088,13 +2107,17 @@ test("orbit phase validation succeeds when assigned agents satisfy requirements"
       dryRun: false,
     }),
   );
-  const generatedPluginWrites = warmOpencode.operations.filter(
+  const generatedPluginSkips = warmOpencode.operations.filter(
     (operation) =>
-      operation.kind === "write-plugin-file" &&
-      operation.target.includes(join(".opencode", "plugins", "prism-generated")),
+      operation.kind === "skip" &&
+      operation.targetPath.includes(join(".opencode", "plugins", "prism-generated")),
   );
-  expect(generatedPluginWrites.length).toBeGreaterThan(0);
-  expect(generatedPluginWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
+  expect(generatedPluginSkips.length).toBeGreaterThan(0);
+  expect(warmOpencode.operations.filter(
+    (operation) =>
+      (operation.kind === "create" || operation.kind === "repair") &&
+      operation.targetPath.includes(join(".opencode", "plugins", "prism-generated")),
+  )).toEqual([]);
 });
 
 test("orbit validation fails when assigned agents do not satisfy requirements", async () => {
@@ -2794,31 +2817,21 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   const stalePath = join(outputPluginRoot, "stale", "old.txt");
   const staleContent = "stale\n";
   await writeText(stalePath, staleContent);
-  await writeHarnessLedger({
-    version: 1,
-    harness: "antigravity-cli",
-    entries: [{
-      id: managedEntryId({
-        harness: "antigravity-cli",
-        scope: "project",
-        root: join(projectRoot, ".agents"),
-        pluginName: "antigravity_plugin.demo",
-        artifact: "compile",
-        targetPath: stalePath,
-        kind: "file",
-      }),
-      pluginName: "antigravity_plugin.demo",
-      pluginVersion: "0.1.0",
-      pluginPath: pluginRoot,
+  // Snapshot membership is ownership: a previously managed file that is no
+  // longer desired gets pruned by the sync engine.
+  await commitSnapshot({
+    prismHome: testPrismHome(),
+    manifest: {
+      version: 1,
       harness: "antigravity-cli",
-      scope: "project",
       root: join(projectRoot, ".agents"),
-      artifact: "compile",
-      targetPath: stalePath,
-      kind: "file",
-      contentHash: computeContentHash(staleContent),
-      updatedAt: new Date().toISOString(),
-    }],
+      entries: [{
+        targetPath: stalePath,
+        contentHash: computeContentHash(staleContent),
+        mode: "owned",
+        plugin: "antigravity_plugin.demo",
+      }],
+    },
   });
 
   const result = await Effect.runPromise(
@@ -2883,7 +2896,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
   expect(await readFile(join(outputPluginRoot, "skills", "testing", "SKILL.md"), "utf8")).toContain("# Testing");
   const orbitSkill = await readFile(join(outputPluginRoot, "skills", "delivery", "SKILL.md"), "utf8");
-  expect(orbitSkill).toContain('<!-- prism:orbit-skill owner="antigravity_plugin.demo" -->');
+  expect(orbitSkill).not.toContain("<!-- prism:");
   expect(orbitSkill).toContain("# delivery");
   expect(orbitSkill).toContain("### 1. Build — agent `worker`");
 
@@ -2977,7 +2990,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   });
 
   expect(await pathExists(join(outputPluginRoot, "stale", "old.txt"))).toBe(false);
-  expect(result.operations.some((operation) => operation.kind === "prune-plugin-path" && operation.target.endsWith(join("stale", "old.txt")))).toBe(true);
+  expect(result.operations.some((operation) => operation.kind === "prune" && operation.targetPath.endsWith(join("stale", "old.txt")))).toBe(true);
 
   const outputFiles = [
     join(outputPluginRoot, "plugin.json"),
@@ -2995,19 +3008,11 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
       outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
     ),
   );
-  const ledgerSnapshot = (await readHarnessLedger("antigravity-cli")).entries
-    .filter((entry) => entry.pluginName === "antigravity_plugin.demo")
-    .map((entry) => ({
-      id: entry.id,
-      artifact: entry.artifact,
-      kind: entry.kind,
-      scope: entry.scope,
-      root: entry.root,
-      targetPath: entry.targetPath,
-      contentHash: entry.contentHash,
-      updatedAt: entry.updatedAt,
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id));
+  const snapshotBefore = await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "antigravity-cli",
+    root: join(projectRoot, ".agents"),
+  });
 
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
@@ -3019,30 +3024,23 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
       dryRun: false,
     }),
   );
-  const warmWrites = warmCompile.operations.filter(
-    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
-  );
-  expect(warmWrites.length).toBeGreaterThan(0);
-  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
-  expect(warmCompile.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(warmCompile.converged).toBe(true);
+  expect(warmCompile.operations.filter(
+    (operation) => operation.kind === "create" || operation.kind === "repair",
+  )).toEqual([]);
+  expect(warmCompile.operations.some((operation) => operation.kind === "skip")).toBe(true);
+  expect(warmCompile.operations.some((operation) => operation.kind === "prune")).toBe(false);
   expect(Object.fromEntries(
     await Promise.all(
       outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
     ),
   )).toEqual(outputSnapshot);
-  expect((await readHarnessLedger("antigravity-cli")).entries
-    .filter((entry) => entry.pluginName === "antigravity_plugin.demo")
-    .map((entry) => ({
-      id: entry.id,
-      artifact: entry.artifact,
-      kind: entry.kind,
-      scope: entry.scope,
-      root: entry.root,
-      targetPath: entry.targetPath,
-      contentHash: entry.contentHash,
-      updatedAt: entry.updatedAt,
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id))).toEqual(ledgerSnapshot);
+  // A converged run leaves the snapshot manifest byte-identical.
+  expect(await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "antigravity-cli",
+    root: join(projectRoot, ".agents"),
+  })).toEqual(snapshotBefore);
 });
 
 test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
@@ -3309,8 +3307,8 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
   expect(result.composed).toHaveLength(0);
   expect(result.operations).toContainEqual(
     expect.objectContaining({
-      kind: "patch-config",
-      target: join(cursorRoot, "mcp.json"),
+      kind: "patch-regions",
+      targetPath: join(cursorRoot, "mcp.json"),
     }),
   );
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
@@ -3323,15 +3321,20 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
     env: { PRISM_MCP_ENABLED_TOOLS: "tool_only_demo_echo_message" },
   });
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "tool-only-demo"))).toBe(true);
-  // The canonical bundle is pipeline-owned: harness ledgers no longer record
-  // bundle paths for new compiles.
-  expect((await readHarnessLedger("cursor")).entries.some((entry) =>
+  // The mcp.json server entry is a region in the snapshot manifest; the
+  // canonical bundle is pipeline-owned and never appears as a managed target.
+  const snapshot = await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "cursor",
+    root: cursorRoot,
+  });
+  expect(snapshot.manifest.entries.some((entry) =>
     entry.targetPath.endsWith("server.mjs")
   )).toBe(false);
-  expect((await readHarnessLedger("cursor")).entries.some((entry) =>
-    entry.pluginName === "tool-only-demo" &&
+  expect(snapshot.manifest.entries.some((entry) =>
+    entry.plugin === "tool-only-demo" &&
     entry.targetPath === join(cursorRoot, "mcp.json") &&
-    entry.kind === "config"
+    entry.mode === "region"
   )).toBe(true);
 });
 
@@ -3363,56 +3366,29 @@ test("compilePluginForTarget removes the stale Cursor MCP config entry when tool
     }, null, 2)}\n`,
   );
   await writeText(staleServerPath, staleServerContent);
-  const configEntryId = managedEntryId({
-    harness: "cursor",
-    scope: "global",
-    root: cursorRoot,
-    pluginName: "cursor-empty-cleanup",
-    artifact: "compile",
-    targetPath: join(cursorRoot, "mcp.json"),
-    kind: "config",
-  });
-  const serverEntryId = managedEntryId({
-    harness: "cursor",
-    scope: "global",
-    root: cursorRoot,
-    pluginName: "cursor-empty-cleanup",
-    artifact: "compile",
-    targetPath: staleServerPath,
-    kind: "file",
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("cursor")),
-    entries: [
-      {
-        id: configEntryId,
-        pluginName: "cursor-empty-cleanup",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        artifact: "compile",
+  // Seed the snapshot with the previously compiled mcp.json region; the
+  // recompile (with no tool targets) must remove it as orphaned.
+  await commitSnapshot({
+    prismHome: testPrismHome(),
+    manifest: {
+      version: 1,
+      harness: "cursor",
+      root: cursorRoot,
+      entries: [{
         targetPath: join(cursorRoot, "mcp.json"),
-        kind: "config",
-        contentHash: computeContentHash(await readFile(join(cursorRoot, "mcp.json"), "utf8")),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: serverEntryId,
-        pluginName: "cursor-empty-cleanup",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        artifact: "compile",
-        targetPath: staleServerPath,
-        kind: "file",
-        contentHash: computeContentHash(staleServerContent),
-        updatedAt: new Date().toISOString(),
-      },
-    ],
+        contentHash: "stale",
+        mode: "region",
+        regionKey: serializeRegionRef({
+          kind: "json-key",
+          targetPath: join(cursorRoot, "mcp.json"),
+          regionKey: "mcpServers.prism-generated-cursor-empty-cleanup",
+          jsonPath: ["mcpServers", "prism-generated-cursor-empty-cleanup"],
+          value: undefined,
+          plugin: "cursor-empty-cleanup",
+        }),
+        plugin: "cursor-empty-cleanup",
+      }],
+    },
   });
 
   const result = await Effect.runPromise(
@@ -3426,18 +3402,17 @@ test("compilePluginForTarget removes the stale Cursor MCP config entry when tool
     }),
   );
 
-  // The config entry is removed; stale in-root bundle files are NOT pruned
-  // by the lowerer anymore — old-layout leftovers are WS8 teardown's job.
-  expect(result.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  // The config region is removed; stale in-root bundle files are NOT pruned
+  // (they were never snapshot-managed) — old-layout leftovers are WS8
+  // teardown's job.
+  expect(result.operations.some((operation) => operation.kind === "prune")).toBe(false);
+  expect(result.operations.some((operation) => operation.kind === "patch-regions")).toBe(true);
   expect(await pathExists(staleServerPath)).toBe(true);
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
     mcpServers?: Record<string, unknown>;
   };
   expect(config.mcpServers?.["prism-generated-cursor-empty-cleanup"]).toBeUndefined();
   expect(config.mcpServers?.userServer).toEqual({ url: "https://example.com/mcp" });
-  const entries = (await readHarnessLedger("cursor")).entries;
-  expect(entries.some((entry) => entry.id === serverEntryId)).toBe(true);
-  expect(entries.some((entry) => entry.id === configEntryId)).toBe(true);
 });
 
 test("compilePluginForTarget leaves unrelated Cursor MCP config untouched without tool targets", async () => {
@@ -3470,8 +3445,8 @@ test("compilePluginForTarget leaves unrelated Cursor MCP config untouched withou
     }),
   );
 
-  expect(result.operations.some((operation) => operation.kind === "patch-config")).toBe(false);
-  expect(result.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(result.operations.some((operation) => operation.kind === "patch-regions")).toBe(false);
+  expect(result.operations.some((operation) => operation.kind === "prune")).toBe(false);
   expect(await readFile(configPath, "utf8")).toBe(originalConfig);
   expect(await readFile(collidingServerPath, "utf8")).toBe(collidingServerContent);
 });
@@ -3523,9 +3498,8 @@ export default defineTool({
     }),
   );
 
-  expect(result.operations.some((operation) =>
-    operation.kind === "write-md" &&
-    operation.target.endsWith(join("skills", "testing", "SKILL.md"))
+  expect(result.files.some((file) =>
+    file.targetPath.endsWith(join("skills", "testing", "SKILL.md"))
   )).toBe(false);
   expect(await pathExists(join(cursorRoot, "skills", "testing", "SKILL.md"))).toBe(false);
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
@@ -3534,7 +3508,7 @@ export default defineTool({
   expect(config.mcpServers?.["prism-generated-cursor-mixed-skills-tools"]).toBeDefined();
 });
 
-test("compilePluginForTarget skips Cursor config deletion when ledger content drifted", async () => {
+test("compilePluginForTarget leaves never-managed Cursor MCP entries untouched", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-stale-ledger-collision");
   const cursorRoot = join(root, "cursor-home");
@@ -3546,7 +3520,6 @@ test("compilePluginForTarget skips Cursor config deletion when ledger content dr
     "server.mjs",
   );
   const staleServerContent = "console.log('stale Cursor runtime');\n";
-  const ledgerConfig = `${JSON.stringify({ mcpServers: { userServer: { url: "https://example.com/mcp" } } })}\n`;
   const currentConfig = `${JSON.stringify({
     mcpServers: {
       "prism-generated-cursor-stale-ledger-collision": {
@@ -3567,57 +3540,9 @@ test("compilePluginForTarget skips Cursor config deletion when ledger content dr
   );
   await writeText(configPath, currentConfig);
   await writeText(staleServerPath, staleServerContent);
-  const configEntryId = managedEntryId({
-    harness: "cursor",
-    scope: "global",
-    root: cursorRoot,
-    pluginName: "cursor-stale-ledger-collision",
-    artifact: "compile",
-    targetPath: configPath,
-    kind: "config",
-  });
-  const serverEntryId = managedEntryId({
-    harness: "cursor",
-    scope: "global",
-    root: cursorRoot,
-    pluginName: "cursor-stale-ledger-collision",
-    artifact: "compile",
-    targetPath: staleServerPath,
-    kind: "file",
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("cursor")),
-    entries: [
-      {
-        id: configEntryId,
-        pluginName: "cursor-stale-ledger-collision",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        artifact: "compile",
-        targetPath: configPath,
-        kind: "config",
-        contentHash: computeContentHash(ledgerConfig),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: serverEntryId,
-        pluginName: "cursor-stale-ledger-collision",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        artifact: "compile",
-        targetPath: staleServerPath,
-        kind: "file",
-        contentHash: computeContentHash(staleServerContent),
-        updatedAt: new Date().toISOString(),
-      },
-    ],
-  });
+  // Nothing is seeded into the snapshot: the prism-named config entry and the
+  // old-layout bundle file were never snapshot-managed, so the sync engine
+  // must not touch them (no adopt, no name-based cleanup).
 
   const result = await Effect.runPromise(
     compilePluginForTarget({
@@ -3630,10 +3555,10 @@ test("compilePluginForTarget skips Cursor config deletion when ledger content dr
     }),
   );
 
-  expect(result.operations.some((operation) => operation.kind === "patch-config")).toBe(false);
+  expect(result.operations.some((operation) => operation.kind === "patch-regions")).toBe(false);
   expect(result.operations.some((operation) =>
-    operation.kind === "prune-plugin-path" &&
-    operation.target === staleServerPath
+    operation.kind === "prune" &&
+    operation.targetPath === staleServerPath
   )).toBe(false);
   expect(await readFile(configPath, "utf8")).toBe(currentConfig);
   expect(await readFile(staleServerPath, "utf8")).toBe(staleServerContent);
@@ -3713,7 +3638,7 @@ export default defineTool({
   const serverPath = prismMcpServerPath(testPrismHome(), "cursor-http-demo");
   expect(await pathExists(serverPath)).toBe(true);
   expect(result.operations.some((operation) =>
-    "target" in operation && operation.target.endsWith("server.mjs"),
+    operation.targetPath.endsWith("server.mjs"),
   )).toBe(false);
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
     mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
@@ -3745,9 +3670,12 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
   expect(result.outputRoot.replace(/\/$/u, "")).toBe(codexRoot);
 
   const config = await readFile(join(codexRoot, "config.toml"), "utf8");
-  expect(config).toContain("[features]\nhooks = true");
-  expect(config).not.toContain("codex_hooks");
-  expect(config).toContain("# --- prism codex-cli begin: codex-project-demo ---");
+  // The features flag fence is anchored under a single [features] header.
+  expect(config).toContain("[features]");
+  expect(config).toContain("hooks = true");
+  expect(config.split("[features]").length - 1).toBe(1);
+  expect(config).toContain("# --- prism:codex.hooks.codex-project-demo begin ---");
+  expect(config).toContain("# --- prism:codex.mcp.prism-generated-codex-project-demo begin ---");
   expect(config).toContain('["mcp_servers"."prism-generated-codex-project-demo"]');
   expect(config).toContain('enabled_tools = ["codex_project_demo_submit_work"]');
   expect(config).toContain('[["hooks"."PreToolUse"]]');
@@ -4461,29 +4389,16 @@ Review the current branch and report findings first.
     }),
   );
   expect(computeContentHash(await readFile(pluginPath, "utf8"))).toBe(sourceHash);
-  expect(warmCompile.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(warmCompile.operations.some((operation) => operation.kind === "prune")).toBe(false);
 
   await rm(join(pluginRoot, "commands"), { recursive: true, force: true });
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({ name: "amp-command-demo", version: "0.1.0", targets: {} }, null, 2)}\n`,
   );
+  // The plugin file drifted outside Prism; drift is never an error — the
+  // orphaned target is pruned with a backup (converge, don't refuse).
   await writeFile(pluginPath, `${source}\n// external change\n`);
-  await expect(
-    Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "amp-code",
-        scope: "project",
-        projectPath: projectRoot,
-        dryRun: false,
-      }),
-    ),
-  ).rejects.toThrow("Refusing to prune drifted Amp generated plugin");
-  expect(await pathExists(pluginPath)).toBe(true);
-
-  await writeFile(pluginPath, source);
   const pruneCompile = await Effect.runPromise(
     compilePluginForTarget({
       prismHome: testPrismHome(),
@@ -4496,14 +4411,20 @@ Review the current branch and report findings first.
   );
   expect(pruneCompile.operations).toContainEqual(
     expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: pluginPath,
-      targetType: "file",
-      reason: "stale",
+      kind: "prune",
+      targetPath: pluginPath,
+      reason: "orphaned",
+      backup: true,
     }),
   );
   expect(await pathExists(pluginPath)).toBe(false);
-  expect((await readHarnessLedger("amp-code")).entries.some((entry) => entry.targetPath === pluginPath)).toBe(false);
+  expect(pruneCompile.backups.length).toBeGreaterThan(0);
+  const ampSnapshot = await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "amp-code",
+    root: pruneCompile.outputRoot,
+  });
+  expect(ampSnapshot.manifest.entries.some((entry) => entry.targetPath === pluginPath)).toBe(false);
 });
 
 test("compilePluginForTarget lowers Claude commands into skills-dir plugin bundles", async () => {
@@ -4694,43 +4615,38 @@ export default defineTool({
   const serverPath = prismMcpServerPath(testPrismHome(), "hermes-tool-demo");
   expect(result.outputRoot).toBe(hermesRoot);
 
-  const skillWrite = result.operations.find(
-    (operation) =>
-      operation.kind === "write-md" &&
-      operation.target === join(hermesRoot, "skills", "hermes-demo", "SKILL.md"),
+  const skillWrite = result.files.find(
+    (file) => file.targetPath === join(hermesRoot, "skills", "hermes-demo", "SKILL.md"),
   );
-  expect(skillWrite?.kind).toBe("write-md");
-  if (skillWrite?.kind === "write-md") {
-    expect(skillWrite.content).toContain("# Hermes Demo");
-  }
+  expect(skillWrite?.content).toContain("# Hermes Demo");
 
   // The bundle is written to PRISM_HOME by the pipeline, never planned as a
   // harness-root operation.
   expect(result.operations.some(
-    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+    (operation) => operation.targetPath.endsWith("server.mjs"),
   )).toBe(false);
+  expect(result.files.some((file) => file.targetPath.endsWith("server.mjs"))).toBe(false);
 
-  const configWrite = result.operations.find(
-    (operation) =>
-      operation.kind === "patch-config" &&
-      operation.target === join(hermesRoot, "config.yaml"),
+  const configRegion = result.regions.find(
+    (region) => region.targetPath === join(hermesRoot, "config.yaml"),
   );
-  expect(configWrite?.kind).toBe("patch-config");
-  if (configWrite?.kind === "patch-config") {
-    expect(configWrite.content).toContain("mcp_servers:");
-    expect(configWrite.content).toContain("prism-generated-hermes-tool-demo:");
-    expect(configWrite.content).toContain('command: "bun"');
-    expect(configWrite.content).toContain(JSON.stringify(serverPath));
-    expect(configWrite.content).toContain("connect_timeout: 10");
-    expect(configWrite.content).toContain("timeout: 120");
-    expect(configWrite.content).toContain("sampling:");
-    expect(configWrite.content).toContain("enabled: false");
-    expect(configWrite.content).toContain("PRISM_MCP_WORKING_DIRECTORY");
-    expect(configWrite.content).toContain(`PRISM_MCP_REPO_ROOT: ${JSON.stringify(hermesRoot)}`);
-    expect(configWrite.content).toContain(
+  expect(configRegion?.kind).toBe("marker");
+  if (configRegion?.kind === "marker") {
+    // Anchored inside the user-shared top-level mcp_servers mapping.
+    expect(configRegion.anchor).toBe("mcp_servers:");
+    expect(configRegion.content).toContain("prism-generated-hermes-tool-demo:");
+    expect(configRegion.content).toContain('command: "bun"');
+    expect(configRegion.content).toContain(JSON.stringify(serverPath));
+    expect(configRegion.content).toContain("connect_timeout: 10");
+    expect(configRegion.content).toContain("timeout: 120");
+    expect(configRegion.content).toContain("sampling:");
+    expect(configRegion.content).toContain("enabled: false");
+    expect(configRegion.content).toContain("PRISM_MCP_WORKING_DIRECTORY");
+    expect(configRegion.content).toContain(`PRISM_MCP_REPO_ROOT: ${JSON.stringify(hermesRoot)}`);
+    expect(configRegion.content).toContain(
       'PRISM_MCP_ENABLED_TOOLS: "hermes_tool_demo_echo"',
     );
-    expect(configWrite.content).toContain("hermes_tool_demo_echo");
+    expect(configRegion.content).toContain("hermes_tool_demo_echo");
   }
 });
 
@@ -4795,25 +4711,23 @@ export default defineTool({
   // No bundle write is planned into any root — the union bundle is a
   // pipeline-owned PRISM_HOME artifact (skipped entirely in dry-run).
   expect(result.operations.some(
-    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+    (operation) => operation.targetPath.endsWith("server.mjs"),
   )).toBe(false);
 
-  const configWrite = result.operations.find(
-    (operation) =>
-      operation.kind === "patch-config" &&
-      operation.target === join(hermesRoot, "config.yaml"),
+  const configRegion = result.regions.find(
+    (region) => region.targetPath === join(hermesRoot, "config.yaml"),
   );
-  expect(configWrite?.kind).toBe("patch-config");
-  if (configWrite?.kind === "patch-config") {
-    expect(configWrite.content).toContain("prism-generated-hermes-http-demo:");
-    expect(configWrite.content).toContain('url: "http://127.0.0.1:38463/mcp"');
-    expect(configWrite.content).toContain("connect_timeout: 15");
-    expect(configWrite.content).toContain("timeout: 90");
-    expect(configWrite.content).toContain('Authorization: "Bearer ${PRISM_MCP_TOKEN}"');
-    expect(configWrite.content).toContain("sampling:");
-    expect(configWrite.content).toContain("enabled: false");
-    expect(configWrite.content).toContain("hermes_http_demo_echo");
-    expect(configWrite.content).not.toContain("prism-generated-hermes-http-demo:\n    command:");
+  expect(configRegion?.kind).toBe("marker");
+  if (configRegion?.kind === "marker") {
+    expect(configRegion.content).toContain("prism-generated-hermes-http-demo:");
+    expect(configRegion.content).toContain('url: "http://127.0.0.1:38463/mcp"');
+    expect(configRegion.content).toContain("connect_timeout: 15");
+    expect(configRegion.content).toContain("timeout: 90");
+    expect(configRegion.content).toContain('Authorization: "Bearer ${PRISM_MCP_TOKEN}"');
+    expect(configRegion.content).toContain("sampling:");
+    expect(configRegion.content).toContain("enabled: false");
+    expect(configRegion.content).toContain("hermes_http_demo_echo");
+    expect(configRegion.content).not.toContain("prism-generated-hermes-http-demo:\n    command:");
   }
 });
 
@@ -4844,16 +4758,11 @@ test("compilePluginForTarget serves Hermes HTTP MCP by default before config wri
       expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
       expect(config).toContain(`Authorization: "Bearer ${compileTestToken}"`);
       const configWrite = result.operations.find(
-        (
-          operation,
-        ): operation is Extract<
-          (typeof result.operations)[number],
-          { readonly kind: "patch-config" }
-        > =>
-          operation.kind === "patch-config" &&
-          operation.target === join(hermesRoot, "config.yaml"),
+        (operation) =>
+          operation.kind === "patch-regions" &&
+          operation.targetPath === join(hermesRoot, "config.yaml"),
       );
-      expect(configWrite?.mode).toBe(0o600);
+      expect(configWrite).toBeDefined();
       expect(
         await pathExists(
           join(testPrismHome(), "runtime", "mcp", "hermes-http-gate-demo", "runtime.json"),
@@ -5128,14 +5037,12 @@ test("compilePluginForTarget previews an auto-selected Hermes HTTP MCP port in d
     }),
   );
 
-  const configWrite = result.operations.find(
-    (operation) =>
-      operation.kind === "patch-config" &&
-      operation.target === join(hermesRoot, "config.yaml"),
+  const configRegion = result.regions.find(
+    (region) => region.targetPath === join(hermesRoot, "config.yaml"),
   );
-  expect(configWrite?.kind).toBe("patch-config");
-  if (configWrite?.kind === "patch-config") {
-    expect(configWrite.content).toMatch(/url: "http:\/\/127\.0\.0\.1:\d+\/mcp"/u);
+  expect(configRegion?.kind).toBe("marker");
+  if (configRegion?.kind === "marker") {
+    expect(configRegion.content).toMatch(/url: "http:\/\/127\.0\.0\.1:\d+\/mcp"/u);
   }
   expect(
     await pathExists(
@@ -6457,12 +6364,11 @@ test("trait-orbit example lowers assigned traits and orbit skill into opencode p
     expect(agent?.skills).toEqual([]);
     expect(agent?.allowedSkills).toEqual(expectedSkills);
 
-    const markdown = result.operations.find(
-      (operation) =>
-        operation.kind === "write-md" && operation.target.endsWith(`agents/${agentName}.md`),
+    const markdown = result.files.find(
+      (file) => file.targetPath.endsWith(`agents/${agentName}.md`),
     );
-    if (!markdown || markdown.kind !== "write-md") {
-      throw new Error(`expected ${agentName} markdown operation`);
+    if (!markdown) {
+      throw new Error(`expected ${agentName} markdown file`);
     }
     const frontmatter = matter(markdown.content).data as {
       permission?: { skill?: Record<string, string> };
@@ -6633,13 +6539,11 @@ export default defineAgent({
     expect(agent?.skills).toEqual([]);
     expect(agent?.allowedSkills).toEqual(family.expected);
 
-    const markdown = result.operations.find(
-      (operation) =>
-        operation.kind === "write-md" &&
-        operation.target.endsWith(`agents/${family.agent}.md`),
+    const markdown = result.files.find(
+      (file) => file.targetPath.endsWith(`agents/${family.agent}.md`),
     );
-    if (!markdown || markdown.kind !== "write-md") {
-      throw new Error(`expected ${family.agent} markdown operation`);
+    if (!markdown) {
+      throw new Error(`expected ${family.agent} markdown file`);
     }
 
     const frontmatter = matter(markdown.content).data as {
@@ -6752,12 +6656,11 @@ export default defineAgent({
   expect(worker?.skills).toEqual(["contracts"]);
   expect(worker?.allowedSkills).toEqual(["contracts", "testing"]);
 
-  const markdown = result.operations.find(
-    (operation) =>
-      operation.kind === "write-md" && operation.target.endsWith("agents/worker.md"),
+  const markdown = result.files.find(
+    (file) => file.targetPath.endsWith("agents/worker.md"),
   );
-  if (!markdown || markdown.kind !== "write-md") {
-    throw new Error("expected worker markdown operation");
+  if (!markdown) {
+    throw new Error("expected worker markdown file");
   }
 
   const permissions = parseOpencodeSkillPermissions(markdown.content);
@@ -6915,23 +6818,21 @@ test("external permission-only consumers do not emit empty generated plugin shel
     "protocol_core_*": "deny",
   });
   expect(opencodeConfig.permission).not.toHaveProperty("permission_only_consumer_*");
-  expect(opencodeConfig.plugin).toEqual([
-    generatedPluginEntry(projectRoot, "prism-generated-stale-dep"),
+  // The desired generated-plugin entry is ensured as an array-membership
+  // region; entries Prism never snapshot-managed (the legacy stale forms the
+  // fixture seeds) are foreign content now — WS8 teardown cleans the old
+  // ledger era, not the compile path.
+  expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
-  ]);
-  expect(opencodeConfig.plugin).not.toContain("prism-generated-stale-dep");
-  expect(opencodeConfig.plugin).not.toContain(
-    generatedStaleSourcePluginEntry(projectRoot, "prism-generated-stale-dep"),
   );
-  expect(opencodeConfig.plugin).not.toContain(
-    "prism-generated-permission-only-consumer",
-  );
-  expect(opencodeConfig.plugin).not.toContain(
-    generatedPluginEntry(
-      projectRoot,
-      "prism-generated-permission-only-consumer",
-    ),
-  );
+  expect(opencodeConfig.plugin?.filter(
+    (entry) => entry === generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
+  )).toHaveLength(1);
+  // No empty generated plugin shell is ever registered for the consumer.
+  expect(opencodeConfig.plugin?.filter(
+    (entry) =>
+      entry === generatedPluginEntry(projectRoot, "prism-generated-permission-only-consumer"),
+  )).toHaveLength(1); // the pre-seeded foreign entry only — Prism added none
 });
 
 test("opencode tools-only plugins bundle runtime helper imports from declared deps", async () => {
@@ -7548,20 +7449,6 @@ export default defineHook({
       outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
     ),
   );
-  const ledgerSnapshot = (await readHarnessLedger("factory-droid")).entries
-    .filter((entry) => entry.pluginName === "factory-pipeline-demo")
-    .map((entry) => ({
-      id: entry.id,
-      artifact: entry.artifact,
-      kind: entry.kind,
-      scope: entry.scope,
-      root: entry.root,
-      targetPath: entry.targetPath,
-      contentHash: entry.contentHash,
-      updatedAt: entry.updatedAt,
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id));
-
   const warmCompile = await Effect.runPromise(
     compilePluginForTarget({
       prismHome: testPrismHome(),
@@ -7572,30 +7459,17 @@ export default defineHook({
       dryRun: false,
     }),
   );
-  const warmWrites = warmCompile.operations.filter(
-    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
-  );
-  expect(warmWrites.length).toBeGreaterThan(0);
-  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
-  expect(warmCompile.operations.some((operation) => operation.kind === "prune-plugin-path")).toBe(false);
+  expect(warmCompile.converged).toBe(true);
+  expect(warmCompile.operations.filter(
+    (operation) => operation.kind === "create" || operation.kind === "repair",
+  )).toEqual([]);
+  expect(warmCompile.operations.some((operation) => operation.kind === "skip")).toBe(true);
+  expect(warmCompile.operations.some((operation) => operation.kind === "prune")).toBe(false);
   expect(Object.fromEntries(
     await Promise.all(
       outputFiles.map(async (path) => [path, computeContentHash(await readFile(path, "utf8"))]),
     ),
   )).toEqual(outputSnapshot);
-  expect((await readHarnessLedger("factory-droid")).entries
-    .filter((entry) => entry.pluginName === "factory-pipeline-demo")
-    .map((entry) => ({
-      id: entry.id,
-      artifact: entry.artifact,
-      kind: entry.kind,
-      scope: entry.scope,
-      root: entry.root,
-      targetPath: entry.targetPath,
-      contentHash: entry.contentHash,
-      updatedAt: entry.updatedAt,
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id))).toEqual(ledgerSnapshot);
 });
 
 test("compilePluginForTarget lowers Pi package and extension surfaces", async () => {
@@ -7758,7 +7632,7 @@ export default defineHook({
   expect(piAgent).toContain('- "pi_pipeline_demo_submit_work"');
   expect(piAgent).toContain('skills:');
   expect(piAgent).toContain('- "testing"');
-  expect(piAgent).toContain("<!-- prism:pi-agent owner=\"pi-pipeline-demo\" -->");
+  expect(piAgent).not.toContain("<!-- prism:");
   expect(await pathExists(join(packageRoot, "skills", "prism-agent-worker", "SKILL.md"))).toBe(false);
   expect(await pathExists(join(packageRoot, "skills", "testing", "SKILL.md"))).toBe(true);
   expect(await pathExists(join(packageRoot, "skills", "delivery", "SKILL.md"))).toBe(true);
@@ -7881,16 +7755,14 @@ export default defineHook({
       dryRun: false,
     }),
   );
-  const warmWrites = warmCompile.operations.filter(
-    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
-  );
-  const warmConfigPatches = warmCompile.operations.filter(
-    (operation) => operation.kind === "patch-config",
-  );
-  expect(warmWrites.length).toBeGreaterThan(0);
-  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
-  expect(warmConfigPatches).toHaveLength(1);
-  expect(warmConfigPatches[0]?.reason).toBe("unchanged");
+  expect(warmCompile.converged).toBe(true);
+  expect(warmCompile.operations.filter(
+    (operation) => operation.kind === "create" || operation.kind === "repair",
+  )).toEqual([]);
+  expect(warmCompile.operations.some((operation) => operation.kind === "skip")).toBe(true);
+  // The settings.json region is byte-stable on warm runs.
+  expect(warmCompile.operations.some((operation) => operation.kind === "patch-regions")).toBe(false);
+  expect(warmCompile.operations.some((operation) => operation.kind === "skip-regions")).toBe(true);
   const warmSettings = JSON.parse(await readFile(join(projectRoot, ".pi", "settings.json"), "utf8")) as {
     packages?: string[];
   };
@@ -7918,7 +7790,7 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
     })}\n`,
   );
   await writeText(stalePackageSkillPath, stalePackageSkillContent);
-  const staleAgentContent = "---\nname: stale\ndescription: Stale\n---\n\n<!-- prism:pi-agent owner=\"pi-source-only\" -->\n\n# Stale\n";
+  const staleAgentContent = "---\nname: stale\ndescription: Stale\n---\n\n# Stale\n";
   await writeText(staleAgentPath, staleAgentContent);
   await writeText(
     join(piRoot, "settings.json"),
@@ -7929,55 +7801,41 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
       ],
     }, null, 2)}\n`,
   );
-  await writeHarnessLedger({
-    version: 1,
-    harness: "pi",
-    entries: [
-      {
-        id: managedEntryId({
-          harness: "pi",
-          scope: "project",
-          root: piRoot,
-          pluginName: "pi-source-only",
-          artifact: "compile",
+  await commitSnapshot({
+    prismHome: testPrismHome(),
+    manifest: {
+      version: 1,
+      harness: "pi",
+      root: piRoot,
+      entries: [
+        {
           targetPath: stalePackageSkillPath,
-          kind: "file",
-        }),
-        pluginName: "pi-source-only",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "pi",
-        scope: "project",
-        root: piRoot,
-        artifact: "compile",
-        targetPath: stalePackageSkillPath,
-        kind: "file",
-        contentHash: computeContentHash(stalePackageSkillContent),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: managedEntryId({
-          harness: "pi",
-          scope: "project",
-          root: piRoot,
-          pluginName: "pi-source-only",
-          artifact: "compile",
+          contentHash: computeContentHash(stalePackageSkillContent),
+          mode: "owned",
+          plugin: "pi-source-only",
+        },
+        {
           targetPath: staleAgentPath,
-          kind: "file",
-        }),
-        pluginName: "pi-source-only",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "pi",
-        scope: "project",
-        root: piRoot,
-        artifact: "compile",
-        targetPath: staleAgentPath,
-        kind: "file",
-        contentHash: computeContentHash(staleAgentContent),
-        updatedAt: new Date().toISOString(),
-      },
-    ],
+          contentHash: computeContentHash(staleAgentContent),
+          mode: "owned",
+          plugin: "pi-source-only",
+        },
+        {
+          targetPath: join(piRoot, "settings.json"),
+          contentHash: "stale",
+          mode: "region",
+          regionKey: serializeRegionRef({
+            kind: "json-array-member",
+            targetPath: join(piRoot, "settings.json"),
+            regionKey: "packages.prism-generated-pi-source-only",
+            jsonPath: ["packages"],
+            value: "./packages/prism-generated-pi-source-only",
+            plugin: "pi-source-only",
+          }),
+          plugin: "pi-source-only",
+        },
+      ],
+    },
   });
 
   const result = await Effect.runPromise(
@@ -7993,16 +7851,14 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
 
   expect(result.operations).toContainEqual(
     expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: generatedRoot,
-      targetType: "dir",
+      kind: "prune",
+      targetPath: stalePackageSkillPath,
     }),
   );
   expect(result.operations).toContainEqual(
     expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: staleAgentPath,
-      targetType: "file",
+      kind: "prune",
+      targetPath: staleAgentPath,
     }),
   );
   expect(await directoryExists(generatedRoot)).toBe(false);
@@ -8011,7 +7867,8 @@ test("compilePluginForTarget prunes stale Pi package and settings entry for sour
     packages?: string[];
   };
   expect(settings.packages).toEqual(["./packages/keep-me"]);
-  expect((await readHarnessLedger("pi")).entries.some((entry) => entry.targetPath === staleAgentPath)).toBe(false);
+  const piSnapshot = await readSnapshot({ prismHome: testPrismHome(), harness: "pi", root: piRoot });
+  expect(piSnapshot.manifest.entries.some((entry) => entry.targetPath === staleAgentPath)).toBe(false);
 });
 
 test("compilePluginForTarget leaves absent Pi cleanup settings absent", async () => {
@@ -8039,8 +7896,8 @@ test("compilePluginForTarget leaves absent Pi cleanup settings absent", async ()
   );
 
   expect(result.operations.some((operation) =>
-    operation.kind === "patch-config" &&
-    operation.target === join(piRoot, "settings.json")
+    operation.kind === "patch-regions" &&
+    operation.targetPath === join(piRoot, "settings.json")
   )).toBe(false);
   expect(await pathExists(join(piRoot, "settings.json"))).toBe(false);
 });
@@ -8269,6 +8126,9 @@ export default defineHook({
     enabled: true,
     originalSource: pluginRoot,
   }));
+  // A user (or Kimi itself) edits the registration and adds their own plugin.
+  // Prism's record is a desired-state region — the next compile restores it —
+  // while foreign array members are never touched.
   await writeText(join(kimiRoot, "plugins", "installed.json"), `${JSON.stringify({
     version: 1,
     plugins: [
@@ -8278,9 +8138,7 @@ export default defineHook({
         source: "local-path",
         enabled: false,
         installedAt: "2026-05-30T00:00:00.000Z",
-        updatedAt: "2026-05-30T00:00:00.000Z",
         originalSource: pluginRoot,
-        capabilities: { mcpServers: { [kimiServerName]: { enabled: false } } },
       },
       {
         id: "user-plugin",
@@ -8293,14 +8151,6 @@ export default defineHook({
     ],
   }, null, 2)}\n`);
 
-  const preservedInstalled = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
-    plugins?: Array<Record<string, unknown>>;
-  };
-  expect(preservedInstalled.plugins?.[0]).toMatchObject({
-    enabled: false,
-    capabilities: { mcpServers: { [kimiServerName]: { enabled: false } } },
-  });
-
   const roleSkill = await readFile(join(pluginOutputRoot, "skills", "prism-agent-worker", "SKILL.md"), "utf8");
   expect(roleSkill).toContain("name: \"prism-agent-worker\"");
   expect(roleSkill).toContain("<!-- prism:kimi-agent-role -->");
@@ -8312,7 +8162,7 @@ export default defineHook({
   expect(await readFile(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"), "utf8")).toContain("kimi_pipeline_demo_submit_work");
 
   const config = await readFile(join(kimiRoot, "config.toml"), "utf8");
-  expect(config).toContain("# --- prism kimi-code begin: kimi-pipeline-demo ---");
+  expect(config).toContain("# --- prism:kimi.hooks.kimi-pipeline-demo begin ---");
   expect(config).toContain('event = "PreToolUse"');
   expect(config).toContain('matcher = "Read"');
   expect(config).toContain(`matcher = "${qualifiedKimiToolName}"`);
@@ -8374,31 +8224,28 @@ export default defineHook({
       dryRun: false,
     }),
   );
-  const warmWrites = warmCompile.operations.filter(
-    (operation) => operation.kind === "write-md" || operation.kind === "write-plugin-file",
-  );
-  const warmConfigPatches = warmCompile.operations.filter(
-    (operation) => operation.kind === "patch-config" && operation.target === join(kimiRoot, "config.toml"),
-  );
-  const warmInstalledPatches = warmCompile.operations.filter(
-    (operation) => operation.kind === "patch-config" && operation.target === join(kimiRoot, "plugins", "installed.json"),
-  );
-  expect(warmWrites.length).toBeGreaterThan(0);
-  expect(warmWrites.every((operation) => operation.reason === "unchanged")).toBe(true);
-  expect(warmConfigPatches).toHaveLength(1);
-  expect(warmConfigPatches[0]?.reason).toBe("unchanged");
-  expect(warmInstalledPatches).toHaveLength(1);
-  expect(warmInstalledPatches[0]?.reason).toBe("unchanged");
+  expect(warmCompile.operations.filter(
+    (operation) => operation.kind === "create" || operation.kind === "repair",
+  )).toEqual([]);
+  expect(warmCompile.operations.some((operation) => operation.kind === "skip")).toBe(true);
+  // The user's edit to Prism's installed.json record drifts from desired
+  // state — source is canonical, so the region is rewritten.
+  expect(warmCompile.operations.some(
+    (operation) =>
+      operation.kind === "patch-regions" &&
+      operation.targetPath === join(kimiRoot, "plugins", "installed.json"),
+  )).toBe(true);
   const warmConfig = await readFile(join(kimiRoot, "config.toml"), "utf8");
   expect(warmConfig).toBe(config);
-  expect(warmConfig.match(/prism kimi-code begin/g) ?? []).toHaveLength(1);
+  expect(warmConfig.match(/prism:kimi\.hooks\.kimi-pipeline-demo begin/g) ?? []).toHaveLength(1);
   const warmInstalled = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
     plugins?: Array<Record<string, unknown>>;
   };
-  expect(warmInstalled.plugins?.[0]).toMatchObject({
-    enabled: false,
-    capabilities: { mcpServers: { [kimiServerName]: { enabled: false } } },
-  });
+  expect(warmInstalled.plugins).toContainEqual(expect.objectContaining({
+    id: kimiPluginId,
+    enabled: true,
+    originalSource: pluginRoot,
+  }));
   expect(warmInstalled.plugins).toContainEqual(expect.objectContaining({
     id: "user-plugin",
     futureField: { preserved: true },
@@ -8427,12 +8274,11 @@ export default defineHook({
     }),
   );
   expect(pruneCompile.operations.some((operation) =>
-    operation.kind === "prune-plugin-path" &&
-    operation.target === pluginOutputRoot &&
-    operation.targetType === "dir"
+    operation.kind === "prune" &&
+    operation.targetPath.startsWith(pluginOutputRoot)
   )).toBe(true);
   expect(await directoryExists(pluginOutputRoot)).toBe(false);
-  expect(await readFile(join(kimiRoot, "config.toml"), "utf8")).not.toContain("prism kimi-code begin");
+  expect(await readFile(join(kimiRoot, "config.toml"), "utf8")).not.toContain("prism:kimi.hooks");
   const prunedInstalled = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
     plugins?: Array<Record<string, unknown>>;
   };
@@ -8628,7 +8474,7 @@ export default defineAgent({
     );
     expect(bundleContent).toContain("factory_tool_core_submit_work");
     expect(compiled.operations.some((operation) =>
-      "target" in operation && operation.target.endsWith("server.mjs")
+      operation.targetPath.endsWith("server.mjs")
     )).toBe(false);
   } finally {
     await stopMcp({
@@ -8682,33 +8528,19 @@ export default defineOrbit({
   const staleTarget = join(generatedRoot, "droids", "stale.md");
   const staleContent = "---\nname: stale\n---\n";
   await writeText(staleTarget, staleContent);
-  const staleEntryId = managedEntryId({
-    harness: "factory-droid",
-    scope: "project",
-    root: join(projectRoot, ".factory"),
-    pluginName: "factory-source-only",
-    artifact: "compile",
-    targetPath: staleTarget,
-    kind: "file",
-  });
-  await writeHarnessLedger({
-    ...(await readHarnessLedger("factory-droid")),
-    entries: [
-      {
-        id: staleEntryId,
-        pluginName: "factory-source-only",
-        pluginVersion: "0.1.0",
-        pluginPath: pluginRoot,
-        harness: "factory-droid",
-        scope: "project",
-        root: join(projectRoot, ".factory"),
-        artifact: "compile",
+  await commitSnapshot({
+    prismHome: testPrismHome(),
+    manifest: {
+      version: 1,
+      harness: "factory-droid",
+      root: join(projectRoot, ".factory"),
+      entries: [{
         targetPath: staleTarget,
-        kind: "file",
         contentHash: computeContentHash(staleContent),
-        updatedAt: new Date().toISOString(),
-      },
-    ],
+        mode: "owned",
+        plugin: "factory-source-only",
+      }],
+    },
   });
 
   const result = await Effect.runPromise(
@@ -8724,13 +8556,17 @@ export default defineOrbit({
 
   expect(result.operations).toContainEqual(
     expect.objectContaining({
-      kind: "prune-plugin-path",
-      target: generatedRoot,
-      targetType: "dir",
+      kind: "prune",
+      targetPath: staleTarget,
     }),
   );
   expect(await directoryExists(generatedRoot)).toBe(false);
-  expect((await readHarnessLedger("factory-droid")).entries).toHaveLength(0);
+  const factorySnapshot = await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "factory-droid",
+    root: join(projectRoot, ".factory"),
+  });
+  expect(factorySnapshot.manifest.entries).toHaveLength(0);
 });
 
 test("compilePluginForTarget keeps plugin skills out of Factory orbit-only bundles", async () => {

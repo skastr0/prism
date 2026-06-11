@@ -49,6 +49,25 @@ export const applyMarkerRegion = (
     const next = fileContent.replace(fence, rendered);
     return { content: next, changed: next !== fileContent };
   }
+
+  if (region.anchor !== undefined) {
+    const lines = fileContent.split("\n");
+    const anchorIndex = lines.findIndex((line) => line.trim() === region.anchor!.trim());
+    if (anchorIndex >= 0) {
+      lines.splice(anchorIndex + 1, 0, rendered);
+      return { content: lines.join("\n"), changed: true };
+    }
+    const separator = fileContent.length === 0 || fileContent.endsWith("\n\n")
+      ? ""
+      : fileContent.endsWith("\n")
+        ? "\n"
+        : "\n\n";
+    return {
+      content: `${fileContent}${separator}${region.anchor}\n${rendered}\n`,
+      changed: true,
+    };
+  }
+
   const separator = fileContent.length === 0 || fileContent.endsWith("\n\n")
     ? ""
     : fileContent.endsWith("\n")
@@ -94,6 +113,91 @@ export const removeJsonKeyRegion = (
   return { content: next, changed: next !== fileContent };
 };
 
+const deepEquals = (left: unknown, right: unknown): boolean =>
+  left === right || JSON.stringify(left) === JSON.stringify(right);
+
+const memberIdentity = (
+  value: unknown,
+  memberKey: ReadonlyArray<string> | undefined,
+): unknown => {
+  if (memberKey === undefined) return value;
+  let cursor: unknown = value;
+  for (const segment of memberKey) {
+    if (cursor === null || typeof cursor !== "object") return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
+};
+
+const findArrayMemberIndex = (
+  fileContent: string,
+  jsonPath: ReadonlyArray<string | number>,
+  identity: unknown,
+  memberKey: ReadonlyArray<string> | undefined,
+): { readonly index: number; readonly length: number } => {
+  const current = readJsonKeyRegion(fileContent, jsonPath);
+  if (current === undefined || current === null) return { index: -1, length: 0 };
+  if (!Array.isArray(current)) {
+    throw new Error(
+      `region expects a JSON array at [${jsonPath.join(".")}] but found ${typeof current}`,
+    );
+  }
+  const index = current.findIndex((element) =>
+    deepEquals(memberIdentity(element, memberKey), identity),
+  );
+  return { index, length: current.length };
+};
+
+export const applyJsonArrayMemberRegion = (
+  fileContent: string,
+  region: Extract<DesiredRegion, { kind: "json-array-member" }>,
+): RegionPatchOutcome => {
+  const base = fileContent.trim().length === 0 ? "{}\n" : fileContent;
+  const identity = memberIdentity(region.value, region.memberKey);
+  const { index, length } = findArrayMemberIndex(
+    base,
+    region.jsonPath,
+    identity,
+    region.memberKey,
+  );
+
+  const path = [...region.jsonPath, index >= 0 ? index : length];
+  const edits = modify(base, path, region.value, {
+    formattingOptions: JSONC_FORMAT,
+    isArrayInsertion: index < 0,
+  });
+  const next = applyEdits(base, edits);
+  return { content: next, changed: next !== fileContent };
+};
+
+export const removeJsonArrayMemberRegion = (
+  fileContent: string,
+  options: {
+    readonly jsonPath: ReadonlyArray<string | number>;
+    readonly identity: unknown;
+    readonly memberKey?: ReadonlyArray<string>;
+  },
+): RegionPatchOutcome => {
+  if (fileContent.trim().length === 0) return { content: fileContent, changed: false };
+  let located: { readonly index: number; readonly length: number };
+  try {
+    located = findArrayMemberIndex(
+      fileContent,
+      options.jsonPath,
+      options.identity,
+      options.memberKey,
+    );
+  } catch {
+    return { content: fileContent, changed: false };
+  }
+  if (located.index < 0) return { content: fileContent, changed: false };
+  const edits = modify(fileContent, [...options.jsonPath, located.index], undefined, {
+    formattingOptions: JSONC_FORMAT,
+  });
+  const next = applyEdits(fileContent, edits);
+  return { content: next, changed: next !== fileContent };
+};
+
 /** Current value at a region's JSON path (undefined when absent/unparseable). */
 export const readJsonKeyRegion = (
   fileContent: string,
@@ -112,7 +216,13 @@ export const readJsonKeyRegion = (
 export const applyRegion = (
   fileContent: string,
   region: DesiredRegion,
-): RegionPatchOutcome =>
-  region.kind === "marker"
-    ? applyMarkerRegion(fileContent, region)
-    : applyJsonKeyRegion(fileContent, region);
+): RegionPatchOutcome => {
+  switch (region.kind) {
+    case "marker":
+      return applyMarkerRegion(fileContent, region);
+    case "json-key":
+      return applyJsonKeyRegion(fileContent, region);
+    case "json-array-member":
+      return applyJsonArrayMemberRegion(fileContent, region);
+  }
+};

@@ -1,6 +1,6 @@
 /** Pi package/extension lowerer. */
 
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
@@ -17,27 +17,24 @@ import {
   collectBindingNameMap,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
-import { exists, readFile } from "../../fs.js";
-import { readHarnessLedger } from "../../managed-ledger.js";
+import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginPlanState,
   createGeneratedPluginWritePusher,
-  executeStandardLowering,
   matcherForResolvedToolHook,
   nativeHookEventName,
   normalizeBundleSegment,
   planGeneratedPluginOrbitSkillWrites,
-  planGeneratedPluginPruning,
-  pushConfigPatchOperation as pushConfigPatch,
-  pushWriteOperation,
+  pushDesiredFile,
   renderGeneratedOrbitSkill,
   renderPrePostSessionHookWrapperEntry,
   serializeSimpleFrontmatter as serializeFrontmatter,
   stringArray,
   uniqueSorted,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "pi" as const;
@@ -103,9 +100,6 @@ const artifactTargetsPi = (
   artifact: AnyArtifactType,
 ): boolean => targetIncludesPi(registry?.targets[artifact]);
 
-const agentOwnerMarker = (sourcePluginName: string): string =>
-  `<!-- prism:pi-agent owner=${JSON.stringify(sourcePluginName)} -->`;
-
 const stringValue = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim().length > 0 ? value : undefined;
 
@@ -170,8 +164,6 @@ const renderPiAgentMarkdown = (
   const lines: string[] = [
     serializeFrontmatter(composePiAgentFrontmatter(agent, target)),
     "",
-    agentOwnerMarker(target.sourcePluginName),
-    "",
     agent.body,
   ];
   return `${lines.join("\n").trimEnd()}\n`;
@@ -179,14 +171,11 @@ const renderPiAgentMarkdown = (
 
 const renderPiOrbitSkillMarkdown = (
   orbit: Orbit,
-  sourcePluginName: string,
   registry: PluginRegistry | undefined,
 ): string =>
   renderGeneratedOrbitSkill({
     orbit,
-    sourcePluginName,
     registry,
-    ownerKind: "pi-orbit-skill",
     trailingNewline: true,
   });
 
@@ -236,94 +225,51 @@ const collectContextFiles = async (input: LowerInput): Promise<ContextFile[]> =>
   return contexts.sort((left, right) => left.label.localeCompare(right.label));
 };
 
-const planAgentWrites = async (
+const planAgentWrites = (
   input: LowerInput,
-  operations: LowerOperation[],
-  desiredRelativePaths: Set<string>,
-): Promise<void> => {
+  files: DesiredFile[],
+): void => {
   for (const agent of input.agents) {
-    const relativePath = `${agent.name}.md`;
-    desiredRelativePaths.add(relativePath);
-    await pushWriteOperation(
-      operations,
-      agentPath(input.target, agent.name),
-      renderPiAgentMarkdown(agent, input.target),
-      "write-md",
-    );
-  }
-};
-
-const relativePathInsideRoot = (root: string, targetPath: string): string | undefined => {
-  const relativePath = relative(resolve(root), resolve(targetPath));
-  if (
-    relativePath === "" ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`) ||
-    isAbsolute(relativePath)
-  ) {
-    return undefined;
-  }
-  return relativePath.split(sep).join("/");
-};
-
-const planAgentPruning = async (
-  input: LowerInput,
-  operations: LowerOperation[],
-  desiredRelativePaths: ReadonlySet<string>,
-): Promise<void> => {
-  const ledger = await readHarnessLedger(TARGET_ID);
-  const currentRoot = agentsRoot(input.target);
-  for (const entry of ledger.entries) {
-    if (entry.pluginName !== input.target.sourcePluginName) continue;
-    if (entry.scope !== input.target.scope) continue;
-    if (resolve(entry.root) !== resolve(input.target.root)) continue;
-    if (entry.artifact !== "compile" || entry.kind !== "file") continue;
-
-    const relativePath = relativePathInsideRoot(currentRoot, entry.targetPath);
-    if (!relativePath || desiredRelativePaths.has(relativePath)) continue;
-    operations.push({
-      kind: "prune-plugin-path",
-      target: entry.targetPath,
-      targetType: "file",
-      reason: "stale",
+    pushDesiredFile(files, {
+      targetPath: agentPath(input.target, agent.name),
+      content: renderPiAgentMarkdown(agent, input.target),
+      plugin: input.target.sourcePluginName,
     });
   }
 };
 
 const planTargetedSkillWrites = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
   for (const skill of input.skills ?? []) {
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       `skills/${skill.name}/SKILL.md`,
       await readFile(skill.sourcePath),
-      "write-md",
     );
   }
 };
 
 const planCommandPromptWrites = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
   const pluginPath = input.target.sourcePluginPath ?? input.registry?.pluginPath;
   if (!pluginPath || !artifactTargetsPi(input.registry, "commands")) return;
 
-  const files = await collectArtifactSourceFiles(pluginPath, "commands", TARGET_ID);
-  for (const file of files.filter((entry) => entry.relativePath.endsWith(".md"))) {
-    await pushWrite(
-      operations,
+  const sourceFiles = await collectArtifactSourceFiles(pluginPath, "commands", TARGET_ID);
+  for (const file of sourceFiles.filter((entry) => entry.relativePath.endsWith(".md"))) {
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       `prompts/${file.relativePath}`,
       await readFile(file.sourcePath),
-      "write-md",
     );
   }
 };
@@ -372,7 +318,7 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> =>
 
 const planHookWrappers = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<PlannedHook[]> => {
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
@@ -393,13 +339,12 @@ const planHookWrappers = async (
       const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, input.registry, TARGET_ID));
       matcher = matcherForResolvedToolHook(resolved, canonicalToolNames);
     }
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       relativePath,
       await bundleHookWrapper(hook),
-      "write-plugin-file",
       { mode: 0o755 },
     );
     planned.push({
@@ -538,7 +483,7 @@ const renderPiSetupSource = (options: {
 
 const planExtension = async (options: {
   readonly input: LowerInput;
-  readonly operations: LowerOperation[];
+  readonly files: DesiredFile[];
   readonly desiredRelativePaths: Set<string>;
   readonly contexts: ReadonlyArray<ContextFile>;
   readonly plannedHooks: ReadonlyArray<PlannedHook>;
@@ -565,8 +510,8 @@ const planExtension = async (options: {
     setupSource,
   });
 
-  await pushWrite(
-    options.operations,
+  pushWrite(
+    options.files,
     options.desiredRelativePaths,
     options.input.target,
     "extensions/prism-extension.js",
@@ -589,59 +534,14 @@ const hasPackageOutput = (
 const packageSettingsEntry = (target: PiLowerTarget): string =>
   `./packages/${generatedPackageId(target)}`;
 
-const readSettingsJson = async (target: PiLowerTarget): Promise<Record<string, unknown>> => {
-  if (!(await exists(settingsPath(target)))) return {};
-  const raw = await readFile(settingsPath(target));
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch (error) {
-    throw new Error(`Pi settings file is not valid JSON: ${settingsPath(target)}`, { cause: error });
-  }
-  throw new Error(`Pi settings file must contain a JSON object: ${settingsPath(target)}`);
-};
-
-const packageSource = (value: unknown): string | undefined => {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const source = (value as { readonly source?: unknown }).source;
-    return typeof source === "string" ? source : undefined;
-  }
-  return undefined;
-};
-
-const renderSettingsJson = async (
-  target: PiLowerTarget,
-  shouldIncludePackage: boolean,
-): Promise<string> => {
-  const settings = await readSettingsJson(target);
-  const currentPackages = settings.packages;
-  if (currentPackages !== undefined && !Array.isArray(currentPackages)) {
-    throw new Error(`Pi settings field 'packages' must be an array: ${settingsPath(target)}`);
-  }
-
-  const entry = packageSettingsEntry(target);
-  const packages = (currentPackages ?? []).filter(
-    (item: unknown) => packageSource(item) !== entry,
-  );
-  if (shouldIncludePackage) packages.push(entry);
-  return json({ ...settings, packages });
-};
-
-const planSettingsPatch = async (
-  target: PiLowerTarget,
-  operations: LowerOperation[],
-  shouldIncludePackage: boolean,
-): Promise<void> => {
-  if (!shouldIncludePackage && !(await exists(settingsPath(target)))) return;
-  await pushConfigPatch(
-    operations,
-    settingsPath(target),
-    await renderSettingsJson(target, shouldIncludePackage),
-  );
-};
+const packageRegistrationRegion = (target: PiLowerTarget): DesiredRegion => ({
+  kind: "json-array-member",
+  targetPath: settingsPath(target),
+  regionKey: `packages.${generatedPackageId(target)}`,
+  jsonPath: ["packages"],
+  value: packageSettingsEntry(target),
+  plugin: target.sourcePluginName,
+});
 
 const renderPackageManifest = (input: LowerInput, desired: ReadonlySet<string>): string => {
   const pi: Record<string, string[]> = {};
@@ -665,71 +565,43 @@ const renderPackageManifest = (input: LowerInput, desired: ReadonlySet<string>):
   });
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
-  const resolveTarget = (relativePath: string): string => generatedPath(input.target, relativePath);
   const contexts = await collectContextFiles(input);
-  const desiredAgentRelativePaths = new Set<string>();
 
-  await planAgentWrites(input, state.operations, desiredAgentRelativePaths);
+  planAgentWrites(input, state.files);
 
   if (!hasPackageOutput(input, contexts)) {
-    await planSettingsPatch(input.target, state.operations, false);
-    await planGeneratedPluginPruning({
-      state,
-      root: generatedPackageRoot(input.target),
-      resolveTarget,
-      owner: {
-        harness: TARGET_ID,
-        scope: input.target.scope,
-        root: input.target.root,
-        sourcePluginName: input.target.sourcePluginName,
-      },
-    });
-    await planAgentPruning(input, state.operations, desiredAgentRelativePaths);
-    return state.operations;
+    // No package output: the sync engine prunes a previously managed package
+    // and the orphaned settings.json registration region.
+    return { files: state.files, regions: [] };
   }
 
-  await planTargetedSkillWrites(input, state.operations, state.desiredRelativePaths);
+  await planTargetedSkillWrites(input, state.files, state.desiredRelativePaths);
   await planGeneratedPluginOrbitSkillWrites({
     input,
     state,
     pushWrite,
     renderOrbitSkill: (orbit) =>
-      renderPiOrbitSkillMarkdown(orbit, input.target.sourcePluginName, input.registry),
+      renderPiOrbitSkillMarkdown(orbit, input.registry),
   });
-  await planCommandPromptWrites(input, state.operations, state.desiredRelativePaths);
-  const plannedHooks = await planHookWrappers(input, state.operations, state.desiredRelativePaths);
+  await planCommandPromptWrites(input, state.files, state.desiredRelativePaths);
+  const plannedHooks = await planHookWrappers(input, state.files, state.desiredRelativePaths);
   await planExtension({
     input,
-    operations: state.operations,
+    files: state.files,
     desiredRelativePaths: state.desiredRelativePaths,
     contexts,
     plannedHooks,
   });
 
-  await pushWrite(
-    state.operations,
+  pushWrite(
+    state.files,
     state.desiredRelativePaths,
     input.target,
     "package.json",
     renderPackageManifest(input, state.desiredRelativePaths),
   );
-  await planSettingsPatch(input.target, state.operations, true);
-  await planGeneratedPluginPruning({
-    state,
-    root: generatedPackageRoot(input.target),
-    resolveTarget,
-    owner: {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    },
-  });
-  await planAgentPruning(input, state.operations, desiredAgentRelativePaths);
 
-  return state.operations;
+  return { files: state.files, regions: [packageRegistrationRegion(input.target)] };
 };
-
-export const executeLowering = executeStandardLowering;

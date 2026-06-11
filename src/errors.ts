@@ -118,55 +118,22 @@ export class McpBundleMissingError extends Schema.TaggedError<McpBundleMissingEr
 }
 
 // ---------------------------------------------------------------------------
-// LoweringOwnershipError — INTERIM, deleted in WS5.
-//
-// Drift-as-error dies with the sync engine: the one-writer model converges
-// (repair + backup) instead of refusing. Until WS5 replaces the lowering
-// write/prune authority gates in src/compile/lowerers/shared.ts, this tagged
-// error carries the structured fields the edge renderer needs so the failure
-// is at least explainable. Do not grow new call sites.
+// BlockedTargetError — the sync engine's only guarded case: first-time
+// placement over a foreign file whose bytes differ. Never thrown mid-batch;
+// the compile result lists these (collect, don't abort) and the CLI edge
+// renders them with the delete-or-move hint.
 // ---------------------------------------------------------------------------
 
-export const LOWERING_OWNERSHIP_REASONS = [
-  "unowned-target",
-  "drifted-target",
-  "unowned-prune-target",
-  "drifted-prune-target",
-  "missing-base-hash",
-  "stale-base-hash",
-] as const;
-
-const LOWERING_OWNERSHIP_HEADLINES: Record<
-  (typeof LOWERING_OWNERSHIP_REASONS)[number],
-  string
-> = {
-  "unowned-target": "Compile target exists but is not owned by Prism",
-  "drifted-target": "Managed compile target changed outside Prism",
-  "unowned-prune-target": "Compile prune target is not owned by Prism",
-  "drifted-prune-target": "Managed compile prune target changed outside Prism",
-  "missing-base-hash": "Compile config patch lacks base content hash",
-  "stale-base-hash": "Compile config target changed while Prism was patching it",
-};
-
-export class LoweringOwnershipError extends Schema.TaggedError<LoweringOwnershipError>()(
-  "LoweringOwnershipError",
+export class BlockedTargetError extends Schema.TaggedError<BlockedTargetError>()(
+  "BlockedTargetError",
   {
-    reason: Schema.Literal(...LOWERING_OWNERSHIP_REASONS),
     targetPath: Schema.String,
     plugin: Schema.String,
-    harness: Schema.String,
-    ledgerHash: Schema.optional(Schema.String),
-    ledgerUpdatedAt: Schema.optional(Schema.String),
-    currentHash: Schema.optional(Schema.String),
     hint: Schema.String,
   },
 ) {
-  get headline(): string {
-    return `${LOWERING_OWNERSHIP_HEADLINES[this.reason]}: ${this.targetPath}`;
-  }
-
   override get message(): string {
-    return this.headline;
+    return `Refusing to overwrite a file Prism does not manage: ${this.targetPath}`;
   }
 }
 
@@ -183,7 +150,7 @@ export type PrismError =
   | PrismConfigError
   | BundleBuildError
   | McpBundleMissingError
-  | LoweringOwnershipError;
+  | BlockedTargetError;
 
 export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "SourceParseError",
@@ -202,7 +169,7 @@ export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "PrismConfigError",
   "BundleBuildError",
   "McpBundleMissingError",
-  "LoweringOwnershipError",
+  "BlockedTargetError",
 ]);
 
 export const isPrismError = (value: unknown): value is PrismError =>
@@ -225,16 +192,6 @@ export interface PrismErrorRender {
   /** Filesystem path the error is about, when it has one. */
   readonly path?: string;
 }
-
-const hashDetail = (error: LoweringOwnershipError): string[] => {
-  const lines: string[] = [`plugin: ${error.plugin} · harness: ${error.harness}`];
-  if (error.ledgerHash) {
-    const updated = error.ledgerUpdatedAt ? ` (recorded ${error.ledgerUpdatedAt})` : "";
-    lines.push(`ledger hash: ${error.ledgerHash}${updated}`);
-  }
-  if (error.currentHash) lines.push(`current hash: ${error.currentHash}`);
-  return lines;
-};
 
 export const describePrismError = (error: PrismError): PrismErrorRender => {
   switch (error._tag) {
@@ -265,10 +222,10 @@ export const describePrismError = (error: PrismError): PrismErrorRender => {
         hint: error.hint,
         path: error.bundlePath,
       };
-    case "LoweringOwnershipError":
+    case "BlockedTargetError":
       return {
-        headline: error.headline,
-        detail: hashDetail(error),
+        headline: error.message,
+        detail: [`plugin: ${error.plugin}`],
         hint: error.hint,
         path: error.targetPath,
       };

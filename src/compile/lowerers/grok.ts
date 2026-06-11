@@ -22,18 +22,16 @@ import {
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
-import type { LowerOperation } from "./opencode.js";
+import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginWritePusher,
   createGeneratedPluginPlanState,
-  executeStandardLowering,
   matcherForResolvedToolHook,
   normalizeBundleSegment,
   planGeneratedPluginAgentWrites,
   planGeneratedPluginHookWrites,
   planGeneratedPluginManifest,
-  planGeneratedPluginPruning,
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
@@ -41,6 +39,7 @@ import {
   stringArray,
   uniqueSorted,
   yamlScalar,
+  type LowerOutput,
 } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
@@ -259,7 +258,7 @@ const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
 const planMcpServer = async (
   input: LowerInput,
-  operations: LowerOperation[],
+  files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
   resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
@@ -271,8 +270,8 @@ const planMcpServer = async (
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {
-    await pushWrite(
-      operations,
+    pushWrite(
+      files,
       desiredRelativePaths,
       input.target,
       ".mcp.json",
@@ -285,8 +284,8 @@ const planMcpServer = async (
     throw new Error("Grok MCP lowering requires the canonical Prism MCP server bundle path.");
   }
 
-  await pushWrite(
-    operations,
+  pushWrite(
+    files,
     desiredRelativePaths,
     input.target,
     ".mcp.json",
@@ -309,7 +308,7 @@ const planMcpServer = async (
   );
 };
 
-export const planLowering = async (input: LowerInput): Promise<LowerOperation[]> => {
+export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
@@ -333,7 +332,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     state,
     pushWrite,
   });
-  await planMcpServer(input, state.operations, state.desiredRelativePaths);
+  await planMcpServer(input, state.files, state.desiredRelativePaths);
   await planGeneratedPluginHookWrites({
     input,
     state,
@@ -341,19 +340,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOperation[]>
     bundleHookWrapper,
     resolveTarget,
   });
-  await planGeneratedPluginPruning({
-    state,
-    root: generatedPluginRoot(input.target),
-    resolveTarget,
-    owner: {
-      harness: TARGET_ID,
-      scope: input.target.scope,
-      root: input.target.root,
-      sourcePluginName: input.target.sourcePluginName,
-    },
-  });
 
-  return state.operations;
+  return { files: state.files, regions: [] };
 };
-
-export const executeLowering = executeStandardLowering;

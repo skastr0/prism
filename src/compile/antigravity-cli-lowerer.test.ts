@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/antigravity-cli.js";
-import type { LowerOperation } from "./lowerers/opencode.js";
+import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
 
@@ -32,19 +32,11 @@ const writeText = async (path: string, content: string): Promise<void> => {
   await writeFile(path, content);
 };
 
-type ContentOperation = Extract<LowerOperation, { readonly content: string }>;
-
-const isContentOperation = (operation: LowerOperation): operation is ContentOperation =>
-  "content" in operation;
-
 const findContentOperation = (
-  operations: ReadonlyArray<LowerOperation>,
+  files: ReadonlyArray<DesiredFile>,
   suffix: string,
-): ContentOperation | undefined =>
-  operations.find(
-    (operation): operation is ContentOperation =>
-      isContentOperation(operation) && operation.target.endsWith(suffix),
-  );
+): DesiredFile | undefined =>
+  files.find((file) => file.targetPath.endsWith(suffix));
 
 const runGeneratedHookWrapper = (
   wrapperPath: string,
@@ -195,7 +187,7 @@ export default defineHook({
   if (!startHook) throw new Error("expected pre-invoke hook");
   if (!stopHook) throw new Error("expected keep-going hook");
 
-  const operations = await planLowering({
+  const { files: operations } = await planLowering({
     agents: [],
     orbits: [],
     tools: [],
@@ -227,8 +219,8 @@ export default defineHook({
   expect(hookWrapper?.content).toContain("transcriptPath");
   if (!hookWrapper) throw new Error("expected audit-shell wrapper");
 
-  await writeText(hookWrapper.target, hookWrapper.content);
-  const blocked = await runGeneratedHookWrapper(hookWrapper.target, {
+  await writeText(hookWrapper.targetPath, hookWrapper.content);
+  const blocked = await runGeneratedHookWrapper(hookWrapper.targetPath, {
     toolCall: { name: "run_shell", args: { block: true } },
     stepIdx: 19,
     conversationId: "session-1",
@@ -242,7 +234,7 @@ export default defineHook({
     reason: "blocked",
   });
 
-  const approved = await runGeneratedHookWrapper(hookWrapper.target, {
+  const approved = await runGeneratedHookWrapper(hookWrapper.targetPath, {
     toolCall: { name: "run_shell", args: {} },
     stepIdx: 19,
     conversationId: "session-1",
@@ -258,8 +250,8 @@ export default defineHook({
     join("hooks", "audit-shell-after.mjs"),
   );
   if (!afterHookWrapper) throw new Error("expected audit-shell-after wrapper");
-  await writeText(afterHookWrapper.target, afterHookWrapper.content);
-  const afterResult = await runGeneratedHookWrapper(afterHookWrapper.target, {
+  await writeText(afterHookWrapper.targetPath, afterHookWrapper.content);
+  const afterResult = await runGeneratedHookWrapper(afterHookWrapper.targetPath, {
     toolCall: { name: "run_shell", args: {}, output: { ok: true } },
     stepIdx: 5,
     error: "",
@@ -273,8 +265,8 @@ export default defineHook({
 
   const startHookWrapper = findContentOperation(operations, join("hooks", "pre-invoke.mjs"));
   if (!startHookWrapper) throw new Error("expected pre-invoke wrapper");
-  await writeText(startHookWrapper.target, startHookWrapper.content);
-  const startResult = await runGeneratedHookWrapper(startHookWrapper.target, {
+  await writeText(startHookWrapper.targetPath, startHookWrapper.content);
+  const startResult = await runGeneratedHookWrapper(startHookWrapper.targetPath, {
     invocationNum: 3,
     initialNumSteps: 10,
     conversationId: "session-4",
@@ -287,8 +279,8 @@ export default defineHook({
 
   const stopHookWrapper = findContentOperation(operations, join("hooks", "keep-going.mjs"));
   if (!stopHookWrapper) throw new Error("expected keep-going wrapper");
-  await writeText(stopHookWrapper.target, stopHookWrapper.content);
-  const stopResult = await runGeneratedHookWrapper(stopHookWrapper.target, {
+  await writeText(stopHookWrapper.targetPath, stopHookWrapper.content);
+  const stopResult = await runGeneratedHookWrapper(stopHookWrapper.targetPath, {
     conversationId: "session-3",
     terminationReason: "model_stop",
     executionNum: 7,
@@ -350,7 +342,7 @@ export default defineTool({
   );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const operations = await planLowering({
+  const { files: operations } = await planLowering({
     agents: [],
     orbits: [],
     tools: [...registry.tools.values()],
@@ -388,7 +380,7 @@ export default defineTool({
   // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
   // plans no bundle write anywhere.
   const bundle = operations.find(
-    (operation) => "target" in operation && operation.target.endsWith("server.mjs"),
+    (operation) => operation.targetPath.endsWith("server.mjs"),
   );
   expect(bundle).toBeUndefined();
 });

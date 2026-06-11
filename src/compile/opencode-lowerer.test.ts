@@ -1,32 +1,22 @@
 import { afterEach, expect, test } from "bun:test";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ComposedAgent } from "./compose.js";
-import { executeLowering, planLowering, type LowerOperation } from "./lowerers/opencode.js";
-import { executeStandardLowering, planGeneratedPluginFilePruning } from "./lowerers/shared.js";
-import { managedEntryId, readHarnessLedger, writeHarnessLedger } from "../managed-ledger.js";
-import { computeContentHash } from "../content-hash.js";
+import { planLowering } from "./lowerers/opencode.js";
+import { applySync } from "../sync/apply.js";
+import { planSync } from "../sync/plan.js";
+import { emptySnapshotManifest } from "../state/snapshot.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
 
 const tempRoots: string[] = [];
-const originalPrismHome = process.env.PRISM_HOME;
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-opencode-lowerer-"));
   tempRoots.push(root);
-  process.env.PRISM_HOME = join(root, "prism-home");
   return root;
-};
-
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 };
 
 const writeText = async (path: string, content: string): Promise<void> => {
@@ -39,6 +29,7 @@ const readJson = async <T>(path: string): Promise<T> =>
 
 const createComposedAgent = (
   toolBindings: ReadonlyArray<ResolvedContractBinding>,
+  overrides: Partial<ComposedAgent> = {},
 ): ComposedAgent => ({
   name: "worker",
   description: "Worker agent",
@@ -50,869 +41,220 @@ const createComposedAgent = (
   allowedSkills: [],
   toolBindings,
   allowedTools: [],
+  ...overrides,
 });
 
 afterEach(async () => {
-  process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
-const opencodeExecutionTarget = (root: string) => ({
-  harness: "opencode" as const,
-  scope: "global" as const,
-  root,
-  sourcePluginName: "opencode-lowerer-test",
-  sourcePluginVersion: "0.1.0",
-  sourcePluginPath: join(root, "plugin"),
-});
-
-test("opencode executeLowering skips every operation during dry run", async () => {
+test("opencode planLowering is pure desired state: agent files plus per-key config regions", async () => {
   const root = await createTempRoot();
-  const mdTarget = join(root, "agents", "builder.md");
-  const jsonTarget = join(root, "opencode.json");
+  const outputRoot = join(root, ".opencode");
 
-  const result = await executeLowering(
-    [
-      {
-        kind: "write-md",
-        target: mdTarget,
-        content: "new markdown",
-        reason: "new",
-      },
-      {
-        kind: "patch-json",
-        target: jsonTarget,
-        agentName: "builder",
-        nextBlock: { model: "openai/gpt-5.4" },
-        reason: "new",
-      },
-    ],
-    { dryRun: true },
-  );
-
-  expect(result.backups).toEqual([]);
-  expect(await pathExists(mdTarget)).toBe(false);
-  expect(await pathExists(jsonTarget)).toBe(false);
-});
-
-test("opencode executeLowering applies mixed operations and aggregates config patches", async () => {
-  const root = await createTempRoot();
-  const mdTarget = join(root, "agents", "builder.md");
-  const pluginTarget = join(root, "plugins", "generated", "dist", "server.mjs");
-  const skippedTarget = join(root, "agents", "skipped.md");
-  const pruneFileTarget = join(root, "plugins", "generated", "stale.txt");
-  const pruneDirTarget = join(root, "plugins", "generated", "stale-dir");
-  const jsonTarget = join(root, "opencode.json");
-  const target = opencodeExecutionTarget(root);
-
-  await executeStandardLowering(
-    [
-      {
-        kind: "write-md",
-        target: mdTarget,
-        content: "old markdown",
-        reason: "new",
-      },
-      {
-        kind: "write-plugin-file",
-        target: pluginTarget,
-        content: "old plugin",
-        reason: "new",
-      },
-      {
-        kind: "write-plugin-file",
-        target: pruneFileTarget,
-        content: "stale file",
-        reason: "new",
-      },
-      {
-        kind: "write-plugin-file",
-        target: join(pruneDirTarget, "nested.txt"),
-        content: "stale dir",
-        reason: "new",
-      },
-    ],
-    { dryRun: false, target },
-  );
-  await writeText(
-    jsonTarget,
-    `${JSON.stringify(
-      {
-        agent: {
-          builder: { model: "old" },
-          reviewer: { model: "kept" },
-        },
-        plugin: ["old-plugin", "remove-plugin"],
-        permission: {
-          "old_*": "ask",
-          "remove_*": "deny",
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-
-  const operations: LowerOperation[] = [
-    {
-      kind: "write-md",
-      target: mdTarget,
-      content: "new markdown",
-      reason: "changed",
-    },
-    {
-      kind: "write-plugin-file",
-      target: pluginTarget,
-      content: "new plugin",
-      reason: "changed",
-    },
-    {
-      kind: "write-md",
-      target: skippedTarget,
-      content: "should not write",
-      reason: "unchanged",
-    },
-    {
-      kind: "prune-plugin-path",
-      target: pruneFileTarget,
-      targetType: "file",
-      reason: "stale",
-    },
-    {
-      kind: "prune-plugin-path",
-      target: pruneDirTarget,
-      targetType: "dir",
-      reason: "stale",
-    },
-    {
-      kind: "patch-json",
-      target: jsonTarget,
-      agentName: "builder",
-      nextBlock: { model: "next", mode: "subagent" },
-      reason: "changed",
-    },
-    {
-      kind: "patch-json",
-      target: jsonTarget,
-      agentName: "skipped",
-      nextBlock: { model: "skip" },
-      reason: "unchanged",
-    },
-    {
-      kind: "patch-opencode-plugins",
-      target: jsonTarget,
-      pluginEntry: "new-plugin",
-      desiredPresent: true,
-      reason: "new",
-    },
-    {
-      kind: "patch-opencode-plugins",
-      target: jsonTarget,
-      pluginEntry: "remove-plugin",
-      desiredPresent: false,
-      reason: "changed",
-    },
-    {
-      kind: "patch-opencode-permission",
-      target: jsonTarget,
-      permissionKey: "new_*",
-      desiredAction: "deny",
-      reason: "new",
-    },
-    {
-      kind: "patch-opencode-permission",
-      target: jsonTarget,
-      permissionKey: "remove_*",
-      desiredAction: undefined,
-      reason: "changed",
-    },
-  ];
-
-  const result = await executeLowering(operations, {
-    dryRun: false,
-    target,
-  });
-
-  expect(result.backups).toHaveLength(2);
-  expect(result.backups[0]).toContain(join(process.env.PRISM_HOME!, "backups", "opencode"));
-  expect(result.backups[1]).toContain(join(process.env.PRISM_HOME!, "backups", "opencode"));
-  expect(await readFile(result.backups[0]!, "utf8")).toBe("old markdown");
-  expect(await readFile(result.backups[1]!, "utf8")).toContain('"old"');
-  expect(await pathExists(`${mdTarget}.bak`)).toBe(false);
-  expect(await pathExists(`${jsonTarget}.bak`)).toBe(false);
-  expect(await pathExists(`${pluginTarget}.bak`)).toBe(false);
-  expect(await readFile(mdTarget, "utf8")).toBe("new markdown");
-  expect(await readFile(pluginTarget, "utf8")).toBe("new plugin");
-  expect(await pathExists(skippedTarget)).toBe(false);
-  expect(await pathExists(pruneFileTarget)).toBe(false);
-  expect(await pathExists(pruneDirTarget)).toBe(false);
-
-  const config = await readJson<Record<string, unknown>>(jsonTarget);
-  expect(config).toEqual({
-    agent: {
-      builder: { model: "next", mode: "subagent" },
-      reviewer: { model: "kept" },
-    },
-    plugin: ["old-plugin", "new-plugin"],
-    permission: {
-      "old_*": "ask",
-      "new_*": "deny",
-    },
-  });
-
-  const ledger = await readHarnessLedger("opencode");
-  expect(ledger.entries).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ targetPath: mdTarget, kind: "file" }),
-      expect.objectContaining({ targetPath: pluginTarget, kind: "file" }),
-      expect.objectContaining({ targetPath: jsonTarget, kind: "config" }),
-    ]),
-  );
-});
-
-test("executeStandardLowering backs up and records config patch operations", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const configTarget = join(targetRoot, "config.toml");
-
-  await executeStandardLowering(
-    [
-      {
-        kind: "write-plugin-file",
-        target: configTarget,
-        content: "old config\n",
-        reason: "new",
-      },
-    ],
-    {
-      dryRun: false,
-      target: {
-        harness: "codex-cli",
-        scope: "global",
-        root: targetRoot,
-        sourcePluginName: "config-patch-test",
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: join(root, "plugin"),
-      },
-    },
-  );
-  await chmod(configTarget, 0o644);
-
-  const result = await executeStandardLowering(
-    [
-      {
-        kind: "patch-config",
-        target: configTarget,
-        content: "new config\n",
-        baseContentHash: computeContentHash("old config\n"),
-        mode: 0o600,
-        reason: "changed",
-      },
-    ],
-    {
-      dryRun: false,
-      target: {
-        harness: "codex-cli",
-        scope: "global",
-        root: targetRoot,
-        sourcePluginName: "config-patch-test",
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: join(root, "plugin"),
-      },
-    },
-  );
-
-  expect(result.backups).toHaveLength(1);
-  expect(result.backups[0]).toContain(join(process.env.PRISM_HOME!, "backups", "codex-cli"));
-  expect(await readFile(result.backups[0]!, "utf8")).toBe("old config\n");
-  expect(await pathExists(`${configTarget}.bak`)).toBe(false);
-  expect(await readFile(configTarget, "utf8")).toBe("new config\n");
-  expect((await stat(configTarget)).mode & 0o777).toBe(0o600);
-
-  const ledger = await readHarnessLedger("codex-cli");
-  expect(ledger.entries).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ targetPath: configTarget, kind: "config" }),
-    ]),
-  );
-  expect(ledger.entries).not.toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ targetPath: configTarget, kind: "file" }),
-    ]),
-  );
-});
-
-test("executeStandardLowering records unchanged config patches and migrates old file ownership", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".hermes");
-  const configTarget = join(targetRoot, "config.yaml");
-  const target = {
-    harness: "hermes" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "config-patch-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-
-  await executeStandardLowering(
-    [
-      {
-        kind: "write-plugin-file",
-        target: configTarget,
-        content: "stable config\n",
-        reason: "new",
-      },
-    ],
-    { dryRun: false, target },
-  );
-  await chmod(configTarget, 0o644);
-
-  const result = await executeStandardLowering(
-    [
-      {
-        kind: "patch-config",
-        target: configTarget,
-        content: "stable config\n",
-        mode: 0o600,
-        reason: "unchanged",
-      },
-    ],
-    { dryRun: false, target },
-  );
-
-  expect(result.backups).toEqual([]);
-  expect(await readFile(configTarget, "utf8")).toBe("stable config\n");
-  expect((await stat(configTarget)).mode & 0o777).toBe(0o600);
-
-  const ledger = await readHarnessLedger("hermes");
-  expect(ledger.entries).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ targetPath: configTarget, kind: "config" }),
-    ]),
-  );
-  expect(ledger.entries).not.toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ targetPath: configTarget, kind: "file" }),
-    ]),
-  );
-});
-
-test("executeStandardLowering rejects unmanaged existing compile writes", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "agents", "builder.md");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-ownership-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeText(targetPath, "user content\n");
-
-  await expect(
-    executeStandardLowering(
-      [
-        {
-          kind: "write-md",
-          target: targetPath,
-          content: "generated content\n",
-          reason: "changed",
-        },
-      ],
-      { dryRun: false, target },
-    ),
-  ).rejects.toThrow("Compile target exists but is not owned by Prism");
-  expect(await readFile(targetPath, "utf8")).toBe("user content\n");
-});
-
-test("executeStandardLowering rejects owner-marker-only compile writes", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "skills", "generated", "SKILL.md");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-marker-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeText(
-    targetPath,
-    "<!-- prism:orbit-skill owner=\"compile-marker-test\" -->\n\nuser changed content\n",
-  );
-
-  await expect(
-    executeStandardLowering(
-      [
-        {
-          kind: "write-md",
-          target: targetPath,
-          content: "<!-- prism:orbit-skill owner=\"compile-marker-test\" -->\n\ngenerated content\n",
-          reason: "changed",
-        },
-      ],
-      { dryRun: false, target },
-    ),
-  ).rejects.toThrow("Compile target exists but is not owned by Prism");
-  expect(await readFile(targetPath, "utf8")).toContain("user changed content");
-});
-
-test("executeStandardLowering repairs missing ledger for identical compile writes", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "agents", "builder.md");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-recovery-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeText(targetPath, "generated content\n");
-
-  const result = await executeStandardLowering(
-    [
-      {
-        kind: "write-md",
-        target: targetPath,
-        content: "generated content\n",
-        reason: "unchanged",
-      },
-    ],
-    { dryRun: false, target },
-  );
-
-  expect(result.backups).toEqual([]);
-  expect((await readHarnessLedger("codex-cli")).entries).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        pluginName: "compile-recovery-test",
-        kind: "file",
-        targetPath,
+  const lowered = await planLowering({
+    agents: [
+      createComposedAgent([], {
+        model: { model: "anthropic/claude", temperature: 0.2 },
+        color: "green",
       }),
-    ]),
-  );
-});
-
-test("executeStandardLowering refuses to prune changed stale compile files", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "plugins", "generated", "stale.txt");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-prune-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-
-  await executeStandardLowering(
-    [
-      {
-        kind: "write-plugin-file",
-        target: targetPath,
-        content: "old generated content\n",
-        reason: "new",
-      },
     ],
-    { dryRun: false, target },
-  );
-  await writeText(targetPath, "user changed content\n");
-
-  await expect(
-    executeStandardLowering(
-      [
-        {
-          kind: "prune-plugin-path",
-          target: targetPath,
-          targetType: "file",
-          reason: "stale",
-        },
-      ],
-      { dryRun: false, target },
-    ),
-  ).rejects.toThrow("Managed compile prune target changed outside Prism");
-  expect(await readFile(targetPath, "utf8")).toBe("user changed content\n");
-});
-
-test("executeStandardLowering rejects owner-marker-only stale prunes", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "skills", "generated", "SKILL.md");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-marker-prune-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeText(
-    targetPath,
-    "<!-- prism:orbit-skill owner=\"compile-marker-prune-test\" -->\n\nuser changed content\n",
-  );
-
-  await expect(
-    executeStandardLowering(
-      [
-        {
-          kind: "prune-plugin-path",
-          target: targetPath,
-          targetType: "file",
-          reason: "stale",
-        },
-      ],
-      { dryRun: false, target },
-    ),
-  ).rejects.toThrow("Compile prune target is not owned by Prism");
-  expect(await pathExists(targetPath)).toBe(true);
-});
-
-test("executeStandardLowering rejects config patches without current base proof", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "config.toml");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-config-proof-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeText(targetPath, "user config\n");
-
-  await expect(
-    executeStandardLowering(
-      [
-        {
-          kind: "patch-config",
-          target: targetPath,
-          content: "generated config\n",
-          reason: "changed",
-        },
-      ],
-      { dryRun: false, target },
-    ),
-  ).rejects.toThrow("Compile config patch lacks base content hash");
-  expect(await readFile(targetPath, "utf8")).toBe("user config\n");
-});
-
-test("executeStandardLowering rejects config patches when the base changed", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const targetPath = join(targetRoot, "config.toml");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-config-drift-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeText(targetPath, "user config\n");
-
-  await expect(
-    executeStandardLowering(
-      [
-        {
-          kind: "patch-config",
-          target: targetPath,
-          content: "generated config\n",
-          baseContentHash: computeContentHash("old config\n"),
-          reason: "changed",
-        },
-      ],
-      { dryRun: false, target },
-    ),
-  ).rejects.toThrow("Compile config target changed while Prism was patching it");
-  expect(await readFile(targetPath, "utf8")).toBe("user config\n");
-});
-
-test("executeStandardLowering prunes ledger-owned generated roots", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".codex");
-  const generatedRoot = join(targetRoot, "plugins", "generated");
-  const target = {
-    harness: "codex-cli" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "compile-root-prune-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-
-  await executeStandardLowering(
-    [
-      {
-        kind: "write-plugin-file",
-        target: join(generatedRoot, "package.json"),
-        content: "{}\n",
-        reason: "new",
-      },
-      {
-        kind: "write-plugin-file",
-        target: join(generatedRoot, "dist", "server.mjs"),
-        content: "console.log('generated');\n",
-        reason: "new",
-      },
-    ],
-    { dryRun: false, target },
-  );
-
-  await executeStandardLowering(
-    [
-      {
-        kind: "prune-plugin-path",
-        target: generatedRoot,
-        targetType: "dir",
-        reason: "stale",
-      },
-    ],
-    { dryRun: false, target },
-  );
-
-  expect(await pathExists(generatedRoot)).toBe(false);
-  expect((await readHarnessLedger("codex-cli")).entries).not.toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ pluginName: "compile-root-prune-test" }),
-    ]),
-  );
-});
-
-test("executeStandardLowering forgets stale ledger entries after generated roots disappear", async () => {
-  const root = await createTempRoot();
-  const targetRoot = join(root, ".factory");
-  const generatedRoot = join(targetRoot, "plugins", "generated");
-  const missingPath = join(generatedRoot, "dist", "server.mjs");
-  const target = {
-    harness: "factory-droid" as const,
-    scope: "global" as const,
-    root: targetRoot,
-    sourcePluginName: "missing-root-cleanup-test",
-    sourcePluginVersion: "0.1.0",
-    sourcePluginPath: join(root, "plugin"),
-  };
-  await writeHarnessLedger({
-    version: 1,
-    harness: "factory-droid",
-    entries: [{
-      id: managedEntryId({
-        harness: "factory-droid",
-        scope: "global",
-        root: targetRoot,
-        pluginName: "missing-root-cleanup-test",
-        artifact: "compile",
-        targetPath: missingPath,
-        kind: "file",
-      }),
-      pluginName: "missing-root-cleanup-test",
-      pluginVersion: "0.1.0",
-      pluginPath: target.sourcePluginPath,
-      harness: "factory-droid",
+    orbits: [],
+    tools: [],
+    target: {
       scope: "global",
-      root: targetRoot,
-      artifact: "compile",
-      targetPath: missingPath,
-      kind: "file",
-      contentHash: computeContentHash("already deleted\n"),
-      updatedAt: new Date().toISOString(),
-    }],
-  });
-
-  const operations = await planGeneratedPluginFilePruning({
-    root: generatedRoot,
-    desiredRelativePaths: new Set(),
-    resolveTarget: (relativePath) => join(generatedRoot, relativePath),
-    owner: {
-      harness: "factory-droid",
-      scope: "global",
-      root: targetRoot,
-      sourcePluginName: "missing-root-cleanup-test",
+      root: outputRoot,
+      sourcePluginName: "opencode-lowerer-test",
     },
   });
 
-  expect(operations).toEqual([
-    {
-      kind: "prune-plugin-path",
-      target: generatedRoot,
-      targetType: "dir",
-      reason: "stale",
-    },
+  const agentMd = lowered.files.find((file) =>
+    file.targetPath.endsWith(join("agents", "worker.md")),
+  );
+  expect(agentMd).toBeDefined();
+  expect(agentMd!.content).toContain("name: worker");
+  // Owner markers are gone — ownership is snapshot-manifest membership.
+  expect(agentMd!.content).not.toContain("<!-- prism:");
+
+  const regionKeys = lowered.regions.map((region) => region.regionKey).sort();
+  expect(regionKeys).toEqual([
+    "agent.worker.color",
+    "agent.worker.model",
+    "agent.worker.temperature",
   ]);
-  await executeStandardLowering(operations, { dryRun: false, target });
-  expect((await readHarnessLedger("factory-droid")).entries).toHaveLength(0);
+  for (const region of lowered.regions) {
+    expect(region.targetPath).toBe(join(outputRoot, "opencode.json"));
+    expect(region.kind).toBe("json-key");
+  }
 });
 
-test("opencode executeLowering skips unchanged operations without backups", async () => {
+test("opencode config regions preserve hand-authored opencode.json content", async () => {
   const root = await createTempRoot();
-  const mdTarget = join(root, "agents", "builder.md");
-  const jsonTarget = join(root, "opencode.json");
-
-  await writeText(mdTarget, "old markdown");
-  await writeText(
-    jsonTarget,
-    `${JSON.stringify({ agent: { builder: { model: "old" } } }, null, 2)}\n`,
-  );
-
-  const result = await executeLowering(
-    [
-      {
-        kind: "write-md",
-        target: mdTarget,
-        content: "new markdown",
-        reason: "unchanged",
-      },
-      {
-        kind: "patch-json",
-        target: jsonTarget,
-        agentName: "builder",
-        nextBlock: { model: "new" },
-        reason: "unchanged",
-      },
-    ],
-    { dryRun: false },
-  );
-
-  expect(result.backups).toEqual([]);
-  expect(await readFile(mdTarget, "utf8")).toBe("old markdown");
-  expect(await pathExists(`${mdTarget}.bak`)).toBe(false);
-  expect(await readJson<Record<string, unknown>>(jsonTarget)).toEqual({
-    agent: { builder: { model: "old" } },
-  });
-  expect(await pathExists(`${jsonTarget}.bak`)).toBe(false);
-});
-
-test("executeLowering applies explicit modes to unchanged write operations", async () => {
-  const root = await createTempRoot();
-  const opencodeTarget = join(root, "opencode", "secret.toml");
-  const sharedTarget = join(root, "shared", "secret.json");
-  const configTarget = join(root, "shared", "config.toml");
-  await writeText(opencodeTarget, "secret\n");
-  await writeText(sharedTarget, "secret\n");
-  await writeText(configTarget, "secret\n");
-  await chmod(opencodeTarget, 0o644);
-  await chmod(sharedTarget, 0o644);
-  await chmod(configTarget, 0o644);
-
-  const opencodeOperations: LowerOperation[] = [
-    {
-      kind: "write-plugin-file",
-      target: opencodeTarget,
-      content: "secret\n",
-      mode: 0o600,
-      reason: "unchanged",
-    },
-  ];
-  const sharedOperations: LowerOperation[] = [
-    {
-      kind: "write-plugin-file",
-      target: sharedTarget,
-      content: "secret\n",
-      mode: 0o600,
-      reason: "unchanged",
-    },
-    {
-      kind: "patch-config",
-      target: configTarget,
-      content: "secret\n",
-      mode: 0o600,
-      reason: "unchanged",
-    },
-  ];
-
-  await executeLowering(opencodeOperations, { dryRun: false });
-  await executeStandardLowering(sharedOperations, { dryRun: false });
-
-  expect((await stat(opencodeTarget)).mode & 0o777).toBe(0o600);
-  expect((await stat(sharedTarget)).mode & 0o777).toBe(0o600);
-  expect((await stat(configTarget)).mode & 0o777).toBe(0o600);
-});
-
-test("opencode executeLowering preserves plugin keys and deletes empty permission keys", async () => {
-  const root = await createTempRoot();
-  const jsonTarget = join(root, "opencode.json");
+  const outputRoot = join(root, ".opencode");
+  const prismHome = join(root, "prism-home");
+  const jsonTarget = join(outputRoot, "opencode.json");
 
   await writeText(
     jsonTarget,
     `${JSON.stringify(
       {
-        plugin: ["remove-plugin"],
-        permission: { "remove_*": "deny" },
+        $schema: "https://opencode.ai/config.json",
+        plugin: ["user-plugin"],
+        agent: { worker: { handAuthored: true }, other: { model: "user/model" } },
+        permission: { bash: "ask" },
       },
       null,
       2,
     )}\n`,
   );
 
-  await executeLowering(
-    [
-      {
-        kind: "patch-opencode-plugins",
-        target: jsonTarget,
-        pluginEntry: "remove-plugin",
-        desiredPresent: false,
-        reason: "changed",
-      },
-      {
-        kind: "patch-opencode-permission",
-        target: jsonTarget,
-        permissionKey: "remove_*",
-        desiredAction: undefined,
-        reason: "changed",
-      },
-    ],
-    { dryRun: false },
-  );
-
-  expect(await readJson<Record<string, unknown>>(jsonTarget)).toEqual({
-    plugin: [],
-    agent: {},
-  });
-});
-
-test("opencode executeLowering deletes absent empty plugin keys and normalizes scalar permissions", async () => {
-  const root = await createTempRoot();
-  const jsonTarget = join(root, "opencode.json");
-
-  await writeText(jsonTarget, `${JSON.stringify({ permission: "allow" }, null, 2)}\n`);
-
-  await executeLowering(
-    [
-      {
-        kind: "patch-opencode-plugins",
-        target: jsonTarget,
-        pluginEntry: "missing-plugin",
-        desiredPresent: false,
-        reason: "changed",
-      },
-      {
-        kind: "patch-opencode-permission",
-        target: jsonTarget,
-        permissionKey: "generated_*",
-        desiredAction: "deny",
-        reason: "new",
-      },
-    ],
-    { dryRun: false },
-  );
-
-  expect(await readJson<Record<string, unknown>>(jsonTarget)).toEqual({
-    permission: {
-      "*": "allow",
-      "generated_*": "deny",
+  const lowered = await planLowering({
+    agents: [createComposedAgent([], { model: { model: "anthropic/claude" } })],
+    orbits: [],
+    tools: [],
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "opencode-lowerer-test",
     },
-    agent: {},
   });
+
+  const plan = await planSync({
+    desired: {
+      harness: "opencode",
+      root: outputRoot,
+      files: lowered.files,
+      regions: lowered.regions,
+    },
+    snapshot: emptySnapshotManifest({ harness: "opencode", root: outputRoot }),
+  });
+  await applySync({ prismHome, plan });
+
+  const config = await readJson<{
+    $schema: string;
+    plugin: string[];
+    agent: Record<string, Record<string, unknown>>;
+    permission: Record<string, string>;
+  }>(jsonTarget);
+
+  // Owned keys landed; everything hand-authored survived untouched.
+  expect(config.agent.worker).toEqual({ handAuthored: true, model: "anthropic/claude" });
+  expect(config.agent.other).toEqual({ model: "user/model" });
+  expect(config.plugin).toEqual(["user-plugin"]);
+  expect(config.permission).toEqual({ bash: "ask" });
+  expect(config.$schema).toBe("https://opencode.ai/config.json");
 });
+
+test("opencode orphaned regions are removed without touching neighbors", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".opencode");
+  const prismHome = join(root, "prism-home");
+  const jsonTarget = join(outputRoot, "opencode.json");
+
+  const lower = (agents: ComposedAgent[]) =>
+    planLowering({
+      agents,
+      orbits: [],
+      tools: [],
+      target: {
+        scope: "global",
+        root: outputRoot,
+        sourcePluginName: "opencode-lowerer-test",
+      },
+    });
+
+  const first = await lower([
+    createComposedAgent([], { model: { model: "anthropic/claude", temperature: 0.2 } }),
+  ]);
+  const firstPlan = await planSync({
+    desired: { harness: "opencode", root: outputRoot, files: first.files, regions: first.regions },
+    snapshot: emptySnapshotManifest({ harness: "opencode", root: outputRoot }),
+  });
+  await applySync({ prismHome, plan: firstPlan });
+
+  // User adds their own key next to Prism's.
+  const withUserKey = await readJson<Record<string, any>>(jsonTarget);
+  withUserKey.agent.worker.handAuthored = true;
+  await writeFile(jsonTarget, `${JSON.stringify(withUserKey, null, 2)}\n`);
+
+  // Second compile drops temperature — its region must be removed as orphaned.
+  const second = await lower([createComposedAgent([], { model: { model: "anthropic/claude" } })]);
+  const { readSnapshot } = await import("../state/store.js");
+  const snapshot = await readSnapshot({ prismHome, harness: "opencode", root: outputRoot });
+  const secondPlan = await planSync({
+    desired: { harness: "opencode", root: outputRoot, files: second.files, regions: second.regions },
+    snapshot: snapshot.manifest,
+  });
+  await applySync({ prismHome, plan: secondPlan });
+
+  const config = await readJson<Record<string, any>>(jsonTarget);
+  expect(config.agent.worker).toEqual({ model: "anthropic/claude", handAuthored: true });
+});
+
+test("opencode generated plugin registration is a plugin-array membership region", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".opencode");
+  const pluginRoot = join(root, "plugin-src");
+  const toolSource = join(pluginRoot, "tools", "submit.tool.ts");
+  await writeText(
+    toolSource,
+    [
+      `import { Schema } from "effect";`,
+      ``,
+      `export default {`,
+      `  description: "submit",`,
+      `  Input: Schema.Struct({ message: Schema.String }),`,
+      `  handle: async (input: { message: string }) => ({ ok: true, message: input.message }),`,
+      `};`,
+      ``,
+    ].join("\n"),
+  );
+
+  const lowered = await planLowering({
+    agents: [
+      createComposedAgent([
+        {
+          kind: "permission",
+          logicalName: "submit",
+          toolPluginName: "opencode-lowerer-test",
+          toolName: "submit",
+          toolSourcePath: toolSource,
+        },
+      ]),
+    ],
+    orbits: [],
+    tools: [],
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "opencode-lowerer-test",
+    },
+  });
+
+  const bundle = lowered.files.find((file) =>
+    file.targetPath.endsWith(join("dist", "server.mjs")),
+  );
+  expect(bundle).toBeDefined();
+
+  const pluginRegion = lowered.regions.find(
+    (region) => region.kind === "json-array-member" && region.regionKey.startsWith("plugin."),
+  );
+  expect(pluginRegion).toBeDefined();
+  if (pluginRegion?.kind !== "json-array-member") throw new Error("unreachable");
+  expect(pluginRegion.jsonPath).toEqual(["plugin"]);
+  expect(pluginRegion.value).toBe(
+    pathToFileURL(join(outputRoot, "plugins", "prism-generated-opencode-lowerer-test")).href,
+  );
+
+  const permissionRegion = lowered.regions.find(
+    (region) => region.kind === "json-key" && region.regionKey.startsWith("permission."),
+  );
+  expect(permissionRegion).toBeDefined();
+  if (permissionRegion?.kind !== "json-key") throw new Error("unreachable");
+  expect(permissionRegion.value).toBe("deny");
+}, 60000);
 
 test("opencode planLowering reports generated contract mirror collisions", async () => {
   const root = await createTempRoot();

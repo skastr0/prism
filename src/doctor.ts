@@ -225,115 +225,71 @@ const validateOwnedSnapshotEntry = async (
   })];
 };
 
-const validateRegionSnapshotEntry = async (
+type ParsedRegionRef = NonNullable<ReturnType<typeof parseRegionRef>>;
+
+const regionFinding = (
   manifest: SnapshotManifest,
   entry: SnapshotEntry,
-): Promise<DoctorFinding[]> => {
-  if (!entry.regionKey) {
-    return [finding({
+  input: {
+    readonly severity: DoctorSeverity;
+    readonly code: string;
+    readonly message: string;
+    readonly fix: DoctorFinding["fix"];
+  },
+): DoctorFinding => finding({
+  severity: input.severity,
+  family: "region.integrity",
+  code: input.code,
+  message: input.message,
+  harness: manifest.harness as HarnessId,
+  plugin: entry.plugin,
+  root: manifest.root,
+  path: entry.targetPath,
+  fix: input.fix,
+});
+
+const validateMarkerRegionEntry = (
+  manifest: SnapshotManifest,
+  entry: SnapshotEntry,
+  parsed: Extract<ParsedRegionRef, { kind: "marker" }>,
+  content: string,
+): DoctorFinding[] => {
+  const begin = markerLine(parsed.commentPrefix, parsed.regionKey, "begin", parsed.commentSuffix);
+  const end = markerLine(parsed.commentPrefix, parsed.regionKey, "end", parsed.commentSuffix);
+  const beginCount = countOccurrences(content, begin);
+  const endCount = countOccurrences(content, end);
+  if (beginCount !== 1 || endCount !== 1) {
+    return [regionFinding(manifest, entry, {
       severity: "error",
-      family: "region.integrity",
-      code: "region.ref-missing",
-      message: `Snapshot region entry is missing a serialized region key: ${entry.targetPath}`,
-      harness: manifest.harness as HarnessId,
-      plugin: entry.plugin,
-      root: manifest.root,
-      path: entry.targetPath,
+      code: "region.marker-count",
+      message: `Expected one begin/end fence for region ${parsed.regionKey}; found begin=${beginCount}, end=${endCount}`,
       fix: "refresh",
     })];
   }
 
-  const parsed = parseRegionRef(entry.regionKey);
-  if (!parsed) {
-    return [finding({
-      severity: "error",
-      family: "region.integrity",
-      code: "region.ref-invalid",
-      message: `Snapshot region key is not parseable: ${entry.regionKey}`,
-      harness: manifest.harness as HarnessId,
-      plugin: entry.plugin,
-      root: manifest.root,
-      path: entry.targetPath,
+  const body = markerRegionBody(content, parsed);
+  if (body && computeContentHash(body) !== entry.contentHash) {
+    return [regionFinding(manifest, entry, {
+      severity: "warning",
+      code: "region.marker-drift",
+      message: `Prism-owned marker region differs from the snapshot: ${parsed.regionKey}`,
       fix: "refresh",
     })];
   }
+  return [];
+};
 
-  if (!(await exists(entry.targetPath))) {
-    return [finding({
-      severity: "error",
-      family: "region.integrity",
-      code: "region.target-missing",
-      message: `Shared config file recorded in snapshot is missing: ${entry.targetPath}`,
-      harness: manifest.harness as HarnessId,
-      plugin: entry.plugin,
-      root: manifest.root,
-      path: entry.targetPath,
-      fix: "refresh",
-    })];
-  }
-
-  const content = await readFile(entry.targetPath);
-  if (parsed.kind === "marker") {
-    const begin = markerLine(parsed.commentPrefix, parsed.regionKey, "begin", parsed.commentSuffix);
-    const end = markerLine(parsed.commentPrefix, parsed.regionKey, "end", parsed.commentSuffix);
-    const beginCount = countOccurrences(content, begin);
-    const endCount = countOccurrences(content, end);
-    if (beginCount !== 1 || endCount !== 1) {
-      return [finding({
-        severity: "error",
-        family: "region.integrity",
-        code: "region.marker-count",
-        message: `Expected one begin/end fence for region ${parsed.regionKey}; found begin=${beginCount}, end=${endCount}`,
-        harness: manifest.harness as HarnessId,
-        plugin: entry.plugin,
-        root: manifest.root,
-        path: entry.targetPath,
-        fix: "refresh",
-      })];
-    }
-    const body = markerRegionBody(content, parsed);
-    if (body && computeContentHash(body) !== entry.contentHash) {
-      return [finding({
-        severity: "warning",
-        family: "region.integrity",
-        code: "region.marker-drift",
-        message: `Prism-owned marker region differs from the snapshot: ${parsed.regionKey}`,
-        harness: manifest.harness as HarnessId,
-        plugin: entry.plugin,
-        root: manifest.root,
-        path: entry.targetPath,
-        fix: "refresh",
-      })];
-    }
-    return [];
-  }
-
-  const errors: unknown[] = [];
-  const json = parseJsonc(content, errors as never[]);
-  if (errors.length > 0) {
-    return [finding({
-      severity: "error",
-      family: "region.integrity",
-      code: "region.json-invalid",
-      message: `Shared JSON config with Prism regions is not parseable: ${entry.targetPath}`,
-      harness: manifest.harness as HarnessId,
-      plugin: entry.plugin,
-      root: manifest.root,
-      path: entry.targetPath,
-      fix: "manual",
-    })];
-  }
-
+const validateJsonRegionEntry = (
+  manifest: SnapshotManifest,
+  entry: SnapshotEntry,
+  parsed: Exclude<ParsedRegionRef, { kind: "marker" }>,
+  json: unknown,
+): DoctorFinding[] => {
   if (parsed.kind === "json" && jsonAtPath(json, parsed.jsonPath) === undefined) {
-    return [finding({
+    return [regionFinding(manifest, entry, {
       severity: "error",
-      family: "region.integrity",
       code: "region.json-key-missing",
       message: `Prism-owned JSON key region is missing: ${parsed.regionKey}`,
-      harness: manifest.harness as HarnessId,
-      plugin: entry.plugin,
-      root: manifest.root,
-      path: entry.targetPath,
       fix: "refresh",
     })];
   }
@@ -346,21 +302,67 @@ const validateRegionSnapshotEntry = async (
       return stableJson(jsonAtPath(item, parsed.memberKey)) === wanted;
     });
     if (!found) {
-      return [finding({
+      return [regionFinding(manifest, entry, {
         severity: "error",
-        family: "region.integrity",
         code: "region.json-array-member-missing",
         message: `Prism-owned JSON array member is missing: ${parsed.regionKey}`,
-        harness: manifest.harness as HarnessId,
-        plugin: entry.plugin,
-        root: manifest.root,
-        path: entry.targetPath,
         fix: "refresh",
       })];
     }
   }
 
   return [];
+};
+
+const validateRegionSnapshotEntry = async (
+  manifest: SnapshotManifest,
+  entry: SnapshotEntry,
+): Promise<DoctorFinding[]> => {
+  if (!entry.regionKey) {
+    return [regionFinding(manifest, entry, {
+      severity: "error",
+      code: "region.ref-missing",
+      message: `Snapshot region entry is missing a serialized region key: ${entry.targetPath}`,
+      fix: "refresh",
+    })];
+  }
+
+  const parsed = parseRegionRef(entry.regionKey);
+  if (!parsed) {
+    return [regionFinding(manifest, entry, {
+      severity: "error",
+      code: "region.ref-invalid",
+      message: `Snapshot region key is not parseable: ${entry.regionKey}`,
+      fix: "refresh",
+    })];
+  }
+
+  if (!(await exists(entry.targetPath))) {
+    return [regionFinding(manifest, entry, {
+      severity: "error",
+      code: "region.target-missing",
+      message: `Shared config file recorded in snapshot is missing: ${entry.targetPath}`,
+      fix: "refresh",
+    })];
+  }
+
+  const content = await readFile(entry.targetPath);
+  if (parsed.kind === "marker") {
+    return validateMarkerRegionEntry(manifest, entry, parsed, content);
+  }
+
+  const errors: unknown[] = [];
+  const json = parseJsonc(content, errors as never[]);
+  if (errors.length > 0) {
+    return [regionFinding(manifest, entry, {
+      severity: "error",
+      code: "region.json-invalid",
+      message: `Shared JSON config with Prism regions is not parseable: ${entry.targetPath}`,
+      fix: "manual",
+    })];
+  }
+
+  return validateJsonRegionEntry(manifest, entry, parsed, json);
 };
 
 const validateJsonConfig = async (options: {

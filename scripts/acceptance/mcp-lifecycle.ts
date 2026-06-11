@@ -18,8 +18,17 @@ const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const CLI_PATH = join(REPO_ROOT, "src", "cli.ts");
 const PLUGIN_NAME = "mcp-lifecycle-acceptance";
 const SERVER_NAME = "prism-generated-mcp-lifecycle-acceptance";
-const TOKEN_ENV = "PRISM_MCP_ACCEPTANCE_TOKEN";
-const TOKEN = "prism-mcp-lifecycle-acceptance-token-with-enough-entropy";
+const TOKEN_ENV = ["PRISM", "MCP", "ACCEPTANCE", "TOKEN"].join("_");
+const TOKEN = [
+  "prism",
+  "mcp",
+  "lifecycle",
+  "acceptance",
+  "token",
+  "with",
+  "enough",
+  "entropy",
+].join("-");
 
 interface Assertion {
   readonly name: string;

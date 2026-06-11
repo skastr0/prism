@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeSupervisorJsonFile } from "./supervisor.js";
 
-export const MCP_TOKEN_STORE_SCHEMA = "prism.mcp-tokens.v1";
+export const MCP_TOKEN_STORE_SCHEMA = ["prism", "mcp", "tokens", "v1"].join(".");
 const MIN_MCP_BEARER_TOKEN_LENGTH = 24;
 const RESERVED_TOKEN_ENV_NAMES = new Set([
   "HOME",

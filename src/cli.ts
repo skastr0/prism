@@ -48,8 +48,10 @@ import {
   formatMcpServeResult,
   formatMcpStatus,
   formatMcpStopResult,
+  formatMcpRotateTokenResult,
   getMcpStatus,
   listMcpStatuses,
+  rotateMcpBearerToken,
   restartMcp,
   serveMcp,
   stopMcp,
@@ -530,6 +532,36 @@ mcpCommand
       console.log(formatMcpServeResult(result));
     } catch (error) {
       printCliError(error, "MCP restart error");
+      process.exit(1);
+    }
+  });
+
+mcpCommand
+  .command("rotate-token <plugin-path>")
+  .description("Rotate a Prism-generated HTTP MCP daemon bearer token")
+  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
+  .option(
+    "--scope <scope>",
+    `Output scope (${HARNESS_SCOPES.join("|")})`,
+    parseHarnessScope,
+    "global"
+  )
+  .option("-p, --project <path>", "Project root when using --scope project")
+  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
+  .action(async (pluginPath: string, options) => {
+    try {
+      assertProjectPathForProjectScope(options.scope, options.project);
+      const result = await rotateMcpBearerToken({
+        pluginPath,
+        harness: options.harness,
+        scope: options.scope,
+        projectPath: options.project,
+        prismHome: resolvePrismHome(),
+        tokenEnv: options.tokenEnv,
+      });
+      console.log(formatMcpRotateTokenResult(result));
+    } catch (error) {
+      printCliError(error, "MCP rotate-token error");
       process.exit(1);
     }
   });

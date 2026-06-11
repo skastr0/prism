@@ -1,6 +1,7 @@
 import { randomBytes, createHash } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeSupervisorJsonFile } from "./supervisor.js";
 
 export const MCP_TOKEN_STORE_SCHEMA = "prism.mcp-tokens.v1";
 const MIN_MCP_BEARER_TOKEN_LENGTH = 24;
@@ -80,10 +81,8 @@ const writeTokenStore = async (
   runtimeRoot: string,
   store: McpTokenStore,
 ): Promise<void> => {
-  await mkdir(prismMcpStateDir(runtimeRoot), { recursive: true, mode: 0o700 });
   const path = mcpTokenStorePath(runtimeRoot);
-  await writeFile(path, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  await chmod(path, 0o600).catch(() => undefined);
+  await writeSupervisorJsonFile(path, store, { mode: 0o600 });
 };
 
 const generateToken = (): string => randomBytes(32).toString("base64url");
@@ -132,12 +131,33 @@ export const ensureMcpToken = async (
   const existing = store.tokens[serverName];
   const preferredToken = normalizePreferredMcpBearerToken(options);
   const existingToken = isUsableMcpBearerToken(existing?.token) ? existing.token : undefined;
-  const token = preferredToken ?? existingToken ?? generateToken();
+  const token = existingToken ?? preferredToken ?? generateToken();
   const now = new Date().toISOString();
   store.tokens[serverName] = {
     token,
     createdAt: existing?.createdAt ?? now,
     updatedAt: existing?.token === token ? existing.updatedAt : now,
+  };
+  await writeTokenStore(runtimeRoot, store);
+  return token;
+};
+
+export const rotateMcpToken = async (
+  runtimeRoot: string,
+  serverName: string,
+  options: {
+    readonly preferredToken?: string;
+    readonly preferredTokenEnv?: string;
+  } = {},
+): Promise<string> => {
+  const store = await readTokenStore(runtimeRoot);
+  const existing = store.tokens[serverName];
+  const token = normalizePreferredMcpBearerToken(options) ?? generateToken();
+  const now = new Date().toISOString();
+  store.tokens[serverName] = {
+    token,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
   };
   await writeTokenStore(runtimeRoot, store);
   return token;

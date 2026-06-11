@@ -69,6 +69,7 @@ import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
   isStreamableHttpMcpRuntime,
+  mcpRuntimeUsesBearerTokenEnvConfig,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
 import {
@@ -82,7 +83,11 @@ import {
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
-import { ensureMcpToken } from "../mcp/token-store.js";
+import {
+  ensureMcpToken,
+  normalizePreferredMcpBearerToken,
+  readMcpToken,
+} from "../mcp/token-store.js";
 import { getFreePort } from "../mcp/ports.js";
 
 interface LowererModule {
@@ -935,6 +940,34 @@ const resolveCompileMcpBearerToken = (options: {
     try: async () => {
       const runtime = resolveMcpRuntime(options.registry, options.targetId);
       const preferredToken = process.env[runtime.tokenEnv];
+      if (mcpRuntimeUsesBearerTokenEnvConfig(options.targetId)) {
+        const envToken = normalizePreferredMcpBearerToken({
+          preferredToken,
+          preferredTokenEnv: runtime.tokenEnv,
+        });
+        if (!envToken) {
+          throw new Error(
+            `MCP token env '${runtime.tokenEnv}' must be set to a usable bearer token before compiling '${options.targetId}' Streamable HTTP config.`,
+          );
+        }
+
+        const serverName = generatedMcpServerName(options.registry.pluginName);
+        const existing = await readMcpToken(options.prismHome, serverName);
+        const usableExisting = normalizePreferredMcpBearerToken({
+          preferredToken: existing,
+          preferredTokenEnv: runtime.tokenEnv,
+        });
+        if (usableExisting && usableExisting !== envToken) {
+          throw new Error(
+            `Stored MCP token for '${serverName}' differs from env '${runtime.tokenEnv}'. Run 'prism mcp rotate-token ${options.registry.pluginPath} --harness ${options.targetId} --token-env ${runtime.tokenEnv}' to rotate explicitly.`,
+          );
+        }
+
+        return ensureMcpToken(options.prismHome, serverName, {
+          preferredToken: envToken,
+          preferredTokenEnv: runtime.tokenEnv,
+        });
+      }
       return ensureMcpToken(
         options.prismHome,
         generatedMcpServerName(options.registry.pluginName),

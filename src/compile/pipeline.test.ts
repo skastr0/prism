@@ -188,6 +188,7 @@ const getFreePort = (host: string): Promise<number> =>
   });
 
 const createHermesHttpToolPlugin = async (options?: {
+  readonly target?: "hermes" | "codex-cli";
   readonly pluginName?: string;
   readonly tokenEnv?: string;
   readonly transport?: "stdio" | "streamable-http";
@@ -195,15 +196,16 @@ const createHermesHttpToolPlugin = async (options?: {
   readonly omitPort?: boolean;
 }): Promise<{ readonly pluginRoot: string; readonly hermesRoot: string }> => {
   const root = await createTempRoot();
+  const target = options?.target ?? "hermes";
   const pluginName = options?.pluginName ?? "hermes-http-demo";
   const pluginRoot = join(root, pluginName);
-  const hermesRoot = join(root, "hermes-root");
+  const hermesRoot = join(root, target === "hermes" ? "hermes-root" : "codex-root");
   await mkdir(hermesRoot, { recursive: true });
   const runtime = options?.transport === "stdio"
     ? undefined
     : {
         mcp: {
-          hermes: {
+          [target]: {
             transport: "streamable-http",
             host: "127.0.0.1",
             ...(options?.omitPort ? {} : { port: options?.port ?? 38463 }),
@@ -219,7 +221,7 @@ const createHermesHttpToolPlugin = async (options?: {
         name: pluginName,
         version: "0.1.0",
         targets: {
-          tools: ["hermes"],
+          tools: [target],
         },
         ...(runtime ? { runtime } : {}),
       },
@@ -4815,6 +4817,50 @@ test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async
     await stopMcp({
       pluginPath: pluginRoot,
       harness: "hermes",
+      scope: "global",
+      prismHome: testPrismHome(),
+      tokenEnv,
+    }).catch(() => undefined);
+  }
+});
+
+test("compilePluginForTarget requires token env for Codex HTTP MCP config", async () => {
+  const port = await getFreePort("127.0.0.1");
+  const tokenEnv = "PRISM_MCP_COMPILE_CODEX_REQUIRED_TOKEN";
+  const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
+    target: "codex-cli",
+    pluginName: "codex-http-env-required-demo",
+    tokenEnv,
+    port,
+  });
+  const previous = process.env[tokenEnv];
+  delete process.env[tokenEnv];
+
+  try {
+    const failure = await Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "codex-cli",
+        scope: "global",
+        root: codexRoot,
+        dryRun: false,
+      }),
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeDefined();
+    expect(String((failure as Error).message)).toContain(
+      `MCP token env '${tokenEnv}' must be set to a usable bearer token`,
+    );
+  } finally {
+    if (previous === undefined) delete process.env[tokenEnv];
+    else process.env[tokenEnv] = previous;
+    await stopMcp({
+      pluginPath: pluginRoot,
+      harness: "codex-cli",
       scope: "global",
       prismHome: testPrismHome(),
       tokenEnv,

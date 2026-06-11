@@ -494,7 +494,6 @@ export default defineTool({
       scope: "project",
       root: outputRoot,
       mcpServerPath: join(root, "prism-home", "runtime", "mcp", "codex-http-fixture", "server.mjs"),
-      mcpBearerToken: "codex-static-token",
       sourcePluginName: "codex-http-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -504,20 +503,22 @@ export default defineTool({
   const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(agentToml?.content).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
-  expect(agentToml?.content).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(agentToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(agentToml?.content).not.toContain("http_headers");
+  expect(agentToml?.content).not.toContain("codex-static-token");
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
-  expect(agentToml?.mode).toBe(0o600);
+  expect(agentToml?.mode).toBeUndefined();
 
   const mcpRegion = markerContent(
     findRegion(lowered.regions, "codex.mcp.prism-generated-codex-http-fixture"),
   );
   expect(mcpRegion).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(mcpRegion).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(mcpRegion).toContain('http_headers = { Authorization = "Bearer codex-static-token" }');
-  expect(mcpRegion).not.toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(mcpRegion).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
+  expect(mcpRegion).not.toContain("http_headers");
+  expect(mcpRegion).not.toContain("codex-static-token");
   expect(mcpRegion).not.toContain('command = "bun"');
   expect(mcpRegion).not.toContain("args = ");
   expect(mcpRegion).toContain('enabled_tools = ["codex_http_fixture_echo"]');

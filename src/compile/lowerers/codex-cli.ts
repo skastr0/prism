@@ -11,7 +11,6 @@ import {
 } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
-  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
@@ -47,7 +46,6 @@ export interface CodexCliLowerTarget {
   readonly root: string;
   /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
   readonly mcpServerPath?: string;
-  readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
@@ -74,7 +72,6 @@ interface PlannedHook {
 interface AgentMcpServerConfig {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
-  readonly bearerToken?: string;
   readonly serverPath?: string;
   readonly root: string;
 }
@@ -166,7 +163,6 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
 const renderCodexMcpServerToml = (options: {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
-  readonly bearerToken?: string;
   readonly serverPath?: string;
   readonly root: string;
   readonly enabledTools: ReadonlyArray<string>;
@@ -174,14 +170,7 @@ const renderCodexMcpServerToml = (options: {
   const transportLines = options.runtime.transport === "streamable-http"
     ? [
         `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
-        ...(options.bearerToken
-          ? [
-              `http_headers = { Authorization = ${quote(renderMcpBearerAuthorization({
-                tokenEnv: options.runtime.tokenEnv,
-                token: options.bearerToken,
-              }))} }`,
-            ]
-          : [`bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`]),
+        `bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`,
       ]
     : [
         'command = "bun"',
@@ -424,7 +413,6 @@ const planMcpServer = (
   mcpServerName?: string;
   mcpServerPath?: string;
   mcpRuntime?: ResolvedMcpRuntime;
-  mcpBearerToken?: string;
   toolNames: string[];
   globalToolNames: string[];
 } => {
@@ -445,7 +433,6 @@ const planMcpServer = (
     mcpServerName,
     mcpServerPath: input.target.mcpServerPath,
     mcpRuntime: runtime,
-    ...(input.target.mcpBearerToken ? { mcpBearerToken: input.target.mcpBearerToken } : {}),
     toolNames: uniqueSorted(
       mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
     ),
@@ -467,7 +454,6 @@ const agentMcpServerConfig = (
     ? {
         name: mcp.mcpServerName,
         runtime: mcp.mcpRuntime,
-        ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
         ...(mcp.mcpServerPath ? { serverPath: mcp.mcpServerPath } : {}),
         root: input.target.root,
       }
@@ -483,7 +469,6 @@ const planAgentWrites = (
       targetPath: join(input.target.root, "agents", `${agent.name}.toml`),
       content: renderAgentToml(agent, input.target, agentMcpServer),
       plugin: input.target.sourcePluginName,
-      ...(agentMcpServer?.bearerToken ? { mode: 0o600 } : {}),
     });
   }
 };
@@ -570,7 +555,6 @@ const planConfigRegions = (
       content: renderCodexMcpServerToml({
         name: mcp.mcpServerName,
         runtime: mcp.mcpRuntime,
-        ...(mcp.mcpBearerToken ? { bearerToken: mcp.mcpBearerToken } : {}),
         serverPath: mcp.mcpServerPath,
         root: input.target.root,
         enabledTools: mcp.globalToolNames,

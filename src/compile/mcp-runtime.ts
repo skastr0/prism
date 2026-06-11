@@ -10,6 +10,8 @@ const GENERATED_SERVER_PREFIX = "prism-generated";
 const DEFAULT_HTTP_HOST = "127.0.0.1";
 const DEFAULT_TOKEN_ENV = ["PRISM", "MCP", "TOKEN"].join("_");
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const ENV_BEARER_TOKEN_CONFIG_TARGETS: ReadonlySet<HarnessId> =
+  new Set<HarnessId>(["codex-cli"]);
 
 export type McpRuntimeTransport = "stdio" | "streamable-http";
 
@@ -77,6 +79,9 @@ export const getMcpHttpTargetSupport = (targetId: HarnessId): McpHttpTargetSuppo
     lifecycle: "unsupported",
     reason: `Target '${targetId}' does not have a verified Streamable HTTP MCP config renderer.`,
   };
+
+export const mcpRuntimeUsesBearerTokenEnvConfig = (targetId: HarnessId): boolean =>
+  ENV_BEARER_TOKEN_CONFIG_TARGETS.has(targetId);
 
 export const assertMcpHttpTargetSupported = (
   targetId: HarnessId,

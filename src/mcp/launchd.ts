@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { writeSupervisorTextFile } from "./supervisor.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -141,8 +142,7 @@ export const installLaunchAgent = async (
 
   await mkdir(userLaunchAgentDir(), { recursive: true });
   await mkdir(join(spec.workingDirectory, "runtime", "logs"), { recursive: true, mode: 0o700 });
-  await writeFile(plistPath, desiredPlist, { mode: 0o600 });
-  await chmod(plistPath, 0o600).catch(() => undefined);
+  await writeSupervisorTextFile(plistPath, desiredPlist, { mode: 0o600 });
 
   await runLaunchctl(["bootout", `${domain}/${spec.label}`], { allowFailure: true });
   await runLaunchctl(["bootout", domain, plistPath], { allowFailure: true });

@@ -408,6 +408,21 @@ test("mcp serve/status/stop manages a Hermes daemon under a sandboxed PRISM_HOME
     expect(secondServe.exitCode).toBe(0);
     expect(secondServe.stdout).toContain("already-running prism-generated-cli-hermes-tools");
 
+    const rotated = await runCli([
+      "mcp",
+      "rotate-token",
+      pluginRoot,
+      "--harness",
+      "codex-cli",
+      "--token-env",
+      "PRISM_MCP_CLI_TEST_TOKEN",
+    ], {
+      ...env,
+      PRISM_MCP_CLI_TEST_TOKEN: "prism-cli-rotated-token-with-enough-entropy",
+    });
+    expect(rotated.exitCode).toBe(0);
+    expect(rotated.stdout).toContain("rotated-and-restarted prism-generated-cli-hermes-tools");
+
     const restart = await runCli(["mcp", "restart", ...common, "--port", "auto"], env);
     expect(restart.exitCode).toBe(0);
     expect(restart.stdout).toContain("started prism-generated-cli-hermes-tools");

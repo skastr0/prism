@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { computeContentHash } from "../content-hash.js";
+import { writeSupervisorTextFile } from "./supervisor.js";
 
 export const MCP_RUNTIME_METADATA_SCHEMA = "prism.mcp-runtime.v1" as const;
 export const MCP_RUNTIME_HEALTH_SCHEMA = "prism.mcp-health.v1" as const;
@@ -323,8 +323,7 @@ export const writeMcpRuntimeMetadata = async (
   path: string,
   metadata: McpRuntimeMetadata,
 ): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, serializeMcpRuntimeMetadata(metadata));
+  await writeSupervisorTextFile(path, serializeMcpRuntimeMetadata(metadata), { mode: 0o600 });
 };
 
 const defaultPidExists = (pid: number): boolean => {

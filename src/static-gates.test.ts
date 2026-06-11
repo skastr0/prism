@@ -134,6 +134,11 @@ const NODE_FS_WRITE_PRIMITIVES = [
   "copyFile",
   "chmod",
 ] as const;
+const MCP_NODE_FS_BARE_WRITE_PRIMITIVES = ["writeFile", "copyFile", "chmod"] as const;
+const MCP_BARE_WRITE_CALLS = [
+  { name: "Bun.write", pattern: /\bBun\.write\s*\(/gu },
+  { name: ".writeFile", pattern: /\.writeFile\s*\(/gu },
+] as const;
 
 const COMPILE_PATH_PREFIXES = ["sync/", "compile/"] as const;
 
@@ -169,6 +174,36 @@ const importedNodeFsWritePrimitives = (content: string): string[] => {
   return [...found].sort();
 };
 
+const importedNodeFsBareWritePrimitives = (content: string): string[] => {
+  const found = new Set<string>();
+  const importPattern = /import\s*\{([^}]*)\}\s*from\s*["']node:fs\/promises["']/g;
+  for (const match of content.matchAll(importPattern)) {
+    for (const rawSpecifier of match[1]!.split(",")) {
+      const name = rawSpecifier.replace(/\s+as\s+.*$/u, "").trim();
+      if ((MCP_NODE_FS_BARE_WRITE_PRIMITIVES as readonly string[]).includes(name)) {
+        found.add(name);
+      }
+    }
+  }
+  return [...found].sort();
+};
+
+const countPatternMatches = (content: string, pattern: RegExp): number => {
+  pattern.lastIndex = 0;
+  return [...content.matchAll(pattern)].length;
+};
+
+const allowedMcpBareWriteCall = (
+  relativePath: string,
+  callName: string,
+  count: number,
+  content: string,
+): boolean =>
+  relativePath === "mcp/lifecycle.ts" &&
+  callName === ".writeFile" &&
+  count === 1 &&
+  content.includes("await handle.writeFile(`${JSON.stringify({");
+
 test("only src/sync/apply.ts imports harness-root write primitives among compile-path modules", async () => {
   const violations: string[] = [];
 
@@ -200,6 +235,41 @@ test("compile lowerers do not import node fs write primitives directly", async (
       violations.push(
         `${relativePath}: imports ${primitives.join(", ")} from node:fs/promises`,
       );
+    }
+  }
+
+  expect(violations).toEqual([]);
+});
+
+test("MCP source writes route through the supervisor", async () => {
+  const violations: string[] = [];
+
+  for (const relativePath of await listSourceFiles()) {
+    if (!relativePath.startsWith("mcp/")) continue;
+    if (relativePath.endsWith(".test.ts")) continue;
+    if (relativePath === "mcp/supervisor.ts") continue;
+
+    const content = await readFile(join(SRC_ROOT, relativePath), "utf8");
+    const nodePrimitives = importedNodeFsBareWritePrimitives(content);
+    if (nodePrimitives.length > 0) {
+      violations.push(
+        `${relativePath}: imports ${nodePrimitives.join(", ")} from node:fs/promises`,
+      );
+    }
+
+    const projectPrimitives = importedFsWritePrimitives(content);
+    if (projectPrimitives.length > 0) {
+      violations.push(`${relativePath}: imports ${projectPrimitives.join(", ")} from fs.ts`);
+    }
+
+    for (const call of MCP_BARE_WRITE_CALLS) {
+      const count = countPatternMatches(content, call.pattern);
+      if (
+        count > 0 &&
+        !allowedMcpBareWriteCall(relativePath, call.name, count, content)
+      ) {
+        violations.push(`${relativePath}: uses bare ${call.name} call`);
+      }
     }
   }
 

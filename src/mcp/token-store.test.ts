@@ -6,6 +6,7 @@ import {
   ensureMcpToken,
   mcpTokenStorePath,
   normalizePreferredMcpBearerToken,
+  rotateMcpToken,
 } from "./token-store.js";
 
 const tempRoots: string[] = [];
@@ -20,7 +21,7 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-test("MCP token store accepts explicit strong Prism token overrides", async () => {
+test("MCP token store accepts explicit strong Prism token seeds", async () => {
   const root = await createTempRoot();
   const token = "prism-test-token-with-enough-entropy";
 
@@ -30,6 +31,29 @@ test("MCP token store accepts explicit strong Prism token overrides", async () =
   });
 
   expect(resolved).toBe(token);
+});
+
+test("MCP token store does not silently rotate an existing usable token", async () => {
+  const root = await createTempRoot();
+  const seed = "prism-test-seed-token-with-enough-entropy";
+  const replacement = "prism-test-replacement-token-with-enough-entropy";
+
+  const first = await ensureMcpToken(root, "prism-generated-test", {
+    preferredToken: seed,
+    preferredTokenEnv: "PRISM_MCP_TEST_TOKEN",
+  });
+  const second = await ensureMcpToken(root, "prism-generated-test", {
+    preferredToken: replacement,
+    preferredTokenEnv: "PRISM_MCP_TEST_TOKEN",
+  });
+  const rotated = await rotateMcpToken(root, "prism-generated-test", {
+    preferredToken: replacement,
+    preferredTokenEnv: "PRISM_MCP_TEST_TOKEN",
+  });
+
+  expect(first).toBe(seed);
+  expect(second).toBe(seed);
+  expect(rotated).toBe(replacement);
 });
 
 test("MCP token store ignores reserved process environment values as bearer tokens", async () => {

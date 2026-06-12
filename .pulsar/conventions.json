@@ -6,6 +6,7 @@
       "visibility": "public-api",
       "allowed_imports": [
         "@opencode-ai/plugin",
+        "@skastr0/prism-core",
         "commander",
         "effect",
         "gray-matter",

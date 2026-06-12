@@ -1,0 +1,15 @@
+{
+  "name": "@skastr0/prism-core",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "description": "Source-only workspace core contracts and codecs shared by Prism runtimes and workflow tooling.",
+  "license": "MIT",
+  "exports": {
+    "./refs": "./src/refs.ts",
+    "./snapshot": "./src/snapshot.ts"
+  },
+  "dependencies": {
+    "effect": "^3.21.1"
+  }
+}

@@ -110,4 +110,40 @@ describe("workflow loader", () => {
     expect(summary.name).toBe("loader-smoke");
     expect(summary.tasks[0]?.id).toBe("build");
   });
+
+  test("CLI runs a workflow with mock outputs and decodes them", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const outputFile = join(root, "outputs.json");
+    await writeFile(file, workflowSource());
+    await writeFile(outputFile, JSON.stringify({ build: { summary: "mocked" } }));
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--mock-output",
+        outputFile,
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { workflow: string; tasks: Array<{ output: { summary: string } }> };
+    expect(result.workflow).toBe("loader-smoke");
+    expect(result.tasks[0]?.output.summary).toBe("mocked");
+  });
 });

@@ -35,6 +35,7 @@ import type {
   PluginManifest,
 } from "./types.js";
 import { basename, join } from "node:path";
+import { readFile } from "node:fs/promises";
 import {
   compilePluginForTarget,
   formatOperations,
@@ -70,7 +71,8 @@ import {
 } from "./refresh.js";
 import type { SyncReport } from "./sync/apply.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
-import { validateWorkflowFile } from "./workflow-loader.js";
+import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
+import { runWorkflow } from "./workflow-runner.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -174,6 +176,29 @@ workflow
       console.log(JSON.stringify(summary, null, 2));
     } catch (error) {
       printCliError(error, "Workflow validation failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
+  .command("run <file>")
+  .description("Run a workflow with an explicit mock-output JSON file")
+  .requiredOption("--mock-output <path>", "JSON object keyed by workflow task id")
+  .action(async (file: string, options: { readonly mockOutput: string }) => {
+    try {
+      const workflow = await loadWorkflowFile(file);
+      const outputs = JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>;
+      const result = await runWorkflow(workflow, {
+        executeTask: async (task) => {
+          if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
+            throw new Error(`missing mock output for workflow task ${task.id}`);
+          }
+          return outputs[task.id];
+        },
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow run failed");
       exitWith(EXIT_CODES.domainFailure);
     }
   });

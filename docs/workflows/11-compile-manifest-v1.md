@@ -280,6 +280,7 @@ target-specific (e.g. opencode pool strategy, claude-code block shape per
   "claude-code": {
     "scope": "global",
     "model": { /* resolvedModel Record for this harness, or null */ },
+    "toolGrants": ["forge:workspace/run_shell"],       // canonical tool refs active in this slice
     "allowedTools": ["run_shell", "read_file"],   // composed.allowedTools, sorted
     "allowedSkills": ["explore", "review"]        // composed.allowedSkills, sorted
   },
@@ -287,11 +288,17 @@ target-specific (e.g. opencode pool strategy, claude-code block shape per
 }
 ```
 
-`allowedTools` / `allowedSkills` are the per-harness allowlists `composeAgent`
-already emits (`ComposedAgent.allowedTools`, `.allowedSkills`). Subsumption for a
-dispatch to harness H reads `agents[id].composed.perTarget[H]`. An agent with no
-slice for H was not compiled for H; the gate MUST treat a dispatch to H as
-**uncompiled-target** and refuse (distinct from a policy violation).
+`toolGrants` records the canonical tool refs that contributed to this target
+slice. `allowedTools` / `allowedSkills` are the per-harness allowlists
+`composeAgent` already emits (`ComposedAgent.allowedTools`, `.allowedSkills`).
+The top-level `composed.grants` is recomputed as the union of the remaining
+`perTarget[*].toolGrants` and `perTarget[*].allowedSkills` after every merge or
+prune. It is never last-target-wins and never append-only. Subsumption for a
+dispatch to harness H reads `agents[id].composed.perTarget[H]` for target
+coverage, then checks requested canonical tools against `composed.grants.tools`.
+An agent with no slice for H was not compiled for H; the gate MUST treat a
+dispatch to H as **uncompiled-target** and refuse (distinct from a policy
+violation).
 
 `installs` for the refs emitter (`WorkflowAgentRef.installs`) is exactly
 `Object.keys(perTarget)`.

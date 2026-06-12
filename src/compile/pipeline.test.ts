@@ -12,6 +12,12 @@ import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generateMcpServerBundle, mcpToolNamesForBindings } from "./mcp-bundle.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
+import {
+  compileManifestPath,
+  readCompileManifest,
+  verifyAgentManifestHash,
+  verifyCompileManifestHash,
+} from "./compile-manifest.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
@@ -1762,6 +1768,40 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   expect(
     reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
   ).toBeUndefined();
+
+  expect(await pathExists(compileManifestPath(testPrismHome()))).toBe(true);
+  const manifestRead = await readCompileManifest(testPrismHome());
+  expect(manifestRead.quarantinedPath).toBeUndefined();
+  expect(verifyCompileManifestHash(manifestRead.manifest)).toBe(true);
+  expect(manifestRead.manifest.compileTargets).toEqual([
+    { harness: "opencode", scope: "project" },
+  ]);
+  const builderEntry = manifestRead.manifest.agents["canonical-compile-fixture:builder"];
+  expect(builderEntry).toBeDefined();
+  if (!builder || !builderEntry) throw new Error("expected builder and manifest entry");
+  expect(builderEntry && verifyAgentManifestHash(builderEntry)).toBe(true);
+  expect(builderEntry?.sourceHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(builderEntry?.traits.map((trait) => trait.id)).toEqual([
+    "canonical-compile-fixture:committable",
+    "canonical-compile-fixture:self-assessing",
+    "canonical-compile-fixture:submittable",
+  ]);
+  expect(builderEntry?.composed.modelBindings).toEqual({
+    modelspace: "agent-core:default-models",
+    profile: "builder",
+  });
+  expect(builderEntry.composed.grants.tools).toEqual([
+    "canonical-compile-fixture:commit-work",
+    "protocol-core:create_glyph",
+    "protocol-core:external-submit",
+  ]);
+  expect(builderEntry?.composed.perTarget.opencode).toEqual({
+    scope: "project",
+    model: builder.model ?? null,
+    toolGrants: builderEntry.composed.grants.tools,
+    allowedTools: builder.allowedTools,
+    allowedSkills: builder.allowedSkills,
+  });
 });
 
 test("resolveAgent reports missing identity and personality references", async () => {

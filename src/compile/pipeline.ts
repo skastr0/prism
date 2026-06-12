@@ -18,6 +18,7 @@ import {
   resolveOrbitToolPermissions,
   validateOrbit,
 } from "./resolve.js";
+import { isCompileManifestHarnessId, updateCompileManifestForTarget } from "./compile-manifest.js";
 import { composeAgent, type ComposedAgent } from "./compose.js";
 import { planLowering as planOpenCodeLowering } from "./lowerers/opencode.js";
 import { planLowering as planClaudeCodeLowering } from "./lowerers/claude-code.js";
@@ -1409,6 +1410,26 @@ export const compilePluginForTarget = (
         dryRun: options.dryRun || options.packageMode === true,
       }),
     );
+    const blocked = blockedTargetErrors(report);
+    const manifestTarget = context.targetId;
+    if (
+      !options.dryRun &&
+      options.packageMode !== true &&
+      report.failures.length === 0 &&
+      blocked.length === 0 &&
+      isCompileManifestHarnessId(manifestTarget)
+    ) {
+      yield* Effect.promise(() =>
+        updateCompileManifestForTarget({
+          prismHome: context.prismHome,
+          registry,
+          target: manifestTarget,
+          scope: options.scope,
+          composed: composedForLowering,
+          cacheDescriptors: agentResult.cacheDescriptors,
+        }),
+      );
+    }
     const lockfilePath = yield* persistCompileOutputs({
       pluginPath: options.pluginPath,
       registry,
@@ -1432,7 +1453,7 @@ export const compilePluginForTarget = (
       regions: lowered.regions,
       operations: report.ops,
       failures: report.failures,
-      blocked: blockedTargetErrors(report),
+      blocked,
       backups: report.backups,
       converged: report.converged,
       built: agentResult.built,

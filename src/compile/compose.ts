@@ -6,6 +6,17 @@
 import type { NormalizedOrbitPhase as OrbitPhase } from "./sources.js";
 import type { ResolvedAgent, ResolvedContractBinding } from "./resolve.js";
 
+export interface ComposedAgentManifestMetadata {
+  readonly traits: ReadonlyArray<{
+    readonly id: string;
+    readonly ref: string;
+  }>;
+  readonly modelBindings: {
+    readonly modelspace?: string;
+    readonly profile?: string;
+  };
+}
+
 export interface ComposedAgent {
   readonly name: string;
   readonly description: string;
@@ -17,7 +28,31 @@ export interface ComposedAgent {
   readonly allowedSkills: ReadonlyArray<string>;
   readonly toolBindings: ReadonlyArray<ResolvedContractBinding>;
   readonly allowedTools: ReadonlyArray<string>;
+  readonly manifest?: ComposedAgentManifestMetadata;
 }
+
+const manifestModelBindings = (
+  model: ResolvedAgent["agent"]["model"],
+): ComposedAgentManifestMetadata["modelBindings"] => {
+  if (!model) return {};
+  if (typeof model === "string") {
+    const split = model.indexOf("/");
+    if (split === -1) return {};
+    return {
+      modelspace: model.slice(0, split),
+      profile: model.slice(split + 1),
+    };
+  }
+  return {};
+};
+
+const manifestMetadata = (resolved: ResolvedAgent): ComposedAgentManifestMetadata => ({
+  traits: resolved.traits.map((trait) => ({
+    id: trait.canonicalId,
+    ref: trait.ref,
+  })),
+  modelBindings: manifestModelBindings(resolved.agent.model),
+});
 
 export interface ComposedOrbitPhaseReference {
   readonly label: string;
@@ -117,6 +152,7 @@ export const composeAgent = (resolved: ResolvedAgent): ComposedAgent => {
     allowedSkills: resolved.allowedSkills,
     toolBindings: resolved.toolBindings,
     allowedTools: resolved.allowedTools,
+    manifest: manifestMetadata(resolved),
   };
 };
 

@@ -54,12 +54,14 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
           grok: {
             scope: "project",
             model: { model: "grok-code-fast-1", nested: { temperature: 0 } },
+            toolGrants: ["forge:workspace/run_shell", "core:create_commit"],
             allowedTools: ["forge_workspace_run_shell", "core_create_commit"],
             allowedSkills: ["forge:build", "core:git"],
           },
           "claude-code": {
             scope: "global",
             model: null,
+            toolGrants: ["forge:workspace/run_shell"],
             allowedTools: ["forge_workspace_run_shell"],
             allowedSkills: ["forge:build"],
           },

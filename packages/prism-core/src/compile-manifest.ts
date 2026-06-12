@@ -61,6 +61,7 @@ const JsonRecordSchema = Schema.Record({ key: Schema.String, value: Schema.Unkno
 export const CompileManifestPerTargetSchema = Schema.Struct({
   scope: HarnessScopeSchema,
   model: Schema.NullOr(JsonRecordSchema),
+  toolGrants: Schema.Array(Schema.String),
   allowedTools: Schema.Array(Schema.String),
   allowedSkills: Schema.Array(Schema.String),
 });
@@ -171,6 +172,7 @@ const normalizeAgentForEncoding = (agent: CompileManifestAgent): CompileManifest
     perTarget: sortRecord(agent.composed.perTarget, (slice) => ({
       ...slice,
       model: slice.model === null ? null : stableJsonValue(slice.model as StableJsonValue) as Record<string, unknown>,
+      toolGrants: sortStrings(slice.toolGrants),
       allowedTools: sortStrings(slice.allowedTools),
       allowedSkills: sortStrings(slice.allowedSkills),
     })),

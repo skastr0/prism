@@ -18,8 +18,13 @@ import {
   resolveOrbitToolPermissions,
   validateOrbit,
 } from "./resolve.js";
-import { isCompileManifestHarnessId, updateCompileManifestForTarget } from "./compile-manifest.js";
+import {
+  isCompileManifestHarnessId,
+  readCompileManifest,
+  updateCompileManifestForTarget,
+} from "./compile-manifest.js";
 import { composeAgent, type ComposedAgent } from "./compose.js";
+import { planWorkflowRefsEmit, WORKFLOW_REFS_HARNESS } from "./workflow-refs-emitter.js";
 import { planLowering as planOpenCodeLowering } from "./lowerers/opencode.js";
 import { planLowering as planClaudeCodeLowering } from "./lowerers/claude-code.js";
 import { planLowering as planAntigravityCliLowering } from "./lowerers/antigravity-cli.js";
@@ -1412,6 +1417,7 @@ export const compilePluginForTarget = (
     );
     const blocked = blockedTargetErrors(report);
     const manifestTarget = context.targetId;
+    let workflowRefsReport: Awaited<ReturnType<typeof syncDesiredRoot>> | null = null;
     if (
       !options.dryRun &&
       options.packageMode !== true &&
@@ -1429,6 +1435,23 @@ export const compilePluginForTarget = (
           cacheDescriptors: agentResult.cacheDescriptors,
         }),
       );
+      if (options.projectPath) {
+        const { manifest } = yield* Effect.promise(() =>
+          readCompileManifest(context.prismHome)
+        );
+        workflowRefsReport = yield* Effect.promise(() =>
+          syncDesiredRoot({
+            prismHome: context.prismHome,
+            desired: planWorkflowRefsEmit({
+              projectPath: expandPath(options.projectPath!),
+              registry,
+              manifest,
+            }),
+            scopePlugins: new Set([WORKFLOW_REFS_HARNESS]),
+            dryRun: false,
+          }),
+        );
+      }
     }
     const lockfilePath = yield* persistCompileOutputs({
       pluginPath: options.pluginPath,
@@ -1440,6 +1463,9 @@ export const compilePluginForTarget = (
       cacheDescriptors: agentResult.cacheDescriptors,
       lowered,
     });
+    const workflowRefsBlocked = workflowRefsReport
+      ? blockedTargetErrors(workflowRefsReport)
+      : [];
 
     return {
       target: options.target,
@@ -1451,11 +1477,11 @@ export const compilePluginForTarget = (
       orbits,
       files: lowered.files,
       regions: lowered.regions,
-      operations: report.ops,
-      failures: report.failures,
-      blocked,
-      backups: report.backups,
-      converged: report.converged,
+      operations: [...report.ops, ...(workflowRefsReport?.ops ?? [])],
+      failures: [...report.failures, ...(workflowRefsReport?.failures ?? [])],
+      blocked: [...blocked, ...workflowRefsBlocked],
+      backups: [...report.backups, ...(workflowRefsReport?.backups ?? [])],
+      converged: report.converged && (workflowRefsReport?.converged ?? true),
       built: agentResult.built,
       fromCache: agentResult.fromCache,
     };

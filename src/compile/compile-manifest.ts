@@ -20,7 +20,7 @@ import { ensureDir, exists, readFile, writeFile } from "../fs.js";
 import { withSnapshotLock } from "../state/lock.js";
 import type { AgentCacheDescriptor, CacheInputFile } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
-import type { PluginRegistry } from "./registry.js";
+import { collectPluginRegistries, type PluginRegistry } from "./registry.js";
 
 export * from "@skastr0/prism-core/compile-manifest";
 
@@ -75,17 +75,6 @@ const canonicalToolRef = (binding: ComposedAgent["toolBindings"][number]): strin
   `${binding.toolPluginName}:${binding.toolName}`;
 
 const sortStrings = (values: Iterable<string>): string[] => [...values].sort();
-
-const pluginRegistries = (registry: PluginRegistry): Map<string, PluginRegistry> => {
-  const registries = new Map<string, PluginRegistry>();
-  const visit = (current: PluginRegistry) => {
-    if (registries.has(current.pluginName)) return;
-    registries.set(current.pluginName, current);
-    for (const dep of current.deps.values()) visit(dep);
-  };
-  visit(registry);
-  return registries;
-};
 
 const stableInputKey = (input: CacheInputFile): string => `${input.plugin}:${input.path}`;
 
@@ -228,7 +217,7 @@ export const buildCompileManifestForTarget = (options: {
     agents[id] = { ...updated, manifestHash: computeAgentManifestHash(updated) };
   }
 
-  const registries = pluginRegistries(options.registry);
+  const registries = collectPluginRegistries(options.registry);
   const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
   const livePluginNames = new Set(Object.values(agents).map((agent) => agent.plugin));
   for (const pluginName of currentPluginHashes.keys()) livePluginNames.add(pluginName);

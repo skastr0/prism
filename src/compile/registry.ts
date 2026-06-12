@@ -70,4 +70,15 @@ export const emptyRegistry = (
   deps: new Map(),
 });
 
+export const collectPluginRegistries = (registry: PluginRegistry): Map<string, PluginRegistry> => {
+  const registries = new Map<string, PluginRegistry>();
+  const visit = (current: PluginRegistry) => {
+    if (registries.has(current.pluginName)) return;
+    registries.set(current.pluginName, current);
+    for (const dep of current.deps.values()) visit(dep);
+  };
+  visit(registry);
+  return registries;
+};
+
 export type Registry = PluginRegistry;

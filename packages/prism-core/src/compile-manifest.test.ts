@@ -1,0 +1,158 @@
+import { expect, test } from "bun:test";
+import {
+  type CompileManifest,
+  type CompileManifestAgent,
+  computeAgentManifestHash,
+  computeCompileManifestHash,
+  decodeCompileManifest,
+  emptyCompileManifest,
+  encodeCompileManifest,
+  getCompileManifestAgent,
+  getCompileManifestAgentForTarget,
+  verifyAgentManifestHash,
+  verifyCompileManifestHash,
+} from "@skastr0/prism-core/compile-manifest";
+
+const withAgentHash = (agent: Omit<CompileManifestAgent, "manifestHash">): CompileManifestAgent => {
+  const hashed = { ...agent, manifestHash: "" };
+  return { ...hashed, manifestHash: computeAgentManifestHash(hashed) };
+};
+
+const withManifestHash = (manifest: Omit<CompileManifest, "manifestHash">): CompileManifest => {
+  const hashed = { ...manifest, manifestHash: "" };
+  return { ...hashed, manifestHash: computeCompileManifestHash(hashed) };
+};
+
+const fixtureManifest = (): CompileManifest => withManifestHash({
+  version: 1,
+  plugins: {
+    forge: { version: "1.4.0", sourceHash: "plugin-source" },
+    core: { sourceHash: "core-source" },
+  },
+  compileTargets: [
+    { harness: "grok", scope: "project" },
+    { harness: "claude-code", scope: "global" },
+  ],
+  agents: {
+    "forge:builder": withAgentHash({
+      name: "builder",
+      plugin: "forge",
+      description: "Build specialist",
+      sourceHash: "agent-source",
+      traits: [
+        { id: "forge:reviewable", ref: "reviewable" },
+        { id: "core:committable", ref: "core:committable" },
+      ],
+      skills: ["forge:build", "core:git"],
+      composed: {
+        grants: {
+          tools: ["forge:workspace/run_shell", "core:create_commit"],
+          skills: ["core:git", "forge:build"],
+        },
+        modelBindings: { modelspace: "models", profile: "builder" },
+        perTarget: {
+          grok: {
+            scope: "project",
+            model: { model: "grok-code-fast-1", nested: { temperature: 0 } },
+            allowedTools: ["forge_workspace_run_shell", "core_create_commit"],
+            allowedSkills: ["forge:build", "core:git"],
+          },
+          "claude-code": {
+            scope: "global",
+            model: null,
+            allowedTools: ["forge_workspace_run_shell"],
+            allowedSkills: ["forge:build"],
+          },
+        },
+      },
+    }),
+  },
+});
+
+test("compile manifest decodes and encodes deterministically", () => {
+  const manifest = fixtureManifest();
+  const encoded = encodeCompileManifest(manifest);
+  const decoded = decodeCompileManifest(encoded);
+
+  expect(decoded._tag).toBe("Right");
+  if (decoded._tag !== "Right") throw new Error("manifest did not decode");
+  expect(encodeCompileManifest(decoded.right)).toBe(encoded);
+  expect(verifyCompileManifestHash(decoded.right)).toBe(true);
+  expect(verifyAgentManifestHash(decoded.right.agents["forge:builder"]!)).toBe(true);
+});
+
+test("compile manifest sorts records and arrays into stable bytes", () => {
+  const manifest = fixtureManifest();
+  const scrambled: CompileManifest = {
+    ...manifest,
+    plugins: {
+      core: manifest.plugins.core!,
+      forge: manifest.plugins.forge!,
+    },
+    compileTargets: [...manifest.compileTargets].reverse(),
+    agents: {
+      "forge:builder": {
+        ...manifest.agents["forge:builder"]!,
+        traits: [...manifest.agents["forge:builder"]!.traits].reverse(),
+        skills: [...manifest.agents["forge:builder"]!.skills].reverse(),
+        composed: {
+          ...manifest.agents["forge:builder"]!.composed,
+          grants: {
+            tools: [...manifest.agents["forge:builder"]!.composed.grants.tools].reverse(),
+            skills: [...manifest.agents["forge:builder"]!.composed.grants.skills].reverse(),
+          },
+          perTarget: {
+            "claude-code": manifest.agents["forge:builder"]!.composed.perTarget["claude-code"]!,
+            grok: manifest.agents["forge:builder"]!.composed.perTarget.grok!,
+          },
+        },
+      },
+    },
+  };
+
+  expect(encodeCompileManifest(scrambled)).toBe(encodeCompileManifest(manifest));
+});
+
+test("compile manifest accessors expose agent and target slices", () => {
+  const manifest = fixtureManifest();
+
+  expect(getCompileManifestAgent(manifest, "forge:builder")?.description).toBe("Build specialist");
+  expect(getCompileManifestAgentForTarget(manifest, "forge:builder", "grok")?.target.scope).toBe("project");
+  expect(getCompileManifestAgentForTarget(manifest, "forge:builder", "codex-cli")).toBeUndefined();
+});
+
+test("compile manifest rejects unsupported versions distinctly", () => {
+  const decoded = decodeCompileManifest(JSON.stringify({ ...fixtureManifest(), version: 2 }));
+
+  expect(decoded._tag).toBe("UnsupportedCompileManifestVersion");
+  if (decoded._tag !== "UnsupportedCompileManifestVersion") throw new Error("expected version error");
+  expect(decoded.version).toBe(2);
+});
+
+test("compile manifest invalid payload fails schema decode", () => {
+  const invalid = {
+    ...fixtureManifest(),
+    agents: {
+      "forge:builder": {
+        ...fixtureManifest().agents["forge:builder"]!,
+        composed: { grants: { tools: [] } },
+      },
+    },
+  };
+  const decoded = decodeCompileManifest(JSON.stringify(invalid));
+
+  expect(decoded._tag).toBe("Left");
+});
+
+test("compile manifest malformed JSON fails schema decode", () => {
+  const decoded = decodeCompileManifest("{");
+
+  expect(decoded._tag).toBe("Left");
+});
+
+test("empty compile manifest carries a self-consistent hash", () => {
+  const manifest = emptyCompileManifest();
+
+  expect(manifest.manifestHash).toBe(computeCompileManifestHash(manifest));
+  expect(verifyCompileManifestHash(manifest)).toBe(true);
+});

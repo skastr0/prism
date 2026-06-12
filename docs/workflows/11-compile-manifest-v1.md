@@ -85,9 +85,12 @@ produce byte-identical files and `manifestHash` values are reproducible:
 - All maps serialized as JSON objects with keys sorted by Unicode code point
   order over NFC-normalized strings; all arrays sorted by a stable documented
   key. Locale-sensitive comparison is forbidden.
-- Reuse the existing canonical-JSON discipline: `computeStableHash` /
-  `stableStringify` from `src/compile/cache.ts` (sorts object keys recursively).
-  The manifest schema and hashes MUST hash through the same canonicalizer.
+- Use the shared canonical-JSON discipline exported by
+  `@skastr0/prism-core/stable-json` (`stableJsonStringify` /
+  `stableJsonHash`). The manifest schema and hashes MUST hash through that same
+  canonicalizer. `src/compile/cache.ts` remains the legacy cache fingerprint
+  surface until it is separately migrated; manifest content must not depend on a
+  locale-sensitive string sort.
 - No timestamp or local machine field belongs in the manifest. If humans need
   timing diagnostics, the CLI prints them or records them in the run output, not
   in this deterministic policy file.
@@ -183,7 +186,7 @@ manifest's coverage without scanning every agent.
 
 ```jsonc
 "compileTargets": [
-  { "harness": "claude-code", "scope": "user" },
+  { "harness": "claude-code", "scope": "global" },
   { "harness": "grok",        "scope": "project" }
 ]
 ```
@@ -275,7 +278,7 @@ target-specific (e.g. opencode pool strategy, claude-code block shape per
 ```jsonc
 "perTarget": {
   "claude-code": {
-    "scope": "user",
+    "scope": "global",
     "model": { /* resolvedModel Record for this harness, or null */ },
     "allowedTools": ["run_shell", "read_file"],   // composed.allowedTools, sorted
     "allowedSkills": ["explore", "review"]        // composed.allowedSkills, sorted

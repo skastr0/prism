@@ -6,8 +6,10 @@
   "description": "Source-only workspace core contracts and codecs shared by Prism runtimes and workflow tooling.",
   "license": "MIT",
   "exports": {
+    "./compile-manifest": "./src/compile-manifest.ts",
     "./refs": "./src/refs.ts",
-    "./snapshot": "./src/snapshot.ts"
+    "./snapshot": "./src/snapshot.ts",
+    "./stable-json": "./src/stable-json.ts"
   },
   "dependencies": {
     "effect": "^3.21.1"

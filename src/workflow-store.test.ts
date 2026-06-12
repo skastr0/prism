@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +52,54 @@ const createWorkflow = (options?: { readonly prompt?: string; readonly agent?: W
 };
 
 describe("workflow store", () => {
+  test("backfills run status when opening a legacy ledger", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+    const db = new Database(path);
+    db.exec(`
+      create table workflow_runs (
+        run_id text primary key,
+        workflow text not null,
+        created_at text not null default (datetime('now'))
+      );
+      create table workflow_run_tasks (
+        run_id text not null,
+        ordinal integer not null,
+        workflow text not null,
+        task_id text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        status text not null,
+        cached integer not null,
+        output_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, ordinal)
+      );
+      insert into workflow_runs (run_id, workflow) values ('ok-run', 'legacy'), ('bad-run', 'legacy'), ('empty-run', 'legacy');
+      insert into workflow_run_tasks (
+        run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
+        agent_plugin, agent_name, status, cached, output_json
+      ) values
+        ('ok-run', 0, 'legacy', 'build', 'build', '${"a".repeat(64)}', '${"b".repeat(64)}', 'forge', 'builder', 'completed', 0, '{"summary":"ok"}'),
+        ('bad-run', 0, 'legacy', 'build', 'build', '${"a".repeat(64)}', '${"b".repeat(64)}', 'forge', 'builder', 'failed', 0, '{"summary":"bad"}');
+    `);
+    db.close();
+
+    const store = await WorkflowStore.open(path);
+
+    expect(store.listRuns()).toEqual([
+      { runId: "bad-run", workflow: "legacy", status: "failed", finishedAt: expect.any(String) },
+      { runId: "empty-run", workflow: "legacy", status: "unknown", finishedAt: null },
+      { runId: "ok-run", workflow: "legacy", status: "unknown", finishedAt: null },
+    ]);
+    const newRunId = store.createRun("legacy");
+    expect(store.listRuns().find((run) => run.runId === newRunId)?.status).toBe("running");
+    store.close();
+  });
+
   test("stores and reads completed task output by identity", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
@@ -95,6 +144,7 @@ describe("workflow store", () => {
     expect(second.tasks[0]?.output).toEqual({ summary: "first" });
     const firstRunId = first.runId!;
     const secondRunId = second.runId!;
+    expect(store.listRuns().map((run) => run.status)).toEqual(["completed", "completed"]);
     expect(store.listRunTasks(firstRunId)).toEqual([
       {
         runId: firstRunId,
@@ -132,6 +182,7 @@ describe("workflow store", () => {
 
     const runId = store.listRuns()[0]?.runId;
     expect(runId).toBeString();
+    expect(store.listRuns()[0]?.status).toBe("failed");
     const recordedRunId = runId!;
     expect(store.listRunTasks(recordedRunId)).toEqual([
       {
@@ -160,6 +211,7 @@ describe("workflow store", () => {
     })).rejects.toThrow("mock harness failed");
 
     const runId = store.listRuns()[0]!.runId;
+    expect(store.listRuns()[0]?.status).toBe("failed");
     expect(store.listRunTasks(runId)).toEqual([
       {
         runId,
@@ -229,6 +281,7 @@ describe("workflow store", () => {
     })).rejects.toThrow(WorkflowTaskDecodeError);
 
     const runId = store.listRuns()[0]!.runId;
+    expect(store.listRuns()[0]?.status).toBe("failed");
     expect(store.listRunTasks(runId)).toEqual([
       {
         runId,

@@ -41,6 +41,9 @@ export const runWorkflow = async (
   const useCache = options.cache !== false;
   const runId = options.store?.createRun(workflow.name) ?? null;
   const tasks: WorkflowRunTaskResult[] = [];
+  if (workflow.tasks.length === 0 && runId !== null) {
+    options.store?.finishRun(runId, "completed");
+  }
   for (const [index, task] of workflow.tasks.entries()) {
     const identity = workflowTaskIdentity(workflow.name, task);
     const cached = useCache ? options.store?.getCompleted(identity) : null;
@@ -63,6 +66,7 @@ export const runWorkflow = async (
           output: {
             error: error instanceof Error ? error.message : String(error),
           },
+          finishRunStatus: "failed",
         });
       }
       throw error;
@@ -81,6 +85,7 @@ export const runWorkflow = async (
           status: "failed",
           cached: cacheHit,
           output: rawOutput,
+          finishRunStatus: "failed",
         });
       }
       throw new WorkflowTaskDecodeError(task.id, decoded.left);
@@ -107,6 +112,7 @@ export const runWorkflow = async (
         status: "completed",
         cached: cacheHit,
         output: decoded.right,
+        ...(index === workflow.tasks.length - 1 ? { finishRunStatus: "completed" as const } : {}),
       });
     }
     tasks.push({

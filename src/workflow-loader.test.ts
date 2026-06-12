@@ -231,7 +231,7 @@ describe("workflow loader", () => {
       storeFile,
     ]) as { runId: string };
     const listResult = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
-      runs: Array<{ runId: string; workflow: string }>;
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
     };
     const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
       tasks: Array<{
@@ -245,7 +245,9 @@ describe("workflow loader", () => {
       }>;
     };
 
-    expect(listResult.runs).toEqual([{ runId: runResult.runId, workflow: "loader-smoke" }]);
+    expect(listResult.runs).toEqual([
+      { runId: runResult.runId, workflow: "loader-smoke", status: "completed", finishedAt: expect.any(String) },
+    ]);
     expect(showResult.tasks).toEqual([
       {
         runId: runResult.runId,

@@ -40,7 +40,11 @@ export interface WorkflowRunTaskRecord {
 export interface WorkflowRunRecord {
   readonly runId: string;
   readonly workflow: string;
+  readonly status: WorkflowRunStatus;
+  readonly finishedAt: string | null;
 }
+
+export type WorkflowRunStatus = "running" | "completed" | "failed" | "unknown";
 
 interface TaskRecordRow {
   readonly workflow: string;
@@ -67,6 +71,8 @@ interface RunTaskRow {
 interface RunRow {
   readonly run_id: string;
   readonly workflow: string;
+  readonly status: WorkflowRunStatus;
+  readonly finished_at: string | null;
 }
 
 export const defaultWorkflowStorePath = (projectPath: string): string =>
@@ -82,6 +88,17 @@ export const workflowTaskIdentity = (
   promptHash: computeContentHash(task.prompt),
   agentManifestHash: task.agent.manifestHash,
 });
+
+const addColumnIfMissing = (db: Database, statement: string): void => {
+  try {
+    db.exec(statement);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("duplicate column name")) {
+      return;
+    }
+    throw error;
+  }
+};
 
 export class WorkflowStore {
   constructor(private readonly db: Database) {}
@@ -108,6 +125,8 @@ export class WorkflowStore {
       create table if not exists workflow_runs (
         run_id text primary key,
         workflow text not null,
+        status text not null default 'running',
+        finished_at text,
         created_at text not null default (datetime('now'))
       );
 
@@ -127,6 +146,21 @@ export class WorkflowStore {
         created_at text not null default (datetime('now')),
         primary key (run_id, ordinal)
       );
+    `);
+    addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
+    addColumnIfMissing(db, "alter table workflow_runs add column finished_at text");
+    // Legacy ledgers did not know the workflow's full task count, so completed
+    // task rows are not proof that the whole run finished. Only failed task rows
+    // carry enough evidence to safely backfill a terminal status.
+    db.exec(`
+      update workflow_runs
+      set status = 'failed', finished_at = coalesce(finished_at, datetime('now'))
+      where status in ('running', 'unknown')
+        and exists (
+          select 1 from workflow_run_tasks
+          where workflow_run_tasks.run_id = workflow_runs.run_id
+            and workflow_run_tasks.status = 'failed'
+        );
     `);
     return new WorkflowStore(db);
   }
@@ -171,17 +205,27 @@ export class WorkflowStore {
   }
 
   createRun(workflow: string, runId: string = randomUUID()): string {
-    this.db.query("insert into workflow_runs (run_id, workflow) values (?, ?)").run(runId, workflow);
+    this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, workflow);
     return runId;
+  }
+
+  finishRun(runId: string, status: Exclude<WorkflowRunStatus, "running" | "unknown">): void {
+    this.db.query("update workflow_runs set status = ?, finished_at = datetime('now') where run_id = ?")
+      .run(status, runId);
   }
 
   listRuns(): WorkflowRunRecord[] {
     const rows = this.db.query<RunRow, []>(`
-      select run_id, workflow
+      select run_id, workflow, status, finished_at
       from workflow_runs
       order by created_at asc, run_id asc
     `).all();
-    return rows.map((row) => ({ runId: row.run_id, workflow: row.workflow }));
+    return rows.map((row) => ({
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: row.status,
+      finishedAt: row.finished_at,
+    }));
   }
 
   recordRunTask(input: {
@@ -192,26 +236,37 @@ export class WorkflowStore {
     readonly status: WorkflowRunTaskStatus;
     readonly cached: boolean;
     readonly output: unknown;
+    readonly finishRunStatus?: Exclude<WorkflowRunStatus, "running" | "unknown">;
   }): void {
-    this.db.query(`
-      insert into workflow_run_tasks (
-        run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-        agent_plugin, agent_name, status, cached, output_json
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      input.runId,
-      input.ordinal,
-      input.identity.workflow,
-      input.identity.taskId,
-      input.identity.cacheKey,
-      input.identity.promptHash,
-      input.identity.agentManifestHash,
-      input.agent.plugin,
-      input.agent.name,
-      input.status,
-      input.cached ? 1 : 0,
-      JSON.stringify(input.output),
-    );
+    const insert = () => {
+      this.db.query(`
+        insert into workflow_run_tasks (
+          run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
+          agent_plugin, agent_name, status, cached, output_json
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.runId,
+        input.ordinal,
+        input.identity.workflow,
+        input.identity.taskId,
+        input.identity.cacheKey,
+        input.identity.promptHash,
+        input.identity.agentManifestHash,
+        input.agent.plugin,
+        input.agent.name,
+        input.status,
+        input.cached ? 1 : 0,
+        JSON.stringify(input.output),
+      );
+      if (input.finishRunStatus !== undefined) {
+        this.finishRun(input.runId, input.finishRunStatus);
+      }
+    };
+    if (input.finishRunStatus === undefined) {
+      insert();
+      return;
+    }
+    this.db.transaction(insert)();
   }
 
   listRunTasks(runId: string): WorkflowRunTaskRecord[] {

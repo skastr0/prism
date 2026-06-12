@@ -13,6 +13,8 @@
  * These helpers are identity constructors for authoring ergonomics.
  */
 
+export * from "./workflows.js";
+
 export interface NamedRefDefinition {
   readonly plugin?: string;
   readonly name: string;

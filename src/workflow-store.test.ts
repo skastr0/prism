@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { runWorkflow } from "./workflow-runner.js";
+import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
 
@@ -30,7 +30,14 @@ const builder = {
   installs: ["grok"],
 } as const satisfies WorkflowAgentRef;
 
+const reviewer = {
+  ...builder,
+  name: "reviewer",
+  description: "Review specialist",
+} as const satisfies WorkflowAgentRef;
+
 const Output = Schema.Struct({ summary: Schema.String });
+const ReviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
 const createWorkflow = (options?: { readonly prompt?: string; readonly agent?: WorkflowAgentRef }) => {
   const build = defineTask({
@@ -86,6 +93,162 @@ describe("workflow store", () => {
     expect(first.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output).toEqual({ summary: "first" });
+    const firstRunId = first.runId!;
+    const secondRunId = second.runId!;
+    expect(store.listRunTasks(firstRunId)).toEqual([
+      {
+        runId: firstRunId,
+        taskId: "build",
+        cacheKey: "builder-cache",
+        status: "completed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { summary: "first" },
+      },
+    ]);
+    expect(store.listRunTasks(secondRunId)).toEqual([
+      {
+        runId: secondRunId,
+        taskId: "build",
+        cacheKey: "builder-cache",
+        status: "completed",
+        cached: true,
+        agent: { plugin: "forge", name: "builder" },
+        output: { summary: "first" },
+      },
+    ]);
+    store.close();
+  });
+
+  test("runner records decode failures in run history", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+
+    await expect(runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ notSummary: "wrong" }),
+    })).rejects.toThrow(WorkflowTaskDecodeError);
+
+    const runId = store.listRuns()[0]?.runId;
+    expect(runId).toBeString();
+    const recordedRunId = runId!;
+    expect(store.listRunTasks(recordedRunId)).toEqual([
+      {
+        runId: recordedRunId,
+        taskId: "build",
+        cacheKey: "builder-cache",
+        status: "failed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { notSummary: "wrong" },
+      },
+    ]);
+    store.close();
+  });
+
+  test("runner records executor failures in run history", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+
+    await expect(runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        throw new Error("mock harness failed");
+      },
+    })).rejects.toThrow("mock harness failed");
+
+    const runId = store.listRuns()[0]!.runId;
+    expect(store.listRunTasks(runId)).toEqual([
+      {
+        runId,
+        taskId: "build",
+        cacheKey: "builder-cache",
+        status: "failed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { error: "mock harness failed" },
+      },
+    ]);
+    store.close();
+  });
+
+  test("no-cache still records run history without reading or writing the reuse cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "first" };
+      },
+    });
+    const second = await runWorkflow(workflow, {
+      store,
+      cache: false,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "second" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(second.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
+    expect(store.listRunTasks(second.runId!)[0]?.output).toEqual({ summary: "second" });
+    expect(store.getCompleted(workflowTaskIdentity(workflow.name, workflow.tasks[0]!))?.output).toEqual({ summary: "first" });
+    store.close();
+  });
+
+  test("ledger preserves completed tasks before a later decode failure", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+    });
+    const review = defineTask({
+      id: "review",
+      agent: reviewer,
+      prompt: "Review the slice.",
+      output: ReviewOutput,
+    });
+    const workflow = defineWorkflow({ name: "partial-failure-smoke", tasks: [build, review] as const });
+
+    await expect(runWorkflow(workflow, {
+      store,
+      executeTask: async (task) => task.id === "build"
+        ? { summary: "built" }
+        : { verdict: "needs-work" },
+    })).rejects.toThrow(WorkflowTaskDecodeError);
+
+    const runId = store.listRuns()[0]!.runId;
+    expect(store.listRunTasks(runId)).toEqual([
+      {
+        runId,
+        taskId: "build",
+        cacheKey: "build",
+        status: "completed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { summary: "built" },
+      },
+      {
+        runId,
+        taskId: "review",
+        cacheKey: "review",
+        status: "failed",
+        cached: false,
+        agent: { plugin: "forge", name: "reviewer" },
+        output: { verdict: "needs-work" },
+      },
+    ]);
     store.close();
   });
 

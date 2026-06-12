@@ -13,6 +13,7 @@ export interface WorkflowRunTaskResult {
 }
 
 export interface WorkflowRunResult {
+  readonly runId: string | null;
   readonly workflow: string;
   readonly tasks: ReadonlyArray<WorkflowRunTaskResult>;
 }
@@ -34,25 +35,77 @@ export const runWorkflow = async (
   options: {
     readonly executeTask: WorkflowTaskExecutor;
     readonly store?: WorkflowStore;
+    readonly cache?: boolean;
   },
 ): Promise<WorkflowRunResult> => {
+  const useCache = options.cache !== false;
+  const runId = options.store?.createRun(workflow.name) ?? null;
   const tasks: WorkflowRunTaskResult[] = [];
-  for (const task of workflow.tasks) {
+  for (const [index, task] of workflow.tasks.entries()) {
     const identity = workflowTaskIdentity(workflow.name, task);
-    const cached = options.store?.getCompleted(identity);
+    const cached = useCache ? options.store?.getCompleted(identity) : null;
     const cacheHit = cached !== undefined && cached !== null;
-    const rawOutput = cacheHit ? cached.output : await options.executeTask(task);
+    let rawOutput: unknown;
+    try {
+      rawOutput = cacheHit ? cached.output : await options.executeTask(task);
+    } catch (error) {
+      if (runId !== null) {
+        options.store?.recordRunTask({
+          runId,
+          ordinal: index,
+          identity,
+          agent: {
+            plugin: task.agent.plugin,
+            name: task.agent.name,
+          },
+          status: "failed",
+          cached: false,
+          output: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      throw error;
+    }
     const decoded = decodeTaskOutput(task, rawOutput);
     if (Either.isLeft(decoded)) {
+      if (runId !== null) {
+        options.store?.recordRunTask({
+          runId,
+          ordinal: index,
+          identity,
+          agent: {
+            plugin: task.agent.plugin,
+            name: task.agent.name,
+          },
+          status: "failed",
+          cached: cacheHit,
+          output: rawOutput,
+        });
+      }
       throw new WorkflowTaskDecodeError(task.id, decoded.left);
     }
-    if (!cacheHit) {
+    if (useCache && !cacheHit) {
       options.store?.recordCompleted({
         identity,
         agent: {
           plugin: task.agent.plugin,
           name: task.agent.name,
         },
+        output: decoded.right,
+      });
+    }
+    if (runId !== null) {
+      options.store?.recordRunTask({
+        runId,
+        ordinal: index,
+        identity,
+        agent: {
+          plugin: task.agent.plugin,
+          name: task.agent.name,
+        },
+        status: "completed",
+        cached: cacheHit,
         output: decoded.right,
       });
     }
@@ -66,5 +119,5 @@ export const runWorkflow = async (
       cached: cacheHit,
     });
   }
-  return { workflow: workflow.name, tasks };
+  return { runId, workflow: workflow.name, tasks };
 };

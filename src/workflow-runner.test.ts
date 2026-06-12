@@ -50,6 +50,7 @@ describe("workflow runner", () => {
 
     expect(calls).toEqual(["build", "review"]);
     expect(result).toEqual({
+      runId: null,
       workflow: "runner-smoke",
       tasks: [
         { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false },

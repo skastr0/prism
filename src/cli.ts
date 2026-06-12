@@ -191,12 +191,11 @@ workflow
     let store: WorkflowStore | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
-      if (options.cache !== false) {
-        store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
-      }
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
       const outputs = JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>;
       const result = await runWorkflow(workflow, {
-        ...(store ? { store } : {}),
+        store,
+        cache: options.cache !== false,
         executeTask: async (task) => {
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);

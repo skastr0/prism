@@ -15,6 +15,7 @@
 
 export * from "./workflows.js";
 export * from "./workflow-loader.js";
+export * from "./workflow-runner.js";
 
 export interface NamedRefDefinition {
   readonly plugin?: string;

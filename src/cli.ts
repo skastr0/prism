@@ -70,6 +70,7 @@ import {
 } from "./refresh.js";
 import type { SyncReport } from "./sync/apply.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
+import { validateWorkflowFile } from "./workflow-loader.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -157,6 +158,23 @@ program
     } catch (error) {
       printCliError(error, "Error");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+const workflow = program
+  .command("workflow")
+  .description("Validate Prism workflow files");
+
+workflow
+  .command("validate <file>")
+  .description("Load a workflow module and print its typed task summary")
+  .action(async (file: string) => {
+    try {
+      const summary = await validateWorkflowFile(file);
+      console.log(JSON.stringify(summary, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow validation failed");
+      exitWith(EXIT_CODES.domainFailure);
     }
   });
 

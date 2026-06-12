@@ -11,6 +11,7 @@ import {
 } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
+  renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
 } from "../mcp-runtime.js";
@@ -43,8 +44,6 @@ const TARGET_ID = "codex-cli" as const;
 export interface CodexCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
-  readonly mcpServerPath?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
@@ -71,8 +70,6 @@ interface PlannedHook {
 interface AgentMcpServerConfig {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
-  readonly serverPath?: string;
-  readonly root: string;
 }
 
 const quote = (value: string): string => JSON.stringify(value);
@@ -162,24 +159,17 @@ const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): s
 const renderCodexMcpServerToml = (options: {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
-  readonly serverPath?: string;
-  readonly root: string;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => {
   return [
     tomlDottedTable(["mcp_servers", options.name]),
-    'command = "bun"',
-    `args = ${tomlArray([options.serverPath ?? missingCodexMcpBundlePath()])}`,
-    `cwd = ${quote(options.root)}`,
+    `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
+    `bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`,
     "enabled = true",
     "required = false",
     'default_tools_approval_mode = "approve"',
     `enabled_tools = ${tomlArray(options.enabledTools)}`,
   ];
-};
-
-const missingCodexMcpBundlePath = (): never => {
-  throw new Error("Codex stdio MCP config requires the canonical Prism MCP server bundle path.");
 };
 
 const renderAgentToml = (
@@ -401,7 +391,6 @@ const planMcpServer = (
   input: LowerInput,
 ): {
   mcpServerName?: string;
-  mcpServerPath?: string;
   mcpRuntime?: ResolvedMcpRuntime;
   toolNames: string[];
   globalToolNames: string[];
@@ -416,12 +405,10 @@ const planMcpServer = (
     resolvedPort: input.target.mcpRuntimePort,
   });
   if (bindings.length === 0) return { toolNames: [], globalToolNames: [] };
-  if (!input.target.mcpServerPath) missingCodexMcpBundlePath();
 
   const mcpServerName = generatedMcpServerName(input.target.sourcePluginName);
   return {
     mcpServerName,
-    mcpServerPath: input.target.mcpServerPath,
     mcpRuntime: runtime,
     toolNames: uniqueSorted(
       mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
@@ -436,16 +423,11 @@ const planMcpServer = (
 
 type PlannedMcpServer = ReturnType<typeof planMcpServer>;
 
-const agentMcpServerConfig = (
-  input: LowerInput,
-  mcp: PlannedMcpServer,
-): AgentMcpServerConfig | undefined =>
+const agentMcpServerConfig = (mcp: PlannedMcpServer): AgentMcpServerConfig | undefined =>
   mcp.mcpServerName && mcp.mcpRuntime
     ? {
         name: mcp.mcpServerName,
         runtime: mcp.mcpRuntime,
-        ...(mcp.mcpServerPath ? { serverPath: mcp.mcpServerPath } : {}),
-        root: input.target.root,
       }
     : undefined;
 
@@ -545,8 +527,6 @@ const planConfigRegions = (
       content: renderCodexMcpServerToml({
         name: mcp.mcpServerName,
         runtime: mcp.mcpRuntime,
-        serverPath: mcp.mcpServerPath,
-        root: input.target.root,
         enabledTools: mcp.globalToolNames,
       }).join("\n"),
       plugin,
@@ -581,7 +561,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const mcp = planMcpServer(input);
 
-  planAgentWrites(input, files, agentMcpServerConfig(input, mcp));
+  planAgentWrites(input, files, agentMcpServerConfig(mcp));
   await planManagedSkillWrites(input, files);
   planOrbitWrites(input, files);
   await planRulesWrite(input, files);

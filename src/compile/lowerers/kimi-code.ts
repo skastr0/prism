@@ -11,6 +11,7 @@ import {
 } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
+  MCP_EXPOSURE_HEADER,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -46,9 +47,8 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface KimiCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
-  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
@@ -411,8 +411,8 @@ const planContextSkillWrite = (
 
 const renderKimiMcpServerEntry = (options: {
   readonly runtime: ReturnType<typeof resolveMcpRuntime>;
-  readonly serverPath?: string;
   readonly bearerToken?: string;
+  readonly exposureProfile?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): Record<string, unknown> => {
   const base = {
@@ -421,32 +421,30 @@ const renderKimiMcpServerEntry = (options: {
     startupTimeoutMs: options.runtime.connectTimeoutMs,
     toolTimeoutMs: options.runtime.toolTimeoutMs,
   };
-
-  if (options.runtime.transport === "streamable-http") {
-    return {
-      ...base,
-      url: renderMcpHttpUrl(options.runtime),
-      ...(options.bearerToken
-        ? {
-            headers: {
-              Authorization: renderMcpBearerAuthorization({
-                tokenEnv: options.runtime.tokenEnv,
-                token: options.bearerToken,
-              }),
-            },
-          }
-        : { bearerTokenEnvVar: options.runtime.tokenEnv }),
-    };
-  }
-
-  if (!options.serverPath) {
-    throw new Error("Kimi stdio MCP config requires the canonical Prism MCP server bundle path.");
-  }
+  const headers = {
+    ...(options.bearerToken
+      ? {
+          Authorization: renderMcpBearerAuthorization({
+            tokenEnv: options.runtime.tokenEnv,
+            token: options.bearerToken,
+          }),
+        }
+      : {}),
+    ...(options.exposureProfile
+      ? { [MCP_EXPOSURE_HEADER]: options.exposureProfile }
+      : {}),
+  };
+  const hasHeaders = Object.keys(headers).length > 0;
 
   return {
     ...base,
-    command: "bun",
-    args: [options.serverPath],
+    url: renderMcpHttpUrl(options.runtime),
+    ...(options.bearerToken
+      ? (hasHeaders ? { headers } : {})
+      : {
+          bearerTokenEnvVar: options.runtime.tokenEnv,
+          ...(hasHeaders ? { headers } : {}),
+        }),
   };
 };
 
@@ -471,8 +469,8 @@ const planMcpServer = (input: LowerInput): PlannedMcpServer => {
     toolNames,
     manifestEntry: renderKimiMcpServerEntry({
       runtime,
-      ...(input.target.mcpServerPath ? { serverPath: input.target.mcpServerPath } : {}),
       ...(input.target.mcpBearerToken ? { bearerToken: input.target.mcpBearerToken } : {}),
+      ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
       toolNames,
     }),
   };

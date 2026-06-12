@@ -7,7 +7,7 @@ export const MCP_RUNTIME_HEALTH_SCHEMA = "prism.mcp-health.v1" as const;
 
 export type McpRuntimeMetadataSchema = typeof MCP_RUNTIME_METADATA_SCHEMA;
 export type McpRuntimeHealthSchema = typeof MCP_RUNTIME_HEALTH_SCHEMA;
-export type McpRuntimeTransport = "stdio" | "streamable-http";
+export type McpRuntimeTransport = "streamable-http";
 
 export interface McpRuntimeMetadata {
   readonly schema: McpRuntimeMetadataSchema;
@@ -27,7 +27,7 @@ export interface McpRuntimeMetadata {
 export interface McpRuntimeHealth {
   readonly schema: McpRuntimeHealthSchema;
   readonly serverName: string;
-  readonly transport: Extract<McpRuntimeTransport, "streamable-http">;
+  readonly transport: McpRuntimeTransport;
   readonly startedAt: string;
   readonly uptimeMs: number;
   readonly pid: number;
@@ -229,8 +229,8 @@ export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
   }
 
   const transport = requiredString(record, "transport");
-  if (transport !== "stdio" && transport !== "streamable-http") {
-    fail("'transport' must be 'stdio' or 'streamable-http'");
+  if (transport !== "streamable-http") {
+    fail("'transport' must be 'streamable-http'");
   }
 
   const host = optionalString(record, "host");
@@ -246,7 +246,7 @@ export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
   return {
     schema: MCP_RUNTIME_METADATA_SCHEMA,
     serverName: requiredString(record, "serverName"),
-    transport: transport as McpRuntimeTransport,
+    transport: "streamable-http",
     ...(host !== undefined ? { host } : {}),
     ...(port !== undefined ? { port } : {}),
     ...(pid !== undefined ? { pid } : {}),
@@ -341,8 +341,7 @@ export const detectMcpRuntimeStaleReasons = (
 ): ReadonlyArray<McpRuntimeStaleReason> => {
   const reasons: McpRuntimeStaleReason[] = [];
   const pidExists = options.pidExists ?? defaultPidExists;
-  const healthRequired =
-    options.requireHealth ?? (options.requireLivePid === true && metadata.transport === "streamable-http");
+  const healthRequired = options.requireHealth ?? options.requireLivePid === true;
 
   if (options.requireLivePid) {
     if (metadata.pid === undefined) {

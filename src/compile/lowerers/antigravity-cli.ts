@@ -10,11 +10,9 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
+import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
-  mcpToolNameForBinding,
-  mcpToolNamesForBindings,
-} from "../mcp-bundle.js";
-import {
+  MCP_EXPOSURE_HEADER,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -48,9 +46,8 @@ const PLUGIN_PREFIX = "prism-generated";
 export interface AntigravityCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
-  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
@@ -324,34 +321,19 @@ const planMcpServers = (input: LowerInput): Record<string, unknown> => {
     resolvedPort: input.target.mcpRuntimePort,
   });
   if (bindings.length === 0) return {};
-  if (!input.target.mcpServerPath) {
-    throw new Error("Antigravity MCP lowering requires the canonical Prism MCP server bundle path.");
-  }
 
   const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
   return {
-    [pluginId]: runtime.transport === "streamable-http"
-      ? {
-          serverUrl: renderMcpHttpUrl(runtime),
-          headers: {
-            Authorization: renderMcpBearerAuthorization({
-              tokenEnv: runtime.tokenEnv,
-              token: input.target.mcpBearerToken,
-            }),
-          },
-        }
-      : {
-          command: "bun",
-          args: [input.target.mcpServerPath],
-          // mcp_config.json has no per-server tool allowlist, so the union
-          // bundle is filtered deny-by-default via PRISM_MCP_ENABLED_TOOLS.
-          env: {
-            PRISM_MCP_ENABLED_TOOLS: mcpToolNamesForBindings(
-              input.target.sourcePluginName,
-              bindings,
-            ).join(","),
-          },
-        },
+    [pluginId]: {
+      serverUrl: renderMcpHttpUrl(runtime),
+      headers: {
+        Authorization: renderMcpBearerAuthorization({
+          tokenEnv: runtime.tokenEnv,
+          token: input.target.mcpBearerToken,
+        }),
+        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
+      },
+    },
   };
 };
 

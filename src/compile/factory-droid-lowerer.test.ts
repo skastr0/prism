@@ -215,7 +215,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "factory-plugin-fixture", "server.mjs"),
+      mcpRuntimePort: 38466,
       sourcePluginName: "factory-plugin-fixture",
       sourcePluginVersion: "0.4.0",
       sourcePluginPath: pluginRoot,
@@ -252,12 +252,10 @@ export default defineTool({
   expect(skill?.content).toContain("# Testing");
 
   const mcpConfig = findContentOperation(operations, "mcp.json");
-  expect(mcpConfig?.content).toContain('"type": "stdio"');
-  expect(mcpConfig?.content).toContain('"command": "bun"');
-  expect(mcpConfig?.content).toContain(
-    JSON.stringify(join(root, "prism-home", "runtime", "mcp", "factory-plugin-fixture", "server.mjs")),
-  );
-  expect(mcpConfig?.content).toContain('"PRISM_MCP_ENABLED_TOOLS": "factory_plugin_fixture_echo"');
+  expect(mcpConfig?.content).toContain('"type": "http"');
+  expect(mcpConfig?.content).toContain('"url": "http://127.0.0.1:38466/mcp"');
+  expect(mcpConfig?.content).not.toContain('"command": "bun"');
+  expect(mcpConfig?.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 
   // The bundle lives at the canonical PRISM_HOME path — never in the bundle plan.
   const bundle = operations.find(

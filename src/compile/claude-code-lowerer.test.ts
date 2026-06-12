@@ -222,7 +222,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "claude-plugin-fixture", "server.mjs"),
+      mcpRuntimePort: 38465,
       sourcePluginName: "claude-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -266,17 +266,15 @@ export default defineTool({
   const mcpConfig = findContentOperation(operations, ".mcp.json");
   expect(mcpConfig?.content).toContain('"prism-generated-claude-plugin-fixture"');
   const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
   };
-  const stdioEntry = mcpParsed.mcpServers?.["prism-generated-claude-plugin-fixture"];
-  expect(stdioEntry?.command).toBe("bun");
-  expect(stdioEntry?.args).toEqual([
-    join(root, "prism-home", "runtime", "mcp", "claude-plugin-fixture", "server.mjs"),
-  ]);
-  // Deny-by-default exposure: Claude has no client-side tool filter, so the
-  // per-harness tool names ride PRISM_MCP_ENABLED_TOOLS.
-  expect(stdioEntry?.env).toEqual({
-    PRISM_MCP_ENABLED_TOOLS: "claude_plugin_fixture_echo",
+  const httpEntry = mcpParsed.mcpServers?.["prism-generated-claude-plugin-fixture"];
+  expect(httpEntry).toEqual({
+    type: "http",
+    url: "http://127.0.0.1:38465/mcp",
+    headers: {
+      Authorization: "Bearer ${PRISM_MCP_TOKEN}",
+    },
   });
 
   // The bundle itself lives in PRISM_HOME — never in the generated plugin.
@@ -391,7 +389,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "claude-http-fixture", "server.mjs"),
       mcpBearerToken: "claude-static-token",
       sourcePluginName: "claude-http-fixture",
       sourcePluginVersion: "0.1.0",

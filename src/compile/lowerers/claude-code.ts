@@ -11,9 +11,9 @@ import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   mcpToolNameForBinding,
-  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
+  MCP_EXPOSURE_HEADER,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -54,9 +54,8 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface ClaudeCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
-  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
@@ -322,22 +321,6 @@ const planMcpServer = async (
     return;
   }
 
-  if (!input.target.mcpServerPath) {
-    throw new Error("Claude Code MCP lowering requires the canonical Prism MCP server bundle path.");
-  }
-
-  // The stdio entry references the canonical PRISM_HOME bundle by absolute
-  // path — the same standard mcpServers JSON shape cursor/grok/antigravity
-  // already use. If a real-root cutover ever disproves absolute paths in
-  // plugin .mcp.json, the documented fallback is a 2-line owned shim .mjs
-  // inside the generated plugin re-exporting the canonical bundle
-  // (docs/overhaul-one-writer-plan.md, Claude Code escape hatch).
-
-  // Claude Code has no client-side tool filter in .mcp.json, so the lowered
-  // stdio config passes the per-harness tool names as a deny-by-default
-  // PRISM_MCP_ENABLED_TOOLS filter to the union bundle.
-  const enabledTools = mcpToolNamesForBindings(input.target.sourcePluginName, bindings);
-
   pushWrite(
     files,
     desiredRelativePaths,
@@ -345,28 +328,21 @@ const planMcpServer = async (
     ".mcp.json",
     json({
       mcpServers: {
-        [pluginId]: runtime.transport === "streamable-http"
-          ? {
-              type: "http",
-              url: renderMcpHttpUrl(runtime),
-              headers: {
-                Authorization: renderMcpBearerAuthorization({
-                  tokenEnv: runtime.tokenEnv,
-                  token: input.target.mcpBearerToken,
-                }),
-              },
-            }
-          : {
-              command: "bun",
-              args: [input.target.mcpServerPath],
-              env: { PRISM_MCP_ENABLED_TOOLS: enabledTools.join(",") },
-            },
+        [pluginId]: {
+          type: "http",
+          url: renderMcpHttpUrl(runtime),
+          headers: {
+            Authorization: renderMcpBearerAuthorization({
+              tokenEnv: runtime.tokenEnv,
+              token: input.target.mcpBearerToken,
+            }),
+            [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
+          },
+        },
       },
     }),
     {
-      mode: runtime.transport === "streamable-http" && input.target.mcpBearerToken
-        ? 0o600
-        : undefined,
+      mode: input.target.mcpBearerToken ? 0o600 : undefined,
     },
   );
 };

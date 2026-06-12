@@ -232,14 +232,6 @@ export default defineAgent({
   return { pluginRoot, projectRoot };
 };
 
-type RpcFraming = "content-length" | "newline";
-
-const encodeRpc = (message: unknown, framing: RpcFraming = "content-length"): string => {
-  const payload = JSON.stringify(message);
-  if (framing === "newline") return `${payload}\n`;
-  return `Content-Length: ${Buffer.byteLength(payload, "utf8")}\r\n\r\n${payload}`;
-};
-
 const waitForChildClose = (
   child: ChildProcessWithoutNullStreams,
 ): Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }> =>
@@ -355,67 +347,6 @@ const httpDeleteSession = async (args: {
     },
   });
 
-class RpcClient {
-  private nextId = 1;
-  private buffer = Buffer.alloc(0);
-  private readonly waiters: Array<(value: unknown) => void> = [];
-
-  constructor(
-    private readonly child: ChildProcessWithoutNullStreams,
-    private readonly framing: RpcFraming = "newline",
-  ) {
-    child.stdout.on("data", (chunk) => {
-      this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
-      this.drain();
-    });
-  }
-
-  request(method: string, params?: unknown): Promise<any> {
-    const id = this.nextId++;
-    this.child.stdin.write(encodeRpc({ jsonrpc: "2.0", id, method, params }, this.framing));
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error(`timed out waiting for ${method}`)), 5_000);
-      this.waiters.push((value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      });
-    });
-  }
-
-  notify(method: string, params?: unknown): void {
-    this.child.stdin.write(encodeRpc({ jsonrpc: "2.0", method, params }, this.framing));
-  }
-
-  private drain(): void {
-    while (true) {
-      if (this.framing === "newline") {
-        const newlineEnd = this.buffer.indexOf("\n");
-        if (newlineEnd === -1) return;
-        const line = this.buffer.subarray(0, newlineEnd).toString("utf8").trim();
-        this.buffer = this.buffer.subarray(newlineEnd + 1);
-        if (line.length === 0) continue;
-        const waiter = this.waiters.shift();
-        waiter?.(JSON.parse(line));
-        continue;
-      }
-
-      const headerEnd = this.buffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) return;
-      const header = this.buffer.subarray(0, headerEnd).toString("utf8");
-      const match = /content-length:\s*(\d+)/i.exec(header);
-      if (!match) throw new Error(`missing Content-Length in response: ${header}`);
-      const length = Number(match[1]);
-      const bodyStart = headerEnd + 4;
-      const bodyEnd = bodyStart + length;
-      if (this.buffer.byteLength < bodyEnd) return;
-      const body = this.buffer.subarray(bodyStart, bodyEnd).toString("utf8");
-      this.buffer = this.buffer.subarray(bodyEnd);
-      const waiter = this.waiters.shift();
-      waiter?.(JSON.parse(body));
-    }
-  }
-}
-
 afterEach(async () => {
   process.env.PRISM_HOME = originalPrismHome;
   await Promise.all(
@@ -460,102 +391,6 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
   expect(bundle.content).toContain("PRISM_MCP_TOOL_TIMEOUT_MS");
   expect(bundle.content).not.toContain("unreferenced");
 
-  const serverPath = join(projectRoot, bundle.relativePath);
-  await writeText(serverPath, bundle.content);
-
-  const child = spawn("bun", [serverPath], {
-    cwd: projectRoot,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const client = new RpcClient(child);
-  try {
-    const initialized = await client.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "prism-test", version: "0.1.0" },
-    });
-    expect(initialized.result.serverInfo.name).toBe("prism-mcp-forge");
-
-    const listed = await client.request("tools/list");
-    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "forge_submit_review__review_details",
-      "orbit_core_create_glyph",
-    ]);
-
-    const created = await client.request("tools/call", {
-      name: "orbit_core_create_glyph",
-      arguments: { orbit: "forge", id: "AP-999", title: "Compile MCP" },
-    });
-    expect(JSON.parse(created.result.content[0].text)).toEqual({
-      created: true,
-      orbit: "forge",
-      id: "AP-999",
-    });
-
-    const reviewed = await client.request("tools/call", {
-      name: "forge_submit_review__review_details",
-      arguments: { summary: "Looks good", details: { verdict: "approve" } },
-    });
-    expect(JSON.parse(reviewed.result.content[0].text)).toEqual({
-      acknowledged: true,
-      verdict: "approve",
-    });
-
-    const invalid = await client.request("tools/call", {
-      name: "forge_submit_review__review_details",
-      arguments: { summary: "Missing details" },
-    });
-    expect(invalid.result.isError).toBe(true);
-    expect(invalid.result.content[0].text).toContain("details");
-  } finally {
-    child.kill();
-  }
-});
-
-test("MCP bundle stdio accepts newline-delimited JSON-RPC", async () => {
-  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
-  const compile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const builder = compile.composed.find((agent) => agent.name === "builder");
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: "forge",
-    serverName: "prism-mcp-forge",
-    bundleId: "forge",
-    bindings: builder?.toolBindings ?? [],
-  });
-  const serverPath = join(projectRoot, bundle.relativePath);
-  await writeText(serverPath, bundle.content);
-
-  const child = spawn("bun", [serverPath], {
-    cwd: projectRoot,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const client = new RpcClient(child, "newline");
-  try {
-    const initialized = await client.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "prism-test", version: "0.1.0" },
-    });
-    expect(initialized.result.serverInfo.name).toBe("prism-mcp-forge");
-
-    const listed = await client.request("tools/list");
-    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "forge_submit_review__review_details",
-      "orbit_core_create_glyph",
-    ]);
-  } finally {
-    child.kill();
-  }
 });
 
 test("MCP bundle Streamable HTTP serves multiple sessions from one process", async () => {
@@ -595,7 +430,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_TRANSPORT: "streamable-http",
       PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_SERVER_SHA256: "f".repeat(64),
@@ -802,7 +636,6 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_TRANSPORT: "streamable-http",
       PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_HTTP_TOKEN: token,
     },
@@ -871,7 +704,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_TRANSPORT: "streamable-http",
       PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
@@ -956,7 +788,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_TRANSPORT: "streamable-http",
       PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
@@ -1044,7 +875,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_TRANSPORT: "streamable-http",
       PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_SESSIONS: "1",
@@ -1092,73 +922,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
     child.kill();
     await waitForChildClose(child).catch(() => undefined);
   }
-});
-
-test("MCP bundle stdio exits when stdin closes", async () => {
-  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
-  const compile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const builder = compile.composed.find((agent) => agent.name === "builder");
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: "forge",
-    serverName: "prism-mcp-forge",
-    bundleId: "forge",
-    bindings: builder?.toolBindings ?? [],
-  });
-  const serverPath = join(projectRoot, bundle.relativePath);
-  await writeText(serverPath, bundle.content);
-
-  const child = spawn("bun", [serverPath], {
-    cwd: projectRoot,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.stdin.end();
-
-  const exit = await waitForChildClose(child);
-  expect(exit.code).toBe(0);
-  expect(exit.signal).toBeNull();
-});
-
-test("MCP bundle stdio exits on SIGTERM", async () => {
-  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
-  const compile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const builder = compile.composed.find((agent) => agent.name === "builder");
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: "forge",
-    serverName: "prism-mcp-forge",
-    bundleId: "forge",
-    bindings: builder?.toolBindings ?? [],
-  });
-  const serverPath = join(projectRoot, bundle.relativePath);
-  await writeText(serverPath, bundle.content);
-
-  const child = spawn("bun", [serverPath], {
-    cwd: projectRoot,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.kill("SIGTERM");
-
-  const exit = await waitForChildClose(child);
-  expect(exit.code === 0 || exit.signal === "SIGTERM").toBe(true);
 });
 
 test("MCP bundle generation supports unknown object payload schemas", async () => {
@@ -1280,24 +1043,44 @@ export default defineTool({
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
 
+  const port = await getFreePort();
+  const token = "schema-output-token";
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_TOKEN: token,
+    },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const client = new RpcClient(child);
   try {
-    await client.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "prism-test", version: "0.1.0" },
+    await waitForHttpServer(port);
+    const initialized = await httpRpc({
+      port,
+      token,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "prism-test", version: "0.1.0" },
+      },
     });
+    const sessionId = initialized.response.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
 
-    const invalid = await client.request("tools/call", {
-      name: "schema_fixture_inspect",
-      arguments: { payload: "demo" },
+    const invalid = await httpRpc({
+      port,
+      token,
+      sessionId: sessionId!,
+      method: "tools/call",
+      params: {
+        name: "schema_fixture_inspect",
+        arguments: { payload: "demo" },
+      },
     });
-    expect(invalid.result.isError).toBe(true);
-    expect(invalid.result.content[0].text).toContain("ok");
+    expect(invalid.body.result.isError).toBe(true);
+    expect(invalid.body.result.content[0].text).toContain("ok");
   } finally {
     child.kill();
     await waitForChildClose(child).catch(() => undefined);

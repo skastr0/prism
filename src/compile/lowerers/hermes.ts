@@ -6,6 +6,7 @@ import { mcpToolNamesForBindings } from "../mcp-bundle.js";
 import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
 import {
   generatedMcpServerName,
+  MCP_EXPOSURE_HEADER,
   renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -31,9 +32,8 @@ const TARGET_ID = "hermes" as const;
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
-  readonly mcpServerPath?: string;
   readonly mcpBearerToken?: string;
+  readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
@@ -93,48 +93,27 @@ const copyTargetedSkillArtifacts = async (
 
 const renderHermesMcpServerYaml = (options: {
   readonly serverName: string;
-  readonly serverPath: string;
-  readonly workingDirectory: string;
   readonly runtime: ResolvedMcpRuntime;
   readonly bearerToken?: string;
+  readonly exposureProfile?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): string[] => {
-  if (options.runtime.transport === "streamable-http") {
-    return [
-      `  ${options.serverName}:`,
-      `    url: ${yamlScalar(renderMcpHttpUrl(options.runtime))}`,
-      `    connect_timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.connectTimeoutMs)}`,
-      `    timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.toolTimeoutMs)}`,
-      `    enabled: true`,
-      `    sampling:`,
-      `      enabled: false`,
-    `    headers:`,
-      `      Authorization: ${yamlScalar(renderMcpBearerAuthorization({
-        tokenEnv: options.runtime.tokenEnv,
-        token: options.bearerToken,
-      }))}`,
-      `    tools:`,
-      `      include:`,
-      ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
-    ];
-  }
-
   return [
     `  ${options.serverName}:`,
-    `    command: "bun"`,
-    `    args:`,
-    `      - ${yamlScalar(options.serverPath)}`,
+    `    url: ${yamlScalar(renderMcpHttpUrl(options.runtime))}`,
     `    connect_timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.connectTimeoutMs)}`,
     `    timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.toolTimeoutMs)}`,
     `    enabled: true`,
     `    sampling:`,
     `      enabled: false`,
-    `    env:`,
-    `      PRISM_MCP_SERVER_NAME: ${yamlScalar(options.serverName)}`,
-    `      PRISM_MCP_WORKING_DIRECTORY: ${yamlScalar(options.workingDirectory)}`,
-    `      PRISM_MCP_REPO_ROOT: ${yamlScalar(options.workingDirectory)}`,
-    `      PRISM_MCP_TOOL_TIMEOUT_MS: ${yamlScalar(String(options.runtime.toolTimeoutMs))}`,
-    `      PRISM_MCP_ENABLED_TOOLS: ${yamlScalar(options.toolNames.join(","))}`,
+    `    headers:`,
+    `      Authorization: ${yamlScalar(renderMcpBearerAuthorization({
+      tokenEnv: options.runtime.tokenEnv,
+      token: options.bearerToken,
+    }))}`,
+    ...(options.exposureProfile
+      ? [`      ${MCP_EXPOSURE_HEADER}: ${yamlScalar(options.exposureProfile)}`]
+      : []),
     `    tools:`,
     `      include:`,
     ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
@@ -152,9 +131,6 @@ const planMcpServer = (
   });
 
   if (bindings.length === 0) return { serverName, toolNames: [] };
-  if (!input.target.mcpServerPath) {
-    throw new Error("Hermes MCP lowering requires the canonical Prism MCP server bundle path.");
-  }
 
   return {
     serverName,
@@ -222,10 +198,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       anchor: "mcp_servers:",
       content: renderHermesMcpServerYaml({
         serverName: mcp.serverName,
-        serverPath: input.target.mcpServerPath ?? "",
-        workingDirectory: input.target.root,
         runtime,
         bearerToken: input.target.mcpBearerToken,
+        exposureProfile: input.target.mcpExposureProfile,
         toolNames: mcp.toolNames,
       }).join("\n"),
       plugin,

@@ -22,7 +22,6 @@ import {
 import {
   effectBundleImportPath,
   mcpSdkMcpBundleImportPath,
-  mcpSdkStdioBundleImportPath,
   mcpSdkWebStandardHttpBundleImportPath,
   zodV4BundleImportPath,
 } from "./runtime-deps.js";
@@ -74,6 +73,12 @@ export interface McpServerBundleOptions {
   readonly version?: string;
   readonly bundleId?: string;
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
+  readonly exposureProfiles?: ReadonlyArray<McpServerExposureProfile>;
+}
+
+export interface McpServerExposureProfile {
+  readonly name: string;
+  readonly toolNames: ReadonlyArray<string>;
 }
 
 export interface McpServerBundle {
@@ -821,7 +826,7 @@ interface ToolCallRuntimeContext {
 }
 
 const runtimeContext = (callContext: ToolCallRuntimeContext = {}): ToolRuntimeContext => ({
-  sessionID: callContext.sessionID ?? process.env.PRISM_MCP_SESSION_ID ?? "mcp-stdio",
+  sessionID: callContext.sessionID ?? process.env.PRISM_MCP_SESSION_ID ?? "mcp-http",
   agent: callContext.agent ?? process.env.PRISM_MCP_AGENT ?? "mcp-client",
   timestamp: new Date().toISOString(),
   workingDirectory: prismWorkingDirectory,
@@ -880,13 +885,11 @@ if (process.env.PRISM_MCP_VALIDATE === "1") {
   process.exit(0);
 }
 
-// Deny-by-default exposure filter: harness configs that cannot filter tools
-// client-side pass PRISM_MCP_ENABLED_TOOLS so the union bundle only exposes
-// the tool names bound for that harness.
-const enabledToolsEnv = process.env.PRISM_MCP_ENABLED_TOOLS;
-const enabledToolNames = enabledToolsEnv === undefined
-  ? undefined
-  : new Set(enabledToolsEnv.split(",").map((name) => name.trim()).filter((name) => name.length > 0));
+const exposureProfiles: Record<string, readonly string[]> = __PRISM_EXPOSURE_PROFILES__;
+const exposureHeaderName = "x-prism-mcp-exposure";
+
+const toolNameSet = (names: readonly string[]): Set<string> =>
+  new Set(names.map((name) => name.trim()).filter((name) => name.length > 0));
 
 const configuredMaxConcurrentToolCalls = Number(process.env.PRISM_MCP_MAX_CONCURRENT_CALLS ?? "16");
 const maxConcurrentToolCalls = Number.isFinite(configuredMaxConcurrentToolCalls) && configuredMaxConcurrentToolCalls > 0
@@ -910,7 +913,16 @@ const withToolConcurrency = async <A>(
   }
 };
 
-const registerPrismTools = (server: McpServer): void => {
+const registeredToolCount = (enabledToolNames?: ReadonlySet<string>): number => {
+  let count = 0;
+  for (const name of Object.keys(tools)) {
+    if (enabledToolNames !== undefined && !enabledToolNames.has(name)) continue;
+    count += 1;
+  }
+  return count;
+};
+
+const registerPrismTools = (server: McpServer, enabledToolNames?: ReadonlySet<string>): void => {
   for (const [name, tool] of Object.entries(tools)) {
     if (enabledToolNames !== undefined && !enabledToolNames.has(name)) continue;
     server.registerTool(
@@ -938,38 +950,14 @@ const registerPrismTools = (server: McpServer): void => {
   }
 };
 
-const createPrismMcpServer = (): McpServer => {
+const createPrismMcpServer = (enabledToolNames?: ReadonlySet<string>): McpServer => {
   const server = new McpServer({
     name: __PRISM_SERVER_NAME__,
     version: __PRISM_SERVER_VERSION__,
   });
-  registerPrismTools(server);
+  registerPrismTools(server, enabledToolNames);
   return server;
 };`;
-
-const MCP_SDK_STDIO_RUNTIME = `const server = createPrismMcpServer();
-const transport = new StdioServerTransport();
-let exiting = false;
-
-const stopStdioServer = async (code = 0): Promise<void> => {
-  if (exiting) return;
-  exiting = true;
-  process.exitCode = code;
-  try {
-    await server.close();
-  } catch (error) {
-    console.error("prism MCP stdio server close failed:", errorMessage(error));
-  }
-  process.stdin.pause();
-  setTimeout(() => process.exit(code), 0).unref?.();
-};
-
-process.on("SIGTERM", () => void stopStdioServer(0));
-process.on("SIGINT", () => void stopStdioServer(0));
-process.stdin.on("end", () => void stopStdioServer(0));
-process.stdin.on("close", () => void stopStdioServer(0));
-
-await server.connect(transport);`;
 
 const MCP_SDK_HTTP_RUNTIME = `// Runtime identity is never baked into bundle bytes: the daemon supervisor
 // passes host/port/token via environment when it spawns this server.
@@ -996,6 +984,11 @@ interface HttpSessionState {
   server: McpServer;
   transport: WebStandardStreamableHTTPServerTransport;
   updatedAt: number;
+}
+
+interface AuthorizedRequest {
+  enabledToolNames?: ReadonlySet<string>;
+  denied?: Response;
 }
 
 const configuredMaxSessions = Number(process.env.PRISM_MCP_MAX_SESSIONS ?? "128");
@@ -1105,28 +1098,36 @@ const isAllowedOrigin = (value: string | null): boolean => {
   }
 };
 
-const authorize = (request: Request): Response | undefined => {
+const authorize = (request: Request): AuthorizedRequest => {
   if (!isAllowedHostHeader(request.headers.get("host"))) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden host" }, id: null }, { status: 403 }, request);
+    return { denied: jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden host" }, id: null }, { status: 403 }, request) };
   }
   if (!isAllowedOrigin(request.headers.get("origin"))) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden origin" }, id: null }, { status: 403 }, request);
+    return { denied: jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden origin" }, id: null }, { status: 403 }, request) };
   }
   const expected = \`Bearer \${httpToken}\`;
   if (request.headers.get("authorization") !== expected) {
-    return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 }, request);
+    return { denied: jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null }, { status: 401 }, request) };
   }
-  return undefined;
+  const profile = request.headers.get(exposureHeaderName);
+  if (profile) {
+    const toolNames = exposureProfiles[profile];
+    if (!toolNames) {
+      return { denied: jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Unknown MCP exposure profile" }, id: null }, { status: 403 }, request) };
+    }
+    return { enabledToolNames: toolNameSet(toolNames) };
+  }
+  return {};
 };
 
-const healthPayload = () => ({
+const healthPayload = (enabledToolNames?: ReadonlySet<string>) => ({
   schema: "prism.mcp-health.v1",
   serverName: __PRISM_SERVER_NAME__,
   transport: "streamable-http",
   startedAt: new Date(serverStartedAt).toISOString(),
   uptimeMs: Math.max(0, Date.now() - serverStartedAt),
   pid: process.pid,
-  toolCount: Object.keys(tools).length,
+  toolCount: registeredToolCount(enabledToolNames),
   ...(serverSha256 ? { serverSha256 } : {}),
 });
 
@@ -1175,6 +1176,7 @@ const isSdkSessionBootstrapRequest = (value: unknown): boolean =>
 const handleSdkSessionBootstrapPost = async (
   request: Request,
   parsedBody: unknown,
+  enabledToolNames?: ReadonlySet<string>,
 ): Promise<Response> => {
   if (activeOrPendingSessionCount() >= maxSessions) {
     const id = parsedBody && typeof parsedBody === "object" && "id" in parsedBody
@@ -1184,7 +1186,7 @@ const handleSdkSessionBootstrapPost = async (
   }
 
   pendingSessionBootstraps += 1;
-  const server = createPrismMcpServer();
+  const server = createPrismMcpServer(enabledToolNames);
   let initializedSessionID: string | undefined;
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
@@ -1220,7 +1222,10 @@ const handleSdkSessionBootstrapPost = async (
   }
 };
 
-const handlePost = async (request: Request): Promise<Response> => {
+const handlePost = async (
+  request: Request,
+  enabledToolNames?: ReadonlySet<string>,
+): Promise<Response> => {
   let parsedBody: unknown;
   try {
     parsedBody = await readJsonBody(request);
@@ -1231,7 +1236,7 @@ const handlePost = async (request: Request): Promise<Response> => {
   await pruneExpiredSessions();
 
   if (isSdkSessionBootstrapRequest(parsedBody)) {
-    return await handleSdkSessionBootstrapPost(request, parsedBody);
+    return await handleSdkSessionBootstrapPost(request, parsedBody, enabledToolNames);
   }
 
   const sessionID = request.headers.get("mcp-session-id") ?? undefined;
@@ -1262,17 +1267,17 @@ const server = Bun.serve({
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
     if (url.pathname === httpHealthPath) {
-      const denied = authorize(request);
-      if (denied) return denied;
-      if (request.method === "GET") return jsonResponse(healthPayload(), {}, request);
+      const authorization = authorize(request);
+      if (authorization.denied) return authorization.denied;
+      if (request.method === "GET") return jsonResponse(healthPayload(authorization.enabledToolNames), {}, request);
       return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
     }
     if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 }, request);
 
-    const denied = authorize(request);
-    if (denied) return denied;
+    const authorization = authorize(request);
+    if (authorization.denied) return authorization.denied;
 
-    if (request.method === "POST") return await handlePost(request);
+    if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
     if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
     return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
   },
@@ -1443,43 +1448,34 @@ const renderToolSurfaceBindings = (
   return { imports: imports.join("\n"), entries: entries.join("\n") };
 };
 
-const indentGeneratedBlock = (source: string, indent: string): string =>
-  source
-    .split("\n")
-    .map((line) => (line.length > 0 ? `${indent}${line}` : line))
-    .join("\n");
+const renderExposureProfiles = (
+  profiles: ReadonlyArray<McpServerExposureProfile> | undefined,
+): string => {
+  const rendered: Record<string, string[]> = {};
+  for (const profile of profiles ?? []) {
+    rendered[profile.name] = [...new Set(profile.toolNames)].sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+  return JSON.stringify(rendered, null, 2);
+};
 
 const renderMcpTransportRuntime = (options: {
   readonly serverName: string;
   readonly version: string;
   readonly toolEntries: string;
+  readonly exposureProfiles: string;
 }): string =>
   joinGeneratedSections([
     replaceTemplateTokens(MCP_SDK_SERVER_FACTORY_RUNTIME, {
       __PRISM_TOOL_ENTRIES__: options.toolEntries,
       __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
       __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
+      __PRISM_EXPOSURE_PROFILES__: options.exposureProfiles,
     }),
-    `const runStdioServer = async (): Promise<void> => {
-${indentGeneratedBlock(MCP_SDK_STDIO_RUNTIME, "  ")}
-};
-
-const runHttpServer = async (): Promise<void> => {
-${indentGeneratedBlock(
-      replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
-        __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
-      }),
-      "  ",
-    )}
-};
-
-// Transport is selected at startup: the MCP daemon supervisor sets
-// PRISM_MCP_TRANSPORT=streamable-http; harness stdio configs leave it unset.
-if (process.env.PRISM_MCP_TRANSPORT === "streamable-http") {
-  await runHttpServer();
-} else {
-  await runStdioServer();
-}`,
+    replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
+      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+    }),
   ]);
 
 const renderAmpToolRegistrationRuntime = (
@@ -1504,6 +1500,7 @@ const renderMcpServerEntry = (options: {
   readonly serverName: string;
   readonly version: string;
   readonly specs: ReadonlyArray<McpAdapterSpec>;
+  readonly exposureProfiles?: ReadonlyArray<McpServerExposureProfile>;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
@@ -1514,17 +1511,16 @@ const renderMcpServerEntry = (options: {
     serverName: options.serverName,
     version: options.version,
     toolEntries: entries,
+    exposureProfiles: renderExposureProfiles(options.exposureProfiles),
   });
 
   return joinGeneratedSections([
     `#!/usr/bin/env bun
 // GENERATED by prism — do not edit.
 // Standalone MCP server for compiled canonical tool bindings.
-// Transport (stdio default, streamable-http via PRISM_MCP_TRANSPORT) and HTTP
-// identity (host/port/token) are read from the environment at startup.`,
+// Streamable HTTP identity (host/port/token) is read from the environment at startup.`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
-    `import { StdioServerTransport } from ${JSON.stringify(mcpSdkStdioBundleImportPath())};`,
     `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     imports,
@@ -1714,6 +1710,7 @@ export const generateMcpServerBundle = async (
       serverName: options.serverName,
       version,
       specs,
+      exposureProfiles: options.exposureProfiles,
     });
     const entryPath = await writeTempBundleSources({
       tempRoot,

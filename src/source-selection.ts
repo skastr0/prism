@@ -10,7 +10,6 @@ import {
   type PluginManifestTargets,
   type PluginRuntimeConfig,
   type PluginTargetId,
-  type PrismMcpTransport,
   type TargetPresetId,
 } from "./types.js";
 
@@ -58,7 +57,6 @@ const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType
 
 export interface SourceRuntimeRequirements {
   readonly mcpConfigured: boolean;
-  readonly mcpTransport?: PrismMcpTransport;
   readonly streamableHttpMcp: boolean;
 }
 
@@ -262,8 +260,7 @@ const runtimeRequirementsForTarget = (
   const mcp = runtime.mcp?.[target];
   return {
     mcpConfigured: mcp !== undefined,
-    ...(mcp?.transport ? { mcpTransport: mcp.transport } : {}),
-    streamableHttpMcp: mcp?.transport === "streamable-http",
+    streamableHttpMcp: mcp !== undefined,
   };
 };
 

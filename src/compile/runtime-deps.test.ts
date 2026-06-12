@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import {
   effectBundleImportPath,
   mcpSdkMcpBundleImportPath,
-  mcpSdkStdioBundleImportPath,
   mcpSdkWebStandardHttpBundleImportPath,
   opencodePluginBundleImportPath,
   typescriptBundleImportPath,
@@ -72,10 +71,6 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     "\n",
   );
   await writeText(
-    join(root, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "stdio.js"),
-    "\n",
-  );
-  await writeText(
     join(
       root,
       "node_modules",
@@ -112,9 +107,6 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     );
     expect(mcpSdkMcpBundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "mcp.js").replace(/\\/g, "/"),
-    );
-    expect(mcpSdkStdioBundleImportPath()).toBe(
-      join(resolvedRoot, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "stdio.js").replace(/\\/g, "/"),
     );
     expect(mcpSdkWebStandardHttpBundleImportPath()).toBe(
       join(

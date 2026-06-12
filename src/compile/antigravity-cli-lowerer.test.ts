@@ -351,7 +351,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "antigravity-http-fixture", "server.mjs"),
       mcpBearerToken: "antigravity-static-token",
       sourcePluginName: "antigravity-http-fixture",
       sourcePluginVersion: "0.1.0",

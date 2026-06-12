@@ -465,7 +465,9 @@ test("refresh compile-only writes Hermes MCP config to an explicit profile root"
   const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
   expect(config).toContain("mcp_servers:");
   expect(config).toContain("prism-generated-cli-hermes-tools:");
-  expect(config).toContain('command: "bun"');
+  expect(config).toContain('url: "http://127.0.0.1:');
+  expect(config).toContain("X-Prism-Mcp-Exposure:");
+  expect(config).not.toContain('command: "bun"');
   expect(
     await pathExists(join(prismHome, "runtime", "mcp", "cli-hermes-tools", "server.mjs")),
   ).toBe(true);
@@ -1142,7 +1144,7 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
       projectRoot,
 
     ],
-    { HOME: homeRoot }
+    { HOME: homeRoot, PRISM_MCP_TOKEN: cliTestToken }
   );
 
   expect(result.exitCode).toBe(0);

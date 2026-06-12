@@ -609,8 +609,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
-        summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced by the plugin .mcp.json.",
+        path: "<generated-plugin>/.mcp.json",
+        summary: "Canonical tools lower through the shared Streamable HTTP MCP daemon.",
       },
       hooks: {
         kind: "native-plugin-bundle",
@@ -620,7 +620,7 @@ export const LOWERER_CAPABILITIES = {
       mcpConfig: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/.mcp.json",
-        summary: "MCP config is plugin-local; Prism does not patch config.toml.",
+        summary: "Generated plugin-local MCP config points at Prism's Streamable HTTP daemon.",
       },
       agentConfig: {
         kind: "native-plugin-bundle",

@@ -69,7 +69,7 @@ afterEach(async () => {
   );
 });
 
-test("grok lowerer emits a plugin bundle with agents, skills, MCP, and hooks", async () => {
+test("grok lowerer emits a plugin bundle with agents, skills, HTTP MCP, and hooks", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const pluginRoot = join(root, "grok-plugin-fixture");
@@ -240,7 +240,9 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpServerPath: join(root, "prism-home", "runtime", "mcp", "grok-plugin-fixture", "server.mjs"),
+      mcpBearerToken: "test-grok-token",
+      mcpExposureProfile: "prism-generated-grok-plugin-fixture:grok",
+      mcpRuntimePort: 38467,
       sourcePluginName: "grok-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -293,18 +295,21 @@ export default defineTool({
   const mcpConfig = findContentOperation(operations, ".mcp.json");
   expect(mcpConfig?.content).toContain('"prism-generated-grok-plugin-fixture"');
   const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, {
+      type?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    }>;
   };
   const grokEntry = mcpParsed.mcpServers?.["prism-generated-grok-plugin-fixture"];
-  expect(grokEntry?.command).toBe("bun");
-  expect(grokEntry?.args).toEqual([
-    join(root, "prism-home", "runtime", "mcp", "grok-plugin-fixture", "server.mjs"),
-  ]);
-  // Deny-by-default exposure: Grok has no client-side tool filter, so the
-  // per-harness tool names ride PRISM_MCP_ENABLED_TOOLS.
-  expect(grokEntry?.env).toEqual({
-    PRISM_MCP_ENABLED_TOOLS: "grok_plugin_fixture_echo",
+  expect(grokEntry?.type).toBe("http");
+  expect(grokEntry?.url).toBe("http://127.0.0.1:38467/mcp");
+  expect(grokEntry?.headers).toEqual({
+    Authorization: "Bearer test-grok-token",
+    "X-Prism-Mcp-Exposure": "prism-generated-grok-plugin-fixture:grok",
   });
+  expect(mcpConfig?.content).not.toContain('"command": "bun"');
+  expect(mcpConfig?.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 
   // The bundle itself lives in PRISM_HOME — never in the generated plugin.
   const bundle = operations.find(
@@ -434,7 +439,7 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(omissionAgent?.content).not.toContain("direct-skill");
 });
 
-test("grok lowerer fails closed for Streamable HTTP MCP opt-in", async () => {
+test("grok lowerer emits HTTP MCP config for generated MCP tools", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const pluginRoot = join(root, "grok-http-fixture");
@@ -463,24 +468,59 @@ test("grok lowerer fails closed for Streamable HTTP MCP opt-in", async () => {
       2,
     )}\n`,
   );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo a message",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  await expect(
-    planLowering({
-      agents: [],
-      orbits: [],
-      skills: [],
-      hooks: [],
-      registry,
-      target: {
-        scope: "project",
-        root: outputRoot,
-        sourcePluginName: "grok-http-fixture",
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: pluginRoot,
-      },
-    }),
-  ).rejects.toThrow("Streamable HTTP MCP is not supported for target 'grok'");
+  const { files: operations } = await planLowering({
+    agents: [],
+    orbits: [],
+    tools: [...registry.tools.values()],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      mcpBearerToken: "grok-http-token",
+      mcpExposureProfile: "prism-generated-grok-http-fixture:grok",
+      sourcePluginName: "grok-http-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const mcpConfig = findContentOperation(operations, ".mcp.json");
+  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, {
+      type?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    }>;
+  };
+  const entry = parsed.mcpServers?.["prism-generated-grok-http-fixture"];
+  expect(entry?.type).toBe("http");
+  expect(entry?.url).toBe("http://127.0.0.1:38467/mcp");
+  expect(entry?.headers).toEqual({
+    Authorization: "Bearer grok-http-token",
+    "X-Prism-Mcp-Exposure": "prism-generated-grok-http-fixture:grok",
+  });
+  expect(mcpConfig?.content).not.toContain('"command": "bun"');
+  expect(mcpConfig?.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 });
 
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {

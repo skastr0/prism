@@ -80,7 +80,7 @@ export type PluginManifestTargets = Partial<
   Record<AnyArtifactType, PluginTargetId[]>
 >;
 
-export type PrismMcpTransport = "stdio" | "streamable-http";
+export type PrismMcpTransport = "streamable-http";
 
 export interface PluginRuntimeMcpHarnessConfig {
   transport?: PrismMcpTransport;

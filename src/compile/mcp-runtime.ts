@@ -11,9 +11,10 @@ const DEFAULT_HTTP_HOST = "127.0.0.1";
 const DEFAULT_TOKEN_ENV = ["PRISM", "MCP", "TOKEN"].join("_");
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const ENV_BEARER_TOKEN_CONFIG_TARGETS: ReadonlySet<HarnessId> =
-  new Set<HarnessId>(["codex-cli"]);
+  new Set<HarnessId>(["codex-cli", "claude-code"]);
 
-export type McpRuntimeTransport = "stdio" | "streamable-http";
+export type McpRuntimeTransport = "streamable-http";
+export const MCP_EXPOSURE_HEADER = "X-Prism-Mcp-Exposure" as const;
 
 export type McpHttpSupportState = "supported" | "unsupported";
 
@@ -63,15 +64,18 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
     lifecycle: "supported",
   },
   grok: {
-    config: "unsupported",
-    lifecycle: "unsupported",
-    reason:
-      "Grok Build plugin-local HTTP MCP config has not been verified with a safe bearer-token secret source.",
+    config: "supported",
+    lifecycle: "supported",
   },
 };
 
 export const generatedMcpServerName = (pluginName: string): string =>
   `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
+
+export const mcpExposureProfileForTarget = (
+  serverName: string,
+  targetId: HarnessId,
+): string => `${serverName}:${targetId}`;
 
 export const getMcpHttpTargetSupport = (targetId: HarnessId): McpHttpTargetSupport =>
   HTTP_SUPPORT[targetId] ?? {
@@ -139,7 +143,13 @@ export const resolveMcpRuntime = (
   } = {},
 ): ResolvedMcpRuntime => {
   const configured = registry ? runtimeConfigForTarget(registry, targetId) : undefined;
-  const transport = configured?.transport === "streamable-http" ? "streamable-http" : "stdio";
+  const configuredTransport = (configured as { readonly transport?: unknown } | undefined)?.transport;
+  if (configuredTransport !== undefined && configuredTransport !== "streamable-http") {
+    throw new Error(
+      `MCP runtime config plugin.json runtime.mcp.${targetId}.transport='${String(configuredTransport)}' is no longer supported; Prism generated MCP uses Streamable HTTP only.`,
+    );
+  }
+  const transport: McpRuntimeTransport = "streamable-http";
   const host = stringValue(configured?.host) ?? DEFAULT_HTTP_HOST;
   const tokenEnv = stringValue(configured?.tokenEnv) ?? DEFAULT_TOKEN_ENV;
   const configuredPort = numberValue(configured?.port);
@@ -156,35 +166,33 @@ export const resolveMcpRuntime = (
     "toolTimeoutMs",
   ) ?? DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS;
 
-  if (transport === "streamable-http") {
-    assertMcpHttpTargetSupported(targetId, "config");
-    if (!isLoopbackMcpHost(host)) {
-      throw new Error(
-        `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.host to be a loopback host.`,
-      );
-    }
-    if (configured?.port !== undefined && configuredPort === undefined) {
-      throw new Error(
-        `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
-      );
-    }
-    if (options.resolvedPort !== undefined && resolvedPort === undefined) {
-      throw new Error(
-        `Streamable HTTP MCP transport for target '${targetId}' requires the resolved MCP runtime port to be an integer from 1 to 65535.`,
-      );
-    }
-    if (options.requirePort === true && (port === undefined || port <= 0 || port > 65535)) {
-      throw new Error(
-        `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
-      );
-    }
-    if (port !== undefined && (port <= 0 || port > 65535)) {
-      throw new Error(
-        `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
-      );
-    }
-    assertMcpTokenEnvName(tokenEnv);
+  assertMcpHttpTargetSupported(targetId, "config");
+  if (!isLoopbackMcpHost(host)) {
+    throw new Error(
+      `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.host to be a loopback host.`,
+    );
   }
+  if (configured?.port !== undefined && configuredPort === undefined) {
+    throw new Error(
+      `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
+    );
+  }
+  if (options.resolvedPort !== undefined && resolvedPort === undefined) {
+    throw new Error(
+      `Streamable HTTP MCP transport for target '${targetId}' requires the resolved MCP runtime port to be an integer from 1 to 65535.`,
+    );
+  }
+  if (options.requirePort === true && (port === undefined || port <= 0 || port > 65535)) {
+    throw new Error(
+      `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
+    );
+  }
+  if (port !== undefined && (port <= 0 || port > 65535)) {
+    throw new Error(
+      `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
+    );
+  }
+  assertMcpTokenEnvName(tokenEnv);
 
   return {
     targetId,
@@ -198,7 +206,7 @@ export const resolveMcpRuntime = (
 };
 
 export const renderMcpHttpUrl = (runtime: ResolvedMcpRuntime): string => {
-  if (runtime.transport !== "streamable-http" || runtime.port === undefined) {
+  if (runtime.port === undefined) {
     throw new Error(
       `Streamable HTTP MCP transport for target '${runtime.targetId}' requires a resolved port before URL rendering.`,
     );
@@ -214,8 +222,3 @@ export const renderMcpBearerAuthorization = (options: {
   readonly token?: string;
 }): string =>
   options.token ? `Bearer ${options.token}` : renderMcpBearerAuthorizationTemplate(options.tokenEnv);
-
-export const isStreamableHttpMcpRuntime = (
-  registry: PluginRegistry,
-  targetId: HarnessId,
-): boolean => resolveMcpRuntime(registry, targetId).transport === "streamable-http";

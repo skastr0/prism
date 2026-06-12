@@ -21,6 +21,7 @@ import {
   resolveManifestTargets,
 } from "./manifest.js";
 import { compilePluginForTarget } from "./compile/pipeline.js";
+import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
 
@@ -584,6 +585,16 @@ const generatedConfigPathExists = async (
   path: string,
 ): Promise<boolean> => exists(expandPath(path));
 
+const canonicalMcpBundlePathForServer = (
+  prismHome: string,
+  serverName: string,
+): string | undefined => {
+  const prefix = "prism-generated-";
+  if (!serverName.startsWith(prefix)) return undefined;
+  const pluginName = serverName.slice(prefix.length);
+  return pluginName.length > 0 ? prismMcpServerPath(prismHome, pluginName) : undefined;
+};
+
 const enabledToolFindings = async (options: {
   readonly harness: HarnessId;
   readonly configPath: string;
@@ -615,7 +626,10 @@ const pathFromCommandString = (command: string): string | undefined => {
   return match?.[1] ?? match?.[2] ?? match?.[3];
 };
 
-const validateCodexConfigReferences = async (path: string): Promise<DoctorFinding[]> => {
+const validateCodexConfigReferences = async (
+  path: string,
+  prismHome: string,
+): Promise<DoctorFinding[]> => {
   if (!(await exists(path))) return [];
   let parsed: Record<string, unknown>;
   try {
@@ -629,14 +643,48 @@ const validateCodexConfigReferences = async (path: string): Promise<DoctorFindin
     for (const [name, raw] of Object.entries(mcpServers as Record<string, unknown>)) {
       if (!name.startsWith("prism-generated-") || !raw || typeof raw !== "object") continue;
       const server = raw as Record<string, unknown>;
+      const bundle = canonicalMcpBundlePathForServer(prismHome, name);
       const args = Array.isArray(server.args) ? server.args : [];
-      const bundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
-      if (typeof server.command === "string" && bundle && !(await generatedConfigPathExists(bundle))) {
+      const stdioBundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
+      if (typeof server.command === "string" || stdioBundle) {
+        findings.push(finding({
+          severity: "error",
+          family: "harness.config",
+          code: "config.codex-mcp-stdio-removed",
+          message: `Codex MCP server '${name}' still uses removed stdio command/args config; refresh to Streamable HTTP`,
+          harness: "codex-cli",
+          path,
+          fix: "refresh",
+        }));
+      }
+      if (bundle && !(await generatedConfigPathExists(bundle))) {
         findings.push(finding({
           severity: "error",
           family: "harness.config",
           code: "config.codex-mcp-bundle-missing",
-          message: `Codex MCP server '${name}' references a missing bundle: ${bundle}`,
+          message: `Codex MCP server '${name}' references a missing canonical bundle: ${bundle}`,
+          harness: "codex-cli",
+          path,
+          fix: "refresh",
+        }));
+      }
+      if (typeof server.url !== "string") {
+        findings.push(finding({
+          severity: "error",
+          family: "harness.config",
+          code: "config.codex-mcp-url-missing",
+          message: `Codex MCP server '${name}' is missing Streamable HTTP url`,
+          harness: "codex-cli",
+          path,
+          fix: "refresh",
+        }));
+      }
+      if (typeof server.bearer_token_env_var !== "string") {
+        findings.push(finding({
+          severity: "error",
+          family: "harness.config",
+          code: "config.codex-mcp-token-env-missing",
+          message: `Codex MCP server '${name}' is missing bearer_token_env_var`,
           harness: "codex-cli",
           path,
           fix: "refresh",
@@ -751,6 +799,7 @@ const validateOpenCodeConfigReferences = async (path: string): Promise<DoctorFin
 const validateClaudeGeneratedPlugin = async (
   root: string,
   pluginRoot: string,
+  prismHome: string,
 ): Promise<DoctorFinding[]> => {
   const findings: DoctorFinding[] = [];
   const mcpPath = join(pluginRoot, ".mcp.json");
@@ -760,32 +809,57 @@ const validateClaudeGeneratedPlugin = async (
         readonly mcpServers?: Record<string, Record<string, unknown>>;
       };
       for (const [name, server] of Object.entries(parsed.mcpServers ?? {})) {
+        const bundle = canonicalMcpBundlePathForServer(prismHome, name);
         const args = Array.isArray(server.args) ? server.args : [];
-        const bundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
-        if (server.command === "bun" && bundle && !(await generatedConfigPathExists(bundle))) {
+        const stdioBundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
+        if (typeof server.command === "string" || stdioBundle) {
           findings.push(finding({
             severity: "error",
             family: "harness.config",
-            code: "config.claude-mcp-bundle-missing",
-            message: `Claude generated plugin '${name}' references a missing bundle: ${bundle}`,
+            code: "config.claude-mcp-stdio-removed",
+            message: `Claude generated plugin '${name}' still uses removed stdio command/args config; refresh to Streamable HTTP`,
             harness: "claude-code",
             root,
             path: mcpPath,
             fix: "refresh",
           }));
-        } else if (server.command === "bun" && bundle && typeof server.env === "object" && server.env) {
-          const enabled = (server.env as Record<string, unknown>).PRISM_MCP_ENABLED_TOOLS;
-          if (typeof enabled === "string") {
-            findings.push(
-              ...(await enabledToolFindings({
-                harness: "claude-code",
-                configPath: mcpPath,
-                serverName: name,
-                bundlePath: bundle,
-                enabledTools: enabled.split(",").map((tool) => tool.trim()).filter(Boolean),
-              })),
-            );
-          }
+        }
+        if (bundle && !(await generatedConfigPathExists(bundle))) {
+          findings.push(finding({
+            severity: "error",
+            family: "harness.config",
+            code: "config.claude-mcp-bundle-missing",
+            message: `Claude generated plugin '${name}' references a missing canonical bundle: ${bundle}`,
+            harness: "claude-code",
+            root,
+            path: mcpPath,
+            fix: "refresh",
+          }));
+        }
+        if (Object.keys(server).length > 0 && typeof server.url !== "string") {
+          findings.push(finding({
+            severity: "error",
+            family: "harness.config",
+            code: "config.claude-mcp-url-missing",
+            message: `Claude generated plugin '${name}' is missing Streamable HTTP url`,
+            harness: "claude-code",
+            root,
+            path: mcpPath,
+            fix: "refresh",
+          }));
+        }
+        const headers = server.headers;
+        if (Object.keys(server).length > 0 && (!headers || typeof headers !== "object")) {
+          findings.push(finding({
+            severity: "error",
+            family: "harness.config",
+            code: "config.claude-mcp-headers-missing",
+            message: `Claude generated plugin '${name}' is missing HTTP headers`,
+            harness: "claude-code",
+            root,
+            path: mcpPath,
+            fix: "refresh",
+          }));
         }
       }
     } catch (error) {
@@ -852,6 +926,7 @@ const validateClaudeGeneratedPlugin = async (
 const validateClaudeGeneratedPluginReferences = async (
   scope: HarnessScope,
   projectPath: string | undefined,
+  prismHome: string,
 ): Promise<DoctorFinding[]> => {
   const roots = rootsForHarness("claude-code", scope, projectPath);
   const findings: DoctorFinding[] = [];
@@ -861,7 +936,7 @@ const validateClaudeGeneratedPluginReferences = async (
     for (const entry of await listDir(skillsRoot)) {
       if (!entry.startsWith("prism-generated-")) continue;
       const pluginRoot = join(skillsRoot, entry);
-      findings.push(...(await validateClaudeGeneratedPlugin(root, pluginRoot)));
+      findings.push(...(await validateClaudeGeneratedPlugin(root, pluginRoot, prismHome)));
     }
   }
   return findings;
@@ -871,15 +946,16 @@ const validateHarnessConfigReferences = async (options: {
   readonly harness: HarnessId;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
+  readonly prismHome: string;
 }): Promise<DoctorFinding[]> => {
   const path = configPathForHarness(options.harness, options.scope, options.projectPath);
   switch (options.harness) {
     case "codex-cli":
-      return path ? validateCodexConfigReferences(path) : [];
+      return path ? validateCodexConfigReferences(path, options.prismHome) : [];
     case "opencode":
       return path ? validateOpenCodeConfigReferences(path) : [];
     case "claude-code":
-      return validateClaudeGeneratedPluginReferences(options.scope, options.projectPath);
+      return validateClaudeGeneratedPluginReferences(options.scope, options.projectPath, options.prismHome);
     default:
       return [];
   }
@@ -1243,6 +1319,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       ...(await validateHarnessConfigReferences({
         harness,
         scope: options.scope,
+        prismHome: options.prismHome,
         ...(options.projectPath ? { projectPath: options.projectPath } : {}),
       })),
     );

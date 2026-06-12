@@ -10,13 +10,13 @@ Scope: PQ-040 activated the SDK-backed generated MCP runtime for the live `tower
 - The second run settled idempotently for both plugins across all four harnesses.
 - `tower` has exactly one shared HTTP daemon: `prism_generated_tower/server.mjs`, pid `35641`, `http://127.0.0.1:38463/mcp`.
 - `grok-agent` has exactly one shared HTTP daemon: `prism_generated_grok_agent/server.mjs`, pid `38271`, `http://127.0.0.1:38473/mcp`.
-- No harness-local stale stdio Tower or Grok Agent generated MCP server processes were running.
+- No harness-local generated MCP subprocesses were running; generated MCP was already moving to shared HTTP daemons.
 - No sibling `.bak` files were produced; managed backups stayed under `~/.prism/backups/`.
 
 ## Config Proof
 
 - Hermes `~/.hermes/config.yaml` points both generated servers at local HTTP URLs with bearer authorization headers.
-- Codex CLI `~/.codex/config.toml` parses successfully with `Bun.TOML.parse` and contains HTTP `mcp_servers` entries for both generated servers with bearer authorization headers.
+- Codex CLI `~/.codex/config.toml` parses successfully with `Bun.TOML.parse` and contains HTTP `mcp_servers` entries for both generated servers.
 - Claude Code generated plugin `.mcp.json` files point both generated servers at local HTTP URLs with bearer authorization headers.
 - Antigravity CLI generated plugin `mcp_config.json` files point both generated servers at local HTTP URLs with bearer authorization headers.
 - Raw bearer token values are intentionally not recorded in this document.

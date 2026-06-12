@@ -33,10 +33,10 @@ const registry = (runtime: PluginRegistry["runtime"] = {}): PluginRegistry => ({
   deps: new Map(),
 });
 
-test("MCP runtime defaults to stdio per target", () => {
+test("MCP runtime defaults to Streamable HTTP per target", () => {
   expect(resolveMcpRuntime(registry(), "codex-cli")).toEqual({
     targetId: "codex-cli",
-    transport: "stdio",
+    transport: "streamable-http",
     host: "127.0.0.1",
     tokenEnv: "PRISM_MCP_TOKEN",
     connectTimeoutMs: DEFAULT_MCP_CONNECT_TIMEOUT_MS,
@@ -140,6 +140,27 @@ test("MCP runtime supports Cursor Streamable HTTP config", () => {
   expect(getMcpHttpTargetSupport("cursor").config).toBe("supported");
 });
 
+test("MCP runtime supports Grok Streamable HTTP config", () => {
+  const runtime = resolveMcpRuntime(
+    registry({
+      mcp: {
+        grok: {
+          transport: "streamable-http",
+          host: "127.0.0.1",
+          port: 38469,
+          tokenEnv: "PRISM_MCP_GROK_TOKEN",
+        },
+      },
+    }),
+    "grok",
+    { requirePort: true },
+  );
+
+  expect(runtime.targetId).toBe("grok");
+  expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:38469/mcp");
+  expect(getMcpHttpTargetSupport("grok").config).toBe("supported");
+});
+
 test("MCP runtime accepts a lifecycle-resolved Streamable HTTP port", () => {
   const runtime = resolveMcpRuntime(
     registry({
@@ -174,26 +195,6 @@ test("MCP runtime still rejects missing Streamable HTTP ports when required", ()
       { requirePort: true },
     ),
   ).toThrow(/requires plugin\.json runtime\.mcp\.hermes\.port/);
-});
-
-test("MCP runtime fails closed for unsupported HTTP targets", () => {
-  expect(() =>
-    resolveMcpRuntime(
-      registry({
-        mcp: {
-          grok: {
-            transport: "streamable-http",
-            host: "127.0.0.1",
-            port: 38465,
-            tokenEnv: "PRISM_MCP_GROK_TOKEN",
-          },
-        },
-      }),
-      "grok",
-      { requirePort: true },
-    ),
-  ).toThrow(/Streamable HTTP MCP is not supported for target 'grok'/);
-  expect(getMcpHttpTargetSupport("grok").reason).toContain("not been verified");
 });
 
 test("MCP runtime rejects non-loopback HTTP hosts and invalid token env", () => {

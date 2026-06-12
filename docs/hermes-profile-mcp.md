@@ -13,9 +13,10 @@ state database. Hermes also exposes `hermes --profile <name>` / `hermes -p
 <name>` as the way to run a command under a selected profile.
 
 Hermes MCP is config-driven. A profile's `config.yaml` owns `mcp_servers`, where
-each server can be stdio (`command`, `args`, `env`) or HTTP (`url`, `headers`).
-Hermes supports server-local `tools.include` / `tools.exclude` filtering, and
-registers MCP tools under sanitized `mcp_<server>_<tool>` names.
+Prism-generated servers use HTTP (`url`, `headers`). Hermes also has a native
+stdio shape, but Prism does not emit it for generated MCP. Hermes supports
+server-local `tools.include` / `tools.exclude` filtering, and registers MCP
+tools under sanitized `mcp_<server>_<tool>` names.
 
 Hermes skills are profile-local through the selected home. Hermes can also load
 external skill directories and plugin-provided namespaced skills, but Prism's

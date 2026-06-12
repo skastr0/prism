@@ -10,7 +10,7 @@ import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
-import { generateMcpServerBundle } from "./mcp-bundle.js";
+import { generateMcpServerBundle, mcpToolNamesForBindings } from "./mcp-bundle.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
@@ -45,11 +45,13 @@ import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 const tempRoots: string[] = [];
 const compileTestToken = "prism-compile-test-token-with-enough-entropy";
 const originalPrismHome = process.env.PRISM_HOME;
+const originalPrismMcpToken = process.env.PRISM_MCP_TOKEN;
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-compile-"));
   tempRoots.push(root);
   process.env.PRISM_HOME = join(root, "prism-home");
+  process.env.PRISM_MCP_TOKEN = compileTestToken;
   return root;
 };
 
@@ -192,7 +194,6 @@ const createHermesHttpToolPlugin = async (options?: {
   readonly target?: "hermes" | "codex-cli" | "claude-code";
   readonly pluginName?: string;
   readonly tokenEnv?: string;
-  readonly transport?: "stdio" | "streamable-http";
   readonly port?: number;
   readonly omitPort?: boolean;
 }): Promise<{ readonly pluginRoot: string; readonly hermesRoot: string }> => {
@@ -205,18 +206,16 @@ const createHermesHttpToolPlugin = async (options?: {
     target === "hermes" ? "hermes-root" : target === "codex-cli" ? "codex-root" : "claude-root",
   );
   await mkdir(hermesRoot, { recursive: true });
-  const runtime = options?.transport === "stdio"
-    ? undefined
-    : {
-        mcp: {
-          [target]: {
-            transport: "streamable-http",
-            host: "127.0.0.1",
-            ...(options?.omitPort ? {} : { port: options?.port ?? 38463 }),
-            tokenEnv: options?.tokenEnv ?? "PRISM_MCP_TOKEN",
-          },
-        },
-      };
+  const runtime = {
+    mcp: {
+      [target]: {
+        transport: "streamable-http",
+        host: "127.0.0.1",
+        ...(options?.omitPort ? {} : { port: options?.port ?? 38463 }),
+        tokenEnv: options?.tokenEnv ?? "PRISM_MCP_TOKEN",
+      },
+    },
+  };
 
   await writeText(
     join(pluginRoot, "plugin.json"),
@@ -227,7 +226,7 @@ const createHermesHttpToolPlugin = async (options?: {
         targets: {
           tools: [target],
         },
-        ...(runtime ? { runtime } : {}),
+        runtime,
       },
       null,
       2,
@@ -261,14 +260,19 @@ const prebuildHermesCanonicalBundle = async (
   pluginRoot: string,
   pluginName: string,
 ): Promise<string> => {
+  const bindings = [
+    bindingFromToolSource(pluginName, join(pluginRoot, "tools", "echo.tool.ts")),
+  ];
   const bundle = await generateMcpServerBundle({
     sourcePluginName: pluginName,
     sourcePluginRoot: pluginRoot,
     serverName: `prism-generated-${pluginName}`,
     bundleId: `prism-generated-${pluginName}`,
-    bindings: [
-      bindingFromToolSource(pluginName, join(pluginRoot, "tools", "echo.tool.ts")),
-    ],
+    bindings,
+    exposureProfiles: [{
+      name: `prism-generated-${pluginName}:hermes`,
+      toolNames: mcpToolNamesForBindings(pluginName, bindings),
+    }],
   });
   const write = await writePrismMcpServerBundle(testPrismHome(), pluginName, bundle.content);
   return write.path;
@@ -707,7 +711,7 @@ const createStandaloneToolFixture = async (): Promise<{
         name: "tool-only-demo",
         version: "0.1.0",
         targets: {
-          tools: ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid", "cursor"],
+          tools: ["codex-cli", "claude-code", "antigravity-cli", "factory-droid", "cursor"],
         },
       },
       null,
@@ -1314,6 +1318,8 @@ export default defineTool({
 
 afterEach(async () => {
   process.env.PRISM_HOME = originalPrismHome;
+  if (originalPrismMcpToken === undefined) delete process.env.PRISM_MCP_TOKEN;
+  else process.env.PRISM_MCP_TOKEN = originalPrismMcpToken;
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
@@ -2865,20 +2871,12 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   });
 
   const mcpConfig = JSON.parse(await readFile(join(outputPluginRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string>; trust?: unknown }>;
+    mcpServers?: Record<string, { serverUrl?: string; headers?: Record<string, string>; trust?: unknown }>;
   };
-  expect(mcpConfig).toEqual({
-    mcpServers: {
-      "prism-generated-antigravity-plugin-demo": {
-        command: "bun",
-        args: [prismMcpServerPath(testPrismHome(), "antigravity_plugin.demo")],
-        env: {
-          PRISM_MCP_ENABLED_TOOLS: "antigravity_plugin_demo_submit_work",
-        },
-      },
-    },
-  });
-  expect(mcpConfig.mcpServers?.["prism-generated-antigravity-plugin-demo"]).not.toHaveProperty("trust");
+  const antigravityMcp = mcpConfig.mcpServers?.["prism-generated-antigravity-plugin-demo"];
+  expect(antigravityMcp?.serverUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(antigravityMcp?.headers?.Authorization).toMatch(/^Bearer [A-Za-z0-9_-]{32,}$/);
+  expect(antigravityMcp).not.toHaveProperty("trust");
 
   const context = await readFile(join(outputPluginRoot, "rules", "context.md"), "utf8");
   expect(context).toContain("<!-- prism:context-source global/context.md -->");
@@ -3051,7 +3049,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
 test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
   const { pluginRoot, projectRoot } = await createStandaloneToolFixture();
-  const targets = ["codex-cli", "claude-code", "antigravity-cli", "grok", "factory-droid", "cursor"] as const;
+  const targets = ["codex-cli", "claude-code", "antigravity-cli", "factory-droid", "cursor"] as const;
 
   for (const target of targets) {
     await Effect.runPromise(
@@ -3069,7 +3067,7 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   const expectedToolName = "tool_only_demo_echo_message";
   const canonicalServerPath = prismMcpServerPath(testPrismHome(), "tool-only-demo");
 
-  // UNION BUNDLE: six harness compiles of one plugin converge on a single
+  // UNION BUNDLE: supported generated-MCP harness compiles of one plugin converge on a single
   // canonical PRISM_HOME bundle file with a single hash.
   const unionBundle = await readFile(canonicalServerPath, "utf8");
   expect(unionBundle).toContain(expectedToolName);
@@ -3084,63 +3082,46 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
   expect(codexConfig).toContain('["mcp_servers"."prism-generated-tool-only-demo"]');
   expect(codexConfig).toContain('enabled_tools = ["tool_only_demo_echo_message"]');
-  expect(codexConfig).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
+  expect(codexConfig).toMatch(/url = "http:\/\/127\.0\.0\.1:\d+\/mcp"/);
+  expect(codexConfig).toContain('bearer_token_env_var = "PRISM_MCP_TOKEN"');
+  expect(codexConfig).not.toContain('command = "bun"');
   expect(await pathExists(join(projectRoot, ".codex", "mcp"))).toBe(false);
 
   const claudeRoot = join(projectRoot, ".claude", "skills", "prism-generated-tool-only-demo");
   const claudeMcp = JSON.parse(await readFile(join(claudeRoot, ".mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
   };
-  expect(claudeMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
-    command: "bun",
-    args: [canonicalServerPath],
-    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
+  expect(claudeMcp.mcpServers?.["prism-generated-tool-only-demo"]).toMatchObject({
+    type: "http",
+    headers: { Authorization: "Bearer ${PRISM_MCP_TOKEN}" },
   });
+  expect(claudeMcp.mcpServers?.["prism-generated-tool-only-demo"]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
   expect(await pathExists(join(claudeRoot, "mcp"))).toBe(false);
 
   const antigravityRoot = join(projectRoot, ".agents", "plugins", "prism-generated-tool-only-demo");
   const antigravityMcpConfig = JSON.parse(await readFile(join(antigravityRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, { serverUrl?: string; headers?: Record<string, string> }>;
   };
-  expect(antigravityMcpConfig.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
-    command: "bun",
-    args: [canonicalServerPath],
-    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
-  });
+  expect(antigravityMcpConfig.mcpServers?.["prism-generated-tool-only-demo"]?.serverUrl)
+    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(antigravityMcpConfig.mcpServers?.["prism-generated-tool-only-demo"]?.headers?.Authorization)
+    .toMatch(/^Bearer [A-Za-z0-9_-]{32,}$/);
   expect(await pathExists(join(antigravityRoot, "mcp"))).toBe(false);
-
-  const grokRoot = join(projectRoot, ".grok", "plugins", "prism-generated-tool-only-demo");
-  const grokMcp = JSON.parse(await readFile(join(grokRoot, ".mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
-  };
-  expect(grokMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
-    command: "bun",
-    args: [canonicalServerPath],
-    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
-  });
-  expect(await pathExists(join(grokRoot, "mcp"))).toBe(false);
 
   const factoryRoot = join(projectRoot, ".factory", "plugins", "prism-generated-tool-only-demo");
   const factoryMcp = JSON.parse(await readFile(join(factoryRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type: string; command: string; args: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
   };
-  expect(factoryMcp.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
-    type: "stdio",
-    command: "bun",
-    args: [canonicalServerPath],
-    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
-  });
+  expect(factoryMcp.mcpServers?.["prism-generated-tool-only-demo"]?.type).toBe("http");
+  expect(factoryMcp.mcpServers?.["prism-generated-tool-only-demo"]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(factoryMcp.mcpServers?.["prism-generated-tool-only-demo"]?.headers?.Authorization).toMatch(/^Bearer [A-Za-z0-9_-]{32,}$/);
   expect(await pathExists(join(factoryRoot, "mcp"))).toBe(false);
 
   const cursorConfig = JSON.parse(await readFile(join(projectRoot, ".cursor", "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type: string; command: string; args: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
   };
-  expect(cursorConfig.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
-    type: "stdio",
-    command: "bun",
-    args: [canonicalServerPath],
-    env: { PRISM_MCP_ENABLED_TOOLS: expectedToolName },
-  });
+  expect(cursorConfig.mcpServers?.["prism-generated-tool-only-demo"]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(cursorConfig.mcpServers?.["prism-generated-tool-only-demo"]?.headers?.Authorization).toMatch(/^Bearer [A-Za-z0-9_-]{32,}$/);
   expect(await pathExists(join(projectRoot, ".cursor", "mcp"))).toBe(false);
 
   // Byte-identical across harness compiles: recompiling another harness must
@@ -3281,17 +3262,19 @@ export default defineAgent({
   expect(codexConfig).toContain('enabled_tools = ["exposure_demo_shared"]');
   expect(codexConfig).not.toContain('enabled_tools = ["exposure_core_agent_only"');
 
-  // Claude (harness B): deny-by-default — the agent-bound tool from harness A
-  // is NOT exposed in the .mcp.json env filter.
+  expect(unionBundle).toContain('"prism-generated-exposure-demo:claude-code"');
+
+  // Claude (harness B): deny-by-default moves to the HTTP exposure profile,
+  // because Streamable HTTP clients do not spawn per-client subprocess env.
   const claudeMcp = JSON.parse(
     await readFile(
       join(projectRoot, ".claude", "skills", "prism-generated-exposure-demo", ".mcp.json"),
       "utf8",
     ),
-  ) as { mcpServers?: Record<string, { env?: Record<string, string> }> };
-  const claudeEnv = claudeMcp.mcpServers?.["prism-generated-exposure-demo"]?.env;
-  expect(claudeEnv?.PRISM_MCP_ENABLED_TOOLS).toBe("exposure_demo_shared");
-  expect(claudeEnv?.PRISM_MCP_ENABLED_TOOLS).not.toContain("exposure_core_agent_only");
+  ) as { mcpServers?: Record<string, { headers?: Record<string, string> }> };
+  const claudeHeaders = claudeMcp.mcpServers?.["prism-generated-exposure-demo"]?.headers;
+  expect(claudeHeaders?.["X-Prism-Mcp-Exposure"]).toBe("prism-generated-exposure-demo:claude-code");
+  expect(JSON.stringify(claudeMcp)).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 });
 
 test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async () => {
@@ -3318,14 +3301,11 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
     }),
   );
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type: string; command: string; args: string[]; env?: Record<string, string> }>;
+    mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
   };
-  expect(config.mcpServers?.["prism-generated-tool-only-demo"]).toEqual({
-    type: "stdio",
-    command: "bun",
-    args: [prismMcpServerPath(testPrismHome(), "tool-only-demo")],
-    env: { PRISM_MCP_ENABLED_TOOLS: "tool_only_demo_echo_message" },
-  });
+  const cursorMcp = config.mcpServers?.["prism-generated-tool-only-demo"];
+  expect(cursorMcp?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(cursorMcp?.headers?.Authorization).toMatch(/^Bearer [A-Za-z0-9_-]{32,}$/);
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "tool-only-demo"))).toBe(true);
   // The mcp.json server entry is a region in the snapshot manifest; the
   // canonical bundle is pipeline-owned and never appears as a managed target.
@@ -3653,6 +3633,7 @@ export default defineTool({
     url: `http://127.0.0.1:${port}/mcp`,
     headers: {
       Authorization: expect.stringMatching(/^Bearer [A-Za-z0-9_-]{32,}$/),
+      "X-Prism-Mcp-Exposure": "prism-generated-cursor-http-demo:cursor",
     },
   });
 });
@@ -4641,17 +4622,12 @@ export default defineTool({
     // Anchored inside the user-shared top-level mcp_servers mapping.
     expect(configRegion.anchor).toBe("mcp_servers:");
     expect(configRegion.content).toContain("prism-generated-hermes-tool-demo:");
-    expect(configRegion.content).toContain('command: "bun"');
-    expect(configRegion.content).toContain(JSON.stringify(serverPath));
+    expect(configRegion.content).toMatch(/url: "http:\/\/127\.0\.0\.1:\d+\/mcp"/);
     expect(configRegion.content).toContain("connect_timeout: 10");
     expect(configRegion.content).toContain("timeout: 120");
     expect(configRegion.content).toContain("sampling:");
     expect(configRegion.content).toContain("enabled: false");
-    expect(configRegion.content).toContain("PRISM_MCP_WORKING_DIRECTORY");
-    expect(configRegion.content).toContain(`PRISM_MCP_REPO_ROOT: ${JSON.stringify(hermesRoot)}`);
-    expect(configRegion.content).toContain(
-      'PRISM_MCP_ENABLED_TOOLS: "hermes_tool_demo_echo"',
-    );
+    expect(configRegion.content).toContain('Authorization: "Bearer ${PRISM_MCP_TOKEN}"');
     expect(configRegion.content).toContain("hermes_tool_demo_echo");
   }
 });
@@ -4828,17 +4804,17 @@ test("compilePluginForTarget can serve Hermes HTTP MCP without token env", async
   }
 });
 
-test("compilePluginForTarget renders Codex MCP config as stdio without token env", async () => {
+test("compilePluginForTarget renders Codex MCP config as HTTP with token env", async () => {
   const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_COMPILE_CODEX_STDIO_TOKEN";
+  const tokenEnv = "PRISM_MCP_COMPILE_CODEX_HTTP_TOKEN";
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
-    pluginName: "codex-http-to-stdio-demo",
+    pluginName: "codex-http-demo",
     tokenEnv,
     port,
   });
   const previous = process.env[tokenEnv];
-  delete process.env[tokenEnv];
+  process.env[tokenEnv] = compileTestToken;
 
   try {
     const result = await Effect.runPromise(
@@ -4853,22 +4829,21 @@ test("compilePluginForTarget renders Codex MCP config as stdio without token env
     );
 
     expect(result.outputRoot).toBe(codexRoot);
-    const canonicalServerPath = prismMcpServerPath(testPrismHome(), "codex-http-to-stdio-demo");
     const config = await readFile(join(codexRoot, "config.toml"), "utf8");
-    expect(config).toContain('["mcp_servers"."prism-generated-codex-http-to-stdio-demo"]');
-    expect(config).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
-    expect(config).toContain('command = "bun"');
-    expect(config).not.toContain("url = ");
-    expect(config).not.toContain("bearer_token_env_var");
+    expect(config).toContain('["mcp_servers"."prism-generated-codex-http-demo"]');
+    expect(config).toContain(`url = "http://127.0.0.1:${port}/mcp"`);
+    expect(config).toContain(`bearer_token_env_var = "${tokenEnv}"`);
+    expect(config).not.toContain('command = "bun"');
+    expect(config).not.toContain("args = ");
     expect(config).not.toContain("http_headers");
-    expect(config).not.toContain(String(port));
-    expect(await pathExists(canonicalServerPath)).toBe(true);
+    expect(config).not.toContain(compileTestToken);
+    expect(await pathExists(prismMcpServerPath(testPrismHome(), "codex-http-demo"))).toBe(true);
     expect(
-      await pathExists(join(testPrismHome(), "runtime", "mcp", "codex-http-to-stdio-demo", "runtime.json")),
-    ).toBe(false);
+      await pathExists(join(testPrismHome(), "runtime", "mcp", "codex-http-demo", "runtime.json")),
+    ).toBe(true);
     expect(
       await pathExists(join(testPrismHome(), "runtime", "mcp", "tokens.json")),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       result.operations.some((operation) => operation.targetPath.endsWith("server.mjs")),
     ).toBe(false);
@@ -4881,17 +4856,17 @@ test("compilePluginForTarget renders Codex MCP config as stdio without token env
   }
 });
 
-test("planPluginForTarget renders Codex MCP config as stdio without token env", async () => {
+test("planPluginForTarget renders Codex MCP config as HTTP with token env", async () => {
   const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_PLAN_CODEX_STDIO_TOKEN";
+  const tokenEnv = "PRISM_MCP_PLAN_CODEX_HTTP_TOKEN";
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
-    pluginName: "codex-http-plan-to-stdio-demo",
+    pluginName: "codex-http-plan-demo",
     tokenEnv,
     port,
   });
   const previous = process.env[tokenEnv];
-  delete process.env[tokenEnv];
+  process.env[tokenEnv] = compileTestToken;
 
   try {
     const result = await Effect.runPromise(
@@ -4905,33 +4880,33 @@ test("planPluginForTarget renders Codex MCP config as stdio without token env", 
       }),
     );
 
-    const canonicalServerPath = prismMcpServerPath(testPrismHome(), "codex-http-plan-to-stdio-demo");
     const configRegion = result.regions.find((region): region is Extract<DesiredRegion, { kind: "marker" }> =>
       region.kind === "marker" &&
-      region.regionKey === "codex.mcp.prism-generated-codex-http-plan-to-stdio-demo"
+      region.regionKey === "codex.mcp.prism-generated-codex-http-plan-demo"
     );
-    expect(configRegion?.content).toContain(`args = [${JSON.stringify(canonicalServerPath)}]`);
-    expect(configRegion?.content).toContain('command = "bun"');
-    expect(configRegion?.content).not.toContain("url = ");
-    expect(configRegion?.content).not.toContain("bearer_token_env_var");
-    expect(configRegion?.content).not.toContain(String(port));
+    expect(configRegion?.content).toContain(`url = "http://127.0.0.1:${port}/mcp"`);
+    expect(configRegion?.content).toContain(`bearer_token_env_var = "${tokenEnv}"`);
+    expect(configRegion?.content).not.toContain('command = "bun"');
+    expect(configRegion?.content).not.toContain("args = ");
+    expect(configRegion?.content).not.toContain(compileTestToken);
   } finally {
     if (previous === undefined) delete process.env[tokenEnv];
     else process.env[tokenEnv] = previous;
   }
 });
 
-test("compilePluginForTarget renders Claude MCP config as stdio without token env", async () => {
+test("compilePluginForTarget renders Claude MCP config as HTTP with token env", async () => {
   const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_COMPILE_CLAUDE_STDIO_TOKEN";
+  const tokenEnv = "PRISM_MCP_COMPILE_CLAUDE_HTTP_TOKEN";
   const { pluginRoot, hermesRoot: claudeRoot } = await createHermesHttpToolPlugin({
     target: "claude-code",
-    pluginName: "claude-http-to-stdio-demo",
+    pluginName: "claude-http-demo",
     tokenEnv,
     port,
   });
+  const canonicalServerPath = prismMcpServerPath(testPrismHome(), "claude-http-demo");
   const previous = process.env[tokenEnv];
-  delete process.env[tokenEnv];
+  process.env[tokenEnv] = compileTestToken;
 
   try {
     const result = await Effect.runPromise(
@@ -4946,14 +4921,14 @@ test("compilePluginForTarget renders Claude MCP config as stdio without token en
     );
 
     expect(result.outputRoot).toBe(claudeRoot);
-    const canonicalServerPath = prismMcpServerPath(testPrismHome(), "claude-http-to-stdio-demo");
     const config = JSON.parse(
       await readFile(
-        join(claudeRoot, "skills", "prism-generated-claude-http-to-stdio-demo", ".mcp.json"),
+        join(claudeRoot, "skills", "prism-generated-claude-http-demo", ".mcp.json"),
         "utf8",
       ),
     ) as {
       mcpServers?: Record<string, {
+        type?: string;
         command?: string;
         args?: string[];
         env?: Record<string, string>;
@@ -4961,18 +4936,19 @@ test("compilePluginForTarget renders Claude MCP config as stdio without token en
         headers?: Record<string, string>;
       }>;
     };
-    expect(config.mcpServers?.["prism-generated-claude-http-to-stdio-demo"]).toEqual({
-      command: "bun",
-      args: [canonicalServerPath],
-      env: { PRISM_MCP_ENABLED_TOOLS: "claude_http_to_stdio_demo_echo" },
+    expect(config.mcpServers?.["prism-generated-claude-http-demo"]).toEqual({
+      type: "http",
+      url: `http://127.0.0.1:${port}/mcp`,
+      headers: {
+        Authorization: `Bearer \${${tokenEnv}}`,
+        "X-Prism-Mcp-Exposure": "prism-generated-claude-http-demo:claude-code",
+      },
     });
-    expect(JSON.stringify(config)).not.toContain("url");
-    expect(JSON.stringify(config)).not.toContain("Authorization");
-    expect(JSON.stringify(config)).not.toContain(String(port));
+    expect(JSON.stringify(config)).not.toContain(compileTestToken);
     expect(await pathExists(canonicalServerPath)).toBe(true);
     expect(
-      await pathExists(join(testPrismHome(), "runtime", "mcp", "claude-http-to-stdio-demo", "runtime.json")),
-    ).toBe(false);
+      await pathExists(join(testPrismHome(), "runtime", "mcp", "claude-http-demo", "runtime.json")),
+    ).toBe(true);
   } finally {
     if (previous === undefined) delete process.env[tokenEnv];
     else process.env[tokenEnv] = previous;
@@ -5328,28 +5304,36 @@ test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind",
   expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
 });
 
-test("compilePluginForTarget leaves Hermes stdio MCP fallback ungated", async () => {
+test("compilePluginForTarget rejects removed Hermes stdio MCP transport", async () => {
   const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
     pluginName: "hermes-stdio-gate-demo",
-    transport: "stdio",
   });
+  const manifestPath = join(pluginRoot, "plugin.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  manifest.runtime = {
+    mcp: {
+      hermes: {
+        transport: "stdio",
+        host: "127.0.0.1",
+        port: 38463,
+        tokenEnv: "PRISM_MCP_TOKEN",
+      },
+    },
+  };
+  await writeText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "hermes",
-      scope: "global",
-      root: hermesRoot,
-      dryRun: false,
-    }),
-  );
-
-  expect(result.outputRoot).toBe(hermesRoot);
-  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-  expect(config).toContain("prism-generated-hermes-stdio-gate-demo:");
-  expect(config).toContain("command:");
-  expect(config).not.toContain("url:");
+  await expect(
+    Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        root: hermesRoot,
+        dryRun: false,
+      }),
+    ),
+  ).rejects.toThrow("stdio");
 });
 
 test("compilePluginForTarget rejects non-loopback Hermes Streamable HTTP hosts", async () => {
@@ -7218,11 +7202,13 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
   expect(mcpConfig).toContain('"prism-generated-canonical-compile-fixture"');
-  expect(mcpConfig).toContain('"command": "bun"');
+  expect(mcpConfig).toContain('"type": "http"');
+  expect(mcpConfig).toMatch(/"url": "http:\/\/127\.0\.0\.1:\d+\/mcp"/u);
+  expect(mcpConfig).toContain('"Authorization": "Bearer ${PRISM_MCP_TOKEN}"');
   expect(mcpConfig).toContain(
-    JSON.stringify(prismMcpServerPath(testPrismHome(), "canonical-compile-fixture")),
+    '"X-Prism-Mcp-Exposure": "prism-generated-canonical-compile-fixture:claude-code"',
   );
-  expect(mcpConfig).toContain('"PRISM_MCP_ENABLED_TOOLS"');
+  expect(mcpConfig).not.toContain('"command": "bun"');
   expect(
     await pathExists(prismMcpServerPath(testPrismHome(), "canonical-compile-fixture")),
   ).toBe(true);
@@ -7346,10 +7332,20 @@ export default defineAgent({
   expect(agent).toContain('disallowedTools:\n  - "web_fetch"');
   expect(agent).toContain('skills:\n  - "testing"');
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
-  const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
-  expect(mcpConfig).toContain('"prism-generated-grok-pipeline-demo"');
-  expect(mcpConfig).toContain(prismMcpServerPath(testPrismHome(), "grok-pipeline-demo"));
-  expect(mcpConfig).toContain('"PRISM_MCP_ENABLED_TOOLS": "grok_pipeline_demo_submit_work"');
+  const mcpConfig = JSON.parse(await readFile(join(pluginRootPath, ".mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, {
+      type?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    }>;
+  };
+  expect(mcpConfig.mcpServers?.["prism-generated-grok-pipeline-demo"]?.type).toBe("http");
+  expect(mcpConfig.mcpServers?.["prism-generated-grok-pipeline-demo"]?.url)
+    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(mcpConfig.mcpServers?.["prism-generated-grok-pipeline-demo"]?.headers).toMatchObject({
+    Authorization: `Bearer ${compileTestToken}`,
+    "X-Prism-Mcp-Exposure": "prism-generated-grok-pipeline-demo:grok",
+  });
   const mcpServer = await readFile(
     prismMcpServerPath(testPrismHome(), "grok-pipeline-demo"),
     "utf8",
@@ -7519,12 +7515,20 @@ export default defineHook({
   expect(droid).not.toContain("skills:");
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
   expect(await pathExists(join(pluginRootPath, "skills", "delivery", "SKILL.md"))).toBe(true);
-  const mcpConfig = await readFile(join(pluginRootPath, "mcp.json"), "utf8");
-  expect(mcpConfig).toContain('"prism-generated-factory-pipeline-demo"');
-  expect(mcpConfig).toContain(
-    JSON.stringify(prismMcpServerPath(testPrismHome(), "factory-pipeline-demo")),
-  );
-  expect(mcpConfig).toContain('"PRISM_MCP_ENABLED_TOOLS": "factory_pipeline_demo_submit_work"');
+  const mcpConfig = JSON.parse(await readFile(join(pluginRootPath, "mcp.json"), "utf8")) as {
+    mcpServers?: Record<string, {
+      type?: string;
+      url?: string;
+      headers?: Record<string, string>;
+    }>;
+  };
+  expect(mcpConfig.mcpServers?.["prism-generated-factory-pipeline-demo"]?.type).toBe("http");
+  expect(mcpConfig.mcpServers?.["prism-generated-factory-pipeline-demo"]?.url)
+    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(mcpConfig.mcpServers?.["prism-generated-factory-pipeline-demo"]?.headers).toMatchObject({
+    Authorization: `Bearer ${compileTestToken}`,
+    "X-Prism-Mcp-Exposure": "prism-generated-factory-pipeline-demo:factory-droid",
+  });
   const mcpServer = await readFile(
     prismMcpServerPath(testPrismHome(), "factory-pipeline-demo"),
     "utf8",
@@ -8258,7 +8262,14 @@ export default defineHook({
     name: string;
     skills: string;
     sessionStart?: { skill?: string };
-    mcpServers?: Record<string, { command?: string; args?: string[]; cwd?: string; enabledTools?: string[] }>;
+    mcpServers?: Record<string, {
+      command?: string;
+      args?: string[];
+      cwd?: string;
+      url?: string;
+      headers?: Record<string, string>;
+      enabledTools?: string[];
+    }>;
   };
   expect(manifest).toMatchObject({
     name: kimiPluginId,
@@ -8266,10 +8277,15 @@ export default defineHook({
     sessionStart: { skill: "prism-context" },
   });
   expect(manifest.mcpServers?.[kimiServerName]).toMatchObject({
-    command: "bun",
-    args: [prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo")],
+    url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/),
+    headers: {
+      Authorization: `Bearer ${compileTestToken}`,
+      "X-Prism-Mcp-Exposure": "prism-generated-kimi-pipeline-demo:kimi-code",
+    },
     enabledTools: [kimiToolName],
   });
+  expect(manifest.mcpServers?.[kimiServerName]?.command).toBeUndefined();
+  expect(manifest.mcpServers?.[kimiServerName]?.args).toBeUndefined();
   expect(manifest.mcpServers?.[kimiServerName]?.cwd).toBeUndefined();
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"))).toBe(true);
   expect(await pathExists(join(pluginOutputRoot, "mcp"))).toBe(false);

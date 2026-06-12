@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, mkdir, open, readdir, readFile, readlink, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -342,7 +343,9 @@ const terminatePid = async (
 };
 
 const bunCommand = (): string =>
-  /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath) ? process.execPath : "bun";
+  /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath) && existsSync(process.execPath)
+    ? process.execPath
+    : "bun";
 
 // launchd's PATH resolution for non-system bins (mise, homebrew) is unreliable
 // and silently fails with EX_CONFIG (78) before the program ever runs. Resolve
@@ -700,7 +703,6 @@ const stoppedMetadata = (metadata: McpRuntimeMetadata): McpRuntimeMetadata => ({
  */
 const daemonIdentityEnv = (prepared: McpPreparedServer): Record<string, string> => ({
   [prepared.tokenEnv]: prepared.token,
-  PRISM_MCP_TRANSPORT: "streamable-http",
   PRISM_MCP_SERVER_NAME: prepared.descriptor.serverName,
   PRISM_MCP_WORKING_DIRECTORY: prepared.descriptor.prismHome,
   PRISM_MCP_REPO_ROOT: prepared.descriptor.prismHome,

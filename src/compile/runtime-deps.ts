@@ -262,9 +262,6 @@ export const effectBundleImportPath = (): string => resolveBundleImportPath("eff
 export const mcpSdkMcpBundleImportPath = (): string =>
   resolveBundleImportPath("@modelcontextprotocol/sdk/server/mcp.js");
 
-export const mcpSdkStdioBundleImportPath = (): string =>
-  resolveBundleImportPath("@modelcontextprotocol/sdk/server/stdio.js");
-
 export const mcpSdkWebStandardHttpBundleImportPath = (): string =>
   resolveBundleImportPath("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 

@@ -45,7 +45,10 @@ import {
 import { BlockedTargetError, PluginManifestError } from "../errors.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
-import { getCompileTargetCapabilities } from "./target-capabilities.js";
+import {
+  getCompileTargetCapabilities,
+  targetHasGeneratedMcpConfig,
+} from "./target-capabilities.js";
 import {
   resolveManifestTargetsForSourceNoun,
   selectSourcesForTarget,
@@ -67,7 +70,7 @@ import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
 import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
-  isStreamableHttpMcpRuntime,
+  mcpExposureProfileForTarget,
   mcpRuntimeUsesBearerTokenEnvConfig,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
@@ -78,6 +81,8 @@ import {
 import {
   generateMcpServerBundle,
   mcpServerArtifactRelativePath,
+  mcpToolNamesForBindings,
+  type McpServerExposureProfile,
 } from "./mcp-bundle.js";
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
@@ -100,8 +105,8 @@ interface LowererModule {
     readonly target: {
       readonly scope: HarnessScope;
       readonly root: string;
-      readonly mcpServerPath?: string;
       readonly mcpBearerToken?: string;
+      readonly mcpExposureProfile?: string;
       readonly mcpRuntimePort?: number;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
@@ -613,10 +618,10 @@ const resolveCompileMcpRuntimePort = (options: {
     agents: options.agents,
     artifacts: options.artifacts,
   });
-  const runtime = resolveMcpRuntime(options.registry, options.targetId);
-  if (runtime.transport !== "streamable-http" || bindings.length === 0) {
+  if (bindings.length === 0 || !targetHasGeneratedMcpConfig(options.targetId)) {
     return Effect.succeed(undefined);
   }
+  const runtime = resolveMcpRuntime(options.registry, options.targetId);
   if (runtime.port !== undefined) {
     return Effect.succeed(undefined);
   }
@@ -690,8 +695,8 @@ const assertHttpMcpLifecycleGate = (options: {
   });
   if (
     options.compileOptions.dryRun ||
-    !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
-    bindings.length === 0
+    bindings.length === 0 ||
+    !targetHasGeneratedMcpConfig(options.targetId)
   ) {
     return Effect.void;
   }
@@ -929,8 +934,8 @@ const resolveCompileMcpBearerToken = (options: {
   );
   if (
     options.dryRun ||
-    !isStreamableHttpMcpRuntime(options.registry, options.targetId) ||
-    bindings.length === 0
+    bindings.length === 0 ||
+    !targetHasGeneratedMcpConfig(options.targetId)
   ) {
     return Effect.succeed(undefined);
   }
@@ -962,10 +967,11 @@ const resolveCompileMcpBearerToken = (options: {
           );
         }
 
-        return ensureMcpToken(options.prismHome, serverName, {
+        await ensureMcpToken(options.prismHome, serverName, {
           preferredToken: envToken,
           preferredTokenEnv: runtime.tokenEnv,
         });
+        return undefined;
       }
       return ensureMcpToken(
         options.prismHome,
@@ -982,10 +988,11 @@ const resolveCompileMcpBearerToken = (options: {
 };
 
 // ---------------------------------------------------------------------------
-// Union MCP bundle (overhaul WS3): ONE bundle per plugin, merging the canonical
-// tool bindings of every harness the plugin targets. Per-harness exposure
-// stays client-side (enabled_tools / tools.include / enabledTools /
-// PRISM_MCP_ENABLED_TOOLS) in the lowered configs.
+// Union MCP bundle (overhaul WS3): ONE HTTP bundle per plugin, merging the
+// canonical tool bindings of every generated-MCP-config harness the plugin
+// targets. Per-harness exposure stays client-side where the harness has native
+// filters, and server-side through the HTTP exposure profile header for shared
+// daemons that cannot inherit per-client environment.
 // ---------------------------------------------------------------------------
 
 const MCP_UNION_NOUNS = ["tools", "agents", "orbits"] as const;
@@ -997,18 +1004,24 @@ const unionMcpTargetHarnesses = (registry: PluginRegistry): HarnessId[] => {
       (registry.targets[noun] ?? []) as readonly PluginTargetId[],
       noun,
     )) {
+      if (!targetHasGeneratedMcpConfig(target)) continue;
       harnesses.add(target);
     }
   }
   return [...harnesses].sort((left, right) => left.localeCompare(right));
 };
 
-const resolveUnionMcpBindings = (
+const resolveUnionMcpBundleInputs = (
   registry: PluginRegistry,
   scope: HarnessScope,
-): Effect.Effect<ReadonlyArray<ResolvedContractBinding>, CompileError> =>
+): Effect.Effect<{
+  readonly bindings: ReadonlyArray<ResolvedContractBinding>;
+  readonly exposureProfiles: ReadonlyArray<McpServerExposureProfile>;
+}, CompileError> =>
   Effect.gen(function* () {
     const bindings: ResolvedContractBinding[] = [];
+    const exposureProfiles: McpServerExposureProfile[] = [];
+    const serverName = generatedMcpServerName(registry.pluginName);
     for (const harness of unionMcpTargetHarnesses(registry)) {
       const surfaces = selectTargetSurfaces(registry, harness, scope);
       const tools = surfaces.tools
@@ -1025,11 +1038,18 @@ const resolveUnionMcpBindings = (
       const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
       const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
       const agentsWithOrbitTools = applyOrbitToolPermissions(agents, orbitToolPermissions);
-      bindings.push(
-        ...mcpBindingsForAgentsAndTools(registry.pluginName, tools, agentsWithOrbitTools),
+      const targetBindings = mcpBindingsForAgentsAndTools(
+        registry.pluginName,
+        tools,
+        agentsWithOrbitTools,
       );
+      bindings.push(...targetBindings);
+      exposureProfiles.push({
+        name: mcpExposureProfileForTarget(serverName, harness),
+        toolNames: mcpToolNamesForBindings(registry.pluginName, targetBindings),
+      });
     }
-    return bindings;
+    return { bindings, exposureProfiles };
   });
 
 interface PreparedMcpServer {
@@ -1055,7 +1075,7 @@ const prepareUnionMcpServer = (options: {
     );
     if (targetBindings.length === 0) return undefined;
 
-    const unionBindings = yield* resolveUnionMcpBindings(
+    const unionInputs = yield* resolveUnionMcpBundleInputs(
       options.registry,
       options.compileOptions.scope,
     );
@@ -1068,7 +1088,8 @@ const prepareUnionMcpServer = (options: {
         serverName,
         version: options.registry.pluginVersion,
         bundleId: serverName,
-        bindings: unionBindings,
+        bindings: unionInputs.bindings,
+        exposureProfiles: unionInputs.exposureProfiles,
       }),
     );
 
@@ -1138,8 +1159,15 @@ const planTargetLowering = (options: {
       target: {
         scope: options.scope,
         root: options.outputRoot,
-        ...(options.mcpServer ? { mcpServerPath: options.mcpServer.serverPath } : {}),
         ...(options.mcpBearerToken ? { mcpBearerToken: options.mcpBearerToken } : {}),
+        ...(options.mcpServer && targetHasGeneratedMcpConfig(options.targetId)
+          ? {
+              mcpExposureProfile: mcpExposureProfileForTarget(
+                generatedMcpServerName(options.registry.pluginName),
+                options.targetId,
+              ),
+            }
+          : {}),
         ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
@@ -1219,15 +1247,7 @@ const prepareLoweringInputs = (
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
-    const loadedRegistry = yield* loadPlugin(options.pluginPath);
-    // Config repos must stay durable: no per-run HTTP ports or bearer tokens
-    // are serialized into tracked Codex/Claude config. Use stdio against the
-    // canonical PRISM_HOME bundle for those targets.
-    const configRepoStdioTarget =
-      context.targetId === "codex-cli" || context.targetId === "claude-code";
-    const registry = options.packageMode === true || configRepoStdioTarget
-      ? registryWithStdioMcpRuntime(loadedRegistry)
-      : loadedRegistry;
+    const registry = yield* loadPlugin(options.pluginPath);
     const surfaces = selectTargetSurfaces(registry, context.targetId, options.scope);
     yield* assertTargetSupportsAgents(options.target, surfaces.agents);
     yield* assertTargetSupportsHooks(options.target, surfaces.hooks);
@@ -1288,19 +1308,6 @@ const prepareLoweringInputs = (
       ...(mcpBearerToken ? { mcpBearerToken } : {}),
     };
   });
-
-const registryWithStdioMcpRuntime = (registry: PluginRegistry): PluginRegistry => ({
-  ...registry,
-  runtime: {
-    ...registry.runtime,
-    mcp: Object.fromEntries(
-      Object.entries(registry.runtime.mcp ?? {}).map(([target, config]) => [
-        target,
-        { ...config, transport: "stdio" as const },
-      ]),
-    ),
-  },
-});
 
 export const planPluginForTarget = (
   options: CompileOptions,

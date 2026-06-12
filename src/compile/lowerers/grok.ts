@@ -9,11 +9,13 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
+import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
-  mcpToolNameForBinding,
-  mcpToolNamesForBindings,
-} from "../mcp-bundle.js";
-import { resolveMcpRuntime } from "../mcp-runtime.js";
+  MCP_EXPOSURE_HEADER,
+  renderMcpBearerAuthorization,
+  renderMcpHttpUrl,
+  resolveMcpRuntime,
+} from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -48,8 +50,9 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface GrokLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  /** Absolute canonical `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` path. */
-  readonly mcpServerPath?: string;
+  readonly mcpBearerToken?: string;
+  readonly mcpExposureProfile?: string;
+  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -261,12 +264,15 @@ const planMcpServer = async (
   files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  resolveMcpRuntime(input.registry, TARGET_ID, { requirePort: true });
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
+  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
+    requirePort: bindings.length > 0,
+    resolvedPort: input.target.mcpRuntimePort,
+  });
   const pluginId = generatedPluginId(input.target);
 
   if (bindings.length === 0) {
@@ -280,10 +286,6 @@ const planMcpServer = async (
     return;
   }
 
-  if (!input.target.mcpServerPath) {
-    throw new Error("Grok MCP lowering requires the canonical Prism MCP server bundle path.");
-  }
-
   pushWrite(
     files,
     desiredRelativePaths,
@@ -292,19 +294,21 @@ const planMcpServer = async (
     json({
       mcpServers: {
         [pluginId]: {
-          command: "bun",
-          args: [input.target.mcpServerPath],
-          // Grok .mcp.json has no per-server tool allowlist, so the union
-          // bundle is filtered deny-by-default via PRISM_MCP_ENABLED_TOOLS.
-          env: {
-            PRISM_MCP_ENABLED_TOOLS: mcpToolNamesForBindings(
-              input.target.sourcePluginName,
-              bindings,
-            ).join(","),
+          type: "http",
+          url: renderMcpHttpUrl(runtime),
+          headers: {
+            Authorization: renderMcpBearerAuthorization({
+              tokenEnv: runtime.tokenEnv,
+              token: input.target.mcpBearerToken,
+            }),
+            [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
           },
         },
       },
     }),
+    {
+      mode: input.target.mcpBearerToken ? 0o600 : undefined,
+    },
   );
 };
 

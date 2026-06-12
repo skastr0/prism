@@ -7,6 +7,7 @@ import { EXIT_CODES } from "./exit.js";
 import { computeContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
+import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 
 let root: string;
 let originalHome: string | undefined;
@@ -227,20 +228,25 @@ test("doctor --fix drops snapshots for dead roots", async () => {
 });
 
 test("doctor validates generated harness config references", async () => {
-  const bundlePath = join(root, "bundle", "server.mjs");
+  const prismHome = join(root, "prism-home");
+  const bundlePath = prismMcpServerPath(prismHome, "filter");
   await writeText(bundlePath, "known_tool\n");
   await writeText(
     join(process.env.HOME!, ".codex", "config.toml"),
     [
       '["mcp_servers"."prism-generated-demo"]',
-      'command = "bun"',
-      'args = ["/missing/prism/server.mjs"]',
+      'url = "http://127.0.0.1:38463/mcp"',
+      'bearer_token_env_var = "PRISM_MCP_TOKEN"',
       'enabled_tools = "not-an-array"',
       "",
       '["mcp_servers"."prism-generated-filter"]',
-      'command = "bun"',
-      `args = [${JSON.stringify(bundlePath)}]`,
+      'url = "http://127.0.0.1:38464/mcp"',
+      'bearer_token_env_var = "PRISM_MCP_TOKEN"',
       'enabled_tools = ["missing_tool"]',
+      "",
+      '["mcp_servers"."prism-generated-legacy"]',
+      'command = "bun"',
+      'args = ["/missing/prism/server.mjs"]',
       "",
     ].join("\n"),
   );
@@ -250,7 +256,19 @@ test("doctor validates generated harness config references", async () => {
   );
   await writeText(
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
-    `${JSON.stringify({ mcpServers: { "prism-generated-demo": { command: "bun", args: ["/missing/server.mjs"] } } }, null, 2)}\n`,
+    `${JSON.stringify({
+      mcpServers: {
+        "prism-generated-demo": {
+          type: "http",
+          url: "http://127.0.0.1:38465/mcp",
+          headers: {
+            Authorization: "Bearer ${PRISM_MCP_TOKEN}",
+            "X-Prism-Mcp-Exposure": "prism-generated-demo:claude-code",
+          },
+        },
+        "prism-generated-legacy": { command: "bun", args: ["/missing/server.mjs"] },
+      },
+    }, null, 2)}\n`,
   );
   await writeText(
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", "hooks", "hooks.json"),
@@ -260,15 +278,17 @@ test("doctor validates generated harness config references", async () => {
   const report = await runDoctor({
     harnesses: ["codex-cli", "opencode", "claude-code"],
     scope: "global",
-    prismHome: join(root, "prism-home"),
+    prismHome,
     fix: false,
   });
 
   const codes = report.findings.map((finding) => finding.code);
   expect(codes).toContain("config.codex-mcp-bundle-missing");
+  expect(codes).toContain("config.codex-mcp-stdio-removed");
   expect(codes).toContain("config.codex-enabled-tools-invalid");
   expect(codes).toContain("config.enabled-tool-missing-from-bundle");
   expect(codes).toContain("config.opencode-plugin-missing");
   expect(codes).toContain("config.claude-mcp-bundle-missing");
+  expect(codes).toContain("config.claude-mcp-stdio-removed");
   expect(codes).toContain("config.claude-hook-command-missing");
 });

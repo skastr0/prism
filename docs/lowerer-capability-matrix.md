@@ -29,11 +29,10 @@ patched into a config file.
 All `generated-mcp` surfaces reference ONE canonical union bundle per source
 plugin at `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` (never inside harness
 roots). Per-harness tool exposure stays client-side: codex `enabled_tools`,
-hermes `tools.include`, kimi `enabledTools`, and a deny-by-default
-`PRISM_MCP_ENABLED_TOOLS` env filter for harnesses without a native filter
-field (Claude Code, Cursor, Antigravity, Factory Droid, Grok). Streamable HTTP
-daemons expose the full union bundle to every connected harness — the bearer
-token is the trust boundary there.
+hermes `tools.include`, kimi `enabledTools`, and a deny-by-default HTTP
+exposure profile header for shared daemon clients without a native filter field
+(Claude Code, Cursor, Antigravity, Factory Droid, Grok). The generated HTTP
+daemon registers only the profile's assigned tools for each MCP session.
 
 | Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -143,8 +142,7 @@ Cursor compile support is tools-only. Cursor's official MCP contract uses
 `~/.cursor/mcp.json` globally and `.cursor/mcp.json` per project, and Cursor CLI
 respects the same file as the IDE. Prism lowers canonical tools into a generated
 MCP server and patches one compiler-owned `mcpServers` entry in that file:
-stdio entries use `command` plus `args`, while Streamable HTTP entries use `url`
-plus `headers`. Cursor documents local plugins under
+generated entries use Streamable HTTP `url` plus `headers`. Cursor documents local plugins under
 `~/.cursor/plugins/local/<plugin>` with `.cursor-plugin/plugin.json` and default
 `commands/` component discovery, so Prism installs Cursor command artifacts into
 a generated local plugin bundle instead of direct `~/.cursor/commands/` files.

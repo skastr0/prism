@@ -115,6 +115,7 @@ describe("workflow loader", () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const outputFile = join(root, "outputs.json");
+    const storeFile = join(root, "workflows.sqlite");
     await writeFile(file, workflowSource());
     await writeFile(outputFile, JSON.stringify({ build: { summary: "mocked" } }));
 
@@ -128,6 +129,8 @@ describe("workflow loader", () => {
         file,
         "--mock-output",
         outputFile,
+        "--store",
+        storeFile,
       ],
       cwd: process.cwd(),
       stdout: "pipe",
@@ -145,5 +148,51 @@ describe("workflow loader", () => {
     const result = JSON.parse(stdout) as { workflow: string; tasks: Array<{ output: { summary: string } }> };
     expect(result.workflow).toBe("loader-smoke");
     expect(result.tasks[0]?.output.summary).toBe("mocked");
+  });
+
+  test("CLI mock run reuses cached task output from the store", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const firstOutputFile = join(root, "first.json");
+    const secondOutputFile = join(root, "second.json");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, workflowSource());
+    await writeFile(firstOutputFile, JSON.stringify({ build: { summary: "first" } }));
+    await writeFile(secondOutputFile, JSON.stringify({ build: { summary: "second" } }));
+
+    const run = async (outputFile: string) => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--mock-output",
+          outputFile,
+          "--store",
+          storeFile,
+        ],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; cached: boolean }> };
+    };
+
+    const first = await run(firstOutputFile);
+    const second = await run(secondOutputFile);
+
+    expect(first.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.cached).toBe(true);
+    expect(second.tasks[0]?.output.summary).toBe("first");
   });
 });

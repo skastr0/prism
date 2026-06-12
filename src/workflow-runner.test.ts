@@ -52,8 +52,8 @@ describe("workflow runner", () => {
     expect(result).toEqual({
       workflow: "runner-smoke",
       tasks: [
-        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" } },
-        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" } },
+        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false },
+        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" }, cached: false },
       ],
     });
   });

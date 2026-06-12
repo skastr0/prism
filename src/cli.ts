@@ -73,6 +73,7 @@ import type { SyncReport } from "./sync/apply.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
+import { defaultWorkflowStorePath, WorkflowStore } from "./workflow-store.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -184,11 +185,18 @@ workflow
   .command("run <file>")
   .description("Run a workflow with an explicit mock-output JSON file")
   .requiredOption("--mock-output <path>", "JSON object keyed by workflow task id")
-  .action(async (file: string, options: { readonly mockOutput: string }) => {
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--no-cache", "Disable workflow task cache lookup and writes")
+  .action(async (file: string, options: { readonly mockOutput: string; readonly store?: string; readonly cache?: boolean }) => {
+    let store: WorkflowStore | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
+      if (options.cache !== false) {
+        store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      }
       const outputs = JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>;
       const result = await runWorkflow(workflow, {
+        ...(store ? { store } : {}),
         executeTask: async (task) => {
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);
@@ -200,6 +208,8 @@ workflow
     } catch (error) {
       printCliError(error, "Workflow run failed");
       exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
     }
   });
 

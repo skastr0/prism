@@ -212,6 +212,44 @@ workflow
     }
   });
 
+const workflowRuns = workflow
+  .command("runs")
+  .description("Inspect persisted workflow run history");
+
+workflowRuns
+  .command("list")
+  .description("List workflow runs from the SQLite workflow store")
+  .option("--store <path>", "SQLite workflow store path")
+  .action(async (options: { readonly store?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      console.log(JSON.stringify({ runs: store.listRuns() }, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow runs list failed");
+      exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("show <runId>")
+  .description("Show task history for one workflow run")
+  .option("--store <path>", "SQLite workflow store path")
+  .action(async (runId: string, options: { readonly store?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      console.log(JSON.stringify({ runId, tasks: store.listRunTasks(runId) }, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow runs show failed");
+      exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
 // Init command - create a new plugin
 program
   .command("init <name>")

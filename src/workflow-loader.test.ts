@@ -195,4 +195,67 @@ describe("workflow loader", () => {
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("first");
   });
+
+  test("CLI lists and shows workflow run history", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const outputFile = join(root, "outputs.json");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, workflowSource());
+    await writeFile(outputFile, JSON.stringify({ build: { summary: "history" } }));
+
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const runResult = await cli([
+      "workflow",
+      "run",
+      file,
+      "--mock-output",
+      outputFile,
+      "--store",
+      storeFile,
+    ]) as { runId: string };
+    const listResult = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
+      runs: Array<{ runId: string; workflow: string }>;
+    };
+    const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
+      tasks: Array<{
+        runId: string;
+        taskId: string;
+        cacheKey: string;
+        status: string;
+        cached: boolean;
+        agent: { plugin: string; name: string };
+        output: { summary: string };
+      }>;
+    };
+
+    expect(listResult.runs).toEqual([{ runId: runResult.runId, workflow: "loader-smoke" }]);
+    expect(showResult.tasks).toEqual([
+      {
+        runId: runResult.runId,
+        taskId: "build",
+        cacheKey: "workflow-loader-build",
+        status: "completed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { summary: "history" },
+      },
+    ]);
+  });
 });

@@ -7,6 +7,9 @@ packages/npm/prism-*/bin/
 .DS_Store
 
 .atlas/
+.grok/
+.groundwork/
+.prism/
 .exa-cli/
 .firecrawl-cli/
 

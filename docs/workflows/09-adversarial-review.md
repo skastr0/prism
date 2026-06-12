@@ -113,31 +113,12 @@ resource system.
 
 Resolution: document POC scope explicitly before implementation.
 
-## POC facts to preserve
+## POC facts and artifact disposition
 
-The POC proved:
-
-- generated literal agent refs can make `tsc` reject mistyped agent names;
-- Effect Schema handoffs can make `tsc` reject wrong phase fields;
-- malformed/tampered refs can fail before dispatch;
-- multiple harness dispatch shapes can be sketched from the same typed ref;
-- a forge-shaped mission can be authored as ordinary TypeScript.
-
-The POC did **not** prove:
-
-- AgentRun resource reuse;
-- SQLite ledger correctness;
-- semantic fingerprint stability;
-- compile manifest policy subsumption;
-- install attestation against real harness roots;
-- detached supervision;
-- worktree isolation;
-- artifact/world-state restoration;
-- adapter lifecycle safety;
-- Hermes/class B dispatch.
-
-Therefore WS0.2 must extract the POC learnings and delete `poc/workflows/` before
-workflow code ships. It is evidence, not production scaffolding.
+Canonical POC facts, proof commands, artifact mapping, and deletion rationale
+live in `13-poc-disposition.md`. Do not duplicate the proved/not-proved lists in
+this adversarial review; the POC is evidence, not production scaffolding, and
+its local artifacts are deleted after extraction.
 
 ### 11. Scope keys need a ledger resolver
 

@@ -1,6 +1,6 @@
 # Prism Workflows — Vision and Decided Shape
 
-Status: planned (POC validated 2026-06-11, see `poc/workflows/`)
+Status: planned (POC validated 2026-06-11, preserved in `13-poc-disposition.md`)
 Origin: Forge signal `sig_905c410397ec224978b18721` + three-session architecture discussion.
 
 ## What this is
@@ -219,3 +219,4 @@ through the workflows MCP tools — a capability that does not exist today.
 - `10-public-runtime-types.md` — normative library/CLI runtime type catalog for WS2
 - `11-compile-manifest-v1.md` — compile-manifest schema, writer, reader, and gate contract for WS1
 - `12-fingerprint-and-ref-resolution-v1.md` — canonical hashing, scope resolution, ref hashing, and golden-vector contract
+- `13-poc-disposition.md` — POC proof extraction, artifact mapping, and deletion rationale

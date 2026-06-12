@@ -36,9 +36,9 @@ workstream.
 
 - 0.1 Dedupe Effect to a single version across the tree (3.21.x skew + 4-beta
   via `@opencode-ai/plugin`); add a lockfile guard script.
-- 0.2 Decide POC disposition: extract learnings from `poc/workflows/`, document
-  the proof it provided, then delete the POC folder before workflow code ships;
-  the real code starts clean in packages.
+- 0.2 Decide POC disposition: extract learnings into
+  `13-poc-disposition.md`, document the proof it provided, then delete the POC
+  folder before workflow code ships; the real code starts clean in packages.
 
 ## WS1 — Types and provenance (prism repo)
 

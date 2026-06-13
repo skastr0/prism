@@ -98,4 +98,40 @@ describe("workflow runner", () => {
 
     expect(calls).toEqual(["build"]);
   });
+
+  test("runs dynamic workflows that construct downstream tasks from decoded outputs", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-runner-smoke",
+      run: async (wf) => {
+        const patch = await wf.runTask(build);
+        const review = defineTask({
+          id: "review",
+          agent: reviewer,
+          prompt: `Review this patch: ${patch.summary}`,
+          output: ReviewReport,
+        });
+        const verdict = await wf.runTask(review);
+        return { reviewed: patch.summary, verdict: verdict.verdict };
+      },
+    });
+    const prompts: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        prompts.push(task.prompt);
+        if (task.id === "build") return { summary: "built" };
+        return { verdict: "pass" };
+      },
+    });
+
+    expect(prompts).toEqual(["Build the slice.", "Review this patch: built"]);
+    expect(result.output).toEqual({ reviewed: "built", verdict: "pass" });
+    expect(result.tasks.map((task) => task.id)).toEqual(["build", "review"]);
+  });
 });

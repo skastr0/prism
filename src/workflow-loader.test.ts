@@ -49,6 +49,51 @@ ${exportKind === "default" ? "export default workflow;" : "export { workflow };"
 `;
 };
 
+const dynamicWorkflowSource = () => {
+  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
+    .replace(/\\/g, "/");
+  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+  return `
+import { Schema } from ${JSON.stringify(effectPath)};
+import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+};
+
+const buildOutput = Schema.Struct({ summary: Schema.String });
+const reviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
+
+export default defineWorkflow({
+  name: "dynamic-loader-smoke",
+  run: async (wf) => {
+    const build = await wf.runTask(defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the next slice.",
+      output: buildOutput,
+      cacheKey: "dynamic-build",
+    }));
+    const review = await wf.runTask(defineTask({
+      id: "review",
+      agent: builder,
+      prompt: \`Review: \${build.summary}\`,
+      output: reviewOutput,
+      cacheKey: "dynamic-review",
+    }));
+    return { summary: build.summary, verdict: review.verdict };
+  },
+});
+`;
+};
+
 describe("workflow loader", () => {
   test("loads a workflow module and summarizes its tasks", async () => {
     const root = await createTempRoot();
@@ -58,6 +103,7 @@ describe("workflow loader", () => {
     const summary = await validateWorkflowFile(file);
 
     expect(summary.name).toBe("loader-smoke");
+    expect(summary.dynamic).toBe(false);
     expect(summary.tasks).toEqual([
       {
         id: "build",
@@ -76,6 +122,18 @@ describe("workflow loader", () => {
 
     expect(summary.name).toBe("loader-smoke");
     expect(summary.tasks[0]?.agent).toEqual({ plugin: "forge", name: "builder" });
+  });
+
+  test("loads a dynamic workflow module", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, dynamicWorkflowSource());
+
+    const summary = await validateWorkflowFile(file);
+
+    expect(summary.name).toBe("dynamic-loader-smoke");
+    expect(summary.dynamic).toBe(true);
+    expect(summary.tasks).toEqual([]);
   });
 
   test("rejects modules that do not export a workflow definition", async () => {
@@ -148,6 +206,50 @@ describe("workflow loader", () => {
     const result = JSON.parse(stdout) as { workflow: string; tasks: Array<{ output: { summary: string } }> };
     expect(result.workflow).toBe("loader-smoke");
     expect(result.tasks[0]?.output.summary).toBe("mocked");
+  });
+
+  test("CLI runs a dynamic workflow with decoded upstream output in downstream prompt", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const outputFile = join(root, "outputs.json");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, dynamicWorkflowSource());
+    await writeFile(outputFile, JSON.stringify({
+      build: { summary: "dynamic build" },
+      review: { verdict: "pass" },
+    }));
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--mock-output",
+        outputFile,
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as {
+      output: { summary: string; verdict: string };
+      tasks: Array<{ id: string; output: unknown }>;
+    };
+    expect(result.output).toEqual({ summary: "dynamic build", verdict: "pass" });
+    expect(result.tasks.map((task) => task.id)).toEqual(["build", "review"]);
   });
 
   test("CLI mock run reuses cached task output from the store", async () => {

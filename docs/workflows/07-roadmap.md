@@ -69,9 +69,12 @@ Implementation checkpoint (2026-06-13): the repo now has a single-package
 runtime wedge rather than the full `@skastr0/prism-workflow` package boundary:
 typed workflow authoring primitives, module validation, sequential runner,
 SQLite task cache/run history/events, terminal statuses, mock-output execution,
+dynamic workflow bodies whose downstream tasks can use prior decoded outputs,
 and a first generic Grok CLI worker. This is intentionally short of the full
 AgentRun ledger in `08`; treat it as the dogfood wedge, not as the final ledger
-shape.
+shape. Live proof now exists for a two-task Grok workflow where the review task
+prompt is constructed from the build task's decoded output and both tasks are
+reused from cache on rerun.
 
 - 2.1 Package scaffold; `defineWorkflow` envelope + input decode; CLI command
   namespace under `prism workflow ...`.

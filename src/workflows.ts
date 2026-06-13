@@ -49,6 +49,21 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
   readonly tasks: Tasks;
 }
 
+export interface WorkflowRuntime {
+  runTask: <Task extends AnyWorkflowTask>(task: Task) => Promise<WorkflowTaskOutput<Task>>;
+}
+
+export interface DynamicWorkflowDefinition<Name extends string> {
+  readonly kind: "workflow";
+  readonly name: Name;
+  readonly tasks: readonly [];
+  readonly run: (runtime: WorkflowRuntime) => Promise<unknown>;
+}
+
+export type AnyWorkflowDefinition =
+  | WorkflowDefinition<string, ReadonlyArray<AnyWorkflowTask>>
+  | DynamicWorkflowDefinition<string>;
+
 export const defineTask = <
   const Id extends string,
   const Agent extends WorkflowAgentRef,
@@ -58,12 +73,30 @@ export const defineTask = <
   ...definition,
 });
 
-export const defineWorkflow = <const Name extends string, const Tasks extends ReadonlyArray<AnyWorkflowTask>>(
+export function defineWorkflow<const Name extends string, const Tasks extends ReadonlyArray<AnyWorkflowTask>>(
   definition: { readonly name: Name; readonly tasks: Tasks },
-): WorkflowDefinition<Name, Tasks> => ({
+): WorkflowDefinition<Name, Tasks>;
+export function defineWorkflow<const Name extends string>(
+  definition: { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Promise<unknown> },
+): DynamicWorkflowDefinition<Name>;
+export function defineWorkflow<const Name extends string>(
+  definition:
+    | { readonly name: Name; readonly tasks: ReadonlyArray<AnyWorkflowTask> }
+    | { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Promise<unknown> },
+): WorkflowDefinition<Name, ReadonlyArray<AnyWorkflowTask>> | DynamicWorkflowDefinition<Name> {
+  if ("run" in definition) {
+    return {
+      kind: "workflow",
+      name: definition.name,
+      tasks: [],
+      run: definition.run,
+    };
+  }
+  return {
   kind: "workflow",
   ...definition,
-});
+  };
+}
 
 export const decodeTaskOutput = <Task extends AnyWorkflowTask>(
   task: Task,

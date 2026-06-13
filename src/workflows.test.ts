@@ -81,4 +81,26 @@ describe("workflow authoring primitives", () => {
     const invalid: WorkflowTaskOutput<typeof build> = { summary: "typed" };
     expect(invalid).toBeDefined();
   });
+
+  test("dynamic workflows expose decoded task outputs to later code", async () => {
+    const discover = defineTask({
+      id: "discover",
+      agent: builder,
+      prompt: "Return a patch report.",
+      output: PatchReport,
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-typed",
+      run: async (wf) => {
+        const report = await wf.runTask(discover);
+        return report.filesChanged.join(",");
+      },
+    });
+
+    expect(workflow.kind).toBe("workflow");
+    expect(workflow.tasks).toEqual([]);
+    expect(await workflow.run({
+      runTask: async () => ({ summary: "typed", filesChanged: ["src/workflows.ts"] }) as never,
+    })).toBe("src/workflows.ts");
+  });
 });

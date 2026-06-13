@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { Schema } from "effect";
 import { expandPath } from "./fs.js";
-import type { AnyWorkflowTask, WorkflowDefinition, WorkflowAgentRef } from "./workflows.js";
+import type { AnyWorkflowDefinition, AnyWorkflowTask, WorkflowAgentRef } from "./workflows.js";
 
 export interface WorkflowTaskSummary {
   readonly id: string;
@@ -16,6 +16,7 @@ export interface WorkflowValidationSummary {
   readonly path: string;
   readonly name: string;
   readonly tasks: ReadonlyArray<WorkflowTaskSummary>;
+  readonly dynamic: boolean;
 }
 
 export class WorkflowLoadError extends Error {
@@ -55,19 +56,21 @@ const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
 
 export const isWorkflowDefinition = (
   value: unknown,
-): value is WorkflowDefinition<string, ReadonlyArray<AnyWorkflowTask>> =>
+): value is AnyWorkflowDefinition =>
   isRecord(value) &&
   value.kind === "workflow" &&
   typeof value.name === "string" &&
   Array.isArray(value.tasks) &&
-  value.tasks.every(isWorkflowTask);
+  value.tasks.every(isWorkflowTask) &&
+  (value.run === undefined || typeof value.run === "function");
 
 export const workflowSummary = (
   path: string,
-  workflow: WorkflowDefinition<string, ReadonlyArray<AnyWorkflowTask>>,
+  workflow: AnyWorkflowDefinition,
 ): WorkflowValidationSummary => ({
   path,
   name: workflow.name,
+  dynamic: "run" in workflow,
   tasks: workflow.tasks.map((task) => ({
     id: task.id,
     agent: {
@@ -80,7 +83,7 @@ export const workflowSummary = (
 
 export const loadWorkflowFile = async (
   filePath: string,
-): Promise<WorkflowDefinition<string, ReadonlyArray<AnyWorkflowTask>>> => {
+): Promise<AnyWorkflowDefinition> => {
   const resolved = expandPath(filePath);
   const module = (await import(`${pathToFileURL(resolved).href}?t=${Date.now()}`)) as WorkflowModule;
   const candidate = module.workflow ?? module.default;

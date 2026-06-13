@@ -194,6 +194,57 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("dynamic workflows reuse cached upstream output to construct downstream tasks", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = defineWorkflow({
+      name: "dynamic-store-smoke",
+      run: async (wf) => {
+        const build = await wf.runTask(defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build the slice.",
+          output: Output,
+          cacheKey: "dynamic-builder-cache",
+        }));
+        const review = await wf.runTask(defineTask({
+          id: "review",
+          agent: reviewer,
+          prompt: `Review ${build.summary}`,
+          output: ReviewOutput,
+          cacheKey: "dynamic-review-cache",
+        }));
+        return { summary: build.summary, verdict: review.verdict };
+      },
+    });
+    const calls: string[] = [];
+
+    const first = await runWorkflow(workflow, {
+      store,
+      executeTask: async (task) => {
+        calls.push(task.prompt);
+        if (task.id === "build") return { summary: "first" };
+        return { verdict: "pass" };
+      },
+    });
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async (task) => {
+        calls.push(`unexpected:${task.id}`);
+        return task.id === "build" ? { summary: "second" } : { verdict: "pass" };
+      },
+    });
+
+    expect(calls).toEqual(["Build the slice.", "Review first"]);
+    expect(first.output).toEqual({ summary: "first", verdict: "pass" });
+    expect(second.output).toEqual({ summary: "first", verdict: "pass" });
+    expect(second.tasks.map((task) => ({ id: task.id, cached: task.cached }))).toEqual([
+      { id: "build", cached: true },
+      { id: "review", cached: true },
+    ]);
+    store.close();
+  });
+
   test("runner records decode failures in run history", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

@@ -49,6 +49,14 @@ const contractMetadata = {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const deadPid = async (): Promise<number> => {
+  const processHandle = Bun.spawn({ cmd: ["sh", "-c", "sleep 30"] });
+  const pid = processHandle.pid;
+  processHandle.kill("SIGKILL");
+  await processHandle.exited;
+  return pid;
+};
+
 const createWorkflow = (options?: {
   readonly prompt?: string;
   readonly agent?: WorkflowAgentRef;
@@ -126,7 +134,7 @@ describe("workflow store", () => {
     store.createRun("store-smoke", "old-run");
     store.createRun("store-smoke", "fresh-run");
     store.createRun("store-smoke", "old-with-fresh-heartbeat");
-    store.markRunRunnerStarted("old-with-fresh-heartbeat", 12345);
+    store.markRunRunnerStarted("old-with-fresh-heartbeat", process.pid);
     store.close();
 
     const db = new Database(path);
@@ -210,12 +218,72 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("read surfaces reconcile running runs whose runner pid is dead", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const pid = await deadPid();
+    store.createRun("store-smoke", "dead-run");
+    store.createRun("store-smoke", "live-run");
+    store.markRunRunnerStarted("dead-run", pid);
+    store.markRunRunnerStarted("live-run", process.pid);
+
+    expect(store.getRun("dead-run")).toMatchObject({
+      runId: "dead-run",
+      status: "failed",
+      runnerPid: pid,
+      finishedAt: expect.any(String),
+    });
+    expect(store.getRun("live-run")).toMatchObject({
+      runId: "live-run",
+      status: "running",
+      runnerPid: process.pid,
+      finishedAt: null,
+    });
+    expect(store.listRunEvents("dead-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "runner.started",
+      "run.stale_dead_pid",
+      "run.failed",
+    ]);
+    expect(store.listRunEvents("dead-run").at(-1)?.payload).toMatchObject({
+      reason: "dead-runner-pid",
+      runnerPid: pid,
+    });
+    expect(store.failDeadPidRuns()).toEqual([]);
+    expect(store.listRunEvents("live-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "runner.started",
+    ]);
+    store.close();
+  });
+
+  test("stopRun returns a healed terminal record when the runner pid is already dead", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const pid = await deadPid();
+    store.createRun("store-smoke", "dead-stop-run");
+    store.markRunRunnerStarted("dead-stop-run", pid);
+
+    expect(store.stopRun("dead-stop-run")).toMatchObject({
+      runId: "dead-stop-run",
+      status: "failed",
+      runnerPid: pid,
+    });
+    expect(store.listRunEvents("dead-stop-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "runner.started",
+      "run.stale_dead_pid",
+      "run.failed",
+    ]);
+    store.close();
+  });
+
   test("records detached runner pid and heartbeat on run records", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     store.createRun("store-smoke", "detached-run");
 
-    store.markRunRunnerStarted("detached-run", 12345);
+    store.markRunRunnerStarted("detached-run", process.pid);
     const started = store.getRun("detached-run");
     store.heartbeatRun("detached-run");
     const heartbeat = store.getRun("detached-run");
@@ -224,13 +292,13 @@ describe("workflow store", () => {
       runId: "detached-run",
       workflow: "store-smoke",
       status: "running",
-      runnerPid: 12345,
+      runnerPid: process.pid,
       heartbeatAt: expect.any(String),
     });
-    expect(heartbeat).toMatchObject({ runnerPid: 12345, heartbeatAt: expect.any(String) });
+    expect(heartbeat).toMatchObject({ runnerPid: process.pid, heartbeatAt: expect.any(String) });
     expect(store.listRuns()).toEqual([expect.objectContaining({
       runId: "detached-run",
-      runnerPid: 12345,
+      runnerPid: process.pid,
       heartbeatAt: expect.any(String),
     })]);
     expect(store.listRunEvents("detached-run").map((event) => event.type)).toEqual([

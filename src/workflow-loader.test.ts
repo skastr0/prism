@@ -31,6 +31,14 @@ const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 5_000): Pr
   throw new Error("timed out waiting for condition");
 };
 
+const deadPid = async (): Promise<number> => {
+  const processHandle = Bun.spawn({ cmd: ["sh", "-c", "sleep 30"] });
+  const pid = processHandle.pid;
+  processHandle.kill("SIGKILL");
+  await processHandle.exited;
+  return pid;
+};
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -2267,6 +2275,58 @@ describe("workflow loader", () => {
     expect(waited).toMatchObject({ run: { runId: "stop-run", status: "failed" }, tasks: [] });
     expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stop_requested", "run.failed"]);
     expect(events.events.at(-1)?.payload).toEqual({ reason: "stop-requested" });
+  });
+
+  test("CLI run inspection heals dead detached runner pids without the stale flag", async () => {
+    const root = await createTempRoot();
+    const storeFile = join(root, "workflows.sqlite");
+    const pid = await deadPid();
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+    const store = await WorkflowStore.open(storeFile);
+    store.createRun("dead-pid-smoke", "dead-pid-run");
+    store.markRunRunnerStarted("dead-pid-run", pid);
+    store.close();
+
+    const listed = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null; runnerPid?: number; heartbeatAt?: string }>;
+    };
+    const shown = await cli(["workflow", "runs", "show", "dead-pid-run", "--store", storeFile]) as {
+      run: { runId: string; status: string; finishedAt: string | null; runnerPid?: number };
+    };
+    const events = await cli(["workflow", "runs", "events", "dead-pid-run", "--store", storeFile]) as {
+      events: Array<{ type: string; payload: unknown }>;
+    };
+    const stopped = await cli(["workflow", "runs", "stop", "dead-pid-run", "--store", storeFile]) as {
+      run: { runId: string; status: string; finishedAt: string | null; runnerPid?: number };
+    };
+
+    expect(listed.runs).toEqual([
+      { runId: "dead-pid-run", workflow: "dead-pid-smoke", status: "failed", finishedAt: expect.any(String), runnerPid: pid, heartbeatAt: expect.any(String) },
+    ]);
+    expect(shown.run).toMatchObject({ runId: "dead-pid-run", status: "failed", runnerPid: pid });
+    expect(stopped.run).toMatchObject({ runId: "dead-pid-run", status: "failed", runnerPid: pid });
+    expect(events.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "runner.started",
+      "run.stale_dead_pid",
+      "run.failed",
+    ]);
+    expect(events.events.at(-1)?.payload).toMatchObject({ reason: "dead-runner-pid", runnerPid: pid });
   });
 
   test("CLI stop aborts an active detached worker process", async () => {

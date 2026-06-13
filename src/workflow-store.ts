@@ -155,6 +155,18 @@ const pickContractMetadata = (metadata: Record<string, unknown> | undefined): Re
   };
 };
 
+const processIsAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
+};
+
 export const workflowTaskIdentity = (
   workflow: string,
   task: AnyWorkflowTask,
@@ -425,6 +437,7 @@ export class WorkflowStore {
   }
 
   stopRun(runId: string, reason: string = "stop-requested"): WorkflowRunRecord | null {
+    this.failDeadPidRuns();
     const stop = this.db.transaction(() => {
       const stopped = this.db.query<RunRow, [string]>(`
         update workflow_runs
@@ -457,6 +470,7 @@ export class WorkflowStore {
   }
 
   getRun(runId: string): WorkflowRunRecord | null {
+    this.failDeadPidRuns();
     const row = this.db.query<RunRow, [string]>(`
       select run_id, workflow, status, finished_at, runner_pid, heartbeat_at
       from workflow_runs
@@ -498,6 +512,7 @@ export class WorkflowStore {
   }
 
   listRunEvents(runId: string): WorkflowEventRecord[] {
+    this.failDeadPidRuns();
     const rows = this.db.query<EventRow, [string]>(`
       select sequence, run_id, task_id, type, payload_json, created_at
       from workflow_events
@@ -512,6 +527,47 @@ export class WorkflowStore {
       payload: JSON.parse(row.payload_json) as unknown,
       createdAt: row.created_at,
     }));
+  }
+
+  failDeadPidRuns(): WorkflowRunRecord[] {
+    const candidates = this.db.query<StaleRunRow, []>(`
+      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
+      from workflow_runs
+      where status = 'running'
+        and runner_pid is not null
+    `).all();
+    const dead = candidates.filter((row) => row.runner_pid !== null && !processIsAlive(row.runner_pid));
+    if (dead.length === 0) return [];
+    const fail = this.db.transaction(() => {
+      const failed: WorkflowRunRecord[] = [];
+      for (const row of dead) {
+        const updated = this.db.query<RunRow, [string]>(`
+          update workflow_runs
+          set status = 'failed', finished_at = datetime('now')
+          where run_id = ? and status = 'running'
+          returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+        `).get(row.run_id);
+        if (updated === null) continue;
+        const payload = {
+          reason: "dead-runner-pid",
+          runnerPid: row.runner_pid,
+          createdAt: row.created_at,
+          ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+        };
+        this.recordEvent({ runId: row.run_id, type: "run.stale_dead_pid", payload });
+        this.recordEvent({ runId: row.run_id, type: "run.failed", payload });
+        failed.push({
+          runId: updated.run_id,
+          workflow: updated.workflow,
+          status: "failed",
+          finishedAt: updated.finished_at,
+          ...(updated.runner_pid !== null ? { runnerPid: updated.runner_pid } : {}),
+          ...(updated.heartbeat_at !== null ? { heartbeatAt: updated.heartbeat_at } : {}),
+        });
+      }
+      return failed;
+    });
+    return fail();
   }
 
   failStaleRuns(olderThanMs: number, now: Date = new Date()): WorkflowRunRecord[] {
@@ -560,6 +616,7 @@ export class WorkflowStore {
   }
 
   listRuns(): WorkflowRunRecord[] {
+    this.failDeadPidRuns();
     const rows = this.db.query<RunRow, []>(`
       select run_id, workflow, status, finished_at, runner_pid, heartbeat_at
       from workflow_runs
@@ -629,6 +686,7 @@ export class WorkflowStore {
   }
 
   listRunTasks(runId: string): WorkflowRunTaskRecord[] {
+    this.failDeadPidRuns();
     const rows = this.db.query<RunTaskRow, [string]>(`
       select run_id, task_id, cache_key, status, cached, agent_plugin, agent_name, output_json, metadata_json
       from workflow_run_tasks

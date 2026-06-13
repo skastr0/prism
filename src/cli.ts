@@ -368,10 +368,14 @@ workflowRuns
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
-      console.log(JSON.stringify({ runId, tasks: store.listRunTasks(runId) }, null, 2));
+      const run = store.getRun(runId);
+      if (run === null) {
+        throw new CliUsageError(`workflow run not found: ${runId}`);
+      }
+      console.log(JSON.stringify({ run, tasks: store.listRunTasks(runId) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs show failed");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     } finally {
       store?.close();
     }

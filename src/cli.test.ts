@@ -102,6 +102,64 @@ test("workflow run help exposes the runtime task concurrency limit", async () =>
   expect(result.stdout).toContain("Maximum concurrent workflow task executions");
 });
 
+test("workflow runs show returns the run record and rejects missing runs", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "inspect.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+  const storePath = join(root, "workflows.sqlite");
+
+  await writeFile(workflowPath, `
+import { Schema } from "${effectImportPath}";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+export const workflow = defineWorkflow({
+  name: "inspect-smoke",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    cacheKey: "inspect-build",
+  })] as const,
+});
+`);
+  await writeFile(mockOutputPath, JSON.stringify({ build: { summary: "ok" } }));
+
+  const run = await runCli([
+    "workflow", "run", workflowPath,
+    "--store", storePath,
+    "--mock-output", mockOutputPath,
+  ], {});
+
+  expect(run.exitCode).toBe(0);
+  const runData = JSON.parse(run.stdout) as { runId: string };
+
+  const show = await runCli(["workflow", "runs", "show", runData.runId, "--store", storePath], {});
+
+  expect(show.exitCode).toBe(0);
+  const showData = JSON.parse(show.stdout) as {
+    run: { runId: string; workflow: string; status: string };
+    tasks: Array<{ taskId: string; cached: boolean }>;
+  };
+  expect(showData.run).toMatchObject({ runId: runData.runId, workflow: "inspect-smoke", status: "completed" });
+  expect(showData.tasks).toEqual([expect.objectContaining({ taskId: "build", cached: false })]);
+
+  const missing = await runCli(["workflow", "runs", "show", "missing-run", "--store", storePath], {});
+  expect(missing.exitCode).toBe(2);
+  expect(missing.stderr).toContain("workflow run not found: missing-run");
+});
+
 type JsonObject = Record<string, unknown>;
 
 type LintRule = {

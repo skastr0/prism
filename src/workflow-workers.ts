@@ -4,6 +4,7 @@ import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
+import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskExecution, WorkflowTaskExecutor } from "./workflow-runner.js";
 
@@ -62,6 +63,13 @@ const workflowWorkerAdapters = {
   grok: {
     id: "grok",
     runTask: (task, options) => runGrokWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+    }),
+  },
+  hermes: {
+    id: "hermes",
+    runTask: (task, options) => runHermesWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
     }),

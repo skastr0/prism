@@ -604,7 +604,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, opencode");
   });
 
   test("CLI runs a workflow through the Antigravity worker adapter", async () => {
@@ -1244,6 +1244,164 @@ describe("workflow loader", () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("codex did not write --output-last-message");
+  });
+
+  test("CLI runs a workflow through the Hermes worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "hermes-calls.jsonl");
+    const fakeHermes = join(root, "fake-hermes.mjs");
+    await writeFile(file, workerModelWorkflowSource("hermes"));
+    await writeFile(fakeHermes, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const queryIndex = process.argv.indexOf('--query');",
+      "const sourceIndex = process.argv.indexOf('--source');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const query = queryIndex >= 0 ? process.argv[queryIndex + 1] : '';",
+      "const source = sourceIndex >= 0 ? process.argv[sourceIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, quiet: process.argv.includes('--quiet'), source, hasInstruction: query.includes('Prism workflow task') }) + '\\n');`,
+      "console.error('session_id: hermes-session-123');",
+      "console.log(JSON.stringify({ summary: model }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeHermes, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "hermes",
+        "--store",
+        storeFile,
+        "--model",
+        "nous/qwen3-coder",
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_HERMES_BIN: fakeHermes },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as {
+      tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string; sessionId?: string } }>;
+    };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "nous/qwen3-coder"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["hermes", "hermes"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "nous/qwen3-coder"]);
+    expect(result.tasks.map((task) => task.metadata?.sessionId)).toEqual(["hermes-session-123", "hermes-session-123"]);
+
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+      command: string;
+      model: string;
+      quiet: boolean;
+      source: string;
+      hasInstruction: boolean;
+    });
+    expect(calls).toEqual([
+      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", hasInstruction: true },
+      { command: "chat", model: "nous/qwen3-coder", quiet: true, source: "prism-workflow", hasInstruction: true },
+    ]);
+  });
+
+  test("CLI fails Hermes runs when chat exits non-zero", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeHermes = join(root, "fake-hermes-error.mjs");
+    await writeFile(file, workflowSource("default", { worker: "hermes" }));
+    await writeFile(fakeHermes, [
+      "#!/usr/bin/env node",
+      "console.error('Hermes auth missing');",
+      "process.exit(2);",
+      "",
+    ].join("\n"));
+    await chmod(fakeHermes, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "hermes",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_HERMES_BIN: fakeHermes },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("hermes exited with 2: Hermes auth missing");
+  });
+
+  test("CLI kills Hermes runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeHermes = join(root, "fake-hermes-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "hermes" }));
+    await writeFile(fakeHermes, [
+      "#!/usr/bin/env node",
+      "console.log('starting hermes hang');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeHermes, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "hermes",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        PRISM_WORKFLOW_HERMES_BIN: fakeHermes,
+        PRISM_WORKFLOW_HERMES_PROCESS_TIMEOUT_MS: "250",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("hermes exceeded Prism process timeout after 250ms");
   });
 
   test("CLI runs a workflow through the OpenCode worker adapter", async () => {

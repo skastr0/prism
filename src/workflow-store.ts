@@ -13,6 +13,26 @@ export interface WorkflowTaskIdentity {
   readonly agentManifestHash: string;
 }
 
+const WORKFLOW_TASK_IDENTITY_VERSION = 2;
+
+const workflowWorkerSemanticsVersion = (worker: string | null): string => {
+  switch (worker) {
+    case "claude-code":
+    case "grok":
+    case "opencode":
+      return "native-agent-v1";
+    case "amp-code":
+    case "antigravity-cli":
+    case "codex-cli":
+    case "hermes":
+      return "prompt-agent-v1";
+    case null:
+      return "mock-or-custom-v1";
+    default:
+      return `custom:${worker}`;
+  }
+};
+
 export interface CompletedWorkflowTaskRecord {
   readonly identity: WorkflowTaskIdentity;
   readonly agent: {
@@ -113,22 +133,27 @@ export const workflowTaskIdentity = (
   workflow: string,
   task: AnyWorkflowTask,
   runtimeOptions: WorkflowRuntimeOptions = {},
-): WorkflowTaskIdentity => ({
-  workflow,
-  taskId: task.id,
-  cacheKey: task.cacheKey ?? task.id,
-  promptHash: computeContentHash(JSON.stringify({
-    prompt: task.prompt,
-    worker: task.worker?.worker ?? runtimeOptions.fallbackWorker ?? null,
-    model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
-    outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
-    finish: {
-      maxRepairs: task.finish?.maxRepairs ?? 0,
-      criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
-    },
-  })),
-  agentManifestHash: task.agent.manifestHash,
-});
+): WorkflowTaskIdentity => {
+  const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker ?? null;
+  return {
+    workflow,
+    taskId: task.id,
+    cacheKey: task.cacheKey ?? task.id,
+    promptHash: computeContentHash(JSON.stringify({
+      identityVersion: WORKFLOW_TASK_IDENTITY_VERSION,
+      prompt: task.prompt,
+      worker,
+      workerSemantics: workflowWorkerSemanticsVersion(worker),
+      model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
+      outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
+      finish: {
+        maxRepairs: task.finish?.maxRepairs ?? 0,
+        criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+      },
+    })),
+    agentManifestHash: task.agent.manifestHash,
+  };
+};
 
 const addColumnIfMissing = (db: Database, statement: string): void => {
   try {

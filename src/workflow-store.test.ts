@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
+import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
@@ -803,6 +804,24 @@ describe("workflow store", () => {
     expect(second.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.output).toEqual({ summary: "second" });
     store.close();
+  });
+
+  test("worker execution semantics participate in task cache identity", () => {
+    const workflow = createWorkflow({ worker: "grok", model: "grok-build" });
+    const task = workflow.tasks[0]!;
+    const identity = workflowTaskIdentity(workflow.name, task);
+    const preSemanticsHash = computeContentHash(JSON.stringify({
+      prompt: task.prompt,
+      worker: task.worker?.worker ?? null,
+      model: task.worker?.model ?? null,
+      outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
+      finish: {
+        maxRepairs: task.finish?.maxRepairs ?? 0,
+        criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+      },
+    }));
+
+    expect(identity.promptHash).not.toBe(preSemanticsHash);
   });
 
   test("changing the task model breaks the task cache", async () => {

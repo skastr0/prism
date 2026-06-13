@@ -456,7 +456,7 @@ export class WorkflowStore {
         update workflow_runs
         set status = 'failed', finished_at = datetime('now')
         where status = 'running'
-          and datetime(created_at) < datetime(?)
+          and datetime(coalesce(heartbeat_at, created_at)) < datetime(?)
         returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
       `).all(staleBefore);
       for (const row of updated) {
@@ -468,6 +468,7 @@ export class WorkflowStore {
             staleAfterMs: olderThanMs,
             staleBefore,
             createdAt: row.created_at,
+            ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
           },
         });
       }

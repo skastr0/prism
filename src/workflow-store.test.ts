@@ -119,6 +119,8 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(path);
     store.createRun("store-smoke", "old-run");
     store.createRun("store-smoke", "fresh-run");
+    store.createRun("store-smoke", "old-with-fresh-heartbeat");
+    store.markRunRunnerStarted("old-with-fresh-heartbeat", 12345);
     store.close();
 
     const db = new Database(path);
@@ -126,6 +128,8 @@ describe("workflow store", () => {
       .run("2026-01-01 00:00:00", "old-run");
     db.query("update workflow_runs set created_at = ? where run_id = ?")
       .run("2026-01-01 00:00:59", "fresh-run");
+    db.query("update workflow_runs set created_at = ?, heartbeat_at = ? where run_id = ?")
+      .run("2026-01-01 00:00:00", "2026-01-01 00:00:59", "old-with-fresh-heartbeat");
     db.close();
 
     const reopened = await WorkflowStore.open(path);
@@ -135,6 +139,7 @@ describe("workflow store", () => {
     expect(typeof reconciled[0]?.finishedAt).toBe("string");
     expect(reopened.listRuns().map((run) => ({ runId: run.runId, status: run.status }))).toEqual([
       { runId: "old-run", status: "failed" },
+      { runId: "old-with-fresh-heartbeat", status: "running" },
       { runId: "fresh-run", status: "running" },
     ]);
     expect(reopened.listRunEvents("old-run").map((event) => event.type)).toEqual([
@@ -148,6 +153,10 @@ describe("workflow store", () => {
       createdAt: "2026-01-01 00:00:00",
     });
     expect(reopened.listRunEvents("fresh-run").map((event) => event.type)).toEqual(["run.started"]);
+    expect(reopened.listRunEvents("old-with-fresh-heartbeat").map((event) => event.type)).toEqual([
+      "run.started",
+      "runner.started",
+    ]);
     expect(reopened.failStaleRuns(30_000, new Date("2026-01-01T00:01:00Z"))).toEqual([]);
     expect(reopened.listRunEvents("old-run").map((event) => event.type)).toEqual([
       "run.started",

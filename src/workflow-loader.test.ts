@@ -1740,7 +1740,21 @@ describe("workflow loader", () => {
       }>;
     };
     const eventsResult = await cli(["workflow", "runs", "events", runResult.runId, "--store", storeFile]) as {
-      events: Array<{ type: string; taskId: string | null }>;
+      events: Array<{ sequence: number; type: string; taskId: string | null }>;
+    };
+    const cursorResult = await cli([
+      "workflow",
+      "runs",
+      "events",
+      runResult.runId,
+      "--store",
+      storeFile,
+      "--after-sequence",
+      "2",
+      "--limit",
+      "3",
+    ]) as {
+      events: Array<{ sequence: number; type: string }>;
     };
 
     expect(listResult.runs).toEqual([
@@ -1769,6 +1783,11 @@ describe("workflow loader", () => {
       "task.cache_write.completed",
       "task.completed",
       "run.completed",
+    ]);
+    expect(cursorResult.events.map((event) => ({ sequence: event.sequence, type: event.type }))).toEqual([
+      { sequence: 3, type: "task.cache_lookup.miss" },
+      { sequence: 4, type: "task.executor.started" },
+      { sequence: 5, type: "task.executor.completed" },
     ]);
   });
 

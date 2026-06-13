@@ -170,13 +170,16 @@ const workflow = program
   .command("workflow")
   .description("Validate Prism workflow files");
 
-const parsePositiveInteger = (value: string): number => {
+const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new InvalidArgumentError("must be a positive integer");
+  if (!Number.isInteger(parsed) || parsed < minimum) {
+    throw new InvalidArgumentError(message);
   }
   return parsed;
 };
+
+const parsePositiveInteger = (value: string): number =>
+  parseIntegerAtLeast(value, 1, "must be a positive integer");
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -377,15 +380,29 @@ workflowRuns
   .command("events <runId>")
   .description("Show append-only events for one workflow run")
   .option("--store <path>", "SQLite workflow store path")
+  .option("--after-sequence <n>", "Return events after this sequence number", (value) =>
+    parseIntegerAtLeast(value, 0, "must be a non-negative integer"))
+  .option("--limit <n>", "Maximum number of events to return", parsePositiveInteger)
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing events")
-  .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
+  .action(async (
+    runId: string,
+    options: {
+      readonly store?: string;
+      readonly afterSequence?: number;
+      readonly limit?: number;
+      readonly failStaleAfterMs?: string;
+    },
+  ) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
-      console.log(JSON.stringify({ runId, events: store.listRunEvents(runId) }, null, 2));
+      const events = store.listRunEvents(runId)
+        .filter((event) => options.afterSequence === undefined || event.sequence > options.afterSequence)
+        .slice(0, options.limit);
+      console.log(JSON.stringify({ runId, events }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs events failed");
       exitWith(EXIT_CODES.domainFailure);

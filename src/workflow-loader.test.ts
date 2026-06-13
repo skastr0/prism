@@ -521,7 +521,164 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: codex-cli, grok, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: claude-code, codex-cli, grok, opencode");
+  });
+
+  test("CLI runs a workflow through the Claude Code worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "claude-calls.jsonl");
+    const fakeClaude = join(root, "fake-claude.mjs");
+    await writeFile(file, workerModelWorkflowSource("claude-code"));
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const outputFormatIndex = process.argv.indexOf('--output-format');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const outputFormat = outputFormatIndex >= 0 ? process.argv[outputFormatIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, cwd: process.cwd() }) + '\\n');`,
+      "console.log(JSON.stringify({ result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const run = async () => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--worker",
+          "claude-code",
+          "--store",
+          storeFile,
+          "--model",
+          "sonnet",
+        ],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as {
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; sessionId?: string; totalCostUsd?: number } }>;
+      };
+    };
+
+    const result = await run();
+    const cachedResult = await run();
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "sonnet"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["claude-code", "claude-code"]);
+    expect(result.tasks[0]?.metadata?.sessionId).toBe("claude-session");
+    expect(result.tasks[0]?.metadata?.totalCostUsd).toBe(0.01);
+    expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
+    expect(cachedResult.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "sonnet"]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+      print: boolean;
+      outputFormat: string;
+      noSession: boolean;
+      model: string;
+      cwd: string;
+    });
+    expect(calls).toEqual([
+      { print: true, outputFormat: "json", noSession: true, model: "grok-build", cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: true, model: "sonnet", cwd: expectedCwd },
+    ]);
+  });
+
+  test("CLI fails Claude runs when the JSON envelope reports an error", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeClaude = join(root, "fake-claude-error.mjs");
+    await writeFile(file, workflowSource("default", { worker: "claude-code" }));
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify({ result: 'Not logged in', is_error: true }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "claude-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("claude returned an error: Not logged in");
+  });
+
+  test("CLI fails Claude runs when the JSON envelope result is not task text", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeClaude = join(root, "fake-claude-non-string-result.mjs");
+    await writeFile(file, workflowSource("default", { worker: "claude-code" }));
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify({ result: { summary: 'not task text' }, is_error: false }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "claude-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("claude JSON envelope did not contain a string result");
   });
 
   test("CLI runs a workflow through the Codex worker adapter", async () => {

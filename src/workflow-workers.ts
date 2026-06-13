@@ -1,4 +1,5 @@
 import type { AnyWorkflowTask } from "./workflows.js";
+import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
@@ -28,6 +29,13 @@ export class UnsupportedWorkflowWorkerError extends Error {
 }
 
 const workflowWorkerAdapters = {
+  "claude-code": {
+    id: "claude-code",
+    runTask: (task, options) => runClaudeWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+    }),
+  },
   "codex-cli": {
     id: "codex-cli",
     runTask: (task, options) => runCodexWorkflowTask(task, {

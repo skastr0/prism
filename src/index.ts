@@ -14,6 +14,7 @@
  */
 
 export * from "./workflows.js";
+export * from "./workflow-claude-worker.js";
 export * from "./workflow-codex-worker.js";
 export * from "./workflow-loader.js";
 export * from "./workflow-opencode-worker.js";

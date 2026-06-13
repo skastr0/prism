@@ -23,6 +23,8 @@ const reviewer = {
 const PatchReport = Schema.Struct({ summary: Schema.String });
 const ReviewReport = Schema.Struct({ verdict: Schema.Literal("pass", "needs-work") });
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 describe("workflow runner", () => {
   test("executes tasks sequentially and decodes outputs", async () => {
     const build = defineTask({
@@ -133,5 +135,47 @@ describe("workflow runner", () => {
     expect(prompts).toEqual(["Build the slice.", "Review this patch: built"]);
     expect(result.output).toEqual({ reviewed: "built", verdict: "pass" });
     expect(result.tasks.map((task) => task.id)).toEqual(["build", "review"]);
+  });
+
+  test("orders dynamic fan-out results by invocation ordinal", async () => {
+    const slow = defineTask({
+      id: "slow",
+      agent: builder,
+      prompt: "Return slow output.",
+      output: PatchReport,
+    });
+    const fast = defineTask({
+      id: "fast",
+      agent: reviewer,
+      prompt: "Return fast output.",
+      output: ReviewReport,
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-fanout-smoke",
+      run: async (wf) => {
+        const [slowOutput, fastOutput] = await Promise.all([
+          wf.runTask(slow),
+          wf.runTask(fast),
+        ]);
+        return { slow: slowOutput.summary, fast: fastOutput.verdict };
+      },
+    });
+    const completions: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        if (task.id === "slow") {
+          await delay(20);
+          completions.push(task.id);
+          return { summary: "slow" };
+        }
+        completions.push(task.id);
+        return { verdict: "pass" };
+      },
+    });
+
+    expect(completions).toEqual(["fast", "slow"]);
+    expect(result.tasks.map((task) => task.id)).toEqual(["slow", "fast"]);
+    expect(result.output).toEqual({ slow: "slow", fast: "pass" });
   });
 });

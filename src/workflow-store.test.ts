@@ -40,6 +40,8 @@ const reviewer = {
 const Output = Schema.Struct({ summary: Schema.String });
 const ReviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 const createWorkflow = (options?: { readonly prompt?: string; readonly agent?: WorkflowAgentRef }) => {
   const build = defineTask({
     id: "build",
@@ -242,6 +244,94 @@ describe("workflow store", () => {
       { id: "build", cached: true },
       { id: "review", cached: true },
     ]);
+    store.close();
+  });
+
+  test("dynamic fan-out preserves invocation order in run history", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = defineWorkflow({
+      name: "dynamic-fanout-store-smoke",
+      run: async (wf) => {
+        const slow = defineTask({
+          id: "slow",
+          agent: builder,
+          prompt: "Return slow output.",
+          output: Output,
+          cacheKey: "dynamic-slow-cache",
+        });
+        const fast = defineTask({
+          id: "fast",
+          agent: reviewer,
+          prompt: "Return fast output.",
+          output: ReviewOutput,
+          cacheKey: "dynamic-fast-cache",
+        });
+        const [slowOutput, fastOutput] = await Promise.all([
+          wf.runTask(slow),
+          wf.runTask(fast),
+        ]);
+        return { slow: slowOutput.summary, fast: fastOutput.verdict };
+      },
+    });
+    const completions: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async (task) => {
+        if (task.id === "slow") {
+          await delay(20);
+          completions.push(task.id);
+          return { summary: "slow" };
+        }
+        completions.push(task.id);
+        return { verdict: "pass" };
+      },
+    });
+
+    expect(completions).toEqual(["fast", "slow"]);
+    expect(result.tasks.map((task) => task.id)).toEqual(["slow", "fast"]);
+    expect(store.listRuns()[0]?.status).toBe("completed");
+    expect(store.listRunTasks(result.runId!).map((task) => task.taskId)).toEqual(["slow", "fast"]);
+    expect(store.listRunEvents(result.runId!).map((event) => event.type).at(-1)).toBe("run.completed");
+    store.close();
+  });
+
+  test("dynamic workflow failures after completed tasks mark the run failed", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = defineWorkflow({
+      name: "dynamic-post-task-failure-smoke",
+      run: async (wf) => {
+        await wf.runTask(defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build before failing.",
+          output: Output,
+        }));
+        throw new Error("dynamic workflow body failed");
+      },
+    });
+
+    await expect(runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "built" }),
+    })).rejects.toThrow("dynamic workflow body failed");
+
+    const runId = store.listRuns()[0]!.runId;
+    expect(store.listRuns()[0]?.status).toBe("failed");
+    expect(store.listRunTasks(runId)).toEqual([
+      {
+        runId,
+        taskId: "build",
+        cacheKey: "build",
+        status: "completed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { summary: "built" },
+      },
+    ]);
+    expect(store.listRunEvents(runId).map((event) => event.type).at(-1)).toBe("run.failed");
     store.close();
   });
 

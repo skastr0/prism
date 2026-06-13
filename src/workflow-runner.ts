@@ -209,12 +209,13 @@ const runDynamicWorkflow = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
-  const tasks: WorkflowRunTaskResult[] = [];
+  const tasks: Array<WorkflowRunTaskResult | undefined> = [];
   let ordinal = 0;
   const runtime: WorkflowRuntime = {
     runTask: async (task) => {
+      const taskOrdinal = ordinal++;
       const result = await executeWorkflowTask({
-        ordinal: ordinal++,
+        ordinal: taskOrdinal,
         task,
         identity: workflowTaskIdentity(input.workflow.name, task),
         runId: input.runId,
@@ -222,14 +223,14 @@ const runDynamicWorkflow = async (input: {
         executeTask: input.executeTask,
         useCache: input.useCache,
       });
-      tasks.push(result);
+      tasks[taskOrdinal] = result;
       return result.output as never;
     },
   };
   try {
     const output = await input.workflow.run(runtime);
     if (input.runId !== null) input.store?.finishRun(input.runId, "completed");
-    return { output, tasks };
+    return { output, tasks: tasks.flatMap((task) => task === undefined ? [] : [task]) };
   } catch (error) {
     if (input.runId !== null && input.store?.listRuns().find((run) => run.runId === input.runId)?.status === "running") {
       input.store.finishRun(input.runId, "failed");

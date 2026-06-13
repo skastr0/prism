@@ -1,12 +1,14 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface ClaudeWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly abortSignal?: AbortSignal;
 }
 
 export class ClaudeWorkflowWorkerError extends Error {
@@ -62,19 +64,15 @@ export const runClaudeWorkflowTask = async (
     prompt,
   ];
 
-  const started = Date.now();
-  const child = Bun.spawn({
-    cmd: [command, ...args],
+  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
+    command,
+    args,
     cwd: options.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+    abortSignal: options.abortSignal,
   });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  const durationMs = Date.now() - started;
+  if (aborted) {
+    throw new ClaudeWorkflowWorkerError("claude was aborted by Prism workflow stop");
+  }
   if (exitCode !== 0) {
     throw new ClaudeWorkflowWorkerError(`claude exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
   }

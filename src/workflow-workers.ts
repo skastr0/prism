@@ -6,11 +6,12 @@ import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
-import type { WorkflowTaskExecution, WorkflowTaskExecutor } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskExecutionContext, WorkflowTaskExecutor } from "./workflow-runner.js";
 
 export interface WorkflowWorkerAdapterOptions {
   readonly cwd: string;
   readonly model?: string;
+  readonly abortSignal?: AbortSignal;
 }
 
 export interface WorkflowWorkerAdapter {
@@ -37,6 +38,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runAntigravityWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
   "amp-code": {
@@ -44,6 +46,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runAmpWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
   "claude-code": {
@@ -51,6 +54,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
   "codex-cli": {
@@ -58,6 +62,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runCodexWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
   grok: {
@@ -65,6 +70,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runGrokWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
   hermes: {
@@ -72,6 +78,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runHermesWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
   opencode: {
@@ -79,6 +86,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runOpenCodeWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
     }),
   },
 } as const satisfies Record<string, WorkflowWorkerAdapter>;
@@ -102,12 +110,12 @@ export const createWorkflowWorkerExecutor = (input: {
   if (input.worker !== undefined) {
     getWorkflowWorkerAdapter(input.worker);
   }
-  return (task) => {
+  return (task, context?: WorkflowTaskExecutionContext) => {
     const worker = task.worker?.worker ?? input.worker;
     if (worker === undefined) {
       throw new UnsupportedWorkflowWorkerError("<missing>", supportedWorkflowWorkers());
     }
     const adapter = getWorkflowWorkerAdapter(worker);
-    return adapter.runTask(task, { cwd: input.cwd, model: input.model });
+    return adapter.runTask(task, { cwd: input.cwd, model: input.model, abortSignal: context?.abortSignal });
   };
 };

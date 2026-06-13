@@ -1,6 +1,7 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface HermesWorkflowWorkerOptions {
@@ -8,6 +9,7 @@ export interface HermesWorkflowWorkerOptions {
   readonly bin?: string;
   readonly model?: string;
   readonly processTimeoutMs?: number;
+  readonly abortSignal?: AbortSignal;
 }
 
 export class HermesWorkflowWorkerError extends Error {
@@ -31,14 +33,6 @@ const hermesSessionId = (stderr: string): string | undefined => {
   return match?.[1];
 };
 
-const parsePositiveInteger = (value: string | undefined): number | undefined => {
-  if (value === undefined) return undefined;
-  if (!/^\d+$/u.test(value)) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-  return parsed;
-};
-
 export const runHermesWorkflowTask = async (
   task: AnyWorkflowTask,
   options: HermesWorkflowWorkerOptions,
@@ -58,27 +52,18 @@ export const runHermesWorkflowTask = async (
     ...(options.model !== undefined ? ["--model", options.model] : []),
   ];
 
-  const started = Date.now();
-  const child = Bun.spawn({
-    cmd: [command, ...args],
+  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+    command,
+    args,
     cwd: options.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+    processTimeoutMs,
+    abortSignal: options.abortSignal,
   });
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, processTimeoutMs);
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]).finally(() => clearTimeout(timeout));
-  const durationMs = Date.now() - started;
+  if (aborted) {
+    throw new HermesWorkflowWorkerError(`hermes was aborted by Prism workflow stop${workflowWorkerProcessExcerpt(stdout, stderr)}`);
+  }
   if (timedOut) {
-    const transcript = `${stdout}\n${stderr}`.trim();
-    const excerpt = transcript.length > 0 ? `: ${transcript.slice(-512)}` : "";
+    const excerpt = workflowWorkerProcessExcerpt(stdout, stderr);
     throw new HermesWorkflowWorkerError(`hermes exceeded Prism process timeout after ${processTimeoutMs}ms${excerpt}`);
   }
   if (exitCode !== 0) {

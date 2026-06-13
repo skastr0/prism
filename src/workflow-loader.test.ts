@@ -2130,6 +2130,89 @@ describe("workflow loader", () => {
     expect(events.events.at(-1)?.payload).toEqual({ reason: "stop-requested" });
   });
 
+  test("CLI stop aborts an active detached worker process", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const startedFile = join(root, "worker-started.txt");
+    const fakeGrok = join(root, "fake-grok-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(startedFile)}, 'started');`,
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const detached = await cli(["workflow", "run", file, "--detach", "--store", storeFile]) as { runId: string };
+    await waitFor(async () => Bun.file(startedFile).exists(), 5_000);
+    const stopped = await cli(["workflow", "runs", "stop", detached.runId, "--store", storeFile]) as {
+      run: { runId: string; status: string };
+    };
+    await waitFor(async () => {
+      const shown = await cli(["workflow", "runs", "show", detached.runId, "--store", storeFile]) as {
+        tasks: Array<{ status: string }>;
+      };
+      return shown.tasks[0]?.status === "failed";
+    }, 5_000);
+    const waited = await cli([
+      "workflow",
+      "runs",
+      "wait",
+      detached.runId,
+      "--store",
+      storeFile,
+      "--timeout-ms",
+      "5000",
+      "--interval-ms",
+      "50",
+    ]) as {
+      run: { runId: string; status: string };
+      tasks: Array<{
+        runId: string;
+        taskId: string;
+        cacheKey: string;
+        status: string;
+        cached: boolean;
+        agent: { plugin: string; name: string };
+        output: { error: string };
+      }>;
+    };
+
+    expect(stopped.run).toMatchObject({ runId: detached.runId, status: "failed" });
+    expect(waited.run).toMatchObject({ runId: detached.runId, status: "failed" });
+    expect(waited.tasks).toEqual([
+      {
+        runId: detached.runId,
+        taskId: "build",
+        cacheKey: "workflow-loader-build",
+        status: "failed",
+        cached: false,
+        agent: { plugin: "forge", name: "builder" },
+        output: { error: "grok was aborted by Prism workflow stop" },
+      },
+    ]);
+  });
+
   test("CLI waits for a detached workflow run to complete", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

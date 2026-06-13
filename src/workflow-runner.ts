@@ -42,7 +42,14 @@ export class WorkflowRunStoppedError extends Error {
   }
 }
 
-export type WorkflowTaskExecutor = (task: AnyWorkflowTask) => Promise<unknown | WorkflowTaskExecution>;
+export interface WorkflowTaskExecutionContext {
+  readonly abortSignal?: AbortSignal;
+}
+
+export type WorkflowTaskExecutor = (
+  task: AnyWorkflowTask,
+  context?: WorkflowTaskExecutionContext,
+) => Promise<unknown | WorkflowTaskExecution>;
 
 export const DEFAULT_WORKFLOW_TASK_CONCURRENCY = 8;
 
@@ -117,6 +124,7 @@ const executeOrReuseTask = async (input: {
   readonly task: AnyWorkflowTask;
   readonly cached: { readonly output: unknown } | null | undefined;
   readonly executeTask: WorkflowTaskExecutor;
+  readonly context?: WorkflowTaskExecutionContext;
 }): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
   if (input.cached !== undefined && input.cached !== null) {
     return {
@@ -124,7 +132,7 @@ const executeOrReuseTask = async (input: {
       metadata: { cachedFrom: "workflow_task_records" },
     };
   }
-  const executed = await input.executeTask(input.task);
+  const executed = await input.executeTask(input.task, input.context);
   if (!isWorkflowTaskExecution(executed)) {
     return { rawOutput: executed };
   }
@@ -226,6 +234,23 @@ const assertRunStillRunning = (
   }
 };
 
+const createRunAbortMonitor = (
+  store: WorkflowStore | undefined,
+  runId: string | null,
+): { readonly signal?: AbortSignal; readonly dispose: () => void } => {
+  if (store === undefined || runId === null) return { dispose: () => {} };
+  const controller = new AbortController();
+  const interval = setInterval(() => {
+    if (store.getRun(runId)?.status !== "running") {
+      controller.abort();
+    }
+  }, 250);
+  return {
+    signal: controller.signal,
+    dispose: () => clearInterval(interval),
+  };
+};
+
 const executeWorkflowTask = async (input: {
   readonly isLastTask?: boolean;
   readonly finishRunOnFailure?: boolean;
@@ -253,7 +278,17 @@ const executeWorkflowTask = async (input: {
     while (true) {
       try {
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
-        ({ rawOutput, metadata } = await executeOrReuseTask({ task: attemptTask, cached: repairs === 0 ? cached : null, executeTask }));
+        const abortMonitor = createRunAbortMonitor(store, runId);
+        try {
+          ({ rawOutput, metadata } = await executeOrReuseTask({
+            task: attemptTask,
+            cached: repairs === 0 ? cached : null,
+            executeTask,
+            ...(abortMonitor.signal ? { context: { abortSignal: abortMonitor.signal } } : {}),
+          }));
+        } finally {
+          abortMonitor.dispose();
+        }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
         const output = { error: errorMessage(error) };

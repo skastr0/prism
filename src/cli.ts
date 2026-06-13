@@ -313,8 +313,8 @@ workflow
           fallbackWorker: options.worker,
           fallbackModel: options.model,
         },
-        executeTask: async (task) => {
-          if (outputs === null) return workerExecutor!(task);
+        executeTask: async (task, context) => {
+          if (outputs === null) return workerExecutor!(task, context);
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);
           }

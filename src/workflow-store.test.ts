@@ -223,6 +223,7 @@ describe("workflow store", () => {
       "task.executor.completed",
       "task.decode.started",
       "task.decode.completed",
+      "task.finish.completed",
       "task.cache_write.completed",
       "task.completed",
       "run.completed",
@@ -236,7 +237,10 @@ describe("workflow store", () => {
         cached: true,
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
-        metadata: { cachedFrom: "workflow_task_records" },
+        metadata: {
+          cachedFrom: "workflow_task_records",
+          finish: { repairs: 0, criteria: [], repairMode: "none" },
+        },
       },
     ]);
     expect(store.listRunEvents(secondRunId).map((event) => event.type)).toEqual([
@@ -246,6 +250,7 @@ describe("workflow store", () => {
       "task.cache_lookup.hit",
       "task.decode.started",
       "task.decode.completed",
+      "task.finish.completed",
       "task.completed",
       "run.completed",
     ]);
@@ -559,6 +564,7 @@ describe("workflow store", () => {
       "task.executor.completed",
       "task.decode.started",
       "task.decode.completed",
+      "task.finish.completed",
       "task.completed",
       "run.completed",
     ]);
@@ -621,6 +627,7 @@ describe("workflow store", () => {
       "task.executor.completed",
       "task.decode.started",
       "task.decode.completed",
+      "task.finish.completed",
       "task.cache_write.completed",
       "task.completed",
       "task.started",

@@ -24,6 +24,23 @@ export interface WorkflowTaskWorkerOptions {
   readonly model?: string;
 }
 
+export interface WorkflowFinishCriterionContext<Output> {
+  readonly output: Output;
+  readonly rawOutput: unknown;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface WorkflowFinishCriterion<Output> {
+  readonly name: string;
+  readonly check: (context: WorkflowFinishCriterionContext<Output>) => Effect.Effect<void, unknown>;
+  readonly repairPrompt?: (error: unknown, context: WorkflowFinishCriterionContext<Output>) => string;
+}
+
+export interface WorkflowFinishOptions<Output> {
+  readonly maxRepairs?: number;
+  readonly criteria?: ReadonlyArray<WorkflowFinishCriterion<Output>>;
+}
+
 export interface WorkflowTaskDefinition<
   Id extends string,
   Agent extends WorkflowAgentRef,
@@ -35,6 +52,7 @@ export interface WorkflowTaskDefinition<
   readonly output: Output;
   readonly cacheKey?: string;
   readonly worker?: WorkflowTaskWorkerOptions;
+  readonly finish?: WorkflowFinishOptions<Schema.Schema.Type<Output>>;
 }
 
 export interface WorkflowTask<

@@ -1780,6 +1780,7 @@ describe("workflow loader", () => {
       "task.executor.completed",
       "task.decode.started",
       "task.decode.completed",
+      "task.finish.completed",
       "task.cache_write.completed",
       "task.completed",
       "run.completed",

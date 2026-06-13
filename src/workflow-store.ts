@@ -121,6 +121,11 @@ export const workflowTaskIdentity = (
     prompt: task.prompt,
     worker: task.worker?.worker ?? runtimeOptions.fallbackWorker ?? null,
     model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
+    outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
+    finish: {
+      maxRepairs: task.finish?.maxRepairs ?? 0,
+      criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+    },
   })),
   agentManifestHash: task.agent.manifestHash,
 });

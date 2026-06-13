@@ -316,4 +316,74 @@ describe("workflow runner", () => {
 
     expect(calls).toEqual(["task-0"]);
   });
+
+  test("repairs malformed schema output before yielding to downstream workflow code", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: { maxRepairs: 1 },
+    });
+    const workflow = defineWorkflow({
+      name: "repair-schema-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const patch = yield* wf.runTask(build);
+        return patch.summary;
+      }),
+    });
+    const prompts: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        prompts.push(task.prompt);
+        if (prompts.length === 1) return { wrong: "shape" };
+        return { summary: "repaired" };
+      },
+    });
+
+    expect(result.output).toBe("repaired");
+    expect(result.tasks[0]?.metadata?.finish).toEqual({
+      repairs: 1,
+      criteria: [],
+      repairMode: "new-executor-invocation",
+    });
+    expect(prompts[1]).toContain("failed the output schema decode");
+  });
+
+  test("repairs arbitrary Effect finish criteria before completing a task", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: {
+        maxRepairs: 1,
+        criteria: [{
+          name: "mentions-done",
+          check: ({ output }) => output.summary.includes("done")
+            ? Effect.void
+            : Effect.fail(new Error("summary must include done")),
+          repairPrompt: () => "Your summary must include the word done.",
+        }],
+      },
+    });
+    const workflow = defineWorkflow({ name: "repair-criterion-smoke", tasks: [build] as const });
+    const calls: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        calls.push(task.prompt);
+        return calls.length === 1 ? { summary: "built" } : { summary: "done built" };
+      },
+    });
+
+    expect(result.tasks[0]?.output).toEqual({ summary: "done built" });
+    expect(result.tasks[0]?.metadata?.finish).toEqual({
+      repairs: 1,
+      criteria: ["mentions-done"],
+      repairMode: "new-executor-invocation",
+    });
+    expect(calls[1]).toContain("Your summary must include the word done.");
+  });
 });

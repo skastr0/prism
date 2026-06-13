@@ -124,6 +124,44 @@ const executeOrReuseTask = async (input: {
   return { rawOutput: executed.output, ...(executed.metadata ? { metadata: executed.metadata } : {}) };
 };
 
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const appendRepairPrompt = (task: AnyWorkflowTask, repairPrompt: string): AnyWorkflowTask => ({
+  ...task,
+  prompt: `${task.prompt}\n\nYou are still inside the same Prism workflow task. Your previous response did not satisfy the task finish requirements.\n\n${repairPrompt}\n\nReturn the corrected final response now.`,
+});
+
+const schemaRepairPrompt = (error: unknown): string =>
+  `Your previous response failed the output schema decode. Preserve the substance of your answer, but re-express it so it exactly satisfies the requested JSON shape. Decode error: ${errorMessage(error)}`;
+
+const runFinishCriteria = async (input: {
+  readonly task: AnyWorkflowTask;
+  readonly output: unknown;
+  readonly rawOutput: unknown;
+  readonly metadata?: Record<string, unknown>;
+}): Promise<{ readonly ok: true } | { readonly ok: false; readonly criterion: string; readonly error: unknown; readonly repairPrompt: string }> => {
+  for (const criterion of input.task.finish?.criteria ?? []) {
+    const context = {
+      output: input.output as never,
+      rawOutput: input.rawOutput,
+      metadata: input.metadata,
+    };
+    try {
+      await Effect.runPromise(criterion.check(context));
+    } catch (error) {
+      return {
+        ok: false,
+        criterion: criterion.name,
+        error,
+        repairPrompt: criterion.repairPrompt?.(error, context) ??
+          `Finish criterion '${criterion.name}' failed: ${errorMessage(error)}. Preserve the useful substance, fix the issue, and return the corrected final response.`,
+      };
+    }
+  }
+  return { ok: true };
+};
+
 const recordCacheLookup = (
   store: WorkflowStore | undefined,
   runId: string | null,
@@ -188,32 +226,89 @@ const executeWorkflowTask = async (input: {
 
   const runTaskBoundary = async (): Promise<WorkflowRunTaskResult> => {
     let rawOutput: unknown;
+    let decodedOutput: unknown = undefined;
     let metadata: Record<string, unknown> | undefined;
-    try {
-      if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", {});
-      ({ rawOutput, metadata } = await executeOrReuseTask({ task, cached, executeTask }));
-      if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", metadata ?? {});
-    } catch (error) {
-      const output = { error: error instanceof Error ? error.message : String(error) };
-      recordEvent(store, runId, task.id, "task.executor.failed", output);
-      recordRunTaskIfPersisted({
-        store,
-        runId,
-        ordinal,
-        identity,
-        agent: taskAgent(task),
-        status: "failed",
-        cached: false,
-        output,
-        ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
-      });
-      throw error;
-    }
+    const maxRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
+    let attemptTask = task;
+    let repairs = 0;
+    while (true) {
+      try {
+        if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
+        ({ rawOutput, metadata } = await executeOrReuseTask({ task: attemptTask, cached: repairs === 0 ? cached : null, executeTask }));
+        if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
+      } catch (error) {
+        const output = { error: errorMessage(error) };
+        recordEvent(store, runId, task.id, "task.executor.failed", { attempt: repairs, ...output });
+        recordRunTaskIfPersisted({
+          store,
+          runId,
+          ordinal,
+          identity,
+          agent: taskAgent(task),
+          status: "failed",
+          cached: false,
+          output,
+          ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
+        });
+        throw error;
+      }
 
-    recordEvent(store, runId, task.id, "task.decode.started", {});
-    const decoded = decodeTaskOutput(task, rawOutput);
-    if (Either.isLeft(decoded)) {
-      recordEvent(store, runId, task.id, "task.decode.failed", { error: String(decoded.left) });
+      recordEvent(store, runId, task.id, "task.decode.started", { attempt: repairs });
+      const decoded = decodeTaskOutput(task, rawOutput);
+      if (Either.isLeft(decoded)) {
+        const error = decoded.left;
+        recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error) });
+        if (repairs < maxRepairs) {
+          repairs += 1;
+          const repairPrompt = schemaRepairPrompt(error);
+          recordEvent(store, runId, task.id, "task.repair.started", {
+            attempt: repairs,
+            criterion: "output-schema",
+            mode: "new-executor-invocation",
+          });
+          attemptTask = appendRepairPrompt(task, repairPrompt);
+          continue;
+        }
+        recordRunTaskIfPersisted({
+          store,
+          runId,
+          ordinal,
+          identity,
+          agent: taskAgent(task),
+          status: "failed",
+          cached: cacheHit,
+          output: rawOutput,
+          metadata,
+          ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
+        });
+        throw new WorkflowTaskDecodeError(task.id, error);
+      }
+
+      decodedOutput = decoded.right;
+      recordEvent(store, runId, task.id, "task.decode.completed", { attempt: repairs });
+      const finish = await runFinishCriteria({ task, output: decodedOutput, rawOutput, metadata });
+      if (finish.ok) {
+        recordEvent(store, runId, task.id, "task.finish.completed", {
+          repairs,
+          criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+        });
+        break;
+      }
+      recordEvent(store, runId, task.id, "task.finish.failed", {
+        attempt: repairs,
+        criterion: finish.criterion,
+        error: errorMessage(finish.error),
+      });
+      if (repairs < maxRepairs) {
+        repairs += 1;
+        recordEvent(store, runId, task.id, "task.repair.started", {
+          attempt: repairs,
+          criterion: finish.criterion,
+          mode: "new-executor-invocation",
+        });
+        attemptTask = appendRepairPrompt(task, finish.repairPrompt);
+        continue;
+      }
       recordRunTaskIfPersisted({
         store,
         runId,
@@ -226,12 +321,22 @@ const executeWorkflowTask = async (input: {
         metadata,
         ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
       });
-      throw new WorkflowTaskDecodeError(task.id, decoded.left);
+      throw new Error(`workflow task ${task.id} failed finish criterion '${finish.criterion}': ${errorMessage(finish.error)}`);
     }
 
-    recordEvent(store, runId, task.id, "task.decode.completed", {});
+    const criteria = task.finish?.criteria?.map((criterion) => criterion.name) ?? [];
+    const finalMetadata = metadata !== undefined || repairs > 0 || task.finish !== undefined
+      ? {
+        ...(metadata ?? {}),
+        finish: {
+          repairs,
+          criteria,
+          repairMode: repairs > 0 ? "new-executor-invocation" : "none",
+        },
+      }
+      : undefined;
     if (useCache && !cacheHit) {
-      store?.recordCompleted({ identity, agent: taskAgent(task), output: decoded.right });
+      store?.recordCompleted({ identity, agent: taskAgent(task), output: decodedOutput });
       recordEvent(store, runId, task.id, "task.cache_write.completed", { cacheKey: identity.cacheKey });
     }
     recordRunTaskIfPersisted({
@@ -242,11 +347,11 @@ const executeWorkflowTask = async (input: {
       agent: taskAgent(task),
       status: "completed",
       cached: cacheHit,
-      output: decoded.right,
-      metadata,
+      output: decodedOutput,
+      ...(finalMetadata ? { metadata: finalMetadata } : {}),
       ...(isLastTask ? { finishRunStatus: "completed" as const } : {}),
     });
-    return { id: task.id, agent: taskAgent(task), output: decoded.right, cached: cacheHit, ...(metadata ? { metadata } : {}) };
+    return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, ...(finalMetadata ? { metadata: finalMetadata } : {}) };
   };
 
   if (cacheHit || input.limiter === undefined) {

@@ -340,6 +340,7 @@ export const runWorkflow = async (
     readonly store?: WorkflowStore;
     readonly cache?: boolean;
     readonly maxConcurrentTasks?: number;
+    readonly runId?: string;
   },
 ): Promise<WorkflowRunResult> => {
   const useCache = options.cache !== false;
@@ -348,7 +349,7 @@ export const runWorkflow = async (
     throw new RangeError("maxConcurrentTasks must be a positive integer");
   }
   const limiter = createTaskLimiter(maxConcurrentTasks);
-  const runId = options.store?.createRun(workflow.name) ?? null;
+  const runId = options.store === undefined ? null : options.runId ?? options.store.createRun(workflow.name);
   if ("run" in workflow) {
     const result = await runDynamicWorkflow({
       workflow: workflow as AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },

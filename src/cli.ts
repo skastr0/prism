@@ -3,8 +3,9 @@
  * prism CLI - Unified plugin distribution for AI coding harnesses
  */
 
-import { Command, CommanderError, InvalidArgumentError } from "commander";
+import { Command, CommanderError, InvalidArgumentError, Option as CommanderOption } from "commander";
 import { Effect } from "effect";
+import { randomUUID } from "node:crypto";
 import {
   getAllHarnessIds,
   getHarness,
@@ -177,6 +178,57 @@ const parsePositiveInteger = (value: string): number => {
   return parsed;
 };
 
+const currentCliCommand = (): string[] => {
+  const entrypoint = process.argv[1];
+  if (entrypoint === undefined) {
+    return [process.execPath];
+  }
+  if (/\.[cm]?[jt]s$/u.test(entrypoint)) {
+    return [process.execPath, "run", entrypoint];
+  }
+  return [entrypoint];
+};
+
+const startDetachedWorkflowRun = (
+  file: string,
+  options: {
+    readonly mockOutput?: string;
+    readonly worker: string;
+    readonly model: string;
+    readonly maxConcurrentTasks?: number;
+    readonly cache?: boolean;
+  },
+  run: { readonly runId: string; readonly storePath: string; readonly token: string },
+): void => {
+  const args = [
+    "workflow",
+    "run",
+    file,
+    "--store",
+    run.storePath,
+    "--run-id",
+    run.runId,
+    "--run-token",
+    run.token,
+    "--worker",
+    options.worker,
+    "--model",
+    options.model,
+    ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
+    ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
+    ...(options.cache === false ? ["--no-cache"] : []),
+  ];
+
+  Bun.spawn({
+    cmd: [...currentCliCommand(), ...args],
+    cwd: process.cwd(),
+    env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1" },
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  }).unref();
+};
+
 workflow
   .command("validate <file>")
   .description("Load a workflow module and print its typed task summary")
@@ -198,6 +250,9 @@ workflow
   .option("--model <model>", "Worker model id", "grok-build")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
+  .option("--detach", "Start the workflow in a detached background process and return its run id")
+  .addOption(new CommanderOption("--run-id <id>").hideHelp())
+  .addOption(new CommanderOption("--run-token <token>").hideHelp())
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (file: string, options: {
     readonly mockOutput?: string;
@@ -205,12 +260,41 @@ workflow
     readonly model: string;
     readonly maxConcurrentTasks?: number;
     readonly store?: string;
+    readonly detach?: boolean;
+    readonly runId?: string;
+    readonly runToken?: string;
     readonly cache?: boolean;
   }) => {
     let store: WorkflowStore | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
+      if (options.detach === true) {
+        if (options.runId !== undefined || options.runToken !== undefined) {
+          throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
+        }
+        if (options.worker !== "grok" && options.mockOutput === undefined) {
+          throw new CliUsageError(`unsupported workflow worker '${options.worker}'. Supported workers: grok`);
+        }
+        store = await WorkflowStore.open(storePath);
+        const runId = store.createRun(workflow.name, randomUUID());
+        const token = randomUUID();
+        store.setRunHandoffToken(runId, token);
+        store.close();
+        store = undefined;
+        startDetachedWorkflowRun(file, options, { runId, storePath, token });
+        console.log(JSON.stringify({ runId, workflow: workflow.name, status: "running", detached: true }, null, 2));
+        return;
+      }
+      if (options.runId !== undefined && process.env.PRISM_WORKFLOW_DETACHED_CHILD !== "1") {
+        throw new CliUsageError("--run-id is reserved for Prism's internal detached runner");
+      }
+      store = await WorkflowStore.open(storePath);
+      if (options.runId !== undefined) {
+        if (options.runToken === undefined || !store.consumeRunHandoffToken(options.runId, options.runToken)) {
+          throw new CliUsageError("invalid detached workflow run handoff");
+        }
+      }
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
         : null;
@@ -221,6 +305,7 @@ workflow
         store,
         cache: options.cache !== false,
         maxConcurrentTasks: options.maxConcurrentTasks,
+        runId: options.runId,
         executeTask: async (task) => {
           if (outputs === null) {
             return runGrokWorkflowTask(task, { cwd: process.cwd(), model: task.worker?.model ?? options.model });

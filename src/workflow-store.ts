@@ -86,6 +86,10 @@ interface RunRow {
   readonly finished_at: string | null;
 }
 
+interface HandoffTokenRow {
+  readonly handoff_token: string | null;
+}
+
 interface EventRow {
   readonly sequence: number;
   readonly run_id: string;
@@ -120,12 +124,25 @@ const addColumnIfMissing = (db: Database, statement: string): void => {
   }
 };
 
+const enableConcurrentWorkflowAccess = (db: Database): void => {
+  db.exec("pragma busy_timeout = 5000;");
+  try {
+    db.exec("pragma journal_mode = WAL;");
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("database is locked")) {
+      return;
+    }
+    throw error;
+  }
+};
+
 export class WorkflowStore {
   constructor(private readonly db: Database) {}
 
   static async open(path: string): Promise<WorkflowStore> {
     await ensureDir(dirname(path));
     const db = new Database(path);
+    enableConcurrentWorkflowAccess(db);
     db.exec(`
       create table if not exists workflow_task_records (
         workflow text not null,
@@ -147,6 +164,7 @@ export class WorkflowStore {
         workflow text not null,
         status text not null default 'running',
         finished_at text,
+        handoff_token text,
         created_at text not null default (datetime('now'))
       );
 
@@ -180,6 +198,7 @@ export class WorkflowStore {
     `);
     addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
     addColumnIfMissing(db, "alter table workflow_runs add column finished_at text");
+    addColumnIfMissing(db, "alter table workflow_runs add column handoff_token text");
     addColumnIfMissing(db, "alter table workflow_run_tasks add column metadata_json text");
     // Legacy ledgers did not know the workflow's full task count, so completed
     // task rows are not proof that the whole run finished. Only failed task rows
@@ -240,6 +259,19 @@ export class WorkflowStore {
     this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, workflow);
     this.recordEvent({ runId, type: "run.started", payload: { workflow } });
     return runId;
+  }
+
+  setRunHandoffToken(runId: string, token: string): void {
+    this.db.query("update workflow_runs set handoff_token = ? where run_id = ?").run(token, runId);
+  }
+
+  consumeRunHandoffToken(runId: string, token: string): boolean {
+    const row = this.db.query<HandoffTokenRow, [string]>(
+      "select handoff_token from workflow_runs where run_id = ?"
+    ).get(runId);
+    if (row?.handoff_token !== token) return false;
+    this.db.query("update workflow_runs set handoff_token = null where run_id = ?").run(runId);
+    return true;
   }
 
   finishRun(runId: string, status: Exclude<WorkflowRunStatus, "running" | "unknown">): void {

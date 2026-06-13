@@ -12,6 +12,17 @@ const createTempRoot = async (): Promise<string> => {
   return root;
 };
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> => {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await predicate()) return;
+    await delay(50);
+  }
+  throw new Error("timed out waiting for condition");
+};
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -391,6 +402,142 @@ describe("workflow loader", () => {
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("from grok");
     expect(calls.trim().split("\n")).toHaveLength(1);
+  });
+
+  test("CLI detaches a workflow run and leaves it inspectable by run id", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "detached-grok-calls.txt");
+    const fakeGrok = join(root, "fake-grok.mjs");
+    await writeFile(file, workflowSource());
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "await new Promise((resolve) => setTimeout(resolve, 1200));",
+      `appendFileSync(${JSON.stringify(callsFile)}, 'called\\n');`,
+      "console.log(JSON.stringify({ summary: 'detached' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const started = Date.now();
+    const runResult = await cli([
+      "workflow",
+      "run",
+      file,
+      "--detach",
+      "--store",
+      storeFile,
+    ]) as { runId: string; workflow: string; status: string; detached: boolean };
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(runResult).toEqual({
+      runId: expect.any(String),
+      workflow: "loader-smoke",
+      status: "running",
+      detached: true,
+    });
+
+    await waitFor(async () => {
+      const listResult = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
+        runs: Array<{ runId: string; status: string }>;
+      };
+      return listResult.runs.find((run) => run.runId === runResult.runId)?.status === "completed";
+    });
+
+    const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
+      tasks: Array<{ taskId: string; output: { summary: string } }>;
+    };
+    const eventsResult = await cli(["workflow", "runs", "events", runResult.runId, "--store", storeFile]) as {
+      events: Array<{ type: string }>;
+    };
+
+    expect(showResult.tasks).toMatchObject([{ taskId: "build", output: { summary: "detached" } }]);
+    expect(eventsResult.events.map((event) => event.type).at(-1)).toBe("run.completed");
+    expect((await Bun.file(callsFile).text()).trim()).toBe("called");
+  });
+
+  test("CLI rejects user supplied workflow run ids", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const outputFile = join(root, "outputs.json");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, workflowSource());
+    await writeFile(outputFile, JSON.stringify({ build: { summary: "manual" } }));
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--run-id",
+        "manual-run-id",
+        "--mock-output",
+        outputFile,
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("--run-id is reserved for Prism's internal detached runner");
+
+    const forgedProcess = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--run-id",
+        "manual-run-id",
+        "--run-token",
+        "wrong-token",
+        "--mock-output",
+        outputFile,
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [forgedExitCode, forgedStderr] = await Promise.all([
+      forgedProcess.exited,
+      new Response(forgedProcess.stderr).text(),
+    ]);
+
+    expect(forgedExitCode).not.toBe(0);
+    expect(forgedStderr).toContain("invalid detached workflow run handoff");
   });
 
   test("CLI uses task-level worker models before the CLI fallback model", async () => {

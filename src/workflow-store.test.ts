@@ -335,6 +335,62 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("dynamic fan-out failures wait for sibling task records before run failure", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = defineWorkflow({
+      name: "dynamic-fanout-failure-smoke",
+      run: async (wf) => {
+        const fail = defineTask({
+          id: "fail",
+          agent: builder,
+          prompt: "Fail quickly.",
+          output: Output,
+          cacheKey: "dynamic-fail-cache",
+        });
+        const slow = defineTask({
+          id: "slow",
+          agent: reviewer,
+          prompt: "Finish slowly.",
+          output: Output,
+          cacheKey: "dynamic-slow-cache",
+        });
+        await Promise.all([
+          wf.runTask(fail),
+          wf.runTask(slow),
+        ]);
+      },
+    });
+    const completions: string[] = [];
+
+    await expect(runWorkflow(workflow, {
+      store,
+      executeTask: async (task) => {
+        if (task.id === "fail") {
+          completions.push(task.id);
+          throw new Error("fast failure");
+        }
+        await delay(20);
+        completions.push(task.id);
+        return { summary: "slow" };
+      },
+    })).rejects.toThrow("fast failure");
+
+    const runId = store.listRuns()[0]!.runId;
+    expect(completions).toEqual(["fail", "slow"]);
+    expect(store.listRuns()[0]?.status).toBe("failed");
+    expect(store.listRunTasks(runId).map((task) => ({ taskId: task.taskId, status: task.status }))).toEqual([
+      { taskId: "fail", status: "failed" },
+      { taskId: "slow", status: "completed" },
+    ]);
+    const events = store.listRunEvents(runId).map((event) => ({ taskId: event.taskId, type: event.type }));
+    expect(events.at(-1)).toEqual({ taskId: null, type: "run.failed" });
+    expect(events.some((event) => event.taskId === "slow" && event.type === "task.completed")).toBe(true);
+    expect(events.findLastIndex((event) => event.type === "task.completed"))
+      .toBeLessThan(events.findLastIndex((event) => event.type === "run.failed"));
+    store.close();
+  });
+
   test("runner records decode failures in run history", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

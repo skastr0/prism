@@ -122,6 +122,7 @@ const recordRunTaskIfPersisted = (input: {
 
 const executeWorkflowTask = async (input: {
   readonly isLastTask?: boolean;
+  readonly finishRunOnFailure?: boolean;
   readonly ordinal: number;
   readonly task: AnyWorkflowTask;
   readonly identity: WorkflowTaskIdentity;
@@ -130,7 +131,7 @@ const executeWorkflowTask = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
 }): Promise<WorkflowRunTaskResult> => {
-  const { isLastTask = false, ordinal, task, identity, runId, store, executeTask, useCache } = input;
+  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache } = input;
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
   const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache);
 
@@ -143,7 +144,17 @@ const executeWorkflowTask = async (input: {
   } catch (error) {
     const output = { error: error instanceof Error ? error.message : String(error) };
     recordEvent(store, runId, task.id, "task.executor.failed", output);
-    recordRunTaskIfPersisted({ store, runId, ordinal, identity, agent: taskAgent(task), status: "failed", cached: false, output, finishRunStatus: "failed" });
+    recordRunTaskIfPersisted({
+      store,
+      runId,
+      ordinal,
+      identity,
+      agent: taskAgent(task),
+      status: "failed",
+      cached: false,
+      output,
+      ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
+    });
     throw error;
   }
 
@@ -151,7 +162,18 @@ const executeWorkflowTask = async (input: {
   const decoded = decodeTaskOutput(task, rawOutput);
   if (Either.isLeft(decoded)) {
     recordEvent(store, runId, task.id, "task.decode.failed", { error: String(decoded.left) });
-    recordRunTaskIfPersisted({ store, runId, ordinal, identity, agent: taskAgent(task), status: "failed", cached: cacheHit, output: rawOutput, metadata, finishRunStatus: "failed" });
+    recordRunTaskIfPersisted({
+      store,
+      runId,
+      ordinal,
+      identity,
+      agent: taskAgent(task),
+      status: "failed",
+      cached: cacheHit,
+      output: rawOutput,
+      metadata,
+      ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
+    });
     throw new WorkflowTaskDecodeError(task.id, decoded.left);
   }
 
@@ -210,11 +232,13 @@ const runDynamicWorkflow = async (input: {
   readonly useCache: boolean;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
   const tasks: Array<WorkflowRunTaskResult | undefined> = [];
+  const inFlightTasks: Array<Promise<WorkflowRunTaskResult>> = [];
   let ordinal = 0;
   const runtime: WorkflowRuntime = {
     runTask: async (task) => {
       const taskOrdinal = ordinal++;
-      const result = await executeWorkflowTask({
+      const taskRun = executeWorkflowTask({
+        finishRunOnFailure: false,
         ordinal: taskOrdinal,
         task,
         identity: workflowTaskIdentity(input.workflow.name, task),
@@ -223,15 +247,19 @@ const runDynamicWorkflow = async (input: {
         executeTask: input.executeTask,
         useCache: input.useCache,
       });
+      inFlightTasks.push(taskRun);
+      const result = await taskRun;
       tasks[taskOrdinal] = result;
       return result.output as never;
     },
   };
   try {
     const output = await input.workflow.run(runtime);
+    await Promise.allSettled(inFlightTasks);
     if (input.runId !== null) input.store?.finishRun(input.runId, "completed");
     return { output, tasks: tasks.flatMap((task) => task === undefined ? [] : [task]) };
   } catch (error) {
+    await Promise.allSettled(inFlightTasks);
     if (input.runId !== null && input.store?.listRuns().find((run) => run.runId === input.runId)?.status === "running") {
       input.store.finishRun(input.runId, "failed");
     }

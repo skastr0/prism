@@ -250,6 +250,23 @@ workflowRuns
     }
   });
 
+workflowRuns
+  .command("events <runId>")
+  .description("Show append-only events for one workflow run")
+  .option("--store <path>", "SQLite workflow store path")
+  .action(async (runId: string, options: { readonly store?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      console.log(JSON.stringify({ runId, events: store.listRunEvents(runId) }, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow runs events failed");
+      exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
 // Init command - create a new plugin
 program
   .command("init <name>")

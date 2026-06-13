@@ -244,6 +244,9 @@ describe("workflow loader", () => {
         output: { summary: string };
       }>;
     };
+    const eventsResult = await cli(["workflow", "runs", "events", runResult.runId, "--store", storeFile]) as {
+      events: Array<{ type: string; taskId: string | null }>;
+    };
 
     expect(listResult.runs).toEqual([
       { runId: runResult.runId, workflow: "loader-smoke", status: "completed", finishedAt: expect.any(String) },
@@ -258,6 +261,19 @@ describe("workflow loader", () => {
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "history" },
       },
+    ]);
+    expect(eventsResult.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.miss",
+      "task.executor.started",
+      "task.executor.completed",
+      "task.decode.started",
+      "task.decode.completed",
+      "task.cache_write.completed",
+      "task.completed",
+      "run.completed",
     ]);
   });
 });

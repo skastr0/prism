@@ -156,6 +156,19 @@ describe("workflow store", () => {
         output: { summary: "first" },
       },
     ]);
+    expect(store.listRunEvents(firstRunId).map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.miss",
+      "task.executor.started",
+      "task.executor.completed",
+      "task.decode.started",
+      "task.decode.completed",
+      "task.cache_write.completed",
+      "task.completed",
+      "run.completed",
+    ]);
     expect(store.listRunTasks(secondRunId)).toEqual([
       {
         runId: secondRunId,
@@ -166,6 +179,16 @@ describe("workflow store", () => {
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
       },
+    ]);
+    expect(store.listRunEvents(secondRunId).map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.hit",
+      "task.decode.started",
+      "task.decode.completed",
+      "task.completed",
+      "run.completed",
     ]);
     store.close();
   });
@@ -195,6 +218,18 @@ describe("workflow store", () => {
         output: { notSummary: "wrong" },
       },
     ]);
+    expect(store.listRunEvents(recordedRunId).map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.miss",
+      "task.executor.started",
+      "task.executor.completed",
+      "task.decode.started",
+      "task.decode.failed",
+      "task.failed",
+      "run.failed",
+    ]);
     store.close();
   });
 
@@ -222,6 +257,16 @@ describe("workflow store", () => {
         agent: { plugin: "forge", name: "builder" },
         output: { error: "mock harness failed" },
       },
+    ]);
+    expect(store.listRunEvents(runId).map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.miss",
+      "task.executor.started",
+      "task.executor.failed",
+      "task.failed",
+      "run.failed",
     ]);
     store.close();
   });
@@ -252,6 +297,17 @@ describe("workflow store", () => {
     expect(second.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.output).toEqual({ summary: "second" });
     expect(store.listRunTasks(second.runId!)[0]?.output).toEqual({ summary: "second" });
+    expect(store.listRunEvents(second.runId!).map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.skipped",
+      "task.executor.started",
+      "task.executor.completed",
+      "task.decode.started",
+      "task.decode.completed",
+      "task.completed",
+      "run.completed",
+    ]);
     expect(store.getCompleted(workflowTaskIdentity(workflow.name, workflow.tasks[0]!))?.output).toEqual({ summary: "first" });
     store.close();
   });
@@ -302,6 +358,43 @@ describe("workflow store", () => {
         output: { verdict: "needs-work" },
       },
     ]);
+    expect(store.listRunEvents(runId).map((event) => event.type)).toEqual([
+      "run.started",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.miss",
+      "task.executor.started",
+      "task.executor.completed",
+      "task.decode.started",
+      "task.decode.completed",
+      "task.cache_write.completed",
+      "task.completed",
+      "task.started",
+      "task.cache_lookup.started",
+      "task.cache_lookup.miss",
+      "task.executor.started",
+      "task.executor.completed",
+      "task.decode.started",
+      "task.decode.failed",
+      "task.failed",
+      "run.failed",
+    ]);
+    store.close();
+  });
+
+  test("empty workflows emit start and completion events", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = defineWorkflow({ name: "empty-smoke", tasks: [] as const });
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "unused" }),
+    });
+
+    expect(result.tasks).toEqual([]);
+    expect(store.listRuns()[0]?.status).toBe("completed");
+    expect(store.listRunEvents(result.runId!).map((event) => event.type)).toEqual(["run.started", "run.completed"]);
     store.close();
   });
 

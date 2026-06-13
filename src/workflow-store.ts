@@ -46,6 +46,15 @@ export interface WorkflowRunRecord {
 
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "unknown";
 
+export interface WorkflowEventRecord {
+  readonly sequence: number;
+  readonly runId: string;
+  readonly taskId: string | null;
+  readonly type: string;
+  readonly payload: unknown;
+  readonly createdAt: string;
+}
+
 interface TaskRecordRow {
   readonly workflow: string;
   readonly task_id: string;
@@ -73,6 +82,15 @@ interface RunRow {
   readonly workflow: string;
   readonly status: WorkflowRunStatus;
   readonly finished_at: string | null;
+}
+
+interface EventRow {
+  readonly sequence: number;
+  readonly run_id: string;
+  readonly task_id: string | null;
+  readonly type: string;
+  readonly payload_json: string;
+  readonly created_at: string;
 }
 
 export const defaultWorkflowStorePath = (projectPath: string): string =>
@@ -146,6 +164,16 @@ export class WorkflowStore {
         created_at text not null default (datetime('now')),
         primary key (run_id, ordinal)
       );
+
+      create table if not exists workflow_events (
+        run_id text not null,
+        sequence integer not null,
+        task_id text,
+        type text not null,
+        payload_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, sequence)
+      );
     `);
     addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
     addColumnIfMissing(db, "alter table workflow_runs add column finished_at text");
@@ -206,12 +234,55 @@ export class WorkflowStore {
 
   createRun(workflow: string, runId: string = randomUUID()): string {
     this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, workflow);
+    this.recordEvent({ runId, type: "run.started", payload: { workflow } });
     return runId;
   }
 
   finishRun(runId: string, status: Exclude<WorkflowRunStatus, "running" | "unknown">): void {
     this.db.query("update workflow_runs set status = ?, finished_at = datetime('now') where run_id = ?")
       .run(status, runId);
+    this.recordEvent({ runId, type: `run.${status}`, payload: {} });
+  }
+
+  recordEvent(input: {
+    readonly runId: string;
+    readonly taskId?: string;
+    readonly type: string;
+    readonly payload: unknown;
+  }): void {
+    this.db.query(`
+      insert into workflow_events (run_id, sequence, task_id, type, payload_json)
+      values (
+        ?,
+        coalesce((select max(sequence) + 1 from workflow_events where run_id = ?), 0),
+        ?,
+        ?,
+        ?
+      )
+    `).run(
+      input.runId,
+      input.runId,
+      input.taskId ?? null,
+      input.type,
+      JSON.stringify(input.payload),
+    );
+  }
+
+  listRunEvents(runId: string): WorkflowEventRecord[] {
+    const rows = this.db.query<EventRow, [string]>(`
+      select sequence, run_id, task_id, type, payload_json, created_at
+      from workflow_events
+      where run_id = ?
+      order by sequence asc
+    `).all(runId);
+    return rows.map((row) => ({
+      sequence: row.sequence,
+      runId: row.run_id,
+      taskId: row.task_id,
+      type: row.type,
+      payload: JSON.parse(row.payload_json) as unknown,
+      createdAt: row.created_at,
+    }));
   }
 
   listRuns(): WorkflowRunRecord[] {
@@ -258,6 +329,12 @@ export class WorkflowStore {
         input.cached ? 1 : 0,
         JSON.stringify(input.output),
       );
+      this.recordEvent({
+        runId: input.runId,
+        taskId: input.identity.taskId,
+        type: `task.${input.status}`,
+        payload: { cached: input.cached, cacheKey: input.identity.cacheKey },
+      });
       if (input.finishRunStatus !== undefined) {
         this.finishRun(input.runId, input.finishRunStatus);
       }

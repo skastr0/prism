@@ -24,6 +24,33 @@ const agyErrorText = (stdout: string, stderr: string): string | undefined => {
   return undefined;
 };
 
+const antigravityMetadata = (input: {
+  readonly task: AnyWorkflowTask;
+  readonly model?: string;
+  readonly durationMs: number;
+  readonly printTimeout: string;
+  readonly processTimeoutMs: number;
+  readonly stderr: string;
+  readonly timedOut?: boolean;
+  readonly recoveredAfterTimeout?: boolean;
+}) => ({
+  adapter: "antigravity-cli",
+  prompted: true,
+  agentSelection: "prompted-contract",
+  agent: {
+    plugin: input.task.agent.plugin,
+    name: input.task.agent.name,
+    manifestHash: input.task.agent.manifestHash,
+  },
+  model: input.model,
+  durationMs: input.durationMs,
+  printTimeout: input.printTimeout,
+  processTimeoutMs: input.processTimeoutMs,
+  ...(input.timedOut === true ? { timedOut: true } : {}),
+  ...(input.recoveredAfterTimeout === true ? { recoveredAfterTimeout: true } : {}),
+  ...summarizeWorkflowWorkerStderr(input.stderr),
+});
+
 export const runAntigravityWorkflowTask = async (
   task: AnyWorkflowTask,
   options: AntigravityWorkflowWorkerOptions,
@@ -57,6 +84,23 @@ export const runAntigravityWorkflowTask = async (
     throw new AntigravityWorkflowWorkerError(`agy was aborted by Prism workflow stop${workflowWorkerProcessExcerpt(stdout, stderr)}`);
   }
   if (timedOut) {
+    try {
+      return {
+        output: parseWorkflowWorkerJsonOutput(stdout),
+        metadata: antigravityMetadata({
+          task,
+          model: options.model,
+          durationMs,
+          printTimeout,
+          processTimeoutMs,
+          stderr,
+          timedOut: true,
+          recoveredAfterTimeout: true,
+        }),
+      };
+    } catch {
+      // Preserve the existing timeout failure unless AGY printed a complete Prism worker JSON value before stalling.
+    }
     const excerpt = workflowWorkerProcessExcerpt(stdout, stderr);
     throw new AntigravityWorkflowWorkerError(`agy exceeded Prism process timeout after ${processTimeoutMs}ms${excerpt}`);
   }
@@ -76,20 +120,13 @@ export const runAntigravityWorkflowTask = async (
   }
   return {
     output,
-    metadata: {
-      adapter: "antigravity-cli",
-      prompted: true,
-      agentSelection: "prompted-contract",
-      agent: {
-        plugin: task.agent.plugin,
-        name: task.agent.name,
-        manifestHash: task.agent.manifestHash,
-      },
+    metadata: antigravityMetadata({
+      task,
       model: options.model,
       durationMs,
       printTimeout,
       processTimeoutMs,
-      ...summarizeWorkflowWorkerStderr(stderr),
-    },
+      stderr,
+    }),
   };
 };

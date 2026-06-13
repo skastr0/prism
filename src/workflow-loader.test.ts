@@ -959,6 +959,55 @@ describe("workflow loader", () => {
     expect(stderr).toContain("agy exceeded Prism process timeout after 100ms");
   });
 
+  test("CLI recovers Antigravity JSON output printed before a standby timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAgy = join(root, "fake-agy-standby.mjs");
+    await writeFile(file, workflowSource("default", { worker: "antigravity-cli" }));
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "process.stdout.write(JSON.stringify({ summary: 'printed before standby' }) + '\\n');",
+      "console.error('Standing by for follow-up');",
+      "await new Promise((resolve) => setTimeout(resolve, 100));",
+      "await new Promise((resolve) => setTimeout(resolve, 10_000));",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "antigravity-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy, PRISM_WORKFLOW_ANTIGRAVITY_PROCESS_TIMEOUT_MS: "500" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { timedOut?: boolean; recoveredAfterTimeout?: boolean; stderrExcerpt?: string } }> };
+    expect(result.tasks[0]?.output.summary).toBe("printed before standby");
+    expect(result.tasks[0]?.metadata?.timedOut).toBe(true);
+    expect(result.tasks[0]?.metadata?.recoveredAfterTimeout).toBe(true);
+    expect(result.tasks[0]?.metadata?.stderrExcerpt).toBe("Standing by for follow-up");
+  });
+
   test("CLI runs a workflow through the Amp worker adapter", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

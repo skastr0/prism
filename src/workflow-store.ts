@@ -23,10 +23,11 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
     case "opencode":
       return "native-agent-v1";
     case "amp-code":
-    case "antigravity-cli":
     case "codex-cli":
     case "hermes":
       return "prompt-agent-v1";
+    case "antigravity-cli":
+      return "prompt-agent-timeout-recovery-v1";
     case null:
       return "mock-or-custom-v1";
     default:

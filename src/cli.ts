@@ -212,7 +212,7 @@ workflow
         cache: options.cache !== false,
         executeTask: async (task) => {
           if (outputs === null) {
-            return runGrokWorkflowTask(task, { cwd: process.cwd(), model: options.model });
+            return runGrokWorkflowTask(task, { cwd: process.cwd(), model: task.worker?.model ?? options.model });
           }
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);

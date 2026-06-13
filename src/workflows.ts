@@ -19,6 +19,10 @@ export interface WorkflowAgentRef {
 
 export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
 
+export interface WorkflowTaskWorkerOptions {
+  readonly model?: string;
+}
+
 export interface WorkflowTaskDefinition<
   Id extends string,
   Agent extends WorkflowAgentRef,
@@ -29,6 +33,7 @@ export interface WorkflowTaskDefinition<
   readonly prompt: string;
   readonly output: Output;
   readonly cacheKey?: string;
+  readonly worker?: WorkflowTaskWorkerOptions;
 }
 
 export interface WorkflowTask<

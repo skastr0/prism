@@ -42,6 +42,18 @@ describe("workflow authoring primitives", () => {
     expect(workflow.tasks[0]?.cacheKey).toBe("workflow-refs-build");
   });
 
+  test("preserves task-level worker model selection", () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Use the build model.",
+      output: PatchReport,
+      worker: { model: "grok-build" },
+    });
+
+    expect(build.worker?.model).toBe("grok-build");
+  });
+
   test("decodes task output at the workflow boundary", () => {
     const build = defineTask({
       id: "build",

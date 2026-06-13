@@ -94,6 +94,46 @@ export default defineWorkflow({
 `;
 };
 
+const workerModelWorkflowSource = () => {
+  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
+    .replace(/\\/g, "/");
+  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+  return `
+import { Schema } from ${JSON.stringify(effectPath)};
+import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build with explicit model.",
+  output,
+  cacheKey: "model-build",
+  worker: { model: "grok-build" },
+});
+const review = defineTask({
+  id: "review",
+  agent: builder,
+  prompt: "Review with CLI fallback model.",
+  output,
+  cacheKey: "model-review",
+});
+
+export default defineWorkflow({ name: "worker-model-smoke", tasks: [build, review] });
+`;
+};
+
 describe("workflow loader", () => {
   test("loads a workflow module and summarizes its tasks", async () => {
     const root = await createTempRoot();
@@ -351,6 +391,56 @@ describe("workflow loader", () => {
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("from grok");
     expect(calls.trim().split("\n")).toHaveLength(1);
+  });
+
+  test("CLI uses task-level worker models before the CLI fallback model", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "grok-models.txt");
+    const fakeGrok = join(root, "fake-grok.mjs");
+    await writeFile(file, workerModelWorkflowSource());
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, model + '\\n');`,
+      "console.log(JSON.stringify({ summary: model }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--store",
+        storeFile,
+        "--model",
+        "grok-composer-2.5-fast",
+      ],
+      cwd: process.cwd(),
+      env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { model?: string } }> };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "grok-composer-2.5-fast"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "grok-composer-2.5-fast"]);
+    expect((await Bun.file(callsFile).text()).trim().split("\n")).toEqual(["grok-build", "grok-composer-2.5-fast"]);
   });
 
   test("CLI lists and shows workflow run history", async () => {

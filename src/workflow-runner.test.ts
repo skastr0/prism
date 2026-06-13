@@ -178,4 +178,41 @@ describe("workflow runner", () => {
     expect(result.tasks.map((task) => task.id)).toEqual(["slow", "fast"]);
     expect(result.output).toEqual({ slow: "slow", fast: "pass" });
   });
+
+  test("passes mixed task-level worker models through the executor seam", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build with Grok Build.",
+      output: PatchReport,
+      worker: { model: "grok-build" },
+    });
+    const review = defineTask({
+      id: "review",
+      agent: reviewer,
+      prompt: "Review with Composer.",
+      output: ReviewReport,
+      worker: { model: "grok-composer-2.5-fast" },
+    });
+    const workflow = defineWorkflow({
+      name: "mixed-model-smoke",
+      run: async (wf) => {
+        const [buildOutput, reviewOutput] = await Promise.all([
+          wf.runTask(build),
+          wf.runTask(review),
+        ]);
+        return { build: buildOutput.summary, review: reviewOutput.verdict };
+      },
+    });
+    const models: Array<string | undefined> = [];
+
+    await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        models.push(task.worker?.model);
+        return task.id === "build" ? { summary: "built" } : { verdict: "pass" };
+      },
+    });
+
+    expect(models).toEqual(["grok-build", "grok-composer-2.5-fast"]);
+  });
 });

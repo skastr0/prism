@@ -525,6 +525,71 @@ describe("workflow loader", () => {
     expect(first.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("first");
+
+    const listHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "cache",
+        "list",
+        "--store",
+        storeFile,
+        "--workflow",
+        "loader-smoke",
+        "--cache-key",
+        "workflow-loader-build",
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [listExitCode, listStdout, listStderr] = await Promise.all([
+      listHandle.exited,
+      new Response(listHandle.stdout).text(),
+      new Response(listHandle.stderr).text(),
+    ]);
+    expect(listStderr).toBe("");
+    expect(listExitCode).toBe(0);
+    const listed = JSON.parse(listStdout) as {
+      entries: Array<{
+        identity: { taskId: string; cacheKey: string };
+        metadata: Record<string, unknown>;
+      }>;
+    };
+    expect(listed.entries).toHaveLength(1);
+    expect(listed.entries[0]?.identity).toMatchObject({ taskId: "build", cacheKey: "workflow-loader-build" });
+    expect(listed.entries[0]?.metadata).toMatchObject(contractMetadata);
+
+    const showHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "cache",
+        "show",
+        "--store",
+        storeFile,
+        "--workflow",
+        "loader-smoke",
+        "--cache-key",
+        "workflow-loader-build",
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [showExitCode, showStdout, showStderr] = await Promise.all([
+      showHandle.exited,
+      new Response(showHandle.stdout).text(),
+      new Response(showHandle.stderr).text(),
+    ]);
+    expect(showStderr).toBe("");
+    expect(showExitCode).toBe(0);
+    const shown = JSON.parse(showStdout) as { entry: { metadata: Record<string, unknown> } };
+    expect(shown.entry.metadata).toMatchObject(contractMetadata);
   });
 
   test("CLI runs a workflow through the Grok worker and reuses its cached output", async () => {
@@ -1962,6 +2027,7 @@ describe("workflow loader", () => {
         agent: { plugin: string; name: string };
         status: string;
         output: { summary: string };
+        metadata: Record<string, unknown>;
         createdAt: string;
         updatedAt: string;
       }>;
@@ -2018,6 +2084,7 @@ describe("workflow loader", () => {
         agent: { plugin: "forge", name: "builder" },
         status: "completed",
         output: { summary: "history" },
+        metadata: contractMetadata,
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       },

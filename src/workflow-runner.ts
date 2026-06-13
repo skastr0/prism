@@ -410,7 +410,7 @@ const executeWorkflowTask = async (input: {
       }
       : { ...workflowContractMetadata, ...(metadata ?? {}) };
     if (useCache && !cacheHit) {
-      store?.recordCompleted({ identity, agent: taskAgent(task), output: decodedOutput });
+      store?.recordCompleted({ identity, agent: taskAgent(task), output: decodedOutput, metadata: finalMetadata });
       recordEvent(store, runId, task.id, "task.cache_write.completed", { cacheKey: identity.cacheKey });
     }
     recordRunTaskIfPersisted({

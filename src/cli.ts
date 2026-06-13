@@ -354,22 +354,73 @@ workflowCache
   .description("List completed workflow task cache entries")
   .option("--store <path>", "SQLite workflow store path")
   .option("--workflow <name>", "Filter cache entries by workflow name")
+  .option("--task-id <id>", "Filter cache entries by task id")
   .option("--cache-key <key>", "Filter cache entries by task cache key")
+  .option("--prompt-hash <hash>", "Filter cache entries by prompt hash")
+  .option("--agent-manifest-hash <hash>", "Filter cache entries by agent manifest hash")
   .option("--limit <n>", "Maximum number of cache entries to return", parsePositiveInteger)
   .action(async (options: {
     readonly store?: string;
     readonly workflow?: string;
+    readonly taskId?: string;
     readonly cacheKey?: string;
+    readonly promptHash?: string;
+    readonly agentManifestHash?: string;
     readonly limit?: number;
   }) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
-      const entries = store.listCompletedCache({ workflow: options.workflow, cacheKey: options.cacheKey })
+      const entries = store.listCompletedCache({
+        workflow: options.workflow,
+        taskId: options.taskId,
+        cacheKey: options.cacheKey,
+        promptHash: options.promptHash,
+        agentManifestHash: options.agentManifestHash,
+      })
         .slice(0, options.limit);
       console.log(JSON.stringify({ entries }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow cache list failed");
+      exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowCache
+  .command("show")
+  .description("Show one completed workflow task cache entry")
+  .requiredOption("--workflow <name>", "Workflow name")
+  .requiredOption("--cache-key <key>", "Task cache key")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--task-id <id>", "Filter cache entries by task id")
+  .option("--prompt-hash <hash>", "Filter cache entries by prompt hash")
+  .option("--agent-manifest-hash <hash>", "Filter cache entries by agent manifest hash")
+  .action(async (options: {
+    readonly store?: string;
+    readonly workflow: string;
+    readonly taskId?: string;
+    readonly cacheKey: string;
+    readonly promptHash?: string;
+    readonly agentManifestHash?: string;
+  }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      const entries = store.listCompletedCache({
+        workflow: options.workflow,
+        taskId: options.taskId,
+        cacheKey: options.cacheKey,
+        promptHash: options.promptHash,
+        agentManifestHash: options.agentManifestHash,
+      });
+      if (entries.length !== 1) {
+        throw new Error(`workflow cache show expected exactly one entry, found ${entries.length}`);
+      }
+      console.log(JSON.stringify({ entry: entries[0] }, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow cache show failed");
       exitWith(EXIT_CODES.domainFailure);
     } finally {
       store?.close();

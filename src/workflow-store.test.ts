@@ -292,15 +292,20 @@ describe("workflow store", () => {
       identity,
       agent: { plugin: task.agent.plugin, name: task.agent.name },
       output: { summary: "stored" },
+      metadata: contractMetadata,
     });
 
-    expect(store.getCompleted(identity)?.output).toEqual({ summary: "stored" });
+    expect(store.getCompleted(identity)).toMatchObject({
+      output: { summary: "stored" },
+      metadata: contractMetadata,
+    });
     expect(store.listCompletedCache()).toEqual([
       {
         identity,
         agent: { plugin: "forge", name: "builder" },
         status: "completed",
         output: { summary: "stored" },
+        metadata: contractMetadata,
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       },
@@ -308,6 +313,13 @@ describe("workflow store", () => {
     expect(store.listCompletedCache({ workflow: workflow.name }).map((entry) => entry.identity.cacheKey)).toEqual([
       "builder-cache",
     ]);
+    expect(store.listCompletedCache({
+      workflow: workflow.name,
+      taskId: "build",
+      cacheKey: "builder-cache",
+      promptHash: identity.promptHash,
+      agentManifestHash: identity.agentManifestHash,
+    }).map((entry) => entry.metadata)).toEqual([contractMetadata]);
     expect(store.listCompletedCache({ cacheKey: "missing-cache" })).toEqual([]);
     store.close();
   });
@@ -337,6 +349,7 @@ describe("workflow store", () => {
     expect(first.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output).toEqual({ summary: "first" });
+    expect(store.getCompleted(workflowTaskIdentity(workflow.name, workflow.tasks[0]!))?.metadata).toEqual(contractMetadata);
     const firstRunId = first.runId!;
     const secondRunId = second.runId!;
     expect(store.listRuns().map((run) => run.status)).toEqual(["completed", "completed"]);

@@ -148,7 +148,11 @@ export const workflowTaskIdentity = (
       outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
       finish: {
         maxRepairs: task.finish?.maxRepairs ?? 0,
-        criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+        criteria: task.finish?.criteria?.map((criterion) => ({
+          name: criterion.name,
+          check: criterion.check.toString(),
+          repairPrompt: criterion.repairPrompt?.toString() ?? null,
+        })) ?? [],
       },
     })),
     agentManifestHash: task.agent.manifestHash,

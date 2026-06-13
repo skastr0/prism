@@ -7,7 +7,7 @@ import { Effect, Schema } from "effect";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
+import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions } from "./workflows.js";
 
 const tempRoots: string[] = [];
 
@@ -43,13 +43,20 @@ const ReviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const createWorkflow = (options?: { readonly prompt?: string; readonly agent?: WorkflowAgentRef; readonly worker?: string; readonly model?: string }) => {
+const createWorkflow = (options?: {
+  readonly prompt?: string;
+  readonly agent?: WorkflowAgentRef;
+  readonly worker?: string;
+  readonly model?: string;
+  readonly finish?: WorkflowFinishOptions<{ summary: string }>;
+}) => {
   const build = defineTask({
     id: "build",
     agent: options?.agent ?? builder,
     prompt: options?.prompt ?? "Build the slice.",
     output: Output,
     cacheKey: "builder-cache",
+    ...(options?.finish !== undefined ? { finish: options.finish } : {}),
     ...(options?.worker !== undefined || options?.model !== undefined
       ? { worker: { ...(options.worker !== undefined ? { worker: options.worker } : {}), ...(options.model !== undefined ? { model: options.model } : {}) } }
       : {}),
@@ -822,6 +829,48 @@ describe("workflow store", () => {
     }));
 
     expect(identity.promptHash).not.toBe(preSemanticsHash);
+  });
+
+  test("changing finish criterion logic breaks the task cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+    const firstFinish: WorkflowFinishOptions<{ summary: string }> = {
+      criteria: [{
+        name: "summary-prefix",
+        check: ({ output }) => output.summary.startsWith("first")
+          ? Effect.void
+          : Effect.fail(new Error("summary must start with first")),
+      }],
+    };
+    const secondFinish: WorkflowFinishOptions<{ summary: string }> = {
+      criteria: [{
+        name: "summary-prefix",
+        check: ({ output }) => output.summary.startsWith("second")
+          ? Effect.void
+          : Effect.fail(new Error("summary must start with second")),
+      }],
+    };
+
+    await runWorkflow(createWorkflow({ finish: firstFinish }), {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "first output" };
+      },
+    });
+    const second = await runWorkflow(createWorkflow({ finish: secondFinish }), {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "second output" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(second.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.output).toEqual({ summary: "second output" });
+    store.close();
   });
 
   test("changing the task model breaks the task cache", async () => {

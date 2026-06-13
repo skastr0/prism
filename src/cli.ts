@@ -338,15 +338,16 @@ workflowRuns
   .command("list")
   .description("List workflow runs from the SQLite workflow store")
   .option("--store <path>", "SQLite workflow store path")
+  .option("--limit <n>", "Maximum number of runs to return", parsePositiveInteger)
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before listing")
-  .action(async (options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
+  .action(async (options: { readonly store?: string; readonly limit?: number; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
-      console.log(JSON.stringify({ runs: store.listRuns() }, null, 2));
+      console.log(JSON.stringify({ runs: store.listRuns().slice(0, options.limit) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs list failed");
       exitWith(EXIT_CODES.domainFailure);

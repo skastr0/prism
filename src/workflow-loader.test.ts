@@ -1728,6 +1728,9 @@ describe("workflow loader", () => {
     const listResult = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
       runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
     };
+    const limitedListResult = await cli(["workflow", "runs", "list", "--store", storeFile, "--limit", "1"]) as {
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+    };
     const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
       tasks: Array<{
         runId: string;
@@ -1760,6 +1763,7 @@ describe("workflow loader", () => {
     expect(listResult.runs).toEqual([
       { runId: runResult.runId, workflow: "loader-smoke", status: "completed", finishedAt: expect.any(String) },
     ]);
+    expect(limitedListResult.runs).toEqual(listResult.runs);
     expect(showResult.tasks).toEqual([
       {
         runId: runResult.runId,

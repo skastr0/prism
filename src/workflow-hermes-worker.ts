@@ -61,6 +61,14 @@ export const runHermesWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(stdout),
     metadata: {
       adapter: "hermes",
+      prompted: true,
+      agentSelection: "prompted-contract",
+      source: "prism-workflow",
+      agent: {
+        plugin: task.agent.plugin,
+        name: task.agent.name,
+        manifestHash: task.agent.manifestHash,
+      },
       model: options.model,
       durationMs,
       processTimeoutMs,

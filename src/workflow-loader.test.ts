@@ -1372,48 +1372,70 @@ describe("workflow loader", () => {
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const query = queryIndex >= 0 ? process.argv[queryIndex + 1] : '';",
       "const source = sourceIndex >= 0 ? process.argv[sourceIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, quiet: process.argv.includes('--quiet'), source, hasInstruction: query.includes('Prism workflow task') }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, quiet: process.argv.includes('--quiet'), source, hasInstruction: query.includes('Prism workflow task'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
       "console.error('session_id: hermes-session-123');",
       "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
     await chmod(fakeHermes, 0o755);
 
-    const processHandle = Bun.spawn({
-      cmd: [
-        process.execPath,
-        "run",
-        join(process.cwd(), "src", "cli.ts"),
-        "workflow",
-        "run",
-        file,
-        "--worker",
-        "hermes",
-        "--store",
-        storeFile,
-        "--model",
-        "nous/qwen3-coder",
-      ],
-      cwd: root,
-      env: { ...process.env, PRISM_WORKFLOW_HERMES_BIN: fakeHermes },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      processHandle.exited,
-      new Response(processHandle.stdout).text(),
-      new Response(processHandle.stderr).text(),
-    ]);
+    const run = async () => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--worker",
+          "hermes",
+          "--store",
+          storeFile,
+          "--model",
+          "nous/qwen3-coder",
+        ],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_HERMES_BIN: fakeHermes },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
 
-    expect(stderr).toBe("");
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout) as {
-      tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string; sessionId?: string } }>;
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as {
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; prompted?: boolean; agentSelection?: string; source?: string; agent?: { plugin?: string; name?: string; manifestHash?: string }; nativeAgent?: string; model?: string; sessionId?: string } }>;
+      };
     };
+
+    const result = await run();
+    const cachedResult = await run();
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "nous/qwen3-coder"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["hermes", "hermes"]);
+    expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
+    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
+    expect(result.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
+    expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+    ]);
+    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "nous/qwen3-coder"]);
     expect(result.tasks.map((task) => task.metadata?.sessionId)).toEqual(["hermes-session-123", "hermes-session-123"]);
+    expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.agent)).toEqual([
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+    ]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
 
     const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
       command: string;
@@ -1421,10 +1443,12 @@ describe("workflow loader", () => {
       quiet: boolean;
       source: string;
       hasInstruction: boolean;
+      hasProfileFlag: boolean;
+      hasAgentFlag: boolean;
     });
     expect(calls).toEqual([
-      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", hasInstruction: true },
-      { command: "chat", model: "nous/qwen3-coder", quiet: true, source: "prism-workflow", hasInstruction: true },
+      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
+      { command: "chat", model: "nous/qwen3-coder", quiet: true, source: "prism-workflow", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
     ]);
   });
 

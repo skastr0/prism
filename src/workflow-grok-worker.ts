@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask } from "./workflows.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface GrokWorkflowWorkerOptions {
@@ -102,7 +103,7 @@ export const runGrokWorkflowTask = async (
         adapter: "grok-cli",
         model: options.model ?? "grok-build",
         durationMs,
-        stderr: stderr.trim() || undefined,
+        ...summarizeWorkflowWorkerStderr(stderr),
       },
     };
   } finally {

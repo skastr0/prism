@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface CodexWorkflowWorkerOptions {
@@ -74,7 +75,7 @@ export const runCodexWorkflowTask = async (
         adapter: "codex-cli",
         model: options.model,
         durationMs,
-        stderr: stderr.trim() || undefined,
+        ...summarizeWorkflowWorkerStderr(stderr),
       },
     };
   } finally {

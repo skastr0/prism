@@ -1,5 +1,6 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface ClaudeWorkflowWorkerOptions {
@@ -92,7 +93,7 @@ export const runClaudeWorkflowTask = async (
       adapter: "claude-code",
       model: options.model,
       durationMs,
-      stderr: stderr.trim() || undefined,
+      ...summarizeWorkflowWorkerStderr(stderr),
       sessionId: envelope.session_id,
       claudeDurationMs: envelope.duration_ms,
       totalCostUsd: envelope.total_cost_usd,

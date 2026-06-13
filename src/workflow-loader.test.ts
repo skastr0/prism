@@ -856,6 +856,7 @@ describe("workflow loader", () => {
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd, ephemeral: process.argv.includes('--ephemeral') }) + '\\n');`,
       "if (!outputPath) throw new Error('missing --output-last-message');",
       "writeFileSync(outputPath, JSON.stringify({ summary: model }));",
+      "console.error('codex noisy stderr ' + 'x'.repeat(5000) + ' tail-marker');",
       "console.log('ignored stdout');",
       "",
     ].join("\n"));
@@ -885,10 +886,29 @@ describe("workflow loader", () => {
 
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
+    const result = JSON.parse(stdout) as {
+      tasks: Array<{
+        output: { summary: string };
+        metadata?: {
+          adapter?: string;
+          model?: string;
+          stderr?: string;
+          stderrBytes?: number;
+          stderrExcerpt?: string;
+          stderrSha256?: string;
+          stderrTruncated?: boolean;
+        };
+      }>;
+    };
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "missing"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["codex-cli", "codex-cli"]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", undefined]);
+    expect(result.tasks[0]?.metadata?.stderr).toBeUndefined();
+    expect(result.tasks[0]?.metadata?.stderrBytes).toBeGreaterThan(4096);
+    expect(result.tasks[0]?.metadata?.stderrExcerpt?.length).toBeLessThanOrEqual(4096);
+    expect(result.tasks[0]?.metadata?.stderrExcerpt).toContain("tail-marker");
+    expect(result.tasks[0]?.metadata?.stderrSha256).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(result.tasks[0]?.metadata?.stderrTruncated).toBe(true);
 
     const expectedCwd = await realpath(root);
     const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string; ephemeral: boolean });

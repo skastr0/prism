@@ -21,6 +21,7 @@ export * from "./workflow-loader.js";
 export * from "./workflow-opencode-worker.js";
 export * from "./workflow-runner.js";
 export * from "./workflow-store.js";
+export * from "./workflow-worker-metadata.js";
 export * from "./workflow-workers.js";
 
 export interface NamedRefDefinition {

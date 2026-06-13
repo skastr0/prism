@@ -1,5 +1,6 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface AmpWorkflowWorkerOptions {
@@ -62,7 +63,7 @@ export const runAmpWorkflowTask = async (
       adapter: "amp-code",
       model: options.model,
       durationMs,
-      stderr: stderr.trim() || undefined,
+      ...summarizeWorkflowWorkerStderr(stderr),
     },
   };
 };

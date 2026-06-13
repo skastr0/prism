@@ -1,5 +1,6 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface OpenCodeWorkflowWorkerOptions {
@@ -60,7 +61,7 @@ export const runOpenCodeWorkflowTask = async (
       adapter: "opencode-cli",
       model: options.model,
       durationMs,
-      stderr: stderr.trim() || undefined,
+      ...summarizeWorkflowWorkerStderr(stderr),
     },
   };
 };

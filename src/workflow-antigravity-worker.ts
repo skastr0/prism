@@ -78,6 +78,13 @@ export const runAntigravityWorkflowTask = async (
     output,
     metadata: {
       adapter: "antigravity-cli",
+      prompted: true,
+      agentSelection: "prompted-contract",
+      agent: {
+        plugin: task.agent.plugin,
+        name: task.agent.name,
+        manifestHash: task.agent.manifestHash,
+      },
       model: options.model,
       durationMs,
       printTimeout,

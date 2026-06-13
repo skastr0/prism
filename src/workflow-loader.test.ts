@@ -711,6 +711,7 @@ describe("workflow loader", () => {
       "const printTimeout = timeoutIndex >= 0 ? process.argv[timeoutIndex + 1] : 'missing';",
       "const addDir = addDirIndex >= 0 ? process.argv[addDirIndex + 1] : 'missing';",
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), skipPermissions: process.argv.includes('--dangerously-skip-permissions'), sandbox: process.argv.includes('--sandbox'), printTimeout, addDir, model, cwd: process.cwd() }) + '\\n');`,
+      "console.error('agy diagnostic');",
       "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
@@ -745,7 +746,7 @@ describe("workflow loader", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       return JSON.parse(stdout) as {
-        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; printTimeout?: string; processTimeoutMs?: number } }>;
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; prompted?: boolean; agentSelection?: string; agent?: { plugin?: string; name?: string; manifestHash?: string }; nativeAgent?: string; model?: string; printTimeout?: string; processTimeoutMs?: number; stderrBytes?: number; stderrSha256?: string; stderrExcerpt?: string; stderrTruncated?: boolean } }>;
       };
     };
 
@@ -753,10 +754,28 @@ describe("workflow loader", () => {
     const cachedResult = await run();
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["Gemini 3.5 Flash (Low)", "Gemini 3.5 Flash (High)"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["antigravity-cli", "antigravity-cli"]);
+    expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
+    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
+    expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+    ]);
+    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["Gemini 3.5 Flash (Low)", "Gemini 3.5 Flash (High)"]);
     expect(result.tasks.map((task) => task.metadata?.printTimeout)).toEqual(["20s", "20s"]);
     expect(result.tasks.map((task) => task.metadata?.processTimeoutMs)).toEqual([360000, 360000]);
+    expect(result.tasks.map((task) => task.metadata?.stderrExcerpt)).toEqual(["agy diagnostic", "agy diagnostic"]);
+    expect(result.tasks.map((task) => task.metadata?.stderrBytes)).toEqual([14, 14]);
+    expect(result.tasks.map((task) => task.metadata?.stderrSha256)).toEqual([expect.any(String), expect.any(String)]);
+    expect(result.tasks.map((task) => task.metadata?.stderrTruncated)).toEqual([false, false]);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.agent)).toEqual([
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+    ]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
 
     const expectedCwd = await realpath(root);
     const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {

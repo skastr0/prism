@@ -133,14 +133,14 @@ const recordEvent = (
 
 const executeOrReuseTask = async (input: {
   readonly task: AnyWorkflowTask;
-  readonly cached: { readonly output: unknown } | null | undefined;
+  readonly cached: { readonly output: unknown; readonly metadata?: Record<string, unknown> } | null | undefined;
   readonly executeTask: WorkflowTaskExecutor;
   readonly context?: WorkflowTaskExecutionContext;
 }): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
   if (input.cached !== undefined && input.cached !== null) {
     return {
       rawOutput: input.cached.output,
-      metadata: { ...workflowContractMetadata, cachedFrom: "workflow_task_records" },
+      metadata: { ...workflowContractMetadata, ...(input.cached.metadata ?? {}), cachedFrom: "workflow_task_records" },
     };
   }
   const executed = await input.executeTask(input.task, input.context);

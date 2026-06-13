@@ -292,9 +292,58 @@ export class WorkflowStore {
   }
 
   finishRun(runId: string, status: Exclude<WorkflowRunStatus, "running" | "unknown">): void {
-    this.db.query("update workflow_runs set status = ?, finished_at = datetime('now') where run_id = ?")
-      .run(status, runId);
-    this.recordEvent({ runId, type: `run.${status}`, payload: {} });
+    const updated = this.db.query<{ readonly run_id: string }, [WorkflowRunStatus, string]>(`
+      update workflow_runs
+      set status = ?, finished_at = datetime('now')
+      where run_id = ? and status = 'running'
+      returning run_id
+    `).get(status, runId);
+    if (updated != null) {
+      this.recordEvent({ runId, type: `run.${status}`, payload: {} });
+    }
+  }
+
+  stopRun(runId: string, reason: string = "stop-requested"): WorkflowRunRecord | null {
+    const stop = this.db.transaction(() => {
+      const stopped = this.db.query<RunRow, [string]>(`
+        update workflow_runs
+        set status = 'failed', finished_at = datetime('now')
+        where run_id = ? and status = 'running'
+        returning run_id, workflow, status, finished_at
+      `).get(runId);
+      if (stopped != null) {
+        this.recordEvent({ runId, type: "run.failed", payload: { reason } });
+        return stopped;
+      }
+      return this.db.query<RunRow, [string]>(`
+        select run_id, workflow, status, finished_at
+        from workflow_runs
+        where run_id = ?
+      `).get(runId);
+    });
+    const row = stop();
+    if (row == null) return null;
+    return {
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: row.status,
+      finishedAt: row.finished_at,
+    };
+  }
+
+  getRun(runId: string): WorkflowRunRecord | null {
+    const row = this.db.query<RunRow, [string]>(`
+      select run_id, workflow, status, finished_at
+      from workflow_runs
+      where run_id = ?
+    `).get(runId);
+    if (row == null) return null;
+    return {
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: row.status,
+      finishedAt: row.finished_at,
+    };
   }
 
   recordEvent(input: {

@@ -4,6 +4,7 @@ import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
+import { WorkflowStore } from "./workflow-store.js";
 
 const tempRoots: string[] = [];
 
@@ -2085,6 +2086,48 @@ describe("workflow loader", () => {
       { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
     ]);
     expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+  });
+
+  test("CLI can stop a running workflow run cooperatively", async () => {
+    const root = await createTempRoot();
+    const storeFile = join(root, "workflows.sqlite");
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const store = await WorkflowStore.open(storeFile);
+    store.createRun("stop-smoke", "stop-run");
+    store.close();
+
+    const stopped = await cli(["workflow", "runs", "stop", "stop-run", "--store", storeFile]) as {
+      run: { runId: string; workflow: string; status: string; finishedAt: string | null };
+    };
+    const waited = await cli(["workflow", "runs", "wait", "stop-run", "--store", storeFile, "--timeout-ms", "1000"]) as {
+      run: { runId: string; status: string };
+      tasks: unknown[];
+    };
+    const events = await cli(["workflow", "runs", "events", "stop-run", "--store", storeFile]) as {
+      events: Array<{ type: string; payload: unknown }>;
+    };
+
+    expect(stopped.run).toMatchObject({ runId: "stop-run", workflow: "stop-smoke", status: "failed" });
+    expect(typeof stopped.run.finishedAt).toBe("string");
+    expect(waited).toMatchObject({ run: { runId: "stop-run", status: "failed" }, tasks: [] });
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+    expect(events.events.at(-1)?.payload).toEqual({ reason: "stop-requested" });
   });
 
   test("CLI waits for a detached workflow run to complete", async () => {

@@ -35,6 +35,13 @@ export class WorkflowTaskDecodeError extends Error {
   }
 }
 
+export class WorkflowRunStoppedError extends Error {
+  override readonly name = "WorkflowRunStoppedError";
+  constructor(readonly runId: string) {
+    super(`workflow run ${runId} is no longer running`);
+  }
+}
+
 export type WorkflowTaskExecutor = (task: AnyWorkflowTask) => Promise<unknown | WorkflowTaskExecution>;
 
 export const DEFAULT_WORKFLOW_TASK_CONCURRENCY = 8;
@@ -208,6 +215,17 @@ const recordRunTaskIfPersisted = (input: {
   });
 };
 
+const assertRunStillRunning = (
+  store: WorkflowStore | undefined,
+  runId: string | null,
+): void => {
+  if (store === undefined || runId === null) return;
+  const run = store.getRun(runId);
+  if (run?.status !== "running") {
+    throw new WorkflowRunStoppedError(runId);
+  }
+};
+
 const executeWorkflowTask = async (input: {
   readonly isLastTask?: boolean;
   readonly finishRunOnFailure?: boolean;
@@ -221,6 +239,7 @@ const executeWorkflowTask = async (input: {
   readonly limiter?: TaskExecutionLimiter;
 }): Promise<WorkflowRunTaskResult> => {
   const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache } = input;
+  assertRunStillRunning(store, runId);
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
   const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache);
 

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
-import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
+import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
 
@@ -155,6 +155,72 @@ describe("workflow store", () => {
     expect(() => store.failStaleRuns(0)).toThrow("olderThanMs must be a positive number");
     expect(() => store.failStaleRuns(Number.POSITIVE_INFINITY)).toThrow("olderThanMs must be a positive number");
 
+    store.close();
+  });
+
+  test("stopRun marks running runs failed and preserves terminal status", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    store.createRun("store-smoke", "running-run");
+    store.createRun("store-smoke", "completed-run");
+    store.finishRun("completed-run", "completed");
+
+    const stopped = store.stopRun("running-run");
+    const completed = store.stopRun("completed-run");
+    const missing = store.stopRun("missing-run");
+
+    expect(stopped).toMatchObject({ runId: "running-run", workflow: "store-smoke", status: "failed" });
+    expect(completed).toMatchObject({ runId: "completed-run", workflow: "store-smoke", status: "completed" });
+    expect(missing).toBeNull();
+    expect(store.listRunEvents("running-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.failed",
+    ]);
+    expect(store.listRunEvents("running-run").at(-1)?.payload).toEqual({ reason: "stop-requested" });
+    expect(store.listRunEvents("completed-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.completed",
+    ]);
+    store.close();
+  });
+
+  test("runner observes a stopped run before starting the next task", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const first = defineTask({
+      id: "first",
+      agent: builder,
+      prompt: "First task.",
+      output: Output,
+      cacheKey: "first-cache",
+    });
+    const second = defineTask({
+      id: "second",
+      agent: reviewer,
+      prompt: "Second task.",
+      output: ReviewOutput,
+      cacheKey: "second-cache",
+    });
+    const workflow = defineWorkflow({ name: "stop-smoke", tasks: [first, second] as const });
+    const runId = store.createRun(workflow.name);
+    const seen: string[] = [];
+
+    await expect(runWorkflow(workflow, {
+      store,
+      runId,
+      executeTask: async (task) => {
+        seen.push(task.id);
+        if (task.id === "first") {
+          store.stopRun(runId);
+          return { summary: "done" };
+        }
+        return { verdict: "pass" };
+      },
+    })).rejects.toThrow(WorkflowRunStoppedError);
+
+    expect(seen).toEqual(["first"]);
+    expect(store.getRun(runId)).toMatchObject({ status: "failed" });
+    expect(store.listRunTasks(runId).map((task) => task.taskId)).toEqual(["first"]);
     store.close();
   });
 

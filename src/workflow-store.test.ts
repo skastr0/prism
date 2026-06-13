@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
@@ -201,15 +201,15 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const workflow = defineWorkflow({
       name: "dynamic-store-smoke",
-      run: async (wf) => {
-        const build = await wf.runTask(defineTask({
+      run: (wf) => Effect.gen(function* () {
+        const build = yield* wf.runTask(defineTask({
           id: "build",
           agent: builder,
           prompt: "Build the slice.",
           output: Output,
           cacheKey: "dynamic-builder-cache",
         }));
-        const review = await wf.runTask(defineTask({
+        const review = yield* wf.runTask(defineTask({
           id: "review",
           agent: reviewer,
           prompt: `Review ${build.summary}`,
@@ -217,7 +217,7 @@ describe("workflow store", () => {
           cacheKey: "dynamic-review-cache",
         }));
         return { summary: build.summary, verdict: review.verdict };
-      },
+      }),
     });
     const calls: string[] = [];
 
@@ -252,7 +252,7 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const workflow = defineWorkflow({
       name: "dynamic-fanout-store-smoke",
-      run: async (wf) => {
+      run: (wf) => Effect.gen(function* () {
         const slow = defineTask({
           id: "slow",
           agent: builder,
@@ -267,12 +267,12 @@ describe("workflow store", () => {
           output: ReviewOutput,
           cacheKey: "dynamic-fast-cache",
         });
-        const [slowOutput, fastOutput] = await Promise.all([
+        const [slowOutput, fastOutput] = yield* Effect.all([
           wf.runTask(slow),
           wf.runTask(fast),
-        ]);
+        ], { concurrency: "unbounded" });
         return { slow: slowOutput.summary, fast: fastOutput.verdict };
-      },
+      }),
     });
     const completions: string[] = [];
 
@@ -302,15 +302,15 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const workflow = defineWorkflow({
       name: "dynamic-post-task-failure-smoke",
-      run: async (wf) => {
-        await wf.runTask(defineTask({
+      run: (wf) => Effect.gen(function* () {
+        yield* wf.runTask(defineTask({
           id: "build",
           agent: builder,
           prompt: "Build before failing.",
           output: Output,
         }));
-        throw new Error("dynamic workflow body failed");
-      },
+        return yield* Effect.fail(new Error("dynamic workflow body failed"));
+      }),
     });
 
     await expect(runWorkflow(workflow, {
@@ -340,7 +340,7 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const workflow = defineWorkflow({
       name: "dynamic-fanout-failure-smoke",
-      run: async (wf) => {
+      run: (wf) => Effect.gen(function* () {
         const fail = defineTask({
           id: "fail",
           agent: builder,
@@ -355,11 +355,11 @@ describe("workflow store", () => {
           output: Output,
           cacheKey: "dynamic-slow-cache",
         });
-        await Promise.all([
+        yield* Effect.all([
           wf.runTask(fail),
           wf.runTask(slow),
-        ]);
-      },
+        ], { concurrency: "unbounded" });
+      }),
     });
     const completions: string[] = [];
 

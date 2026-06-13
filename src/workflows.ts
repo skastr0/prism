@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 export interface WorkflowModelRef {
   readonly modelspace?: string;
@@ -55,14 +55,14 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
 }
 
 export interface WorkflowRuntime {
-  runTask: <Task extends AnyWorkflowTask>(task: Task) => Promise<WorkflowTaskOutput<Task>>;
+  runTask: <Task extends AnyWorkflowTask>(task: Task) => Effect.Effect<WorkflowTaskOutput<Task>, unknown>;
 }
 
 export interface DynamicWorkflowDefinition<Name extends string> {
   readonly kind: "workflow";
   readonly name: Name;
   readonly tasks: readonly [];
-  readonly run: (runtime: WorkflowRuntime) => Promise<unknown>;
+  readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown>;
 }
 
 export type AnyWorkflowDefinition =
@@ -82,12 +82,12 @@ export function defineWorkflow<const Name extends string, const Tasks extends Re
   definition: { readonly name: Name; readonly tasks: Tasks },
 ): WorkflowDefinition<Name, Tasks>;
 export function defineWorkflow<const Name extends string>(
-  definition: { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Promise<unknown> },
+  definition: { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },
 ): DynamicWorkflowDefinition<Name>;
 export function defineWorkflow<const Name extends string>(
   definition:
     | { readonly name: Name; readonly tasks: ReadonlyArray<AnyWorkflowTask> }
-    | { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Promise<unknown> },
+    | { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },
 ): WorkflowDefinition<Name, ReadonlyArray<AnyWorkflowTask>> | DynamicWorkflowDefinition<Name> {
   if ("run" in definition) {
     return {

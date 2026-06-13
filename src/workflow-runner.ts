@@ -1,4 +1,4 @@
-import { Either } from "effect";
+import { Effect, Either } from "effect";
 import { decodeTaskOutput, type AnyWorkflowDefinition, type AnyWorkflowTask, type WorkflowRuntime } from "./workflows.js";
 import { workflowTaskIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
 
@@ -225,7 +225,7 @@ const runStaticWorkflow = async (input: {
 };
 
 const runDynamicWorkflow = async (input: {
-  readonly workflow: AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Promise<unknown> };
+  readonly workflow: AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> };
   readonly runId: string | null;
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
@@ -235,26 +235,29 @@ const runDynamicWorkflow = async (input: {
   const inFlightTasks: Array<Promise<WorkflowRunTaskResult>> = [];
   let ordinal = 0;
   const runtime: WorkflowRuntime = {
-    runTask: async (task) => {
-      const taskOrdinal = ordinal++;
-      const taskRun = executeWorkflowTask({
-        finishRunOnFailure: false,
-        ordinal: taskOrdinal,
-        task,
-        identity: workflowTaskIdentity(input.workflow.name, task),
-        runId: input.runId,
-        store: input.store,
-        executeTask: input.executeTask,
-        useCache: input.useCache,
-      });
-      inFlightTasks.push(taskRun);
-      const result = await taskRun;
-      tasks[taskOrdinal] = result;
-      return result.output as never;
-    },
+    runTask: (task) => Effect.tryPromise({
+      try: async () => {
+        const taskOrdinal = ordinal++;
+        const taskRun = executeWorkflowTask({
+          finishRunOnFailure: false,
+          ordinal: taskOrdinal,
+          task,
+          identity: workflowTaskIdentity(input.workflow.name, task),
+          runId: input.runId,
+          store: input.store,
+          executeTask: input.executeTask,
+          useCache: input.useCache,
+        });
+        inFlightTasks.push(taskRun);
+        const result = await taskRun;
+        tasks[taskOrdinal] = result;
+        return result.output as never;
+      },
+      catch: (error) => error,
+    }),
   };
   try {
-    const output = await input.workflow.run(runtime);
+    const output = await Effect.runPromise(input.workflow.run(runtime));
     await Promise.allSettled(inFlightTasks);
     if (input.runId !== null) input.store?.finishRun(input.runId, "completed");
     return { output, tasks: tasks.flatMap((task) => task === undefined ? [] : [task]) };
@@ -279,7 +282,7 @@ export const runWorkflow = async (
   const runId = options.store?.createRun(workflow.name) ?? null;
   if ("run" in workflow) {
     const result = await runDynamicWorkflow({
-      workflow: workflow as AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Promise<unknown> },
+      workflow: workflow as AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },
       runId,
       store: options.store,
       executeTask: options.executeTask,

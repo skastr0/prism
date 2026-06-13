@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
 
@@ -110,17 +110,17 @@ describe("workflow runner", () => {
     });
     const workflow = defineWorkflow({
       name: "dynamic-runner-smoke",
-      run: async (wf) => {
-        const patch = await wf.runTask(build);
+      run: (wf) => Effect.gen(function* () {
+        const patch = yield* wf.runTask(build);
         const review = defineTask({
           id: "review",
           agent: reviewer,
           prompt: `Review this patch: ${patch.summary}`,
           output: ReviewReport,
         });
-        const verdict = await wf.runTask(review);
+        const verdict = yield* wf.runTask(review);
         return { reviewed: patch.summary, verdict: verdict.verdict };
-      },
+      }),
     });
     const prompts: string[] = [];
 
@@ -152,13 +152,13 @@ describe("workflow runner", () => {
     });
     const workflow = defineWorkflow({
       name: "dynamic-fanout-smoke",
-      run: async (wf) => {
-        const [slowOutput, fastOutput] = await Promise.all([
+      run: (wf) => Effect.gen(function* () {
+        const [slowOutput, fastOutput] = yield* Effect.all([
           wf.runTask(slow),
           wf.runTask(fast),
-        ]);
+        ], { concurrency: "unbounded" });
         return { slow: slowOutput.summary, fast: fastOutput.verdict };
-      },
+      }),
     });
     const completions: string[] = [];
 
@@ -196,13 +196,13 @@ describe("workflow runner", () => {
     });
     const workflow = defineWorkflow({
       name: "mixed-model-smoke",
-      run: async (wf) => {
-        const [buildOutput, reviewOutput] = await Promise.all([
+      run: (wf) => Effect.gen(function* () {
+        const [buildOutput, reviewOutput] = yield* Effect.all([
           wf.runTask(build),
           wf.runTask(review),
-        ]);
+        ], { concurrency: "unbounded" });
         return { build: buildOutput.summary, review: reviewOutput.verdict };
-      },
+      }),
     });
     const models: Array<string | undefined> = [];
 

@@ -54,7 +54,7 @@ const dynamicWorkflowSource = () => {
     .replace(/\\/g, "/");
   const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
+import { Effect, Schema } from ${JSON.stringify(effectPath)};
 import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
 
 const builder = {
@@ -73,15 +73,15 @@ const reviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
 export default defineWorkflow({
   name: "dynamic-loader-smoke",
-  run: async (wf) => {
-    const build = await wf.runTask(defineTask({
+  run: (wf) => Effect.gen(function* () {
+    const build = yield* wf.runTask(defineTask({
       id: "build",
       agent: builder,
       prompt: "Build the next slice.",
       output: buildOutput,
       cacheKey: "dynamic-build",
     }));
-    const review = await wf.runTask(defineTask({
+    const review = yield* wf.runTask(defineTask({
       id: "review",
       agent: builder,
       prompt: \`Review: \${build.summary}\`,
@@ -89,7 +89,7 @@ export default defineWorkflow({
       cacheKey: "dynamic-review",
     }));
     return { summary: build.summary, verdict: review.verdict };
-  },
+  }),
 });
 `;
 };

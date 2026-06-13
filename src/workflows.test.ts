@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Either, Schema } from "effect";
+import { Effect, Either, Schema } from "effect";
 import {
   decodeTaskOutput,
   defineTask,
@@ -103,16 +103,16 @@ describe("workflow authoring primitives", () => {
     });
     const workflow = defineWorkflow({
       name: "dynamic-typed",
-      run: async (wf) => {
-        const report = await wf.runTask(discover);
+      run: (wf) => Effect.gen(function* () {
+        const report = yield* wf.runTask(discover);
         return report.filesChanged.join(",");
-      },
+      }),
     });
 
     expect(workflow.kind).toBe("workflow");
     expect(workflow.tasks).toEqual([]);
-    expect(await workflow.run({
-      runTask: async () => ({ summary: "typed", filesChanged: ["src/workflows.ts"] }) as never,
-    })).toBe("src/workflows.ts");
+    expect(await Effect.runPromise(workflow.run({
+      runTask: () => Effect.succeed({ summary: "typed", filesChanged: ["src/workflows.ts"] }) as never,
+    }))).toBe("src/workflows.ts");
   });
 });

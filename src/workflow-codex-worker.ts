@@ -34,18 +34,15 @@ export const runCodexWorkflowTask = async (
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-workflow-codex-"));
   const outputPath = join(tempRoot, "last-message.txt");
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CODEX_BIN ?? "codex";
-  const model = options.model ?? "gpt-5.5-codex";
   const prompt = `${task.prompt}${jsonInstruction(task)}`;
   const args = [
     "exec",
-    "--model",
-    model,
+    ...(options.model !== undefined ? ["--model", options.model] : []),
     "--cd",
     options.cwd,
     "--sandbox",
     "workspace-write",
-    "--ask-for-approval",
-    "never",
+    "--ephemeral",
     "--output-last-message",
     outputPath,
     prompt,
@@ -75,7 +72,7 @@ export const runCodexWorkflowTask = async (
       output: parseWorkflowWorkerJsonOutput(outputText),
       metadata: {
         adapter: "codex-cli",
-        model,
+        model: options.model,
         durationMs,
         stderr: stderr.trim() || undefined,
       },

@@ -853,7 +853,7 @@ describe("workflow loader", () => {
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const outputPath = outputIndex >= 0 ? process.argv[outputIndex + 1] : undefined;",
       "const cwd = cdIndex >= 0 ? process.argv[cdIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd, ephemeral: process.argv.includes('--ephemeral') }) + '\\n');`,
       "if (!outputPath) throw new Error('missing --output-last-message');",
       "writeFileSync(outputPath, JSON.stringify({ summary: model }));",
       "console.log('ignored stdout');",
@@ -886,15 +886,15 @@ describe("workflow loader", () => {
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
-    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "gpt-5.5-codex"]);
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "missing"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["codex-cli", "codex-cli"]);
-    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "gpt-5.5-codex"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", undefined]);
 
     const expectedCwd = await realpath(root);
-    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string });
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string; ephemeral: boolean });
     expect(calls).toEqual([
-      { command: "exec", model: "grok-build", cwd: expectedCwd },
-      { command: "exec", model: "gpt-5.5-codex", cwd: expectedCwd },
+      { command: "exec", model: "grok-build", cwd: expectedCwd, ephemeral: true },
+      { command: "exec", model: "missing", cwd: expectedCwd, ephemeral: true },
     ]);
   });
 

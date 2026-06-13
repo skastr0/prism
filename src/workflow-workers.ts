@@ -1,4 +1,5 @@
 import type { AnyWorkflowTask } from "./workflows.js";
+import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
@@ -29,6 +30,13 @@ export class UnsupportedWorkflowWorkerError extends Error {
 }
 
 const workflowWorkerAdapters = {
+  "amp-code": {
+    id: "amp-code",
+    runTask: (task, options) => runAmpWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+    }),
+  },
   "claude-code": {
     id: "claude-code",
     runTask: (task, options) => runClaudeWorkflowTask(task, {

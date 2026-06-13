@@ -152,6 +152,47 @@ export default defineWorkflow({ name: "worker-model-smoke", tasks: [build, revie
 `;
 };
 
+const ampWorkerModelWorkflowSource = () => {
+  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
+    .replace(/\\/g, "/");
+  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+  return `
+import { Schema } from ${JSON.stringify(effectPath)};
+import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["amp"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build with Amp deep mode.",
+  output,
+  cacheKey: "amp-model-build",
+  worker: { worker: "amp-code", model: "deep" },
+});
+const review = defineTask({
+  id: "review",
+  agent: builder,
+  prompt: "Review with Amp fallback mode.",
+  output,
+  cacheKey: "amp-model-review",
+  worker: { worker: "amp-code" },
+});
+
+export default defineWorkflow({ name: "amp-worker-model-smoke", tasks: [build, review] });
+`;
+};
+
 const workerRoutingWorkflowSource = () => {
   const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
     .replace(/\\/g, "/");
@@ -521,7 +562,122 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: claude-code, codex-cli, grok, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, claude-code, codex-cli, grok, opencode");
+  });
+
+  test("CLI runs a workflow through the Amp worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "amp-calls.jsonl");
+    const fakeAmp = join(root, "fake-amp.mjs");
+    await writeFile(file, ampWorkerModelWorkflowSource());
+    await writeFile(fakeAmp, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modeIndex = process.argv.indexOf('--mode');",
+      "const mode = modeIndex >= 0 ? process.argv[modeIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ execute: process.argv.includes('--execute'), noArchive: process.argv.includes('--no-archive-after-execute'), noIde: process.argv.includes('--no-ide'), noNotifications: process.argv.includes('--no-notifications'), noColor: process.argv.includes('--no-color'), mode, cwd: process.cwd() }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: mode }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeAmp, 0o755);
+
+    const run = async () => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--worker",
+          "amp-code",
+          "--store",
+          storeFile,
+          "--model",
+          "smart",
+        ],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_AMP_BIN: fakeAmp },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as {
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string } }>;
+      };
+    };
+
+    const result = await run();
+    const cachedResult = await run();
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["deep", "smart"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["amp-code", "amp-code"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["deep", "smart"]);
+    expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+      execute: boolean;
+      noArchive: boolean;
+      noIde: boolean;
+      noNotifications: boolean;
+      noColor: boolean;
+      mode: string;
+      cwd: string;
+    });
+    expect(calls).toEqual([
+      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "deep", cwd: expectedCwd },
+      { execute: true, noArchive: true, noIde: true, noNotifications: true, noColor: true, mode: "smart", cwd: expectedCwd },
+    ]);
+  });
+
+  test("CLI fails Amp runs when execute mode exits non-zero", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAmp = join(root, "fake-amp-error.mjs");
+    await writeFile(file, workflowSource("default", { worker: "amp-code" }));
+    await writeFile(fakeAmp, [
+      "#!/usr/bin/env node",
+      "console.error('amp auth failed');",
+      "process.exit(2);",
+      "",
+    ].join("\n"));
+    await chmod(fakeAmp, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "amp-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_AMP_BIN: fakeAmp },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("amp exited with 2: amp auth failed");
   });
 
   test("CLI runs a workflow through the Claude Code worker adapter", async () => {

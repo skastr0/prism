@@ -16,6 +16,7 @@
 export * from "./workflows.js";
 export * from "./workflow-codex-worker.js";
 export * from "./workflow-loader.js";
+export * from "./workflow-opencode-worker.js";
 export * from "./workflow-runner.js";
 export * from "./workflow-store.js";
 export * from "./workflow-workers.js";

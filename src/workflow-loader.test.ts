@@ -433,7 +433,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: codex-cli, grok");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: codex-cli, grok, opencode");
   });
 
   test("CLI runs a workflow through the Codex worker adapter", async () => {
@@ -537,6 +537,121 @@ describe("workflow loader", () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("codex did not write --output-last-message");
+  });
+
+  test("CLI runs a workflow through the OpenCode worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "opencode-calls.jsonl");
+    const fakeOpenCode = join(root, "fake-opencode.mjs");
+    await writeFile(file, workerModelWorkflowSource());
+    await writeFile(fakeOpenCode, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const dirIndex = process.argv.indexOf('--dir');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: model }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeOpenCode, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "opencode",
+        "--store",
+        storeFile,
+        "--model",
+        "github-copilot/gpt-5.1",
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_OPENCODE_BIN: fakeOpenCode },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "github-copilot/gpt-5.1"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["opencode-cli", "opencode-cli"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "github-copilot/gpt-5.1"]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string });
+    expect(calls).toEqual([
+      { command: "run", model: "grok-build", cwd: expectedCwd },
+      { command: "run", model: "github-copilot/gpt-5.1", cwd: expectedCwd },
+    ]);
+  });
+
+  test("CLI omits OpenCode --model when no model is configured", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "opencode-no-model-calls.jsonl");
+    const fakeOpenCode = join(root, "fake-opencode-no-model.mjs");
+    await writeFile(file, workflowSource());
+    await writeFile(fakeOpenCode, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const dirIndex = process.argv.indexOf('--dir');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ hasModelFlag: modelIndex >= 0, model, cwd }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: model }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeOpenCode, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "opencode",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_OPENCODE_BIN: fakeOpenCode },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string } }> };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["missing"]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { hasModelFlag: boolean; model: string; cwd: string });
+    expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd }]);
   });
 
   test("CLI detaches a workflow run and leaves it inspectable by run id", async () => {

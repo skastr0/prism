@@ -1,6 +1,7 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
+import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskExecution, WorkflowTaskExecutor } from "./workflow-runner.js";
 
 export interface WorkflowWorkerAdapterOptions {
@@ -37,6 +38,13 @@ const workflowWorkerAdapters = {
   grok: {
     id: "grok",
     runTask: (task, options) => runGrokWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+    }),
+  },
+  opencode: {
+    id: "opencode",
+    runTask: (task, options) => runOpenCodeWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
     }),

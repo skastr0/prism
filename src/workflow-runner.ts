@@ -291,7 +291,11 @@ const executeWorkflowTask = async (input: {
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
-        const output = { error: errorMessage(error) };
+        const output: Record<string, unknown> = { error: errorMessage(error) };
+        const rawText = (error as { readonly rawText?: unknown } | null | undefined)?.rawText;
+        if (rawText !== undefined) {
+          output.rawText = rawText;
+        }
         recordEvent(store, runId, task.id, "task.executor.failed", { attempt: repairs, ...output });
         recordRunTaskIfPersisted({
           store,
@@ -311,7 +315,7 @@ const executeWorkflowTask = async (input: {
       const decoded = decodeTaskOutput(task, rawOutput);
       if (Either.isLeft(decoded)) {
         const error = decoded.left;
-        recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error) });
+        recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
         if (repairs < maxRepairs) {
           repairs += 1;
           const repairPrompt = schemaRepairPrompt(error);
@@ -319,6 +323,7 @@ const executeWorkflowTask = async (input: {
             attempt: repairs,
             criterion: "output-schema",
             mode: "new-executor-invocation",
+            repairPrompt,
           });
           attemptTask = appendRepairPrompt(task, repairPrompt);
           continue;
@@ -352,6 +357,7 @@ const executeWorkflowTask = async (input: {
         attempt: repairs,
         criterion: finish.criterion,
         error: errorMessage(finish.error),
+        output: decodedOutput,
       });
       if (repairs < maxRepairs) {
         repairs += 1;
@@ -359,6 +365,7 @@ const executeWorkflowTask = async (input: {
           attempt: repairs,
           criterion: finish.criterion,
           mode: "new-executor-invocation",
+          repairPrompt: finish.repairPrompt,
         });
         attemptTask = appendRepairPrompt(task, finish.repairPrompt);
         continue;

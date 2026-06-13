@@ -67,4 +67,14 @@ describe("workflow worker contract", () => {
     expect(() => parseWorkflowWorkerJsonOutput("  \n")).toThrow(WorkflowOutputParseError);
     expect(() => parseWorkflowWorkerJsonOutput("no json here")).toThrow("workflow worker output did not contain JSON");
   });
+
+  test("preserves raw worker text on parse failures for debugging", () => {
+    try {
+      parseWorkflowWorkerJsonOutput("not valid json");
+      throw new Error("expected parse failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkflowOutputParseError);
+      expect((error as WorkflowOutputParseError).rawText).toBe("not valid json");
+    }
+  });
 });

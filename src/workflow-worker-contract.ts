@@ -4,6 +4,13 @@ export const WORKFLOW_WORKER_JSON_CONTRACT_VERSION = "v1";
 
 export class WorkflowOutputParseError extends Error {
   override readonly name = "WorkflowOutputParseError";
+  readonly rawText?: string;
+  constructor(message: string, rawText?: string) {
+    super(message);
+    if (rawText !== undefined) {
+      this.rawText = rawText;
+    }
+  }
 }
 
 export const workflowWorkerJsonInstruction = (task: AnyWorkflowTask): string => `
@@ -22,7 +29,7 @@ see it. Do not wrap the JSON in Markdown fences.
 export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
-    throw new WorkflowOutputParseError("workflow worker returned empty output");
+    throw new WorkflowOutputParseError("workflow worker returned empty output", trimmed);
   }
   try {
     return JSON.parse(trimmed) as unknown;
@@ -34,12 +41,12 @@ export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
     const firstArray = trimmed.indexOf("[");
     const starts = [firstObject, firstArray].filter((index) => index >= 0);
     if (starts.length === 0) {
-      throw new WorkflowOutputParseError("workflow worker output did not contain JSON");
+      throw new WorkflowOutputParseError("workflow worker output did not contain JSON", trimmed);
     }
     const start = Math.min(...starts);
     const end = Math.max(trimmed.lastIndexOf("}"), trimmed.lastIndexOf("]"));
     if (end < start) {
-      throw new WorkflowOutputParseError("workflow worker output contained incomplete JSON");
+      throw new WorkflowOutputParseError("workflow worker output contained incomplete JSON", trimmed);
     }
     return JSON.parse(trimmed.slice(start, end + 1)) as unknown;
   }

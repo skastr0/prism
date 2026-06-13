@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WorkflowOutputParseError } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import type { WorkflowAgentRef } from "./workflows.js";
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "a".repeat(64),
+  manifestHash: "b".repeat(64),
+  installs: ["grok"],
+} as const satisfies WorkflowAgentRef;
 
 describe("workflow worker metadata", () => {
   test("omits empty stderr metadata", () => {
@@ -25,5 +38,33 @@ describe("workflow worker metadata", () => {
     expect(metadata.stderrExcerpt).toEndWith(" café tail");
     expect(Buffer.byteLength(metadata.stderrExcerpt ?? "", "utf8")).toBeLessThanOrEqual(16);
     expect(metadata.stderrTruncated).toBe(true);
+  });
+});
+
+describe("workflow worker contract", () => {
+  test("renders one versioned JSON instruction for worker prompts", () => {
+    const instruction = workflowWorkerJsonInstruction({
+      kind: "workflow-task",
+      id: "build",
+      agent: builder,
+      prompt: "Build it.",
+      output: {} as never,
+    });
+
+    expect(instruction).toContain("Task id: build");
+    expect(instruction).toContain("Agent identity: forge.builder");
+    expect(instruction).toContain(`Contract version: ${WORKFLOW_WORKER_JSON_CONTRACT_VERSION}`);
+    expect(instruction).toContain("Return exactly one JSON value and nothing else");
+  });
+
+  test("parses direct, fenced, and prefixed JSON outputs", () => {
+    expect(parseWorkflowWorkerJsonOutput('{"ok":true}')).toEqual({ ok: true });
+    expect(parseWorkflowWorkerJsonOutput("```json\n{\"ok\":true}\n```" )).toEqual({ ok: true });
+    expect(parseWorkflowWorkerJsonOutput("done\n{\"ok\":true}\nthanks")).toEqual({ ok: true });
+  });
+
+  test("rejects empty or non-json worker output", () => {
+    expect(() => parseWorkflowWorkerJsonOutput("  \n")).toThrow(WorkflowOutputParseError);
+    expect(() => parseWorkflowWorkerJsonOutput("no json here")).toThrow("workflow worker output did not contain JSON");
   });
 });

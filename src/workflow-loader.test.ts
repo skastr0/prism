@@ -2087,7 +2087,7 @@ describe("workflow loader", () => {
     db.close();
 
     const show = await cli(["workflow", "runs", "show", "stale-show-run", "--store", storeFile, "--fail-stale-after-ms", "1"]) as {
-      runId: string;
+      run: { runId: string; workflow: string; status: string; finishedAt: string | null };
       tasks: unknown[];
     };
     const afterShow = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
@@ -2097,7 +2097,10 @@ describe("workflow loader", () => {
       events: Array<{ type: string; payload: unknown }>;
     };
 
-    expect(show).toEqual({ runId: "stale-show-run", tasks: [] });
+    expect(show).toEqual({
+      run: { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
+      tasks: [],
+    });
     expect(afterShow.runs).toEqual([
       { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
     ]);

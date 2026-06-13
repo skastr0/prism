@@ -1,5 +1,5 @@
 import type { AnyWorkflowTask } from "./workflows.js";
-import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
+import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
@@ -24,18 +24,6 @@ interface ClaudeJsonEnvelope {
   readonly num_turns?: number;
 }
 
-const jsonInstruction = (task: AnyWorkflowTask): string => `
-
-You are running inside a Prism workflow task.
-
-Task id: ${task.id}
-Agent identity: ${task.agent.plugin}.${task.agent.name}
-
-Return exactly one JSON value and nothing else. The Prism workflow runtime will parse
-that JSON and validate it with the task's Effect Schema before any downstream task can
-see it. Do not wrap the JSON in Markdown fences.
-`;
-
 const parseClaudeEnvelope = (stdout: string): ClaudeJsonEnvelope => {
   try {
     const parsed = JSON.parse(stdout.trim()) as unknown;
@@ -54,7 +42,7 @@ export const runClaudeWorkflowTask = async (
   options: ClaudeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CLAUDE_BIN ?? "claude";
-  const prompt = `${task.prompt}${jsonInstruction(task)}`;
+  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const args = [
     "--print",
     "--output-format",

@@ -1,5 +1,5 @@
 import type { AnyWorkflowTask } from "./workflows.js";
-import { parseWorkflowWorkerJsonOutput } from "./workflow-grok-worker.js";
+import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
@@ -17,18 +17,6 @@ export class AntigravityWorkflowWorkerError extends Error {
   override readonly name = "AntigravityWorkflowWorkerError";
 }
 
-const jsonInstruction = (task: AnyWorkflowTask): string => `
-
-You are running inside a Prism workflow task.
-
-Task id: ${task.id}
-Agent identity: ${task.agent.plugin}.${task.agent.name}
-
-Return exactly one JSON value and nothing else. The Prism workflow runtime will parse
-that JSON and validate it with the task's Effect Schema before any downstream task can
-see it. Do not wrap the JSON in Markdown fences.
-`;
-
 const agyErrorText = (stdout: string, stderr: string): string | undefined => {
   const text = `${stdout}\n${stderr}`.trim();
   const errorIndex = text.indexOf("Error:");
@@ -41,7 +29,7 @@ export const runAntigravityWorkflowTask = async (
   options: AntigravityWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN ?? "agy";
-  const prompt = `${task.prompt}${jsonInstruction(task)}`;
+  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const printTimeout = options.printTimeout ?? process.env.PRISM_WORKFLOW_ANTIGRAVITY_PRINT_TIMEOUT ?? "5m";
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_ANTIGRAVITY_PROCESS_TIMEOUT_MS)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
@@ -433,7 +433,110 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: grok");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: codex-cli, grok");
+  });
+
+  test("CLI runs a workflow through the Codex worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "codex-calls.jsonl");
+    const fakeCodex = join(root, "fake-codex.mjs");
+    await writeFile(file, workerModelWorkflowSource());
+    await writeFile(fakeCodex, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync, writeFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const outputIndex = process.argv.indexOf('--output-last-message');",
+      "const cdIndex = process.argv.indexOf('--cd');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const outputPath = outputIndex >= 0 ? process.argv[outputIndex + 1] : undefined;",
+      "const cwd = cdIndex >= 0 ? process.argv[cdIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd }) + '\\n');`,
+      "if (!outputPath) throw new Error('missing --output-last-message');",
+      "writeFileSync(outputPath, JSON.stringify({ summary: model }));",
+      "console.log('ignored stdout');",
+      "",
+    ].join("\n"));
+    await chmod(fakeCodex, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "codex-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CODEX_BIN: fakeCodex },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "gpt-5.5-codex"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["codex-cli", "codex-cli"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "gpt-5.5-codex"]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string });
+    expect(calls).toEqual([
+      { command: "exec", model: "grok-build", cwd: expectedCwd },
+      { command: "exec", model: "gpt-5.5-codex", cwd: expectedCwd },
+    ]);
+  });
+
+  test("CLI fails Codex runs when --output-last-message is missing", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeCodex = join(root, "fake-codex-missing-output.mjs");
+    await writeFile(file, workflowSource());
+    await writeFile(fakeCodex, [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify({ summary: 'stdout fallback must not be used' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeCodex, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "codex-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CODEX_BIN: fakeCodex },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("codex did not write --output-last-message");
   });
 
   test("CLI detaches a workflow run and leaves it inspectable by run id", async () => {

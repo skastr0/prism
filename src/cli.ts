@@ -194,7 +194,7 @@ const startDetachedWorkflowRun = (
   options: {
     readonly mockOutput?: string;
     readonly worker: string;
-    readonly model: string;
+    readonly model?: string;
     readonly maxConcurrentTasks?: number;
     readonly cache?: boolean;
   },
@@ -212,8 +212,7 @@ const startDetachedWorkflowRun = (
     run.token,
     "--worker",
     options.worker,
-    "--model",
-    options.model,
+    ...(options.model !== undefined ? ["--model", options.model] : []),
     ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
     ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
     ...(options.cache === false ? ["--no-cache"] : []),
@@ -247,7 +246,7 @@ workflow
   .description("Run a workflow through the configured worker, or with mock outputs when provided")
   .option("--mock-output <path>", "JSON object keyed by workflow task id")
   .option("--worker <worker>", "Workflow worker to use when --mock-output is absent (grok)", "grok")
-  .option("--model <model>", "Worker model id", "grok-build")
+  .option("--model <model>", "Worker model id")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
@@ -257,7 +256,7 @@ workflow
   .action(async (file: string, options: {
     readonly mockOutput?: string;
     readonly worker: string;
-    readonly model: string;
+    readonly model?: string;
     readonly maxConcurrentTasks?: number;
     readonly store?: string;
     readonly detach?: boolean;

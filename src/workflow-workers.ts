@@ -1,10 +1,11 @@
 import type { AnyWorkflowTask } from "./workflows.js";
+import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import type { WorkflowTaskExecution, WorkflowTaskExecutor } from "./workflow-runner.js";
 
 export interface WorkflowWorkerAdapterOptions {
   readonly cwd: string;
-  readonly model: string;
+  readonly model?: string;
 }
 
 export interface WorkflowWorkerAdapter {
@@ -26,6 +27,13 @@ export class UnsupportedWorkflowWorkerError extends Error {
 }
 
 const workflowWorkerAdapters = {
+  "codex-cli": {
+    id: "codex-cli",
+    runTask: (task, options) => runCodexWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+    }),
+  },
   grok: {
     id: "grok",
     runTask: (task, options) => runGrokWorkflowTask(task, {
@@ -49,7 +57,7 @@ export const getWorkflowWorkerAdapter = (worker: string): WorkflowWorkerAdapter 
 export const createWorkflowWorkerExecutor = (input: {
   readonly worker: string;
   readonly cwd: string;
-  readonly model: string;
+  readonly model?: string;
 }): WorkflowTaskExecutor => {
   const adapter = getWorkflowWorkerAdapter(input.worker);
   return (task) => adapter.runTask(task, { cwd: input.cwd, model: input.model });

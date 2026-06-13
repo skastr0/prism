@@ -58,6 +58,14 @@ The filesystem tree is a convenience/artifact cache. If it disagrees with the
 SQLite ledger, the ledger wins. Crash recovery, lock cleanup, status, wait, and
 stop never depend on a filesystem lease being present.
 
+Implementation checkpoint (2026-06-13): the dogfood runtime currently stores
+workflow runs, task rows, events, and cache records in
+`.prism/workflows/workflows.sqlite` by default. That store proves the local
+runtime loop, cache replay, detached inspection, stop/cancel, and finish repair.
+It is not yet the final AgentRun-resource ledger sketched below; current task
+records should be treated as durable evidence for the dogfood wedge, not as the
+full resource model with refs, lineage, attempts, and cross-scope locks.
+
 ```
 <project>/.prism/workflows/
   workflow-ledger.sqlite   # AgentRun/resources/runs/events index

@@ -50,7 +50,7 @@ allowed under an exclusive lock.
 
 ## Per-harness adapters
 
-### Claude Code — class A `verified`
+### Claude Code — class A `native-agent surface verified`
 
 - Dispatch: `claude -p <prompt> --agent prism-generated-<plugin>:<name>
   --output-format json` (or `stream-json` for live transcripts).
@@ -64,20 +64,18 @@ allowed under an exclusive lock.
 - Sandbox: permission system native; agent's compiled permissions already
   installed.
 
-### Grok CLI — class A `verified`
+### Grok CLI — class A `native-agent verified`
 
-- Current wedge dispatch: `grok --model <model> --cwd <cwd> --no-alt-screen
-  --output-format plain --prompt-file <prompt-file>`. This intentionally does
-  **not** set `--max-turns`; the CLI owns task completion.
-- Agent selection: generic Grok model first. Prism-generated agent artifact
-  binding is the next adapter-hardening step; it must not block the basic live
-  workflow wedge.
+- Current dispatch: `grok --model <model> --agent <agent-name> --cwd <cwd>
+  --no-alt-screen --output-format plain --prompt-file <prompt-file>`. This
+  intentionally does **not** set `--max-turns`; the CLI owns task completion.
+- Agent selection: native `--agent` binding is live for generated Prism agent
+  refs. A real Survey `source-scout` workflow smoke proved `adapter: grok-cli`,
+  `nativeAgent: source-scout`, and `model: grok-build` in the task metadata.
 - Structured output: `prompted` (extract + decode + retry). Investigate
   `-p` JSON content blocks for a native lane (WS3).
 - Fork: `--resume <sessionId>` exists; copy-vs-continue semantics unverified —
   matrix says `none` until verified.
-- Watch-item: identity binding looser than claude/codex (smoke test returned
-  model name, not agent name) — grok lowerer follow-up filed.
 - `grok agent stdio` exists for a future persistent-session adapter.
 
 ### Codex — class A via projection `verified`
@@ -95,6 +93,18 @@ allowed under an exclusive lock.
 - This adapter doubles as the template for any **API-projection worker**
   (raw Anthropic/OpenAI/xAI SDK calls) — same projection, no CLI.
 
+### OpenCode — class A `native-agent verified`
+
+- Dispatch: `opencode run --agent <agent-name> <prompt>` through the shared
+  workflow worker process helper.
+- Agent selection: native `--agent` binding is live for generated Prism agent
+  refs. Task metadata records `nativeAgent` only when this native selector is
+  actually used.
+- Structured output: `prompted` for the current wedge; runtime extraction and
+  Effect Schema decode remain mandatory before completion/cache-write.
+- Fork/session semantics: not claimed yet. Treat as `fork: "none"` until an
+  immutable provider-copy or safe continue mode is live-verified.
+
 ### Antigravity CLI — class A `surface verified, dispatch unverified`
 
 - Prism has an antigravity lowerer (agents land in the generated plugin).
@@ -106,14 +116,15 @@ allowed under an exclusive lock.
   markdown, inject as system context the way codex does). Capability matrix
   filled only from live runs, per the rule above.
 
-### Hermes — class B `surface verified, dispatch unverified`
+### Hermes — class B `live dispatch verified, profile binding pending`
 
 - Hermes is a claw-style assistant, not a coding harness; profiles are not
   prism-compiled. **No Hermes→Prism type-generation bridge** (decided —
   overkill).
-- Dispatch shape: `hermes -z/--oneshot <prompt>` prints only the final response
-  — clean for capture. Profile selection per invocation (profile wrapper
-  aliases exist via `hermes profile alias`; exact flag/env verified in WS4).
+- Dispatch shape: `hermes chat --oneshot --json --source prism-workflow` with a
+  bounded process timeout. Live dogfood succeeded and a rerun hit cache. Profile
+  selection per invocation remains pending because the CLI surface does not yet
+  expose a Prism-agent selector equivalent to Grok/OpenCode/Claude `--agent`.
 - Worker descriptor (typed, runtime-registered, ledgered):
 
 ```typescript

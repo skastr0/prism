@@ -66,15 +66,24 @@ Runtime code starts from the public type catalog (`10`), AgentRun ledger spec
 contracts before any real provider adapter enters the runtime.
 
 Implementation checkpoint (2026-06-13): the repo now has a single-package
-runtime wedge rather than the full `@skastr0/prism-workflow` package boundary:
-typed workflow authoring primitives, module validation, sequential runner,
-SQLite task cache/run history/events, terminal statuses, mock-output execution,
-dynamic workflow bodies whose downstream tasks can use prior decoded outputs,
-and a first generic Grok CLI worker. This is intentionally short of the full
-AgentRun ledger in `08`; treat it as the dogfood wedge, not as the final ledger
-shape. Live proof now exists for a two-task Grok workflow where the review task
-prompt is constructed from the build task's decoded output and both tasks are
-reused from cache on rerun.
+runtime wedge rather than the full `@skastr0/prism-workflow` package boundary.
+It includes typed Effect-first workflow authoring primitives, module validation,
+dynamic workflow bodies, SQLite task cache/run history/events, terminal statuses,
+detached runs, `runs list/show/events/wait/stop`, stale-run reconciliation,
+bounded task concurrency, mock-output execution, typed decoded outputs, finish
+criteria with bounded repair prompts, cooperative stop plus active child-process
+abort, and shared subprocess hygiene for CLI workers. Worker adapters exist for
+Grok, Codex, OpenCode, Amp, Claude Code, Antigravity, and Hermes. Native agent
+binding is live only where the harness has a proven selector: OpenCode, Grok,
+and Claude Code. Codex, Amp, Antigravity, and Hermes remain prompt-identity or
+declared-worker lanes until their selector/profile semantics are proven.
+
+This is intentionally short of the full AgentRun ledger in `08`; treat it as the
+dogfood wedge, not as the final ledger shape. Live proof exists for: a Survey
+workflow using generated refs and cache replay; finish-repair on real Grok
+output (`decode.failed -> repair.started -> decode.completed -> cache_write`);
+Hermes live dispatch plus rerun cache hit; and a real Grok Survey `source-scout`
+run with `nativeAgent: source-scout` and `model: grok-build` metadata.
 
 - 2.1 Package scaffold; `defineWorkflow` envelope + input decode; CLI command
   namespace under `prism workflow ...`.
@@ -100,15 +109,18 @@ reused from cache on rerun.
   on AgentRun resources and dependency refs.
 - 2.9 Worker gateway interface + capability matrix + subprocess hygiene
   (watchdog, stderr ring, Scope-tied teardown).
-- 2.10 Adapters v1: grok first as generic CLI dispatch, then grok artifact
-  binding, opencode/codex projection, and claude named-agent paths as pressure
-  demands. Generic Grok is acceptable as the first live wedge.
-- 2.11 CLI: `run | validate | status | wait | events | stop`, plus
-  `agent-runs list|show|output|transcript|refs`, JSON envelopes; mock-output
-  lane for deterministic tests/debugging.
+- 2.10 Adapters v1: grok first as generic CLI dispatch, then native Grok,
+  native OpenCode, native Claude, prompt/projected Codex, prompt Amp,
+  prompt Antigravity, and declared Hermes as live verification permits. Current
+  implementation has all listed adapters, with native agent selectors only for
+  OpenCode/Grok/Claude.
+- 2.11 CLI: `run | runs list | runs show | runs wait | runs events | runs stop`,
+  JSON envelopes; mock-output lane for deterministic tests/debugging. The
+  future AgentRun-resource inspection commands remain outstanding until the
+  ledger converges on `08`.
 - 2.12 Basic structured output lane: native schema where proven, otherwise
-  prompt clause + extract JSON + `Schema.decodeUnknown`; no Smithers-style repair
-  loop until real failures justify it.
+  prompt clause + extract JSON + `Schema.decodeUnknown`; bounded finish repair
+  now exists because real dogfood proved the need.
 
 Exit / **first real use**: forge-mission runs end-to-end on a real goal;
 rerunning an edited workflow reuses completed upstream AgentRuns with zero

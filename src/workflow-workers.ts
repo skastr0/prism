@@ -1,4 +1,5 @@
 import type { AnyWorkflowTask } from "./workflows.js";
+import { runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
 import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
@@ -30,6 +31,13 @@ export class UnsupportedWorkflowWorkerError extends Error {
 }
 
 const workflowWorkerAdapters = {
+  "antigravity-cli": {
+    id: "antigravity-cli",
+    runTask: (task, options) => runAntigravityWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+    }),
+  },
   "amp-code": {
     id: "amp-code",
     runTask: (task, options) => runAmpWorkflowTask(task, {

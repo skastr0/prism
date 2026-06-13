@@ -193,6 +193,47 @@ export default defineWorkflow({ name: "amp-worker-model-smoke", tasks: [build, r
 `;
 };
 
+const antigravityWorkerModelWorkflowSource = () => {
+  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
+    .replace(/\\/g, "/");
+  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+  return `
+import { Schema } from ${JSON.stringify(effectPath)};
+import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["antigravity-cli"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build with AGY Flash.",
+  output,
+  cacheKey: "antigravity-model-build",
+  worker: { worker: "antigravity-cli", model: "Gemini 3.5 Flash (Low)" },
+});
+const review = defineTask({
+  id: "review",
+  agent: builder,
+  prompt: "Review with AGY fallback model.",
+  output,
+  cacheKey: "antigravity-model-review",
+  worker: { worker: "antigravity-cli" },
+});
+
+export default defineWorkflow({ name: "antigravity-worker-model-smoke", tasks: [build, review] });
+`;
+};
+
 const workerRoutingWorkflowSource = () => {
   const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
     .replace(/\\/g, "/");
@@ -562,7 +603,253 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, claude-code, codex-cli, grok, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, opencode");
+  });
+
+  test("CLI runs a workflow through the Antigravity worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "agy-calls.jsonl");
+    const fakeAgy = join(root, "fake-agy.mjs");
+    await writeFile(file, antigravityWorkerModelWorkflowSource());
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const timeoutIndex = process.argv.indexOf('--print-timeout');",
+      "const addDirIndex = process.argv.indexOf('--add-dir');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const printTimeout = timeoutIndex >= 0 ? process.argv[timeoutIndex + 1] : 'missing';",
+      "const addDir = addDirIndex >= 0 ? process.argv[addDirIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), skipPermissions: process.argv.includes('--dangerously-skip-permissions'), sandbox: process.argv.includes('--sandbox'), printTimeout, addDir, model, cwd: process.cwd() }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: model }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+
+    const run = async () => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--worker",
+          "antigravity-cli",
+          "--store",
+          storeFile,
+          "--model",
+          "Gemini 3.5 Flash (High)",
+        ],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy, PRISM_WORKFLOW_ANTIGRAVITY_PRINT_TIMEOUT: "20s" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as {
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; printTimeout?: string; processTimeoutMs?: number } }>;
+      };
+    };
+
+    const result = await run();
+    const cachedResult = await run();
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["Gemini 3.5 Flash (Low)", "Gemini 3.5 Flash (High)"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["antigravity-cli", "antigravity-cli"]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["Gemini 3.5 Flash (Low)", "Gemini 3.5 Flash (High)"]);
+    expect(result.tasks.map((task) => task.metadata?.printTimeout)).toEqual(["20s", "20s"]);
+    expect(result.tasks.map((task) => task.metadata?.processTimeoutMs)).toEqual([360000, 360000]);
+    expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+      print: boolean;
+      skipPermissions: boolean;
+      sandbox: boolean;
+      printTimeout: string;
+      addDir: string;
+      model: string;
+      cwd: string;
+    });
+    expect(calls).toEqual([
+      { print: true, skipPermissions: true, sandbox: true, printTimeout: "20s", addDir: expectedCwd, model: "Gemini 3.5 Flash (Low)", cwd: expectedCwd },
+      { print: true, skipPermissions: true, sandbox: true, printTimeout: "20s", addDir: expectedCwd, model: "Gemini 3.5 Flash (High)", cwd: expectedCwd },
+    ]);
+  });
+
+  test("CLI fails Antigravity runs when print mode reports a timeout with exit zero", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAgy = join(root, "fake-agy-timeout.mjs");
+    await writeFile(file, workflowSource("default", { worker: "antigravity-cli" }));
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "console.log('Error: timed out waiting for response');",
+      "process.exit(0);",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "antigravity-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("agy exited with 0: Error: timed out waiting for response");
+  });
+
+  test("CLI fails Antigravity runs when prefixed output contains an AGY error", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAgy = join(root, "fake-agy-prefixed-error.mjs");
+    await writeFile(file, workflowSource("default", { worker: "antigravity-cli" }));
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "console.log('notice before failure\\nError: timed out waiting for response');",
+      "process.exit(0);",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "antigravity-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("agy exited with 0: Error: timed out waiting for response");
+  });
+
+  test("CLI accepts Antigravity JSON output that contains the word Error", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAgy = join(root, "fake-agy-error-word.mjs");
+    await writeFile(file, workflowSource("default", { worker: "antigravity-cli" }));
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify({ summary: 'Error: handled upstream' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "antigravity-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string } }> };
+    expect(result.tasks[0]?.output.summary).toBe("Error: handled upstream");
+  });
+
+  test("CLI kills Antigravity runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAgy = join(root, "fake-agy-hang.mjs");
+    await writeFile(file, workflowSource("default", { worker: "antigravity-cli" }));
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "await new Promise((resolve) => setTimeout(resolve, 10_000));",
+      "console.log(JSON.stringify({ summary: 'too late' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "antigravity-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy, PRISM_WORKFLOW_ANTIGRAVITY_PROCESS_TIMEOUT_MS: "100" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("agy exceeded Prism process timeout after 100ms");
   });
 
   test("CLI runs a workflow through the Amp worker adapter", async () => {

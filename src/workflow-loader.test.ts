@@ -1946,6 +1946,26 @@ describe("workflow loader", () => {
     ]) as {
       events: Array<{ sequence: number; type: string }>;
     };
+    const cacheResult = await cli([
+      "workflow",
+      "cache",
+      "list",
+      "--store",
+      storeFile,
+      "--workflow",
+      "loader-smoke",
+      "--cache-key",
+      "workflow-loader-build",
+    ]) as {
+      entries: Array<{
+        identity: { workflow: string; taskId: string; cacheKey: string; promptHash: string; agentManifestHash: string };
+        agent: { plugin: string; name: string };
+        status: string;
+        output: { summary: string };
+        createdAt: string;
+        updatedAt: string;
+      }>;
+    };
 
     expect(listResult.runs).toMatchObject([
       { runId: runResult.runId, workflow: "loader-smoke", status: "completed", finishedAt: expect.any(String) },
@@ -1985,6 +2005,22 @@ describe("workflow loader", () => {
       { sequence: 3, type: "task.cache_lookup.started" },
       { sequence: 4, type: "task.cache_lookup.miss" },
       { sequence: 5, type: "task.executor.started" },
+    ]);
+    expect(cacheResult.entries).toEqual([
+      {
+        identity: {
+          workflow: "loader-smoke",
+          taskId: "build",
+          cacheKey: "workflow-loader-build",
+          promptHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          agentManifestHash: "b".repeat(64),
+        },
+        agent: { plugin: "forge", name: "builder" },
+        status: "completed",
+        output: { summary: "history" },
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+      },
     ]);
   });
 

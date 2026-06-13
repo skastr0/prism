@@ -345,6 +345,37 @@ const workflowRuns = workflow
   .command("runs")
   .description("Inspect persisted workflow run history");
 
+const workflowCache = workflow
+  .command("cache")
+  .description("Inspect persisted workflow task cache entries");
+
+workflowCache
+  .command("list")
+  .description("List completed workflow task cache entries")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--workflow <name>", "Filter cache entries by workflow name")
+  .option("--cache-key <key>", "Filter cache entries by task cache key")
+  .option("--limit <n>", "Maximum number of cache entries to return", parsePositiveInteger)
+  .action(async (options: {
+    readonly store?: string;
+    readonly workflow?: string;
+    readonly cacheKey?: string;
+    readonly limit?: number;
+  }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      const entries = store.listCompletedCache({ workflow: options.workflow, cacheKey: options.cacheKey })
+        .slice(0, options.limit);
+      console.log(JSON.stringify({ entries }, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow cache list failed");
+      exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
 workflowRuns
   .command("list")
   .description("List workflow runs from the SQLite workflow store")

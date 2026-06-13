@@ -295,6 +295,20 @@ describe("workflow store", () => {
     });
 
     expect(store.getCompleted(identity)?.output).toEqual({ summary: "stored" });
+    expect(store.listCompletedCache()).toEqual([
+      {
+        identity,
+        agent: { plugin: "forge", name: "builder" },
+        status: "completed",
+        output: { summary: "stored" },
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+      },
+    ]);
+    expect(store.listCompletedCache({ workflow: workflow.name }).map((entry) => entry.identity.cacheKey)).toEqual([
+      "builder-cache",
+    ]);
+    expect(store.listCompletedCache({ cacheKey: "missing-cache" })).toEqual([]);
     store.close();
   });
 

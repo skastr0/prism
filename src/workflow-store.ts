@@ -43,6 +43,12 @@ export interface CompletedWorkflowTaskRecord {
   readonly output: unknown;
 }
 
+export interface WorkflowCacheRecord extends CompletedWorkflowTaskRecord {
+  readonly status: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export type WorkflowRunTaskStatus = "completed" | "failed";
 
 export interface WorkflowRunTaskRecord {
@@ -87,7 +93,10 @@ interface TaskRecordRow {
   readonly agent_manifest_hash: string;
   readonly agent_plugin: string;
   readonly agent_name: string;
+  readonly status: string;
   readonly output_json: string;
+  readonly created_at: string;
+  readonly updated_at: string;
 }
 
 interface RunTaskRow {
@@ -290,7 +299,7 @@ export class WorkflowStore {
   getCompleted(identity: WorkflowTaskIdentity): CompletedWorkflowTaskRecord | null {
     const row = this.db.query<TaskRecordRow, [string, string, string, string, string]>(`
       select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-             agent_plugin, agent_name, output_json
+             agent_plugin, agent_name, status, output_json, created_at, updated_at
       from workflow_task_records
       where workflow = ?
         and task_id = ?
@@ -320,6 +329,39 @@ export class WorkflowStore {
       },
       output: JSON.parse(row.output_json) as unknown,
     };
+  }
+
+  listCompletedCache(options: {
+    readonly workflow?: string;
+    readonly cacheKey?: string;
+  } = {}): WorkflowCacheRecord[] {
+    const rows = this.db.query<TaskRecordRow, []>(`
+      select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
+             agent_plugin, agent_name, status, output_json, created_at, updated_at
+      from workflow_task_records
+      where status = 'completed'
+      order by updated_at desc, created_at desc, workflow asc, task_id asc
+    `).all();
+    return rows
+      .filter((row) => options.workflow === undefined || row.workflow === options.workflow)
+      .filter((row) => options.cacheKey === undefined || row.cache_key === options.cacheKey)
+      .map((row) => ({
+        identity: {
+          workflow: row.workflow,
+          taskId: row.task_id,
+          cacheKey: row.cache_key,
+          promptHash: row.prompt_hash,
+          agentManifestHash: row.agent_manifest_hash,
+        },
+        agent: {
+          plugin: row.agent_plugin,
+          name: row.agent_name,
+        },
+        status: row.status,
+        output: JSON.parse(row.output_json) as unknown,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
   }
 
   createRun(workflow: string, runId: string = randomUUID()): string {

@@ -192,6 +192,40 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("records detached runner pid and heartbeat on run records", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    store.createRun("store-smoke", "detached-run");
+
+    store.markRunRunnerStarted("detached-run", 12345);
+    const started = store.getRun("detached-run");
+    store.heartbeatRun("detached-run");
+    const heartbeat = store.getRun("detached-run");
+
+    expect(started).toMatchObject({
+      runId: "detached-run",
+      workflow: "store-smoke",
+      status: "running",
+      runnerPid: 12345,
+      heartbeatAt: expect.any(String),
+    });
+    expect(heartbeat).toMatchObject({ runnerPid: 12345, heartbeatAt: expect.any(String) });
+    expect(store.listRuns()).toEqual([expect.objectContaining({
+      runId: "detached-run",
+      runnerPid: 12345,
+      heartbeatAt: expect.any(String),
+    })]);
+    expect(store.listRunEvents("detached-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "runner.started",
+    ]);
+
+    store.finishRun("detached-run", "completed");
+    store.heartbeatRun("detached-run");
+    expect(store.getRun("detached-run")?.status).toBe("completed");
+    store.close();
+  });
+
   test("runner observes a stopped run before starting the next task", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

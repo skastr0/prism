@@ -63,6 +63,8 @@ export interface WorkflowRunRecord {
   readonly workflow: string;
   readonly status: WorkflowRunStatus;
   readonly finishedAt: string | null;
+  readonly runnerPid?: number;
+  readonly heartbeatAt?: string;
 }
 
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "unknown";
@@ -104,6 +106,8 @@ interface RunRow {
   readonly workflow: string;
   readonly status: WorkflowRunStatus;
   readonly finished_at: string | null;
+  readonly runner_pid: number | null;
+  readonly heartbeat_at: string | null;
 }
 
 interface StaleRunRow extends RunRow {
@@ -211,6 +215,8 @@ export class WorkflowStore {
         status text not null default 'running',
         finished_at text,
         handoff_token text,
+        runner_pid integer,
+        heartbeat_at text,
         created_at text not null default (datetime('now'))
       );
 
@@ -245,6 +251,8 @@ export class WorkflowStore {
     addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
     addColumnIfMissing(db, "alter table workflow_runs add column finished_at text");
     addColumnIfMissing(db, "alter table workflow_runs add column handoff_token text");
+    addColumnIfMissing(db, "alter table workflow_runs add column runner_pid integer");
+    addColumnIfMissing(db, "alter table workflow_runs add column heartbeat_at text");
     addColumnIfMissing(db, "alter table workflow_run_tasks add column metadata_json text");
     // Legacy ledgers did not know the workflow's full task count, so completed
     // task rows are not proof that the whole run finished. Only failed task rows
@@ -320,6 +328,23 @@ export class WorkflowStore {
     return true;
   }
 
+  markRunRunnerStarted(runId: string, runnerPid: number): void {
+    this.db.query(`
+      update workflow_runs
+      set runner_pid = ?, heartbeat_at = datetime('now')
+      where run_id = ? and status = 'running'
+    `).run(runnerPid, runId);
+    this.recordEvent({ runId, type: "runner.started", payload: { runnerPid } });
+  }
+
+  heartbeatRun(runId: string): void {
+    this.db.query(`
+      update workflow_runs
+      set heartbeat_at = datetime('now')
+      where run_id = ? and status = 'running'
+    `).run(runId);
+  }
+
   finishRun(runId: string, status: Exclude<WorkflowRunStatus, "running" | "unknown">): void {
     const updated = this.db.query<{ readonly run_id: string }, [WorkflowRunStatus, string]>(`
       update workflow_runs
@@ -338,7 +363,7 @@ export class WorkflowStore {
         update workflow_runs
         set status = 'failed', finished_at = datetime('now')
         where run_id = ? and status = 'running'
-        returning run_id, workflow, status, finished_at
+        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
       `).get(runId);
       if (stopped != null) {
         this.recordEvent({ runId, type: "run.failed", payload: { reason } });
@@ -346,6 +371,7 @@ export class WorkflowStore {
       }
       return this.db.query<RunRow, [string]>(`
         select run_id, workflow, status, finished_at
+             , runner_pid, heartbeat_at
         from workflow_runs
         where run_id = ?
       `).get(runId);
@@ -357,12 +383,14 @@ export class WorkflowStore {
       workflow: row.workflow,
       status: row.status,
       finishedAt: row.finished_at,
+      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
     };
   }
 
   getRun(runId: string): WorkflowRunRecord | null {
     const row = this.db.query<RunRow, [string]>(`
-      select run_id, workflow, status, finished_at
+      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at
       from workflow_runs
       where run_id = ?
     `).get(runId);
@@ -372,6 +400,8 @@ export class WorkflowStore {
       workflow: row.workflow,
       status: row.status,
       finishedAt: row.finished_at,
+      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
     };
   }
 
@@ -427,7 +457,7 @@ export class WorkflowStore {
         set status = 'failed', finished_at = datetime('now')
         where status = 'running'
           and datetime(created_at) < datetime(?)
-        returning run_id, workflow, status, finished_at, created_at
+        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
       `).all(staleBefore);
       for (const row of updated) {
         this.recordEvent({
@@ -449,12 +479,14 @@ export class WorkflowStore {
       workflow: row.workflow,
       status: "failed" as const,
       finishedAt: row.finished_at,
+      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
     }));
   }
 
   listRuns(): WorkflowRunRecord[] {
     const rows = this.db.query<RunRow, []>(`
-      select run_id, workflow, status, finished_at
+      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at
       from workflow_runs
       order by created_at asc, run_id asc
     `).all();
@@ -463,6 +495,8 @@ export class WorkflowStore {
       workflow: row.workflow,
       status: row.status,
       finishedAt: row.finished_at,
+      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
     }));
   }
 

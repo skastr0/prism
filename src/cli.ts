@@ -269,6 +269,7 @@ workflow
     readonly cache?: boolean;
   }) => {
     let store: WorkflowStore | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
       const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
@@ -297,6 +298,8 @@ workflow
         if (options.runToken === undefined || !store.consumeRunHandoffToken(options.runId, options.runToken)) {
           throw new CliUsageError("invalid detached workflow run handoff");
         }
+        store.markRunRunnerStarted(options.runId, process.pid);
+        heartbeat = setInterval(() => store?.heartbeatRun(options.runId!), 2_000);
       }
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
@@ -326,6 +329,7 @@ workflow
       printCliError(error, "Workflow run failed");
       exitWith(EXIT_CODES.domainFailure);
     } finally {
+      if (heartbeat !== undefined) clearInterval(heartbeat);
       store?.close();
     }
   });

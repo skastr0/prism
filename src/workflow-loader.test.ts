@@ -1737,13 +1737,17 @@ describe("workflow loader", () => {
     });
 
     const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
+      run: { runnerPid?: number; heartbeatAt?: string };
       tasks: Array<{ taskId: string; output: { summary: string } }>;
     };
     const eventsResult = await cli(["workflow", "runs", "events", runResult.runId, "--store", storeFile]) as {
       events: Array<{ type: string }>;
     };
 
+    expect(showResult.run.runnerPid).toEqual(expect.any(Number));
+    expect(showResult.run.heartbeatAt).toEqual(expect.any(String));
     expect(showResult.tasks).toMatchObject([{ taskId: "build", output: { summary: "detached" } }]);
+    expect(eventsResult.events.map((event) => event.type)).toContain("runner.started");
     expect(eventsResult.events.map((event) => event.type).at(-1)).toBe("run.completed");
     expect((await Bun.file(callsFile).text()).trim()).toBe("called");
   });

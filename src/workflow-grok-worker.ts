@@ -72,6 +72,8 @@ export const runGrokWorkflowTask = async (
   const args = [
     "--model",
     options.model ?? "grok-build",
+    "--agent",
+    task.agent.name,
     "--cwd",
     options.cwd,
     "--no-alt-screen",
@@ -99,6 +101,7 @@ export const runGrokWorkflowTask = async (
       output: extractJson(stdout),
       metadata: {
         adapter: "grok-cli",
+        nativeAgent: task.agent.name,
         model: options.model ?? "grok-build",
         durationMs,
         ...summarizeWorkflowWorkerStderr(stderr),

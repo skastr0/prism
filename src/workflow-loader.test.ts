@@ -531,7 +531,11 @@ describe("workflow loader", () => {
     await writeFile(fakeGrok, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
-      `appendFileSync(${JSON.stringify(callsFile)}, 'called\\n');`,
+      "const agentIndex = process.argv.indexOf('--agent');",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ agent, model }) + '\\n');`,
       "console.log(JSON.stringify({ summary: 'from grok' }));",
       "",
     ].join("\n"));
@@ -561,7 +565,7 @@ describe("workflow loader", () => {
       ]);
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
-      return JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string } }> };
+      return JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; nativeAgent?: string } }> };
     };
 
     const first = await run();
@@ -571,9 +575,12 @@ describe("workflow loader", () => {
     expect(first.tasks[0]?.cached).toBe(false);
     expect(first.tasks[0]?.output.summary).toBe("from grok");
     expect(first.tasks[0]?.metadata?.adapter).toBe("grok-cli");
+    expect(first.tasks[0]?.metadata?.nativeAgent).toBe("builder");
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("from grok");
-    expect(calls.trim().split("\n")).toHaveLength(1);
+    expect(calls.trim().split("\n").map((line) => JSON.parse(line) as { agent: string; model: string })).toEqual([
+      { agent: "builder", model: "grok-build" },
+    ]);
   });
 
   test("CLI rejects unsupported workflow workers from the adapter registry", async () => {
@@ -981,9 +988,11 @@ describe("workflow loader", () => {
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
       "const outputFormatIndex = process.argv.indexOf('--output-format');",
+      "const agentIndex = process.argv.indexOf('--agent');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const outputFormat = outputFormatIndex >= 0 ? process.argv[outputFormatIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, cwd: process.cwd() }) + '\\n');`,
+      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, cwd: process.cwd() }) + '\\n');`,
       "console.log(JSON.stringify({ result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
       "",
     ].join("\n"));
@@ -1019,7 +1028,7 @@ describe("workflow loader", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       return JSON.parse(stdout) as {
-        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; sessionId?: string; totalCostUsd?: number } }>;
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; nativeAgent?: string; sessionId?: string; totalCostUsd?: number } }>;
       };
     };
 
@@ -1027,6 +1036,7 @@ describe("workflow loader", () => {
     const cachedResult = await run();
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "sonnet"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["claude-code", "claude-code"]);
+    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual(["builder", "builder"]);
     expect(result.tasks[0]?.metadata?.sessionId).toBe("claude-session");
     expect(result.tasks[0]?.metadata?.totalCostUsd).toBe(0.01);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
@@ -1038,11 +1048,12 @@ describe("workflow loader", () => {
       outputFormat: string;
       noSession: boolean;
       model: string;
+      agent: string;
       cwd: string;
     });
     expect(calls).toEqual([
-      { print: true, outputFormat: "json", noSession: true, model: "grok-build", cwd: expectedCwd },
-      { print: true, outputFormat: "json", noSession: true, model: "sonnet", cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: true, model: "grok-build", agent: "builder", cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: true, model: "sonnet", agent: "builder", cwd: expectedCwd },
     ]);
   });
 

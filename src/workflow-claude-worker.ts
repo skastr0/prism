@@ -60,6 +60,8 @@ export const runClaudeWorkflowTask = async (
     "--output-format",
     "json",
     "--no-session-persistence",
+    "--agent",
+    task.agent.name,
     ...(options.model !== undefined ? ["--model", options.model] : []),
     prompt,
   ];
@@ -89,6 +91,7 @@ export const runClaudeWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(envelope.result),
     metadata: {
       adapter: "claude-code",
+      nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
       ...summarizeWorkflowWorkerStderr(stderr),

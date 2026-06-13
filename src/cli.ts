@@ -169,6 +169,14 @@ const workflow = program
   .command("workflow")
   .description("Validate Prism workflow files");
 
+const parsePositiveInteger = (value: string): number => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new InvalidArgumentError("must be a positive integer");
+  }
+  return parsed;
+};
+
 workflow
   .command("validate <file>")
   .description("Load a workflow module and print its typed task summary")
@@ -188,12 +196,14 @@ workflow
   .option("--mock-output <path>", "JSON object keyed by workflow task id")
   .option("--worker <worker>", "Workflow worker to use when --mock-output is absent (grok)", "grok")
   .option("--model <model>", "Worker model id", "grok-build")
+  .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (file: string, options: {
     readonly mockOutput?: string;
     readonly worker: string;
     readonly model: string;
+    readonly maxConcurrentTasks?: number;
     readonly store?: string;
     readonly cache?: boolean;
   }) => {
@@ -210,6 +220,7 @@ workflow
       const result = await runWorkflow(workflow, {
         store,
         cache: options.cache !== false,
+        maxConcurrentTasks: options.maxConcurrentTasks,
         executeTask: async (task) => {
           if (outputs === null) {
             return runGrokWorkflowTask(task, { cwd: process.cwd(), model: task.worker?.model ?? options.model });

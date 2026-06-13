@@ -94,6 +94,14 @@ test("refresh and plan help use managed backup policy instead of a per-run backu
   }
 });
 
+test("workflow run help exposes the runtime task concurrency limit", async () => {
+  const result = await runCli(["workflow", "run", "--help"], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("--max-concurrent-tasks");
+  expect(result.stdout).toContain("Maximum concurrent workflow task executions");
+});
+
 type JsonObject = Record<string, unknown>;
 
 type LintRule = {

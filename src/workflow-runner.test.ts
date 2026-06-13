@@ -215,4 +215,68 @@ describe("workflow runner", () => {
 
     expect(models).toEqual(["grok-build", "grok-composer-2.5-fast"]);
   });
+
+  test("bounds executor concurrency below unbounded author fan-out", async () => {
+    const tasks = Array.from({ length: 5 }, (_, index) => defineTask({
+      id: `task-${index}`,
+      agent: builder,
+      prompt: `Run task ${index}.`,
+      output: PatchReport,
+    }));
+    const workflow = defineWorkflow({
+      name: "bounded-fanout-smoke",
+      run: (wf) => Effect.gen(function* () {
+        return yield* Effect.all(
+          tasks.map((task) => wf.runTask(task)),
+          { concurrency: "unbounded" },
+        );
+      }),
+    });
+    let active = 0;
+    let maxActive = 0;
+
+    const result = await runWorkflow(workflow, {
+      maxConcurrentTasks: 2,
+      executeTask: async (task) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await delay(20);
+        active -= 1;
+        return { summary: task.id };
+      },
+    });
+
+    expect(maxActive).toBe(2);
+    expect(result.tasks.map((task) => task.id)).toEqual(["task-0", "task-1", "task-2", "task-3", "task-4"]);
+  });
+
+  test("cancels queued dynamic fan-out when the first limited task fails decode", async () => {
+    const tasks = Array.from({ length: 5 }, (_, index) => defineTask({
+      id: `task-${index}`,
+      agent: builder,
+      prompt: `Run task ${index}.`,
+      output: PatchReport,
+    }));
+    const workflow = defineWorkflow({
+      name: "bounded-fanout-failure-smoke",
+      run: (wf) => Effect.gen(function* () {
+        return yield* Effect.all(
+          tasks.map((task) => wf.runTask(task)),
+          { concurrency: "unbounded" },
+        );
+      }),
+    });
+    const calls: string[] = [];
+
+    await expect(runWorkflow(workflow, {
+      maxConcurrentTasks: 1,
+      executeTask: async (task) => {
+        calls.push(task.id);
+        await delay(20);
+        return { wrong: task.id };
+      },
+    })).rejects.toThrow("workflow task task-0 returned output that failed schema decode");
+
+    expect(calls).toEqual(["task-0"]);
+  });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
@@ -194,6 +194,61 @@ describe("workflow loader", () => {
     expect(first.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("first");
+  });
+
+  test("CLI runs a workflow through the Grok worker and reuses its cached output", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "grok-calls.txt");
+    const fakeGrok = join(root, "fake-grok.mjs");
+    await writeFile(file, workflowSource());
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      `appendFileSync(${JSON.stringify(callsFile)}, 'called\\n');`,
+      "console.log(JSON.stringify({ summary: 'from grok' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+
+    const run = async () => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--store",
+          storeFile,
+        ],
+        cwd: process.cwd(),
+        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string } }> };
+    };
+
+    const first = await run();
+    const second = await run();
+    const calls = await Bun.file(callsFile).text();
+
+    expect(first.tasks[0]?.cached).toBe(false);
+    expect(first.tasks[0]?.output.summary).toBe("from grok");
+    expect(first.tasks[0]?.metadata?.adapter).toBe("grok-cli");
+    expect(second.tasks[0]?.cached).toBe(true);
+    expect(second.tasks[0]?.output.summary).toBe("from grok");
+    expect(calls.trim().split("\n")).toHaveLength(1);
   });
 
   test("CLI lists and shows workflow run history", async () => {

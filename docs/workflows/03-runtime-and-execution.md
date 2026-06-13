@@ -214,8 +214,8 @@ ambiguous in-flight provider state.
 ## CLI surface (JSON-first, agent-native)
 
 ```
-prism workflow run <file|name> [--input @file.json] [--detach] [--fake]
-prism workflow validate <file>            # load + typecheck + gate dry-run, no dispatch
+prism workflow run <file|name> [--input @file.json] [--detach]
+prism workflow validate <file>            # debug/preflight lane; run performs required checks too
 prism workflow status <workflowRunId> | list | wait <workflowRunId> [--timeout]
 prism workflow events <workflowRunId> [--follow]
 prism workflow approve <workflowRunId> <approvalId> [--deny] [--by <who>]

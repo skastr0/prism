@@ -2,6 +2,11 @@ import { Either } from "effect";
 import { decodeTaskOutput, type AnyWorkflowTask, type WorkflowDefinition } from "./workflows.js";
 import { workflowTaskIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
 
+export interface WorkflowTaskExecution {
+  readonly output: unknown;
+  readonly metadata?: Record<string, unknown>;
+}
+
 export interface WorkflowRunTaskResult {
   readonly id: string;
   readonly agent: {
@@ -10,6 +15,7 @@ export interface WorkflowRunTaskResult {
   };
   readonly output: unknown;
   readonly cached: boolean;
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface WorkflowRunResult {
@@ -28,7 +34,10 @@ export class WorkflowTaskDecodeError extends Error {
   }
 }
 
-export type WorkflowTaskExecutor = (task: AnyWorkflowTask) => Promise<unknown>;
+export type WorkflowTaskExecutor = (task: AnyWorkflowTask) => Promise<unknown | WorkflowTaskExecution>;
+
+const isWorkflowTaskExecution = (value: unknown): value is WorkflowTaskExecution =>
+  typeof value === "object" && value !== null && "output" in value;
 
 const taskAgent = (task: AnyWorkflowTask) => ({
   plugin: task.agent.plugin,
@@ -46,6 +55,70 @@ const recordEvent = (
   store?.recordEvent({ runId, taskId, type, payload });
 };
 
+const executeOrReuseTask = async (input: {
+  readonly task: AnyWorkflowTask;
+  readonly cached: { readonly output: unknown } | null | undefined;
+  readonly executeTask: WorkflowTaskExecutor;
+}): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
+  if (input.cached !== undefined && input.cached !== null) {
+    return {
+      rawOutput: input.cached.output,
+      metadata: { cachedFrom: "workflow_task_records" },
+    };
+  }
+  const executed = await input.executeTask(input.task);
+  if (!isWorkflowTaskExecution(executed)) {
+    return { rawOutput: executed };
+  }
+  return { rawOutput: executed.output, ...(executed.metadata ? { metadata: executed.metadata } : {}) };
+};
+
+const recordCacheLookup = (
+  store: WorkflowStore | undefined,
+  runId: string | null,
+  task: AnyWorkflowTask,
+  identity: WorkflowTaskIdentity,
+  useCache: boolean,
+): { readonly cached: { readonly output: unknown } | null | undefined; readonly cacheHit: boolean } => {
+  if (!useCache) {
+    recordEvent(store, runId, task.id, "task.cache_lookup.skipped", { cacheKey: identity.cacheKey });
+    return { cached: null, cacheHit: false };
+  }
+  recordEvent(store, runId, task.id, "task.cache_lookup.started", identity);
+  const cached = store?.getCompleted(identity);
+  const cacheHit = cached !== undefined && cached !== null;
+  recordEvent(store, runId, task.id, cacheHit ? "task.cache_lookup.hit" : "task.cache_lookup.miss", {
+    cacheKey: identity.cacheKey,
+  });
+  return { cached, cacheHit };
+};
+
+const recordRunTaskIfPersisted = (input: {
+  readonly store: WorkflowStore | undefined;
+  readonly runId: string | null;
+  readonly ordinal: number;
+  readonly identity: WorkflowTaskIdentity;
+  readonly agent: { readonly plugin: string; readonly name: string };
+  readonly status: "completed" | "failed";
+  readonly cached: boolean;
+  readonly output: unknown;
+  readonly metadata?: Record<string, unknown>;
+  readonly finishRunStatus?: "completed" | "failed";
+}): void => {
+  if (input.runId === null) return;
+  input.store?.recordRunTask({
+    runId: input.runId,
+    ordinal: input.ordinal,
+    identity: input.identity,
+    agent: input.agent,
+    status: input.status,
+    cached: input.cached,
+    output: input.output,
+    metadata: input.metadata,
+    ...(input.finishRunStatus ? { finishRunStatus: input.finishRunStatus } : {}),
+  });
+};
+
 const executeWorkflowTask = async (input: {
   readonly workflowTaskCount: number;
   readonly index: number;
@@ -58,39 +131,18 @@ const executeWorkflowTask = async (input: {
 }): Promise<WorkflowRunTaskResult> => {
   const { workflowTaskCount, index, task, identity, runId, store, executeTask, useCache } = input;
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
-  if (!useCache) {
-    recordEvent(store, runId, task.id, "task.cache_lookup.skipped", { cacheKey: identity.cacheKey });
-  } else {
-    recordEvent(store, runId, task.id, "task.cache_lookup.started", identity);
-  }
-  const cached = useCache ? store?.getCompleted(identity) : null;
-  const cacheHit = cached !== undefined && cached !== null;
-  if (useCache) {
-    recordEvent(store, runId, task.id, cacheHit ? "task.cache_lookup.hit" : "task.cache_lookup.miss", {
-      cacheKey: identity.cacheKey,
-    });
-  }
+  const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache);
 
   let rawOutput: unknown;
+  let metadata: Record<string, unknown> | undefined;
   try {
     if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", {});
-    rawOutput = cacheHit ? cached.output : await executeTask(task);
-    if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", {});
+    ({ rawOutput, metadata } = await executeOrReuseTask({ task, cached, executeTask }));
+    if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", metadata ?? {});
   } catch (error) {
     const output = { error: error instanceof Error ? error.message : String(error) };
     recordEvent(store, runId, task.id, "task.executor.failed", output);
-    if (runId !== null) {
-      store?.recordRunTask({
-        runId,
-        ordinal: index,
-        identity,
-        agent: taskAgent(task),
-        status: "failed",
-        cached: false,
-        output,
-        finishRunStatus: "failed",
-      });
-    }
+    recordRunTaskIfPersisted({ store, runId, ordinal: index, identity, agent: taskAgent(task), status: "failed", cached: false, output, finishRunStatus: "failed" });
     throw error;
   }
 
@@ -98,18 +150,7 @@ const executeWorkflowTask = async (input: {
   const decoded = decodeTaskOutput(task, rawOutput);
   if (Either.isLeft(decoded)) {
     recordEvent(store, runId, task.id, "task.decode.failed", { error: String(decoded.left) });
-    if (runId !== null) {
-      store?.recordRunTask({
-        runId,
-        ordinal: index,
-        identity,
-        agent: taskAgent(task),
-        status: "failed",
-        cached: cacheHit,
-        output: rawOutput,
-        finishRunStatus: "failed",
-      });
-    }
+    recordRunTaskIfPersisted({ store, runId, ordinal: index, identity, agent: taskAgent(task), status: "failed", cached: cacheHit, output: rawOutput, metadata, finishRunStatus: "failed" });
     throw new WorkflowTaskDecodeError(task.id, decoded.left);
   }
 
@@ -118,19 +159,19 @@ const executeWorkflowTask = async (input: {
     store?.recordCompleted({ identity, agent: taskAgent(task), output: decoded.right });
     recordEvent(store, runId, task.id, "task.cache_write.completed", { cacheKey: identity.cacheKey });
   }
-  if (runId !== null) {
-    store?.recordRunTask({
-      runId,
-      ordinal: index,
-      identity,
-      agent: taskAgent(task),
-      status: "completed",
-      cached: cacheHit,
-      output: decoded.right,
-      ...(index === workflowTaskCount - 1 ? { finishRunStatus: "completed" as const } : {}),
-    });
-  }
-  return { id: task.id, agent: taskAgent(task), output: decoded.right, cached: cacheHit };
+  recordRunTaskIfPersisted({
+    store,
+    runId,
+    ordinal: index,
+    identity,
+    agent: taskAgent(task),
+    status: "completed",
+    cached: cacheHit,
+    output: decoded.right,
+    metadata,
+    ...(index === workflowTaskCount - 1 ? { finishRunStatus: "completed" as const } : {}),
+  });
+  return { id: task.id, agent: taskAgent(task), output: decoded.right, cached: cacheHit, ...(metadata ? { metadata } : {}) };
 };
 
 export const runWorkflow = async (

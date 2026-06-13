@@ -73,6 +73,7 @@ import type { SyncReport } from "./sync/apply.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
+import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { defaultWorkflowStorePath, WorkflowStore } from "./workflow-store.js";
 
 declare const APP_VERSION: string | undefined;
@@ -183,20 +184,36 @@ workflow
 
 workflow
   .command("run <file>")
-  .description("Run a workflow with an explicit mock-output JSON file")
-  .requiredOption("--mock-output <path>", "JSON object keyed by workflow task id")
+  .description("Run a workflow through the configured worker, or with mock outputs when provided")
+  .option("--mock-output <path>", "JSON object keyed by workflow task id")
+  .option("--worker <worker>", "Workflow worker to use when --mock-output is absent (grok)", "grok")
+  .option("--model <model>", "Worker model id", "grok-build")
   .option("--store <path>", "SQLite workflow store path")
   .option("--no-cache", "Disable workflow task cache lookup and writes")
-  .action(async (file: string, options: { readonly mockOutput: string; readonly store?: string; readonly cache?: boolean }) => {
+  .action(async (file: string, options: {
+    readonly mockOutput?: string;
+    readonly worker: string;
+    readonly model: string;
+    readonly store?: string;
+    readonly cache?: boolean;
+  }) => {
     let store: WorkflowStore | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
-      const outputs = JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>;
+      const outputs = options.mockOutput
+        ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
+        : null;
+      if (outputs === null && options.worker !== "grok") {
+        throw new CliUsageError(`unsupported workflow worker '${options.worker}'. Supported workers: grok`);
+      }
       const result = await runWorkflow(workflow, {
         store,
         cache: options.cache !== false,
         executeTask: async (task) => {
+          if (outputs === null) {
+            return runGrokWorkflowTask(task, { cwd: process.cwd(), model: options.model });
+          }
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);
           }

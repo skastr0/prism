@@ -66,11 +66,12 @@ allowed under an exclusive lock.
 
 ### Grok CLI — class A `verified`
 
-- Dispatch: `grok --agent <installed artifact path> -p <prompt>
-  --max-turns N --no-alt-screen [--effort low|medium|high|xhigh|max]
-  [--worktree] [--always-approve]`.
-- Agent selection: **by artifact file path** — the tightest loop available; the
-  dispatched identity IS the attested file.
+- Current wedge dispatch: `grok --model <model> --cwd <cwd> --no-alt-screen
+  --output-format plain --prompt-file <prompt-file>`. This intentionally does
+  **not** set `--max-turns`; the CLI owns task completion.
+- Agent selection: generic Grok model first. Prism-generated agent artifact
+  binding is the next adapter-hardening step; it must not block the basic live
+  workflow wedge.
 - Structured output: `prompted` (extract + decode + retry). Investigate
   `-p` JSON content blocks for a native lane (WS3).
 - Fork: `--resume <sessionId>` exists; copy-vs-continue semantics unverified —

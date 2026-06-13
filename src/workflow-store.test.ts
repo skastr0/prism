@@ -178,6 +178,7 @@ describe("workflow store", () => {
         cached: true,
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
+        metadata: { cachedFrom: "workflow_task_records" },
       },
     ]);
     expect(store.listRunEvents(secondRunId).map((event) => event.type)).toEqual([

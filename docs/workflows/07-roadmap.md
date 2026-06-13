@@ -65,6 +65,14 @@ Runtime code starts from the public type catalog (`10`), AgentRun ledger spec
 (`08`), and fingerprint/ref contract (`12`). Fake-worker replay proves those
 contracts before any real provider adapter enters the runtime.
 
+Implementation checkpoint (2026-06-13): the repo now has a single-package
+runtime wedge rather than the full `@skastr0/prism-workflow` package boundary:
+typed workflow authoring primitives, module validation, sequential runner,
+SQLite task cache/run history/events, terminal statuses, mock-output execution,
+and a first generic Grok CLI worker. This is intentionally short of the full
+AgentRun ledger in `08`; treat it as the dogfood wedge, not as the final ledger
+shape.
+
 - 2.1 Package scaffold; `defineWorkflow` envelope + input decode; CLI command
   namespace under `prism workflow ...`.
 - 2.2 SQLite AgentRun ledger: workflow_runs, agent_runs, outputs, attempts,
@@ -89,11 +97,12 @@ contracts before any real provider adapter enters the runtime.
   on AgentRun resources and dependency refs.
 - 2.9 Worker gateway interface + capability matrix + subprocess hygiene
   (watchdog, stderr ring, Scope-tied teardown).
-- 2.10 Adapters v1: claude (named agent), grok (artifact path), codex
-  (projection) — lifted from POC after fake-worker replay is proven.
+- 2.10 Adapters v1: grok first as generic CLI dispatch, then grok artifact
+  binding, opencode/codex projection, and claude named-agent paths as pressure
+  demands. Generic Grok is acceptable as the first live wedge.
 - 2.11 CLI: `run | validate | status | wait | events | stop`, plus
-  `agent-runs list|show|output|transcript|refs`, JSON envelopes; `--fake`
-  lane.
+  `agent-runs list|show|output|transcript|refs`, JSON envelopes; mock-output
+  lane for deterministic tests/debugging.
 - 2.12 Basic structured output lane: native schema where proven, otherwise
   prompt clause + extract JSON + `Schema.decodeUnknown`; no Smithers-style repair
   loop until real failures justify it.

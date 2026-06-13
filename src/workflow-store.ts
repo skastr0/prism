@@ -35,6 +35,7 @@ export interface WorkflowRunTaskRecord {
     readonly name: string;
   };
   readonly output: unknown;
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface WorkflowRunRecord {
@@ -75,6 +76,7 @@ interface RunTaskRow {
   readonly agent_plugin: string;
   readonly agent_name: string;
   readonly output_json: string;
+  readonly metadata_json: string | null;
 }
 
 interface RunRow {
@@ -161,6 +163,7 @@ export class WorkflowStore {
         status text not null,
         cached integer not null,
         output_json text not null,
+        metadata_json text,
         created_at text not null default (datetime('now')),
         primary key (run_id, ordinal)
       );
@@ -177,6 +180,7 @@ export class WorkflowStore {
     `);
     addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
     addColumnIfMissing(db, "alter table workflow_runs add column finished_at text");
+    addColumnIfMissing(db, "alter table workflow_run_tasks add column metadata_json text");
     // Legacy ledgers did not know the workflow's full task count, so completed
     // task rows are not proof that the whole run finished. Only failed task rows
     // carry enough evidence to safely backfill a terminal status.
@@ -307,14 +311,15 @@ export class WorkflowStore {
     readonly status: WorkflowRunTaskStatus;
     readonly cached: boolean;
     readonly output: unknown;
+    readonly metadata?: Record<string, unknown>;
     readonly finishRunStatus?: Exclude<WorkflowRunStatus, "running" | "unknown">;
   }): void {
     const insert = () => {
       this.db.query(`
         insert into workflow_run_tasks (
           run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-          agent_plugin, agent_name, status, cached, output_json
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          agent_plugin, agent_name, status, cached, output_json, metadata_json
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.runId,
         input.ordinal,
@@ -328,6 +333,7 @@ export class WorkflowStore {
         input.status,
         input.cached ? 1 : 0,
         JSON.stringify(input.output),
+        input.metadata === undefined ? null : JSON.stringify(input.metadata),
       );
       this.recordEvent({
         runId: input.runId,
@@ -348,7 +354,7 @@ export class WorkflowStore {
 
   listRunTasks(runId: string): WorkflowRunTaskRecord[] {
     const rows = this.db.query<RunTaskRow, [string]>(`
-      select run_id, task_id, cache_key, status, cached, agent_plugin, agent_name, output_json
+      select run_id, task_id, cache_key, status, cached, agent_plugin, agent_name, output_json, metadata_json
       from workflow_run_tasks
       where run_id = ?
       order by ordinal asc
@@ -364,6 +370,7 @@ export class WorkflowStore {
         name: row.agent_name,
       },
       output: JSON.parse(row.output_json) as unknown,
+      ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
     }));
   }
 

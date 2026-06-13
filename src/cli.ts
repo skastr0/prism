@@ -333,10 +333,14 @@ workflowRuns
   .command("list")
   .description("List workflow runs from the SQLite workflow store")
   .option("--store <path>", "SQLite workflow store path")
-  .action(async (options: { readonly store?: string }) => {
+  .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before listing")
+  .action(async (options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      if (options.failStaleAfterMs !== undefined) {
+        store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+      }
       console.log(JSON.stringify({ runs: store.listRuns() }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs list failed");
@@ -350,10 +354,14 @@ workflowRuns
   .command("show <runId>")
   .description("Show task history for one workflow run")
   .option("--store <path>", "SQLite workflow store path")
-  .action(async (runId: string, options: { readonly store?: string }) => {
+  .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing tasks")
+  .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      if (options.failStaleAfterMs !== undefined) {
+        store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+      }
       console.log(JSON.stringify({ runId, tasks: store.listRunTasks(runId) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs show failed");
@@ -367,10 +375,14 @@ workflowRuns
   .command("events <runId>")
   .description("Show append-only events for one workflow run")
   .option("--store <path>", "SQLite workflow store path")
-  .action(async (runId: string, options: { readonly store?: string }) => {
+  .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing events")
+  .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      if (options.failStaleAfterMs !== undefined) {
+        store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+      }
       console.log(JSON.stringify({ runId, events: store.listRunEvents(runId) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs events failed");

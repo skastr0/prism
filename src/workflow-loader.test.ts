@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1769,5 +1770,138 @@ describe("workflow loader", () => {
       "task.completed",
       "run.completed",
     ]);
+  });
+
+  test("CLI can reconcile stale running workflow runs while listing history", async () => {
+    const root = await createTempRoot();
+    const storeFile = join(root, "workflows.sqlite");
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const db = new Database(storeFile);
+    db.exec(`
+      create table workflow_runs (
+        run_id text primary key,
+        workflow text not null,
+        status text not null default 'running',
+        finished_at text,
+        handoff_token text,
+        created_at text not null default (datetime('now'))
+      );
+      create table workflow_events (
+        run_id text not null,
+        sequence integer not null,
+        task_id text,
+        type text not null,
+        payload_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, sequence)
+      );
+      insert into workflow_runs (run_id, workflow, status, created_at)
+      values ('stale-run', 'stale-smoke', 'running', '2026-01-01 00:00:00');
+      insert into workflow_events (run_id, sequence, task_id, type, payload_json, created_at)
+      values ('stale-run', 0, null, 'run.started', '{"workflow":"stale-smoke"}', '2026-01-01 00:00:00');
+    `);
+    db.close();
+
+    const before = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+    };
+    const after = await cli(["workflow", "runs", "list", "--store", storeFile, "--fail-stale-after-ms", "1"]) as {
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+    };
+    const events = await cli(["workflow", "runs", "events", "stale-run", "--store", storeFile]) as {
+      events: Array<{ type: string; payload: unknown }>;
+    };
+
+    expect(before.runs).toEqual([{ runId: "stale-run", workflow: "stale-smoke", status: "running", finishedAt: null }]);
+    expect(after.runs.map((run) => ({ runId: run.runId, workflow: run.workflow, status: run.status }))).toEqual([
+      { runId: "stale-run", workflow: "stale-smoke", status: "failed" },
+    ]);
+    expect(typeof after.runs[0]?.finishedAt).toBe("string");
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+    expect(events.events.at(-1)?.payload).toMatchObject({
+      reason: "stale-running-run",
+      staleAfterMs: 1,
+      createdAt: "2026-01-01 00:00:00",
+    });
+  });
+
+  test("CLI can reconcile stale running workflow runs while showing details and events", async () => {
+    const root = await createTempRoot();
+    const storeFile = join(root, "workflows.sqlite");
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const db = new Database(storeFile);
+    db.exec(`
+      create table workflow_runs (
+        run_id text primary key,
+        workflow text not null,
+        status text not null default 'running',
+        finished_at text,
+        handoff_token text,
+        created_at text not null default (datetime('now'))
+      );
+      create table workflow_events (
+        run_id text not null,
+        sequence integer not null,
+        task_id text,
+        type text not null,
+        payload_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, sequence)
+      );
+      insert into workflow_runs (run_id, workflow, status, created_at)
+      values ('stale-show-run', 'stale-smoke', 'running', '2026-01-01 00:00:00');
+      insert into workflow_events (run_id, sequence, task_id, type, payload_json, created_at)
+      values ('stale-show-run', 0, null, 'run.started', '{"workflow":"stale-smoke"}', '2026-01-01 00:00:00');
+    `);
+    db.close();
+
+    const show = await cli(["workflow", "runs", "show", "stale-show-run", "--store", storeFile, "--fail-stale-after-ms", "1"]) as {
+      runId: string;
+      tasks: unknown[];
+    };
+    const afterShow = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+    };
+    const events = await cli(["workflow", "runs", "events", "stale-show-run", "--store", storeFile, "--fail-stale-after-ms", "1"]) as {
+      events: Array<{ type: string; payload: unknown }>;
+    };
+
+    expect(show).toEqual({ runId: "stale-show-run", tasks: [] });
+    expect(afterShow.runs).toEqual([
+      { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
+    ]);
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
   });
 });

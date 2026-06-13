@@ -105,6 +105,59 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("fails stale running runs without touching fresh running runs", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+    const store = await WorkflowStore.open(path);
+    store.createRun("store-smoke", "old-run");
+    store.createRun("store-smoke", "fresh-run");
+    store.close();
+
+    const db = new Database(path);
+    db.query("update workflow_runs set created_at = ? where run_id = ?")
+      .run("2026-01-01 00:00:00", "old-run");
+    db.query("update workflow_runs set created_at = ? where run_id = ?")
+      .run("2026-01-01 00:00:59", "fresh-run");
+    db.close();
+
+    const reopened = await WorkflowStore.open(path);
+    const reconciled = reopened.failStaleRuns(30_000, new Date("2026-01-01T00:01:00Z"));
+
+    expect(reconciled.map((run) => run.runId)).toEqual(["old-run"]);
+    expect(typeof reconciled[0]?.finishedAt).toBe("string");
+    expect(reopened.listRuns().map((run) => ({ runId: run.runId, status: run.status }))).toEqual([
+      { runId: "old-run", status: "failed" },
+      { runId: "fresh-run", status: "running" },
+    ]);
+    expect(reopened.listRunEvents("old-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.failed",
+    ]);
+    expect(reopened.listRunEvents("old-run").at(-1)?.payload).toEqual({
+      reason: "stale-running-run",
+      staleAfterMs: 30_000,
+      staleBefore: "2026-01-01 00:00:30",
+      createdAt: "2026-01-01 00:00:00",
+    });
+    expect(reopened.listRunEvents("fresh-run").map((event) => event.type)).toEqual(["run.started"]);
+    expect(reopened.failStaleRuns(30_000, new Date("2026-01-01T00:01:00Z"))).toEqual([]);
+    expect(reopened.listRunEvents("old-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.failed",
+    ]);
+    reopened.close();
+  });
+
+  test("rejects invalid stale run thresholds", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+
+    expect(() => store.failStaleRuns(0)).toThrow("olderThanMs must be a positive number");
+    expect(() => store.failStaleRuns(Number.POSITIVE_INFINITY)).toThrow("olderThanMs must be a positive number");
+
+    store.close();
+  });
+
   test("stores and reads completed task output by identity", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

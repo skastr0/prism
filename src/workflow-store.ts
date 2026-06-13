@@ -86,6 +86,10 @@ interface RunRow {
   readonly finished_at: string | null;
 }
 
+interface StaleRunRow extends RunRow {
+  readonly created_at: string;
+}
+
 interface HandoffTokenRow {
   readonly handoff_token: string | null;
 }
@@ -101,6 +105,9 @@ interface EventRow {
 
 export const defaultWorkflowStorePath = (projectPath: string): string =>
   join(projectPath, ".prism", "workflows", "workflows.sqlite");
+
+const sqliteDateTime = (date: Date): string =>
+  date.toISOString().slice(0, 19).replace("T", " ");
 
 export const workflowTaskIdentity = (
   workflow: string,
@@ -323,6 +330,42 @@ export class WorkflowStore {
       type: row.type,
       payload: JSON.parse(row.payload_json) as unknown,
       createdAt: row.created_at,
+    }));
+  }
+
+  failStaleRuns(olderThanMs: number, now: Date = new Date()): WorkflowRunRecord[] {
+    if (!Number.isFinite(olderThanMs) || olderThanMs <= 0) {
+      throw new Error("olderThanMs must be a positive number");
+    }
+    const staleBefore = sqliteDateTime(new Date(now.getTime() - olderThanMs));
+    const fail = this.db.transaction(() => {
+      const updated = this.db.query<StaleRunRow, [string]>(`
+        update workflow_runs
+        set status = 'failed', finished_at = datetime('now')
+        where status = 'running'
+          and datetime(created_at) < datetime(?)
+        returning run_id, workflow, status, finished_at, created_at
+      `).all(staleBefore);
+      for (const row of updated) {
+        this.recordEvent({
+          runId: row.run_id,
+          type: "run.failed",
+          payload: {
+            reason: "stale-running-run",
+            staleAfterMs: olderThanMs,
+            staleBefore,
+            createdAt: row.created_at,
+          },
+        });
+      }
+      return updated;
+    });
+    const failedRuns = fail();
+    return failedRuns.map((row) => ({
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: "failed" as const,
+      finishedAt: row.finished_at,
     }));
   }
 

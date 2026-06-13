@@ -248,11 +248,22 @@ const assertRunStillRunning = (
 const createRunAbortMonitor = (
   store: WorkflowStore | undefined,
   runId: string | null,
+  taskId: string,
 ): { readonly signal?: AbortSignal; readonly dispose: () => void } => {
   if (store === undefined || runId === null) return { dispose: () => {} };
   const controller = new AbortController();
+  let aborted = false;
   const interval = setInterval(() => {
     if (store.getRun(runId)?.status !== "running") {
+      if (!aborted) {
+        aborted = true;
+        store.recordEvent({
+          runId,
+          taskId,
+          type: "task.abort_monitor_triggered",
+          payload: { reason: "run-not-running" },
+        });
+      }
       controller.abort();
     }
   }, 250);
@@ -289,7 +300,7 @@ const executeWorkflowTask = async (input: {
     while (true) {
       try {
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
-        const abortMonitor = createRunAbortMonitor(store, runId);
+        const abortMonitor = createRunAbortMonitor(store, runId, task.id);
         try {
           ({ rawOutput, metadata } = await executeOrReuseTask({
             task: attemptTask,

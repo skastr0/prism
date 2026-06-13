@@ -2152,7 +2152,7 @@ describe("workflow loader", () => {
       { runId: "stale-run", workflow: "stale-smoke", status: "failed" },
     ]);
     expect(typeof after.runs[0]?.finishedAt).toBe("string");
-    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.failed"]);
     expect(events.events.at(-1)?.payload).toMatchObject({
       reason: "stale-running-run",
       staleAfterMs: 1,
@@ -2224,7 +2224,7 @@ describe("workflow loader", () => {
     expect(afterShow.runs).toEqual([
       { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
     ]);
-    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.failed"]);
   });
 
   test("CLI can stop a running workflow run cooperatively", async () => {
@@ -2265,7 +2265,7 @@ describe("workflow loader", () => {
     expect(stopped.run).toMatchObject({ runId: "stop-run", workflow: "stop-smoke", status: "failed" });
     expect(typeof stopped.run.finishedAt).toBe("string");
     expect(waited).toMatchObject({ run: { runId: "stop-run", status: "failed" }, tasks: [] });
-    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stop_requested", "run.failed"]);
     expect(events.events.at(-1)?.payload).toEqual({ reason: "stop-requested" });
   });
 
@@ -2352,6 +2352,15 @@ describe("workflow loader", () => {
         metadata: contractMetadata,
       },
     ]);
+    const events = await cli(["workflow", "runs", "events", detached.runId, "--store", storeFile]) as {
+      events: Array<{ type: string; taskId: string | null; payload: unknown }>;
+    };
+    expect(events.events.map((event) => event.type)).toContain("run.stop_requested");
+    expect(events.events).toContainEqual(expect.objectContaining({
+      taskId: "build",
+      type: "task.abort_monitor_triggered",
+      payload: { reason: "run-not-running" },
+    }));
   });
 
   test("CLI waits for a detached workflow run to complete", async () => {

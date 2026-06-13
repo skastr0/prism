@@ -433,6 +433,7 @@ export class WorkflowStore {
         returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
       `).get(runId);
       if (stopped != null) {
+        this.recordEvent({ runId, type: "run.stop_requested", payload: { reason } });
         this.recordEvent({ runId, type: "run.failed", payload: { reason } });
         return stopped;
       }
@@ -527,16 +528,22 @@ export class WorkflowStore {
         returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
       `).all(staleBefore);
       for (const row of updated) {
+        const payload = {
+          reason: "stale-running-run",
+          staleAfterMs: olderThanMs,
+          staleBefore,
+          createdAt: row.created_at,
+          ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+        };
+        this.recordEvent({
+          runId: row.run_id,
+          type: "run.stale_reconciled",
+          payload,
+        });
         this.recordEvent({
           runId: row.run_id,
           type: "run.failed",
-          payload: {
-            reason: "stale-running-run",
-            staleAfterMs: olderThanMs,
-            staleBefore,
-            createdAt: row.created_at,
-            ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-          },
+          payload,
         });
       }
       return updated;

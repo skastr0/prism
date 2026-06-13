@@ -150,6 +150,7 @@ describe("workflow store", () => {
     ]);
     expect(reopened.listRunEvents("old-run").map((event) => event.type)).toEqual([
       "run.started",
+      "run.stale_reconciled",
       "run.failed",
     ]);
     expect(reopened.listRunEvents("old-run").at(-1)?.payload).toEqual({
@@ -166,6 +167,7 @@ describe("workflow store", () => {
     expect(reopened.failStaleRuns(30_000, new Date("2026-01-01T00:01:00Z"))).toEqual([]);
     expect(reopened.listRunEvents("old-run").map((event) => event.type)).toEqual([
       "run.started",
+      "run.stale_reconciled",
       "run.failed",
     ]);
     reopened.close();
@@ -197,6 +199,7 @@ describe("workflow store", () => {
     expect(missing).toBeNull();
     expect(store.listRunEvents("running-run").map((event) => event.type)).toEqual([
       "run.started",
+      "run.stop_requested",
       "run.failed",
     ]);
     expect(store.listRunEvents("running-run").at(-1)?.payload).toEqual({ reason: "stop-requested" });

@@ -1417,9 +1417,11 @@ describe("workflow loader", () => {
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
       "const dirIndex = process.argv.indexOf('--dir');",
+      "const agentIndex = process.argv.indexOf('--agent');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd }) + '\\n');`,
+      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, cwd, agent }) + '\\n');`,
       "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
@@ -1453,16 +1455,17 @@ describe("workflow loader", () => {
 
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string; nativeAgent?: string } }> };
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "github-copilot/gpt-5.1"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["opencode-cli", "opencode-cli"]);
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "github-copilot/gpt-5.1"]);
+    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual(["builder", "builder"]);
 
     const expectedCwd = await realpath(root);
-    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string });
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string; agent: string });
     expect(calls).toEqual([
-      { command: "run", model: "grok-build", cwd: expectedCwd },
-      { command: "run", model: "github-copilot/gpt-5.1", cwd: expectedCwd },
+      { command: "run", model: "grok-build", cwd: expectedCwd, agent: "builder" },
+      { command: "run", model: "github-copilot/gpt-5.1", cwd: expectedCwd, agent: "builder" },
     ]);
   });
 
@@ -1478,9 +1481,11 @@ describe("workflow loader", () => {
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
       "const dirIndex = process.argv.indexOf('--dir');",
+      "const agentIndex = process.argv.indexOf('--agent');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ hasModelFlag: modelIndex >= 0, model, cwd }) + '\\n');`,
+      "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ hasModelFlag: modelIndex >= 0, model, cwd, agent }) + '\\n');`,
       "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
@@ -1516,8 +1521,8 @@ describe("workflow loader", () => {
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["missing"]);
 
     const expectedCwd = await realpath(root);
-    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { hasModelFlag: boolean; model: string; cwd: string });
-    expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd }]);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { hasModelFlag: boolean; model: string; cwd: string; agent: string });
+    expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd, agent: "builder" }]);
   });
 
   test("CLI routes mixed task-level workers in one workflow run", async () => {

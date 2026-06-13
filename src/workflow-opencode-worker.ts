@@ -37,6 +37,8 @@ export const runOpenCodeWorkflowTask = async (
     "run",
     "--dir",
     options.cwd,
+    "--agent",
+    task.agent.name,
     ...(options.model !== undefined ? ["--model", options.model] : []),
     prompt,
   ];
@@ -57,6 +59,7 @@ export const runOpenCodeWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(stdout),
     metadata: {
       adapter: "opencode-cli",
+      nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
       ...summarizeWorkflowWorkerStderr(stderr),

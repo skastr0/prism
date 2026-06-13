@@ -74,8 +74,8 @@ import type { SyncReport } from "./sync/apply.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
-import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { defaultWorkflowStorePath, WorkflowStore } from "./workflow-store.js";
+import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -273,8 +273,8 @@ workflow
         if (options.runId !== undefined || options.runToken !== undefined) {
           throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
         }
-        if (options.worker !== "grok" && options.mockOutput === undefined) {
-          throw new CliUsageError(`unsupported workflow worker '${options.worker}'. Supported workers: grok`);
+        if (options.mockOutput === undefined) {
+          getWorkflowWorkerAdapter(options.worker);
         }
         store = await WorkflowStore.open(storePath);
         const runId = store.createRun(workflow.name, randomUUID());
@@ -298,18 +298,16 @@ workflow
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
         : null;
-      if (outputs === null && options.worker !== "grok") {
-        throw new CliUsageError(`unsupported workflow worker '${options.worker}'. Supported workers: grok`);
-      }
+      const workerExecutor = outputs === null
+        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model })
+        : null;
       const result = await runWorkflow(workflow, {
         store,
         cache: options.cache !== false,
         maxConcurrentTasks: options.maxConcurrentTasks,
         runId: options.runId,
         executeTask: async (task) => {
-          if (outputs === null) {
-            return runGrokWorkflowTask(task, { cwd: process.cwd(), model: task.worker?.model ?? options.model });
-          }
+          if (outputs === null) return workerExecutor!(task);
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);
           }

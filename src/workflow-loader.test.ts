@@ -404,6 +404,38 @@ describe("workflow loader", () => {
     expect(calls.trim().split("\n")).toHaveLength(1);
   });
 
+  test("CLI rejects unsupported workflow workers from the adapter registry", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, workflowSource());
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "not-real",
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: grok");
+  });
+
   test("CLI detaches a workflow run and leaves it inspectable by run id", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

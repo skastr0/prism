@@ -63,10 +63,19 @@ export const getWorkflowWorkerAdapter = (worker: string): WorkflowWorkerAdapter 
 };
 
 export const createWorkflowWorkerExecutor = (input: {
-  readonly worker: string;
+  readonly worker?: string;
   readonly cwd: string;
   readonly model?: string;
 }): WorkflowTaskExecutor => {
-  const adapter = getWorkflowWorkerAdapter(input.worker);
-  return (task) => adapter.runTask(task, { cwd: input.cwd, model: input.model });
+  if (input.worker !== undefined) {
+    getWorkflowWorkerAdapter(input.worker);
+  }
+  return (task) => {
+    const worker = task.worker?.worker ?? input.worker;
+    if (worker === undefined) {
+      throw new UnsupportedWorkflowWorkerError("<missing>", supportedWorkflowWorkers());
+    }
+    const adapter = getWorkflowWorkerAdapter(worker);
+    return adapter.runTask(task, { cwd: input.cwd, model: input.model });
+  };
 };

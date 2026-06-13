@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
 import { computeContentHash } from "./content-hash.js";
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowRuntimeOptions } from "./workflows.js";
 
 export interface WorkflowTaskIdentity {
   readonly workflow: string;
@@ -105,11 +105,16 @@ export const defaultWorkflowStorePath = (projectPath: string): string =>
 export const workflowTaskIdentity = (
   workflow: string,
   task: AnyWorkflowTask,
+  runtimeOptions: WorkflowRuntimeOptions = {},
 ): WorkflowTaskIdentity => ({
   workflow,
   taskId: task.id,
   cacheKey: task.cacheKey ?? task.id,
-  promptHash: computeContentHash(task.prompt),
+  promptHash: computeContentHash(JSON.stringify({
+    prompt: task.prompt,
+    worker: task.worker?.worker ?? runtimeOptions.fallbackWorker ?? null,
+    model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
+  })),
   agentManifestHash: task.agent.manifestHash,
 });
 

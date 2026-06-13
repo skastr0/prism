@@ -1,5 +1,5 @@
 import { Effect, Either } from "effect";
-import { decodeTaskOutput, type AnyWorkflowDefinition, type AnyWorkflowTask, type WorkflowRuntime } from "./workflows.js";
+import { decodeTaskOutput, type AnyWorkflowDefinition, type AnyWorkflowTask, type WorkflowRuntime, type WorkflowRuntimeOptions } from "./workflows.js";
 import { workflowTaskIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
 
 export interface WorkflowTaskExecution {
@@ -262,13 +262,14 @@ const runStaticWorkflow = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
   readonly limiter: TaskExecutionLimiter;
+  readonly runtimeOptions: WorkflowRuntimeOptions;
 }): Promise<ReadonlyArray<WorkflowRunTaskResult>> => {
   const tasks: WorkflowRunTaskResult[] = [];
   if (input.workflow.tasks.length === 0 && input.runId !== null) {
     input.store?.finishRun(input.runId, "completed");
   }
   for (const [index, task] of input.workflow.tasks.entries()) {
-    const identity = workflowTaskIdentity(input.workflow.name, task);
+    const identity = workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions);
     tasks.push(await executeWorkflowTask({
       isLastTask: index === input.workflow.tasks.length - 1,
       ordinal: index,
@@ -291,6 +292,7 @@ const runDynamicWorkflow = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
   readonly limiter: TaskExecutionLimiter;
+  readonly runtimeOptions: WorkflowRuntimeOptions;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
   const tasks: Array<WorkflowRunTaskResult | undefined> = [];
   const inFlightTasks: Array<Promise<WorkflowRunTaskResult>> = [];
@@ -303,7 +305,7 @@ const runDynamicWorkflow = async (input: {
           finishRunOnFailure: false,
           ordinal: taskOrdinal,
           task,
-          identity: workflowTaskIdentity(input.workflow.name, task),
+          identity: workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions),
           runId: input.runId,
           store: input.store,
           executeTask: input.executeTask,
@@ -341,9 +343,11 @@ export const runWorkflow = async (
     readonly cache?: boolean;
     readonly maxConcurrentTasks?: number;
     readonly runId?: string;
+    readonly runtimeOptions?: WorkflowRuntimeOptions;
   },
 ): Promise<WorkflowRunResult> => {
   const useCache = options.cache !== false;
+  const runtimeOptions = options.runtimeOptions ?? {};
   const maxConcurrentTasks = options.maxConcurrentTasks ?? DEFAULT_WORKFLOW_TASK_CONCURRENCY;
   if (!Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1) {
     throw new RangeError("maxConcurrentTasks must be a positive integer");
@@ -358,9 +362,10 @@ export const runWorkflow = async (
       executeTask: options.executeTask,
       useCache,
       limiter,
+      runtimeOptions,
     });
     return { runId, workflow: workflow.name, tasks: result.tasks, output: result.output };
   }
-  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, limiter });
+  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, limiter, runtimeOptions });
   return { runId, workflow: workflow.name, tasks };
 };

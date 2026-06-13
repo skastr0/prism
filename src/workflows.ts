@@ -20,6 +20,7 @@ export interface WorkflowAgentRef {
 export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
 
 export interface WorkflowTaskWorkerOptions {
+  readonly worker?: string;
   readonly model?: string;
 }
 
@@ -56,6 +57,11 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
 
 export interface WorkflowRuntime {
   runTask: <Task extends AnyWorkflowTask>(task: Task) => Effect.Effect<WorkflowTaskOutput<Task>, unknown>;
+}
+
+export interface WorkflowRuntimeOptions {
+  readonly fallbackWorker?: string;
+  readonly fallbackModel?: string;
 }
 
 export interface DynamicWorkflowDefinition<Name extends string> {

@@ -216,6 +216,43 @@ describe("workflow runner", () => {
     expect(models).toEqual(["grok-build", "grok-composer-2.5-fast"]);
   });
 
+  test("passes mixed task-level workers through the executor seam", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build with Grok.",
+      output: PatchReport,
+      worker: { worker: "grok", model: "grok-build" },
+    });
+    const review = defineTask({
+      id: "review",
+      agent: reviewer,
+      prompt: "Review with Codex.",
+      output: ReviewReport,
+      worker: { worker: "codex-cli", model: "gpt-5.5-codex" },
+    });
+    const workflow = defineWorkflow({
+      name: "mixed-worker-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const [buildOutput, reviewOutput] = yield* Effect.all([
+          wf.runTask(build),
+          wf.runTask(review),
+        ], { concurrency: "unbounded" });
+        return { build: buildOutput.summary, review: reviewOutput.verdict };
+      }),
+    });
+    const workers: Array<string | undefined> = [];
+
+    await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        workers.push(task.worker?.worker);
+        return task.id === "build" ? { summary: "built" } : { verdict: "pass" };
+      },
+    });
+
+    expect(workers).toEqual(["grok", "codex-cli"]);
+  });
+
   test("bounds executor concurrency below unbounded author fan-out", async () => {
     const tasks = Array.from({ length: 5 }, (_, index) => defineTask({
       id: `task-${index}`,

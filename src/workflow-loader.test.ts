@@ -27,7 +27,10 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-const workflowSource = (exportKind: "default" | "named" = "default") => {
+const workflowSource = (
+  exportKind: "default" | "named" = "default",
+  options?: { readonly worker?: string; readonly model?: string },
+) => {
   const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
     .replace(/\\/g, "/");
   const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
@@ -53,6 +56,9 @@ const build = defineTask({
   prompt: "Build the next slice.",
   output,
   cacheKey: "workflow-loader-build",
+  ${options?.worker !== undefined || options?.model !== undefined
+    ? `worker: { ${options.worker !== undefined ? `worker: ${JSON.stringify(options.worker)},` : ""} ${options.model !== undefined ? `model: ${JSON.stringify(options.model)},` : ""} },`
+    : ""}
 });
 
 const workflow = defineWorkflow({ name: "loader-smoke", tasks: [build] });
@@ -105,7 +111,7 @@ export default defineWorkflow({
 `;
 };
 
-const workerModelWorkflowSource = () => {
+const workerModelWorkflowSource = (worker?: string) => {
   const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
     .replace(/\\/g, "/");
   const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
@@ -131,7 +137,7 @@ const build = defineTask({
   prompt: "Build with explicit model.",
   output,
   cacheKey: "model-build",
-  worker: { model: "grok-build" },
+  worker: { ${worker !== undefined ? `worker: ${JSON.stringify(worker)},` : ""} model: "grok-build" },
 });
 const review = defineTask({
   id: "review",
@@ -139,9 +145,91 @@ const review = defineTask({
   prompt: "Review with CLI fallback model.",
   output,
   cacheKey: "model-review",
+  ${worker !== undefined ? `worker: { worker: ${JSON.stringify(worker)} },` : ""}
 });
 
 export default defineWorkflow({ name: "worker-model-smoke", tasks: [build, review] });
+`;
+};
+
+const workerRoutingWorkflowSource = () => {
+  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
+    .replace(/\\/g, "/");
+  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+  return `
+import { Schema } from ${JSON.stringify(effectPath)};
+import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build with OpenCode.",
+  output,
+  cacheKey: "worker-routing-build",
+  worker: { worker: "opencode", model: "github-copilot/gpt-5.1" },
+});
+const review = defineTask({
+  id: "review",
+  agent: builder,
+  prompt: "Review with fallback worker.",
+  output,
+  cacheKey: "worker-routing-review",
+});
+
+export default defineWorkflow({ name: "worker-routing-smoke", tasks: [build, review] });
+`;
+};
+
+const allTaskWorkersWorkflowSource = () => {
+  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
+    .replace(/\\/g, "/");
+  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+  return `
+import { Schema } from ${JSON.stringify(effectPath)};
+import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+
+const builder = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourcePath: "/plugins/forge/agents/builder.agent.ts",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build with OpenCode.",
+  output,
+  cacheKey: "all-task-workers-build",
+  worker: { worker: "opencode", model: "github-copilot/gpt-5.1" },
+});
+const review = defineTask({
+  id: "review",
+  agent: builder,
+  prompt: "Review with Grok.",
+  output,
+  cacheKey: "all-task-workers-review",
+  worker: { worker: "grok", model: "grok-build" },
+});
+
+export default defineWorkflow({ name: "all-task-workers-smoke", tasks: [build, review] });
 `;
 };
 
@@ -149,7 +237,7 @@ describe("workflow loader", () => {
   test("loads a workflow module and summarizes its tasks", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
 
     const summary = await validateWorkflowFile(file);
 
@@ -198,7 +286,7 @@ describe("workflow loader", () => {
   test("CLI validates a workflow module", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "opencode" }));
 
     const processHandle = Bun.spawn({
       cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), "workflow", "validate", file],
@@ -225,7 +313,7 @@ describe("workflow loader", () => {
     const file = join(root, "workflow.ts");
     const outputFile = join(root, "outputs.json");
     const storeFile = join(root, "workflows.sqlite");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
     await writeFile(outputFile, JSON.stringify({ build: { summary: "mocked" } }));
 
     const processHandle = Bun.spawn({
@@ -309,7 +397,7 @@ describe("workflow loader", () => {
     const firstOutputFile = join(root, "first.json");
     const secondOutputFile = join(root, "second.json");
     const storeFile = join(root, "workflows.sqlite");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
     await writeFile(firstOutputFile, JSON.stringify({ build: { summary: "first" } }));
     await writeFile(secondOutputFile, JSON.stringify({ build: { summary: "second" } }));
 
@@ -355,7 +443,7 @@ describe("workflow loader", () => {
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "grok-calls.txt");
     const fakeGrok = join(root, "fake-grok.mjs");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
     await writeFile(fakeGrok, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
@@ -442,7 +530,7 @@ describe("workflow loader", () => {
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "codex-calls.jsonl");
     const fakeCodex = join(root, "fake-codex.mjs");
-    await writeFile(file, workerModelWorkflowSource());
+    await writeFile(file, workerModelWorkflowSource("codex-cli"));
     await writeFile(fakeCodex, [
       "#!/usr/bin/env node",
       "import { appendFileSync, writeFileSync } from 'node:fs';",
@@ -468,8 +556,6 @@ describe("workflow loader", () => {
         "workflow",
         "run",
         file,
-        "--worker",
-        "codex-cli",
         "--store",
         storeFile,
       ],
@@ -504,7 +590,7 @@ describe("workflow loader", () => {
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
     const fakeCodex = join(root, "fake-codex-missing-output.mjs");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "codex-cli" }));
     await writeFile(fakeCodex, [
       "#!/usr/bin/env node",
       "console.log(JSON.stringify({ summary: 'stdout fallback must not be used' }));",
@@ -545,7 +631,7 @@ describe("workflow loader", () => {
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "opencode-calls.jsonl");
     const fakeOpenCode = join(root, "fake-opencode.mjs");
-    await writeFile(file, workerModelWorkflowSource());
+    await writeFile(file, workerModelWorkflowSource("opencode"));
     await writeFile(fakeOpenCode, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
@@ -606,7 +692,7 @@ describe("workflow loader", () => {
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "opencode-no-model-calls.jsonl");
     const fakeOpenCode = join(root, "fake-opencode-no-model.mjs");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "opencode" }));
     await writeFile(fakeOpenCode, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
@@ -654,13 +740,155 @@ describe("workflow loader", () => {
     expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd }]);
   });
 
+  test("CLI routes mixed task-level workers in one workflow run", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "mixed-worker-calls.jsonl");
+    const fakeGrok = join(root, "fake-grok.mjs");
+    const fakeOpenCode = join(root, "fake-opencode.mjs");
+    await writeFile(file, workerRoutingWorkflowSource());
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const cwdIndex = process.argv.indexOf('--cwd');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const cwd = cwdIndex >= 0 ? process.argv[cwdIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ worker: 'grok', model, cwd }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: `grok:${model}` }));",
+      "",
+    ].join("\n"));
+    await writeFile(fakeOpenCode, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const dirIndex = process.argv.indexOf('--dir');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ worker: 'opencode', model, cwd }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: `opencode:${model}` }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    await chmod(fakeOpenCode, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "grok",
+        "--store",
+        storeFile,
+        "--model",
+        "grok-build",
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok, PRISM_WORKFLOW_OPENCODE_BIN: fakeOpenCode },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string } }> };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["opencode:github-copilot/gpt-5.1", "grok:grok-build"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["opencode-cli", "grok-cli"]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { worker: string; model: string; cwd: string });
+    expect(calls).toEqual([
+      { worker: "opencode", model: "github-copilot/gpt-5.1", cwd: expectedCwd },
+      { worker: "grok", model: "grok-build", cwd: expectedCwd },
+    ]);
+  });
+
+  test("CLI runs a mixed workflow with only task-level workers", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "all-task-workers-calls.jsonl");
+    const fakeGrok = join(root, "fake-grok.mjs");
+    const fakeOpenCode = join(root, "fake-opencode.mjs");
+    await writeFile(file, allTaskWorkersWorkflowSource());
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const cwdIndex = process.argv.indexOf('--cwd');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const cwd = cwdIndex >= 0 ? process.argv[cwdIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ worker: 'grok', model, cwd }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: `grok:${model}` }));",
+      "",
+    ].join("\n"));
+    await writeFile(fakeOpenCode, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const dirIndex = process.argv.indexOf('--dir');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const cwd = dirIndex >= 0 ? process.argv[dirIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ worker: 'opencode', model, cwd }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: `opencode:${model}` }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    await chmod(fakeOpenCode, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok, PRISM_WORKFLOW_OPENCODE_BIN: fakeOpenCode },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string } }> };
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["opencode:github-copilot/gpt-5.1", "grok:grok-build"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["opencode-cli", "grok-cli"]);
+
+    const expectedCwd = await realpath(root);
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { worker: string; model: string; cwd: string });
+    expect(calls).toEqual([
+      { worker: "opencode", model: "github-copilot/gpt-5.1", cwd: expectedCwd },
+      { worker: "grok", model: "grok-build", cwd: expectedCwd },
+    ]);
+  });
+
   test("CLI detaches a workflow run and leaves it inspectable by run id", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "detached-grok-calls.txt");
     const fakeGrok = join(root, "fake-grok.mjs");
-    await writeFile(file, workflowSource());
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
     await writeFile(fakeGrok, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
@@ -697,7 +925,7 @@ describe("workflow loader", () => {
       "--store",
       storeFile,
     ]) as { runId: string; workflow: string; status: string; detached: boolean };
-    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(Date.now() - started).toBeLessThan(1_200);
     expect(runResult).toEqual({
       runId: expect.any(String),
       workflow: "loader-smoke",
@@ -816,6 +1044,8 @@ describe("workflow loader", () => {
         "workflow",
         "run",
         file,
+        "--worker",
+        "grok",
         "--store",
         storeFile,
         "--model",

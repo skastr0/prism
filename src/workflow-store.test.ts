@@ -42,13 +42,16 @@ const ReviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const createWorkflow = (options?: { readonly prompt?: string; readonly agent?: WorkflowAgentRef }) => {
+const createWorkflow = (options?: { readonly prompt?: string; readonly agent?: WorkflowAgentRef; readonly worker?: string; readonly model?: string }) => {
   const build = defineTask({
     id: "build",
     agent: options?.agent ?? builder,
     prompt: options?.prompt ?? "Build the slice.",
     output: Output,
     cacheKey: "builder-cache",
+    ...(options?.worker !== undefined || options?.model !== undefined
+      ? { worker: { ...(options.worker !== undefined ? { worker: options.worker } : {}), ...(options.model !== undefined ? { model: options.model } : {}) } }
+      : {}),
   });
   return defineWorkflow({ name: "store-smoke", tasks: [build] as const });
 };
@@ -638,6 +641,114 @@ describe("workflow store", () => {
       agent: { ...builder, manifestHash: "c".repeat(64) },
     }), {
       store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "second" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(second.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
+    store.close();
+  });
+
+  test("changing the task worker breaks the task cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+
+    await runWorkflow(createWorkflow({ worker: "grok" }), {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "first" };
+      },
+    });
+    const second = await runWorkflow(createWorkflow({ worker: "codex-cli" }), {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "second" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(second.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
+    store.close();
+  });
+
+  test("changing the task model breaks the task cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+
+    await runWorkflow(createWorkflow({ worker: "grok", model: "grok-build" }), {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "first" };
+      },
+    });
+    const second = await runWorkflow(createWorkflow({ worker: "grok", model: "grok-composer-2.5-fast" }), {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "second" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(second.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
+    store.close();
+  });
+
+  test("changing the fallback worker breaks the task cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+
+    await runWorkflow(createWorkflow(), {
+      store,
+      runtimeOptions: { fallbackWorker: "grok" },
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "first" };
+      },
+    });
+    const second = await runWorkflow(createWorkflow(), {
+      store,
+      runtimeOptions: { fallbackWorker: "codex-cli" },
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "second" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(second.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
+    store.close();
+  });
+
+  test("changing the fallback model breaks the task cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+
+    await runWorkflow(createWorkflow(), {
+      store,
+      runtimeOptions: { fallbackWorker: "grok", fallbackModel: "grok-build" },
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "first" };
+      },
+    });
+    const second = await runWorkflow(createWorkflow(), {
+      store,
+      runtimeOptions: { fallbackWorker: "grok", fallbackModel: "grok-composer-2.5-fast" },
       executeTask: async () => {
         calls += 1;
         return { summary: "second" };

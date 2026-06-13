@@ -193,7 +193,7 @@ const startDetachedWorkflowRun = (
   file: string,
   options: {
     readonly mockOutput?: string;
-    readonly worker: string;
+    readonly worker?: string;
     readonly model?: string;
     readonly maxConcurrentTasks?: number;
     readonly cache?: boolean;
@@ -210,8 +210,7 @@ const startDetachedWorkflowRun = (
     run.runId,
     "--run-token",
     run.token,
-    "--worker",
-    options.worker,
+    ...(options.worker !== undefined ? ["--worker", options.worker] : []),
     ...(options.model !== undefined ? ["--model", options.model] : []),
     ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
     ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
@@ -245,8 +244,8 @@ workflow
   .command("run <file>")
   .description("Run a workflow through the configured worker, or with mock outputs when provided")
   .option("--mock-output <path>", "JSON object keyed by workflow task id")
-  .option("--worker <worker>", "Workflow worker to use when --mock-output is absent (grok)", "grok")
-  .option("--model <model>", "Worker model id")
+  .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
+  .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
@@ -255,7 +254,7 @@ workflow
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (file: string, options: {
     readonly mockOutput?: string;
-    readonly worker: string;
+    readonly worker?: string;
     readonly model?: string;
     readonly maxConcurrentTasks?: number;
     readonly store?: string;
@@ -272,7 +271,7 @@ workflow
         if (options.runId !== undefined || options.runToken !== undefined) {
           throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
         }
-        if (options.mockOutput === undefined) {
+        if (options.mockOutput === undefined && options.worker !== undefined) {
           getWorkflowWorkerAdapter(options.worker);
         }
         store = await WorkflowStore.open(storePath);
@@ -305,6 +304,10 @@ workflow
         cache: options.cache !== false,
         maxConcurrentTasks: options.maxConcurrentTasks,
         runId: options.runId,
+        runtimeOptions: {
+          fallbackWorker: options.worker,
+          fallbackModel: options.model,
+        },
         executeTask: async (task) => {
           if (outputs === null) return workerExecutor!(task);
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {

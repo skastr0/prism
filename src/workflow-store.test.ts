@@ -484,6 +484,67 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("summarizes workflow task progress from stored task records and events", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow({
+      finish: {
+        maxRepairs: 1,
+        criteria: [{
+          name: "summary-length",
+          check: () => Effect.void,
+        }],
+      },
+    });
+
+    const first = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "first" }),
+    });
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "second" }),
+    });
+    store.createRun("store-smoke", "event-only-run");
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.started", payload: { cacheKey: "running-cache" } });
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.cache_lookup.miss", payload: { cacheKey: "running-cache" } });
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.repair.started", payload: { attempt: 1 } });
+
+    expect(store.summarizeRunTasks(first.runId!)).toEqual([
+      expect.objectContaining({
+        taskId: "build",
+        status: "completed",
+        cacheKey: "builder-cache",
+        cached: false,
+        cacheLookup: "miss",
+        repairs: 0,
+        agent: { plugin: "forge", name: "builder" },
+        lastEventType: "task.completed",
+      }),
+    ]);
+    expect(store.summarizeRunTasks(second.runId!)).toEqual([
+      expect.objectContaining({
+        taskId: "build",
+        status: "completed",
+        cacheKey: "builder-cache",
+        cached: true,
+        cacheLookup: "hit",
+        repairs: 0,
+      }),
+    ]);
+    expect(store.summarizeRunTasks("event-only-run")).toEqual([
+      expect.objectContaining({
+        taskId: "running-task",
+        status: "running",
+        cacheKey: "running-cache",
+        cacheLookup: "miss",
+        repairs: 1,
+        lastEventType: "task.repair.started",
+      }),
+    ]);
+    store.close();
+  });
+
   test("dynamic workflows reuse cached upstream output to construct downstream tasks", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

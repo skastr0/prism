@@ -150,9 +150,13 @@ export const workflow = defineWorkflow({
   expect(show.exitCode).toBe(0);
   const showData = JSON.parse(show.stdout) as {
     run: { runId: string; workflow: string; status: string };
+    taskSummary: Array<{ taskId: string; status: string; cached: boolean; cacheLookup: string }>;
     tasks: Array<{ taskId: string; cached: boolean }>;
   };
   expect(showData.run).toMatchObject({ runId: runData.runId, workflow: "inspect-smoke", status: "completed" });
+  expect(showData.taskSummary).toEqual([
+    expect.objectContaining({ taskId: "build", status: "completed", cached: false, cacheLookup: "miss" }),
+  ]);
   expect(showData.tasks).toEqual([expect.objectContaining({ taskId: "build", cached: false })]);
 
   const missing = await runCli(["workflow", "runs", "show", "missing-run", "--store", storePath], {});

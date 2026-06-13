@@ -66,6 +66,29 @@ export interface WorkflowRunTaskRecord {
   readonly metadata?: Record<string, unknown>;
 }
 
+export type WorkflowRunTaskProgressStatus = "running" | "completed" | "failed";
+
+export type WorkflowRunTaskCacheLookup = "hit" | "miss" | "skipped";
+
+export interface WorkflowRunTaskProgress {
+  readonly taskId: string;
+  readonly status: WorkflowRunTaskProgressStatus;
+  readonly cacheKey?: string;
+  readonly cached?: boolean;
+  readonly cacheLookup?: WorkflowRunTaskCacheLookup;
+  readonly repairs: number;
+  readonly agent?: {
+    readonly plugin: string;
+    readonly name: string;
+  };
+  readonly lastEventType?: string;
+  readonly lastEventAt?: string;
+}
+
+type WorkflowRunTaskProgressPatch = Partial<{
+  -readonly [Key in keyof WorkflowRunTaskProgress]: WorkflowRunTaskProgress[Key];
+}>;
+
 export interface WorkflowRunRecord {
   readonly runId: string;
   readonly workflow: string;
@@ -166,6 +189,11 @@ const processIsAlive = (pid: number): boolean => {
     return false;
   }
 };
+
+const objectPayload = (payload: unknown): Record<string, unknown> | null =>
+  typeof payload === "object" && payload !== null && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
 
 export const workflowTaskIdentity = (
   workflow: string,
@@ -706,6 +734,67 @@ export class WorkflowStore {
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
     }));
+  }
+
+  summarizeRunTasks(runId: string): WorkflowRunTaskProgress[] {
+    const summaries = new Map<string, WorkflowRunTaskProgress>();
+    const upsert = (taskId: string, patch: WorkflowRunTaskProgressPatch): void => {
+      const existing = summaries.get(taskId);
+      summaries.set(taskId, {
+        taskId,
+        status: existing?.status ?? "running",
+        repairs: existing?.repairs ?? 0,
+        ...existing,
+        ...patch,
+      });
+    };
+
+    for (const task of this.listRunTasks(runId)) {
+      upsert(task.taskId, {
+        status: task.status,
+        cacheKey: task.cacheKey,
+        cached: task.cached,
+        agent: task.agent,
+      });
+    }
+
+    for (const event of this.listRunEvents(runId)) {
+      if (event.taskId === null) continue;
+      const taskId = event.taskId;
+      const payload = objectPayload(event.payload);
+      const existing = summaries.get(taskId);
+      const patch: WorkflowRunTaskProgressPatch = {
+        lastEventType: event.type,
+        lastEventAt: event.createdAt,
+      };
+      if (event.type === "task.started") {
+        patch.status = existing?.status ?? "running";
+      }
+      if (event.type === "task.cache_lookup.hit") patch.cacheLookup = "hit";
+      if (event.type === "task.cache_lookup.miss") patch.cacheLookup = "miss";
+      if (event.type === "task.cache_lookup.skipped") patch.cacheLookup = "skipped";
+      if (event.type === "task.cache_lookup.started" || event.type === "task.started") {
+        if (payload !== null && typeof payload.cacheKey === "string") {
+          patch.cacheKey = payload.cacheKey;
+        }
+      }
+      if (event.type === "task.repair.started") {
+        patch.repairs = (existing?.repairs ?? 0) + 1;
+      }
+      if (event.type === "task.completed") {
+        patch.status = "completed";
+        if (payload !== null && typeof payload.cached === "boolean") patch.cached = payload.cached;
+        if (payload !== null && typeof payload.cacheKey === "string") patch.cacheKey = payload.cacheKey;
+      }
+      if (event.type === "task.failed") {
+        patch.status = "failed";
+        if (payload !== null && typeof payload.cached === "boolean") patch.cached = payload.cached;
+        if (payload !== null && typeof payload.cacheKey === "string") patch.cacheKey = payload.cacheKey;
+      }
+      upsert(taskId, patch);
+    }
+
+    return Array.from(summaries.values());
   }
 
   recordCompleted(input: {

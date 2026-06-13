@@ -270,6 +270,7 @@ workflow
   }) => {
     let store: WorkflowStore | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let executionRunId: string | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
       const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
@@ -298,9 +299,12 @@ workflow
         if (options.runToken === undefined || !store.consumeRunHandoffToken(options.runId, options.runToken)) {
           throw new CliUsageError("invalid detached workflow run handoff");
         }
-        store.markRunRunnerStarted(options.runId, process.pid);
-        heartbeat = setInterval(() => store?.heartbeatRun(options.runId!), 2_000);
+        executionRunId = options.runId;
+      } else {
+        executionRunId = store.createRun(workflow.name);
       }
+      store.markRunRunnerStarted(executionRunId, process.pid);
+      heartbeat = setInterval(() => store?.heartbeatRun(executionRunId!), 2_000);
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
         : null;
@@ -311,7 +315,7 @@ workflow
         store,
         cache: options.cache !== false,
         maxConcurrentTasks: options.maxConcurrentTasks,
-        runId: options.runId,
+        runId: executionRunId,
         runtimeOptions: {
           fallbackWorker: options.worker,
           fallbackModel: options.model,
@@ -326,6 +330,9 @@ workflow
       });
       console.log(JSON.stringify(result, null, 2));
     } catch (error) {
+      if (store !== undefined && executionRunId !== undefined && store.getRun(executionRunId)?.status === "running") {
+        store.finishRun(executionRunId, "failed");
+      }
       printCliError(error, "Workflow run failed");
       exitWith(EXIT_CODES.domainFailure);
     } finally {

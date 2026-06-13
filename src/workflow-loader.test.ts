@@ -1911,6 +1911,7 @@ describe("workflow loader", () => {
       runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
     };
     const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
+      run: { runnerPid?: number; heartbeatAt?: string };
       tasks: Array<{
         runId: string;
         taskId: string;
@@ -1939,10 +1940,13 @@ describe("workflow loader", () => {
       events: Array<{ sequence: number; type: string }>;
     };
 
-    expect(listResult.runs).toEqual([
+    expect(listResult.runs).toMatchObject([
       { runId: runResult.runId, workflow: "loader-smoke", status: "completed", finishedAt: expect.any(String) },
     ]);
+    expect(listResult.runs[0]).toMatchObject({ runnerPid: expect.any(Number), heartbeatAt: expect.any(String) });
     expect(limitedListResult.runs).toEqual(listResult.runs);
+    expect(showResult.run.runnerPid).toEqual(expect.any(Number));
+    expect(showResult.run.heartbeatAt).toEqual(expect.any(String));
     expect(showResult.tasks).toEqual([
       {
         runId: runResult.runId,
@@ -1956,6 +1960,7 @@ describe("workflow loader", () => {
     ]);
     expect(eventsResult.events.map((event) => event.type)).toEqual([
       "run.started",
+      "runner.started",
       "task.started",
       "task.cache_lookup.started",
       "task.cache_lookup.miss",
@@ -1969,9 +1974,9 @@ describe("workflow loader", () => {
       "run.completed",
     ]);
     expect(cursorResult.events.map((event) => ({ sequence: event.sequence, type: event.type }))).toEqual([
-      { sequence: 3, type: "task.cache_lookup.miss" },
-      { sequence: 4, type: "task.executor.started" },
-      { sequence: 5, type: "task.executor.completed" },
+      { sequence: 3, type: "task.cache_lookup.started" },
+      { sequence: 4, type: "task.cache_lookup.miss" },
+      { sequence: 5, type: "task.executor.started" },
     ]);
   });
 

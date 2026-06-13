@@ -111,6 +111,11 @@ allowed under an exclusive lock.
 - Headless surface confirmed: `agy --print/-p <prompt> --model <m>
   --dangerously-skip-permissions --sandbox --print-timeout <d>`; sessions via
   `--conversation <id>` resume.
+- Local `agy 1.0.8` currently exposes models including `Gemini 3.5 Flash (Low)`
+  and accepts the headless flags, but a bounded one-task JSON smoke timed out
+  waiting for a response. The Prism adapter's own process timeout correctly
+  aborts and reports this condition, so AGY is safe to experiment with but not
+  yet promoted to a reliable live worker lane.
 - Open (WS3 verification task): how a lowered agent is addressed headlessly —
   plugin agent naming vs projection fallback (read the generated agent
   markdown, inject as system context the way codex does). Capability matrix

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
 const tempRoots: string[] = [];
 
@@ -15,6 +16,11 @@ const createTempRoot = async (): Promise<string> => {
 };
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const contractMetadata = {
+  contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+  instructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
+};
 
 const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> => {
   const started = Date.now();
@@ -1920,6 +1926,7 @@ describe("workflow loader", () => {
         cached: boolean;
         agent: { plugin: string; name: string };
         output: { summary: string };
+        metadata: typeof contractMetadata;
       }>;
     };
     const eventsResult = await cli(["workflow", "runs", "events", runResult.runId, "--store", storeFile]) as {
@@ -1956,6 +1963,7 @@ describe("workflow loader", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "history" },
+        metadata: contractMetadata,
       },
     ]);
     expect(eventsResult.events.map((event) => event.type)).toEqual([
@@ -2223,6 +2231,7 @@ describe("workflow loader", () => {
         cached: boolean;
         agent: { plugin: string; name: string };
         output: { error: string };
+        metadata: typeof contractMetadata;
       }>;
     };
 
@@ -2237,6 +2246,7 @@ describe("workflow loader", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { error: "grok was aborted by Prism workflow stop" },
+        metadata: contractMetadata,
       },
     ]);
   });

@@ -1,6 +1,7 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 
 export const WORKFLOW_WORKER_JSON_CONTRACT_VERSION = "v1";
+export const WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE = "workflow-worker-json-instruction-v1";
 
 export class WorkflowOutputParseError extends Error {
   override readonly name = "WorkflowOutputParseError";

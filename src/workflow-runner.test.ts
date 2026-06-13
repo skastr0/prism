@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
 import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
 
 const builder = {
@@ -22,6 +23,11 @@ const reviewer = {
 
 const PatchReport = Schema.Struct({ summary: Schema.String });
 const ReviewReport = Schema.Struct({ verdict: Schema.Literal("pass", "needs-work") });
+
+const contractMetadata = {
+  contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+  instructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
+};
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -55,10 +61,11 @@ describe("workflow runner", () => {
       runId: null,
       workflow: "runner-smoke",
       tasks: [
-        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false },
-        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" }, cached: false },
+        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false, metadata: contractMetadata },
+        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" }, cached: false, metadata: contractMetadata },
       ],
     });
+    expect(result.tasks.map((task) => task.metadata)).toEqual([contractMetadata, contractMetadata]);
   });
 
   test("fails before handoff when task output does not decode", async () => {

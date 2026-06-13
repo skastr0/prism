@@ -7,6 +7,7 @@ import { Effect, Schema } from "effect";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions } from "./workflows.js";
 
 const tempRoots: string[] = [];
@@ -40,6 +41,11 @@ const reviewer = {
 
 const Output = Schema.Struct({ summary: Schema.String });
 const ReviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
+
+const contractMetadata = {
+  contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+  instructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
+};
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -329,6 +335,7 @@ describe("workflow store", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
+        metadata: contractMetadata,
       },
     ]);
     expect(store.listRunEvents(firstRunId).map((event) => event.type)).toEqual([
@@ -345,6 +352,8 @@ describe("workflow store", () => {
       "task.completed",
       "run.completed",
     ]);
+    expect(store.listRunEvents(firstRunId).find((event) => event.type === "task.completed")?.payload)
+      .toMatchObject(contractMetadata);
     expect(store.listRunTasks(secondRunId)).toEqual([
       {
         runId: secondRunId,
@@ -355,6 +364,7 @@ describe("workflow store", () => {
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "first" },
         metadata: {
+          ...contractMetadata,
           cachedFrom: "workflow_task_records",
           finish: { repairs: 0, criteria: [], repairMode: "none" },
         },
@@ -371,6 +381,8 @@ describe("workflow store", () => {
       "task.completed",
       "run.completed",
     ]);
+    expect(store.listRunEvents(secondRunId).find((event) => event.type === "task.completed")?.payload)
+      .toMatchObject(contractMetadata);
     store.close();
   });
 
@@ -507,6 +519,7 @@ describe("workflow store", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "built" },
+        metadata: contractMetadata,
       },
     ]);
     expect(store.listRunEvents(runId).map((event) => event.type).at(-1)).toBe("run.failed");
@@ -592,6 +605,7 @@ describe("workflow store", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { notSummary: "wrong" },
+        metadata: contractMetadata,
       },
     ]);
     expect(store.listRunEvents(recordedRunId).map((event) => event.type)).toEqual([
@@ -632,6 +646,7 @@ describe("workflow store", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { error: "mock harness failed" },
+        metadata: contractMetadata,
       },
     ]);
     expect(store.listRunEvents(runId).map((event) => event.type)).toEqual([
@@ -724,6 +739,7 @@ describe("workflow store", () => {
         cached: false,
         agent: { plugin: "forge", name: "builder" },
         output: { summary: "built" },
+        metadata: contractMetadata,
       },
       {
         runId,
@@ -733,6 +749,7 @@ describe("workflow store", () => {
         cached: false,
         agent: { plugin: "forge", name: "reviewer" },
         output: { verdict: "needs-work" },
+        metadata: contractMetadata,
       },
     ]);
     expect(store.listRunEvents(runId).map((event) => event.type)).toEqual([

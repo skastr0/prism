@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
 import { computeContentHash } from "./content-hash.js";
 import type { AnyWorkflowTask, WorkflowRuntimeOptions } from "./workflows.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskIdentity {
   readonly workflow: string;
@@ -133,6 +134,16 @@ export const defaultWorkflowStorePath = (projectPath: string): string =>
 const sqliteDateTime = (date: Date): string =>
   date.toISOString().slice(0, 19).replace("T", " ");
 
+const pickContractMetadata = (metadata: Record<string, unknown> | undefined): Record<string, unknown> => {
+  if (metadata === undefined) return {};
+  const contractVersion = metadata.contractVersion;
+  const instructionSource = metadata.instructionSource;
+  return {
+    ...(contractVersion !== undefined ? { contractVersion } : {}),
+    ...(instructionSource !== undefined ? { instructionSource } : {}),
+  };
+};
+
 export const workflowTaskIdentity = (
   workflow: string,
   task: AnyWorkflowTask,
@@ -145,6 +156,8 @@ export const workflowTaskIdentity = (
     cacheKey: task.cacheKey ?? task.id,
     promptHash: computeContentHash(JSON.stringify({
       identityVersion: WORKFLOW_TASK_IDENTITY_VERSION,
+      workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+      workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
       prompt: task.prompt,
       worker,
       workerSemantics: workflowWorkerSemanticsVersion(worker),
@@ -537,7 +550,11 @@ export class WorkflowStore {
         runId: input.runId,
         taskId: input.identity.taskId,
         type: `task.${input.status}`,
-        payload: { cached: input.cached, cacheKey: input.identity.cacheKey },
+        payload: {
+          cached: input.cached,
+          cacheKey: input.identity.cacheKey,
+          ...pickContractMetadata(input.metadata),
+        },
       });
       if (input.finishRunStatus !== undefined) {
         this.finishRun(input.runId, input.finishRunStatus);

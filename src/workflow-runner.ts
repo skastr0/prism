@@ -1,6 +1,7 @@
 import { Effect, Either } from "effect";
 import { decodeTaskOutput, type AnyWorkflowDefinition, type AnyWorkflowTask, type WorkflowRuntime, type WorkflowRuntimeOptions } from "./workflows.js";
 import { workflowTaskIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskExecution {
   readonly output: unknown;
@@ -66,6 +67,16 @@ const taskAgent = (task: AnyWorkflowTask) => ({
   name: task.agent.name,
 });
 
+const workflowContractMetadata = {
+  contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+  instructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
+} as const;
+
+const hasNonContractMetadata = (metadata: Record<string, unknown> | undefined): boolean => {
+  if (metadata === undefined) return false;
+  return Object.keys(metadata).some((key) => !(key in workflowContractMetadata));
+};
+
 const createTaskLimiter = (maxConcurrentTasks: number): TaskExecutionLimiter => {
   let active = 0;
   const queue: Array<{
@@ -129,14 +140,14 @@ const executeOrReuseTask = async (input: {
   if (input.cached !== undefined && input.cached !== null) {
     return {
       rawOutput: input.cached.output,
-      metadata: { cachedFrom: "workflow_task_records" },
+      metadata: { ...workflowContractMetadata, cachedFrom: "workflow_task_records" },
     };
   }
   const executed = await input.executeTask(input.task, input.context);
   if (!isWorkflowTaskExecution(executed)) {
-    return { rawOutput: executed };
+    return { rawOutput: executed, metadata: workflowContractMetadata };
   }
-  return { rawOutput: executed.output, ...(executed.metadata ? { metadata: executed.metadata } : {}) };
+  return { rawOutput: executed.output, metadata: { ...workflowContractMetadata, ...(executed.metadata ?? {}) } };
 };
 
 const errorMessage = (error: unknown): string =>
@@ -306,6 +317,7 @@ const executeWorkflowTask = async (input: {
           status: "failed",
           cached: false,
           output,
+          metadata: workflowContractMetadata,
           ...(finishRunOnFailure ? { finishRunStatus: "failed" as const } : {}),
         });
         throw error;
@@ -386,8 +398,9 @@ const executeWorkflowTask = async (input: {
     }
 
     const criteria = task.finish?.criteria?.map((criterion) => criterion.name) ?? [];
-    const finalMetadata = metadata !== undefined || repairs > 0 || task.finish !== undefined
+    const finalMetadata = repairs > 0 || task.finish !== undefined || hasNonContractMetadata(metadata)
       ? {
+        ...workflowContractMetadata,
         ...(metadata ?? {}),
         finish: {
           repairs,
@@ -395,7 +408,7 @@ const executeWorkflowTask = async (input: {
           repairMode: repairs > 0 ? "new-executor-invocation" : "none",
         },
       }
-      : undefined;
+      : { ...workflowContractMetadata, ...(metadata ?? {}) };
     if (useCache && !cacheHit) {
       store?.recordCompleted({ identity, agent: taskAgent(task), output: decodedOutput });
       recordEvent(store, runId, task.id, "task.cache_write.completed", { cacheKey: identity.cacheKey });
@@ -409,10 +422,10 @@ const executeWorkflowTask = async (input: {
       status: "completed",
       cached: cacheHit,
       output: decodedOutput,
-      ...(finalMetadata ? { metadata: finalMetadata } : {}),
+      metadata: finalMetadata,
       ...(isLastTask ? { finishRunStatus: "completed" as const } : {}),
     });
-    return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, ...(finalMetadata ? { metadata: finalMetadata } : {}) };
+    return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, metadata: finalMetadata };
   };
 
   if (cacheHit || input.limiter === undefined) {

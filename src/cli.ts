@@ -178,6 +178,8 @@ const parsePositiveInteger = (value: string): number => {
   return parsed;
 };
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 const currentCliCommand = (): string[] => {
   const entrypoint = process.argv[1];
   if (entrypoint === undefined) {
@@ -387,6 +389,51 @@ workflowRuns
     } catch (error) {
       printCliError(error, "Workflow runs events failed");
       exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("wait <runId>")
+  .description("Wait until a workflow run reaches a terminal status")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--timeout-ms <ms>", "Maximum time to wait before failing", parsePositiveInteger, 60_000)
+  .option("--interval-ms <ms>", "Polling interval", parsePositiveInteger, 250)
+  .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed while waiting")
+  .action(async (
+    runId: string,
+    options: {
+      readonly store?: string;
+      readonly timeoutMs: number;
+      readonly intervalMs: number;
+      readonly failStaleAfterMs?: string;
+    },
+  ) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      const started = Date.now();
+      while (true) {
+        if (options.failStaleAfterMs !== undefined) {
+          store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+        }
+        const run = store.listRuns().find((candidate) => candidate.runId === runId);
+        if (run === undefined) {
+          throw new CliUsageError(`workflow run not found: ${runId}`);
+        }
+        if (run.status !== "running") {
+          console.log(JSON.stringify({ run, tasks: store.listRunTasks(runId) }, null, 2));
+          return;
+        }
+        if (Date.now() - started >= options.timeoutMs) {
+          throw new Error(`timed out waiting for workflow run ${runId}`);
+        }
+        await delay(Math.min(options.intervalMs, Math.max(1, options.timeoutMs - (Date.now() - started))));
+      }
+    } catch (error) {
+      printCliError(error, "Workflow runs wait failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     } finally {
       store?.close();
     }

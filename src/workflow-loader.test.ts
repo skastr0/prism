@@ -1904,4 +1904,118 @@ describe("workflow loader", () => {
     ]);
     expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
   });
+
+  test("CLI waits for a detached workflow run to complete", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeGrok = join(root, "fake-grok.mjs");
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "await new Promise((resolve) => setTimeout(resolve, 400));",
+      "console.log(JSON.stringify({ summary: 'waited' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    const detached = await cli(["workflow", "run", file, "--detach", "--store", storeFile]) as { runId: string };
+    const waited = await cli([
+      "workflow",
+      "runs",
+      "wait",
+      detached.runId,
+      "--store",
+      storeFile,
+      "--timeout-ms",
+      "5000",
+      "--interval-ms",
+      "50",
+    ]) as {
+      run: { runId: string; status: string };
+      tasks: Array<{ taskId: string; output: { summary: string } }>;
+    };
+
+    expect(waited.run).toMatchObject({ runId: detached.runId, status: "completed" });
+    expect(waited.tasks).toMatchObject([{ taskId: "build", output: { summary: "waited" } }]);
+  });
+
+  test("CLI wait returns failed runs and times out running runs", async () => {
+    const root = await createTempRoot();
+    const storeFile = join(root, "workflows.sqlite");
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      return { exitCode, stdout, stderr };
+    };
+
+    const db = new Database(storeFile);
+    db.exec(`
+      create table workflow_runs (
+        run_id text primary key,
+        workflow text not null,
+        status text not null default 'running',
+        finished_at text,
+        handoff_token text,
+        created_at text not null default (datetime('now'))
+      );
+      create table workflow_run_tasks (
+        run_id text not null,
+        ordinal integer not null,
+        workflow text not null,
+        task_id text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        status text not null,
+        cached integer not null,
+        output_json text not null,
+        metadata_json text,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, ordinal)
+      );
+      insert into workflow_runs (run_id, workflow, status, finished_at)
+      values ('failed-run', 'wait-smoke', 'failed', datetime('now'));
+      insert into workflow_runs (run_id, workflow, status)
+      values ('running-run', 'wait-smoke', 'running');
+    `);
+    db.close();
+
+    const failed = await cli(["workflow", "runs", "wait", "failed-run", "--store", storeFile, "--timeout-ms", "100"]);
+    const running = await cli(["workflow", "runs", "wait", "running-run", "--store", storeFile, "--timeout-ms", "50", "--interval-ms", "10"]);
+
+    expect(failed.exitCode).toBe(0);
+    expect(failed.stderr).toBe("");
+    expect((JSON.parse(failed.stdout) as { run: { status: string }; tasks: unknown[] }).run.status).toBe("failed");
+    expect(running.exitCode).toBe(1);
+    expect(running.stderr).toContain("timed out waiting for workflow run running-run");
+  });
 });

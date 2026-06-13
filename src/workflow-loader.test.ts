@@ -831,7 +831,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("agy exited with 0: Error: timed out waiting for response");
+    expect(stderr).toContain("agy print mode failed before Prism worker JSON (printTimeout: 5m, model: <default>): Error: timed out waiting for response");
   });
 
   test("CLI fails Antigravity runs when prefixed output contains an AGY error", async () => {
@@ -872,7 +872,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("agy exited with 0: Error: timed out waiting for response");
+    expect(stderr).toContain("agy print mode failed before Prism worker JSON (printTimeout: 5m, model: <default>): Error: timed out waiting for response");
   });
 
   test("CLI accepts Antigravity JSON output that contains the word Error", async () => {

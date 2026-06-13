@@ -24,6 +24,15 @@ const agyErrorText = (stdout: string, stderr: string): string | undefined => {
   return undefined;
 };
 
+const agyPrintFailureMessage = (input: {
+  readonly printedError: string;
+  readonly printTimeout: string;
+  readonly model?: string;
+}): string => {
+  const model = input.model ?? "<default>";
+  return `agy print mode failed before Prism worker JSON (printTimeout: ${input.printTimeout}, model: ${model}): ${input.printedError}`;
+};
+
 const antigravityMetadata = (input: {
   readonly task: AnyWorkflowTask;
   readonly model?: string;
@@ -114,7 +123,11 @@ export const runAntigravityWorkflowTask = async (
   } catch (error) {
     const printedError = agyErrorText(stdout, stderr);
     if (printedError !== undefined) {
-      throw new AntigravityWorkflowWorkerError(`agy exited with ${exitCode}: ${printedError}`);
+      throw new AntigravityWorkflowWorkerError(agyPrintFailureMessage({
+        printedError,
+        printTimeout,
+        model: options.model,
+      }));
     }
     throw error;
   }

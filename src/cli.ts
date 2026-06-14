@@ -481,6 +481,9 @@ workflowRuns
   .option("--after-sequence <n>", "Return events after this sequence number", (value) =>
     parseIntegerAtLeast(value, 0, "must be a non-negative integer"))
   .option("--limit <n>", "Maximum number of events to return", parsePositiveInteger)
+  .option("--follow", "Stream events as NDJSON until the workflow run reaches a terminal status")
+  .option("--timeout-ms <ms>", "Maximum time to follow before failing", parsePositiveInteger)
+  .option("--interval-ms <ms>", "Polling interval when following", parsePositiveInteger, 250)
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing events")
   .action(async (
     runId: string,
@@ -488,12 +491,44 @@ workflowRuns
       readonly store?: string;
       readonly afterSequence?: number;
       readonly limit?: number;
+      readonly follow?: boolean;
+      readonly timeoutMs?: number;
+      readonly intervalMs: number;
       readonly failStaleAfterMs?: string;
     },
   ) => {
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      if (options.follow === true) {
+        const started = Date.now();
+        let afterSequence = options.afterSequence ?? 0;
+        let emitted = 0;
+        while (true) {
+          if (options.failStaleAfterMs !== undefined) {
+            store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+          }
+          const run = store.getRun(runId);
+          if (run === null) {
+            throw new CliUsageError(`workflow run not found: ${runId}`);
+          }
+          const remaining = options.limit === undefined ? undefined : Math.max(0, options.limit - emitted);
+          const events = store.listRunEvents(runId)
+            .filter((event) => event.sequence > afterSequence)
+            .slice(0, remaining);
+          for (const event of events) {
+            process.stdout.write(`${JSON.stringify({ runId, event })}\n`);
+            afterSequence = event.sequence;
+            emitted += 1;
+          }
+          if (options.limit !== undefined && emitted >= options.limit) return;
+          if (store.getRun(runId)?.status !== "running") return;
+          if (options.timeoutMs !== undefined && Date.now() - started >= options.timeoutMs) {
+            throw new Error(`timed out following workflow run ${runId}`);
+          }
+          await delay(Math.min(options.intervalMs, Math.max(1, (options.timeoutMs ?? Number.POSITIVE_INFINITY) - (Date.now() - started))));
+        }
+      }
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }

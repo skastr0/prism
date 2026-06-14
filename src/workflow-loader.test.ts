@@ -2081,6 +2081,22 @@ describe("workflow loader", () => {
       expect(exitCode).toBe(0);
       return JSON.parse(stdout) as unknown;
     };
+    const cliText = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return stdout;
+    };
 
     const runResult = await cli([
       "workflow",
@@ -2127,6 +2143,22 @@ describe("workflow loader", () => {
     ]) as {
       events: Array<{ sequence: number; type: string }>;
     };
+    const followedEvents = (await cliText([
+      "workflow",
+      "runs",
+      "events",
+      runResult.runId,
+      "--store",
+      storeFile,
+      "--after-sequence",
+      "2",
+      "--limit",
+      "2",
+      "--follow",
+    ])).trim().split("\n").map((line) => JSON.parse(line) as {
+      runId: string;
+      event: { sequence: number; type: string };
+    });
     const cacheResult = await cli([
       "workflow",
       "cache",
@@ -2187,6 +2219,10 @@ describe("workflow loader", () => {
       { sequence: 3, type: "task.cache_lookup.started" },
       { sequence: 4, type: "task.cache_lookup.miss" },
       { sequence: 5, type: "task.executor.started" },
+    ]);
+    expect(followedEvents).toEqual([
+      { runId: runResult.runId, event: expect.objectContaining({ sequence: 3, type: "task.cache_lookup.started" }) },
+      { runId: runResult.runId, event: expect.objectContaining({ sequence: 4, type: "task.cache_lookup.miss" }) },
     ]);
     expect(cacheResult.entries).toEqual([
       {

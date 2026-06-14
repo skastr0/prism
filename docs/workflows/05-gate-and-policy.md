@@ -40,7 +40,7 @@ yield* wf.agentRun("build", agents.builder, {
 });
 ```
 
-Check: `needs ⊆ manifest.agents["forge:builder"].composed.grants` for the
+Check: `needs ⊆ manifest.agents["demo:builder"].composed.grants` for the
 target harness. A reviewer agent asked to write, or a task requesting a tool
 outside the agent's toolspace grants, fails with `PolicyViolation` naming the
 missing grant and the trait that would provide it.

@@ -1444,7 +1444,6 @@ export const compilePluginForTarget = (
             prismHome: context.prismHome,
             desired: planWorkflowRefsEmit({
               projectPath: expandPath(options.projectPath!),
-              registry,
               manifest,
             }),
             scopePlugins: new Set([WORKFLOW_REFS_HARNESS]),

@@ -997,6 +997,16 @@ You are a code review specialist...
 5. Route writes through the sync engine
 6. Update `init` command to generate examples
 
+### Workflow Architecture Boundary
+
+Before changing Prism workflows, read `docs/workflows/14-architecture-boundaries.md`.
+
+- Workflows consume installed/compiled Prism truth: compile manifests, installed harness artifacts, snapshots, and generated refs.
+- Compiler/install is the only layer that reads plugin source, resolves dependencies, composes traits, and lowers artifacts.
+- Workflow runtime and generated refs must not import plugin source trees, scan `prism-plugins`, or expose plugin source file paths when hashes/manifests suffice.
+- Prism core has no default orbit or business ontology. Forge, Tower, Glyphs, Booth, Quasar, Beacon, Scribe, Atelier, and similar concepts are userland plugin vocabulary unless they appear only as explicit fixtures/examples.
+- Resource claims, file-edit semaphores, proposal-layer editing, Git/worktree policy, and domain-specific side-effect rules are plugin/service concerns, not Prism workflow core by default.
+
 ## Development Workflow
 
 1. Make changes to `src/` files

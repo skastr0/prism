@@ -220,3 +220,4 @@ through the workflows MCP tools — a capability that does not exist today.
 - `11-compile-manifest-v1.md` — compile-manifest schema, writer, reader, and gate contract for WS1
 - `12-fingerprint-and-ref-resolution-v1.md` — canonical hashing, scope resolution, ref hashing, and golden-vector contract
 - `13-poc-disposition.md` — POC proof extraction, artifact mapping, and deletion rationale
+- `14-architecture-boundaries.md` — compiler/workflow/userland ontology boundary guardrails

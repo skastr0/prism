@@ -167,7 +167,7 @@ from, so the gate can cheaply detect that a plugin's source moved.
 
 ```jsonc
 "plugins": {
-  "forge": {
+  "demo": {
     "version": "1.4.0",          // from PluginRegistry.pluginVersion (optional)
     "sourceHash": "sha256…"      // stable hash over the plugin's contributing source files
   }
@@ -198,17 +198,17 @@ it.
 
 ### 5.4 `agents` — composed agent entries
 
-Keyed by **canonical agent id** `"<plugin>:<agentName>"` (e.g. `"forge:builder"`),
-matching the `agents["forge:builder"]` form used throughout `05`. Each entry:
+Keyed by **canonical agent id** `"<plugin>:<agentName>"` (e.g. `"demo:builder"`),
+matching the `agents["demo:builder"]` form used throughout `05`. Each entry:
 
 ```jsonc
-"forge:builder": {
+"demo:builder": {
   "name": "builder",
-  "plugin": "forge",
+  "plugin": "demo",
   "description": "…",                 // surfaces in refs/tsc errors
   "sourceHash": "sha256…",            // = AgentCacheDescriptor.sourceHash (agent + resolved refs)
   "traits": [ /* §5.5 */ ],
-  "skills": ["forge:explore", …],     // recommended skills (composed.skills)
+  "skills": ["demo:explore", …],     // recommended skills (composed.skills)
   "composed": {
     "grants": { /* §5.5 */ },
     "modelBindings": { /* §5.5 */ },
@@ -233,7 +233,7 @@ This is the load-bearing section: it is what layer-5 subsumption reads.
 
 ```jsonc
 "traits": [
-  { "id": "forge:writes-code", "ref": "writes-code" }
+  { "id": "demo:writes-code", "ref": "writes-code" }
 ]
 ```
 
@@ -246,10 +246,10 @@ are the *logical* grants; per-harness allowlists live in `perTarget` (below).
 ```jsonc
 "grants": {
   "tools": [
-    "forge:workspace-tools/run_shell",   // canonical tool refs, sorted
-    "forge:fs-tools/read_file"
+    "demo:workspace-tools/run_shell",   // canonical tool refs, sorted
+    "demo:fs-tools/read_file"
   ],
-  "skills": ["forge:explore", "forge:review"]   // grantable skills, sorted
+  "skills": ["demo:explore", "demo:review"]   // grantable skills, sorted
 }
 ```
 
@@ -263,7 +263,7 @@ identity plus per-harness resolution:
 
 ```jsonc
 "modelBindings": {
-  "modelspace": "forge:default",   // the modelspace ref, if any
+  "modelspace": "demo:default",   // the modelspace ref, if any
   "profile": "balanced"            // selected profile, if the source declares one
 }
 ```
@@ -280,7 +280,7 @@ target-specific (e.g. opencode pool strategy, claude-code block shape per
   "claude-code": {
     "scope": "global",
     "model": { /* resolvedModel Record for this harness, or null */ },
-    "toolGrants": ["forge:workspace/run_shell"],       // canonical tool refs active in this slice
+    "toolGrants": ["demo:workspace/run_shell"],       // canonical tool refs active in this slice
     "allowedTools": ["run_shell", "read_file"],   // composed.allowedTools, sorted
     "allowedSkills": ["explore", "review"]        // composed.allowedSkills, sorted
   },
@@ -319,7 +319,7 @@ Two hash scopes, both via the canonical stringifier (§2.2):
 
 ## 6. No MCP coupling (normative)
 
-Earlier sketch (`01`) showed a `grants.mcpServers: { "prism-generated-forge":
+Earlier sketch (`01`) showed a `grants.mcpServers: { "prism-generated-demo":
 […] }` shape. v1 **rejects** that. The manifest MUST NOT contain MCP server
 names, generated server identifiers (`generatedMcpServerName`), exposure profiles
 (`mcpExposureProfileForTarget`), bearer tokens, ports, or any MCP transport
@@ -366,7 +366,7 @@ CLI deps"). Reader contract:
 
 - **Pure decode + typed accessors, no I/O policy.** The reader exposes
   `decodeCompileManifest(json) → Either<DecodeError, CompileManifest>` and
-  accessors: `getAgent(manifest, "forge:builder")`,
+  accessors: `getAgent(manifest, "demo:builder")`,
   `getAgentForTarget(manifest, id, harness)`, `verifyManifestHash(entry)`.
 - **No `prism/src/*` imports anywhere in the consumer.** The WS1 exit criterion
   (`01`, `07`): "An external bun script consumes `@skastr0/prism-core` (load
@@ -391,9 +391,9 @@ to executable contract.
    (`07` WS1.6) twice; the manifest is byte-identical and all `manifestHash`
    values match.
 2. **Grants reflect compose, verified against lowered output.** For the fixture
-   (and forge), every `composed.grants.tools` / `allowedTools` entry corresponds
+   (and a representative fixture), every `composed.grants.tools` / `allowedTools` entry corresponds
    to what the lowerers actually installed for that harness (`01` AC: "composed
-   grants for a real plugin (forge), verified against what the lowerers actually
+   grants for a real plugin or fixture, verified against what the lowerers actually
    installed"). No grant present that the agent cannot use; no usable tool
    missing.
 3. **Per-target merge.** Compile target A, then target B for the same project;

@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import type { CompileManifest, CompileManifestAgent } from "./compile-manifest.js";
 import type { DesiredRoot } from "../sync/desired.js";
-import { collectPluginRegistries, type PluginRegistry } from "./registry.js";
 
 export const WORKFLOW_REFS_HARNESS = "prism-workflows";
 
@@ -34,20 +33,12 @@ const pluginAgents = (
     .filter((agent) => agent.plugin === pluginName)
     .sort((left, right) => left.name.localeCompare(right.name));
 
-const agentSourcePath = (
-  registries: ReadonlyMap<string, PluginRegistry>,
-  agent: CompileManifestAgent,
-): string =>
-  registries.get(agent.plugin)?.agents.get(agent.name)?.sourcePath ?? "";
-
 const agentInstalls = (agent: CompileManifestAgent): string[] =>
   Object.keys(agent.composed.perTarget).sort();
 
 const renderAgentRef = (options: {
-  readonly registries: ReadonlyMap<string, PluginRegistry>;
   readonly agent: CompileManifestAgent;
 }): string => {
-  const sourcePath = agentSourcePath(options.registries, options.agent);
   const modelBindings = options.agent.composed.modelBindings;
   const model =
     modelBindings.modelspace || modelBindings.profile
@@ -60,7 +51,6 @@ const renderAgentRef = (options: {
       plugin: ${JSON.stringify(options.agent.plugin)},
       name: ${JSON.stringify(options.agent.name)},
       description: ${JSON.stringify(options.agent.description)},
-      sourcePath: ${JSON.stringify(sourcePath)},
       sourceHash: ${JSON.stringify(options.agent.sourceHash)},
       manifestHash: ${JSON.stringify(options.agent.manifestHash)}${model},
       installs: ${JSON.stringify(agentInstalls(options.agent))}
@@ -68,25 +58,21 @@ const renderAgentRef = (options: {
 };
 
 const renderAgentsNamespace = (options: {
-  readonly registries: ReadonlyMap<string, PluginRegistry>;
   readonly manifest: CompileManifest;
   readonly pluginName: string;
 }): string => {
   const entries = pluginAgents(options.manifest, options.pluginName).map((agent) =>
-    `    ${JSON.stringify(camelKey(agent.name))}: ${renderAgentRef({ registries: options.registries, agent })}`,
+    `    ${JSON.stringify(camelKey(agent.name))}: ${renderAgentRef({ agent })}`,
   );
   return entries.length > 0 ? entries.join(",\n") : "";
 };
 
 export const renderWorkflowAgentsModule = (options: {
-  readonly registry: PluginRegistry;
   readonly manifest: CompileManifest;
 }): string => {
-  const registries = collectPluginRegistries(options.registry);
   const namespaces = pluginNames(options.manifest).map((pluginName) => {
     const pluginKey = camelKey(pluginName);
     const body = renderAgentsNamespace({
-      registries,
       manifest: options.manifest,
       pluginName,
     });
@@ -110,7 +96,6 @@ export interface WorkflowAgentRef {
   readonly plugin: string;
   readonly name: string;
   readonly description: string;
-  readonly sourcePath: string;
   readonly sourceHash: string;
   readonly manifestHash: string;
   readonly model?: WorkflowModelRef;
@@ -125,7 +110,6 @@ ${namespaces.join(",\n")}
 
 export const planWorkflowRefsEmit = (options: {
   readonly projectPath: string;
-  readonly registry: PluginRegistry;
   readonly manifest: CompileManifest;
 }): DesiredRoot => {
   const root = workflowRefsRoot(options.projectPath);
@@ -136,7 +120,6 @@ export const planWorkflowRefsEmit = (options: {
       {
         targetPath: workflowAgentsPath(options.projectPath),
         content: renderWorkflowAgentsModule({
-          registry: options.registry,
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,

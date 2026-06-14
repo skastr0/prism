@@ -13,7 +13,6 @@ const builder = {
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
-  sourcePath: "/plugins/forge/agents/builder.agent.ts",
   sourceHash: "a".repeat(64),
   manifestHash: "b".repeat(64),
   installs: ["grok", "codex-cli"],

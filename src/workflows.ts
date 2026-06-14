@@ -10,7 +10,6 @@ export interface WorkflowAgentRef {
   readonly plugin: string;
   readonly name: string;
   readonly description: string;
-  readonly sourcePath: string;
   readonly sourceHash: string;
   readonly manifestHash: string;
   readonly model?: WorkflowModelRef;

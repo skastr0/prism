@@ -16,6 +16,12 @@ disposable cache by design (deleted snapshot converges on next refresh) — refs
 must not derive identity from it. Install state is checked at dispatch time as
 attestation, not baked into refs.
 
+Workflow refs also do **not** expose plugin source paths. Plugin source files are
+compiler inputs, not workflow authoring or runtime inputs. The workflow surface
+gets the falsifiable compile pointers (`sourceHash`, `manifestHash`, plugin name,
+agent name, and install coverage) and never needs to inspect the source tree that
+produced them.
+
 ## The refs emitter
 
 A new **project-level emit target** on the existing sync engine. It is
@@ -44,7 +50,6 @@ export interface WorkflowAgentRef {
   readonly plugin: string;
   readonly name: string;
   readonly description: string;       // surfaces in tsc errors — fleet docs via compiler
-  readonly sourcePath: string;
   readonly sourceHash: string;        // sha256 of agent source at codegen
   readonly manifestHash: string;      // hash of this agent's composed entry in the compile manifest
   readonly model?: WorkflowModelRef;  // resolved modelspace binding
@@ -90,12 +95,12 @@ it is not hand-edited project state.
   "version": 1,
   "plugins": { "<name>": { "version": "...", "sourceHash": "..." } },
   "agents": {
-    "forge:builder": {
+    "demo:builder": {
       "sourceHash": "...",
       "composed": {
         "model": { "modelspace": "...", "profile": "...", "perHarness": { ... } },
         "grants": {
-          "tools": ["forge:workspace-tools/run_shell", ...],
+          "tools": ["demo:workspace-tools/run_shell", ...],
           "skills": [...]
         },
         "harnesses": ["claude-code", "grok", "codex-cli", "antigravity-cli"]
@@ -181,7 +186,7 @@ extracted package — single source of truth, no duplication.
 - [ ] `bunx tsc --noEmit` on a workflow importing generated refs: unknown agent
       and mistyped handoff each produce a compile error naming the real fields.
 - [ ] Compile manifest written on every compile; contains composed grants for a
-      real plugin (forge), verified against what the lowerers actually installed.
+      real plugin or fixture, verified against what the lowerers actually installed.
 - [ ] An external bun script consumes `@skastr0/prism-core` (load registry,
       read manifest, verify a hash) without importing `prism/src/*`.
 - [ ] No Tower/board identifiers anywhere in generated output.

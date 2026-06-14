@@ -40,7 +40,6 @@ const isWorkflowAgentRef = (value: unknown): value is WorkflowAgentRef =>
   typeof value.plugin === "string" &&
   typeof value.name === "string" &&
   typeof value.description === "string" &&
-  typeof value.sourcePath === "string" &&
   typeof value.sourceHash === "string" &&
   typeof value.manifestHash === "string" &&
   isStringArray(value.installs);

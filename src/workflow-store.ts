@@ -25,6 +25,7 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
     case "amp-code":
     case "codex-cli":
     case "hermes":
+    case "kimi-code":
       return "prompt-agent-v1";
     case "antigravity-cli":
       return "prompt-agent-timeout-recovery-v1";

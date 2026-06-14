@@ -691,7 +691,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, kimi-code, opencode");
   });
 
   test("CLI runs a workflow through the Antigravity worker adapter", async () => {
@@ -1601,6 +1601,90 @@ describe("workflow loader", () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("hermes exceeded Prism process timeout after 250ms");
+  });
+
+  test("CLI runs a workflow through the Kimi Code worker adapter", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "kimi-calls.jsonl");
+    const fakeKimi = join(root, "fake-kimi.mjs");
+    await writeFile(file, workerModelWorkflowSource("kimi-code"));
+    await writeFile(fakeKimi, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const modelIndex = process.argv.indexOf('--model');",
+      "const promptIndex = process.argv.indexOf('--prompt');",
+      "const formatIndex = process.argv.indexOf('--output-format');",
+      "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
+      "const prompt = promptIndex >= 0 ? process.argv[promptIndex + 1] : '';",
+      "const outputFormat = formatIndex >= 0 ? process.argv[formatIndex + 1] : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ model, outputFormat, hasInstruction: prompt.includes('Prism workflow task'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: model }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeKimi, 0o755);
+
+    const run = async () => {
+      const processHandle = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "run",
+          join(process.cwd(), "src", "cli.ts"),
+          "workflow",
+          "run",
+          file,
+          "--worker",
+          "kimi-code",
+          "--store",
+          storeFile,
+          "--model",
+          "kimi-k2",
+        ],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_KIMI_BIN: fakeKimi },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as {
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; prompted?: boolean; agentSelection?: string; source?: string; agent?: { plugin?: string; name?: string; manifestHash?: string }; nativeAgent?: string; model?: string } }>;
+      };
+    };
+
+    const result = await run();
+    const cachedResult = await run();
+    expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "kimi-k2"]);
+    expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["kimi-code", "kimi-code"]);
+    expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
+    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["role-skill-contract", "role-skill-contract"]);
+    expect(result.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
+    expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+      { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
+    ]);
+    expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
+    expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "kimi-k2"]);
+    expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.adapter)).toEqual(["kimi-code", "kimi-code"]);
+
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+      model: string;
+      outputFormat: string;
+      hasInstruction: boolean;
+      hasAgentFlag: boolean;
+    });
+    expect(calls).toEqual([
+      { model: "grok-build", outputFormat: "text", hasInstruction: true, hasAgentFlag: false },
+      { model: "kimi-k2", outputFormat: "text", hasInstruction: true, hasAgentFlag: false },
+    ]);
   });
 
   test("CLI runs a workflow through the OpenCode worker adapter", async () => {

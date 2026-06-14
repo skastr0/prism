@@ -5,6 +5,7 @@ import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
+import { runKimiWorkflowTask } from "./workflow-kimi-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskExecution, WorkflowTaskExecutionContext, WorkflowTaskExecutor } from "./workflow-runner.js";
 
@@ -80,6 +81,14 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
       profile: task.worker?.profile ?? options.profile,
+      abortSignal: options.abortSignal,
+    }),
+  },
+  "kimi-code": {
+    id: "kimi-code",
+    runTask: (task, options) => runKimiWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
       abortSignal: options.abortSignal,
     }),
   },

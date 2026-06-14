@@ -254,27 +254,42 @@ const createRunAbortMonitor = (
   store: WorkflowStore | undefined,
   runId: string | null,
   taskId: string,
+  externalAbortSignal?: AbortSignal,
 ): { readonly signal?: AbortSignal; readonly dispose: () => void } => {
-  if (store === undefined || runId === null) return { dispose: () => {} };
+  if ((store === undefined || runId === null) && externalAbortSignal === undefined) return { dispose: () => {} };
   const controller = new AbortController();
   let aborted = false;
-  const interval = setInterval(() => {
-    if (store.getRun(runId)?.status !== "running") {
-      if (!aborted) {
-        aborted = true;
+  const abort = (reason: string): void => {
+    if (!aborted) {
+      aborted = true;
+      if (store !== undefined && runId !== null) {
         store.recordEvent({
           runId,
           taskId,
           type: "task.abort_monitor_triggered",
-          payload: { reason: "run-not-running" },
+          payload: { reason },
         });
       }
-      controller.abort();
     }
-  }, 250);
+    controller.abort();
+  };
+  const onExternalAbort = (): void => abort("runner-termination-signal");
+  if (externalAbortSignal?.aborted === true) {
+    onExternalAbort();
+  } else {
+    externalAbortSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  const interval = store !== undefined && runId !== null ? setInterval(() => {
+    if (store.getRun(runId)?.status !== "running") {
+      abort("run-not-running");
+    }
+  }, 250) : undefined;
   return {
     signal: controller.signal,
-    dispose: () => clearInterval(interval),
+    dispose: () => {
+      if (interval !== undefined) clearInterval(interval);
+      externalAbortSignal?.removeEventListener("abort", onExternalAbort);
+    },
   };
 };
 
@@ -289,6 +304,7 @@ const executeWorkflowTask = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
   readonly limiter?: TaskExecutionLimiter;
+  readonly abortSignal?: AbortSignal;
 }): Promise<WorkflowRunTaskResult> => {
   const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache } = input;
   assertRunStillRunning(store, runId);
@@ -305,7 +321,7 @@ const executeWorkflowTask = async (input: {
     while (true) {
       try {
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
-        const abortMonitor = createRunAbortMonitor(store, runId, task.id);
+        const abortMonitor = createRunAbortMonitor(store, runId, task.id, input.abortSignal);
         try {
           ({ rawOutput, metadata } = await executeOrReuseTask({
             task: attemptTask,
@@ -475,6 +491,7 @@ const runStaticWorkflow = async (input: {
   readonly useCache: boolean;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
+  readonly abortSignal?: AbortSignal;
 }): Promise<ReadonlyArray<WorkflowRunTaskResult>> => {
   const tasks: WorkflowRunTaskResult[] = [];
   if (input.workflow.tasks.length === 0 && input.runId !== null) {
@@ -492,6 +509,7 @@ const runStaticWorkflow = async (input: {
       executeTask: input.executeTask,
       useCache: input.useCache,
       limiter: input.limiter,
+      abortSignal: input.abortSignal,
     }));
   }
   return tasks;
@@ -505,6 +523,7 @@ const runDynamicWorkflow = async (input: {
   readonly useCache: boolean;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
+  readonly abortSignal?: AbortSignal;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
   const tasks: Array<WorkflowRunTaskResult | undefined> = [];
   const inFlightTasks: Array<Promise<WorkflowRunTaskResult>> = [];
@@ -523,6 +542,7 @@ const runDynamicWorkflow = async (input: {
           executeTask: input.executeTask,
           useCache: input.useCache,
           limiter: input.limiter,
+          abortSignal: input.abortSignal,
         });
         inFlightTasks.push(taskRun);
         const result = await taskRun;
@@ -556,6 +576,7 @@ export const runWorkflow = async (
     readonly maxConcurrentTasks?: number;
     readonly runId?: string;
     readonly runtimeOptions?: WorkflowRuntimeOptions;
+    readonly abortSignal?: AbortSignal;
   },
 ): Promise<WorkflowRunResult> => {
   const useCache = options.cache !== false;
@@ -575,9 +596,10 @@ export const runWorkflow = async (
       useCache,
       limiter,
       runtimeOptions,
+      abortSignal: options.abortSignal,
     });
     return { runId, workflow: workflow.name, tasks: result.tasks, output: result.output };
   }
-  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, limiter, runtimeOptions });
+  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, limiter, runtimeOptions, abortSignal: options.abortSignal });
   return { runId, workflow: workflow.name, tasks };
 };

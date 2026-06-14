@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 
 const tempRoots: string[] = [];
 
@@ -332,6 +333,30 @@ export default defineWorkflow({ name: "all-task-workers-smoke", tasks: [build, r
 };
 
 describe("workflow loader", () => {
+  test("worker process honors an already-aborted signal", async () => {
+    const root = await createTempRoot();
+    const fakeWorker = join(root, "fake-worker.mjs");
+    await writeFile(fakeWorker, [
+      "#!/usr/bin/env node",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeWorker, 0o755);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runWorkflowWorkerProcess({
+      command: fakeWorker,
+      args: [],
+      cwd: root,
+      abortSignal: controller.signal,
+      processTimeoutMs: 5_000,
+    });
+
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+  });
+
   test("loads a workflow module and summarizes its tasks", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
@@ -2222,7 +2247,37 @@ describe("workflow loader", () => {
     ]);
 
     expect(forgedExitCode).not.toBe(0);
-    expect(forgedStderr).toContain("invalid detached workflow run handoff");
+    expect(forgedStderr).toContain("--run-id is reserved for Prism's internal detached runner");
+
+    const matchingRunMarkerProcess = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--run-id",
+        "manual-run-id",
+        "--run-token",
+        "wrong-token",
+        "--mock-output",
+        outputFile,
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1", PRISM_WORKFLOW_DETACHED_RUN_ID: "manual-run-id" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [matchingRunMarkerExitCode, matchingRunMarkerStderr] = await Promise.all([
+      matchingRunMarkerProcess.exited,
+      new Response(matchingRunMarkerProcess.stderr).text(),
+    ]);
+
+    expect(matchingRunMarkerExitCode).not.toBe(0);
+    expect(matchingRunMarkerStderr).toContain("invalid detached workflow run handoff");
   });
 
   test("CLI uses task-level worker models before the CLI fallback model", async () => {
@@ -2782,10 +2837,11 @@ describe("workflow loader", () => {
       events: Array<{ type: string; taskId: string | null; payload: unknown }>;
     };
     expect(events.events.map((event) => event.type)).toContain("run.stop_requested");
+    expect(events.events.map((event) => event.type)).toContain("runner.termination_requested");
     expect(events.events).toContainEqual(expect.objectContaining({
       taskId: "build",
       type: "task.abort_monitor_triggered",
-      payload: { reason: "run-not-running" },
+      payload: expect.objectContaining({ reason: expect.stringMatching(/^(run-not-running|runner-termination-signal)$/) }),
     }));
   });
 
@@ -2865,6 +2921,10 @@ describe("workflow loader", () => {
     expect(oldEvents.events).toContainEqual(expect.objectContaining({
       type: "run.stop_requested",
       payload: { reason: "update-requested" },
+    }));
+    expect(oldEvents.events).toContainEqual(expect.objectContaining({
+      type: "runner.termination_requested",
+      payload: expect.objectContaining({ reason: "update-requested", signal: "SIGTERM" }),
     }));
     expect(newEvents.events).toContainEqual(expect.objectContaining({
       type: "run.updated_from",

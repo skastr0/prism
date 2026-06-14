@@ -225,11 +225,39 @@ const startDetachedWorkflowRun = (
   Bun.spawn({
     cmd: [...currentCliCommand(), ...args],
     cwd: process.cwd(),
-    env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1" },
+    env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1", PRISM_WORKFLOW_DETACHED_RUN_ID: run.runId },
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
   }).unref();
+};
+
+const requestWorkflowRunnerTermination = (
+  store: WorkflowStore,
+  run: { readonly runId: string; readonly runnerPid?: number },
+  reason: string,
+): void => {
+  if (run.runnerPid === undefined) {
+    return;
+  }
+  try {
+    process.kill(run.runnerPid, "SIGTERM");
+    store.recordEvent({
+      runId: run.runId,
+      type: "runner.termination_requested",
+      payload: { reason, runnerPid: run.runnerPid, signal: "SIGTERM" },
+    });
+  } catch (error) {
+    store.recordEvent({
+      runId: run.runId,
+      type: "runner.termination_skipped",
+      payload: {
+        reason,
+        runnerPid: run.runnerPid,
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
 };
 
 workflow
@@ -271,6 +299,8 @@ workflow
     let store: WorkflowStore | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let executionRunId: string | undefined;
+    let terminationController: AbortController | undefined;
+    let terminationHandler: (() => void) | undefined;
     try {
       const workflow = await loadWorkflowFile(file);
       const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
@@ -291,7 +321,10 @@ workflow
         console.log(JSON.stringify({ runId, workflow: workflow.name, status: "running", detached: true }, null, 2));
         return;
       }
-      if (options.runId !== undefined && process.env.PRISM_WORKFLOW_DETACHED_CHILD !== "1") {
+      if (
+        options.runId !== undefined &&
+        (process.env.PRISM_WORKFLOW_DETACHED_CHILD !== "1" || process.env.PRISM_WORKFLOW_DETACHED_RUN_ID !== options.runId)
+      ) {
         throw new CliUsageError("--run-id is reserved for Prism's internal detached runner");
       }
       store = await WorkflowStore.open(storePath);
@@ -303,6 +336,18 @@ workflow
       } else {
         executionRunId = store.createRun(workflow.name);
       }
+      terminationController = new AbortController();
+      terminationHandler = () => {
+        terminationController?.abort();
+        if (store !== undefined && executionRunId !== undefined) {
+          store.recordEvent({
+            runId: executionRunId,
+            type: "runner.termination_signal.received",
+            payload: { signal: "SIGTERM" },
+          });
+        }
+      };
+      process.once("SIGTERM", terminationHandler);
       store.markRunRunnerStarted(executionRunId, process.pid);
       heartbeat = setInterval(() => store?.heartbeatRun(executionRunId!), 2_000);
       const outputs = options.mockOutput
@@ -316,6 +361,7 @@ workflow
         cache: options.cache !== false,
         maxConcurrentTasks: options.maxConcurrentTasks,
         runId: executionRunId,
+        abortSignal: terminationController.signal,
         runtimeOptions: {
           fallbackWorker: options.worker,
           fallbackModel: options.model,
@@ -337,6 +383,7 @@ workflow
       exitWith(EXIT_CODES.domainFailure);
     } finally {
       if (heartbeat !== undefined) clearInterval(heartbeat);
+      if (terminationHandler !== undefined) process.off("SIGTERM", terminationHandler);
       store?.close();
     }
   });
@@ -632,6 +679,7 @@ workflowRuns
       if (stoppedRun === null) {
         throw new CliUsageError(`workflow run is no longer running: ${runId}`);
       }
+      requestWorkflowRunnerTermination(store, stoppedRun, "update-requested");
       store.close();
       store = undefined;
       startDetachedWorkflowRun(file, options, { runId: nextRunId, storePath, token });
@@ -659,7 +707,13 @@ workflowRuns
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
-      const run = store.stopRun(runId);
+      const stoppedRun = store.stopRunningRun(runId);
+      if (stoppedRun !== null) {
+        requestWorkflowRunnerTermination(store, stoppedRun, "stop-requested");
+        console.log(JSON.stringify({ run: stoppedRun }, null, 2));
+        return;
+      }
+      const run = store.getRun(runId);
       if (run === null) {
         throw new CliUsageError(`workflow run not found: ${runId}`);
       }

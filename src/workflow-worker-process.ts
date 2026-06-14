@@ -45,7 +45,11 @@ export const runWorkflowWorkerProcess = async (
     aborted = true;
     kill();
   };
-  options.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  if (options.abortSignal?.aborted === true) {
+    onAbort();
+  } else {
+    options.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
   const timeout = options.processTimeoutMs === undefined
     ? undefined
     : setTimeout(() => {

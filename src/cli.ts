@@ -590,6 +590,68 @@ workflowRuns
   });
 
 workflowRuns
+  .command("update <runId> <file>")
+  .description("Stop a running workflow and start an updated detached run against the same store/cache")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--mock-output <path>", "JSON object keyed by workflow task id")
+  .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
+  .option("--model <model>", "Fallback model for tasks without task-level model selection")
+  .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
+  .action(async (runId: string, file: string, options: {
+    readonly store?: string;
+    readonly mockOutput?: string;
+    readonly worker?: string;
+    readonly model?: string;
+    readonly maxConcurrentTasks?: number;
+  }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      const workflow = await loadWorkflowFile(file);
+      if (options.mockOutput === undefined && options.worker !== undefined) {
+        getWorkflowWorkerAdapter(options.worker);
+      }
+      const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
+      store = await WorkflowStore.open(storePath);
+      const previousRun = store.getRun(runId);
+      if (previousRun === null) {
+        throw new CliUsageError(`workflow run not found: ${runId}`);
+      }
+      if (previousRun.status !== "running") {
+        throw new CliUsageError(`workflow run is not running: ${runId}`);
+      }
+      const nextRunId = randomUUID();
+      const token = randomUUID();
+      const stoppedRun = store.restartRunningRun({
+        previousRunId: runId,
+        nextRunId,
+        nextWorkflow: workflow.name,
+        handoffToken: token,
+        reason: "update-requested",
+        mode: "restart-with-cache",
+      });
+      if (stoppedRun === null) {
+        throw new CliUsageError(`workflow run is no longer running: ${runId}`);
+      }
+      store.close();
+      store = undefined;
+      startDetachedWorkflowRun(file, options, { runId: nextRunId, storePath, token });
+      console.log(JSON.stringify({
+        previousRun: stoppedRun,
+        runId: nextRunId,
+        workflow: workflow.name,
+        status: "running",
+        detached: true,
+        update: { previousRunId: runId, mode: "restart-with-cache" },
+      }, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow runs update failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
   .command("stop <runId>")
   .description("Request a running workflow run to stop before starting more tasks")
   .option("--store <path>", "SQLite workflow store path")

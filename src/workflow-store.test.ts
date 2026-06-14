@@ -218,6 +218,78 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("stopRunningRun only returns a record when it transitions a running run", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    store.createRun("store-smoke", "running-run");
+    store.createRun("store-smoke", "completed-run");
+    store.finishRun("completed-run", "completed");
+
+    const stopped = store.stopRunningRun("running-run", "update-requested");
+    const completed = store.stopRunningRun("completed-run", "update-requested");
+    const missing = store.stopRunningRun("missing-run", "update-requested");
+
+    expect(stopped).toMatchObject({ runId: "running-run", workflow: "store-smoke", status: "failed" });
+    expect(completed).toBeNull();
+    expect(missing).toBeNull();
+    expect(store.listRunEvents("running-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.stop_requested",
+      "run.failed",
+    ]);
+    expect(store.listRunEvents("running-run").at(-1)?.payload).toEqual({ reason: "update-requested" });
+    expect(store.listRunEvents("completed-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.completed",
+    ]);
+    store.close();
+  });
+
+  test("restartRunningRun links the stopped run and replacement run atomically", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    store.createRun("store-smoke", "running-run");
+    store.createRun("store-smoke", "completed-run");
+    store.finishRun("completed-run", "completed");
+
+    const stopped = store.restartRunningRun({
+      previousRunId: "running-run",
+      nextRunId: "replacement-run",
+      nextWorkflow: "store-smoke-v2",
+      handoffToken: "token",
+    });
+    const completed = store.restartRunningRun({
+      previousRunId: "completed-run",
+      nextRunId: "should-not-exist",
+      nextWorkflow: "store-smoke-v2",
+      handoffToken: "token",
+    });
+
+    expect(stopped).toMatchObject({ runId: "running-run", workflow: "store-smoke", status: "failed" });
+    expect(completed).toBeNull();
+    expect(store.getRun("replacement-run")).toMatchObject({
+      runId: "replacement-run",
+      workflow: "store-smoke-v2",
+      status: "running",
+    });
+    expect(store.getRun("should-not-exist")).toBeNull();
+    expect(store.listRunEvents("running-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.stop_requested",
+      "run.failed",
+    ]);
+    expect(store.listRunEvents("replacement-run").map((event) => event.type)).toEqual([
+      "run.started",
+      "run.updated_from",
+    ]);
+    expect(store.listRunEvents("replacement-run").at(-1)?.payload).toEqual({
+      previousRunId: "running-run",
+      mode: "restart-with-cache",
+    });
+    expect(store.consumeRunHandoffToken("replacement-run", "token")).toBe(true);
+    store.close();
+  });
+
   test("read surfaces reconcile running runs whose runner pid is dead", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

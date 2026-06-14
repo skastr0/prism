@@ -2789,6 +2789,90 @@ describe("workflow loader", () => {
     }));
   });
 
+  test("CLI update restarts a running workflow and reuses completed cache", async () => {
+    const root = await createTempRoot();
+    const storeFile = join(root, "workflows.sqlite");
+    const seedFile = join(root, "seed-workflow.ts");
+    const oldFile = join(root, "old-workflow.ts");
+    const mockOutput = join(root, "mock-output.json");
+    const startedFile = join(root, "old-worker-started.txt");
+    const fakeGrok = join(root, "fake-grok-hangs.mjs");
+    await writeFile(seedFile, workflowSource());
+    await writeFile(oldFile, workflowSource().replace('cacheKey: "workflow-loader-build"', 'cacheKey: "workflow-loader-old"'));
+    await writeFile(mockOutput, JSON.stringify({ build: { summary: "seeded" } }));
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(startedFile)}, 'started');`,
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    const cli = async (args: string[]) => {
+      const processHandle = Bun.spawn({
+        cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
+        cwd: root,
+        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        processHandle.exited,
+        new Response(processHandle.stdout).text(),
+        new Response(processHandle.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      return JSON.parse(stdout) as unknown;
+    };
+
+    await cli(["workflow", "run", seedFile, "--store", storeFile, "--mock-output", mockOutput, "--worker", "grok"]);
+    const oldRun = await cli(["workflow", "run", oldFile, "--detach", "--store", storeFile, "--worker", "grok"]) as { runId: string };
+    await waitFor(async () => Bun.file(startedFile).exists(), 5_000);
+    const update = await cli(["workflow", "runs", "update", oldRun.runId, seedFile, "--store", storeFile, "--worker", "grok"]) as {
+      previousRun: { runId: string; status: string };
+      runId: string;
+      update: { previousRunId: string; mode: string };
+    };
+    const waited = await cli([
+      "workflow",
+      "runs",
+      "wait",
+      update.runId,
+      "--store",
+      storeFile,
+      "--timeout-ms",
+      "5000",
+      "--interval-ms",
+      "50",
+    ]) as {
+      run: { runId: string; status: string };
+      tasks: Array<{ taskId: string; cached: boolean; output: { summary: string } }>;
+    };
+    const oldEvents = await cli(["workflow", "runs", "events", oldRun.runId, "--store", storeFile]) as {
+      events: Array<{ type: string; payload: unknown }>;
+    };
+    const newEvents = await cli(["workflow", "runs", "events", update.runId, "--store", storeFile]) as {
+      events: Array<{ type: string; payload: unknown }>;
+    };
+
+    expect(update.previousRun).toMatchObject({ runId: oldRun.runId, status: "failed" });
+    expect(update.update).toEqual({ previousRunId: oldRun.runId, mode: "restart-with-cache" });
+    expect(waited.run).toMatchObject({ runId: update.runId, status: "completed" });
+    expect(waited.tasks).toMatchObject([
+      { taskId: "build", cached: true, output: { summary: "seeded" } },
+    ]);
+    expect(oldEvents.events).toContainEqual(expect.objectContaining({
+      type: "run.stop_requested",
+      payload: { reason: "update-requested" },
+    }));
+    expect(newEvents.events).toContainEqual(expect.objectContaining({
+      type: "run.updated_from",
+      payload: { previousRunId: oldRun.runId, mode: "restart-with-cache" },
+    }));
+    expect(newEvents.events.map((event) => event.type)).toContain("task.cache_lookup.hit");
+  });
+
   test("CLI waits for a detached workflow run to complete", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

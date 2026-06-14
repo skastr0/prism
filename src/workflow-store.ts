@@ -500,6 +500,73 @@ export class WorkflowStore {
     };
   }
 
+  stopRunningRun(runId: string, reason: string = "stop-requested"): WorkflowRunRecord | null {
+    this.failDeadPidRuns();
+    const stop = this.db.transaction(() => {
+      const row = this.db.query<RunRow, [string]>(`
+        update workflow_runs
+        set status = 'failed', finished_at = datetime('now')
+        where run_id = ? and status = 'running'
+        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+      `).get(runId);
+      if (row == null) return null;
+      this.recordEvent({ runId, type: "run.stop_requested", payload: { reason } });
+      this.recordEvent({ runId, type: "run.failed", payload: { reason } });
+      return row;
+    });
+    const row = stop();
+    if (row == null) return null;
+    return {
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: row.status,
+      finishedAt: row.finished_at,
+      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+    };
+  }
+
+  restartRunningRun(input: {
+    readonly previousRunId: string;
+    readonly nextRunId: string;
+    readonly nextWorkflow: string;
+    readonly handoffToken: string;
+    readonly reason?: string;
+    readonly mode?: string;
+  }): WorkflowRunRecord | null {
+    this.failDeadPidRuns();
+    const restart = this.db.transaction(() => {
+      const row = this.db.query<RunRow, [string]>(`
+        update workflow_runs
+        set status = 'failed', finished_at = datetime('now')
+        where run_id = ? and status = 'running'
+        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+      `).get(input.previousRunId);
+      if (row == null) return null;
+      const reason = input.reason ?? "update-requested";
+      this.recordEvent({ runId: input.previousRunId, type: "run.stop_requested", payload: { reason } });
+      this.recordEvent({ runId: input.previousRunId, type: "run.failed", payload: { reason } });
+      this.createRun(input.nextWorkflow, input.nextRunId);
+      this.recordEvent({
+        runId: input.nextRunId,
+        type: "run.updated_from",
+        payload: { previousRunId: input.previousRunId, mode: input.mode ?? "restart-with-cache" },
+      });
+      this.setRunHandoffToken(input.nextRunId, input.handoffToken);
+      return row;
+    });
+    const row = restart();
+    if (row == null) return null;
+    return {
+      runId: row.run_id,
+      workflow: row.workflow,
+      status: row.status,
+      finishedAt: row.finished_at,
+      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+    };
+  }
+
   getRun(runId: string): WorkflowRunRecord | null {
     this.failDeadPidRuns();
     const row = this.db.query<RunRow, [string]>(`

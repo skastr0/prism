@@ -1664,7 +1664,7 @@ describe("workflow loader", () => {
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "kimi-k2"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["kimi-code", "kimi-code"]);
     expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
-    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["role-skill-contract", "role-skill-contract"]);
+    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
     expect(result.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
     expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
       { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
@@ -1685,6 +1685,142 @@ describe("workflow loader", () => {
       { model: "grok-build", outputFormat: "text", hasInstruction: true, hasAgentFlag: false },
       { model: "kimi-k2", outputFormat: "text", hasInstruction: true, hasAgentFlag: false },
     ]);
+  });
+
+  test("CLI resolves the Kimi Code worker from PATH by default", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "kimi-path-calls.jsonl");
+    const fakeKimi = join(root, "kimi");
+    await writeFile(file, workflowSource("default", { worker: "kimi-code" }));
+    await writeFile(fakeKimi, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[1], prompt: process.argv.includes('--prompt') }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: 'path-kimi' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeKimi, 0o755);
+    const env: Record<string, string | undefined> = { ...process.env, PATH: `${root}:${process.env.PATH ?? ""}` };
+    delete env.PRISM_WORKFLOW_KIMI_BIN;
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "kimi-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ tasks: [{ output: { summary: "path-kimi" } }] });
+    expect((await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      { command: fakeKimi, prompt: true },
+    ]);
+  });
+
+  test("CLI fails Kimi Code runs when the worker exits non-zero", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeKimi = join(root, "fake-kimi-error.mjs");
+    await writeFile(file, workflowSource("default", { worker: "kimi-code" }));
+    await writeFile(fakeKimi, [
+      "#!/usr/bin/env node",
+      "console.error('Kimi auth missing');",
+      "process.exit(2);",
+      "",
+    ].join("\n"));
+    await chmod(fakeKimi, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "kimi-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_KIMI_BIN: fakeKimi },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("kimi-code exited with 2: Kimi auth missing");
+  });
+
+  test("CLI kills Kimi Code runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeKimi = join(root, "fake-kimi-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "kimi-code" }));
+    await writeFile(fakeKimi, [
+      "#!/usr/bin/env node",
+      "console.log('starting kimi hang');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeKimi, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "kimi-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        PRISM_WORKFLOW_KIMI_BIN: fakeKimi,
+        PRISM_WORKFLOW_KIMI_PROCESS_TIMEOUT_MS: "250",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("kimi-code exceeded Prism process timeout after 250ms");
   });
 
   test("CLI runs a workflow through the OpenCode worker adapter", async () => {

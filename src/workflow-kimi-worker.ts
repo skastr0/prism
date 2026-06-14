@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
@@ -22,9 +20,7 @@ export const runKimiWorkflowTask = async (
   task: AnyWorkflowTask,
   options: KimiWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
-  const command = options.bin
-    ?? process.env.PRISM_WORKFLOW_KIMI_BIN
-    ?? join(homedir(), ".kimi-code", "bin", "kimi");
+  const command = options.bin ?? process.env.PRISM_WORKFLOW_KIMI_BIN ?? "kimi";
   const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_KIMI_PROCESS_TIMEOUT_MS)
@@ -59,7 +55,7 @@ export const runKimiWorkflowTask = async (
     metadata: {
       adapter: "kimi-code",
       prompted: true,
-      agentSelection: "role-skill-contract",
+      agentSelection: "prompted-contract",
       source: "prism-workflow",
       agent: {
         plugin: task.agent.plugin,

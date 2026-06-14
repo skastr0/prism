@@ -22,6 +22,7 @@ export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
 export interface WorkflowTaskWorkerOptions {
   readonly worker?: string;
   readonly model?: string;
+  readonly profile?: string;
 }
 
 export interface WorkflowFinishCriterionContext<Output> {

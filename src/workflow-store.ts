@@ -214,6 +214,7 @@ export const workflowTaskIdentity = (
       worker,
       workerSemantics: workflowWorkerSemanticsVersion(worker),
       model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
+      profile: task.worker?.profile ?? null,
       outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
       finish: {
         maxRepairs: task.finish?.maxRepairs ?? 0,

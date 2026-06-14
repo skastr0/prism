@@ -1411,17 +1411,22 @@ describe("workflow loader", () => {
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "hermes-calls.jsonl");
     const fakeHermes = join(root, "fake-hermes.mjs");
-    await writeFile(file, workerModelWorkflowSource("hermes"));
+    await writeFile(file, workerModelWorkflowSource("hermes").replace(
+      `model: "grok-build"`,
+      `model: "grok-build", profile: "ansel12"`,
+    ));
     await writeFile(fakeHermes, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
       "const queryIndex = process.argv.indexOf('--query');",
       "const sourceIndex = process.argv.indexOf('--source');",
+      "const profileIndex = process.argv.indexOf('--profile');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const query = queryIndex >= 0 ? process.argv[queryIndex + 1] : '';",
       "const source = sourceIndex >= 0 ? process.argv[sourceIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[2], model, quiet: process.argv.includes('--quiet'), source, hasInstruction: query.includes('Prism workflow task'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
+      "const profile = profileIndex >= 0 ? process.argv[profileIndex + 1] : undefined;",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv.includes('chat') ? 'chat' : process.argv[2], model, quiet: process.argv.includes('--quiet'), source, profile, hasInstruction: query.includes('Prism workflow task'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
       "console.error('session_id: hermes-session-123');",
       "console.log(JSON.stringify({ summary: model }));",
       "",
@@ -1458,17 +1463,23 @@ describe("workflow loader", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       return JSON.parse(stdout) as {
-        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; prompted?: boolean; agentSelection?: string; source?: string; agent?: { plugin?: string; name?: string; manifestHash?: string }; nativeAgent?: string; model?: string; sessionId?: string } }>;
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; prompted?: boolean; agentSelection?: string; source?: string; profile?: string; agent?: { plugin?: string; name?: string; manifestHash?: string }; nativeAgent?: string; model?: string; sessionId?: string } }>;
       };
     };
 
     const result = await run();
     const cachedResult = await run();
+    await writeFile(file, workerModelWorkflowSource("hermes").replace(
+      `model: "grok-build"`,
+      `model: "grok-build", profile: "ada07"`,
+    ));
+    const changedProfileResult = await run();
     expect(result.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "nous/qwen3-coder"]);
     expect(result.tasks.map((task) => task.metadata?.adapter)).toEqual(["hermes", "hermes"]);
-    expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
-    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
+    expect(result.tasks.map((task) => task.metadata?.prompted)).toEqual([false, true]);
+    expect(result.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["profile", "prompted-contract"]);
     expect(result.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
+    expect(result.tasks.map((task) => task.metadata?.profile)).toEqual(["ansel12", undefined]);
     expect(result.tasks.map((task) => task.metadata?.agent)).toEqual([
       { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
       { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
@@ -1477,27 +1488,32 @@ describe("workflow loader", () => {
     expect(result.tasks.map((task) => task.metadata?.model)).toEqual(["grok-build", "nous/qwen3-coder"]);
     expect(result.tasks.map((task) => task.metadata?.sessionId)).toEqual(["hermes-session-123", "hermes-session-123"]);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
-    expect(cachedResult.tasks.map((task) => task.metadata?.prompted)).toEqual([true, true]);
-    expect(cachedResult.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["prompted-contract", "prompted-contract"]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.prompted)).toEqual([false, true]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.agentSelection)).toEqual(["profile", "prompted-contract"]);
     expect(cachedResult.tasks.map((task) => task.metadata?.source)).toEqual(["prism-workflow", "prism-workflow"]);
+    expect(cachedResult.tasks.map((task) => task.metadata?.profile)).toEqual(["ansel12", undefined]);
     expect(cachedResult.tasks.map((task) => task.metadata?.agent)).toEqual([
       { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
       { plugin: "forge", name: "builder", manifestHash: "b".repeat(64) },
     ]);
     expect(cachedResult.tasks.map((task) => task.metadata?.nativeAgent)).toEqual([undefined, undefined]);
+    expect(changedProfileResult.tasks.map((task) => task.cached)).toEqual([false, true]);
+    expect(changedProfileResult.tasks.map((task) => task.metadata?.profile)).toEqual(["ada07", undefined]);
 
     const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
       command: string;
       model: string;
       quiet: boolean;
       source: string;
+      profile?: string;
       hasInstruction: boolean;
       hasProfileFlag: boolean;
       hasAgentFlag: boolean;
     });
     expect(calls).toEqual([
-      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
+      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", profile: "ansel12", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
       { command: "chat", model: "nous/qwen3-coder", quiet: true, source: "prism-workflow", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
+      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", profile: "ada07", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
     ]);
   });
 

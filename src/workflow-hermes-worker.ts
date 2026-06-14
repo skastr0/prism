@@ -8,6 +8,7 @@ export interface HermesWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly profile?: string;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
@@ -31,6 +32,7 @@ export const runHermesWorkflowTask = async (
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_HERMES_PROCESS_TIMEOUT_MS)
     ?? 360_000;
   const args = [
+    ...(options.profile !== undefined ? ["--profile", options.profile] : []),
     "chat",
     "--query",
     prompt,
@@ -61,9 +63,10 @@ export const runHermesWorkflowTask = async (
     output: parseWorkflowWorkerJsonOutput(stdout),
     metadata: {
       adapter: "hermes",
-      prompted: true,
-      agentSelection: "prompted-contract",
+      prompted: options.profile === undefined,
+      agentSelection: options.profile === undefined ? "prompted-contract" : "profile",
       source: "prism-workflow",
+      profile: options.profile,
       agent: {
         plugin: task.agent.plugin,
         name: task.agent.name,

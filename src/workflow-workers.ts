@@ -11,6 +11,7 @@ import type { WorkflowTaskExecution, WorkflowTaskExecutionContext, WorkflowTaskE
 export interface WorkflowWorkerAdapterOptions {
   readonly cwd: string;
   readonly model?: string;
+  readonly profile?: string;
   readonly abortSignal?: AbortSignal;
 }
 
@@ -78,6 +79,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runHermesWorkflowTask(task, {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
+      profile: task.worker?.profile ?? options.profile,
       abortSignal: options.abortSignal,
     }),
   },

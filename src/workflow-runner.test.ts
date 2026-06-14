@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
 import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
-import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
 
 const builder = {
@@ -106,6 +106,66 @@ describe("workflow runner", () => {
     })).rejects.toThrow(WorkflowTaskDecodeError);
 
     expect(calls).toEqual(["build"]);
+  });
+
+  test("repairs malformed worker JSON before failing the task", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: { maxRepairs: 1 },
+    });
+    const workflow = defineWorkflow({ name: "runner-json-parse-repair", tasks: [build] as const });
+    const prompts: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        prompts.push(task.prompt);
+        if (prompts.length === 1) {
+          return { output: parseWorkflowWorkerJsonOutput('{"summary":"bad\\q"}') };
+        }
+        return { summary: "repaired" };
+      },
+    });
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Your previous response was not valid JSON");
+    expect(prompts[1]).toContain("Invalid escape character");
+    expect(prompts[1]).toContain('{"summary":"bad\\q"}');
+    expect(result.tasks).toEqual([
+      {
+        id: "build",
+        agent: { plugin: "forge", name: "builder" },
+        output: { summary: "repaired" },
+        cached: false,
+        metadata: {
+          ...contractMetadata,
+          finish: { repairs: 1, criteria: [], repairMode: "new-executor-invocation" },
+        },
+      },
+    ]);
+  });
+
+  test("does not repair ordinary executor failures", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: { maxRepairs: 1 },
+    });
+    const workflow = defineWorkflow({ name: "runner-executor-failure-no-repair", tasks: [build] as const });
+    const calls: string[] = [];
+
+    await expect(runWorkflow(workflow, {
+      executeTask: async (task) => {
+        calls.push(task.prompt);
+        throw new Error("provider auth missing");
+      },
+    })).rejects.toThrow("provider auth missing");
+
+    expect(calls).toEqual(["Build the slice."]);
   });
 
   test("runs dynamic workflows that construct downstream tasks from decoded outputs", async () => {

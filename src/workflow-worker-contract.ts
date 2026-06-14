@@ -27,6 +27,20 @@ that JSON and validate it with the task's Effect Schema before any downstream ta
 see it. Do not wrap the JSON in Markdown fences.
 `;
 
+const jsonParseErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+const parseJsonCandidate = (candidate: string, rawText: string): unknown => {
+  try {
+    return JSON.parse(candidate) as unknown;
+  } catch (error) {
+    throw new WorkflowOutputParseError(
+      `workflow worker output contained invalid JSON: ${jsonParseErrorMessage(error)}`,
+      rawText,
+    );
+  }
+};
+
 export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
@@ -36,7 +50,7 @@ export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
     return JSON.parse(trimmed) as unknown;
   } catch {
     const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/u);
-    if (fenced?.[1]) return JSON.parse(fenced[1]) as unknown;
+    if (fenced?.[1]) return parseJsonCandidate(fenced[1], trimmed);
 
     const firstObject = trimmed.indexOf("{");
     const firstArray = trimmed.indexOf("[");
@@ -49,6 +63,6 @@ export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
     if (end < start) {
       throw new WorkflowOutputParseError("workflow worker output contained incomplete JSON", trimmed);
     }
-    return JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+    return parseJsonCandidate(trimmed.slice(start, end + 1), trimmed);
   }
 };

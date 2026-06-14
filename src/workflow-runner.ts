@@ -1,7 +1,7 @@
 import { Effect, Either } from "effect";
 import { decodeTaskOutput, type AnyWorkflowDefinition, type AnyWorkflowTask, type WorkflowRuntime, type WorkflowRuntimeOptions } from "./workflows.js";
 import { workflowTaskIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
-import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskExecution {
   readonly output: unknown;
@@ -161,6 +161,11 @@ const appendRepairPrompt = (task: AnyWorkflowTask, repairPrompt: string): AnyWor
 const schemaRepairPrompt = (error: unknown): string =>
   `Your previous response failed the output schema decode. Preserve the substance of your answer, but re-express it so it exactly satisfies the requested JSON shape. Decode error: ${errorMessage(error)}`;
 
+const parseRepairPrompt = (error: WorkflowOutputParseError): string => {
+  const rawText = error.rawText?.slice(0, 4_000);
+  return `Your previous response was not valid JSON, so Prism could not parse it before schema validation. Preserve the substance of your answer, but re-express it as exactly one valid JSON value. Parse error: ${error.message}${rawText !== undefined ? `\n\nPrevious raw output excerpt:\n${rawText}` : ""}`;
+};
+
 const runFinishCriteria = async (input: {
   readonly task: AnyWorkflowTask;
   readonly output: unknown;
@@ -313,6 +318,23 @@ const executeWorkflowTask = async (input: {
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
+        if (error instanceof WorkflowOutputParseError && repairs < maxRepairs) {
+          recordEvent(store, runId, task.id, "task.decode.failed", {
+            attempt: repairs,
+            error: error.message,
+            ...(error.rawText !== undefined ? { rawText: error.rawText } : {}),
+          });
+          repairs += 1;
+          const repairPrompt = parseRepairPrompt(error);
+          recordEvent(store, runId, task.id, "task.repair.started", {
+            attempt: repairs,
+            criterion: "output-json-parse",
+            mode: "new-executor-invocation",
+            repairPrompt,
+          });
+          attemptTask = appendRepairPrompt(task, repairPrompt);
+          continue;
+        }
         const output: Record<string, unknown> = { error: errorMessage(error) };
         const rawText = (error as { readonly rawText?: unknown } | null | undefined)?.rawText;
         if (rawText !== undefined) {

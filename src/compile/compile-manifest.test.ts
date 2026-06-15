@@ -109,6 +109,13 @@ describe("compile manifest writer", () => {
       { harness: "opencode", scope: "project" },
     ]);
     expect(verifyCompileManifestHash(pruned)).toBe(true);
+    // tools top-level populated from grants (minimal plugin+name or plugin+toolspace+name, source-free)
+    expect(Object.keys(pruned.tools || {}).sort()).toEqual(["forge:read_file", "forge:run_shell"]);
+    expect(pruned.tools?.["forge:run_shell"]).toEqual({ plugin: "forge", name: "run_shell" });
+    expect(pruned.tools?.["forge:read_file"]).toEqual({ plugin: "forge", name: "read_file" });
+    expect(JSON.stringify(pruned.tools)).not.toContain("sourcePath");
+    expect(JSON.stringify(pruned.tools)).not.toContain("input");
+    expect(JSON.stringify(pruned.tools)).not.toContain("handle");
     // modelspaces populated from bindings (no source paths)
     expect(Object.keys(pruned.modelspaces).sort()).toEqual(["forge:models"]);
     expect(pruned.modelspaces["forge:models"]).toEqual({
@@ -136,6 +143,9 @@ describe("compile manifest writer", () => {
     // no sourcePath etc in manifest orbit entries
     expect(JSON.stringify(withOrbits.orbits)).not.toContain("sourcePath");
     expect(verifyCompileManifestHash(withOrbits)).toBe(true);
+    // tools also populated (from the agent grants in this build)
+    expect(Object.keys(withOrbits.tools || {}).length).toBeGreaterThan(0);
+    expect(JSON.stringify(withOrbits.tools)).not.toContain("sourcePath");
   });
 
   test("commit/read round-trips deterministically and corrupt files quarantine", async () => {

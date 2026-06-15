@@ -17,6 +17,8 @@ import {
   type CompileManifestSkillspace,
   type CompileManifestOrbit,
   type CompileManifestTrait,
+  type CompileManifestCanonicalTool,
+  type CompileManifestToolspaceTool,
   type HarnessId,
   type HarnessScope,
 } from "@skastr0/prism-core/compile-manifest";
@@ -324,6 +326,55 @@ export const buildCompileManifestForTarget = (options: {
   }
   const traits: Record<string, CompileManifestTrait> = traitAccum;
 
+  // Derive top-level tools collection (canonical + toolspace tools) post-merge from
+  // the agent composed.grants.tools + perTarget.toolGrants strings (manifest truth only;
+  // no source paths, no registry, no input/output/handle, no permissions/MCP details).
+  // Uses parseNamedRef + parseSpaceItemRef(ref, '/') to classify "plugin:name" canon vs
+  // "plugin:space/name" toolspace. Keyed `${owner}:${name}` or `${owner}:${space}/${name}`.
+  // Populated for workflow refs parity; identity-only.
+  const toolAccum: Record<
+    string,
+    { plugin: string; name?: string; toolspace?: string }
+  > = {};
+  for (const agent of Object.values(agents)) {
+    const allToolRefs = new Set<string>([
+      ...agent.composed.grants.tools,
+      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.toolGrants),
+    ]);
+    for (const ref of allToolRefs) {
+      const named = parseNamedRef(ref);
+      const space = parseSpaceItemRef(ref, "/");
+      if (space) {
+        const owner = space.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${space.space}/${space.name}`;
+        if (!toolAccum[key]) {
+          toolAccum[key] = { plugin: owner, toolspace: space.space, name: space.name };
+        }
+      } else {
+        const owner = named.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${named.name}`;
+        if (!toolAccum[key]) {
+          toolAccum[key] = { plugin: owner, name: named.name };
+        }
+      }
+    }
+  }
+  const tools: Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> = {};
+  for (const [key, acc] of Object.entries(toolAccum)) {
+    if (acc.toolspace && acc.name) {
+      tools[key] = {
+        plugin: acc.plugin,
+        toolspace: acc.toolspace,
+        name: acc.name,
+      };
+    } else if (acc.name) {
+      tools[key] = {
+        plugin: acc.plugin,
+        name: acc.name,
+      };
+    }
+  }
+
   // Derive top-level orbits Record (keyed "plugin:name") from the authoritative
   // orbits list when passed (this target compile targeted orbits for the plugin).
   // Only plugin+name (no sourcePath, no phases/body). Prune only this plugin's
@@ -368,6 +419,7 @@ export const buildCompileManifestForTarget = (options: {
     agents,
     modelspaces,
     skills,
+    tools,
     traits,
     orbits,
   });

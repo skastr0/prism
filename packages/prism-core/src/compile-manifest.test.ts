@@ -85,6 +85,11 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
       skills: ["testing"],
     },
   },
+  tools: {
+    "forge:workspace/run_shell": { plugin: "forge", toolspace: "workspace", name: "run_shell" },
+    "core:create_commit": { plugin: "core", name: "create_commit" },
+    "agent-core:repo/inspect": { plugin: "agent-core", toolspace: "repo", name: "inspect" },
+  },
   traits: {
     "forge:reviewable": { id: "forge:reviewable", ref: "reviewable" },
     "core:committable": { id: "core:committable", ref: "core:committable" },
@@ -105,6 +110,13 @@ test("compile manifest decodes and encodes deterministically", () => {
   expect(encodeCompileManifest(decoded.right)).toBe(encoded);
   expect(verifyCompileManifestHash(decoded.right)).toBe(true);
   expect(verifyAgentManifestHash(decoded.right.agents["forge:builder"]!)).toBe(true);
+  // tools populated as minimal identity refs, source-path free
+  expect(Object.keys(decoded.right.tools).sort()).toEqual(["agent-core:repo/inspect", "core:create_commit", "forge:workspace/run_shell"]);
+  expect(decoded.right.tools["forge:workspace/run_shell"]).toEqual({ plugin: "forge", toolspace: "workspace", name: "run_shell" });
+  expect(decoded.right.tools["core:create_commit"]).toEqual({ plugin: "core", name: "create_commit" });
+  expect(JSON.stringify(decoded.right.tools)).not.toContain("sourcePath");
+  expect(JSON.stringify(decoded.right.tools)).not.toContain("input");
+  expect(JSON.stringify(decoded.right.tools)).not.toContain("handle");
 });
 
 test("compile manifest sorts records and arrays into stable bytes", () => {
@@ -145,6 +157,11 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
       },
       "forge:build": manifest.skills["forge:build"]!,
     },
+    tools: {
+      "core:create_commit": manifest.tools["core:create_commit"]!,
+      "agent-core:repo/inspect": manifest.tools["agent-core:repo/inspect"]!,
+      "forge:workspace/run_shell": manifest.tools["forge:workspace/run_shell"]!,
+    },
     traits: {
       "forge:reviewable": manifest.traits["forge:reviewable"]!,
       "core:committable": manifest.traits["core:committable"]!,
@@ -156,6 +173,10 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
   };
 
   expect(encodeCompileManifest(scrambled)).toBe(encodeCompileManifest(manifest));
+  // tools stability: no sourcePath, schemas, or executable details in serialized form
+  expect(JSON.stringify(encodeCompileManifest(manifest))).not.toContain("sourcePath");
+  expect(JSON.stringify(encodeCompileManifest(manifest))).not.toContain(".tool.ts");
+  expect(JSON.stringify(encodeCompileManifest(manifest))).not.toContain("handle");
 });
 
 test("compile manifest accessors expose agent and target slices", () => {
@@ -200,4 +221,5 @@ test("empty compile manifest carries a self-consistent hash", () => {
 
   expect(manifest.manifestHash).toBe(computeCompileManifestHash(manifest));
   expect(verifyCompileManifestHash(manifest)).toBe(true);
+  expect(manifest.tools).toEqual({});
 });

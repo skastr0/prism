@@ -50,6 +50,19 @@ export const CompileManifestOrbitSchema = Schema.Struct({
 });
 export type CompileManifestOrbit = typeof CompileManifestOrbitSchema.Type;
 
+export const CompileManifestCanonicalToolSchema = Schema.Struct({
+  plugin: Schema.String,
+  name: Schema.String,
+});
+export type CompileManifestCanonicalTool = typeof CompileManifestCanonicalToolSchema.Type;
+
+export const CompileManifestToolspaceToolSchema = Schema.Struct({
+  plugin: Schema.String,
+  toolspace: Schema.String,
+  name: Schema.String,
+});
+export type CompileManifestToolspaceTool = typeof CompileManifestToolspaceToolSchema.Type;
+
 export const CompileManifestGrantsSchema = Schema.Struct({
   tools: Schema.Array(Schema.String),
   skills: Schema.Array(Schema.String),
@@ -116,6 +129,7 @@ const CompileManifestV1Schema = Schema.Struct({
   agents: Schema.Record({ key: Schema.String, value: CompileManifestAgentSchema }),
   modelspaces: Schema.Record({ key: Schema.String, value: CompileManifestModelspaceSchema }),
   skills: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema) }),
+  tools: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestToolspaceToolSchema, CompileManifestCanonicalToolSchema) }),
   traits: Schema.Record({ key: Schema.String, value: CompileManifestTraitSchema }),
   orbits: Schema.Record({ key: Schema.String, value: CompileManifestOrbitSchema }),
   manifestHash: Schema.String,
@@ -196,6 +210,21 @@ const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifes
       : left.plugin.localeCompare(right.plugin),
   );
 
+const sortTools = (tools: ReadonlyArray<CompileManifestCanonicalTool | CompileManifestToolspaceTool>): (CompileManifestCanonicalTool | CompileManifestToolspaceTool)[] =>
+  [...tools].sort((left, right) =>
+    left.plugin === right.plugin
+      ? ("toolspace" in left && left.toolspace !== undefined
+          ? ("toolspace" in right && right.toolspace !== undefined
+              ? (left.toolspace === right.toolspace
+                  ? left.name.localeCompare(right.name)
+                  : left.toolspace.localeCompare(right.toolspace))
+              : -1)
+          : ("toolspace" in right && right.toolspace !== undefined
+              ? 1
+              : left.name.localeCompare(right.name)))
+      : left.plugin.localeCompare(right.plugin),
+  );
+
 const normalizeAgentForEncoding = (agent: CompileManifestAgent): CompileManifestAgent => ({
   ...agent,
   traits: sortTraits(agent.traits),
@@ -232,6 +261,18 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
           plugin: entry.plugin,
           skillspace: entry.skillspace,
           skills: sortStrings(entry.skills),
+        }
+      : {
+          plugin: entry.plugin,
+          name: (entry as { readonly name: string }).name,
+        },
+  ),
+  tools: sortRecord(manifest.tools, (entry) =>
+    "toolspace" in entry && entry.toolspace !== undefined
+      ? {
+          plugin: entry.plugin,
+          toolspace: entry.toolspace,
+          name: (entry as { readonly name: string }).name,
         }
       : {
           plugin: entry.plugin,
@@ -295,6 +336,7 @@ export const emptyCompileManifest = (): CompileManifest => {
     agents: {},
     modelspaces: {},
     skills: {},
+    tools: {},
     traits: {},
     orbits: {},
     manifestHash: "",

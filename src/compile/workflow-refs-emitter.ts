@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
-import type { CompileManifest, CompileManifestAgent, CompileManifestOrbit, CompileManifestTrait } from "./compile-manifest.js";
+import type { CompileManifest, CompileManifestAgent, CompileManifestOrbit, CompileManifestTrait, CompileManifestCanonicalTool, CompileManifestToolspaceTool } from "./compile-manifest.js";
 import type { DesiredRoot } from "../sync/desired.js";
 
 export const WORKFLOW_REFS_HARNESS = "prism-workflows";
@@ -21,6 +21,9 @@ export const workflowTraitsPath = (projectPath: string): string =>
 
 export const workflowOrbitsPath = (projectPath: string): string =>
   join(workflowRefsRoot(projectPath), "generated", "workflows", "orbits.ts");
+
+export const workflowToolsPath = (projectPath: string): string =>
+  join(workflowRefsRoot(projectPath), "generated", "workflows", "tools.ts");
 
 const camelKey = (value: string): string => {
   const parts = value
@@ -491,6 +494,70 @@ const collectUsedOrbits = (
   );
 };
 
+const collectUsedTools = (
+  manifest: CompileManifest,
+): Array<{ plugin: string; name: string } | { plugin: string; toolspace: string; name: string }> => {
+  const entries: Array<{ plugin: string; name: string } | { plugin: string; toolspace: string; name: string }> = [];
+  const seen = new Set<string>();
+
+  const tRec = (manifest as any).tools as Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> | undefined;
+  if (tRec && Object.keys(tRec).length > 0) {
+    for (const entry of Object.values(tRec)) {
+      const k = "toolspace" in entry && entry.toolspace !== undefined
+        ? `${entry.plugin}:${entry.toolspace}/${entry.name}`
+        : `${entry.plugin}:${(entry as { readonly name: string }).name}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        entries.push({ ...entry } as any);
+      }
+    }
+  } else {
+    // Fallback: derive from agent grants.tools + perTarget.toolGrants (manifest source of truth)
+    const toolAccum: Record<
+      string,
+      { plugin: string; name?: string; toolspace?: string }
+    > = {};
+    for (const agent of Object.values(manifest.agents)) {
+      const allRefs = new Set<string>([
+        ...agent.composed.grants.tools,
+        ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.toolGrants),
+      ]);
+      for (const ref of allRefs) {
+        const named = parseNamedRef(ref);
+        const space = parseSpaceItemRef(ref, "/");
+        let owner = named.pluginPrefix ?? agent.plugin;
+        if (space) {
+          owner = space.pluginPrefix ?? agent.plugin;
+          const key = `${owner}:${space.space}/${space.name}`;
+          if (!toolAccum[key]) {
+            toolAccum[key] = { plugin: owner, toolspace: space.space, name: space.name };
+          }
+        } else {
+          const key = `${owner}:${named.name}`;
+          if (!toolAccum[key]) {
+            toolAccum[key] = { plugin: owner, name: named.name };
+          }
+        }
+      }
+    }
+    for (const [_key, acc] of Object.entries(toolAccum)) {
+      if (acc.toolspace && acc.name) {
+        entries.push({ plugin: acc.plugin, toolspace: acc.toolspace, name: acc.name });
+      } else if (acc.name) {
+        entries.push({ plugin: acc.plugin, name: acc.name });
+      }
+    }
+  }
+
+  return entries.sort((a, b) =>
+    a.plugin === b.plugin
+      ? ((a as any).toolspace ?? (a as any).name ?? "") === ((b as any).toolspace ?? (b as any).name ?? "")
+        ? 0
+        : ((a as any).toolspace ?? (a as any).name ?? "").localeCompare(((b as any).toolspace ?? (b as any).name ?? ""))
+      : a.plugin.localeCompare(b.plugin),
+  );
+};
+
 export const renderWorkflowOrbitsModule = (options: {
   readonly manifest: CompileManifest;
 }): string => {
@@ -541,6 +608,84 @@ ${body}
 `;
 };
 
+export const renderWorkflowToolsModule = (options: {
+  readonly manifest: CompileManifest;
+}): string => {
+  const used = collectUsedTools(options.manifest);
+
+  const byPlugin: Record<string, Record<string, any>> = {};
+  for (const entry of used) {
+    const pk = camelKey(entry.plugin);
+    if (!byPlugin[pk]) byPlugin[pk] = {};
+    if ("toolspace" in entry && entry.toolspace) {
+      const tsk = camelKey(entry.toolspace);
+      if (!byPlugin[pk][tsk]) byPlugin[pk][tsk] = {};
+      const nk = camelKey(entry.name);
+      byPlugin[pk][tsk][nk] = {
+        kind: "toolspace-tool-ref",
+        plugin: entry.plugin,
+        toolspace: entry.toolspace,
+        name: entry.name,
+      };
+    } else {
+      const nk = camelKey((entry as { name: string }).name);
+      byPlugin[pk][nk] = {
+        kind: "canonical-tool-ref",
+        plugin: entry.plugin,
+        name: (entry as { name: string }).name,
+      };
+    }
+  }
+
+  const pluginBlocks = Object.keys(byPlugin)
+    .sort()
+    .map((pk) => {
+      const group = byPlugin[pk]!;
+      const lines = Object.keys(group)
+        .sort()
+        .map((k) => {
+          const val = group[k];
+          if (val && typeof val === "object" && !("kind" in val)) {
+            // toolspace sub-namespace: 3-level nesting
+            const innerLines = Object.keys(val)
+              .sort()
+              .map((nk) => `      ${JSON.stringify(nk)}: ${JSON.stringify(val[nk])}`)
+              .join(",\n");
+            return `    ${JSON.stringify(k)}: {\n${innerLines}\n    }`;
+          } else {
+            return `    ${JSON.stringify(k)}: ${JSON.stringify(val)}`;
+          }
+        })
+        .join(",\n");
+      return `  ${JSON.stringify(pk)}: {\n${lines}\n  }`;
+    });
+
+  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
+
+  return `/**
+ * Generated by Prism. Do not edit.
+ * Source: compile manifest ${options.manifest.manifestHash}
+ */
+
+export interface WorkflowCanonicalToolRef {
+  readonly kind: "canonical-tool-ref";
+  readonly plugin: string;
+  readonly name: string;
+}
+
+export interface WorkflowToolspaceToolRef {
+  readonly kind: "toolspace-tool-ref";
+  readonly plugin: string;
+  readonly toolspace: string;
+  readonly name: string;
+}
+
+export const tools = {
+${body}
+} as const satisfies Record<string, Record<string, WorkflowCanonicalToolRef | Record<string, WorkflowToolspaceToolRef>>>;
+`;
+};
+
 export const planWorkflowRefsEmit = (options: {
   readonly projectPath: string;
   readonly manifest: CompileManifest;
@@ -581,6 +726,13 @@ export const planWorkflowRefsEmit = (options: {
       {
         targetPath: workflowOrbitsPath(options.projectPath),
         content: renderWorkflowOrbitsModule({
+          manifest: options.manifest,
+        }),
+        plugin: WORKFLOW_REFS_HARNESS,
+      },
+      {
+        targetPath: workflowToolsPath(options.projectPath),
+        content: renderWorkflowToolsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,

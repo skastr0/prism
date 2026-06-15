@@ -85,6 +85,10 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
       skills: ["testing"],
     },
   },
+  traits: {
+    "forge:reviewable": { id: "forge:reviewable", ref: "reviewable" },
+    "core:committable": { id: "core:committable", ref: "core:committable" },
+  },
 });
 
 test("compile manifest decodes and encodes deterministically", () => {
@@ -136,6 +140,10 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
         skills: [...manifest.skills["agent-core:core-skills"]!.skills].reverse(),
       },
       "forge:build": manifest.skills["forge:build"]!,
+    },
+    traits: {
+      "forge:reviewable": manifest.traits["forge:reviewable"]!,
+      "core:committable": manifest.traits["core:committable"]!,
     },
   };
 

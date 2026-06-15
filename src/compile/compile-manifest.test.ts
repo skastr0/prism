@@ -116,6 +116,9 @@ describe("compile manifest writer", () => {
       modelspace: "models",
       profiles: ["builder"],
     });
+    // traits populated from per-agent traits only (deduped by id, source-path free)
+    expect(Object.keys(pruned.traits).sort()).toEqual(["forge:builder"]);
+    expect(pruned.traits["forge:builder"]).toEqual({ id: "forge:builder", ref: "builder" });
   });
 
   test("commit/read round-trips deterministically and corrupt files quarantine", async () => {

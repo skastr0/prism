@@ -15,6 +15,7 @@ import {
   type CompileManifestManagedSkill,
   type CompileManifestModelspace,
   type CompileManifestSkillspace,
+  type CompileManifestTrait,
   type HarnessId,
   type HarnessScope,
 } from "@skastr0/prism-core/compile-manifest";
@@ -305,6 +306,21 @@ export const buildCompileManifestForTarget = (options: {
     }
   }
 
+  // Derive top-level traits Record keyed by id from composed agents' traits only.
+  // Dedupe by id (preserve first {id,ref}); no registry scans, no source paths, no
+  // plugin source reads. This provides manifest truth for workflow trait refs.
+  // Inserted after skills derivation (modelspaces/skills precedent) and before any
+  // registries/plugins collection.
+  const traitAccum: Record<string, CompileManifestTrait> = {};
+  for (const agent of Object.values(agents)) {
+    for (const t of agent.traits) {
+      if (!traitAccum[t.id]) {
+        traitAccum[t.id] = { id: t.id, ref: t.ref };
+      }
+    }
+  }
+  const traits: Record<string, CompileManifestTrait> = traitAccum;
+
   const registries = collectPluginRegistries(options.registry);
   const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
   const livePluginNames = new Set(Object.values(agents).map((agent) => agent.plugin));
@@ -328,6 +344,7 @@ export const buildCompileManifestForTarget = (options: {
     agents,
     modelspaces,
     skills,
+    traits,
   });
 };
 

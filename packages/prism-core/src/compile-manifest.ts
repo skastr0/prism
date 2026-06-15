@@ -110,6 +110,7 @@ const CompileManifestV1Schema = Schema.Struct({
   agents: Schema.Record({ key: Schema.String, value: CompileManifestAgentSchema }),
   modelspaces: Schema.Record({ key: Schema.String, value: CompileManifestModelspaceSchema }),
   skills: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema) }),
+  traits: Schema.Record({ key: Schema.String, value: CompileManifestTraitSchema }),
   manifestHash: Schema.String,
 });
 
@@ -223,6 +224,7 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
           name: (entry as { readonly name: string }).name,
         },
   ),
+  traits: sortRecord(manifest.traits, (trait) => trait),
   manifestHash: manifest.manifestHash,
 });
 
@@ -278,6 +280,7 @@ export const emptyCompileManifest = (): CompileManifest => {
     agents: {},
     modelspaces: {},
     skills: {},
+    traits: {},
     manifestHash: "",
   };
   return { ...manifest, manifestHash: computeCompileManifestHash(manifest) };

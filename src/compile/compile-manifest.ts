@@ -12,9 +12,13 @@ import {
   verifyCompileManifestHash,
   type CompileManifest,
   type CompileManifestAgent,
+  type CompileManifestManagedSkill,
+  type CompileManifestModelspace,
+  type CompileManifestSkillspace,
   type HarnessId,
   type HarnessScope,
 } from "@skastr0/prism-core/compile-manifest";
+import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
 import { ensureDir, exists, readFile, writeFile } from "../fs.js";
 import { withSnapshotLock } from "../state/lock.js";
@@ -217,6 +221,90 @@ export const buildCompileManifestForTarget = (options: {
     agents[id] = { ...updated, manifestHash: computeAgentManifestHash(updated) };
   }
 
+  // Derive top-level modelspaces collection from agent composed.modelBindings.
+  // Smallest additive surface for workflow refs; populated only from already-composed
+  // bindings (no plugin source reads). Keyed by "ownerPlugin:localModelspace" for
+  // collision-free stable lookup. Profiles collected per (plugin, modelspace).
+  const modelspaceAccum: Record<string, { plugin: string; modelspace: string; profiles: Set<string> }> = {};
+  for (const agent of Object.values(agents)) {
+    const mb = agent.composed.modelBindings;
+    if (mb.modelspace && mb.profile) {
+      let owner = mb.modelspace;
+      let local = mb.modelspace;
+      const colon = mb.modelspace.indexOf(":");
+      if (colon !== -1) {
+        owner = mb.modelspace.slice(0, colon);
+        local = mb.modelspace.slice(colon + 1);
+      } else {
+        owner = agent.plugin;
+        local = mb.modelspace;
+      }
+      const key = `${owner}:${local}`;
+      if (!modelspaceAccum[key]) {
+        modelspaceAccum[key] = { plugin: owner, modelspace: local, profiles: new Set() };
+      }
+      modelspaceAccum[key].profiles.add(mb.profile);
+    }
+  }
+  const modelspaces: Record<string, CompileManifestModelspace> = {};
+  for (const [key, acc] of Object.entries(modelspaceAccum)) {
+    modelspaces[key] = {
+      plugin: acc.plugin,
+      modelspace: acc.modelspace,
+      profiles: sortStrings([...acc.profiles]),
+    };
+  }
+
+  // Derive top-level skills collection (managed + skillspaces) post-merge from
+  // the agent skills/grants/allowedSkills strings (manifest truth only; no source
+  // paths, no registry scans). Uses parseNamedRef/parseSpaceItemRef to classify
+  // bare/prefixed managed vs p:space/name skillspace refs. Keyed "owner:local"
+  // for collision-free lookup. Parallel to modelspaces derivation.
+  const skillAccum: Record<
+    string,
+    { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
+  > = {};
+  for (const agent of Object.values(agents)) {
+    const allSkillRefs = new Set<string>([
+      ...agent.skills,
+      ...agent.composed.grants.skills,
+      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.allowedSkills),
+    ]);
+    for (const ref of allSkillRefs) {
+      const named = parseNamedRef(ref);
+      const space = parseSpaceItemRef(ref, "/");
+      if (space) {
+        const owner = space.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${space.space}`;
+        if (!skillAccum[key]) {
+          skillAccum[key] = { plugin: owner, skillspace: space.space, skills: new Set() };
+        }
+        skillAccum[key].skills!.add(space.name);
+      } else {
+        const owner = named.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${named.name}`;
+        if (!skillAccum[key]) {
+          skillAccum[key] = { plugin: owner, name: named.name };
+        }
+      }
+    }
+  }
+  const skills: Record<string, CompileManifestManagedSkill | CompileManifestSkillspace> = {};
+  for (const [key, acc] of Object.entries(skillAccum)) {
+    if (acc.skillspace) {
+      skills[key] = {
+        plugin: acc.plugin,
+        skillspace: acc.skillspace,
+        skills: sortStrings([...acc.skills!]),
+      };
+    } else if (acc.name) {
+      skills[key] = {
+        plugin: acc.plugin,
+        name: acc.name,
+      };
+    }
+  }
+
   const registries = collectPluginRegistries(options.registry);
   const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
   const livePluginNames = new Set(Object.values(agents).map((agent) => agent.plugin));
@@ -238,6 +326,8 @@ export const buildCompileManifestForTarget = (options: {
     plugins,
     compileTargets: recomputeCoverage(agents),
     agents,
+    modelspaces,
+    skills,
   });
 };
 

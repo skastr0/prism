@@ -109,6 +109,13 @@ describe("compile manifest writer", () => {
       { harness: "opencode", scope: "project" },
     ]);
     expect(verifyCompileManifestHash(pruned)).toBe(true);
+    // modelspaces populated from bindings (no source paths)
+    expect(Object.keys(pruned.modelspaces).sort()).toEqual(["forge:models"]);
+    expect(pruned.modelspaces["forge:models"]).toEqual({
+      plugin: "forge",
+      modelspace: "models",
+      profiles: ["builder"],
+    });
   });
 
   test("commit/read round-trips deterministically and corrupt files quarantine", async () => {

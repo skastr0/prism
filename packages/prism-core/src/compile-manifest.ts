@@ -56,6 +56,26 @@ export const CompileManifestModelBindingsSchema = Schema.Struct({
 });
 export type CompileManifestModelBindings = typeof CompileManifestModelBindingsSchema.Type;
 
+export const CompileManifestModelspaceSchema = Schema.Struct({
+  plugin: Schema.String,
+  modelspace: Schema.String,
+  profiles: Schema.Array(Schema.String),
+});
+export type CompileManifestModelspace = typeof CompileManifestModelspaceSchema.Type;
+
+export const CompileManifestManagedSkillSchema = Schema.Struct({
+  plugin: Schema.String,
+  name: Schema.String,
+});
+export type CompileManifestManagedSkill = typeof CompileManifestManagedSkillSchema.Type;
+
+export const CompileManifestSkillspaceSchema = Schema.Struct({
+  plugin: Schema.String,
+  skillspace: Schema.String,
+  skills: Schema.Array(Schema.String),
+});
+export type CompileManifestSkillspace = typeof CompileManifestSkillspaceSchema.Type;
+
 const JsonRecordSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
 
 export const CompileManifestPerTargetSchema = Schema.Struct({
@@ -88,6 +108,8 @@ const CompileManifestV1Schema = Schema.Struct({
   plugins: Schema.Record({ key: Schema.String, value: CompileManifestPluginSchema }),
   compileTargets: Schema.Array(CompileManifestTargetSchema),
   agents: Schema.Record({ key: Schema.String, value: CompileManifestAgentSchema }),
+  modelspaces: Schema.Record({ key: Schema.String, value: CompileManifestModelspaceSchema }),
+  skills: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema) }),
   manifestHash: Schema.String,
 });
 
@@ -184,6 +206,23 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
   plugins: sortRecord(manifest.plugins, (plugin) => plugin),
   compileTargets: sortTargets(manifest.compileTargets),
   agents: sortRecord(manifest.agents, normalizeAgentForEncoding),
+  modelspaces: sortRecord(manifest.modelspaces, (entry) => ({
+    plugin: entry.plugin,
+    modelspace: entry.modelspace,
+    profiles: sortStrings(entry.profiles),
+  })),
+  skills: sortRecord(manifest.skills, (entry) =>
+    "skillspace" in entry && entry.skillspace !== undefined
+      ? {
+          plugin: entry.plugin,
+          skillspace: entry.skillspace,
+          skills: sortStrings(entry.skills),
+        }
+      : {
+          plugin: entry.plugin,
+          name: (entry as { readonly name: string }).name,
+        },
+  ),
   manifestHash: manifest.manifestHash,
 });
 
@@ -237,6 +276,8 @@ export const emptyCompileManifest = (): CompileManifest => {
     plugins: {},
     compileTargets: [],
     agents: {},
+    modelspaces: {},
+    skills: {},
     manifestHash: "",
   };
   return { ...manifest, manifestHash: computeCompileManifestHash(manifest) };

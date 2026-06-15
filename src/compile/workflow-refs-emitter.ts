@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
 import type { CompileManifest, CompileManifestAgent } from "./compile-manifest.js";
 import type { DesiredRoot } from "../sync/desired.js";
 
@@ -8,6 +9,12 @@ export const workflowRefsRoot = (projectPath: string): string => join(projectPat
 
 export const workflowAgentsPath = (projectPath: string): string =>
   join(workflowRefsRoot(projectPath), "generated", "workflows", "agents.ts");
+
+export const workflowModelsPath = (projectPath: string): string =>
+  join(workflowRefsRoot(projectPath), "generated", "workflows", "models.ts");
+
+export const workflowSkillsPath = (projectPath: string): string =>
+  join(workflowRefsRoot(projectPath), "generated", "workflows", "skills.ts");
 
 const camelKey = (value: string): string => {
   const parts = value
@@ -22,6 +29,8 @@ const camelKey = (value: string): string => {
   ].join("");
 };
 
+const sortStrings = (values: Iterable<string>): string[] => [...values].sort();
+
 const pluginNames = (manifest: CompileManifest): string[] =>
   [...new Set(Object.values(manifest.agents).map((agent) => agent.plugin))].sort();
 
@@ -32,6 +41,128 @@ const pluginAgents = (
   Object.values(manifest.agents)
     .filter((agent) => agent.plugin === pluginName)
     .sort((left, right) => left.name.localeCompare(right.name));
+
+const collectUsedModelProfiles = (
+  manifest: CompileManifest,
+): Array<{ plugin: string; modelspace: string; profile: string }> => {
+  const entries: Array<{ plugin: string; modelspace: string; profile: string }> = [];
+  const seen = new Set<string>();
+
+  const msRec = manifest.modelspaces;
+  if (msRec && Object.keys(msRec).length > 0) {
+    for (const entry of Object.values(msRec)) {
+      for (const profile of entry.profiles ?? []) {
+        const k = `${entry.plugin}:${entry.modelspace}:${profile}`;
+        if (!seen.has(k)) {
+          seen.add(k);
+          entries.push({ plugin: entry.plugin, modelspace: entry.modelspace, profile });
+        }
+      }
+    }
+  } else {
+    // Fallback: derive from agent bindings (manifest is source of truth either way)
+    for (const agent of Object.values(manifest.agents)) {
+      const mb = agent.composed.modelBindings;
+      if (mb.modelspace && mb.profile) {
+        let p = agent.plugin;
+        let ms = mb.modelspace;
+        const colon = mb.modelspace.indexOf(":");
+        if (colon !== -1) {
+          p = mb.modelspace.slice(0, colon);
+          ms = mb.modelspace.slice(colon + 1);
+        }
+        const k = `${p}:${ms}:${mb.profile}`;
+        if (!seen.has(k)) {
+          seen.add(k);
+          entries.push({ plugin: p, modelspace: ms, profile: mb.profile });
+        }
+      }
+    }
+  }
+
+  return entries.sort((a, b) =>
+    a.plugin === b.plugin
+      ? a.modelspace === b.modelspace
+        ? a.profile.localeCompare(b.profile)
+        : a.modelspace.localeCompare(b.modelspace)
+      : a.plugin.localeCompare(b.plugin),
+  );
+};
+
+const collectUsedSkills = (
+  manifest: CompileManifest,
+): Array<{ plugin: string; name?: string; skillspace?: string; skills?: readonly string[] }> => {
+  const entries: Array<{ plugin: string; name?: string; skillspace?: string; skills?: readonly string[] }> = [];
+  const seen = new Set<string>();
+
+  const skRec = manifest.skills;
+  if (skRec && Object.keys(skRec).length > 0) {
+    for (const entry of Object.values(skRec)) {
+      const k = "skillspace" in entry && entry.skillspace !== undefined
+        ? `${entry.plugin}:${entry.skillspace}`
+        : `${entry.plugin}:${(entry as { readonly name?: string }).name ?? ""}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        entries.push({ ...entry });
+      }
+    }
+  } else {
+    // Fallback: derive from agent skill strings (manifest is source of truth either way)
+    const skillAccum: Record<
+      string,
+      { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
+    > = {};
+    for (const agent of Object.values(manifest.agents)) {
+      const allRefs = new Set<string>([
+        ...agent.skills,
+        ...agent.composed.grants.skills,
+        ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.allowedSkills),
+      ]);
+      for (const ref of allRefs) {
+        const named = parseNamedRef(ref);
+        const space = parseSpaceItemRef(ref, "/");
+        let owner = named.pluginPrefix ?? agent.plugin;
+        let key: string;
+        if (space) {
+          owner = space.pluginPrefix ?? agent.plugin;
+          key = `${owner}:${space.space}`;
+          if (!skillAccum[key]) {
+            skillAccum[key] = { plugin: owner, skillspace: space.space, skills: new Set() };
+          }
+          skillAccum[key]!.skills!.add(space.name);
+        } else {
+          key = `${owner}:${named.name}`;
+          if (!skillAccum[key]) {
+            skillAccum[key] = { plugin: owner, name: named.name };
+          }
+        }
+      }
+    }
+    for (const [_key, acc] of Object.entries(skillAccum)) {
+      let item: { plugin: string; name?: string; skillspace?: string; skills?: readonly string[] };
+      if (acc.skillspace) {
+        item = {
+          plugin: acc.plugin,
+          skillspace: acc.skillspace,
+          skills: sortStrings(acc.skills!),
+        };
+      } else if (acc.name) {
+        item = { plugin: acc.plugin, name: acc.name };
+      } else {
+        continue;
+      }
+      entries.push(item);
+    }
+  }
+
+  return entries.sort((a, b) =>
+    a.plugin === b.plugin
+      ? (a.skillspace ?? a.name ?? "") === (b.skillspace ?? b.name ?? "")
+        ? 0
+        : (a.skillspace ?? a.name ?? "").localeCompare(b.skillspace ?? b.name ?? "")
+      : a.plugin.localeCompare(b.plugin),
+  );
+};
 
 const agentInstalls = (agent: CompileManifestAgent): string[] =>
   Object.keys(agent.composed.perTarget).sort();
@@ -108,6 +239,140 @@ ${namespaces.join(",\n")}
 `;
 };
 
+export const renderWorkflowModelsModule = (options: {
+  readonly manifest: CompileManifest;
+}): string => {
+  const profiles = collectUsedModelProfiles(options.manifest);
+
+  const byPlugin: Record<string, Record<string, Record<string, any>>> = {};
+  for (const { plugin, modelspace, profile } of profiles) {
+    const pk = camelKey(plugin);
+    const msk = camelKey(modelspace);
+    const profk = camelKey(profile);
+    if (!byPlugin[pk]) byPlugin[pk] = {};
+    if (!byPlugin[pk][msk]) byPlugin[pk][msk] = {};
+    byPlugin[pk][msk][profk] = {
+      kind: "model-profile-ref",
+      plugin,
+      modelspace,
+      profile,
+    };
+  }
+
+  const pluginBlocks = Object.keys(byPlugin)
+    .sort()
+    .map((pk) => {
+      const msGroup = byPlugin[pk]!;
+      const msBlocks = Object.keys(msGroup)
+        .sort()
+        .map((msk) => {
+          const profGroup = msGroup[msk]!;
+          const profLines = Object.keys(profGroup)
+            .sort()
+            .map((profk) => {
+              const ref = profGroup[profk];
+              return `      ${JSON.stringify(profk)}: ${JSON.stringify(ref)}`;
+            })
+            .join(",\n");
+          return `    ${JSON.stringify(msk)}: {\n${profLines}\n    }`;
+        })
+        .join(",\n");
+      return `  ${JSON.stringify(pk)}: {\n${msBlocks}\n  }`;
+    });
+
+  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
+
+  return `/**
+ * Generated by Prism. Do not edit.
+ * Source: compile manifest ${options.manifest.manifestHash}
+ */
+
+export interface WorkflowModelspaceRef {
+  readonly kind: "modelspace-ref";
+  readonly plugin: string;
+  readonly modelspace: string;
+}
+
+export interface WorkflowModelProfileRef {
+  readonly kind: "model-profile-ref";
+  readonly plugin: string;
+  readonly modelspace: string;
+  readonly profile: string;
+}
+
+export const models = {
+${body}
+} as const satisfies Record<string, Record<string, Record<string, WorkflowModelProfileRef>>>;
+`;
+};
+
+export const renderWorkflowSkillsModule = (options: {
+  readonly manifest: CompileManifest;
+}): string => {
+  const used = collectUsedSkills(options.manifest);
+
+  const byPlugin: Record<string, Record<string, any>> = {};
+  for (const entry of used) {
+    const pk = camelKey(entry.plugin);
+    if (!byPlugin[pk]) byPlugin[pk] = {};
+    if (entry.skillspace) {
+      const sk = camelKey(entry.skillspace);
+      byPlugin[pk][sk] = {
+        kind: "skillspace-ref",
+        plugin: entry.plugin,
+        skillspace: entry.skillspace,
+        skills: entry.skills ?? [],
+      };
+    } else if (entry.name) {
+      const nk = camelKey(entry.name);
+      byPlugin[pk][nk] = {
+        kind: "managed-skill-ref",
+        plugin: entry.plugin,
+        name: entry.name,
+      };
+    }
+  }
+
+  const pluginBlocks = Object.keys(byPlugin)
+    .sort()
+    .map((pk) => {
+      const group = byPlugin[pk]!;
+      const lines = Object.keys(group)
+        .sort()
+        .map((k) => {
+          const ref = group[k];
+          return `    ${JSON.stringify(k)}: ${JSON.stringify(ref)}`;
+        })
+        .join(",\n");
+      return `  ${JSON.stringify(pk)}: {\n${lines}\n  }`;
+    });
+
+  const body = pluginBlocks.length > 0 ? pluginBlocks.join(",\n") : "";
+
+  return `/**
+ * Generated by Prism. Do not edit.
+ * Source: compile manifest ${options.manifest.manifestHash}
+ */
+
+export interface WorkflowManagedSkillRef {
+  readonly kind: "managed-skill-ref";
+  readonly plugin: string;
+  readonly name: string;
+}
+
+export interface WorkflowSkillspaceRef {
+  readonly kind: "skillspace-ref";
+  readonly plugin: string;
+  readonly skillspace: string;
+  readonly skills: ReadonlyArray<string>;
+}
+
+export const skills = {
+${body}
+} as const satisfies Record<string, Record<string, WorkflowManagedSkillRef | WorkflowSkillspaceRef>>;
+`;
+};
+
 export const planWorkflowRefsEmit = (options: {
   readonly projectPath: string;
   readonly manifest: CompileManifest;
@@ -120,6 +385,20 @@ export const planWorkflowRefsEmit = (options: {
       {
         targetPath: workflowAgentsPath(options.projectPath),
         content: renderWorkflowAgentsModule({
+          manifest: options.manifest,
+        }),
+        plugin: WORKFLOW_REFS_HARNESS,
+      },
+      {
+        targetPath: workflowModelsPath(options.projectPath),
+        content: renderWorkflowModelsModule({
+          manifest: options.manifest,
+        }),
+        plugin: WORKFLOW_REFS_HARNESS,
+      },
+      {
+        targetPath: workflowSkillsPath(options.projectPath),
+        content: renderWorkflowSkillsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,

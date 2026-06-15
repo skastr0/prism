@@ -5,6 +5,32 @@ export interface WorkflowModelRef {
   readonly profile?: string;
 }
 
+export interface WorkflowModelspaceRef {
+  readonly kind: "modelspace-ref";
+  readonly plugin: string;
+  readonly modelspace: string;
+}
+
+export interface WorkflowModelProfileRef {
+  readonly kind: "model-profile-ref";
+  readonly plugin: string;
+  readonly modelspace: string;
+  readonly profile: string;
+}
+
+export interface WorkflowManagedSkillRef {
+  readonly kind: "managed-skill-ref";
+  readonly plugin: string;
+  readonly name: string;
+}
+
+export interface WorkflowSkillspaceRef {
+  readonly kind: "skillspace-ref";
+  readonly plugin: string;
+  readonly skillspace: string;
+  readonly skills: ReadonlyArray<string>;
+}
+
 export interface WorkflowAgentRef {
   readonly kind: "agent-ref";
   readonly plugin: string;

@@ -69,6 +69,22 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
       },
     }),
   },
+  modelspaces: {
+    "forge:models": {
+      plugin: "forge",
+      modelspace: "models",
+      profiles: ["builder"],
+    },
+  },
+  skills: {
+    "forge:build": { plugin: "forge", name: "build" },
+    "core:git": { plugin: "core", name: "git" },
+    "agent-core:core-skills": {
+      plugin: "agent-core",
+      skillspace: "core-skills",
+      skills: ["testing"],
+    },
+  },
 });
 
 test("compile manifest decodes and encodes deterministically", () => {
@@ -109,6 +125,17 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
           },
         },
       },
+    },
+    modelspaces: {
+      "forge:models": manifest.modelspaces["forge:models"]!,
+    },
+    skills: {
+      "core:git": manifest.skills["core:git"]!,
+      "agent-core:core-skills": {
+        ...manifest.skills["agent-core:core-skills"]!,
+        skills: [...manifest.skills["agent-core:core-skills"]!.skills].reverse(),
+      },
+      "forge:build": manifest.skills["forge:build"]!,
     },
   };
 

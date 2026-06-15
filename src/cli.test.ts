@@ -163,6 +163,93 @@ export const workflow = defineWorkflow({
   expect(missing.stderr).toContain("workflow run not found: missing-run");
 });
 
+test("workflow runs summary exposes compact execution evidence in text and JSON", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "summary.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+  const storePath = join(root, "workflows.sqlite");
+
+  await writeFile(workflowPath, `
+import { Schema } from "${effectImportPath}";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+export const workflow = defineWorkflow({
+  name: "summary-smoke",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    cacheKey: "summary-build",
+  })] as const,
+});
+`);
+  await writeFile(mockOutputPath, JSON.stringify({ build: { summary: "ok" } }));
+
+  const run = await runCli([
+    "workflow", "run", workflowPath,
+    "--store", storePath,
+    "--mock-output", mockOutputPath,
+  ], {});
+  expect(run.exitCode).toBe(0);
+  const runData = JSON.parse(run.stdout) as { runId: string };
+
+  const text = await runCli(["workflow", "runs", "summary", runData.runId, "--store", storePath], {});
+  expect(text.exitCode).toBe(0);
+  expect(text.stdout).toContain("execution evidence only");
+  expect(text.stdout).toContain("does not prove workflow side effects were semantically correct");
+  expect(text.stdout).toContain("Tasks: total 1, fresh executions 1, cache hits 0, repairs 0");
+  expect(text.stdout).toContain("- build: completed, fresh");
+  expect(text.stdout).toContain("source this run");
+
+  const json = await runCli(["workflow", "runs", "summary", runData.runId, "--store", storePath, "--json"], {});
+  expect(json.exitCode).toBe(0);
+  const data = JSON.parse(json.stdout) as {
+    summary: {
+      kind: string;
+      semanticCorrectness: string;
+      disclaimer: string;
+      totals: { totalTasks: number; freshExecutions: number; cacheHits: number; repairs: number; status: string };
+      tasks: Array<{ taskId: string; status: string; execution: string; evidenceSource: string; repairCount: number; workerAdapter: string | null; externalSessionPointer: string | null }>;
+    };
+  };
+  expect(data.summary.kind).toBe("workflow-execution-evidence");
+  expect(data.summary.semanticCorrectness).toBe("not-evaluated");
+  expect(data.summary.disclaimer).toContain("execution evidence only");
+  expect(data.summary.totals).toMatchObject({
+    totalTasks: 1,
+    freshExecutions: 1,
+    cacheHits: 0,
+    repairs: 0,
+    status: "completed",
+  });
+  expect(data.summary.tasks).toEqual([
+    expect.objectContaining({
+      taskId: "build",
+      status: "completed",
+      execution: "fresh",
+      evidenceSource: "this-run",
+      repairCount: 0,
+      workerAdapter: null,
+      externalSessionPointer: null,
+    }),
+  ]);
+
+  const missing = await runCli(["workflow", "runs", "summary", "missing-run", "--store", storePath], {});
+  expect(missing.exitCode).toBe(2);
+  expect(missing.stderr).toContain("workflow run not found: missing-run");
+});
+
 type JsonObject = Record<string, unknown>;
 
 type LintRule = {

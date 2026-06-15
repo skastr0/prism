@@ -200,6 +200,64 @@ export default defineWorkflow({
 exists so the CLI/MCP surface can validate input, list workflows, and record
 the input value; it is not a constrained IR.
 
+## Finish checks, judges, and review phases
+
+Workflow task completion has four distinct layers:
+
+1. **Schema decode** is the typed output boundary. The worker response must parse
+   as one JSON value and decode through the task's Effect Schema before any
+   downstream workflow code sees it. Decode failures are shape failures, not
+   semantic judgments.
+2. **Deterministic finish criteria** are local checks over the decoded output,
+   raw output, and task metadata. They are ordinary Effect functions for bounded
+   invariants such as "field X mentions the requested file" or "array Y is not
+   empty." When configured with `maxRepairs`, failures can feed a repair prompt
+   back through the original task path.
+3. **Judge criteria** are bounded evaluator definitions. A judge receives the
+   task goal, decoded output, task metadata, and explicitly selected evidence.
+   It does not require full transcript ingestion. Its typed verdict is
+   `pass`, `continue`, `fail`, or `escalate`: `continue` feeds feedback into the
+   same repair/continuation path as deterministic finish criteria, `fail` ends
+   the task as failed, and `escalate` marks the run as requiring escalation.
+   Judge executions are ledgered and cached separately from primary task
+   outputs using the criterion definition plus bounded judge input.
+4. **Review phases** are normal workflow tasks or phases with their own agents,
+   prompts, evidence refs, schemas, and outputs. They are not finish criteria.
+   Use review phases when another identity should inspect a broader surface or
+   produce durable review findings for downstream workflow code.
+
+```typescript
+const build = wf.agentRun("build", agents.builder, {
+  prompt: "Implement the change.",
+  output: PatchReport,                 // schema decode
+  finish: {
+    maxRepairs: 1,
+    criteria: [
+      {
+        name: "mentions validation",
+        check: ({ output }) => output.validation.length > 0
+          ? Effect.void
+          : Effect.fail(new Error("validation evidence required")),
+      },
+      {
+        kind: "judge",
+        name: "bounded quality judge",
+        goal: "Decide whether this build report is ready for review.",
+        selectEvidence: ({ output }) => ({
+          summary: output.summary,
+          validation: output.validation,
+        }),
+        evaluate: ({ output, evidence }) => Effect.succeed(
+          output.ready
+            ? { verdict: "pass" as const }
+            : { verdict: "continue" as const, feedback: "Return missing readiness evidence." },
+        ),
+      },
+    ],
+  },
+});
+```
+
 ## What we deliberately did not build
 
 - **Static whole-graph preflight** — replaced by the per-dispatch gate plus

@@ -120,7 +120,9 @@ run with `nativeAgent: source-scout` and `model: grok-build` metadata.
   ledger converges on `08`.
 - 2.12 Basic structured output lane: native schema where proven, otherwise
   prompt clause + extract JSON + `Schema.decodeUnknown`; bounded finish repair
-  now exists because real dogfood proved the need.
+  now exists because real dogfood proved the need. Finish checks now distinguish
+  schema decode, deterministic criteria, bounded judge criteria with
+  pass/continue/fail/escalate verdicts, and full review phases.
 
 Exit / **first real use**: forge-mission runs end-to-end on a real goal;
 rerunning an edited workflow reuses completed upstream AgentRuns with zero

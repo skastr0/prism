@@ -1,6 +1,17 @@
 import { Effect, Either } from "effect";
-import { decodeTaskOutput, type AnyWorkflowDefinition, type AnyWorkflowTask, type WorkflowRuntime, type WorkflowRuntimeOptions } from "./workflows.js";
-import { workflowTaskIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
+import { computeContentHash } from "./content-hash.js";
+import {
+  decodeTaskOutput,
+  type AnyWorkflowDefinition,
+  type AnyWorkflowTask,
+  type WorkflowJudgeCriterionContext,
+  type WorkflowJudgeFinishCriterion,
+  type WorkflowJudgeTaskMetadata,
+  type WorkflowJudgeVerdict,
+  type WorkflowRuntime,
+  type WorkflowRuntimeOptions,
+} from "./workflows.js";
+import { workflowTaskIdentity, type WorkflowJudgeIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskExecution {
@@ -43,8 +54,35 @@ export class WorkflowRunStoppedError extends Error {
   }
 }
 
+export class WorkflowTaskEscalatedError extends Error {
+  override readonly name = "WorkflowTaskEscalatedError";
+  constructor(
+    readonly taskId: string,
+    readonly criterion: string,
+    readonly feedback?: string,
+  ) {
+    super(`workflow task ${taskId} escalated by judge criterion '${criterion}'${feedback !== undefined ? `: ${feedback}` : ""}`);
+  }
+}
+
+export type WorkflowTaskRepairMode = "native-continuation" | "fresh-executor-invocation" | "none";
+
+export interface WorkflowTaskRepairContext {
+  readonly attempt: number;
+  readonly criterion: string;
+  readonly repairPrompt: string;
+  readonly mode: Exclude<WorkflowTaskRepairMode, "none">;
+  readonly previousMetadata?: Record<string, unknown>;
+  readonly fallbackReason?: "adapter-does-not-support-continuation" | "executor-does-not-advertise-continuation" | "missing-session-id";
+  readonly continuation?: {
+    readonly adapter: string;
+    readonly sessionId: string;
+  };
+}
+
 export interface WorkflowTaskExecutionContext {
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 export type WorkflowTaskExecutor = (
@@ -76,6 +114,103 @@ const hasNonContractMetadata = (metadata: Record<string, unknown> | undefined): 
   if (metadata === undefined) return false;
   return Object.keys(metadata).some((key) => !(key in workflowContractMetadata));
 };
+
+const stringMetadata = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
+const repairExecutionPlan = (
+  metadata: Record<string, unknown> | undefined,
+): Pick<WorkflowTaskRepairContext, "mode" | "fallbackReason" | "continuation"> => {
+  const adapter = stringMetadata(metadata, "adapter");
+  if (adapter === "claude-code") {
+    const sessionId = stringMetadata(metadata, "sessionId")
+      ?? stringMetadata(metadata, "sessionID")
+      ?? stringMetadata(metadata, "session_id")
+      ?? stringMetadata(metadata, "externalSessionPointer");
+    if (sessionId !== undefined) {
+      return { mode: "native-continuation", continuation: { adapter, sessionId } };
+    }
+    return { mode: "fresh-executor-invocation", fallbackReason: "missing-session-id" };
+  }
+  return {
+    mode: "fresh-executor-invocation",
+    fallbackReason: adapter === undefined ? "executor-does-not-advertise-continuation" : "adapter-does-not-support-continuation",
+  };
+};
+
+const objectMetadata = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+const metadataWithRepairExecution = (
+  metadata: Record<string, unknown> | undefined,
+  repair: WorkflowTaskRepairContext | undefined,
+): Record<string, unknown> | undefined => {
+  if (repair === undefined) return metadata;
+  const base = metadata ?? {};
+  if (objectMetadata(base.repairExecution) !== undefined) return base;
+  return {
+    ...base,
+    repairExecution: {
+      attempt: repair.attempt,
+      criterion: repair.criterion,
+      mode: repair.mode,
+      ...(repair.fallbackReason !== undefined ? { fallbackReason: repair.fallbackReason } : {}),
+      ...(repair.continuation !== undefined ? { continuation: repair.continuation } : {}),
+    },
+  };
+};
+
+const metadataRepairMode = (
+  metadata: Record<string, unknown> | undefined,
+  fallback: Exclude<WorkflowTaskRepairMode, "none">,
+): Exclude<WorkflowTaskRepairMode, "none"> => {
+  const repairExecution = objectMetadata(metadata?.repairExecution);
+  const mode = repairExecution?.mode;
+  return mode === "native-continuation" || mode === "fresh-executor-invocation" ? mode : fallback;
+};
+
+const summarizeRepairMode = (repairModes: ReadonlyArray<Exclude<WorkflowTaskRepairMode, "none">>): WorkflowTaskRepairMode => {
+  if (repairModes.length === 0) return "none";
+  return repairModes.every((mode) => mode === "native-continuation")
+    ? "native-continuation"
+    : "fresh-executor-invocation";
+};
+
+const stableValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (typeof value === "function") return value.toString();
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, stableValue(nested)]),
+  );
+};
+
+const stableJson = (value: unknown): string =>
+  JSON.stringify(stableValue(value));
+
+const judgeCriterionDefinition = (criterion: WorkflowJudgeFinishCriterion<unknown, unknown>): unknown => ({
+  kind: criterion.kind,
+  name: criterion.name,
+  goal: typeof criterion.goal === "function" ? criterion.goal.toString() : criterion.goal ?? null,
+  selectEvidence: criterion.selectEvidence?.toString() ?? null,
+  evaluate: criterion.evaluate.toString(),
+});
+
+const taskJudgeMetadata = (task: AnyWorkflowTask): WorkflowJudgeTaskMetadata => ({
+  id: task.id,
+  agent: taskAgent(task),
+  ...(task.cacheKey !== undefined ? { cacheKey: task.cacheKey } : {}),
+  ...(task.worker !== undefined ? { worker: task.worker } : {}),
+});
+
+const judgeFeedback = (verdict: WorkflowJudgeVerdict): string | undefined =>
+  "feedback" in verdict ? verdict.feedback : undefined;
 
 const createTaskLimiter = (maxConcurrentTasks: number): TaskExecutionLimiter => {
   let active = 0;
@@ -145,9 +280,15 @@ const executeOrReuseTask = async (input: {
   }
   const executed = await input.executeTask(input.task, input.context);
   if (!isWorkflowTaskExecution(executed)) {
-    return { rawOutput: executed, metadata: workflowContractMetadata };
+    return {
+      rawOutput: executed,
+      metadata: metadataWithRepairExecution(workflowContractMetadata, input.context?.repair),
+    };
   }
-  return { rawOutput: executed.output, metadata: { ...workflowContractMetadata, ...(executed.metadata ?? {}) } };
+  return {
+    rawOutput: executed.output,
+    metadata: metadataWithRepairExecution({ ...workflowContractMetadata, ...(executed.metadata ?? {}) }, input.context?.repair),
+  };
 };
 
 const errorMessage = (error: unknown): string =>
@@ -166,13 +307,150 @@ const parseRepairPrompt = (error: WorkflowOutputParseError): string => {
   return `Your previous response was not valid JSON, so Prism could not parse it before schema validation. Preserve the substance of your answer, but re-express it as exactly one valid JSON value. Parse error: ${error.message}${rawText !== undefined ? `\n\nPrevious raw output excerpt:\n${rawText}` : ""}`;
 };
 
+type WorkflowFinishCriteriaResult =
+  | { readonly ok: true; readonly judgeRuns: ReadonlyArray<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> }
+  | { readonly ok: false; readonly status: "continue"; readonly criterion: string; readonly error: unknown; readonly repairPrompt: string; readonly judgeRuns: ReadonlyArray<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> }
+  | { readonly ok: false; readonly status: "fail"; readonly criterion: string; readonly error: unknown; readonly judgeRuns: ReadonlyArray<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> }
+  | { readonly ok: false; readonly status: "escalate"; readonly criterion: string; readonly error: unknown; readonly feedback?: string; readonly judgeRuns: ReadonlyArray<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> };
+
+const runJudgeCriterion = async (input: {
+  readonly criterion: WorkflowJudgeFinishCriterion<unknown, unknown>;
+  readonly workflowIdentity: WorkflowTaskIdentity;
+  readonly task: AnyWorkflowTask;
+  readonly output: unknown;
+  readonly metadata?: Record<string, unknown>;
+  readonly store: WorkflowStore | undefined;
+  readonly runId: string | null;
+  readonly useCache: boolean;
+}): Promise<{ readonly verdict: WorkflowJudgeVerdict; readonly cached: boolean; readonly identity: WorkflowJudgeIdentity; readonly evidence: unknown; readonly taskMetadata: WorkflowJudgeTaskMetadata }> => {
+  const taskMetadata = taskJudgeMetadata(input.task);
+  const goalContext = { output: input.output as never, metadata: input.metadata, task: taskMetadata };
+  const goal = typeof input.criterion.goal === "function"
+    ? input.criterion.goal(goalContext)
+    : input.criterion.goal ?? input.task.prompt;
+  const evidenceSelectionContext = { goal, output: input.output as never, metadata: input.metadata, task: taskMetadata };
+  const evidence = input.criterion.selectEvidence?.(evidenceSelectionContext) ?? null;
+  const cacheKey = computeContentHash(stableJson({
+    criterion: judgeCriterionDefinition(input.criterion),
+    goal,
+    output: input.output,
+    taskMetadata,
+    evidence,
+  }));
+  const identity: WorkflowJudgeIdentity = {
+    workflow: input.workflowIdentity.workflow,
+    taskId: input.workflowIdentity.taskId,
+    taskCacheKey: input.workflowIdentity.cacheKey,
+    criterion: input.criterion.name,
+    cacheKey,
+  };
+  recordEvent(input.store, input.runId, input.task.id, "task.judge.cache_lookup.started", {
+    criterion: input.criterion.name,
+    cacheKey,
+  });
+  const cached = input.useCache ? input.store?.getJudgeRecord(identity) ?? null : null;
+  if (cached !== null) {
+    const verdict: WorkflowJudgeVerdict = {
+      verdict: cached.verdict,
+      ...(cached.feedback !== undefined ? { feedback: cached.feedback } : {}),
+      ...(cached.metadata !== undefined ? { metadata: cached.metadata } : {}),
+    } as WorkflowJudgeVerdict;
+    recordEvent(input.store, input.runId, input.task.id, "task.judge.cache_lookup.hit", {
+      criterion: input.criterion.name,
+      cacheKey,
+      verdict: verdict.verdict,
+    });
+    return { verdict, cached: true, identity, evidence, taskMetadata };
+  }
+  recordEvent(input.store, input.runId, input.task.id, input.useCache ? "task.judge.cache_lookup.miss" : "task.judge.cache_lookup.skipped", {
+    criterion: input.criterion.name,
+    cacheKey,
+  });
+  const context: WorkflowJudgeCriterionContext<unknown, unknown> = {
+    goal,
+    output: input.output,
+    metadata: input.metadata,
+    task: taskMetadata,
+    evidence,
+  };
+  recordEvent(input.store, input.runId, input.task.id, "task.judge.started", {
+    criterion: input.criterion.name,
+    cacheKey,
+    goal,
+  });
+  const verdict = await Effect.runPromise(input.criterion.evaluate(context));
+  input.store?.recordJudge({ identity, verdict, evidence, output: input.output, taskMetadata });
+  recordEvent(input.store, input.runId, input.task.id, "task.judge.completed", {
+    criterion: input.criterion.name,
+    cacheKey,
+    verdict: verdict.verdict,
+    ...(judgeFeedback(verdict) !== undefined ? { feedback: judgeFeedback(verdict) } : {}),
+  });
+  return { verdict, cached: false, identity, evidence, taskMetadata };
+};
+
 const runFinishCriteria = async (input: {
   readonly task: AnyWorkflowTask;
+  readonly workflowIdentity: WorkflowTaskIdentity;
   readonly output: unknown;
   readonly rawOutput: unknown;
   readonly metadata?: Record<string, unknown>;
-}): Promise<{ readonly ok: true } | { readonly ok: false; readonly criterion: string; readonly error: unknown; readonly repairPrompt: string }> => {
+  readonly store: WorkflowStore | undefined;
+  readonly runId: string | null;
+  readonly useCache: boolean;
+}): Promise<WorkflowFinishCriteriaResult> => {
+  const judgeRuns: Array<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> = [];
   for (const criterion of input.task.finish?.criteria ?? []) {
+    if (criterion.kind === "judge") {
+      try {
+        const judge = await runJudgeCriterion({
+          criterion: criterion as WorkflowJudgeFinishCriterion<unknown, unknown>,
+          workflowIdentity: input.workflowIdentity,
+          task: input.task,
+          output: input.output,
+          metadata: input.metadata,
+          store: input.store,
+          runId: input.runId,
+          useCache: input.useCache,
+        });
+        judgeRuns.push({
+          criterion: criterion.name,
+          verdict: judge.verdict.verdict,
+          cached: judge.cached,
+          cacheKey: judge.identity.cacheKey,
+        });
+        if (judge.verdict.verdict === "pass") continue;
+        if (judge.verdict.verdict === "continue") {
+          return {
+            ok: false,
+            status: "continue",
+            criterion: criterion.name,
+            error: judge.verdict.feedback,
+            repairPrompt: judge.verdict.feedback,
+            judgeRuns,
+          };
+        }
+        if (judge.verdict.verdict === "escalate") {
+          return {
+            ok: false,
+            status: "escalate",
+            criterion: criterion.name,
+            error: judge.verdict.feedback ?? "judge requested escalation",
+            feedback: judge.verdict.feedback,
+            judgeRuns,
+          };
+        }
+        return {
+          ok: false,
+          status: "fail",
+          criterion: criterion.name,
+          error: judge.verdict.feedback ?? "judge criterion failed",
+          judgeRuns,
+        };
+      } catch (error) {
+        return { ok: false, status: "fail", criterion: criterion.name, error, judgeRuns };
+      }
+    }
     const context = {
       output: input.output as never,
       rawOutput: input.rawOutput,
@@ -183,14 +461,16 @@ const runFinishCriteria = async (input: {
     } catch (error) {
       return {
         ok: false,
+        status: "continue",
         criterion: criterion.name,
         error,
         repairPrompt: criterion.repairPrompt?.(error, context) ??
           `Finish criterion '${criterion.name}' failed: ${errorMessage(error)}. Preserve the useful substance, fix the issue, and return the corrected final response.`,
+        judgeRuns,
       };
     }
   }
-  return { ok: true };
+  return { ok: true, judgeRuns };
 };
 
 const recordCacheLookup = (
@@ -219,11 +499,11 @@ const recordRunTaskIfPersisted = (input: {
   readonly ordinal: number;
   readonly identity: WorkflowTaskIdentity;
   readonly agent: { readonly plugin: string; readonly name: string };
-  readonly status: "completed" | "failed";
+  readonly status: "completed" | "failed" | "escalated";
   readonly cached: boolean;
   readonly output: unknown;
   readonly metadata?: Record<string, unknown>;
-  readonly finishRunStatus?: "completed" | "failed";
+  readonly finishRunStatus?: "completed" | "failed" | "escalated";
 }): void => {
   if (input.runId === null) return;
   input.store?.recordRunTask({
@@ -318,7 +598,46 @@ const executeWorkflowTask = async (input: {
     const maxRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
     let attemptTask = task;
     let repairs = 0;
+    let pendingRepair: WorkflowTaskRepairContext | undefined;
+    let finishJudgeRuns: ReadonlyArray<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> = [];
+    const repairAttempts: Array<{
+      attempt: number;
+      criterion: string;
+      mode: Exclude<WorkflowTaskRepairMode, "none">;
+      fallbackReason?: WorkflowTaskRepairContext["fallbackReason"];
+      continuation?: WorkflowTaskRepairContext["continuation"];
+    }> = [];
+    const beginRepair = (criterion: string, repairPrompt: string): void => {
+      assertRunStillRunning(store, runId);
+      const plan = repairExecutionPlan(metadata);
+      pendingRepair = {
+        attempt: repairs,
+        criterion,
+        repairPrompt,
+        previousMetadata: metadata,
+        mode: plan.mode,
+        ...(plan.fallbackReason !== undefined ? { fallbackReason: plan.fallbackReason } : {}),
+        ...(plan.continuation !== undefined ? { continuation: plan.continuation } : {}),
+      };
+      repairAttempts.push({
+        attempt: repairs,
+        criterion,
+        mode: plan.mode,
+        ...(plan.fallbackReason !== undefined ? { fallbackReason: plan.fallbackReason } : {}),
+        ...(plan.continuation !== undefined ? { continuation: plan.continuation } : {}),
+      });
+      recordEvent(store, runId, task.id, "task.repair.started", {
+        attempt: repairs,
+        criterion,
+        mode: plan.mode,
+        ...(plan.fallbackReason !== undefined ? { fallbackReason: plan.fallbackReason } : {}),
+        ...(plan.continuation !== undefined ? { continuation: plan.continuation } : {}),
+        repairPrompt,
+      });
+      attemptTask = appendRepairPrompt(task, repairPrompt);
+    };
     while (true) {
+      assertRunStillRunning(store, runId);
       try {
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
         const abortMonitor = createRunAbortMonitor(store, runId, task.id, input.abortSignal);
@@ -327,10 +646,25 @@ const executeWorkflowTask = async (input: {
             task: attemptTask,
             cached: repairs === 0 ? cached : null,
             executeTask,
-            ...(abortMonitor.signal ? { context: { abortSignal: abortMonitor.signal } } : {}),
+            ...(abortMonitor.signal || pendingRepair !== undefined
+              ? { context: { ...(abortMonitor.signal ? { abortSignal: abortMonitor.signal } : {}), ...(pendingRepair !== undefined ? { repair: pendingRepair } : {}) } }
+              : {}),
           }));
         } finally {
           abortMonitor.dispose();
+        }
+        if (pendingRepair !== undefined) {
+          const repairExecution = repairAttempts.at(-1);
+          if (repairExecution !== undefined) {
+            repairAttempts[repairAttempts.length - 1] = {
+              ...repairExecution,
+              mode: metadataRepairMode(metadata, pendingRepair.mode),
+              ...(objectMetadata(metadata?.repairExecution)?.fallbackReason !== undefined
+                ? { fallbackReason: objectMetadata(metadata?.repairExecution)?.fallbackReason as WorkflowTaskRepairContext["fallbackReason"] }
+                : {}),
+            };
+          }
+          pendingRepair = undefined;
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
@@ -342,13 +676,7 @@ const executeWorkflowTask = async (input: {
           });
           repairs += 1;
           const repairPrompt = parseRepairPrompt(error);
-          recordEvent(store, runId, task.id, "task.repair.started", {
-            attempt: repairs,
-            criterion: "output-json-parse",
-            mode: "new-executor-invocation",
-            repairPrompt,
-          });
-          attemptTask = appendRepairPrompt(task, repairPrompt);
+          beginRepair("output-json-parse", repairPrompt);
           continue;
         }
         const output: Record<string, unknown> = { error: errorMessage(error) };
@@ -380,13 +708,7 @@ const executeWorkflowTask = async (input: {
         if (repairs < maxRepairs) {
           repairs += 1;
           const repairPrompt = schemaRepairPrompt(error);
-          recordEvent(store, runId, task.id, "task.repair.started", {
-            attempt: repairs,
-            criterion: "output-schema",
-            mode: "new-executor-invocation",
-            repairPrompt,
-          });
-          attemptTask = appendRepairPrompt(task, repairPrompt);
+          beginRepair("output-schema", repairPrompt);
           continue;
         }
         recordRunTaskIfPersisted({
@@ -406,30 +728,70 @@ const executeWorkflowTask = async (input: {
 
       decodedOutput = decoded.right;
       recordEvent(store, runId, task.id, "task.decode.completed", { attempt: repairs });
-      const finish = await runFinishCriteria({ task, output: decodedOutput, rawOutput, metadata });
+      const finish = await runFinishCriteria({
+        task,
+        workflowIdentity: identity,
+        output: decodedOutput,
+        rawOutput,
+        metadata,
+        store,
+        runId,
+        useCache,
+      });
+      finishJudgeRuns = finish.judgeRuns;
       if (finish.ok) {
+        const repairMode = summarizeRepairMode(repairAttempts.map((repair) => repair.mode));
         recordEvent(store, runId, task.id, "task.finish.completed", {
           repairs,
+          repairMode,
           criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+          judgeRuns: finish.judgeRuns,
         });
         break;
       }
       recordEvent(store, runId, task.id, "task.finish.failed", {
         attempt: repairs,
         criterion: finish.criterion,
+        status: finish.status,
         error: errorMessage(finish.error),
         output: decodedOutput,
+        judgeRuns: finish.judgeRuns,
       });
-      if (repairs < maxRepairs) {
+      if (finish.status === "continue" && repairs < maxRepairs) {
         repairs += 1;
-        recordEvent(store, runId, task.id, "task.repair.started", {
-          attempt: repairs,
-          criterion: finish.criterion,
-          mode: "new-executor-invocation",
-          repairPrompt: finish.repairPrompt,
-        });
-        attemptTask = appendRepairPrompt(task, finish.repairPrompt);
+        beginRepair(finish.criterion, finish.repairPrompt);
         continue;
+      }
+      if (finish.status === "escalate") {
+        const repairMode = summarizeRepairMode(repairAttempts.map((repair) => repair.mode));
+        const escalatedMetadata = {
+          ...workflowContractMetadata,
+          ...(metadata ?? {}),
+          finish: {
+            repairs,
+            criteria: task.finish?.criteria?.map((criterion) => criterion.name) ?? [],
+            repairMode,
+            judgeRuns: finish.judgeRuns,
+            escalated: true,
+            escalation: {
+              criterion: finish.criterion,
+              ...(finish.feedback !== undefined ? { feedback: finish.feedback } : {}),
+            },
+          },
+        };
+        recordRunTaskIfPersisted({
+          store,
+          runId,
+          ordinal,
+          identity,
+          agent: taskAgent(task),
+          status: "escalated",
+          cached: cacheHit,
+          output: decodedOutput,
+          metadata: escalatedMetadata,
+          ...(finishRunOnFailure ? { finishRunStatus: "escalated" as const } : {}),
+        });
+        throw new WorkflowTaskEscalatedError(task.id, finish.criterion, finish.feedback);
       }
       recordRunTaskIfPersisted({
         store,
@@ -447,6 +809,7 @@ const executeWorkflowTask = async (input: {
     }
 
     const criteria = task.finish?.criteria?.map((criterion) => criterion.name) ?? [];
+    const repairMode = summarizeRepairMode(repairAttempts.map((repair) => repair.mode));
     const finalMetadata = repairs > 0 || task.finish !== undefined || hasNonContractMetadata(metadata)
       ? {
         ...workflowContractMetadata,
@@ -454,7 +817,9 @@ const executeWorkflowTask = async (input: {
         finish: {
           repairs,
           criteria,
-          repairMode: repairs > 0 ? "new-executor-invocation" : "none",
+          repairMode,
+          ...(repairAttempts.length > 0 ? { repairAttempts } : {}),
+          ...(finishJudgeRuns.length > 0 ? { judgeRuns: finishJudgeRuns } : {}),
         },
       }
       : { ...workflowContractMetadata, ...(metadata ?? {}) };
@@ -561,7 +926,7 @@ const runDynamicWorkflow = async (input: {
     input.limiter.cancelPending(error);
     await Promise.allSettled(inFlightTasks);
     if (input.runId !== null && input.store?.listRuns().find((run) => run.runId === input.runId)?.status === "running") {
-      input.store.finishRun(input.runId, "failed");
+      input.store.finishRun(input.runId, error instanceof WorkflowTaskEscalatedError ? "escalated" : "failed");
     }
     throw error;
   }

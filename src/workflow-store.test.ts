@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { computeContentHash } from "./content-hash.js";
-import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError } from "./workflow-runner.js";
+import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions } from "./workflows.js";
@@ -423,6 +423,44 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("runner observes a stopped run before launching a repair attempt", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const runId = store.createRun("stop-before-repair-smoke");
+    const task = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      finish: {
+        maxRepairs: 1,
+        criteria: [{
+          name: "stop-before-repair",
+          check: () => {
+            store.stopRun(runId);
+            return Effect.fail(new Error("stopped before repair"));
+          },
+        }],
+      },
+    });
+    const workflow = defineWorkflow({ name: "stop-before-repair-smoke", tasks: [task] as const });
+    let calls = 0;
+
+    await expect(runWorkflow(workflow, {
+      store,
+      runId,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "needs repair" };
+      },
+    })).rejects.toThrow(WorkflowRunStoppedError);
+
+    expect(calls).toBe(1);
+    expect(store.listRunEvents(runId).map((event) => event.type)).not.toContain("task.repair.started");
+    expect(store.getRun(runId)).toMatchObject({ status: "failed" });
+    store.close();
+  });
+
   test("stores and reads completed task output by identity", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
@@ -463,6 +501,124 @@ describe("workflow store", () => {
       agentManifestHash: identity.agentManifestHash,
     }).map((entry) => entry.metadata)).toEqual([contractMetadata]);
     expect(store.listCompletedCache({ cacheKey: "missing-cache" })).toEqual([]);
+    store.close();
+  });
+
+  test("records and reuses judge executions separately from primary task output cache", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let executorCalls = 0;
+    let judgeCalls = 0;
+    const finish: WorkflowFinishOptions<{ summary: string }> = {
+      criteria: [{
+        kind: "judge",
+        name: "bounded-quality-judge",
+        goal: "Accept summaries that mention done.",
+        selectEvidence: ({ output, task }) => ({ summary: output.summary, taskId: task.id }),
+        evaluate: ({ output, evidence }) => {
+          judgeCalls += 1;
+          expect(evidence).toEqual({ summary: output.summary, taskId: "build" });
+          return Effect.succeed({ verdict: "pass" as const, metadata: { judgeModel: "mock" } });
+        },
+      }],
+    };
+    const workflow = createWorkflow({ finish });
+
+    const first = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        executorCalls += 1;
+        return { output: { summary: "done" }, metadata: { attemptId: "primary-1" } };
+      },
+    });
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        executorCalls += 1;
+        return { summary: "should not execute" };
+      },
+    });
+
+    expect(executorCalls).toBe(1);
+    expect(judgeCalls).toBe(1);
+    expect(first.tasks[0]?.metadata?.finish).toMatchObject({
+      judgeRuns: [expect.objectContaining({ criterion: "bounded-quality-judge", verdict: "pass", cached: false })],
+    });
+    expect(second.tasks[0]?.metadata?.finish).toMatchObject({
+      judgeRuns: [expect.objectContaining({ criterion: "bounded-quality-judge", verdict: "pass", cached: true })],
+    });
+    const records = store.listJudgeRecords({ workflow: workflow.name, taskId: "build" });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      identity: {
+        workflow: workflow.name,
+        taskId: "build",
+        taskCacheKey: "builder-cache",
+        criterion: "bounded-quality-judge",
+      },
+      verdict: "pass",
+      evidence: { summary: "done", taskId: "build" },
+      output: { summary: "done" },
+      taskMetadata: {
+        id: "build",
+        agent: { plugin: "forge", name: "builder" },
+      },
+      metadata: { judgeModel: "mock" },
+      createdAt: expect.any(String),
+      updatedAt: expect.any(String),
+    });
+    expect(store.listRunEvents(second.runId!).map((event) => event.type)).toContain("task.judge.cache_lookup.hit");
+    store.close();
+  });
+
+  test("judge escalation records an escalated run and task status", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow({
+      finish: {
+        criteria: [{
+          kind: "judge",
+          name: "requires-human",
+          evaluate: () => Effect.succeed({ verdict: "escalate" as const, feedback: "Needs human decision." }),
+        }],
+      },
+    });
+
+    await expect(runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "ambiguous" }),
+    })).rejects.toThrow(WorkflowTaskEscalatedError);
+
+    const run = store.listRuns()[0]!;
+    expect(run.status).toBe("escalated");
+    expect(store.listRunTasks(run.runId)).toEqual([
+      expect.objectContaining({
+        taskId: "build",
+        status: "escalated",
+        output: { summary: "ambiguous" },
+        metadata: expect.objectContaining({
+          finish: expect.objectContaining({
+            escalated: true,
+            escalation: {
+              criterion: "requires-human",
+              feedback: "Needs human decision.",
+            },
+          }),
+        }),
+      }),
+    ]);
+    expect(store.listRunEvents(run.runId).map((event) => event.type)).toContain("task.escalated");
+    expect(store.listRunEvents(run.runId).map((event) => event.type)).toContain("run.escalated");
+    expect(store.compactRunSummary(run.runId)).toMatchObject({
+      totals: {
+        status: "escalated",
+        durationMs: expect.any(Number),
+      },
+      tasks: [expect.objectContaining({
+        taskId: "build",
+        status: "escalated",
+      })],
+    });
     store.close();
   });
 
@@ -613,6 +769,253 @@ describe("workflow store", () => {
         lastEventType: "task.repair.started",
       }),
     ]);
+    store.close();
+  });
+
+  test("builds compact execution evidence for completed, failed, cached, repaired, and event-only tasks", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+
+    const completed = await runWorkflow(createWorkflow({ worker: "grok", model: "grok-build" }), {
+      store,
+      executeTask: async () => ({
+        output: { summary: "fresh" },
+        metadata: {
+          adapter: "grok-cli",
+          nativeAgent: "builder",
+          model: "grok-build",
+          durationMs: 25,
+          sessionId: "grok-session-1",
+        },
+      }),
+    });
+    const cached = await runWorkflow(createWorkflow({ worker: "grok", model: "grok-build" }), {
+      store,
+      executeTask: async () => {
+        throw new Error("cache should avoid executor");
+      },
+    });
+
+    let repairCalls = 0;
+    const repaired = await runWorkflow(createWorkflow({
+      finish: {
+        maxRepairs: 1,
+        criteria: [{
+          name: "summary-prefix",
+          check: ({ output }) => output.summary.startsWith("ok")
+            ? Effect.void
+            : Effect.fail(new Error("summary must start with ok")),
+        }],
+      },
+    }), {
+      store,
+      executeTask: async () => {
+        repairCalls += 1;
+        return { summary: repairCalls === 1 ? "bad" : "ok after repair" };
+      },
+    });
+
+    let nativeRepairCalls = 0;
+    const nativeRepaired = await runWorkflow(createWorkflow({
+      worker: "claude-code",
+      model: "sonnet",
+      finish: {
+        maxRepairs: 1,
+        criteria: [{
+          name: "summary-prefix",
+          check: ({ output }) => output.summary.startsWith("ok")
+            ? Effect.void
+            : Effect.fail(new Error("summary must start with ok")),
+        }],
+      },
+    }), {
+      store,
+      executeTask: async (_task, context) => {
+        nativeRepairCalls += 1;
+        return {
+          output: { summary: context?.repair?.mode === "native-continuation" ? "ok native repair" : "bad" },
+          metadata: {
+            adapter: "claude-code",
+            model: "sonnet",
+            nativeAgent: "builder",
+            sessionId: "native-session",
+            durationMs: nativeRepairCalls * 10,
+          },
+        };
+      },
+    });
+
+    const failedWorkflow = createWorkflow({ prompt: "Return malformed output." });
+    const failedRunId = store.createRun(failedWorkflow.name);
+    const failed = await runWorkflow(failedWorkflow, {
+      store,
+      runId: failedRunId,
+      executeTask: async () => ({
+        output: { summary: 1 },
+        metadata: {
+          adapter: "mock-worker",
+          model: "mock-model",
+          nativeAgent: "builder",
+          durationMs: 10,
+        },
+      }),
+    }).catch((error) => {
+      expect(error).toBeInstanceOf(WorkflowTaskDecodeError);
+      return { runId: failedRunId };
+    });
+
+    store.createRun("store-smoke", "started-only-run");
+    store.recordEvent({ runId: "started-only-run", taskId: "pending-task", type: "task.started", payload: { cacheKey: "pending-cache" } });
+
+    store.createRun("store-smoke", "event-only-run");
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.started", payload: { cacheKey: "running-cache" } });
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.cache_lookup.miss", payload: { cacheKey: "running-cache" } });
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.executor.started", payload: { attempt: 0 } });
+    store.recordEvent({ runId: "event-only-run", taskId: "running-task", type: "task.repair.started", payload: { attempt: 1 } });
+    store.recordEvent({
+      runId: "event-only-run",
+      taskId: "running-task",
+      type: "task.executor.completed",
+      payload: {
+        adapter: "claude-code",
+        model: "sonnet",
+        nativeAgent: "builder",
+        durationMs: 123,
+        sessionId: "claude-session",
+      },
+    });
+
+    const metadataOnlyWorkflow = createWorkflow({ worker: "opencode", model: "gpt-5" });
+    const metadataOnlyTask = metadataOnlyWorkflow.tasks[0]!;
+    const metadataOnlyRunId = store.createRun(metadataOnlyWorkflow.name, "metadata-only-repair-run");
+    store.recordRunTask({
+      runId: metadataOnlyRunId,
+      ordinal: 0,
+      identity: workflowTaskIdentity(metadataOnlyWorkflow.name, metadataOnlyTask),
+      agent: { plugin: metadataOnlyTask.agent.plugin, name: metadataOnlyTask.agent.name },
+      status: "completed",
+      cached: false,
+      output: { summary: "metadata repair" },
+      metadata: {
+        finish: {
+          repairs: 2,
+          repairMode: "native-continuation",
+        },
+      },
+      finishRunStatus: "completed",
+    });
+
+    const mixedRunId = store.createRun("store-smoke", "mixed-order-run");
+    store.recordEvent({ runId: mixedRunId, taskId: "in-flight", type: "task.started", payload: { cacheKey: "in-flight-cache" } });
+    store.recordRunTask({
+      runId: mixedRunId,
+      ordinal: 0,
+      identity: workflowTaskIdentity(metadataOnlyWorkflow.name, metadataOnlyTask),
+      agent: { plugin: metadataOnlyTask.agent.plugin, name: metadataOnlyTask.agent.name },
+      status: "completed",
+      cached: false,
+      output: { summary: "terminal" },
+      metadata: { adapter: "opencode", model: "gpt-5" },
+    });
+
+    expect(store.compactRunSummary(completed.runId!)).toMatchObject({
+      kind: "workflow-execution-evidence",
+      semanticCorrectness: "not-evaluated",
+      run: { status: "completed" },
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 0, status: "completed" },
+      tasks: [{
+        taskId: "build",
+        status: "completed",
+        execution: "fresh",
+        evidenceSource: "this-run",
+        cached: false,
+        workerAdapter: "grok-cli",
+        model: "grok-build",
+        nativeAgent: "builder",
+        repairCount: 0,
+        repairMode: "none",
+        durationMs: 25,
+        externalSessionPointer: "grok-session-1",
+      }],
+    });
+    expect(store.compactRunSummary(cached.runId!)).toMatchObject({
+      totals: { totalTasks: 1, freshExecutions: 0, cacheHits: 1, repairs: 0 },
+      tasks: [expect.objectContaining({
+        taskId: "build",
+        execution: "cached",
+        evidenceSource: "prior-cache-record",
+        cached: true,
+        workerAdapter: "grok-cli",
+      })],
+    });
+    expect(store.compactRunSummary(repaired.runId!)).toMatchObject({
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 1 },
+      tasks: [expect.objectContaining({ taskId: "build", status: "completed", execution: "fresh", repairCount: 1, repairMode: "fresh-executor-invocation" })],
+    });
+    expect(store.compactRunSummary(nativeRepaired.runId!)).toMatchObject({
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 1 },
+      tasks: [expect.objectContaining({
+        taskId: "build",
+        status: "completed",
+        execution: "fresh",
+        evidenceSource: "this-run",
+        repairCount: 1,
+        repairMode: "native-continuation",
+      })],
+    });
+    expect(store.compactRunSummary(failed.runId!)).toMatchObject({
+      run: { status: "failed" },
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 0, status: "failed" },
+      tasks: [expect.objectContaining({
+        taskId: "build",
+        status: "failed",
+        execution: "fresh",
+        workerAdapter: "mock-worker",
+        model: "mock-model",
+        nativeAgent: "builder",
+        durationMs: 10,
+      })],
+    });
+    expect(store.compactRunSummary("started-only-run")).toMatchObject({
+      run: { status: "running" },
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 0, status: "running" },
+      tasks: [expect.objectContaining({
+        taskId: "pending-task",
+        status: "running",
+        execution: "fresh",
+        evidenceSource: "run-events",
+        cached: false,
+        workerAdapter: null,
+      })],
+    });
+    expect(store.compactRunSummary("event-only-run")).toMatchObject({
+      run: { status: "running" },
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 1, status: "running" },
+      tasks: [expect.objectContaining({
+        taskId: "running-task",
+        status: "running",
+        execution: "fresh",
+        evidenceSource: "run-events",
+        cached: false,
+        workerAdapter: "claude-code",
+        model: "sonnet",
+        nativeAgent: "builder",
+        repairCount: 1,
+        repairMode: null,
+        durationMs: 123,
+        externalSessionPointer: "claude-session",
+      })],
+    });
+    expect(store.compactRunSummary(metadataOnlyRunId)).toMatchObject({
+      totals: { totalTasks: 1, freshExecutions: 1, cacheHits: 0, repairs: 2 },
+      tasks: [expect.objectContaining({
+        taskId: "build",
+        repairCount: 2,
+        repairMode: "native-continuation",
+      })],
+    });
+    expect(store.compactRunSummary(mixedRunId)?.tasks.map((task) => task.taskId)).toEqual(["in-flight", "build"]);
+    expect(store.compactRunSummary("missing-run")).toBeNull();
     store.close();
   });
 
@@ -1100,6 +1503,52 @@ describe("workflow store", () => {
     expect(calls).toBe(2);
     expect(second.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.output).toEqual({ summary: "second" });
+    store.close();
+  });
+
+  test("volatile continuation metadata does not participate in task cache identity", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    let calls = 0;
+    const workflow = createWorkflow({ worker: "claude-code" });
+
+    await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return {
+          output: { summary: "cached result" },
+          metadata: {
+            adapter: "claude-code",
+            sessionId: "volatile-session-1",
+          },
+        };
+      },
+    });
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return {
+          output: { summary: "should not execute" },
+          metadata: {
+            adapter: "claude-code",
+            sessionId: "volatile-session-2",
+          },
+        };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(second.tasks[0]).toMatchObject({
+      cached: true,
+      output: { summary: "cached result" },
+      metadata: {
+        adapter: "claude-code",
+        sessionId: "volatile-session-1",
+        cachedFrom: "workflow_task_records",
+      },
+    });
     store.close();
   });
 

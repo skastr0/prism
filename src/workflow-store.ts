@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
 import { computeContentHash } from "./content-hash.js";
-import type { AnyWorkflowTask, WorkflowRuntimeOptions } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowJudgeVerdict, WorkflowRuntimeOptions } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskIdentity {
@@ -12,6 +12,14 @@ export interface WorkflowTaskIdentity {
   readonly cacheKey: string;
   readonly promptHash: string;
   readonly agentManifestHash: string;
+}
+
+export interface WorkflowJudgeIdentity {
+  readonly workflow: string;
+  readonly taskId: string;
+  readonly taskCacheKey: string;
+  readonly criterion: string;
+  readonly cacheKey: string;
 }
 
 const WORKFLOW_TASK_IDENTITY_VERSION = 2;
@@ -52,7 +60,19 @@ export interface WorkflowCacheRecord extends CompletedWorkflowTaskRecord {
   readonly updatedAt: string;
 }
 
-export type WorkflowRunTaskStatus = "completed" | "failed";
+export interface WorkflowJudgeRecord {
+  readonly identity: WorkflowJudgeIdentity;
+  readonly verdict: WorkflowJudgeVerdict["verdict"];
+  readonly feedback?: string;
+  readonly evidence: unknown;
+  readonly output: unknown;
+  readonly taskMetadata: unknown;
+  readonly metadata?: Record<string, unknown>;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export type WorkflowRunTaskStatus = "completed" | "failed" | "escalated";
 
 export interface WorkflowRunTaskRecord {
   readonly runId: string;
@@ -68,7 +88,7 @@ export interface WorkflowRunTaskRecord {
   readonly metadata?: Record<string, unknown>;
 }
 
-export type WorkflowRunTaskProgressStatus = "running" | "completed" | "failed";
+export type WorkflowRunTaskProgressStatus = "running" | "completed" | "failed" | "escalated";
 
 export type WorkflowRunTaskCacheLookup = "hit" | "miss" | "skipped";
 
@@ -87,9 +107,66 @@ export interface WorkflowRunTaskProgress {
   readonly lastEventAt?: string;
 }
 
+export type WorkflowRunTaskExecutionSource = "cached" | "fresh" | "unknown";
+export type WorkflowRunTaskEvidenceSource = "this-run" | "prior-cache-record" | "run-events" | "unknown";
+
+export interface WorkflowRunTaskCompactSummary {
+  readonly taskId: string;
+  readonly status: WorkflowRunTaskProgressStatus;
+  readonly execution: WorkflowRunTaskExecutionSource;
+  readonly evidenceSource: WorkflowRunTaskEvidenceSource;
+  readonly cached: boolean | null;
+  readonly cacheLookup?: WorkflowRunTaskCacheLookup;
+  readonly agent?: {
+    readonly plugin: string;
+    readonly name: string;
+  };
+  readonly workerAdapter: string | null;
+  readonly model: string | null;
+  readonly nativeAgent: string | null;
+  readonly repairCount: number;
+  readonly repairMode: string | null;
+  readonly durationMs: number | null;
+  readonly externalSessionPointer: string | null;
+  readonly lastEventType?: string;
+  readonly lastEventAt?: string;
+}
+
+export interface WorkflowRunCompactSummary {
+  readonly kind: "workflow-execution-evidence";
+  readonly semanticCorrectness: "not-evaluated";
+  readonly disclaimer: string;
+  readonly run: WorkflowRunRecord;
+  readonly totals: {
+    readonly totalTasks: number;
+    readonly freshExecutions: number;
+    readonly cacheHits: number;
+    readonly repairs: number;
+    readonly status: WorkflowRunStatus;
+    readonly durationMs: number | null;
+  };
+  readonly tasks: WorkflowRunTaskCompactSummary[];
+}
+
 type WorkflowRunTaskProgressPatch = Partial<{
   -readonly [Key in keyof WorkflowRunTaskProgress]: WorkflowRunTaskProgress[Key];
 }>;
+
+type WorkflowRunTaskCompactPatch = Partial<{
+  -readonly [Key in keyof WorkflowRunTaskCompactSummary]: WorkflowRunTaskCompactSummary[Key];
+}> & {
+  metadata?: Record<string, unknown>;
+  startedAt?: string;
+  firstEventSequence?: number;
+  orderIndex?: number;
+};
+
+interface WorkflowRunTaskCompactAccumulator extends WorkflowRunTaskCompactSummary {
+  readonly metadata?: Record<string, unknown>;
+  readonly startedAt?: string;
+  readonly firstEventSequence?: number;
+  readonly orderIndex?: number;
+}
 
 export interface WorkflowRunRecord {
   readonly runId: string;
@@ -100,7 +177,7 @@ export interface WorkflowRunRecord {
   readonly heartbeatAt?: string;
 }
 
-export type WorkflowRunStatus = "running" | "completed" | "failed" | "unknown";
+export type WorkflowRunStatus = "running" | "completed" | "failed" | "escalated" | "unknown";
 
 export interface WorkflowEventRecord {
   readonly sequence: number;
@@ -126,8 +203,25 @@ interface TaskRecordRow {
   readonly updated_at: string;
 }
 
+interface JudgeRecordRow {
+  readonly workflow: string;
+  readonly task_id: string;
+  readonly task_cache_key: string;
+  readonly criterion: string;
+  readonly judge_cache_key: string;
+  readonly verdict: WorkflowJudgeVerdict["verdict"];
+  readonly feedback: string | null;
+  readonly evidence_json: string;
+  readonly output_json: string;
+  readonly task_metadata_json: string;
+  readonly metadata_json: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
 interface RunTaskRow {
   readonly run_id: string;
+  readonly ordinal: number;
   readonly task_id: string;
   readonly cache_key: string;
   readonly status: WorkflowRunTaskStatus;
@@ -197,6 +291,62 @@ const objectPayload = (payload: unknown): Record<string, unknown> | null =>
     ? payload as Record<string, unknown>
     : null;
 
+const stringMetadata = (metadata: Record<string, unknown> | undefined, key: string): string | null => {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+};
+
+const numberMetadata = (metadata: Record<string, unknown> | undefined, key: string): number | null => {
+  const value = metadata?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+};
+
+const externalSessionPointer = (metadata: Record<string, unknown> | undefined): string | null =>
+  stringMetadata(metadata, "externalSessionPointer")
+    ?? stringMetadata(metadata, "sessionId")
+    ?? stringMetadata(metadata, "sessionID")
+    ?? stringMetadata(metadata, "session_id");
+
+const objectMetadata = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+const repairModeMetadata = (metadata: Record<string, unknown> | undefined): string | null => {
+  const finish = objectMetadata(metadata?.finish);
+  const repairMode = finish?.repairMode;
+  return typeof repairMode === "string" ? repairMode : null;
+};
+
+const repairCountMetadata = (metadata: Record<string, unknown> | undefined): number | null => {
+  const finish = objectMetadata(metadata?.finish);
+  const repairs = finish?.repairs;
+  return typeof repairs === "number" && Number.isInteger(repairs) && repairs >= 0 ? repairs : null;
+};
+
+const eventRepairMode = (payload: Record<string, unknown> | null): string | null => {
+  const mode = payload?.mode ?? payload?.repairMode;
+  return typeof mode === "string" && mode.length > 0 ? mode : null;
+};
+
+const eventRepairCount = (payload: Record<string, unknown> | null): number | null => {
+  const repairs = payload?.repairs;
+  return typeof repairs === "number" && Number.isInteger(repairs) && repairs >= 0 ? repairs : null;
+};
+
+const sqliteTimestampMs = (timestamp: string | undefined): number | null => {
+  if (timestamp === undefined) return null;
+  const parsed = Date.parse(`${timestamp.replace(" ", "T")}Z`);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const elapsedMs = (start: string | undefined, finish: string | undefined): number | null => {
+  const startMs = sqliteTimestampMs(start);
+  const finishMs = sqliteTimestampMs(finish);
+  if (startMs === null || finishMs === null || finishMs < startMs) return null;
+  return finishMs - startMs;
+};
+
 export const workflowTaskIdentity = (
   workflow: string,
   task: AnyWorkflowTask,
@@ -220,9 +370,18 @@ export const workflowTaskIdentity = (
       finish: {
         maxRepairs: task.finish?.maxRepairs ?? 0,
         criteria: task.finish?.criteria?.map((criterion) => ({
+          kind: criterion.kind ?? "deterministic",
           name: criterion.name,
-          check: criterion.check.toString(),
-          repairPrompt: criterion.repairPrompt?.toString() ?? null,
+          ...(criterion.kind === "judge"
+            ? {
+              goal: typeof criterion.goal === "function" ? criterion.goal.toString() : criterion.goal ?? null,
+              selectEvidence: criterion.selectEvidence?.toString() ?? null,
+              evaluate: criterion.evaluate.toString(),
+            }
+            : {
+              check: criterion.check.toString(),
+              repairPrompt: criterion.repairPrompt?.toString() ?? null,
+            }),
         })) ?? [],
       },
     })),
@@ -275,6 +434,22 @@ export class WorkflowStore {
         created_at text not null default (datetime('now')),
         updated_at text not null default (datetime('now')),
         primary key (workflow, task_id, cache_key, prompt_hash, agent_manifest_hash)
+      );
+
+      create table if not exists workflow_judge_records (
+        workflow text not null,
+        task_id text not null,
+        task_cache_key text not null,
+        criterion text not null,
+        judge_cache_key text not null primary key,
+        verdict text not null,
+        feedback text,
+        evidence_json text not null,
+        output_json text not null,
+        task_metadata_json text not null,
+        metadata_json text,
+        created_at text not null default (datetime('now')),
+        updated_at text not null default (datetime('now'))
       );
 
       create table if not exists workflow_runs (
@@ -377,6 +552,106 @@ export class WorkflowStore {
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
     };
+  }
+
+  getJudgeRecord(identity: WorkflowJudgeIdentity): WorkflowJudgeRecord | null {
+    const row = this.db.query<JudgeRecordRow, [string]>(`
+      select workflow, task_id, task_cache_key, criterion, judge_cache_key,
+             verdict, feedback, evidence_json, output_json, task_metadata_json,
+             metadata_json, created_at, updated_at
+      from workflow_judge_records
+      where judge_cache_key = ?
+    `).get(identity.cacheKey);
+    if (!row) return null;
+    return {
+      identity: {
+        workflow: row.workflow,
+        taskId: row.task_id,
+        taskCacheKey: row.task_cache_key,
+        criterion: row.criterion,
+        cacheKey: row.judge_cache_key,
+      },
+      verdict: row.verdict,
+      ...(row.feedback !== null ? { feedback: row.feedback } : {}),
+      evidence: JSON.parse(row.evidence_json) as unknown,
+      output: JSON.parse(row.output_json) as unknown,
+      taskMetadata: JSON.parse(row.task_metadata_json) as unknown,
+      ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  recordJudge(input: {
+    readonly identity: WorkflowJudgeIdentity;
+    readonly verdict: WorkflowJudgeVerdict;
+    readonly evidence: unknown;
+    readonly output: unknown;
+    readonly taskMetadata: unknown;
+  }): void {
+    this.db.query(`
+      insert into workflow_judge_records (
+        workflow, task_id, task_cache_key, criterion, judge_cache_key,
+        verdict, feedback, evidence_json, output_json, task_metadata_json,
+        metadata_json, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      on conflict(judge_cache_key)
+      do update set
+        verdict = excluded.verdict,
+        feedback = excluded.feedback,
+        evidence_json = excluded.evidence_json,
+        output_json = excluded.output_json,
+        task_metadata_json = excluded.task_metadata_json,
+        metadata_json = excluded.metadata_json,
+        updated_at = excluded.updated_at
+    `).run(
+      input.identity.workflow,
+      input.identity.taskId,
+      input.identity.taskCacheKey,
+      input.identity.criterion,
+      input.identity.cacheKey,
+      input.verdict.verdict,
+      "feedback" in input.verdict ? input.verdict.feedback ?? null : null,
+      JSON.stringify(input.evidence),
+      JSON.stringify(input.output),
+      JSON.stringify(input.taskMetadata),
+      input.verdict.metadata === undefined ? null : JSON.stringify(input.verdict.metadata),
+    );
+  }
+
+  listJudgeRecords(options: {
+    readonly workflow?: string;
+    readonly taskId?: string;
+    readonly criterion?: string;
+  } = {}): WorkflowJudgeRecord[] {
+    const rows = this.db.query<JudgeRecordRow, []>(`
+      select workflow, task_id, task_cache_key, criterion, judge_cache_key,
+             verdict, feedback, evidence_json, output_json, task_metadata_json,
+             metadata_json, created_at, updated_at
+      from workflow_judge_records
+      order by updated_at desc, created_at desc, workflow asc, task_id asc, criterion asc
+    `).all();
+    return rows
+      .filter((row) => options.workflow === undefined || row.workflow === options.workflow)
+      .filter((row) => options.taskId === undefined || row.task_id === options.taskId)
+      .filter((row) => options.criterion === undefined || row.criterion === options.criterion)
+      .map((row) => ({
+        identity: {
+          workflow: row.workflow,
+          taskId: row.task_id,
+          taskCacheKey: row.task_cache_key,
+          criterion: row.criterion,
+          cacheKey: row.judge_cache_key,
+        },
+        verdict: row.verdict,
+        ...(row.feedback !== null ? { feedback: row.feedback } : {}),
+        evidence: JSON.parse(row.evidence_json) as unknown,
+        output: JSON.parse(row.output_json) as unknown,
+        taskMetadata: JSON.parse(row.task_metadata_json) as unknown,
+        ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
   }
 
   listCompletedCache(options: {
@@ -786,7 +1061,7 @@ export class WorkflowStore {
   listRunTasks(runId: string): WorkflowRunTaskRecord[] {
     this.failDeadPidRuns();
     const rows = this.db.query<RunTaskRow, [string]>(`
-      select run_id, task_id, cache_key, status, cached, agent_plugin, agent_name, output_json, metadata_json
+      select run_id, ordinal, task_id, cache_key, status, cached, agent_plugin, agent_name, output_json, metadata_json
       from workflow_run_tasks
       where run_id = ?
       order by ordinal asc
@@ -856,8 +1131,8 @@ export class WorkflowStore {
         if (payload !== null && typeof payload.cached === "boolean") patch.cached = payload.cached;
         if (payload !== null && typeof payload.cacheKey === "string") patch.cacheKey = payload.cacheKey;
       }
-      if (event.type === "task.failed") {
-        patch.status = "failed";
+      if (event.type === "task.failed" || event.type === "task.escalated") {
+        patch.status = event.type === "task.escalated" ? "escalated" : "failed";
         if (payload !== null && typeof payload.cached === "boolean") patch.cached = payload.cached;
         if (payload !== null && typeof payload.cacheKey === "string") patch.cacheKey = payload.cacheKey;
       }
@@ -865,6 +1140,177 @@ export class WorkflowStore {
     }
 
     return Array.from(summaries.values());
+  }
+
+  compactRunSummary(runId: string): WorkflowRunCompactSummary | null {
+    const run = this.getRun(runId);
+    if (run === null) return null;
+
+    const summaries = new Map<string, WorkflowRunTaskCompactAccumulator>();
+    const upsert = (taskId: string, patch: WorkflowRunTaskCompactPatch): void => {
+      const existing = summaries.get(taskId);
+      const metadata = patch.metadata !== undefined
+        && (existing?.metadata === undefined || existing.evidenceSource === "run-events" || existing.evidenceSource === "unknown")
+        ? patch.metadata
+        : existing?.metadata ?? patch.metadata;
+      const startedAt = patch.startedAt ?? existing?.startedAt;
+      const lastEventAt = patch.lastEventAt ?? existing?.lastEventAt;
+      const firstEventSequence = patch.firstEventSequence !== undefined && existing?.firstEventSequence !== undefined
+        ? Math.min(patch.firstEventSequence, existing.firstEventSequence)
+        : patch.firstEventSequence ?? existing?.firstEventSequence;
+      const durationMs = patch.durationMs
+        ?? numberMetadata(metadata, "durationMs")
+        ?? elapsedMs(startedAt, lastEventAt)
+        ?? existing?.durationMs
+        ?? null;
+      const next: WorkflowRunTaskCompactAccumulator = {
+        taskId,
+        status: patch.status ?? existing?.status ?? "running",
+        execution: patch.execution ?? existing?.execution ?? "unknown",
+        evidenceSource: patch.evidenceSource ?? existing?.evidenceSource ?? "unknown",
+        cached: patch.cached ?? existing?.cached ?? null,
+        repairCount: patch.repairCount ?? repairCountMetadata(metadata) ?? existing?.repairCount ?? 0,
+        workerAdapter: stringMetadata(metadata, "adapter") ?? patch.workerAdapter ?? existing?.workerAdapter ?? null,
+        model: stringMetadata(metadata, "model") ?? patch.model ?? existing?.model ?? null,
+        nativeAgent: stringMetadata(metadata, "nativeAgent") ?? patch.nativeAgent ?? existing?.nativeAgent ?? null,
+        repairMode: repairModeMetadata(metadata) ?? patch.repairMode ?? existing?.repairMode ?? null,
+        externalSessionPointer: externalSessionPointer(metadata) ?? patch.externalSessionPointer ?? existing?.externalSessionPointer ?? null,
+        durationMs,
+        ...(patch.cacheLookup !== undefined || existing?.cacheLookup !== undefined ? { cacheLookup: patch.cacheLookup ?? existing?.cacheLookup } : {}),
+        ...(patch.agent !== undefined || existing?.agent !== undefined ? { agent: patch.agent ?? existing?.agent } : {}),
+        ...(patch.lastEventType !== undefined || existing?.lastEventType !== undefined ? { lastEventType: patch.lastEventType ?? existing?.lastEventType } : {}),
+        ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        ...(firstEventSequence !== undefined ? { firstEventSequence } : {}),
+        ...(patch.orderIndex !== undefined || existing?.orderIndex !== undefined ? { orderIndex: patch.orderIndex ?? existing?.orderIndex } : {}),
+        ...(metadata !== undefined ? { metadata } : {}),
+      };
+      summaries.set(taskId, next);
+    };
+
+    for (const [index, task] of this.listRunTasks(runId).entries()) {
+      upsert(task.taskId, {
+        status: task.status,
+        execution: task.cached ? "cached" : "fresh",
+        evidenceSource: task.cached ? "prior-cache-record" : "this-run",
+        cached: task.cached,
+        agent: task.agent,
+        metadata: task.metadata,
+        repairCount: repairCountMetadata(task.metadata) ?? 0,
+        durationMs: numberMetadata(task.metadata, "durationMs"),
+        orderIndex: index,
+      });
+    }
+
+    const events = this.listRunEvents(runId);
+    let runStartedAt: string | undefined;
+    let runFinishedAt: string | undefined;
+    for (const event of events) {
+      if (event.taskId === null) {
+        if (event.type === "run.started") runStartedAt = event.createdAt;
+        if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.escalated") {
+          runFinishedAt = event.createdAt;
+        }
+        continue;
+      }
+      const taskId = event.taskId;
+      const payload = objectPayload(event.payload);
+      const existing = summaries.get(taskId);
+      const patch: WorkflowRunTaskCompactPatch = {
+        evidenceSource: existing?.evidenceSource ?? "run-events",
+        firstEventSequence: event.sequence,
+        lastEventType: event.type,
+        lastEventAt: event.createdAt,
+      };
+      if (event.type === "task.started") {
+        patch.status = existing?.status ?? "running";
+        patch.startedAt = existing?.startedAt ?? event.createdAt;
+        patch.execution = existing?.execution ?? "fresh";
+        patch.cached = existing?.cached ?? false;
+      }
+      if (event.type === "task.cache_lookup.hit") {
+        patch.cacheLookup = "hit";
+        patch.execution = "cached";
+        patch.cached = true;
+      }
+      if (event.type === "task.cache_lookup.miss") {
+        patch.cacheLookup = "miss";
+        patch.execution = existing?.execution === "cached" ? "cached" : "fresh";
+        patch.cached = existing?.cached ?? false;
+      }
+      if (event.type === "task.cache_lookup.skipped") {
+        patch.cacheLookup = "skipped";
+        patch.execution = existing?.execution === "cached" ? "cached" : "fresh";
+        patch.cached = existing?.cached ?? false;
+      }
+      if (event.type === "task.executor.started") {
+        patch.execution = existing?.execution === "cached" ? "cached" : "fresh";
+        patch.cached = existing?.cached ?? false;
+      }
+      if (event.type === "task.executor.completed" && payload !== null) {
+        patch.metadata = payload;
+        patch.execution = existing?.execution === "cached" ? "cached" : "fresh";
+        patch.cached = existing?.cached ?? false;
+      }
+      if (event.type === "task.repair.started") {
+        patch.repairCount = repairCountMetadata(existing?.metadata) ?? (existing?.repairCount ?? 0) + 1;
+        const repairMode = eventRepairMode(payload);
+        if (repairMode !== null) patch.repairMode = repairMode;
+      }
+      if (event.type === "task.finish.completed" || event.type === "task.finish.failed") {
+        const repairCount = eventRepairCount(payload);
+        if (repairCount !== null) patch.repairCount = repairCount;
+        const repairMode = eventRepairMode(payload);
+        if (repairMode !== null) patch.repairMode = repairMode;
+      }
+      if (event.type === "task.completed") {
+        patch.status = "completed";
+        if (payload !== null && typeof payload.cached === "boolean") {
+          patch.cached = payload.cached;
+          patch.execution = payload.cached ? "cached" : "fresh";
+        }
+      }
+      if (event.type === "task.failed" || event.type === "task.escalated") {
+        patch.status = event.type === "task.escalated" ? "escalated" : "failed";
+        if (payload !== null && typeof payload.cached === "boolean") {
+          patch.cached = payload.cached;
+          patch.execution = payload.cached ? "cached" : "fresh";
+        }
+      }
+      upsert(taskId, patch);
+    }
+
+    const tasks = Array.from(summaries.values()).sort((left, right) => {
+      const leftOrder = left.firstEventSequence ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = right.firstEventSequence ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return (left.orderIndex ?? Number.MAX_SAFE_INTEGER) - (right.orderIndex ?? Number.MAX_SAFE_INTEGER);
+    }).map((summary): WorkflowRunTaskCompactSummary => {
+      const {
+        metadata: _metadata,
+        startedAt: _startedAt,
+        firstEventSequence: _firstEventSequence,
+        orderIndex: _orderIndex,
+        ...taskSummary
+      } = summary;
+      return taskSummary;
+    });
+    const durationMs = elapsedMs(runStartedAt, runFinishedAt ?? events.at(-1)?.createdAt);
+    return {
+      kind: "workflow-execution-evidence",
+      semanticCorrectness: "not-evaluated",
+      disclaimer: "This summary is execution evidence only; it does not prove workflow side effects were semantically correct.",
+      run,
+      totals: {
+        totalTasks: tasks.length,
+        freshExecutions: tasks.filter((task) => task.execution === "fresh").length,
+        cacheHits: tasks.filter((task) => task.execution === "cached").length,
+        repairs: tasks.reduce((total, task) => total + task.repairCount, 0),
+        status: run.status,
+        durationMs,
+      },
+      tasks,
+    };
   }
 
   recordCompleted(input: {

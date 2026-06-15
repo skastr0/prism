@@ -2,13 +2,14 @@ import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
-import type { WorkflowTaskExecution } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
 
 export interface ClaudeWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 export class ClaudeWorkflowWorkerError extends Error {
@@ -42,14 +43,15 @@ export const runClaudeWorkflowTask = async (
   options: ClaudeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CLAUDE_BIN ?? "claude";
-  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const resumeSessionId = options.repair?.continuation?.sessionId;
+  const prompt = options.repair !== undefined && resumeSessionId !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const args = [
     "--print",
     "--output-format",
     "json",
-    "--no-session-persistence",
-    "--agent",
-    task.agent.name,
+    ...(resumeSessionId !== undefined ? ["--resume", resumeSessionId] : ["--agent", task.agent.name]),
     ...(options.model !== undefined ? ["--model", options.model] : []),
     prompt,
   ];
@@ -87,6 +89,18 @@ export const runClaudeWorkflowTask = async (
       claudeDurationMs: envelope.duration_ms,
       totalCostUsd: envelope.total_cost_usd,
       numTurns: envelope.num_turns,
+      ...(options.repair !== undefined
+        ? {
+          repairExecution: {
+            attempt: options.repair.attempt,
+            criterion: options.repair.criterion,
+            mode: resumeSessionId !== undefined ? "native-continuation" : "fresh-executor-invocation",
+            ...(resumeSessionId !== undefined
+              ? { continuation: { adapter: "claude-code", sessionId: resumeSessionId } }
+              : { fallbackReason: "missing-session-id" }),
+          },
+        }
+        : {}),
     },
   };
 };

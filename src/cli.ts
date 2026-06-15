@@ -74,7 +74,7 @@ import type { SyncReport } from "./sync/apply.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
-import { defaultWorkflowStorePath, WorkflowStore } from "./workflow-store.js";
+import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 
 declare const APP_VERSION: string | undefined;
@@ -396,6 +396,52 @@ const workflowCache = workflow
   .command("cache")
   .description("Inspect persisted workflow task cache entries");
 
+const formatWorkflowDuration = (durationMs: number | null): string =>
+  durationMs === null ? "n/a" : `${durationMs}ms`;
+
+const formatWorkflowSummaryValue = (value: string | null | undefined): string =>
+  value === null || value === undefined || value.length === 0 ? "n/a" : value;
+
+const formatWorkflowEvidenceSource = (source: WorkflowRunCompactSummary["tasks"][number]["evidenceSource"]): string => {
+  switch (source) {
+    case "this-run":
+      return "this run";
+    case "prior-cache-record":
+      return "prior cache record";
+    case "run-events":
+      return "run events";
+    case "unknown":
+      return "unknown";
+  }
+};
+
+const formatWorkflowRunCompactSummary = (summary: WorkflowRunCompactSummary): string => {
+  const lines = [
+    `Workflow run ${summary.run.runId} (${summary.run.workflow})`,
+    summary.disclaimer,
+    `Status: ${summary.totals.status}`,
+    `Duration: ${formatWorkflowDuration(summary.totals.durationMs)}`,
+    `Tasks: total ${summary.totals.totalTasks}, fresh executions ${summary.totals.freshExecutions}, cache hits ${summary.totals.cacheHits}, repairs ${summary.totals.repairs}`,
+  ];
+  for (const task of summary.tasks) {
+    const details = [
+      task.status,
+      task.execution,
+      `source ${formatWorkflowEvidenceSource(task.evidenceSource)}`,
+      `adapter ${formatWorkflowSummaryValue(task.workerAdapter)}`,
+      `model ${formatWorkflowSummaryValue(task.model)}`,
+      `native agent ${formatWorkflowSummaryValue(task.nativeAgent)}`,
+      `repairs ${task.repairCount}`,
+      `duration ${formatWorkflowDuration(task.durationMs)}`,
+    ];
+    if (task.externalSessionPointer !== null) {
+      details.push(`external session ${task.externalSessionPointer}`);
+    }
+    lines.push(`- ${task.taskId}: ${details.join(", ")}`);
+  }
+  return `${lines.join("\n")}\n`;
+};
+
 workflowCache
   .command("list")
   .description("List completed workflow task cache entries")
@@ -515,6 +561,36 @@ workflowRuns
       console.log(JSON.stringify({ run, taskSummary: store.summarizeRunTasks(runId), tasks: store.listRunTasks(runId) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs show failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("summary <runId>")
+  .description("Show compact execution evidence for one workflow run")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--json", "Print the compact summary as JSON", false)
+  .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing the summary")
+  .action(async (runId: string, options: { readonly store?: string; readonly json?: boolean; readonly failStaleAfterMs?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      if (options.failStaleAfterMs !== undefined) {
+        store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+      }
+      const summary = store.compactRunSummary(runId);
+      if (summary === null) {
+        throw new CliUsageError(`workflow run not found: ${runId}`);
+      }
+      if (options.json === true) {
+        console.log(JSON.stringify({ summary }, null, 2));
+      } else {
+        process.stdout.write(formatWorkflowRunCompactSummary(summary));
+      }
+    } catch (error) {
+      printCliError(error, "Workflow runs summary failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     } finally {
       store?.close();

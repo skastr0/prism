@@ -1217,8 +1217,8 @@ describe("workflow loader", () => {
       cwd: string;
     });
     expect(calls).toEqual([
-      { print: true, outputFormat: "json", noSession: true, model: "grok-build", agent: "builder", cwd: expectedCwd },
-      { print: true, outputFormat: "json", noSession: true, model: "sonnet", agent: "builder", cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: false, model: "grok-build", agent: "builder", cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: false, model: "sonnet", agent: "builder", cwd: expectedCwd },
     ]);
   });
 

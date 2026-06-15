@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Effect, Schema } from "effect";
-import { runWorkflow, WorkflowTaskDecodeError } from "./workflow-runner.js";
+import { runWorkflow, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
 
 const builder = {
@@ -132,7 +136,8 @@ describe("workflow runner", () => {
     expect(prompts[1]).toContain("Your previous response was not valid JSON");
     expect(prompts[1]).toContain("Invalid escape character");
     expect(prompts[1]).toContain('{"summary":"bad\\q"}');
-    expect(result.tasks).toEqual([
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]).toMatchObject(
       {
         id: "build",
         agent: { plugin: "forge", name: "builder" },
@@ -140,10 +145,152 @@ describe("workflow runner", () => {
         cached: false,
         metadata: {
           ...contractMetadata,
-          finish: { repairs: 1, criteria: [], repairMode: "new-executor-invocation" },
+          finish: {
+            repairs: 1,
+            criteria: [],
+            repairMode: "fresh-executor-invocation",
+            repairAttempts: [expect.objectContaining({
+              attempt: 1,
+              criterion: "output-json-parse",
+              mode: "fresh-executor-invocation",
+              fallbackReason: "executor-does-not-advertise-continuation",
+            })],
+          },
         },
       },
-    ]);
+    );
+  });
+
+  test("continues Claude repairs in the native session when a session id is available", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-runner-"));
+    const fakeClaude = join(root, "fake-claude.mjs");
+    const callsFile = join(root, "claude-calls.jsonl");
+    const oldBin = process.env.PRISM_WORKFLOW_CLAUDE_BIN;
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const resumeIndex = args.indexOf('--resume');",
+      "const agentIndex = args.indexOf('--agent');",
+      "const prompt = args.at(-1);",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, prompt }) + '\\n');`,
+      "const repaired = resumeIndex >= 0;",
+      "console.log(JSON.stringify({ result: JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }), is_error: false, session_id: 'claude-session-1', duration_ms: 10, num_turns: repaired ? 2 : 1 }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+    process.env.PRISM_WORKFLOW_CLAUDE_BIN = fakeClaude;
+
+    try {
+      const task = defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build the slice.",
+        output: PatchReport,
+        worker: { worker: "claude-code" },
+        finish: {
+          maxRepairs: 1,
+          criteria: [{
+            name: "summary-prefix",
+            check: ({ output }) => output.summary.startsWith("ok")
+              ? Effect.void
+              : Effect.fail(new Error("summary must start with ok")),
+          }],
+        },
+      });
+      const workflow = defineWorkflow({ name: "runner-claude-native-repair", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
+      });
+
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; prompt: string });
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({ agent: "builder" });
+      expect(calls[0]?.prompt).toContain("Build the slice.");
+      expect(calls[1]).toMatchObject({ resume: "claude-session-1" });
+      expect(calls[1]?.agent).toBeUndefined();
+      expect(calls[1]?.prompt).not.toContain("Build the slice.");
+      expect(calls[1]?.prompt).toContain("summary must start with ok");
+      expect(result.tasks[0]?.metadata).toMatchObject({
+        adapter: "claude-code",
+        sessionId: "claude-session-1",
+        repairExecution: {
+          mode: "native-continuation",
+          continuation: { adapter: "claude-code", sessionId: "claude-session-1" },
+        },
+        finish: {
+          repairs: 1,
+          repairMode: "native-continuation",
+        },
+      });
+    } finally {
+      if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_BIN;
+      else process.env.PRISM_WORKFLOW_CLAUDE_BIN = oldBin;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to a fresh Claude repair when continuation metadata is missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-runner-"));
+    const fakeClaude = join(root, "fake-claude-fallback.mjs");
+    const callsFile = join(root, "claude-fallback-calls.jsonl");
+    const oldBin = process.env.PRISM_WORKFLOW_CLAUDE_BIN;
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const resumeIndex = args.indexOf('--resume');",
+      "const prompt = args.at(-1);",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, prompt }) + '\\n');`,
+      "const repaired = prompt.includes('Your previous response did not satisfy');",
+      "console.log(JSON.stringify({ result: JSON.stringify({ summary: repaired ? 'ok after fallback' : 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+    process.env.PRISM_WORKFLOW_CLAUDE_BIN = fakeClaude;
+
+    try {
+      const task = defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build the slice.",
+        output: PatchReport,
+        worker: { worker: "claude-code" },
+        finish: {
+          maxRepairs: 1,
+          criteria: [{
+            name: "summary-prefix",
+            check: ({ output }) => output.summary.startsWith("ok")
+              ? Effect.void
+              : Effect.fail(new Error("summary must start with ok")),
+          }],
+        },
+      });
+      const workflow = defineWorkflow({ name: "runner-claude-fallback-repair", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
+      });
+
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; prompt: string });
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.resume).toBeUndefined();
+      expect(calls[1]?.prompt).toContain("Build the slice.");
+      expect(calls[1]?.prompt).toContain("summary must start with ok");
+      expect(result.tasks[0]?.metadata).toMatchObject({
+        repairExecution: {
+          mode: "fresh-executor-invocation",
+          fallbackReason: "missing-session-id",
+        },
+        finish: {
+          repairs: 1,
+          repairMode: "fresh-executor-invocation",
+        },
+      });
+    } finally {
+      if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_BIN;
+      else process.env.PRISM_WORKFLOW_CLAUDE_BIN = oldBin;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("does not repair ordinary executor failures", async () => {
@@ -409,10 +556,10 @@ describe("workflow runner", () => {
     });
 
     expect(result.output).toBe("repaired");
-    expect(result.tasks[0]?.metadata?.finish).toEqual({
+    expect(result.tasks[0]?.metadata?.finish).toMatchObject({
       repairs: 1,
       criteria: [],
-      repairMode: "new-executor-invocation",
+      repairMode: "fresh-executor-invocation",
     });
     expect(prompts[1]).toContain("failed the output schema decode");
   });
@@ -445,11 +592,130 @@ describe("workflow runner", () => {
     });
 
     expect(result.tasks[0]?.output).toEqual({ summary: "done built" });
-    expect(result.tasks[0]?.metadata?.finish).toEqual({
+    expect(result.tasks[0]?.metadata?.finish).toMatchObject({
       repairs: 1,
       criteria: ["mentions-done"],
-      repairMode: "new-executor-invocation",
+      repairMode: "fresh-executor-invocation",
     });
     expect(calls[1]).toContain("Your summary must include the word done.");
+  });
+
+  test("runs judge criteria on bounded decoded output, metadata, task metadata, and selected evidence", async () => {
+    const contexts: unknown[] = [];
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: {
+        criteria: [{
+          kind: "judge",
+          name: "bounded-judge",
+          goal: "Decide whether the report is shippable.",
+          selectEvidence: ({ output, metadata, task }) => ({
+            summary: output.summary,
+            attemptId: metadata?.attemptId,
+            taskId: task.id,
+          }),
+          evaluate: (context) => {
+            contexts.push(context);
+            return Effect.succeed({ verdict: "pass" as const, metadata: { score: 1 } });
+          },
+        }],
+      },
+    });
+    const workflow = defineWorkflow({ name: "runner-judge-bounded", tasks: [build] as const });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async () => ({
+        output: { summary: "done" },
+        metadata: { attemptId: "primary-1" },
+      }),
+    });
+
+    expect(result.tasks[0]?.output).toEqual({ summary: "done" });
+    expect(contexts).toEqual([{
+      goal: "Decide whether the report is shippable.",
+      output: { summary: "done" },
+      metadata: expect.objectContaining({ attemptId: "primary-1" }),
+      task: {
+        id: "build",
+        agent: { plugin: "forge", name: "builder" },
+      },
+      evidence: {
+        summary: "done",
+        attemptId: "primary-1",
+        taskId: "build",
+      },
+    }]);
+    expect(JSON.stringify(contexts[0])).not.toContain("Build the slice.");
+    expect(result.tasks[0]?.metadata?.finish).toMatchObject({
+      repairs: 0,
+      criteria: ["bounded-judge"],
+      judgeRuns: [expect.objectContaining({ criterion: "bounded-judge", verdict: "pass", cached: false })],
+    });
+  });
+
+  test("feeds judge continue feedback into the existing repair path", async () => {
+    const prompts: string[] = [];
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: {
+        maxRepairs: 1,
+        criteria: [{
+          kind: "judge",
+          name: "judge-quality",
+          goal: "Require a done summary.",
+          selectEvidence: ({ output }) => ({ summary: output.summary }),
+          evaluate: ({ output }) => Effect.succeed(
+            output.summary.includes("done")
+              ? { verdict: "pass" as const }
+              : { verdict: "continue" as const, feedback: "Add the word done to the summary." },
+          ),
+        }],
+      },
+    });
+    const workflow = defineWorkflow({ name: "runner-judge-continue", tasks: [build] as const });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        prompts.push(task.prompt);
+        return prompts.length === 1 ? { summary: "built" } : { summary: "done built" };
+      },
+    });
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Add the word done to the summary.");
+    expect(result.tasks[0]?.output).toEqual({ summary: "done built" });
+    expect(result.tasks[0]?.metadata?.finish).toMatchObject({
+      repairs: 1,
+      criteria: ["judge-quality"],
+      repairMode: "fresh-executor-invocation",
+      judgeRuns: [expect.objectContaining({ criterion: "judge-quality", verdict: "pass" })],
+    });
+  });
+
+  test("escalates judge verdicts distinctly from deterministic finish failures", async () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+      finish: {
+        criteria: [{
+          kind: "judge",
+          name: "human-required",
+          evaluate: () => Effect.succeed({ verdict: "escalate" as const, feedback: "Needs human decision." }),
+        }],
+      },
+    });
+    const workflow = defineWorkflow({ name: "runner-judge-escalate", tasks: [build] as const });
+
+    await expect(runWorkflow(workflow, {
+      executeTask: async () => ({ summary: "ambiguous" }),
+    })).rejects.toThrow(WorkflowTaskEscalatedError);
   });
 });

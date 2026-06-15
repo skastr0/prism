@@ -14,11 +14,16 @@ export interface WorkflowWorkerAdapterOptions {
   readonly model?: string;
   readonly profile?: string;
   readonly abortSignal?: AbortSignal;
+  readonly context?: WorkflowTaskExecutionContext;
 }
 
 export interface WorkflowWorkerAdapter {
   readonly id: string;
   readonly runTask: (
+    task: AnyWorkflowTask,
+    options: WorkflowWorkerAdapterOptions,
+  ) => Promise<WorkflowTaskExecution>;
+  readonly continueTask?: (
     task: AnyWorkflowTask,
     options: WorkflowWorkerAdapterOptions,
   ) => Promise<WorkflowTaskExecution>;
@@ -57,6 +62,12 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: task.worker?.model ?? options.model,
       abortSignal: options.abortSignal,
+    }),
+    continueTask: (task, options) => runClaudeWorkflowTask(task, {
+      cwd: options.cwd,
+      model: task.worker?.model ?? options.model,
+      abortSignal: options.abortSignal,
+      repair: options.context?.repair,
     }),
   },
   "codex-cli": {
@@ -127,6 +138,10 @@ export const createWorkflowWorkerExecutor = (input: {
       throw new UnsupportedWorkflowWorkerError("<missing>", supportedWorkflowWorkers());
     }
     const adapter = getWorkflowWorkerAdapter(worker);
-    return adapter.runTask(task, { cwd: input.cwd, model: input.model, abortSignal: context?.abortSignal });
+    const options = { cwd: input.cwd, model: input.model, abortSignal: context?.abortSignal, context };
+    if (context?.repair?.mode === "native-continuation" && adapter.continueTask !== undefined) {
+      return adapter.continueTask(task, options);
+    }
+    return adapter.runTask(task, options);
   };
 };

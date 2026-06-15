@@ -56,11 +56,51 @@ export interface WorkflowFinishCriterionContext<Output> {
   readonly metadata?: Record<string, unknown>;
 }
 
-export interface WorkflowFinishCriterion<Output> {
+export interface WorkflowDeterministicFinishCriterion<Output> {
+  readonly kind?: "deterministic";
   readonly name: string;
   readonly check: (context: WorkflowFinishCriterionContext<Output>) => Effect.Effect<void, unknown>;
   readonly repairPrompt?: (error: unknown, context: WorkflowFinishCriterionContext<Output>) => string;
 }
+
+export type WorkflowJudgeVerdict =
+  | { readonly verdict: "pass"; readonly feedback?: string; readonly metadata?: Record<string, unknown> }
+  | { readonly verdict: "continue"; readonly feedback: string; readonly metadata?: Record<string, unknown> }
+  | { readonly verdict: "fail"; readonly feedback?: string; readonly metadata?: Record<string, unknown> }
+  | { readonly verdict: "escalate"; readonly feedback?: string; readonly metadata?: Record<string, unknown> };
+
+export interface WorkflowJudgeTaskMetadata {
+  readonly id: string;
+  readonly agent: {
+    readonly plugin: string;
+    readonly name: string;
+  };
+  readonly cacheKey?: string;
+  readonly worker?: WorkflowTaskWorkerOptions;
+}
+
+export interface WorkflowJudgeEvidenceSelectionContext<Output> {
+  readonly goal: string;
+  readonly output: Output;
+  readonly metadata?: Record<string, unknown>;
+  readonly task: WorkflowJudgeTaskMetadata;
+}
+
+export interface WorkflowJudgeCriterionContext<Output, Evidence = unknown> extends WorkflowJudgeEvidenceSelectionContext<Output> {
+  readonly evidence: Evidence;
+}
+
+export interface WorkflowJudgeFinishCriterion<Output, Evidence = unknown> {
+  readonly kind: "judge";
+  readonly name: string;
+  readonly goal?: string | ((context: Omit<WorkflowJudgeEvidenceSelectionContext<Output>, "goal">) => string);
+  readonly selectEvidence?: (context: WorkflowJudgeEvidenceSelectionContext<Output>) => Evidence;
+  readonly evaluate: (context: WorkflowJudgeCriterionContext<Output, Evidence>) => Effect.Effect<WorkflowJudgeVerdict, unknown>;
+}
+
+export type WorkflowFinishCriterion<Output> =
+  | WorkflowDeterministicFinishCriterion<Output>
+  | WorkflowJudgeFinishCriterion<Output>;
 
 export interface WorkflowFinishOptions<Output> {
   readonly maxRepairs?: number;

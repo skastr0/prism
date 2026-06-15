@@ -1433,6 +1433,7 @@ export const compilePluginForTarget = (
           scope: options.scope,
           composed: composedForLowering,
           cacheDescriptors: agentResult.cacheDescriptors,
+          ...(surfaces.orbits ? { orbits } : {}),
         }),
       );
       if (options.projectPath) {

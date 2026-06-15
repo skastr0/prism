@@ -15,6 +15,7 @@ import {
   type CompileManifestManagedSkill,
   type CompileManifestModelspace,
   type CompileManifestSkillspace,
+  type CompileManifestOrbit,
   type CompileManifestTrait,
   type HarnessId,
   type HarnessScope,
@@ -180,6 +181,8 @@ export const buildCompileManifestForTarget = (options: {
   readonly scope: HarnessScope;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
+  /** When provided, this compile pass is authoritative for the source plugin's orbit identities (from prepareTargetOrbits, non-templates only). Threaded only for orbit-targeting compiles to avoid clearing on other targets. Minimal {name} shape (no sourcePath/phases/body). */
+  readonly orbits?: ReadonlyArray<{ readonly name: string }>;
 }): CompileManifest => {
   const agents: Record<string, CompileManifestAgent> = { ...options.base.agents };
   const currentIds = new Set<string>();
@@ -321,6 +324,27 @@ export const buildCompileManifestForTarget = (options: {
   }
   const traits: Record<string, CompileManifestTrait> = traitAccum;
 
+  // Derive top-level orbits Record (keyed "plugin:name") from the authoritative
+  // orbits list when passed (this target compile targeted orbits for the plugin).
+  // Only plugin+name (no sourcePath, no phases/body). Prune only this plugin's
+  // prior entries when authoritative; carry other plugins from base (non-clearing
+  // when compile targets other surfaces only).
+  const orbitsRecord: Record<string, { plugin: string; name: string }> = {
+    ...(options.base as any).orbits ?? {},
+  };
+  if (options.orbits !== undefined) {
+    for (const key of Object.keys(orbitsRecord)) {
+      if (orbitsRecord[key]!.plugin === options.registry.pluginName) {
+        delete orbitsRecord[key];
+      }
+    }
+    for (const o of options.orbits) {
+      const id = `${options.registry.pluginName}:${o.name}`;
+      orbitsRecord[id] = { plugin: options.registry.pluginName, name: o.name };
+    }
+  }
+  const orbits: Record<string, CompileManifestOrbit> = orbitsRecord;
+
   const registries = collectPluginRegistries(options.registry);
   const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
   const livePluginNames = new Set(Object.values(agents).map((agent) => agent.plugin));
@@ -345,6 +369,7 @@ export const buildCompileManifestForTarget = (options: {
     modelspaces,
     skills,
     traits,
+    orbits,
   });
 };
 
@@ -355,6 +380,8 @@ export const updateCompileManifestForTarget = async (options: {
   readonly scope: HarnessScope;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
+  /** Forwarded from surfaces.orbits pass in compilePluginForTarget; undefined means non-authoritative for orbits (carry base). */
+  readonly orbits?: ReadonlyArray<{ readonly name: string }>;
 }): Promise<void> =>
   withSnapshotLock(options.prismHome, async () => {
     const { manifest } = await readCompileManifest(options.prismHome);
@@ -367,6 +394,7 @@ export const updateCompileManifestForTarget = async (options: {
         scope: options.scope,
         composed: options.composed,
         cacheDescriptors: options.cacheDescriptors,
+        ...(options.orbits ? { orbits: options.orbits } : {}),
       }),
     });
   });

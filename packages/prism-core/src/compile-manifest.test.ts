@@ -89,6 +89,10 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
     "forge:reviewable": { id: "forge:reviewable", ref: "reviewable" },
     "core:committable": { id: "core:committable", ref: "core:committable" },
   },
+  orbits: {
+    "forge:delivery-contract": { plugin: "forge", name: "delivery-contract" },
+    "core:experiment": { plugin: "core", name: "experiment" },
+  },
 });
 
 test("compile manifest decodes and encodes deterministically", () => {
@@ -144,6 +148,10 @@ test("compile manifest sorts records and arrays into stable bytes", () => {
     traits: {
       "forge:reviewable": manifest.traits["forge:reviewable"]!,
       "core:committable": manifest.traits["core:committable"]!,
+    },
+    orbits: {
+      "core:experiment": manifest.orbits["core:experiment"]!,
+      "forge:delivery-contract": manifest.orbits["forge:delivery-contract"]!,
     },
   };
 

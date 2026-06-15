@@ -44,6 +44,12 @@ export const CompileManifestTraitSchema = Schema.Struct({
 });
 export type CompileManifestTrait = typeof CompileManifestTraitSchema.Type;
 
+export const CompileManifestOrbitSchema = Schema.Struct({
+  plugin: Schema.String,
+  name: Schema.String,
+});
+export type CompileManifestOrbit = typeof CompileManifestOrbitSchema.Type;
+
 export const CompileManifestGrantsSchema = Schema.Struct({
   tools: Schema.Array(Schema.String),
   skills: Schema.Array(Schema.String),
@@ -111,6 +117,7 @@ const CompileManifestV1Schema = Schema.Struct({
   modelspaces: Schema.Record({ key: Schema.String, value: CompileManifestModelspaceSchema }),
   skills: Schema.Record({ key: Schema.String, value: Schema.Union(CompileManifestManagedSkillSchema, CompileManifestSkillspaceSchema) }),
   traits: Schema.Record({ key: Schema.String, value: CompileManifestTraitSchema }),
+  orbits: Schema.Record({ key: Schema.String, value: CompileManifestOrbitSchema }),
   manifestHash: Schema.String,
 });
 
@@ -182,6 +189,13 @@ const sortTraits = (traits: ReadonlyArray<CompileManifestTrait>): CompileManifes
       : left.id < right.id ? -1 : 1,
   );
 
+const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifestOrbit[] =>
+  [...orbits].sort((left, right) =>
+    left.plugin === right.plugin
+      ? left.name.localeCompare(right.name)
+      : left.plugin.localeCompare(right.plugin),
+  );
+
 const normalizeAgentForEncoding = (agent: CompileManifestAgent): CompileManifestAgent => ({
   ...agent,
   traits: sortTraits(agent.traits),
@@ -225,6 +239,7 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
         },
   ),
   traits: sortRecord(manifest.traits, (trait) => trait),
+  orbits: sortRecord(manifest.orbits, (entry) => entry),
   manifestHash: manifest.manifestHash,
 });
 
@@ -281,6 +296,7 @@ export const emptyCompileManifest = (): CompileManifest => {
     modelspaces: {},
     skills: {},
     traits: {},
+    orbits: {},
     manifestHash: "",
   };
   return { ...manifest, manifestHash: computeCompileManifestHash(manifest) };

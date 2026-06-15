@@ -119,6 +119,23 @@ describe("compile manifest writer", () => {
     // traits populated from per-agent traits only (deduped by id, source-path free)
     expect(Object.keys(pruned.traits).sort()).toEqual(["forge:builder"]);
     expect(pruned.traits["forge:builder"]).toEqual({ id: "forge:builder", ref: "builder" });
+
+    // orbits support: explicit pass on build populates minimal source-free entries for the plugin
+    const withOrbits = buildCompileManifestForTarget({
+      base: emptyCompileManifest(),
+      registry: registry(),
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "a".repeat(64), ["run_shell"])],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
+      orbits: [{ name: "delivery-contract" }, { name: "experiment-template" }], // note: caller already filtered templates, but test uses name only
+    });
+    expect(Object.keys(withOrbits.orbits).sort()).toEqual(["forge:delivery-contract", "forge:experiment-template"]);
+    expect(withOrbits.orbits["forge:delivery-contract"]).toEqual({ plugin: "forge", name: "delivery-contract" });
+    expect(withOrbits.orbits["forge:experiment-template"]).toEqual({ plugin: "forge", name: "experiment-template" });
+    // no sourcePath etc in manifest orbit entries
+    expect(JSON.stringify(withOrbits.orbits)).not.toContain("sourcePath");
+    expect(verifyCompileManifestHash(withOrbits)).toBe(true);
   });
 
   test("commit/read round-trips deterministically and corrupt files quarantine", async () => {

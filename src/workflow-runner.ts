@@ -595,7 +595,13 @@ const executeWorkflowTask = async (input: {
     let rawOutput: unknown;
     let decodedOutput: unknown = undefined;
     let metadata: Record<string, unknown> | undefined;
-    const maxRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
+    // Objective decode/parse repair is independent of finish criteria: a malformed
+    // output is unambiguously wrong and re-promptable, so it self-heals by default
+    // even when the task declares no `finish`. Subjective finish-criterion "continue"
+    // repair stays gated on the author-declared finish budget.
+    const DEFAULT_DECODE_REPAIRS = 2;
+    const decodeRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? DEFAULT_DECODE_REPAIRS;
+    const finishRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
     let attemptTask = task;
     let repairs = 0;
     let pendingRepair: WorkflowTaskRepairContext | undefined;
@@ -668,7 +674,7 @@ const executeWorkflowTask = async (input: {
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
-        if (error instanceof WorkflowOutputParseError && repairs < maxRepairs) {
+        if (error instanceof WorkflowOutputParseError && repairs < decodeRepairs) {
           recordEvent(store, runId, task.id, "task.decode.failed", {
             attempt: repairs,
             error: error.message,
@@ -705,7 +711,7 @@ const executeWorkflowTask = async (input: {
       if (Either.isLeft(decoded)) {
         const error = decoded.left;
         recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
-        if (repairs < maxRepairs) {
+        if (repairs < decodeRepairs) {
           repairs += 1;
           const repairPrompt = schemaRepairPrompt(error);
           beginRepair("output-schema", repairPrompt);
@@ -757,7 +763,7 @@ const executeWorkflowTask = async (input: {
         output: decodedOutput,
         judgeRuns: finish.judgeRuns,
       });
-      if (finish.status === "continue" && repairs < maxRepairs) {
+      if (finish.status === "continue" && repairs < finishRepairs) {
         repairs += 1;
         beginRepair(finish.criterion, finish.repairPrompt);
         continue;

@@ -8,7 +8,7 @@ import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
-import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions } from "./workflows.js";
+import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
 
 const tempRoots: string[] = [];
 
@@ -59,7 +59,7 @@ const deadPid = async (): Promise<number> => {
 const createWorkflow = (options?: {
   readonly prompt?: string;
   readonly agent?: WorkflowAgentRef;
-  readonly worker?: string;
+  readonly worker?: WorkflowWorkerId;
   readonly model?: string;
   readonly finish?: WorkflowFinishOptions<{ summary: string }>;
 }) => {
@@ -845,7 +845,7 @@ describe("workflow store", () => {
       },
     });
 
-    const failedWorkflow = createWorkflow({ prompt: "Return malformed output." });
+    const failedWorkflow = createWorkflow({ prompt: "Return malformed output.", finish: { maxRepairs: 0 } });
     const failedRunId = store.createRun(failedWorkflow.name);
     const failed = await runWorkflow(failedWorkflow, {
       store,
@@ -1218,7 +1218,7 @@ describe("workflow store", () => {
   test("runner records decode failures in run history", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
-    const workflow = createWorkflow();
+    const workflow = createWorkflow({ finish: { maxRepairs: 0 } });
 
     await expect(runWorkflow(workflow, {
       store,
@@ -1253,6 +1253,29 @@ describe("workflow store", () => {
       "task.failed",
       "run.failed",
     ]);
+    store.close();
+  });
+
+  test("self-heals a schema-decode failure by default when no finish block is set", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow(); // no finish block -> objective decode repair is on by default
+    let calls = 0;
+    await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return calls === 1 ? { summary: 42 } : { summary: "healed" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    const runId = store.listRuns()[0]!.runId;
+    expect(store.listRuns()[0]?.status).toBe("completed");
+    const tasks = store.listRunTasks(runId);
+    expect(tasks[0]?.status).toBe("completed");
+    expect(tasks[0]?.output).toEqual({ summary: "healed" });
+    expect(store.listRunEvents(runId).map((event) => event.type)).toContain("task.repair.started");
     store.close();
   });
 
@@ -1351,6 +1374,7 @@ describe("workflow store", () => {
       agent: reviewer,
       prompt: "Review the slice.",
       output: ReviewOutput,
+      finish: { maxRepairs: 0 },
     });
     const workflow = defineWorkflow({ name: "partial-failure-smoke", tasks: [build, review] as const });
 

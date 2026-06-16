@@ -1,4 +1,4 @@
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowWorkerId } from "./workflows.js";
 import { runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
 import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
@@ -111,7 +111,7 @@ const workflowWorkerAdapters = {
       abortSignal: options.abortSignal,
     }),
   },
-} as const satisfies Record<string, WorkflowWorkerAdapter>;
+} as const satisfies Record<WorkflowWorkerId, WorkflowWorkerAdapter>;
 
 export const supportedWorkflowWorkers = (): ReadonlyArray<string> =>
   Object.keys(workflowWorkerAdapters).sort();

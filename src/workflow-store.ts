@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
-import { computeContentHash } from "./content-hash.js";
+import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
 import type { AnyWorkflowTask, WorkflowJudgeVerdict, WorkflowRuntimeOptions } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
@@ -357,7 +357,7 @@ export const workflowTaskIdentity = (
     workflow,
     taskId: task.id,
     cacheKey: task.cacheKey ?? task.id,
-    promptHash: computeContentHash(JSON.stringify({
+    promptHash: stableJsonHash({
       identityVersion: WORKFLOW_TASK_IDENTITY_VERSION,
       workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
       workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
@@ -366,7 +366,7 @@ export const workflowTaskIdentity = (
       workerSemantics: workflowWorkerSemanticsVersion(worker),
       model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
       profile: task.worker?.profile ?? null,
-      outputSchema: (task.output as { readonly ast?: unknown }).ast ?? null,
+      outputSchema: ((task.output as { readonly ast?: unknown }).ast ?? null) as StableJsonValue,
       finish: {
         maxRepairs: task.finish?.maxRepairs ?? 0,
         criteria: task.finish?.criteria?.map((criterion) => ({
@@ -384,7 +384,7 @@ export const workflowTaskIdentity = (
             }),
         })) ?? [],
       },
-    })),
+    } as StableJsonValue),
     agentManifestHash: task.agent.manifestHash,
   };
 };

@@ -8,7 +8,7 @@ export type StableJsonValue =
   | readonly StableJsonValue[]
   | { readonly [key: string]: StableJsonValue | undefined };
 
-const compareCodePoint = (left: string, right: string): number => {
+export const compareCodePoint = (left: string, right: string): number => {
   const normalizedLeft = left.normalize("NFC");
   const normalizedRight = right.normalize("NFC");
   if (normalizedLeft === normalizedRight) return 0;

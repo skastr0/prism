@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
+import { stableJsonHash } from "@skastr0/prism-core/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
@@ -1716,5 +1717,69 @@ describe("workflow store", () => {
     expect(second.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.output).toEqual({ summary: "second" });
     store.close();
+  });
+
+  test("prompt hash is produced via canonical stableJsonHash pipeline (key-order and non-ASCII stable)", () => {
+    // Verify: promptHash equals what stableJsonHash would produce, not what a raw JSON.stringify would.
+    // This proves key-order independence: stableJsonHash sorts keys before hashing.
+    const workflow = createWorkflow({ worker: "grok", model: "grok-build" });
+    const task = workflow.tasks[0]!;
+    const identity = workflowTaskIdentity(workflow.name, task);
+    const outputSchema = (task.output as { readonly ast?: unknown }).ast ?? null;
+
+    // Construct the same payload as workflowTaskIdentity does internally in canonical order.
+    const canonicalOrder = {
+      identityVersion: 2,
+      workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+      workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
+      prompt: task.prompt,
+      worker: task.worker?.worker ?? null,
+      workerSemantics: "native-agent-v1",
+      model: task.worker?.model ?? null,
+      profile: task.worker?.profile ?? null,
+      outputSchema,
+      finish: { maxRepairs: task.finish?.maxRepairs ?? 0, criteria: task.finish?.criteria?.map((criterion) => ({
+        kind: criterion.kind ?? "deterministic",
+        name: criterion.name,
+        ...(criterion.kind === "judge"
+          ? {
+            goal: typeof criterion.goal === "function" ? criterion.goal.toString() : criterion.goal ?? null,
+            selectEvidence: criterion.selectEvidence?.toString() ?? null,
+            evaluate: criterion.evaluate.toString(),
+          }
+          : {
+            check: criterion.check.toString(),
+            repairPrompt: criterion.repairPrompt?.toString() ?? null,
+          }),
+      })) ?? [] },
+    };
+
+    // Build the same payload in a reversed key order to prove stableJsonHash is key-order independent.
+    const reversedOrder = {
+      finish: canonicalOrder.finish,
+      outputSchema: canonicalOrder.outputSchema,
+      profile: canonicalOrder.profile,
+      model: canonicalOrder.model,
+      workerSemantics: canonicalOrder.workerSemantics,
+      worker: canonicalOrder.worker,
+      prompt: canonicalOrder.prompt,
+      workerJsonInstructionSource: canonicalOrder.workerJsonInstructionSource,
+      workerJsonContractVersion: canonicalOrder.workerJsonContractVersion,
+      identityVersion: canonicalOrder.identityVersion,
+    };
+
+    // Raw JSON.stringify is insertion-order dependent and produces different strings.
+    const rawCanonical = computeContentHash(JSON.stringify(canonicalOrder));
+    const rawReversed = computeContentHash(JSON.stringify(reversedOrder));
+    expect(rawCanonical).not.toBe(rawReversed);
+
+    // stableJsonHash is key-order independent — both orderings must hash identically.
+    const stableCanonical = stableJsonHash(canonicalOrder as Parameters<typeof stableJsonHash>[0]);
+    const stableReversed = stableJsonHash(reversedOrder as Parameters<typeof stableJsonHash>[0]);
+    expect(stableCanonical).toBe(stableReversed);
+
+    // The identity promptHash must equal the stable hash, proving it uses stableJsonHash.
+    expect(identity.promptHash).toBe(stableCanonical);
+    expect(identity.promptHash).toBe(stableReversed);
   });
 });

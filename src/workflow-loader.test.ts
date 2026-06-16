@@ -48,12 +48,9 @@ const workflowSource = (
   exportKind: "default" | "named" = "default",
   options?: { readonly worker?: string; readonly model?: string },
 ) => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",
@@ -83,12 +80,9 @@ ${exportKind === "default" ? "export default workflow;" : "export { workflow };"
 };
 
 const dynamicWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Effect, Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Effect, Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",
@@ -127,12 +121,9 @@ export default defineWorkflow({
 };
 
 const workerModelWorkflowSource = (worker?: string) => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",
@@ -167,12 +158,9 @@ export default defineWorkflow({ name: "worker-model-smoke", tasks: [build, revie
 };
 
 const ampWorkerModelWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",
@@ -207,12 +195,9 @@ export default defineWorkflow({ name: "amp-worker-model-smoke", tasks: [build, r
 };
 
 const antigravityWorkerModelWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",
@@ -247,12 +232,9 @@ export default defineWorkflow({ name: "antigravity-worker-model-smoke", tasks: [
 };
 
 const workerRoutingWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",
@@ -286,12 +268,9 @@ export default defineWorkflow({ name: "worker-routing-smoke", tasks: [build, rev
 };
 
 const allTaskWorkersWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
   kind: "agent-ref",

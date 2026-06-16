@@ -227,23 +227,65 @@ export default effect;
 `;
 };
 
+/**
+ * The workflow DSL runtime. Off-repo workflow files import { defineTask,
+ * defineWorkflow } from "prism"; this module supplies those builders with
+ * behavior identical to src/workflows.ts. Schema is read from the binary's
+ * embedded Effect (globalThis.__prism_effect) so Schema.isSchema and
+ * decodeTaskOutput operate on the binary's Effect instance.
+ */
+const WORKFLOW_DSL_RUNTIME_JS = `
+const effect = globalThis.__prism_effect;
+if (!effect) {
+  throw new Error("prism Effect runtime bridge was not initialized");
+}
+const Schema = effect.Schema;
+
+export const defineTask = (definition) => ({
+  kind: "workflow-task",
+  ...definition,
+});
+
+export function defineWorkflow(definition) {
+  if ("run" in definition) {
+    return {
+      kind: "workflow",
+      name: definition.name,
+      tasks: [],
+      run: definition.run,
+    };
+  }
+  return {
+    kind: "workflow",
+    ...definition,
+  };
+}
+
+export const decodeTaskOutput = (task, value) =>
+  Schema.decodeUnknownEither(task.output)(value);
+`;
+
 let importRuntimePaths: Promise<{
   readonly authoring: string;
   readonly effect: string;
+  readonly workflowDsl: string;
 }> | undefined;
 
-const getImportRuntimePaths = async (): Promise<{
+export const getImportRuntimePaths = async (): Promise<{
   readonly authoring: string;
   readonly effect: string;
+  readonly workflowDsl: string;
 }> => {
   importRuntimePaths ??= (async () => {
     const fs = await import("node:fs/promises");
     const dir = await fs.mkdtemp(join(tmpdir(), "prism-authoring-"));
     const authoringPath = join(dir, "prism-authoring-runtime.mjs");
     const effectPath = join(dir, "effect-runtime.mjs");
+    const workflowDslPath = join(dir, "workflow-dsl-runtime.mjs");
     await fs.writeFile(authoringPath, AUTHORING_RUNTIME_JS, "utf8");
     await fs.writeFile(effectPath, makeEffectRuntimeJs(), "utf8");
-    return { authoring: authoringPath, effect: effectPath };
+    await fs.writeFile(workflowDslPath, WORKFLOW_DSL_RUNTIME_JS, "utf8");
+    return { authoring: authoringPath, effect: effectPath, workflowDsl: workflowDslPath };
   })();
 
   return importRuntimePaths;
@@ -324,40 +366,67 @@ const rewritePluginRuntimeDependencyImports = async (
   });
 };
 
+/**
+ * Resolved targets for the three Prism-owned virtual specifiers. The
+ * plugin-compile path maps `prism` to the identity-stub authoring runtime and
+ * leaves `prism/refs` unmapped; the workflow path maps `prism` to the workflow
+ * DSL runtime and `prism/refs` to the generated project refs file. The mode is
+ * carried explicitly through this map, never via a global flag.
+ */
+interface LoadSpecifierOverrides {
+  /** Target for bare `prism` imports. */
+  readonly prism: string;
+  /** Target for bare `effect` imports. */
+  readonly effect: string;
+  /** Target for bare `prism/refs` imports; absent when not applicable (plugin compile). */
+  readonly prismRefs?: string;
+}
+
+const escapeRegExpLiteral = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const replaceBareSpecifier = (
+  source: string,
+  specifier: string,
+  target: string,
+): string => {
+  const escaped = escapeRegExpLiteral(specifier);
+  return source
+    .replace(
+      new RegExp(`(\\bfrom\\s*)(["'])${escaped}\\2`, "g"),
+      (_match, prefix) => `${prefix}${JSON.stringify(target)}`,
+    )
+    .replace(
+      new RegExp(`(\\bimport\\s*\\(\\s*)(["'])${escaped}\\2(\\s*\\))`, "g"),
+      (_match, prefix, _quote, suffix) => `${prefix}${JSON.stringify(target)}${suffix}`,
+    );
+};
+
 const rewriteImportSpecifiers = async (
   source: string,
-  authoringRuntimeSpecifier: string,
-  effectRuntimeSpecifier: string,
+  overrides: LoadSpecifierOverrides,
   pluginRoot: string,
 ): Promise<string> => {
   const rewrittenBuiltins = rewriteNodeSqliteImportForBun(source);
   const rewrittenPluginDeps = await rewritePluginRuntimeDependencyImports(rewrittenBuiltins, pluginRoot);
 
-  return rewrittenPluginDeps
-    .replace(
-      /(\bfrom\s*)(["'])prism\2/g,
-      (_match, prefix) => `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}`,
-    )
-    .replace(
-      /(\bimport\s*\(\s*)(["'])prism\2(\s*\))/g,
-      (_match, prefix, _quote, suffix) =>
-        `${prefix}${JSON.stringify(authoringRuntimeSpecifier)}${suffix}`,
-    )
-    .replace(
-      /(\bfrom\s*)(["'])effect\2/g,
-      (_match, prefix) => `${prefix}${JSON.stringify(effectRuntimeSpecifier)}`,
-    )
-    .replace(
-      /(\bimport\s*\(\s*)(["'])effect\2(\s*\))/g,
-      (_match, prefix, _quote, suffix) =>
-        `${prefix}${JSON.stringify(effectRuntimeSpecifier)}${suffix}`,
-    );
+  // `prism/refs` must be rewritten before bare `prism` so the longer specifier
+  // wins (the bare-prism regex anchors on the closing quote and so cannot match
+  // `prism/refs`, but order keeps the intent explicit).
+  let rewritten = rewrittenPluginDeps;
+  if (overrides.prismRefs !== undefined) {
+    rewritten = replaceBareSpecifier(rewritten, "prism/refs", overrides.prismRefs);
+  }
+  rewritten = replaceBareSpecifier(rewritten, "prism", overrides.prism);
+  rewritten = replaceBareSpecifier(rewritten, "effect", overrides.effect);
+  return rewritten;
 };
 
 const TRANSFORMED_PLUGIN_CACHE_TTL_MS = 30_000;
 const MAX_TRANSFORMED_PLUGIN_CACHE_ENTRIES = 16;
 
 interface TransformedPluginRoot {
+  readonly cacheKey: string;
   readonly pluginRoot: string;
   readonly root: string;
   readonly outputParent: string;
@@ -421,10 +490,10 @@ const cleanupTransformedPluginRoot = async (
 ): Promise<void> => {
   if (entry.activeImports > 0) return;
 
-  const current = await transformedPluginRoots.get(entry.pluginRoot)?.catch(() => undefined);
+  const current = await transformedPluginRoots.get(entry.cacheKey)?.catch(() => undefined);
   if (current !== entry) return;
 
-  transformedPluginRoots.delete(entry.pluginRoot);
+  transformedPluginRoots.delete(entry.cacheKey);
   const fs = await import("node:fs/promises");
   await fs.rm(entry.outputParent, { recursive: true, force: true });
 };
@@ -470,8 +539,12 @@ const pruneTransformedPluginRootCache = async (): Promise<void> => {
   }
 };
 
-const getTransformedPluginRoot = async (pluginRoot: string): Promise<TransformedPluginRoot> => {
-  const existing = transformedPluginRoots.get(pluginRoot);
+const getTransformedPluginRoot = async (
+  cacheKey: string,
+  pluginRoot: string,
+  overrides: LoadSpecifierOverrides,
+): Promise<TransformedPluginRoot> => {
+  const existing = transformedPluginRoots.get(cacheKey);
   if (existing) {
     const entry = await existing;
     entry.lastUsed = Date.now();
@@ -484,19 +557,16 @@ const getTransformedPluginRoot = async (pluginRoot: string): Promise<Transformed
 
   const pending = (async () => {
     const fs = await import("node:fs/promises");
-    const runtimePaths = await getImportRuntimePaths();
-    const authoringRuntimeSpecifier = toFileSpecifier(runtimePaths.authoring);
-    const effectRuntimeSpecifier = toFileSpecifier(runtimePaths.effect);
     const outputParent = await fs.mkdtemp(join(tmpdir(), "prism-sources-"));
     await copyTransformedPluginTree({
       pluginRoot,
       outputParent,
-      authoringRuntimeSpecifier,
-      effectRuntimeSpecifier,
+      overrides,
       visited: new Set<string>(),
     });
 
     return {
+      cacheKey,
       pluginRoot,
       root: join(outputParent, basename(pluginRoot)),
       outputParent,
@@ -506,7 +576,7 @@ const getTransformedPluginRoot = async (pluginRoot: string): Promise<Transformed
     };
   })();
 
-  transformedPluginRoots.set(pluginRoot, pending);
+  transformedPluginRoots.set(cacheKey, pending);
   await pruneTransformedPluginRootCache();
   return pending;
 };
@@ -514,8 +584,7 @@ const getTransformedPluginRoot = async (pluginRoot: string): Promise<Transformed
 const copyTransformedPluginTree = async (options: {
   readonly pluginRoot: string;
   readonly outputParent: string;
-  readonly authoringRuntimeSpecifier: string;
-  readonly effectRuntimeSpecifier: string;
+  readonly overrides: LoadSpecifierOverrides;
   readonly visited: Set<string>;
 }): Promise<void> => {
   const fs = await import("node:fs/promises");
@@ -532,8 +601,7 @@ const copyTransformedPluginTree = async (options: {
     const source = await Bun.file(sourcePath).text();
     const rewritten = await rewriteImportSpecifiers(
       source,
-      options.authoringRuntimeSpecifier,
-      options.effectRuntimeSpecifier,
+      options.overrides,
       pluginRoot,
     );
     await fs.mkdir(resolvePath(targetPath, ".."), { recursive: true });
@@ -557,11 +625,55 @@ const copyTransformedPluginTree = async (options: {
   }
 };
 
-const prepareImportWrapper = async (
+/**
+ * The on-disk generated workflow refs file that `prism/refs` resolves to today.
+ * Stays in the current project location (<cwd>/.prism/generated/workflows);
+ * the storage move to ~/.prism/state/projects/<key>/generated is a later glyph.
+ */
+const workflowRefsTargetPath = (): string =>
+  resolvePath(process.cwd(), ".prism", "generated", "workflows", "agents.ts");
+
+/**
+ * Build the specifier overrides for a workflow load. `prism` resolves to the
+ * workflow DSL runtime, `effect` to the embedded Effect bridge, and `prism/refs`
+ * to the generated project refs file (cache-busted so refreshed refs are
+ * re-read across runs in the same process).
+ */
+const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
+  const runtimePaths = await getImportRuntimePaths();
+  const cacheBust = `?t=${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return {
+    prism: toFileSpecifier(runtimePaths.workflowDsl),
+    effect: toFileSpecifier(runtimePaths.effect),
+    prismRefs: `${toFileSpecifier(workflowRefsTargetPath())}${cacheBust}`,
+  };
+};
+
+/** Build the specifier overrides for a plugin-compile load (`prism/refs` is not used). */
+const pluginSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
+  const runtimePaths = await getImportRuntimePaths();
+  return {
+    prism: toFileSpecifier(runtimePaths.authoring),
+    effect: toFileSpecifier(runtimePaths.effect),
+  };
+};
+
+export interface PrepareImportWrapperOptions {
+  /** When true, resolve `prism`/`prism/refs` for workflow execution rather than plugin compilation. */
+  readonly workflow?: boolean;
+}
+
+export const prepareImportWrapper = async (
   sourcePath: string,
+  options: PrepareImportWrapperOptions = {},
 ): Promise<{ readonly specifier: string; readonly cleanup: () => Promise<void> }> => {
   const pluginRoot = await findPluginRoot(sourcePath);
-  const transformed = await getTransformedPluginRoot(pluginRoot);
+  const mode = options.workflow ? "workflow" : "plugin";
+  const overrides = options.workflow
+    ? await workflowSpecifierOverrides()
+    : await pluginSpecifierOverrides();
+  const cacheKey = `${mode}:${pluginRoot}`;
+  const transformed = await getTransformedPluginRoot(cacheKey, pluginRoot, overrides);
   transformed.activeImports += 1;
   transformed.lastUsed = Date.now();
   let cleaned = false;

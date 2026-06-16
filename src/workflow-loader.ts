@@ -1,6 +1,11 @@
-import { pathToFileURL } from "node:url";
 import { Schema } from "effect";
 import { expandPath } from "./fs.js";
+// Importing from load.ts initializes the binary's Effect runtime bridge
+// (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
+// runtime and the file's `from "effect"` rewrite resolve to the binary's
+// Effect instance — making Schema.isSchema and decodeTaskOutput operate on
+// the same Effect the runner uses.
+import { prepareImportWrapper } from "./compile/load.js";
 import type { AnyWorkflowDefinition, AnyWorkflowTask, WorkflowAgentRef } from "./workflows.js";
 
 export interface WorkflowTaskSummary {
@@ -84,7 +89,13 @@ export const loadWorkflowFile = async (
   filePath: string,
 ): Promise<AnyWorkflowDefinition> => {
   const resolved = expandPath(filePath);
-  const module = (await import(`${pathToFileURL(resolved).href}?t=${Date.now()}`)) as WorkflowModule;
+  const wrapper = await prepareImportWrapper(resolved, { workflow: true });
+  let module: WorkflowModule;
+  try {
+    module = (await import(wrapper.specifier)) as WorkflowModule;
+  } finally {
+    await wrapper.cleanup();
+  }
   const candidate = module.workflow ?? module.default;
   if (!isWorkflowDefinition(candidate)) {
     throw new WorkflowLoadError(

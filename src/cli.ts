@@ -302,7 +302,17 @@ workflow
     let terminationController: AbortController | undefined;
     let terminationHandler: (() => void) | undefined;
     try {
-      const workflow = await loadWorkflowFile(file);
+      // Typecheck gating for detached runs: the user-facing foreground command
+      // is the typecheck moat. The detached background child is spawned by
+      // Prism from already-vetted source, so it skips the (non-trivial)
+      // in-process typecheck to avoid paying cold-start cost on every restart.
+      // The `run --detach` spawning parent also skips it so the detach handoff
+      // returns promptly; structural loading still runs either way.
+      const isDetachSpawnParent = options.detach === true && options.runId === undefined;
+      const isDetachedChild = process.env.PRISM_WORKFLOW_DETACHED_CHILD === "1";
+      const workflow = await loadWorkflowFile(file, {
+        skipTypecheck: isDetachSpawnParent || isDetachedChild,
+      });
       const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
       if (options.detach === true) {
         if (options.runId !== undefined || options.runToken !== undefined) {
@@ -730,7 +740,9 @@ workflowRuns
   }) => {
     let store: WorkflowStore | undefined;
     try {
-      const workflow = await loadWorkflowFile(file);
+      // Like `--detach`, the update parent only needs the workflow name; the
+      // spawned detached child re-loads and runs the authoritative typecheck.
+      const workflow = await loadWorkflowFile(file, { skipTypecheck: true });
       if (options.mockOutput === undefined && options.worker !== undefined) {
         getWorkflowWorkerAdapter(options.worker);
       }

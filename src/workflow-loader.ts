@@ -14,6 +14,11 @@ import { typescriptBundleImportPath } from "./compile/runtime-deps.js";
 import { compileManifestPath } from "./compile/compile-manifest.js";
 import { resolvePrismHome } from "./prism-home.js";
 import { deriveProjectKey, projectGeneratedAgentsPath } from "./project-key.js";
+import {
+  buildWorkflowPaths,
+  resolveWorkflowTypeDirs,
+  WORKFLOW_TSCONFIG_FILENAME,
+} from "./workflow-tsconfig.js";
 import type { AnyWorkflowDefinition, AnyWorkflowTask, WorkflowAgentRef } from "./workflows.js";
 
 const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof TypeScript;
@@ -214,39 +219,66 @@ interface TsconfigJson {
 }
 
 /**
- * Load and parse the Prism-generated workflow tsconfig, then augment it with
- * the current project refs path so `prism/refs` resolves to the generated
- * file. Returns null when the tsconfig does not exist (typecheck skipped).
+ * The fixed compilerOptions a workflow file is typechecked under. The `paths`
+ * are layered on top from the resolved type environment.
  */
-const loadWorkflowCompilerOptions = (
-  prismHome: string,
-): TypeScript.CompilerOptions | null => {
-  const tsconfigPath = resolvePath(prismHome, "state", "tsconfig.workflow.json");
-  if (!existsSync(tsconfigPath)) return null;
+const BASE_WORKFLOW_COMPILER_OPTIONS = {
+  target: "ESNext",
+  module: "ESNext",
+  moduleResolution: "bundler",
+  strict: true,
+  skipLibCheck: true,
+  noEmit: true,
+  allowImportingTsExtensions: true,
+} as const;
 
-  let configJson: TsconfigJson;
-  try {
-    configJson = JSON.parse(readFileSync(tsconfigPath, "utf8")) as TsconfigJson;
-  } catch {
-    return null;
-  }
+interface WorkflowTypeEnvironment {
+  readonly compilerOptions: TypeScript.CompilerOptions;
+  /** True when the prism (DSL) declaration surface resolved. */
+  readonly hasPrismTypes: boolean;
+  /** True when the effect declaration surface resolved. */
+  readonly hasEffectTypes: boolean;
+  /** True when the project-keyed generated refs file resolved. */
+  readonly hasRefs: boolean;
+}
+
+/**
+ * Build the workflow type environment for the current project.
+ *
+ * Paths are computed in-memory from the resolved shipped declarations
+ * (prism.d.ts / effect .d.ts) plus the project-keyed generated refs
+ * (~/.prism/state/projects/<key>/generated/agents.ts), so a stale or absent
+ * on-disk tsconfig cannot break a project whose refs exist. When a
+ * Prism-generated tsconfig is present (legacy global or project-keyed), its
+ * non-path compilerOptions are merged underneath as a base; the resolved paths
+ * always win.
+ *
+ * Returns null only when no type surface at all can be resolved — neither prism
+ * nor effect nor refs — meaning there is nothing to typecheck against and the
+ * caller should warn+proceed.
+ */
+const resolveWorkflowTypeEnvironment = (
+  prismHome: string,
+): WorkflowTypeEnvironment | null => {
+  const typeDirs = resolveWorkflowTypeDirs();
+  const refsPath = workflowRefsFilePath(prismHome);
+  const hasRefs = existsSync(refsPath);
+
+  const paths = buildWorkflowPaths({
+    typeDirs,
+    refsFile: hasRefs ? refsPath : undefined,
+  });
+
+  // Merge any on-disk Prism-generated tsconfig's non-path options as a base.
+  // Prefer the project-keyed location (toolchain & distribution §5), falling
+  // back to the legacy global file. The resolved `paths` above always override.
+  const onDiskBase = readOnDiskWorkflowCompilerOptions(prismHome);
 
   const compilerOptionsJson: Record<string, unknown> = {
-    ...(configJson.compilerOptions ?? {}),
+    ...BASE_WORKFLOW_COMPILER_OPTIONS,
+    ...onDiskBase,
+    paths,
   };
-
-  // Inject `prism/refs` → generated refs file for the current project (cwd's
-  // git-root-else-cwd key). Always set it so that a workflow that imports
-  // prism/refs can be typechecked even when the tsconfig was generated without
-  // a refsDir.
-  const refsPath = workflowRefsFilePath(prismHome);
-  if (existsSync(refsPath)) {
-    const existingPaths = (compilerOptionsJson.paths as Record<string, string[]>) ?? {};
-    compilerOptionsJson.paths = {
-      ...existingPaths,
-      "prism/refs": [refsPath],
-    };
-  }
 
   const { options, errors } = ts.convertCompilerOptionsFromJson(
     compilerOptionsJson,
@@ -254,25 +286,83 @@ const loadWorkflowCompilerOptions = (
   );
   if (errors.length > 0) return null;
 
-  return options;
+  const hasPrismTypes = typeDirs.prismTypesDir !== undefined;
+  const hasEffectTypes = typeDirs.effectDtsDir !== undefined;
+
+  // Nothing resolvable at all — no type environment to check against.
+  if (!hasPrismTypes && !hasEffectTypes && !hasRefs) return null;
+
+  return { compilerOptions: options, hasPrismTypes, hasEffectTypes, hasRefs };
 };
 
 /**
+ * Read the non-path compilerOptions from an on-disk Prism-generated workflow
+ * tsconfig, preferring the project-keyed location over the legacy global one.
+ * Returns an empty object when none exists or cannot be parsed. `paths` are
+ * stripped — the live resolved paths always supersede whatever is on disk.
+ */
+const readOnDiskWorkflowCompilerOptions = (
+  prismHome: string,
+): Record<string, unknown> => {
+  const { key } = deriveProjectKey();
+  const candidates = [
+    resolvePath(prismHome, "state", "projects", key, "tsconfig.json"),
+    resolvePath(prismHome, "state", WORKFLOW_TSCONFIG_FILENAME),
+  ];
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      const configJson = JSON.parse(readFileSync(candidate, "utf8")) as TsconfigJson;
+      const { paths: _paths, ...rest } = configJson.compilerOptions ?? {};
+      return rest;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return {};
+};
+
+/** TS diagnostic codes that mean the type ENVIRONMENT is missing, not a real
+ * error inside the workflow. These never gate a run; they warn+proceed. */
+const ENVIRONMENT_DIAGNOSTIC_CODES = new Set<number>([
+  2307, // Cannot find module 'X' or its corresponding type declarations.
+  2792, // Cannot find module 'X'. Did you mean to set 'moduleResolution'...
+]);
+
+/** TS code 7006: "Parameter 'x' implicitly has an 'any' type." This is a
+ * cascade from an unresolved import (e.g. defineWorkflow typed as any), so it
+ * is treated as environmental ONLY when an environment diagnostic is also
+ * present. */
+const IMPLICIT_ANY_CODE = 7006;
+
+/**
  * Run an in-process TypeScript typecheck on a workflow file using the
- * binary-embedded TypeScript and the Prism-generated tsconfig.
+ * binary-embedded TypeScript and the resolved type environment.
  *
- * Throws WorkflowTypecheckError when the file has type errors.
- * Skips silently when the tsconfig is unavailable (guards against the
- * case where the user has not yet generated the tsconfig via `prism compile`).
+ * Behaviour:
+ *  - No resolvable type environment at all (never compiled, no shipped types):
+ *    warn to stderr and proceed — the runtime loader works regardless.
+ *  - Module-not-found / no-types-configured diagnostics: warn and proceed.
+ *  - A genuine type error inside the workflow (e.g. an unknown agent ref like
+ *    `agents.forge.doesNotExist`): throw WorkflowTypecheckError. This is the
+ *    moat.
  */
 export const typecheckWorkflowFile = (
   filePath: string,
   options: { readonly prismHome?: string } = {},
 ): void => {
   const prismHome = options.prismHome ?? resolvePrismHome();
-  const compilerOptions = loadWorkflowCompilerOptions(prismHome);
-  if (compilerOptions === null) return; // No tsconfig available; skip.
+  const environment = resolveWorkflowTypeEnvironment(prismHome);
+  if (environment === null) {
+    process.stderr.write(
+      `warning: workflow type environment unavailable (no generated refs or ` +
+        `shipped declarations for this project); skipping typecheck and ` +
+        `proceeding with the run. Run \`prism compile\` to enable typechecking.\n`,
+    );
+    return;
+  }
 
+  const compilerOptions = environment.compilerOptions;
   const host = ts.createCompilerHost(compilerOptions);
   const program = ts.createProgram([filePath], compilerOptions, host);
   const allDiagnostics = ts.getPreEmitDiagnostics(program);
@@ -282,8 +372,6 @@ export const typecheckWorkflowFile = (
   const fileDiagnostics = allDiagnostics.filter((d) => {
     if (!d.file) return false;
     const name = d.file.fileName;
-    // Include diagnostics from the workflow file, or from the refs and prism
-    // declaration files the workflow directly imports.
     return (
       name === filePath ||
       name.replace(/\\/g, "/") === filePath.replace(/\\/g, "/")
@@ -292,7 +380,20 @@ export const typecheckWorkflowFile = (
 
   if (fileDiagnostics.length === 0) return;
 
-  const structured: WorkflowTypecheckDiagnostic[] = fileDiagnostics.map((d) => {
+  // Partition: environmental (module-not-found etc.) vs genuine type errors.
+  const hasEnvironmentDiagnostic = fileDiagnostics.some((d) =>
+    ENVIRONMENT_DIAGNOSTIC_CODES.has(d.code),
+  );
+
+  const realErrors = fileDiagnostics.filter((d) => {
+    if (ENVIRONMENT_DIAGNOSTIC_CODES.has(d.code)) return false;
+    // Implicit-any is a cascade from an unresolved import; only environmental
+    // when an environment diagnostic was actually emitted in the same file.
+    if (d.code === IMPLICIT_ANY_CODE && hasEnvironmentDiagnostic) return false;
+    return true;
+  });
+
+  const toStructured = (d: TypeScript.Diagnostic): WorkflowTypecheckDiagnostic => {
     const pos =
       d.file !== undefined && d.start !== undefined
         ? ts.getLineAndCharacterOfPosition(d.file, d.start)
@@ -303,9 +404,24 @@ export const typecheckWorkflowFile = (
       character: pos ? pos.character + 1 : null,
       message: ts.flattenDiagnosticMessageText(d.messageText, "\n"),
     };
-  });
+  };
 
-  throw new WorkflowTypecheckError(filePath, structured);
+  if (realErrors.length === 0) {
+    // Only environmental noise remained — the type surface could not be fully
+    // resolved for this file. Warn and proceed rather than hard-failing a
+    // valid workflow whose types simply are not wired up yet.
+    const summary = fileDiagnostics
+      .slice(0, 3)
+      .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"))
+      .join("; ");
+    process.stderr.write(
+      `warning: workflow types could not be fully resolved for ${filePath} ` +
+        `(${summary}); proceeding with the run.\n`,
+    );
+    return;
+  }
+
+  throw new WorkflowTypecheckError(filePath, realErrors.map(toStructured));
 };
 
 export const loadWorkflowFile = async (

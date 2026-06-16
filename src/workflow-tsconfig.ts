@@ -5,15 +5,22 @@
  * uses to their shipped type declarations:
  *
  *   "prism"      → <platform-package>/types/index.d.ts  (the emitted prism.d.ts)
- *   "prism/refs" → ~/.prism/state/projects/<key>/generated/refs.d.ts  (generated per-project)
+ *   "prism/refs" → ~/.prism/state/projects/<key>/generated/agents.ts  (per-project refs)
  *   "effect"     → <platform-package>/node_modules/effect/dist/dts/index.d.ts
  *
  * Resolution strategy:
  *
  * When the Prism binary is installed, the platform package sits beside the
  * binary: `dirname(dirname(process.execPath))`. During development (source
- * checkout), we fall back to the local node_modules/effect and the repo's
- * dist/dts-tmp/ output, making the tsconfig usable without an install.
+ * checkout) the shipped declarations live inside the matching
+ * packages/npm/prism-<platform>/types directory (populated by build:npm), with
+ * the repo's node_modules/effect and dist/dts-tmp/ as further fallbacks — so
+ * the type surface resolves without an install.
+ *
+ * The resolved type dirs (resolveWorkflowTypeDirs) and path builder
+ * (buildWorkflowPaths) are shared with the in-process typecheck in
+ * workflow-loader, which constructs compilerOptions in-memory rather than
+ * relying solely on the on-disk tsconfig.
  *
  * The generated tsconfig is written to prismHome/state/tsconfig.workflow.json.
  * This file is Prism-owned and must never be committed to the user's project.
@@ -21,7 +28,7 @@
 
 import { existsSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
@@ -72,8 +79,32 @@ const platformPackageRootFromSource = (): string | undefined => {
 // ---------------------------------------------------------------------------
 
 /**
- * Find the prism.d.ts directory (types/index.d.ts relative to the platform
- * package root), or the dist/dts-tmp/ directory when running from source.
+ * Candidate platform-package directory names, most-specific first. During a
+ * source checkout the shipped declarations live inside the matching platform
+ * package under packages/npm/. We probe the host's platform/arch package first,
+ * then fall through to the rest so a non-darwin-arm64 dev box still resolves.
+ */
+const platformPackageDirNames = (): readonly string[] => {
+  const host = `prism-${process.platform}-${process.arch}`;
+  const all = [
+    "prism-darwin-arm64",
+    "prism-darwin-x64",
+    "prism-linux-arm64",
+    "prism-linux-x64",
+  ];
+  return [host, ...all.filter((name) => name !== host)];
+};
+
+/**
+ * Find the prism.d.ts directory. Resolution order:
+ *   1. Installed binary: <package-root>/types/index.d.ts.
+ *   2. Source checkout: the shipped declarations inside the matching
+ *      packages/npm/prism-<platform>/types directory (populated by build:npm).
+ *   3. Source checkout fallback: the freshly-emitted dist/dts-tmp/.
+ *
+ * Returns undefined when none resolve — callers then warn + proceed rather than
+ * pointing "prism" at a nonexistent file (which would surface as a misleading
+ * "Cannot find module 'prism'" type error on every valid workflow).
  */
 const resolvePrismTypesDir = (): string | undefined => {
   // 1. Installed binary path.
@@ -85,12 +116,20 @@ const resolvePrismTypesDir = (): string | undefined => {
     }
   }
 
-  // 2. Source-checkout fallback: use the just-emitted dist/dts-tmp/.
   const repoRoot = platformPackageRootFromSource();
   if (repoRoot) {
-    const candidate = join(repoRoot, "dist", "dts-tmp");
-    if (existsSync(join(candidate, "index.d.ts"))) {
-      return candidate;
+    // 2. Source-checkout: shipped platform-package declarations (build:npm).
+    for (const name of platformPackageDirNames()) {
+      const candidate = join(repoRoot, "packages", "npm", name, "types");
+      if (existsSync(join(candidate, "index.d.ts"))) {
+        return candidate;
+      }
+    }
+
+    // 3. Source-checkout fallback: the just-emitted dist/dts-tmp/.
+    const tmp = join(repoRoot, "dist", "dts-tmp");
+    if (existsSync(join(tmp, "index.d.ts"))) {
+      return tmp;
     }
   }
 
@@ -122,6 +161,60 @@ const resolveEffectDtsDir = (): string | undefined => {
   }
 
   return undefined;
+};
+
+// ---------------------------------------------------------------------------
+// Resolved type environment — shared by tsconfig generation and the in-process
+// typecheck (workflow-loader). The loader builds compilerOptions from these
+// resolved dirs directly so a stale or absent on-disk tsconfig cannot break a
+// project whose refs are present.
+// ---------------------------------------------------------------------------
+
+export interface WorkflowTypeDirs {
+  /** Directory holding the shipped prism declarations (types/index.d.ts). */
+  readonly prismTypesDir: string | undefined;
+  /** Directory holding the effect declarations (dist/dts/index.d.ts). */
+  readonly effectDtsDir: string | undefined;
+}
+
+/**
+ * Resolve the prism and effect declaration directories for the running
+ * environment (installed binary or source checkout). Either may be undefined
+ * when the corresponding type surface cannot be located.
+ */
+export const resolveWorkflowTypeDirs = (): WorkflowTypeDirs => ({
+  prismTypesDir: resolvePrismTypesDir(),
+  effectDtsDir: resolveEffectDtsDir(),
+});
+
+/**
+ * Build the `compilerOptions.paths` map for typechecking a workflow file from
+ * the resolved type dirs and (optionally) the project-keyed generated refs.
+ *
+ * Entries are only emitted when the underlying declaration exists, so callers
+ * can detect a missing type environment (empty/partial paths) and warn+proceed
+ * instead of pointing a specifier at a nonexistent file.
+ */
+export const buildWorkflowPaths = (options: {
+  readonly typeDirs: WorkflowTypeDirs;
+  /** Absolute path to the generated refs file (~/.../generated/agents.ts). */
+  readonly refsFile?: string;
+}): Record<string, string[]> => {
+  const paths: Record<string, string[]> = {};
+  const { prismTypesDir, effectDtsDir } = options.typeDirs;
+
+  if (prismTypesDir) {
+    paths["prism"] = [join(prismTypesDir, "index.d.ts")];
+    paths["prism/*"] = [join(prismTypesDir, "*.d.ts")];
+  }
+  if (options.refsFile) {
+    paths["prism/refs"] = [options.refsFile];
+  }
+  if (effectDtsDir) {
+    paths["effect"] = [join(effectDtsDir, "index.d.ts")];
+    paths["effect/*"] = [join(effectDtsDir, "*.d.ts")];
+  }
+  return paths;
 };
 
 // ---------------------------------------------------------------------------
@@ -169,36 +262,23 @@ export const WORKFLOW_TSCONFIG_FILENAME = "tsconfig.workflow.json";
 export const generateWorkflowTsconfig = async (
   options: WorkflowTsconfigOptions,
 ): Promise<GeneratedWorkflowTsconfig> => {
-  const prismTypesDir = resolvePrismTypesDir();
-  const effectDtsDir = resolveEffectDtsDir();
+  const typeDirs = resolveWorkflowTypeDirs();
+  const { prismTypesDir, effectDtsDir } = typeDirs;
 
   const stateDir = join(options.prismHome, "state");
   await mkdir(stateDir, { recursive: true });
   const tsconfigPath = join(stateDir, WORKFLOW_TSCONFIG_FILENAME);
 
   // Build paths entries. Omit missing resolutions rather than emitting broken
-  // paths — the user will see module-not-found errors, not type errors from
-  // a wrong path.
-  const paths: Record<string, string[]> = {};
-
-  if (prismTypesDir) {
-    paths["prism"] = [join(prismTypesDir, "index.d.ts")];
-    // Sub-path imports (e.g. "prism/workflows") map to the same directory so
-    // TypeScript resolves them via the types directory structure.
-    paths["prism/*"] = [join(prismTypesDir, "*.d.ts")];
-  }
-
-  if (options.refsDir) {
-    // "prism/refs" → the generated per-project refs index.
-    const refsIndex = join(options.refsDir, "refs.d.ts");
-    paths["prism/refs"] = [refsIndex];
-  }
-
-  if (effectDtsDir) {
-    paths["effect"] = [join(effectDtsDir, "index.d.ts")];
-    // Allow sub-path imports like "effect/Schema".
-    paths["effect/*"] = [join(effectDtsDir, "*.d.ts")];
-  }
+  // paths — the typecheck pre-step detects a missing prism/effect surface and
+  // warns+proceeds rather than reporting a misleading "Cannot find module".
+  //
+  // "prism/refs" maps to the generated refs entry file (agents.ts), matching
+  // what the loader injects per project key at typecheck time.
+  const refsFile = options.refsDir
+    ? join(options.refsDir, "agents.ts")
+    : undefined;
+  const paths = buildWorkflowPaths({ typeDirs, refsFile });
 
   const include: string[] = [];
   if (options.workflowDir) {

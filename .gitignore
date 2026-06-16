@@ -2,6 +2,7 @@ node_modules/
 dist/
 packages/npm/*/LICENSE
 packages/npm/prism-*/bin/
+packages/npm/prism-*/types/
 *.bak
 *.bak.*
 .DS_Store

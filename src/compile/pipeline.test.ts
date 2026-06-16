@@ -20,6 +20,8 @@ import {
 } from "./compile-manifest.js";
 import { WORKFLOW_REFS_HARNESS, workflowAgentsPath, workflowModelsPath, workflowRefsRoot, workflowSkillsPath, workflowToolsPath } from "./workflow-refs-emitter.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
+import { deriveProjectKey } from "../project-key.js";
+import { expandPath } from "../fs.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { resolveAgent, resolveAgentCapabilities, validateOrbit } from "./resolve.js";
 import {
@@ -1770,8 +1772,9 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
     reviewer?.toolBindings.find((binding) => binding.logicalName === "submit_work")?.contract,
   ).toBeUndefined();
 
-  expect(await pathExists(compileManifestPath(testPrismHome()))).toBe(true);
-  const manifestRead = await readCompileManifest(testPrismHome());
+  const projectKey = deriveProjectKey(expandPath(projectRoot)).key;
+  expect(await pathExists(compileManifestPath(testPrismHome(), projectKey))).toBe(true);
+  const manifestRead = await readCompileManifest(testPrismHome(), projectKey);
   expect(manifestRead.quarantinedPath).toBeUndefined();
   expect(verifyCompileManifestHash(manifestRead.manifest)).toBe(true);
   expect(manifestRead.manifest.compileTargets).toEqual([
@@ -1804,10 +1807,10 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
     allowedSkills: builder.allowedSkills,
   });
 
-  const workflowAgentsRefPath = workflowAgentsPath(projectRoot);
-  const workflowModelsRefPath = workflowModelsPath(projectRoot);
-  const workflowSkillsRefPath = workflowSkillsPath(projectRoot);
-  const workflowToolsRefPath = workflowToolsPath(projectRoot);
+  const workflowAgentsRefPath = workflowAgentsPath(testPrismHome(), projectKey);
+  const workflowModelsRefPath = workflowModelsPath(testPrismHome(), projectKey);
+  const workflowSkillsRefPath = workflowSkillsPath(testPrismHome(), projectKey);
+  const workflowToolsRefPath = workflowToolsPath(testPrismHome(), projectKey);
   expect(await pathExists(workflowAgentsRefPath)).toBe(true);
   expect(await pathExists(workflowModelsRefPath)).toBe(true);
   expect(await pathExists(workflowSkillsRefPath)).toBe(true);
@@ -1839,7 +1842,7 @@ test("canonical TS-authored agents resolve shared toolspace and modelspace bindi
   const workflowRefsSnapshot = await readSnapshot({
     prismHome: testPrismHome(),
     harness: WORKFLOW_REFS_HARNESS,
-    root: workflowRefsRoot(projectRoot),
+    root: workflowRefsRoot(testPrismHome(), projectKey),
   });
   expect(workflowRefsSnapshot.manifest.entries.some((entry) => entry.targetPath === workflowAgentsRefPath)).toBe(true);
   expect(workflowRefsSnapshot.manifest.entries.some((entry) => entry.targetPath === workflowModelsRefPath)).toBe(true);

@@ -16,6 +16,7 @@ import type { ComposedAgent } from "./compose.js";
 import { emptyRegistry } from "./registry.js";
 
 let home: string;
+const projectKey = "test-project-key";
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "prism-compile-manifest-"));
@@ -158,14 +159,14 @@ describe("compile manifest writer", () => {
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "c".repeat(64))]]),
     });
 
-    await commitCompileManifest({ prismHome: home, manifest });
-    const path = compileManifestPath(home);
+    await commitCompileManifest({ prismHome: home, projectKey, manifest });
+    const path = compileManifestPath(home, projectKey);
     const firstBytes = await readFile(path);
-    await commitCompileManifest({ prismHome: home, manifest: (await readCompileManifest(home)).manifest });
+    await commitCompileManifest({ prismHome: home, projectKey, manifest: (await readCompileManifest(home, projectKey)).manifest });
     expect(await readFile(path)).toBe(firstBytes);
 
     await nodeWriteFile(path, "{ not json");
-    const corrupt = await readCompileManifest(home);
+    const corrupt = await readCompileManifest(home, projectKey);
     expect(corrupt.quarantinedPath).toContain(".corrupt-");
     expect(await exists(corrupt.quarantinedPath!)).toBe(true);
     expect(corrupt.manifest.agents).toEqual({});
@@ -182,14 +183,65 @@ describe("compile manifest writer", () => {
       cacheDescriptors: new Map([["builder", descriptorFor("builder", "d".repeat(64))]]),
     });
 
-    await commitCompileManifest({ prismHome: home, manifest });
-    const path = compileManifestPath(home);
+    await commitCompileManifest({ prismHome: home, projectKey, manifest });
+    const path = compileManifestPath(home, projectKey);
     await nodeWriteFile(path, (await readFile(path)).replace("builder agent", "tampered agent"));
 
-    const corrupt = await readCompileManifest(home);
+    const corrupt = await readCompileManifest(home, projectKey);
     expect(corrupt.quarantinedPath).toContain(".corrupt-");
     expect(await exists(corrupt.quarantinedPath!)).toBe(true);
     expect(corrupt.manifest.agents).toEqual({});
     expect(verifyCompileManifestHash(corrupt.manifest)).toBe(true);
+  });
+
+  test("per-project partition: two project keys with a same-named local plugin/agent do not clobber each other", async () => {
+    // The clobbering bug: the old flat global manifest keyed "<plugin>:<agent>"
+    // meant two projects with a same-named local plugin ("forge") and a
+    // same-named agent ("builder") stomped each other's entry. The per-project
+    // manifest partition isolates them under distinct project keys.
+    const keyA = "project-a-key";
+    const keyB = "project-b-key";
+
+    const manifestA = buildCompileManifestForTarget({
+      base: emptyCompileManifest(),
+      registry: registry(),
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "a".repeat(64), ["tool_a"])],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
+    });
+    const manifestB = buildCompileManifestForTarget({
+      base: emptyCompileManifest(),
+      registry: registry(),
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "b".repeat(64), ["tool_b"])],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "b".repeat(64))]]),
+    });
+
+    // Same manifest id in both partitions — only the project key differs.
+    expect(Object.keys(manifestA.agents)).toEqual(["forge:builder"]);
+    expect(Object.keys(manifestB.agents)).toEqual(["forge:builder"]);
+
+    await commitCompileManifest({ prismHome: home, projectKey: keyA, manifest: manifestA });
+    await commitCompileManifest({ prismHome: home, projectKey: keyB, manifest: manifestB });
+
+    // Distinct on-disk partitions (no shared flat manifest).
+    expect(compileManifestPath(home, keyA)).not.toBe(compileManifestPath(home, keyB));
+
+    const readA = await readCompileManifest(home, keyA);
+    const readB = await readCompileManifest(home, keyB);
+
+    // Neither write stomped the other: each key keeps its own distinct entry.
+    expect(readA.quarantinedPath).toBeUndefined();
+    expect(readB.quarantinedPath).toBeUndefined();
+    const builderA = readA.manifest.agents["forge:builder"];
+    const builderB = readB.manifest.agents["forge:builder"];
+    expect(builderA?.sourceHash).toBe("a".repeat(64));
+    expect(builderB?.sourceHash).toBe("b".repeat(64));
+    expect(builderA?.composed.grants.tools).toEqual(["forge:tool_a"]);
+    expect(builderB?.composed.grants.tools).toEqual(["forge:tool_b"]);
+    expect(verifyCompileManifestHash(readA.manifest)).toBe(true);
+    expect(verifyCompileManifestHash(readB.manifest)).toBe(true);
   });
 });

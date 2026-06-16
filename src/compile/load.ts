@@ -66,6 +66,8 @@ import {
   type CompileError,
 } from "./errors.js";
 import { PluginManifestError } from "../errors.js";
+import { resolvePrismHome } from "../prism-home.js";
+import { deriveProjectKey, projectGeneratedAgentsPath } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { typescriptBundleImportPath } from "./runtime-deps.js";
@@ -626,12 +628,17 @@ const copyTransformedPluginTree = async (options: {
 };
 
 /**
- * The on-disk generated workflow refs file that `prism/refs` resolves to today.
- * Stays in the current project location (<cwd>/.prism/generated/workflows);
- * the storage move to ~/.prism/state/projects/<key>/generated is a later glyph.
+ * The on-disk generated workflow refs file that `prism/refs` resolves to.
+ * Machine-global, project-keyed: ~/.prism/state/projects/<key>/generated/
+ * agents.ts, where the key is the project identity (toolchain & distribution
+ * §4): git repository root of the process cwd, else realpath(cwd). An off-repo
+ * workflow file run from inside a repo resolves to that repo's generated refs.
  */
-const workflowRefsTargetPath = (): string =>
-  resolvePath(process.cwd(), ".prism", "generated", "workflows", "agents.ts");
+const workflowRefsTargetPath = (): string => {
+  const prismHome = resolvePrismHome();
+  const { key } = deriveProjectKey();
+  return projectGeneratedAgentsPath(prismHome, key);
+};
 
 /**
  * Build the specifier overrides for a workflow load. `prism` resolves to the

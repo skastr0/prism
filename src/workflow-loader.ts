@@ -13,6 +13,7 @@ import { prepareImportWrapper } from "./compile/load.js";
 import { typescriptBundleImportPath } from "./compile/runtime-deps.js";
 import { compileManifestPath } from "./compile/compile-manifest.js";
 import { resolvePrismHome } from "./prism-home.js";
+import { deriveProjectKey, projectGeneratedAgentsPath } from "./project-key.js";
 import type { AnyWorkflowDefinition, AnyWorkflowTask, WorkflowAgentRef } from "./workflows.js";
 
 const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof TypeScript;
@@ -119,12 +120,17 @@ export const workflowSummary = (
 });
 
 // ---------------------------------------------------------------------------
-// Workflow refs location (stays in cwd-relative location until the storage
-// migration glyph moves it to ~/.prism/state/projects/<key>/generated).
+// Workflow refs location — machine-global, project-keyed
+// (~/.prism/state/projects/<key>/generated/agents.ts). The key is the
+// project identity (toolchain & distribution §4): git repository root of the
+// process cwd, else realpath(cwd). An off-repo workflow file run from inside a
+// repo therefore resolves prism/refs to that repo's generated refs.
 // ---------------------------------------------------------------------------
 
-const workflowRefsFilePath = (): string =>
-  resolvePath(process.cwd(), ".prism", "generated", "workflows", "agents.ts");
+const workflowRefsFilePath = (prismHome: string): string => {
+  const { key } = deriveProjectKey();
+  return projectGeneratedAgentsPath(prismHome, key);
+};
 
 // ---------------------------------------------------------------------------
 // Ref-freshness: compare the manifest hash embedded in the generated refs
@@ -152,11 +158,15 @@ const extractRefsManifestHash = async (refsPath: string): Promise<string | undef
 };
 
 /**
- * Read the top-level manifestHash from the current compile manifest on disk.
- * Returns undefined when the manifest does not exist or cannot be parsed.
+ * Read the top-level manifestHash from the current per-project compile
+ * manifest on disk. Returns undefined when the manifest does not exist or
+ * cannot be parsed.
  */
-const readCurrentManifestHash = async (prismHome: string): Promise<string | undefined> => {
-  const manifestPath = compileManifestPath(prismHome);
+const readCurrentManifestHash = async (
+  prismHome: string,
+  projectKey: string,
+): Promise<string | undefined> => {
+  const manifestPath = compileManifestPath(prismHome, projectKey);
   if (!existsSync(manifestPath)) return undefined;
   try {
     const raw = await Bun.file(manifestPath).json() as { readonly manifestHash?: string };
@@ -176,11 +186,12 @@ export const checkWorkflowRefsFreshness = async (options: {
   readonly prismHome?: string;
 }): Promise<void> => {
   const prismHome = options.prismHome ?? resolvePrismHome();
-  const refsPath = workflowRefsFilePath();
+  const { key } = deriveProjectKey();
+  const refsPath = workflowRefsFilePath(prismHome);
 
   const [refsHash, currentHash] = await Promise.all([
     extractRefsManifestHash(refsPath),
-    readCurrentManifestHash(prismHome),
+    readCurrentManifestHash(prismHome, key),
   ]);
 
   if (refsHash === undefined || currentHash === undefined) return;
@@ -224,10 +235,11 @@ const loadWorkflowCompilerOptions = (
     ...(configJson.compilerOptions ?? {}),
   };
 
-  // Inject `prism/refs` → generated refs file. Always set it so that a
-  // workflow that imports prism/refs can be typechecked even when the
-  // tsconfig was generated without a refsDir (pre-5 toolchain step).
-  const refsPath = workflowRefsFilePath();
+  // Inject `prism/refs` → generated refs file for the current project (cwd's
+  // git-root-else-cwd key). Always set it so that a workflow that imports
+  // prism/refs can be typechecked even when the tsconfig was generated without
+  // a refsDir.
+  const refsPath = workflowRefsFilePath(prismHome);
   if (existsSync(refsPath)) {
     const existingPaths = (compilerOptionsJson.paths as Record<string, string[]>) ?? {};
     compilerOptionsJson.paths = {
@@ -303,7 +315,9 @@ export const loadWorkflowFile = async (
   const resolved = expandPath(filePath);
 
   // Ref-freshness check (async; runs concurrently with typecheck below).
-  const freshnessCheck = checkWorkflowRefsFreshness({ prismHome: options.prismHome });
+  const freshnessCheck = checkWorkflowRefsFreshness({
+    prismHome: options.prismHome,
+  });
 
   // Transparent typecheck pre-step: fail fast with structured diagnostics.
   if (options.skipTypecheck !== true) {

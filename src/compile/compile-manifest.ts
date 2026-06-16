@@ -25,6 +25,7 @@ import {
 import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
 import { ensureDir, exists, readFile, writeFile } from "../fs.js";
+import { projectCompileManifestPath } from "../project-key.js";
 import { withSnapshotLock } from "../state/lock.js";
 import type { AgentCacheDescriptor, CacheInputFile } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
@@ -32,10 +33,14 @@ import { collectPluginRegistries, type PluginRegistry } from "./registry.js";
 
 export * from "@skastr0/prism-core/compile-manifest";
 
-const MANIFEST_SEGMENTS = ["state", "compile-manifest.json"] as const;
-
-export const compileManifestPath = (prismHome: string): string =>
-  join(prismHome, ...MANIFEST_SEGMENTS);
+/**
+ * The per-project compile manifest partition
+ * (~/.prism/state/projects/<key>/compile-manifest.json). The project key
+ * dimension fixes the clobbering bug: two projects with a same-named local
+ * plugin no longer stomp each other in a single flat global manifest.
+ */
+export const compileManifestPath = (prismHome: string, projectKey: string): string =>
+  projectCompileManifestPath(prismHome, projectKey);
 
 export const isCompileManifestHarnessId = (value: string): value is HarnessId =>
   Schema.is(HarnessIdSchema)(value);
@@ -51,8 +56,9 @@ const verifyManifestIntegrity = (manifest: CompileManifest): boolean =>
 
 export const readCompileManifest = async (
   prismHome: string,
+  projectKey: string,
 ): Promise<CompileManifestReadResult> => {
-  const path = compileManifestPath(prismHome);
+  const path = compileManifestPath(prismHome, projectKey);
   if (!(await exists(path))) return { manifest: emptyCompileManifest() };
 
   const decoded = decodeCompileManifest(await readFile(path));
@@ -69,9 +75,10 @@ export const readCompileManifest = async (
 
 export const commitCompileManifest = async (options: {
   readonly prismHome: string;
+  readonly projectKey: string;
   readonly manifest: CompileManifest;
 }): Promise<void> => {
-  const path = compileManifestPath(options.prismHome);
+  const path = compileManifestPath(options.prismHome, options.projectKey);
   await ensureDir(dirname(path));
   await writeFile(path, encodeCompileManifest(options.manifest));
 };
@@ -427,6 +434,7 @@ export const buildCompileManifestForTarget = (options: {
 
 export const updateCompileManifestForTarget = async (options: {
   readonly prismHome: string;
+  readonly projectKey: string;
   readonly registry: PluginRegistry;
   readonly target: HarnessId;
   readonly scope: HarnessScope;
@@ -436,9 +444,10 @@ export const updateCompileManifestForTarget = async (options: {
   readonly orbits?: ReadonlyArray<{ readonly name: string }>;
 }): Promise<void> =>
   withSnapshotLock(options.prismHome, async () => {
-    const { manifest } = await readCompileManifest(options.prismHome);
+    const { manifest } = await readCompileManifest(options.prismHome, options.projectKey);
     await commitCompileManifest({
       prismHome: options.prismHome,
+      projectKey: options.projectKey,
       manifest: buildCompileManifestForTarget({
         base: manifest,
         registry: options.registry,

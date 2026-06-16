@@ -53,7 +53,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -85,7 +85,7 @@ import { Effect, Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -126,7 +126,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -163,7 +163,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -200,7 +200,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -237,7 +237,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -273,7 +273,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",

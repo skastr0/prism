@@ -191,6 +191,16 @@ export interface OrbitOrchestratorDefinition {
   readonly tools: ReadonlyArray<OrbitToolPermissionToolDefinition>;
 }
 
+export interface OrbitPhaseWorkflowDefinition {
+  readonly when?: string;
+  readonly inputs?: ReadonlyArray<string>;
+  readonly outputs?: ReadonlyArray<string>;
+  readonly sequence?: ReadonlyArray<string>;
+  readonly coordination?: string;
+  readonly finish_criteria?: ReadonlyArray<string>;
+  readonly escalation?: string;
+}
+
 export interface OrbitPhaseDefinition {
   readonly name: string;
   readonly orbit?: OrbitRefInput;
@@ -207,6 +217,11 @@ export interface OrbitPhaseDefinition {
   readonly telos?: string;
   readonly real_world_change?: string;
   readonly cold_pickup_test?: string;
+  /**
+   * Generic workflow-authoring guidance for this phase. Prism renders this
+   * into generated orbit skills, but does not attach runtime semantics to it.
+   */
+  readonly workflow?: OrbitPhaseWorkflowDefinition;
   /**
    * Long-form markdown for this phase. When present, lowerers write it to
    * `references/<phase-name>.md` next to the orbit SKILL.md. Treat this as

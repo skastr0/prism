@@ -210,6 +210,53 @@ const renderAgentSubsection = (
   }
 };
 
+const hasWorkflow = (phase: OrbitPhase): boolean => {
+  const workflow = phase.workflow;
+  if (!workflow) return false;
+  return (
+    Boolean(workflow.when) ||
+    Boolean(workflow.coordination) ||
+    Boolean(workflow.escalation) ||
+    (workflow.inputs?.length ?? 0) > 0 ||
+    (workflow.outputs?.length ?? 0) > 0 ||
+    (workflow.sequence?.length ?? 0) > 0 ||
+    (workflow.finish_criteria?.length ?? 0) > 0
+  );
+};
+
+const renderInlineList = (values: ReadonlyArray<string>): string =>
+  values.map((value) => value.trim()).filter(Boolean).join("; ");
+
+const renderPhaseWorkflowSummary = (
+  phase: OrbitPhase,
+  lines: string[],
+): void => {
+  const workflow = phase.workflow;
+  if (!workflow || !hasWorkflow(phase)) return;
+
+  if (workflow.when) lines.push(`- **Workflow trigger**: ${workflow.when}`);
+  if (workflow.inputs && workflow.inputs.length > 0) {
+    lines.push(`- **Workflow inputs**: ${renderInlineList(workflow.inputs)}`);
+  }
+  if (workflow.outputs && workflow.outputs.length > 0) {
+    lines.push(`- **Workflow outputs**: ${renderInlineList(workflow.outputs)}`);
+  }
+  if (workflow.sequence && workflow.sequence.length > 0) {
+    lines.push(`- **Workflow sequence**: ${renderInlineList(workflow.sequence)}`);
+  }
+  if (workflow.coordination) {
+    lines.push(`- **Workflow coordination**: ${workflow.coordination}`);
+  }
+  if (workflow.finish_criteria && workflow.finish_criteria.length > 0) {
+    lines.push(
+      `- **Workflow finish criteria**: ${renderInlineList(workflow.finish_criteria)}`,
+    );
+  }
+  if (workflow.escalation) {
+    lines.push(`- **Workflow escalation**: ${workflow.escalation}`);
+  }
+};
+
 const renderPhasesSection = (
   orbit: Orbit,
   registry: PluginRegistry,
@@ -228,12 +275,13 @@ const renderPhasesSection = (
     if (phase.cold_pickup_test) {
       lines.push(`- **Cold-pickup test**: ${phase.cold_pickup_test}`);
     }
+    renderPhaseWorkflowSummary(phase, lines);
     if (phase.notes) {
       for (const [key, value] of Object.entries(phase.notes)) {
         lines.push(`- **${key}**: ${value}`);
       }
     }
-    if (phase.body && phase.body.trim().length > 0) {
+    if ((phase.body && phase.body.trim().length > 0) || hasWorkflow(phase)) {
       lines.push(
         `- **Reference**: see \`references/${phase.name}.md\` for the full phase download.`,
       );
@@ -479,9 +527,9 @@ const renderPhaseTransitionsSection = (
   if (orbit.phases.length === 0) return;
   lines.push("## Phase transitions", "");
   lines.push(
-    "Orbit glyphs move through canonical states. The orchestrator owns transitions; phase agents stay inside their phase folder until their submission lands.",
+    "Orbit work moves through the phase sequence declared here. The orchestrator owns transitions when an orchestrator is declared; phase agents stay inside the current phase contract until their output lands.",
     "",
-    "Common state arc: `backlog/` → `exploring/` → `committed/` → `building/` → `reviewing/` → `done/` (or `abandoned/`). All orbits follow the same explore / build / review convention; build means whatever the orbit's domain produces (code for Forge, claims for Survey, assets for Beacon, content for Scribe).",
+    "Use the phase workflow, telos, real-world change, and cold-pickup test to decide whether a phase is complete. Userland orbits may define stricter state names, queues, or artifact families in their own metadata and tools.",
     "",
     "Phase ownership of state transitions:",
     "",
@@ -616,18 +664,50 @@ export interface OrbitPhaseReferenceFile {
   readonly content: string;
 }
 
+const renderWorkflowReferenceSection = (
+  phase: OrbitPhase,
+  lines: string[],
+): void => {
+  const workflow = phase.workflow;
+  if (!workflow || !hasWorkflow(phase)) return;
+
+  lines.push("## Workflow", "");
+  if (workflow.when) lines.push("### When to use this workflow", "", workflow.when.trim(), "");
+  const listSections: ReadonlyArray<[string, ReadonlyArray<string> | undefined]> = [
+    ["Inputs", workflow.inputs],
+    ["Outputs", workflow.outputs],
+    ["Sequence", workflow.sequence],
+    ["Finish criteria", workflow.finish_criteria],
+  ];
+  for (const [heading, values] of listSections) {
+    if (!values || values.length === 0) continue;
+    lines.push(`### ${heading}`, "");
+    for (const value of values) lines.push(`- ${value}`);
+    lines.push("");
+  }
+  if (workflow.coordination) {
+    lines.push("### Coordination", "", workflow.coordination.trim(), "");
+  }
+  if (workflow.escalation) {
+    lines.push("### Escalation", "", workflow.escalation.trim(), "");
+  }
+};
+
 /**
- * Render reference files for orbit phases that declare a `body`. Each file
+ * Render reference files for orbit phases that declare a `body` or workflow.
+ * Each file
  * lands at `<orbit-skill-folder>/references/<phase-name>.md` and carries the
- * full per-phase download (telos, real-world change, cold-pickup test, then
- * the hand-authored body). Phases without a body produce nothing.
+ * full per-phase download (telos, real-world change, cold-pickup test,
+ * workflow, then the hand-authored body). Phases without body or workflow
+ * produce nothing.
  */
 export const renderDerivedOrbitPhaseReferences = (
   orbit: Orbit,
 ): ReadonlyArray<OrbitPhaseReferenceFile> => {
   const files: OrbitPhaseReferenceFile[] = [];
   for (const phase of orbit.phases) {
-    if (!phase.body || phase.body.trim().length === 0) continue;
+    const hasBody = Boolean(phase.body && phase.body.trim().length > 0);
+    if (!hasBody && !hasWorkflow(phase)) continue;
 
     const lines: string[] = [];
     lines.push(`# ${orbit.name}:${phase.name}`, "");
@@ -652,7 +732,8 @@ export const renderDerivedOrbitPhaseReferences = (
         "",
       );
     }
-    lines.push(phase.body.trim(), "");
+    renderWorkflowReferenceSection(phase, lines);
+    if (hasBody) lines.push(phase.body!.trim(), "");
 
     files.push({
       filename: `${phase.name}.md`,

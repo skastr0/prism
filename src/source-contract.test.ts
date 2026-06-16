@@ -24,9 +24,11 @@ import {
 
 const STRICT_PARSE_OPTIONS = { onExcessProperty: "error" } as const;
 
-const expectDecodes = (schema: Schema.Schema.AnyNoContext, value: unknown): void => {
+const expectDecodes = <A>(schema: Schema.Schema<A, any, never>, value: unknown): A => {
   const result = Schema.decodeUnknownEither(schema, STRICT_PARSE_OPTIONS)(value);
   expect(result._tag).toBe("Right");
+  if (result._tag === "Left") throw new Error(result.left.message);
+  return result.right;
 };
 
 const expectRejects = (schema: Schema.Schema.AnyNoContext, value: unknown): void => {
@@ -151,6 +153,15 @@ describe("public source contracts", () => {
         telos: "Implement the change.",
         real_world_change: "Code changes exist.",
         cold_pickup_test: "A reviewer can verify from the diff.",
+        workflow: {
+          when: "Use this phase when ${domain} implementation is ready.",
+          inputs: ["Scoped request", "Current source"],
+          outputs: ["Verified patch", "Reviewable summary"],
+          sequence: ["Read source", "Apply change", "Validate result"],
+          coordination: "Coordinate with the assigned reviewer.",
+          finish_criteria: ["Tests pass", "Change is committed"],
+          escalation: "Escalate if the requested side effect is unauthorized.",
+        },
         body: "Full phase instructions.",
       }],
       orchestrator: {
@@ -184,7 +195,12 @@ describe("public source contracts", () => {
     expectDecodes(ToolspaceSourceSchema, toolspace);
     expectDecodes(ModelspaceSourceSchema, modelspace);
     expectDecodes(SkillspaceSourceSchema, skillspace);
-    expectDecodes(OrbitSourceSchema, orbit);
+    const decodedOrbit = expectDecodes(OrbitSourceSchema, orbit);
+    expect(decodedOrbit.phases[0]?.workflow?.sequence).toEqual([
+      "Read source",
+      "Apply change",
+      "Validate result",
+    ]);
     expectDecodes(HookSourceSchema, hook);
   });
 

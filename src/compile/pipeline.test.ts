@@ -9506,6 +9506,15 @@ test("derived orbit skill renders per-phase telos, real-world change, and cold-p
           "Code, tests, and product behavior are durably different and re-verifiable.",
         cold_pickup_test:
           "Could a reviewer judge satisfaction from only the diff and the glyph?",
+        workflow: {
+          when: "Use a workflow when build work can be decomposed into deterministic agent tasks.",
+          inputs: ["Committed work contract", "Current repository state"],
+          outputs: ["Atomic commit", "Validation evidence"],
+          sequence: ["Implement", "Validate", "Commit", "Review commit range"],
+          coordination: "Builders commit the work unit before review starts.",
+          finish_criteria: ["Focused validation passed", "Working tree is clean"],
+          escalation: "Escalate if the task needs human taste or authority.",
+        },
         body: "## Procrastination shapes\n\n- Moving the glyph forward without changing the codebase.\n",
       },
     ],
@@ -9519,11 +9528,14 @@ test("derived orbit skill renders per-phase telos, real-world change, and cold-p
   expect(skill).toContain("- **Telos**: Bring working software into existence");
   expect(skill).toContain("- **Real-world change**: Code, tests, and product behavior");
   expect(skill).toContain("- **Cold-pickup test**: Could a reviewer judge satisfaction");
+  expect(skill).toContain("- **Workflow trigger**: Use a workflow when build work");
+  expect(skill).toContain("- **Workflow sequence**: Implement; Validate; Commit; Review commit range");
+  expect(skill).toContain("- **Workflow finish criteria**: Focused validation passed; Working tree is clean");
   expect(skill).toContain("- **Input**: One committed glyph.");
   expect(skill).toContain("- **Reference**: see `references/build.md`");
 });
 
-test("derived orbit phase references render only when body is present", async () => {
+test("derived orbit phase references render when body or workflow is present", async () => {
   const { renderDerivedOrbitPhaseReferences } = await import(
     "./derived-orbit-skill.js"
   );
@@ -9547,10 +9559,24 @@ test("derived orbit phase references render only when body is present", async ()
         body: "## What good explore produces\n\nA sharper problem statement and a recommendation.\n",
       },
       {
+        name: "build",
+        agents: [],
+        requires: [],
+        workflow: {
+          when: "The phase needs repeatable agent execution.",
+          inputs: ["Prepared task"],
+          outputs: ["Reviewed outcome"],
+          sequence: ["Run builder", "Run reviewer"],
+          coordination: "Reviewers inspect explicit output, not ambient state.",
+          finish_criteria: ["Output schema decodes"],
+          escalation: "Stop if the workflow cannot observe the result.",
+        },
+      },
+      {
         name: "commit",
         agents: [],
         requires: [],
-        // No body — should produce no reference file.
+        // No body or workflow — should produce no reference file.
       },
     ],
     tool_permissions: [],
@@ -9559,7 +9585,7 @@ test("derived orbit phase references render only when body is present", async ()
   });
 
   const refs = renderDerivedOrbitPhaseReferences(orbit);
-  expect(refs).toHaveLength(1);
+  expect(refs).toHaveLength(2);
   expect(refs[0]?.filename).toBe("explore.md");
   expect(refs[0]?.content).toContain("# phase-refs:explore");
   expect(refs[0]?.content).toContain("## Telos");
@@ -9567,6 +9593,14 @@ test("derived orbit phase references render only when body is present", async ()
   expect(refs[0]?.content).toContain("## Real-world change");
   expect(refs[0]?.content).toContain("## Cold-pickup test");
   expect(refs[0]?.content).toContain("## What good explore produces");
+  expect(refs[1]?.filename).toBe("build.md");
+  expect(refs[1]?.content).toContain("# phase-refs:build");
+  expect(refs[1]?.content).toContain("## Workflow");
+  expect(refs[1]?.content).toContain("### Sequence");
+  expect(refs[1]?.content).toContain("- Run builder");
+  expect(refs[1]?.content).toContain("### Finish criteria");
+  expect(refs[1]?.content).toContain("- Output schema decodes");
+  expect(refs[1]?.content).not.toContain("# phase-refs:commit");
 });
 
 test("orbit body declared in TS source flows into the generated orbit skill", async () => {
@@ -9630,6 +9664,15 @@ test("orbit phase fields participate in template instantiation", async () => {
         telos: "Bring ${domain} change into existence.",
         real_world_change: "${domain} reality is different and re-verifiable.",
         cold_pickup_test: "Could a ${domain} reviewer pick up the change cold?",
+        workflow: {
+          when: "Use when ${domain} can run as a workflow.",
+          inputs: ["${domain} request"],
+          outputs: ["${domain} result"],
+          sequence: ["Plan ${domain}", "Build ${domain}", "Review ${domain}"],
+          coordination: "Keep ${domain} boundaries explicit.",
+          finish_criteria: ["${domain} validation passes"],
+          escalation: "Escalate unclear ${domain} authority.",
+        },
         body: "## ${domain} build notes\n\nKeep scope inside the glyph.\n",
       },
     ],
@@ -9651,6 +9694,17 @@ test("orbit phase fields participate in template instantiation", async () => {
   expect(instantiated.phases[0]?.cold_pickup_test).toBe(
     "Could a Forge reviewer pick up the change cold?",
   );
+  expect(instantiated.phases[0]?.workflow?.when).toBe(
+    "Use when Forge can run as a workflow.",
+  );
+  expect(instantiated.phases[0]?.workflow?.sequence).toEqual([
+    "Plan Forge",
+    "Build Forge",
+    "Review Forge",
+  ]);
+  expect(instantiated.phases[0]?.workflow?.finish_criteria).toEqual([
+    "Forge validation passes",
+  ]);
   expect(instantiated.phases[0]?.body).toBe(
     "## Forge build notes\n\nKeep scope inside the glyph.\n",
   );

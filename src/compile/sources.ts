@@ -1250,6 +1250,17 @@ export const OrbitOrchestratorSchema = Schema.Struct({
 });
 export type OrbitOrchestrator = typeof OrbitOrchestratorSchema.Type;
 
+export const OrbitPhaseWorkflowSchema = Schema.Struct({
+  when: Schema.optional(Schema.String),
+  inputs: Schema.optional(Schema.Array(Schema.String)),
+  outputs: Schema.optional(Schema.Array(Schema.String)),
+  sequence: Schema.optional(Schema.Array(Schema.String)),
+  coordination: Schema.optional(Schema.String),
+  finish_criteria: Schema.optional(Schema.Array(Schema.String)),
+  escalation: Schema.optional(Schema.String),
+});
+export type OrbitPhaseWorkflow = typeof OrbitPhaseWorkflowSchema.Type;
+
 export const OrbitPhaseSchema = Schema.Struct({
   name: Schema.String,
   orbit: Schema.optional(OrbitRefInputSchema),
@@ -1261,6 +1272,7 @@ export const OrbitPhaseSchema = Schema.Struct({
   telos: Schema.optional(Schema.String),
   real_world_change: Schema.optional(Schema.String),
   cold_pickup_test: Schema.optional(Schema.String),
+  workflow: Schema.optional(OrbitPhaseWorkflowSchema),
   body: Schema.optional(Schema.String),
 });
 export type OrbitPhase = typeof OrbitPhaseSchema.Type;
@@ -1290,6 +1302,7 @@ export const NormalizedOrbitPhaseSchema = Schema.Struct({
   telos: Schema.optional(Schema.String),
   real_world_change: Schema.optional(Schema.String),
   cold_pickup_test: Schema.optional(Schema.String),
+  workflow: Schema.optional(OrbitPhaseWorkflowSchema),
   body: Schema.optional(Schema.String),
 });
 export type NormalizedOrbitPhase = typeof NormalizedOrbitPhaseSchema.Type;

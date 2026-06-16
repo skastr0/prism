@@ -946,6 +946,34 @@ const orbitPhaseStringFields = (
   [`phases[${index}].body`, phase.body],
 ];
 
+const visitOrbitPhaseWorkflow = (
+  phase: Orbit["phases"][number],
+  index: number,
+  visit: OrbitStringVisitor,
+): OrbitValidationError | undefined => {
+  if (!phase.workflow) return undefined;
+
+  const directError = visitStringFields(
+    [
+      [`phases[${index}].workflow.when`, phase.workflow.when],
+      [`phases[${index}].workflow.coordination`, phase.workflow.coordination],
+      [`phases[${index}].workflow.escalation`, phase.workflow.escalation],
+    ],
+    visit,
+  );
+  if (directError) return directError;
+
+  for (const listName of ["inputs", "outputs", "sequence", "finish_criteria"] as const) {
+    const values = phase.workflow[listName] ?? [];
+    for (const [itemIndex, value] of values.entries()) {
+      const error = visit(`phases[${index}].workflow.${listName}[${itemIndex}]`, value);
+      if (error) return error;
+    }
+  }
+
+  return undefined;
+};
+
 const visitOrbitPhaseBindingStrings = (
   phase: Orbit["phases"][number],
   index: number,
@@ -1017,6 +1045,7 @@ const visitOrbitPhaseStrings = (
 ): OrbitValidationError | undefined => {
   return (
     visitStringFields(orbitPhaseStringFields(phase, index), visit) ??
+    visitOrbitPhaseWorkflow(phase, index, visit) ??
     visitOrbitPhaseBindingStrings(phase, index, visit) ??
     visitOrbitPhaseNotes(phase, index, visit) ??
     visitOrbitPhaseAgentRefs(phase, index, visit) ??
@@ -1125,6 +1154,7 @@ type InstantiatedPhaseDetails = {
   readonly telos?: string;
   readonly real_world_change?: string;
   readonly cold_pickup_test?: string;
+  readonly workflow?: OrbitPhase["workflow"];
   readonly body?: string;
 };
 
@@ -1218,6 +1248,104 @@ const instantiatePhaseNotes = (
   return nextNotes;
 };
 
+const instantiateOptionalTemplateStringList = (
+  orbit: Orbit,
+  field: string,
+  values: ReadonlyArray<string> | undefined,
+  bindings: BindingMap,
+): string[] | undefined | OrbitValidationError => {
+  if (!values) return undefined;
+
+  const nextValues: string[] = [];
+  for (const [itemIndex, value] of values.entries()) {
+    const nextValue = instantiateTemplateString(
+      orbit,
+      `${field}[${itemIndex}]`,
+      value,
+      bindings,
+    );
+    if (nextValue instanceof OrbitValidationError) return nextValue;
+    nextValues.push(nextValue);
+  }
+
+  return nextValues;
+};
+
+const instantiatePhaseWorkflow = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  index: number,
+  bindings: BindingMap,
+): OrbitPhase["workflow"] | undefined | OrbitValidationError => {
+  if (!phase.workflow) return undefined;
+
+  const when = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].workflow.when`,
+    phase.workflow.when,
+    bindings,
+  );
+  if (when instanceof OrbitValidationError) return when;
+
+  const coordination = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].workflow.coordination`,
+    phase.workflow.coordination,
+    bindings,
+  );
+  if (coordination instanceof OrbitValidationError) return coordination;
+
+  const escalation = instantiateOptionalTemplateString(
+    orbit,
+    `phases[${index}].workflow.escalation`,
+    phase.workflow.escalation,
+    bindings,
+  );
+  if (escalation instanceof OrbitValidationError) return escalation;
+
+  const inputs = instantiateOptionalTemplateStringList(
+    orbit,
+    `phases[${index}].workflow.inputs`,
+    phase.workflow.inputs,
+    bindings,
+  );
+  if (inputs instanceof OrbitValidationError) return inputs;
+
+  const outputs = instantiateOptionalTemplateStringList(
+    orbit,
+    `phases[${index}].workflow.outputs`,
+    phase.workflow.outputs,
+    bindings,
+  );
+  if (outputs instanceof OrbitValidationError) return outputs;
+
+  const sequence = instantiateOptionalTemplateStringList(
+    orbit,
+    `phases[${index}].workflow.sequence`,
+    phase.workflow.sequence,
+    bindings,
+  );
+  if (sequence instanceof OrbitValidationError) return sequence;
+
+  const finishCriteria = instantiateOptionalTemplateStringList(
+    orbit,
+    `phases[${index}].workflow.finish_criteria`,
+    phase.workflow.finish_criteria,
+    bindings,
+  );
+  if (finishCriteria instanceof OrbitValidationError) return finishCriteria;
+
+  return {
+    ...(when !== undefined ? { when } : {}),
+    ...(inputs !== undefined ? { inputs } : {}),
+    ...(outputs !== undefined ? { outputs } : {}),
+    ...(sequence !== undefined ? { sequence } : {}),
+    ...(coordination !== undefined ? { coordination } : {}),
+    ...(finishCriteria !== undefined ? { finish_criteria: finishCriteria } : {}),
+    ...(escalation !== undefined ? { escalation } : {}),
+  };
+};
+
 const instantiatePhaseDetails = (
   orbit: Orbit,
   phase: OrbitPhase,
@@ -1248,6 +1376,9 @@ const instantiatePhaseDetails = (
   );
   if (nextColdPickupTest instanceof OrbitValidationError) return nextColdPickupTest;
 
+  const nextWorkflow = instantiatePhaseWorkflow(orbit, phase, index, bindings);
+  if (nextWorkflow instanceof OrbitValidationError) return nextWorkflow;
+
   const nextBody = instantiateOptionalTemplateString(
     orbit,
     `phases[${index}].body`,
@@ -1264,6 +1395,7 @@ const instantiatePhaseDetails = (
     ...(nextColdPickupTest !== undefined
       ? { cold_pickup_test: nextColdPickupTest }
       : {}),
+    ...(nextWorkflow !== undefined ? { workflow: nextWorkflow } : {}),
     ...(nextBody !== undefined ? { body: nextBody } : {}),
   };
 };

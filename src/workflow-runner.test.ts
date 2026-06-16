@@ -91,6 +91,7 @@ describe("workflow runner", () => {
       agent: builder,
       prompt: "Build the slice.",
       output: PatchReport,
+      finish: { maxRepairs: 0 },
     });
     const review = defineTask({
       id: "review",
@@ -506,6 +507,7 @@ describe("workflow runner", () => {
       agent: builder,
       prompt: `Run task ${index}.`,
       output: PatchReport,
+      finish: { maxRepairs: 0 },
     }));
     const workflow = defineWorkflow({
       name: "bounded-fanout-failure-smoke",

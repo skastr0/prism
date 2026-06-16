@@ -223,3 +223,59 @@ test("empty compile manifest carries a self-consistent hash", () => {
   expect(verifyCompileManifestHash(manifest)).toBe(true);
   expect(manifest.tools).toEqual({});
 });
+
+test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless of insertion order", () => {
+  // Non-ASCII names: café (NFC) and naïve (NFC precomposed) — locale sort vs code-point sort differ on some platforms
+  const makeManifest = (orbitOrder: "ab" | "ba", toolOrder: "ab" | "ba"): CompileManifest => {
+    const orbits = {
+      ab: {
+        "forge:café": { plugin: "forge", name: "café" },
+        "forge:naïve": { plugin: "forge", name: "naïve" },
+      },
+      ba: {
+        "forge:naïve": { plugin: "forge", name: "naïve" },
+        "forge:café": { plugin: "forge", name: "café" },
+      },
+    }[orbitOrder] as CompileManifest["orbits"];
+    const tools = {
+      ab: {
+        "forge:résumé": { plugin: "forge", name: "résumé" },
+        "forge:über": { plugin: "forge", name: "über" },
+      },
+      ba: {
+        "forge:über": { plugin: "forge", name: "über" },
+        "forge:résumé": { plugin: "forge", name: "résumé" },
+      },
+    }[toolOrder] as CompileManifest["tools"];
+    const base: Omit<CompileManifest, "manifestHash"> = {
+      version: 1,
+      plugins: {},
+      compileTargets: [],
+      agents: {},
+      modelspaces: {},
+      skills: {},
+      tools,
+      traits: {},
+      orbits,
+    };
+    const withEmpty = { ...base, manifestHash: "" };
+    return { ...withEmpty, manifestHash: computeCompileManifestHash(withEmpty) };
+  };
+
+  const aa = makeManifest("ab", "ab");
+  const ab = makeManifest("ab", "ba");
+  const ba = makeManifest("ba", "ab");
+  const bb = makeManifest("ba", "ba");
+
+  // All insertion orders must produce the same manifest hash
+  expect(aa.manifestHash).toBe(ab.manifestHash);
+  expect(aa.manifestHash).toBe(ba.manifestHash);
+  expect(aa.manifestHash).toBe(bb.manifestHash);
+
+  // All must verify
+  expect(verifyCompileManifestHash(aa)).toBe(true);
+  expect(verifyCompileManifestHash(bb)).toBe(true);
+
+  // Encoded output must also be identical
+  expect(encodeCompileManifest(aa)).toBe(encodeCompileManifest(bb));
+});

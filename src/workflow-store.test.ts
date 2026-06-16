@@ -4,11 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
+import { stableJsonHash } from "@skastr0/prism-core/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
-import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions } from "./workflows.js";
+import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
 
 const tempRoots: string[] = [];
 
@@ -59,7 +60,7 @@ const deadPid = async (): Promise<number> => {
 const createWorkflow = (options?: {
   readonly prompt?: string;
   readonly agent?: WorkflowAgentRef;
-  readonly worker?: string;
+  readonly worker?: WorkflowWorkerId;
   readonly model?: string;
   readonly finish?: WorkflowFinishOptions<{ summary: string }>;
 }) => {
@@ -711,6 +712,140 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("mock-output run records outputSource provenance and real run does not reuse it", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    // First run: mock-output mode — seeds the cache with outputSource marker
+    const mockRun = await runWorkflow(workflow, {
+      store,
+      mockOutput: true,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "mock-value" };
+      },
+    });
+
+    // After the mock run, the cache record carries the provenance marker
+    const identity = workflowTaskIdentity(workflow.name, workflow.tasks[0]!);
+    const cacheRecordAfterMock = store.getCompleted(identity, { allowMockSourced: true });
+    expect(cacheRecordAfterMock?.outputSource).toBe("mock-output");
+    expect(cacheRecordAfterMock?.output).toEqual({ summary: "mock-value" });
+
+    // getCompleted without allowMockSourced returns null (real runs see no cache)
+    const cacheRecordRealLookup = store.getCompleted(identity);
+    expect(cacheRecordRealLookup).toBeNull();
+
+    // Mock-sourced event has the provenance field
+    const mockRunId = mockRun.runId!;
+    const cacheWriteEvent = store.listRunEvents(mockRunId).find((event) => event.type === "task.cache_write.completed");
+    expect(cacheWriteEvent?.payload).toMatchObject({ outputSource: "mock-output" });
+
+    // listCompletedCache shows the mock-sourced marker
+    expect(store.listCompletedCache()).toEqual([
+      expect.objectContaining({
+        outputSource: "mock-output",
+        output: { summary: "mock-value" },
+      }),
+    ]);
+
+    // Second run: real (non-mock) mode — must NOT reuse mock-sourced cache entry
+    const realRun = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "real-value" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(mockRun.tasks[0]?.cached).toBe(false);
+    expect(mockRun.tasks[0]?.output).toEqual({ summary: "mock-value" });
+    expect(realRun.tasks[0]?.cached).toBe(false);
+    expect(realRun.tasks[0]?.output).toEqual({ summary: "real-value" });
+
+    // Real run recorded a cache miss (not a hit) since mock-sourced entries are excluded
+    const realRunId = realRun.runId!;
+    expect(store.listRunEvents(realRunId).map((event) => event.type)).toContain("task.cache_lookup.miss");
+    expect(store.listRunEvents(realRunId).map((event) => event.type)).not.toContain("task.cache_lookup.hit");
+
+    // After real run, the cache record is overwritten with real output and no outputSource
+    const cacheRecordAfterReal = store.getCompleted(identity);
+    expect(cacheRecordAfterReal?.output).toEqual({ summary: "real-value" });
+    expect(cacheRecordAfterReal?.outputSource).toBeUndefined();
+
+    store.close();
+  });
+
+  test("mock-output run reuses its own prior mock-sourced cache on a subsequent mock run", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    // First mock run seeds the cache
+    await runWorkflow(workflow, {
+      store,
+      mockOutput: true,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "mock-seeded" };
+      },
+    });
+
+    // Second mock run reuses the mock-sourced cache (mock runs can reuse mock cache)
+    const secondMock = await runWorkflow(workflow, {
+      store,
+      mockOutput: true,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "should-not-execute" };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(secondMock.tasks[0]?.cached).toBe(true);
+    expect(secondMock.tasks[0]?.output).toEqual({ summary: "mock-seeded" });
+    store.close();
+  });
+
+  test("real run caches its output and subsequent real run reuses it", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    // First real run
+    const first = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "real-first" };
+      },
+    });
+
+    // Second real run reuses real cache (no outputSource marker)
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "real-second" };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(first.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.cached).toBe(true);
+    expect(second.tasks[0]?.output).toEqual({ summary: "real-first" });
+
+    // No outputSource on real cache records
+    const cacheRecord = store.getCompleted(workflowTaskIdentity(workflow.name, workflow.tasks[0]!));
+    expect(cacheRecord?.outputSource).toBeUndefined();
+    store.close();
+  });
+
   test("summarizes workflow task progress from stored task records and events", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
@@ -845,7 +980,7 @@ describe("workflow store", () => {
       },
     });
 
-    const failedWorkflow = createWorkflow({ prompt: "Return malformed output." });
+    const failedWorkflow = createWorkflow({ prompt: "Return malformed output.", finish: { maxRepairs: 0 } });
     const failedRunId = store.createRun(failedWorkflow.name);
     const failed = await runWorkflow(failedWorkflow, {
       store,
@@ -1218,7 +1353,7 @@ describe("workflow store", () => {
   test("runner records decode failures in run history", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
-    const workflow = createWorkflow();
+    const workflow = createWorkflow({ finish: { maxRepairs: 0 } });
 
     await expect(runWorkflow(workflow, {
       store,
@@ -1253,6 +1388,29 @@ describe("workflow store", () => {
       "task.failed",
       "run.failed",
     ]);
+    store.close();
+  });
+
+  test("self-heals a schema-decode failure by default when no finish block is set", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow(); // no finish block -> objective decode repair is on by default
+    let calls = 0;
+    await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return calls === 1 ? { summary: 42 } : { summary: "healed" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    const runId = store.listRuns()[0]!.runId;
+    expect(store.listRuns()[0]?.status).toBe("completed");
+    const tasks = store.listRunTasks(runId);
+    expect(tasks[0]?.status).toBe("completed");
+    expect(tasks[0]?.output).toEqual({ summary: "healed" });
+    expect(store.listRunEvents(runId).map((event) => event.type)).toContain("task.repair.started");
     store.close();
   });
 
@@ -1351,6 +1509,7 @@ describe("workflow store", () => {
       agent: reviewer,
       prompt: "Review the slice.",
       output: ReviewOutput,
+      finish: { maxRepairs: 0 },
     });
     const workflow = defineWorkflow({ name: "partial-failure-smoke", tasks: [build, review] as const });
 
@@ -1692,5 +1851,69 @@ describe("workflow store", () => {
     expect(second.tasks[0]?.cached).toBe(false);
     expect(second.tasks[0]?.output).toEqual({ summary: "second" });
     store.close();
+  });
+
+  test("prompt hash is produced via canonical stableJsonHash pipeline (key-order and non-ASCII stable)", () => {
+    // Verify: promptHash equals what stableJsonHash would produce, not what a raw JSON.stringify would.
+    // This proves key-order independence: stableJsonHash sorts keys before hashing.
+    const workflow = createWorkflow({ worker: "grok", model: "grok-build" });
+    const task = workflow.tasks[0]!;
+    const identity = workflowTaskIdentity(workflow.name, task);
+    const outputSchema = (task.output as { readonly ast?: unknown }).ast ?? null;
+
+    // Construct the same payload as workflowTaskIdentity does internally in canonical order.
+    const canonicalOrder = {
+      identityVersion: 2,
+      workerJsonContractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
+      workerJsonInstructionSource: WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE,
+      prompt: task.prompt,
+      worker: task.worker?.worker ?? null,
+      workerSemantics: "native-agent-v1",
+      model: task.worker?.model ?? null,
+      profile: task.worker?.profile ?? null,
+      outputSchema,
+      finish: { maxRepairs: task.finish?.maxRepairs ?? 0, criteria: task.finish?.criteria?.map((criterion) => ({
+        kind: criterion.kind ?? "deterministic",
+        name: criterion.name,
+        ...(criterion.kind === "judge"
+          ? {
+            goal: typeof criterion.goal === "function" ? criterion.goal.toString() : criterion.goal ?? null,
+            selectEvidence: criterion.selectEvidence?.toString() ?? null,
+            evaluate: criterion.evaluate.toString(),
+          }
+          : {
+            check: criterion.check.toString(),
+            repairPrompt: criterion.repairPrompt?.toString() ?? null,
+          }),
+      })) ?? [] },
+    };
+
+    // Build the same payload in a reversed key order to prove stableJsonHash is key-order independent.
+    const reversedOrder = {
+      finish: canonicalOrder.finish,
+      outputSchema: canonicalOrder.outputSchema,
+      profile: canonicalOrder.profile,
+      model: canonicalOrder.model,
+      workerSemantics: canonicalOrder.workerSemantics,
+      worker: canonicalOrder.worker,
+      prompt: canonicalOrder.prompt,
+      workerJsonInstructionSource: canonicalOrder.workerJsonInstructionSource,
+      workerJsonContractVersion: canonicalOrder.workerJsonContractVersion,
+      identityVersion: canonicalOrder.identityVersion,
+    };
+
+    // Raw JSON.stringify is insertion-order dependent and produces different strings.
+    const rawCanonical = computeContentHash(JSON.stringify(canonicalOrder));
+    const rawReversed = computeContentHash(JSON.stringify(reversedOrder));
+    expect(rawCanonical).not.toBe(rawReversed);
+
+    // stableJsonHash is key-order independent — both orderings must hash identically.
+    const stableCanonical = stableJsonHash(canonicalOrder as Parameters<typeof stableJsonHash>[0]);
+    const stableReversed = stableJsonHash(reversedOrder as Parameters<typeof stableJsonHash>[0]);
+    expect(stableCanonical).toBe(stableReversed);
+
+    // The identity promptHash must equal the stable hash, proving it uses stableJsonHash.
+    expect(identity.promptHash).toBe(stableCanonical);
+    expect(identity.promptHash).toBe(stableReversed);
   });
 });

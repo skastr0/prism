@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { buildCompileManifestForTarget, emptyCompileManifest } from "./compile-manifest.js";
 import type { AgentCacheDescriptor } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
@@ -102,24 +103,28 @@ describe("workflow refs emitter", () => {
     expect(output).toContain("WorkflowModelProfileRef");
   });
 
-  test("plans a project .prism desired root for the sync engine", () => {
-    const projectPath = "/tmp/workspace";
-    const desired = planWorkflowRefsEmit({ projectPath, manifest: manifest() });
+  test("plans a machine-global, project-keyed generated desired root for the sync engine", () => {
+    const prismHome = "/tmp/prism-home";
+    const projectKey = "workspace-key";
+    const desired = planWorkflowRefsEmit({ prismHome, projectKey, manifest: manifest() });
 
     expect(desired.harness).toBe(WORKFLOW_REFS_HARNESS);
-    expect(desired.root).toBe(workflowRefsRoot(projectPath));
+    expect(desired.root).toBe(workflowRefsRoot(prismHome, projectKey));
+    // Refs are Prism-owned, never in the project tree: under ~/.prism/state.
+    expect(desired.root).toContain(join("state", "projects", projectKey, "generated"));
+    expect(desired.root).not.toContain(".prism/generated/workflows");
     expect(desired.files).toHaveLength(6);
-    expect(desired.files[0]?.targetPath).toBe(workflowAgentsPath(projectPath));
+    expect(desired.files[0]?.targetPath).toBe(workflowAgentsPath(prismHome, projectKey));
     expect(desired.files[0]?.plugin).toBe(WORKFLOW_REFS_HARNESS);
-    expect(desired.files[1]?.targetPath).toBe(workflowModelsPath(projectPath));
+    expect(desired.files[1]?.targetPath).toBe(workflowModelsPath(prismHome, projectKey));
     expect(desired.files[1]?.plugin).toBe(WORKFLOW_REFS_HARNESS);
-    expect(desired.files[2]?.targetPath).toBe(workflowSkillsPath(projectPath));
+    expect(desired.files[2]?.targetPath).toBe(workflowSkillsPath(prismHome, projectKey));
     expect(desired.files[2]?.plugin).toBe(WORKFLOW_REFS_HARNESS);
-    expect(desired.files[3]?.targetPath).toBe(workflowTraitsPath(projectPath));
+    expect(desired.files[3]?.targetPath).toBe(workflowTraitsPath(prismHome, projectKey));
     expect(desired.files[3]?.plugin).toBe(WORKFLOW_REFS_HARNESS);
-    expect(desired.files[4]?.targetPath).toBe(workflowOrbitsPath(projectPath));
+    expect(desired.files[4]?.targetPath).toBe(workflowOrbitsPath(prismHome, projectKey));
     expect(desired.files[4]?.plugin).toBe(WORKFLOW_REFS_HARNESS);
-    expect(desired.files[5]?.targetPath).toBe(workflowToolsPath(projectPath));
+    expect(desired.files[5]?.targetPath).toBe(workflowToolsPath(prismHome, projectKey));
     expect(desired.files[5]?.plugin).toBe(WORKFLOW_REFS_HARNESS);
     expect(desired.regions).toEqual([]);
   });

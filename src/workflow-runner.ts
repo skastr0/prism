@@ -479,13 +479,14 @@ const recordCacheLookup = (
   task: AnyWorkflowTask,
   identity: WorkflowTaskIdentity,
   useCache: boolean,
+  mockOutput: boolean,
 ): { readonly cached: { readonly output: unknown } | null | undefined; readonly cacheHit: boolean } => {
   if (!useCache) {
     recordEvent(store, runId, task.id, "task.cache_lookup.skipped", { cacheKey: identity.cacheKey });
     return { cached: null, cacheHit: false };
   }
   recordEvent(store, runId, task.id, "task.cache_lookup.started", identity);
-  const cached = store?.getCompleted(identity);
+  const cached = store?.getCompleted(identity, { allowMockSourced: mockOutput });
   const cacheHit = cached !== undefined && cached !== null;
   recordEvent(store, runId, task.id, cacheHit ? "task.cache_lookup.hit" : "task.cache_lookup.miss", {
     cacheKey: identity.cacheKey,
@@ -583,19 +584,26 @@ const executeWorkflowTask = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
+  readonly mockOutput: boolean;
   readonly limiter?: TaskExecutionLimiter;
   readonly abortSignal?: AbortSignal;
 }): Promise<WorkflowRunTaskResult> => {
-  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache } = input;
+  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache, mockOutput } = input;
   assertRunStillRunning(store, runId);
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
-  const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache);
+  const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache, mockOutput);
 
   const runTaskBoundary = async (): Promise<WorkflowRunTaskResult> => {
     let rawOutput: unknown;
     let decodedOutput: unknown = undefined;
     let metadata: Record<string, unknown> | undefined;
-    const maxRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
+    // Objective decode/parse repair is independent of finish criteria: a malformed
+    // output is unambiguously wrong and re-promptable, so it self-heals by default
+    // even when the task declares no `finish`. Subjective finish-criterion "continue"
+    // repair stays gated on the author-declared finish budget.
+    const DEFAULT_DECODE_REPAIRS = 2;
+    const decodeRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? DEFAULT_DECODE_REPAIRS;
+    const finishRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
     let attemptTask = task;
     let repairs = 0;
     let pendingRepair: WorkflowTaskRepairContext | undefined;
@@ -668,7 +676,7 @@ const executeWorkflowTask = async (input: {
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
-        if (error instanceof WorkflowOutputParseError && repairs < maxRepairs) {
+        if (error instanceof WorkflowOutputParseError && repairs < decodeRepairs) {
           recordEvent(store, runId, task.id, "task.decode.failed", {
             attempt: repairs,
             error: error.message,
@@ -705,7 +713,7 @@ const executeWorkflowTask = async (input: {
       if (Either.isLeft(decoded)) {
         const error = decoded.left;
         recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
-        if (repairs < maxRepairs) {
+        if (repairs < decodeRepairs) {
           repairs += 1;
           const repairPrompt = schemaRepairPrompt(error);
           beginRepair("output-schema", repairPrompt);
@@ -757,7 +765,7 @@ const executeWorkflowTask = async (input: {
         output: decodedOutput,
         judgeRuns: finish.judgeRuns,
       });
-      if (finish.status === "continue" && repairs < maxRepairs) {
+      if (finish.status === "continue" && repairs < finishRepairs) {
         repairs += 1;
         beginRepair(finish.criterion, finish.repairPrompt);
         continue;
@@ -824,8 +832,17 @@ const executeWorkflowTask = async (input: {
       }
       : { ...workflowContractMetadata, ...(metadata ?? {}) };
     if (useCache && !cacheHit) {
-      store?.recordCompleted({ identity, agent: taskAgent(task), output: decodedOutput, metadata: finalMetadata });
-      recordEvent(store, runId, task.id, "task.cache_write.completed", { cacheKey: identity.cacheKey });
+      store?.recordCompleted({
+        identity,
+        agent: taskAgent(task),
+        output: decodedOutput,
+        metadata: finalMetadata,
+        ...(mockOutput ? { outputSource: "mock-output" as const } : {}),
+      });
+      recordEvent(store, runId, task.id, "task.cache_write.completed", {
+        cacheKey: identity.cacheKey,
+        ...(mockOutput ? { outputSource: "mock-output" } : {}),
+      });
     }
     recordRunTaskIfPersisted({
       store,
@@ -854,6 +871,7 @@ const runStaticWorkflow = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
+  readonly mockOutput: boolean;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly abortSignal?: AbortSignal;
@@ -873,6 +891,7 @@ const runStaticWorkflow = async (input: {
       store: input.store,
       executeTask: input.executeTask,
       useCache: input.useCache,
+      mockOutput: input.mockOutput,
       limiter: input.limiter,
       abortSignal: input.abortSignal,
     }));
@@ -886,6 +905,7 @@ const runDynamicWorkflow = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
+  readonly mockOutput: boolean;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly abortSignal?: AbortSignal;
@@ -906,6 +926,7 @@ const runDynamicWorkflow = async (input: {
           store: input.store,
           executeTask: input.executeTask,
           useCache: input.useCache,
+          mockOutput: input.mockOutput,
           limiter: input.limiter,
           abortSignal: input.abortSignal,
         });
@@ -938,6 +959,7 @@ export const runWorkflow = async (
     readonly executeTask: WorkflowTaskExecutor;
     readonly store?: WorkflowStore;
     readonly cache?: boolean;
+    readonly mockOutput?: boolean;
     readonly maxConcurrentTasks?: number;
     readonly runId?: string;
     readonly runtimeOptions?: WorkflowRuntimeOptions;
@@ -945,6 +967,7 @@ export const runWorkflow = async (
   },
 ): Promise<WorkflowRunResult> => {
   const useCache = options.cache !== false;
+  const mockOutput = options.mockOutput === true;
   const runtimeOptions = options.runtimeOptions ?? {};
   const maxConcurrentTasks = options.maxConcurrentTasks ?? DEFAULT_WORKFLOW_TASK_CONCURRENCY;
   if (!Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1) {
@@ -959,12 +982,13 @@ export const runWorkflow = async (
       store: options.store,
       executeTask: options.executeTask,
       useCache,
+      mockOutput,
       limiter,
       runtimeOptions,
       abortSignal: options.abortSignal,
     });
     return { runId, workflow: workflow.name, tasks: result.tasks, output: result.output };
   }
-  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, limiter, runtimeOptions, abortSignal: options.abortSignal });
+  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, mockOutput, limiter, runtimeOptions, abortSignal: options.abortSignal });
   return { runId, workflow: workflow.name, tasks };
 };

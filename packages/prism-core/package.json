@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Source-only workspace core contracts and codecs shared by Prism runtimes and workflow tooling.",

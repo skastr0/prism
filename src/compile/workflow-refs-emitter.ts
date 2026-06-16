@@ -1,29 +1,36 @@
 import { join } from "node:path";
 import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
 import type { CompileManifest, CompileManifestAgent, CompileManifestOrbit, CompileManifestTrait, CompileManifestCanonicalTool, CompileManifestToolspaceTool } from "./compile-manifest.js";
+import { projectGeneratedRefsDir } from "../project-key.js";
 import type { DesiredRoot } from "../sync/desired.js";
 
 export const WORKFLOW_REFS_HARNESS = "prism-workflows";
 
-export const workflowRefsRoot = (projectPath: string): string => join(projectPath, ".prism");
+/**
+ * Generated workflow refs are Prism-owned, never project source. They live
+ * machine-global, project-keyed, at
+ * ~/.prism/state/projects/<key>/generated/ (toolchain & distribution §5).
+ */
+export const workflowRefsRoot = (prismHome: string, projectKey: string): string =>
+  projectGeneratedRefsDir(prismHome, projectKey);
 
-export const workflowAgentsPath = (projectPath: string): string =>
-  join(workflowRefsRoot(projectPath), "generated", "workflows", "agents.ts");
+export const workflowAgentsPath = (prismHome: string, projectKey: string): string =>
+  join(workflowRefsRoot(prismHome, projectKey), "agents.ts");
 
-export const workflowModelsPath = (projectPath: string): string =>
-  join(workflowRefsRoot(projectPath), "generated", "workflows", "models.ts");
+export const workflowModelsPath = (prismHome: string, projectKey: string): string =>
+  join(workflowRefsRoot(prismHome, projectKey), "models.ts");
 
-export const workflowSkillsPath = (projectPath: string): string =>
-  join(workflowRefsRoot(projectPath), "generated", "workflows", "skills.ts");
+export const workflowSkillsPath = (prismHome: string, projectKey: string): string =>
+  join(workflowRefsRoot(prismHome, projectKey), "skills.ts");
 
-export const workflowTraitsPath = (projectPath: string): string =>
-  join(workflowRefsRoot(projectPath), "generated", "workflows", "traits.ts");
+export const workflowTraitsPath = (prismHome: string, projectKey: string): string =>
+  join(workflowRefsRoot(prismHome, projectKey), "traits.ts");
 
-export const workflowOrbitsPath = (projectPath: string): string =>
-  join(workflowRefsRoot(projectPath), "generated", "workflows", "orbits.ts");
+export const workflowOrbitsPath = (prismHome: string, projectKey: string): string =>
+  join(workflowRefsRoot(prismHome, projectKey), "orbits.ts");
 
-export const workflowToolsPath = (projectPath: string): string =>
-  join(workflowRefsRoot(projectPath), "generated", "workflows", "tools.ts");
+export const workflowToolsPath = (prismHome: string, projectKey: string): string =>
+  join(workflowRefsRoot(prismHome, projectKey), "tools.ts");
 
 const camelKey = (value: string): string => {
   const parts = value
@@ -687,51 +694,52 @@ ${body}
 };
 
 export const planWorkflowRefsEmit = (options: {
-  readonly projectPath: string;
+  readonly prismHome: string;
+  readonly projectKey: string;
   readonly manifest: CompileManifest;
 }): DesiredRoot => {
-  const root = workflowRefsRoot(options.projectPath);
+  const root = workflowRefsRoot(options.prismHome, options.projectKey);
   return {
     harness: WORKFLOW_REFS_HARNESS,
     root,
     files: [
       {
-        targetPath: workflowAgentsPath(options.projectPath),
+        targetPath: workflowAgentsPath(options.prismHome, options.projectKey),
         content: renderWorkflowAgentsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,
       },
       {
-        targetPath: workflowModelsPath(options.projectPath),
+        targetPath: workflowModelsPath(options.prismHome, options.projectKey),
         content: renderWorkflowModelsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,
       },
       {
-        targetPath: workflowSkillsPath(options.projectPath),
+        targetPath: workflowSkillsPath(options.prismHome, options.projectKey),
         content: renderWorkflowSkillsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,
       },
       {
-        targetPath: workflowTraitsPath(options.projectPath),
+        targetPath: workflowTraitsPath(options.prismHome, options.projectKey),
         content: renderWorkflowTraitsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,
       },
       {
-        targetPath: workflowOrbitsPath(options.projectPath),
+        targetPath: workflowOrbitsPath(options.prismHome, options.projectKey),
         content: renderWorkflowOrbitsModule({
           manifest: options.manifest,
         }),
         plugin: WORKFLOW_REFS_HARNESS,
       },
       {
-        targetPath: workflowToolsPath(options.projectPath),
+        targetPath: workflowToolsPath(options.prismHome, options.projectKey),
         content: renderWorkflowToolsModule({
           manifest: options.manifest,
         }),

@@ -9,6 +9,7 @@ import { Effect } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import { expandPath } from "../fs.js";
+import { deriveProjectKey } from "../project-key.js";
 import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
@@ -1425,9 +1426,18 @@ export const compilePluginForTarget = (
       blocked.length === 0 &&
       isCompileManifestHarnessId(manifestTarget)
     ) {
+      // Per-project manifest partition: the project key is derived from the
+      // compiled project (git root of --project, else of cwd), hashed to a
+      // filesystem-safe dir name. This fixes the clobbering bug where two
+      // projects with a same-named local plugin stomped each other in the old
+      // single flat global manifest.
+      const projectKey = deriveProjectKey(
+        options.projectPath ? expandPath(options.projectPath) : process.cwd(),
+      ).key;
       yield* Effect.promise(() =>
         updateCompileManifestForTarget({
           prismHome: context.prismHome,
+          projectKey,
           registry,
           target: manifestTarget,
           scope: options.scope,
@@ -1438,13 +1448,14 @@ export const compilePluginForTarget = (
       );
       if (options.projectPath) {
         const { manifest } = yield* Effect.promise(() =>
-          readCompileManifest(context.prismHome)
+          readCompileManifest(context.prismHome, projectKey)
         );
         workflowRefsReport = yield* Effect.promise(() =>
           syncDesiredRoot({
             prismHome: context.prismHome,
             desired: planWorkflowRefsEmit({
-              projectPath: expandPath(options.projectPath!),
+              prismHome: context.prismHome,
+              projectKey,
               manifest,
             }),
             scopePlugins: new Set([WORKFLOW_REFS_HARNESS]),

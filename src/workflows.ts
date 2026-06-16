@@ -44,8 +44,18 @@ export interface WorkflowAgentRef {
 
 export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
 
+export type WorkflowWorkerId =
+  | "amp-code"
+  | "antigravity-cli"
+  | "claude-code"
+  | "codex-cli"
+  | "grok"
+  | "hermes"
+  | "kimi-code"
+  | "opencode";
+
 export interface WorkflowTaskWorkerOptions {
-  readonly worker?: string;
+  readonly worker?: WorkflowWorkerId;
   readonly model?: string;
   readonly profile?: string;
 }

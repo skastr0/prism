@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import {
   type StableJsonValue,
+  compareCodePoint,
   sortStableStrings,
   stableJsonHash,
   stableJsonValue,
@@ -206,8 +207,8 @@ const sortTraits = (traits: ReadonlyArray<CompileManifestTrait>): CompileManifes
 const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifestOrbit[] =>
   [...orbits].sort((left, right) =>
     left.plugin === right.plugin
-      ? left.name.localeCompare(right.name)
-      : left.plugin.localeCompare(right.plugin),
+      ? compareCodePoint(left.name, right.name)
+      : compareCodePoint(left.plugin, right.plugin),
   );
 
 const sortTools = (tools: ReadonlyArray<CompileManifestCanonicalTool | CompileManifestToolspaceTool>): (CompileManifestCanonicalTool | CompileManifestToolspaceTool)[] =>
@@ -216,13 +217,13 @@ const sortTools = (tools: ReadonlyArray<CompileManifestCanonicalTool | CompileMa
       ? ("toolspace" in left && left.toolspace !== undefined
           ? ("toolspace" in right && right.toolspace !== undefined
               ? (left.toolspace === right.toolspace
-                  ? left.name.localeCompare(right.name)
-                  : left.toolspace.localeCompare(right.toolspace))
+                  ? compareCodePoint(left.name, right.name)
+                  : compareCodePoint(left.toolspace, right.toolspace))
               : -1)
           : ("toolspace" in right && right.toolspace !== undefined
               ? 1
-              : left.name.localeCompare(right.name)))
-      : left.plugin.localeCompare(right.plugin),
+              : compareCodePoint(left.name, right.name)))
+      : compareCodePoint(left.plugin, right.plugin),
   );
 
 const normalizeAgentForEncoding = (agent: CompileManifestAgent): CompileManifestAgent => ({

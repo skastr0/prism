@@ -48,15 +48,12 @@ const workflowSource = (
   exportKind: "default" | "named" = "default",
   options?: { readonly worker?: string; readonly model?: string },
 ) => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -83,15 +80,12 @@ ${exportKind === "default" ? "export default workflow;" : "export { workflow };"
 };
 
 const dynamicWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Effect, Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Effect, Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -127,15 +121,12 @@ export default defineWorkflow({
 };
 
 const workerModelWorkflowSource = (worker?: string) => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -167,15 +158,12 @@ export default defineWorkflow({ name: "worker-model-smoke", tasks: [build, revie
 };
 
 const ampWorkerModelWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -207,15 +195,12 @@ export default defineWorkflow({ name: "amp-worker-model-smoke", tasks: [build, r
 };
 
 const antigravityWorkerModelWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -247,15 +232,12 @@ export default defineWorkflow({ name: "antigravity-worker-model-smoke", tasks: [
 };
 
 const workerRoutingWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -286,15 +268,12 @@ export default defineWorkflow({ name: "worker-routing-smoke", tasks: [build, rev
 };
 
 const allTaskWorkersWorkflowSource = () => {
-  const effectPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js")
-    .replace(/\\/g, "/");
-  const prismPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
   return `
-import { Schema } from ${JSON.stringify(effectPath)};
-import { defineTask, defineWorkflow } from ${JSON.stringify(prismPath)};
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
 
 const builder = {
-  kind: "agent-ref",
+  kind: "agent-ref" as const,
   plugin: "forge",
   name: "builder",
   description: "Build specialist",
@@ -2444,6 +2423,7 @@ describe("workflow loader", () => {
         status: string;
         output: { summary: string };
         metadata: Record<string, unknown>;
+        outputSource?: string;
         createdAt: string;
         updatedAt: string;
       }>;
@@ -2505,6 +2485,7 @@ describe("workflow loader", () => {
         status: "completed",
         output: { summary: "history" },
         metadata: contractMetadata,
+        outputSource: "mock-output",
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       },
@@ -2838,30 +2819,37 @@ describe("workflow loader", () => {
     }));
   });
 
-  test("CLI update restarts a running workflow and reuses completed cache", async () => {
+  test("CLI update restarts a running workflow and does not reuse mock-sourced cache", async () => {
     const root = await createTempRoot();
     const storeFile = join(root, "workflows.sqlite");
     const seedFile = join(root, "seed-workflow.ts");
     const oldFile = join(root, "old-workflow.ts");
     const mockOutput = join(root, "mock-output.json");
     const startedFile = join(root, "old-worker-started.txt");
-    const fakeGrok = join(root, "fake-grok-hangs.mjs");
+    const fakeGrokHangs = join(root, "fake-grok-hangs.mjs");
+    const fakeGrokFast = join(root, "fake-grok-fast.mjs");
     await writeFile(seedFile, workflowSource());
     await writeFile(oldFile, workflowSource().replace('cacheKey: "workflow-loader-build"', 'cacheKey: "workflow-loader-old"'));
     await writeFile(mockOutput, JSON.stringify({ build: { summary: "seeded" } }));
-    await writeFile(fakeGrok, [
+    await writeFile(fakeGrokHangs, [
       "#!/usr/bin/env node",
       "import { writeFileSync } from 'node:fs';",
       `writeFileSync(${JSON.stringify(startedFile)}, 'started');`,
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"));
-    await chmod(fakeGrok, 0o755);
-    const cli = async (args: string[]) => {
+    await writeFile(fakeGrokFast, [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify({ summary: 'from-real-worker' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrokHangs, 0o755);
+    await chmod(fakeGrokFast, 0o755);
+    const cli = async (args: string[], grokBin: string) => {
       const processHandle = Bun.spawn({
         cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
         cwd: root,
-        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: fakeGrok },
+        env: { ...process.env, PRISM_WORKFLOW_GROK_BIN: grokBin },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -2875,10 +2863,13 @@ describe("workflow loader", () => {
       return JSON.parse(stdout) as unknown;
     };
 
-    await cli(["workflow", "run", seedFile, "--store", storeFile, "--mock-output", mockOutput, "--worker", "grok"]);
-    const oldRun = await cli(["workflow", "run", oldFile, "--detach", "--store", storeFile, "--worker", "grok"]) as { runId: string };
+    // Seed the task cache via --mock-output (stored with outputSource = "mock-output")
+    await cli(["workflow", "run", seedFile, "--store", storeFile, "--mock-output", mockOutput, "--worker", "grok"], fakeGrokFast);
+    // Start a detached old run using a grok that hangs (different cache key)
+    const oldRun = await cli(["workflow", "run", oldFile, "--detach", "--store", storeFile, "--worker", "grok"], fakeGrokHangs) as { runId: string };
     await waitFor(async () => Bun.file(startedFile).exists(), 5_000);
-    const update = await cli(["workflow", "runs", "update", oldRun.runId, seedFile, "--store", storeFile, "--worker", "grok"]) as {
+    // Restart with the seed workflow; the update run is a real (non-mock) run that must NOT reuse mock-sourced cache
+    const update = await cli(["workflow", "runs", "update", oldRun.runId, seedFile, "--store", storeFile, "--worker", "grok"], fakeGrokFast) as {
       previousRun: { runId: string; status: string };
       runId: string;
       update: { previousRunId: string; mode: string };
@@ -2894,22 +2885,23 @@ describe("workflow loader", () => {
       "5000",
       "--interval-ms",
       "50",
-    ]) as {
+    ], fakeGrokFast) as {
       run: { runId: string; status: string };
       tasks: Array<{ taskId: string; cached: boolean; output: { summary: string } }>;
     };
-    const oldEvents = await cli(["workflow", "runs", "events", oldRun.runId, "--store", storeFile]) as {
+    const oldEvents = await cli(["workflow", "runs", "events", oldRun.runId, "--store", storeFile], fakeGrokFast) as {
       events: Array<{ type: string; payload: unknown }>;
     };
-    const newEvents = await cli(["workflow", "runs", "events", update.runId, "--store", storeFile]) as {
+    const newEvents = await cli(["workflow", "runs", "events", update.runId, "--store", storeFile], fakeGrokFast) as {
       events: Array<{ type: string; payload: unknown }>;
     };
 
     expect(update.previousRun).toMatchObject({ runId: oldRun.runId, status: "failed" });
     expect(update.update).toEqual({ previousRunId: oldRun.runId, mode: "restart-with-cache" });
     expect(waited.run).toMatchObject({ runId: update.runId, status: "completed" });
+    // Real (non-mock) run does not reuse mock-sourced cache; it calls the real worker
     expect(waited.tasks).toMatchObject([
-      { taskId: "build", cached: true, output: { summary: "seeded" } },
+      { taskId: "build", cached: false, output: { summary: "from-real-worker" } },
     ]);
     expect(oldEvents.events).toContainEqual(expect.objectContaining({
       type: "run.stop_requested",
@@ -2923,7 +2915,9 @@ describe("workflow loader", () => {
       type: "run.updated_from",
       payload: { previousRunId: oldRun.runId, mode: "restart-with-cache" },
     }));
-    expect(newEvents.events.map((event) => event.type)).toContain("task.cache_lookup.hit");
+    // Mock-sourced cache entry is not reused by a real run: cache lookup should miss
+    expect(newEvents.events.map((event) => event.type)).toContain("task.cache_lookup.miss");
+    expect(newEvents.events.map((event) => event.type)).not.toContain("task.cache_lookup.hit");
   });
 
   test("CLI waits for a detached workflow run to complete", async () => {

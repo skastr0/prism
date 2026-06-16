@@ -28,6 +28,7 @@
 
 import { existsSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -177,29 +178,45 @@ const resolvePrismTypesDir = (): string | undefined => {
 };
 
 /**
+ * Resolve effect's dist/dts directory via real node resolution from a root that
+ * owns effect as a dependency. This handles npm's dependency HOISTING: when the
+ * platform package is npm-installed, `effect` is lifted to a parent
+ * node_modules rather than nested under the platform package, so a fixed
+ * `<root>/node_modules/effect` path misses it. `require.resolve` walks the
+ * node_modules chain and finds it wherever it landed.
+ */
+const effectDtsViaResolution = (fromRoot: string | undefined): string | undefined => {
+  if (!fromRoot || !existsSync(join(fromRoot, "package.json"))) return undefined;
+  try {
+    const requireFrom = createRequire(join(fromRoot, "package.json"));
+    const candidate = join(dirname(requireFrom.resolve("effect/package.json")), "dist", "dts");
+    if (existsSync(join(candidate, "index.d.ts"))) return candidate;
+  } catch {
+    // effect not resolvable from this root
+  }
+  return undefined;
+};
+
+/**
  * Find the shipped effect .d.ts directory (node_modules/effect/dist/dts/).
- * When running from a compiled binary the platform package owns its own
- * node_modules. When running from source the repo's node_modules is used.
+ * Tries, in order, the runtime-deps root the wrapper points the binary at, the
+ * platform package root (installed binary), and the repo root (source checkout).
+ * For each it checks the directly-nested layout first, then falls back to node
+ * resolution to cover the hoisted layout npm produces on install.
  */
 const resolveEffectDtsDir = (): string | undefined => {
-  // 1. Platform package's node_modules (installed binary).
-  const binaryRoot = platformPackageRootFromBinary();
-  if (binaryRoot) {
-    const candidate = join(binaryRoot, "node_modules", "effect", "dist", "dts");
-    if (existsSync(join(candidate, "index.d.ts"))) {
-      return candidate;
-    }
+  const roots: ReadonlyArray<string | undefined> = [
+    process.env.PRISM_RUNTIME_DEPS_PACKAGE_ROOT,
+    platformPackageRootFromBinary(),
+    platformPackageRootFromSource(),
+  ];
+  for (const root of roots) {
+    if (!root) continue;
+    const nested = join(root, "node_modules", "effect", "dist", "dts");
+    if (existsSync(join(nested, "index.d.ts"))) return nested;
+    const resolved = effectDtsViaResolution(root);
+    if (resolved) return resolved;
   }
-
-  // 2. Source-checkout fallback.
-  const repoRoot = platformPackageRootFromSource();
-  if (repoRoot) {
-    const candidate = join(repoRoot, "node_modules", "effect", "dist", "dts");
-    if (existsSync(join(candidate, "index.d.ts"))) {
-      return candidate;
-    }
-  }
-
   return undefined;
 };
 

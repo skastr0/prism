@@ -712,6 +712,140 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("mock-output run records outputSource provenance and real run does not reuse it", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    // First run: mock-output mode — seeds the cache with outputSource marker
+    const mockRun = await runWorkflow(workflow, {
+      store,
+      mockOutput: true,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "mock-value" };
+      },
+    });
+
+    // After the mock run, the cache record carries the provenance marker
+    const identity = workflowTaskIdentity(workflow.name, workflow.tasks[0]!);
+    const cacheRecordAfterMock = store.getCompleted(identity, { allowMockSourced: true });
+    expect(cacheRecordAfterMock?.outputSource).toBe("mock-output");
+    expect(cacheRecordAfterMock?.output).toEqual({ summary: "mock-value" });
+
+    // getCompleted without allowMockSourced returns null (real runs see no cache)
+    const cacheRecordRealLookup = store.getCompleted(identity);
+    expect(cacheRecordRealLookup).toBeNull();
+
+    // Mock-sourced event has the provenance field
+    const mockRunId = mockRun.runId!;
+    const cacheWriteEvent = store.listRunEvents(mockRunId).find((event) => event.type === "task.cache_write.completed");
+    expect(cacheWriteEvent?.payload).toMatchObject({ outputSource: "mock-output" });
+
+    // listCompletedCache shows the mock-sourced marker
+    expect(store.listCompletedCache()).toEqual([
+      expect.objectContaining({
+        outputSource: "mock-output",
+        output: { summary: "mock-value" },
+      }),
+    ]);
+
+    // Second run: real (non-mock) mode — must NOT reuse mock-sourced cache entry
+    const realRun = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "real-value" };
+      },
+    });
+
+    expect(calls).toBe(2);
+    expect(mockRun.tasks[0]?.cached).toBe(false);
+    expect(mockRun.tasks[0]?.output).toEqual({ summary: "mock-value" });
+    expect(realRun.tasks[0]?.cached).toBe(false);
+    expect(realRun.tasks[0]?.output).toEqual({ summary: "real-value" });
+
+    // Real run recorded a cache miss (not a hit) since mock-sourced entries are excluded
+    const realRunId = realRun.runId!;
+    expect(store.listRunEvents(realRunId).map((event) => event.type)).toContain("task.cache_lookup.miss");
+    expect(store.listRunEvents(realRunId).map((event) => event.type)).not.toContain("task.cache_lookup.hit");
+
+    // After real run, the cache record is overwritten with real output and no outputSource
+    const cacheRecordAfterReal = store.getCompleted(identity);
+    expect(cacheRecordAfterReal?.output).toEqual({ summary: "real-value" });
+    expect(cacheRecordAfterReal?.outputSource).toBeUndefined();
+
+    store.close();
+  });
+
+  test("mock-output run reuses its own prior mock-sourced cache on a subsequent mock run", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    // First mock run seeds the cache
+    await runWorkflow(workflow, {
+      store,
+      mockOutput: true,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "mock-seeded" };
+      },
+    });
+
+    // Second mock run reuses the mock-sourced cache (mock runs can reuse mock cache)
+    const secondMock = await runWorkflow(workflow, {
+      store,
+      mockOutput: true,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "should-not-execute" };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(secondMock.tasks[0]?.cached).toBe(true);
+    expect(secondMock.tasks[0]?.output).toEqual({ summary: "mock-seeded" });
+    store.close();
+  });
+
+  test("real run caches its output and subsequent real run reuses it", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    let calls = 0;
+
+    // First real run
+    const first = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "real-first" };
+      },
+    });
+
+    // Second real run reuses real cache (no outputSource marker)
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "real-second" };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(first.tasks[0]?.cached).toBe(false);
+    expect(second.tasks[0]?.cached).toBe(true);
+    expect(second.tasks[0]?.output).toEqual({ summary: "real-first" });
+
+    // No outputSource on real cache records
+    const cacheRecord = store.getCompleted(workflowTaskIdentity(workflow.name, workflow.tasks[0]!));
+    expect(cacheRecord?.outputSource).toBeUndefined();
+    store.close();
+  });
+
   test("summarizes workflow task progress from stored task records and events", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

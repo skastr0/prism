@@ -479,13 +479,14 @@ const recordCacheLookup = (
   task: AnyWorkflowTask,
   identity: WorkflowTaskIdentity,
   useCache: boolean,
+  mockOutput: boolean,
 ): { readonly cached: { readonly output: unknown } | null | undefined; readonly cacheHit: boolean } => {
   if (!useCache) {
     recordEvent(store, runId, task.id, "task.cache_lookup.skipped", { cacheKey: identity.cacheKey });
     return { cached: null, cacheHit: false };
   }
   recordEvent(store, runId, task.id, "task.cache_lookup.started", identity);
-  const cached = store?.getCompleted(identity);
+  const cached = store?.getCompleted(identity, { allowMockSourced: mockOutput });
   const cacheHit = cached !== undefined && cached !== null;
   recordEvent(store, runId, task.id, cacheHit ? "task.cache_lookup.hit" : "task.cache_lookup.miss", {
     cacheKey: identity.cacheKey,
@@ -583,13 +584,14 @@ const executeWorkflowTask = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
+  readonly mockOutput: boolean;
   readonly limiter?: TaskExecutionLimiter;
   readonly abortSignal?: AbortSignal;
 }): Promise<WorkflowRunTaskResult> => {
-  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache } = input;
+  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache, mockOutput } = input;
   assertRunStillRunning(store, runId);
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
-  const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache);
+  const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache, mockOutput);
 
   const runTaskBoundary = async (): Promise<WorkflowRunTaskResult> => {
     let rawOutput: unknown;
@@ -830,8 +832,17 @@ const executeWorkflowTask = async (input: {
       }
       : { ...workflowContractMetadata, ...(metadata ?? {}) };
     if (useCache && !cacheHit) {
-      store?.recordCompleted({ identity, agent: taskAgent(task), output: decodedOutput, metadata: finalMetadata });
-      recordEvent(store, runId, task.id, "task.cache_write.completed", { cacheKey: identity.cacheKey });
+      store?.recordCompleted({
+        identity,
+        agent: taskAgent(task),
+        output: decodedOutput,
+        metadata: finalMetadata,
+        ...(mockOutput ? { outputSource: "mock-output" as const } : {}),
+      });
+      recordEvent(store, runId, task.id, "task.cache_write.completed", {
+        cacheKey: identity.cacheKey,
+        ...(mockOutput ? { outputSource: "mock-output" } : {}),
+      });
     }
     recordRunTaskIfPersisted({
       store,
@@ -860,6 +871,7 @@ const runStaticWorkflow = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
+  readonly mockOutput: boolean;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly abortSignal?: AbortSignal;
@@ -879,6 +891,7 @@ const runStaticWorkflow = async (input: {
       store: input.store,
       executeTask: input.executeTask,
       useCache: input.useCache,
+      mockOutput: input.mockOutput,
       limiter: input.limiter,
       abortSignal: input.abortSignal,
     }));
@@ -892,6 +905,7 @@ const runDynamicWorkflow = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
+  readonly mockOutput: boolean;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly abortSignal?: AbortSignal;
@@ -912,6 +926,7 @@ const runDynamicWorkflow = async (input: {
           store: input.store,
           executeTask: input.executeTask,
           useCache: input.useCache,
+          mockOutput: input.mockOutput,
           limiter: input.limiter,
           abortSignal: input.abortSignal,
         });
@@ -944,6 +959,7 @@ export const runWorkflow = async (
     readonly executeTask: WorkflowTaskExecutor;
     readonly store?: WorkflowStore;
     readonly cache?: boolean;
+    readonly mockOutput?: boolean;
     readonly maxConcurrentTasks?: number;
     readonly runId?: string;
     readonly runtimeOptions?: WorkflowRuntimeOptions;
@@ -951,6 +967,7 @@ export const runWorkflow = async (
   },
 ): Promise<WorkflowRunResult> => {
   const useCache = options.cache !== false;
+  const mockOutput = options.mockOutput === true;
   const runtimeOptions = options.runtimeOptions ?? {};
   const maxConcurrentTasks = options.maxConcurrentTasks ?? DEFAULT_WORKFLOW_TASK_CONCURRENCY;
   if (!Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1) {
@@ -965,12 +982,13 @@ export const runWorkflow = async (
       store: options.store,
       executeTask: options.executeTask,
       useCache,
+      mockOutput,
       limiter,
       runtimeOptions,
       abortSignal: options.abortSignal,
     });
     return { runId, workflow: workflow.name, tasks: result.tasks, output: result.output };
   }
-  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, limiter, runtimeOptions, abortSignal: options.abortSignal });
+  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, mockOutput, limiter, runtimeOptions, abortSignal: options.abortSignal });
   return { runId, workflow: workflow.name, tasks };
 };

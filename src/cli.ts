@@ -359,6 +359,7 @@ workflow
       const result = await runWorkflow(workflow, {
         store,
         cache: options.cache !== false,
+        mockOutput: outputs !== null,
         maxConcurrentTasks: options.maxConcurrentTasks,
         runId: executionRunId,
         abortSignal: terminationController.signal,

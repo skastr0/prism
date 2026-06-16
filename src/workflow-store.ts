@@ -44,6 +44,8 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
   }
 };
 
+export type WorkflowTaskOutputSource = "mock-output";
+
 export interface CompletedWorkflowTaskRecord {
   readonly identity: WorkflowTaskIdentity;
   readonly agent: {
@@ -52,10 +54,12 @@ export interface CompletedWorkflowTaskRecord {
   };
   readonly output: unknown;
   readonly metadata?: Record<string, unknown>;
+  readonly outputSource?: WorkflowTaskOutputSource;
 }
 
 export interface WorkflowCacheRecord extends CompletedWorkflowTaskRecord {
   readonly status: string;
+  readonly outputSource?: WorkflowTaskOutputSource;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -199,6 +203,7 @@ interface TaskRecordRow {
   readonly status: string;
   readonly output_json: string;
   readonly metadata_json: string | null;
+  readonly output_source: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
@@ -498,6 +503,7 @@ export class WorkflowStore {
     addColumnIfMissing(db, "alter table workflow_runs add column heartbeat_at text");
     addColumnIfMissing(db, "alter table workflow_task_records add column metadata_json text");
     addColumnIfMissing(db, "alter table workflow_run_tasks add column metadata_json text");
+    addColumnIfMissing(db, "alter table workflow_task_records add column output_source text");
     // Legacy ledgers did not know the workflow's full task count, so completed
     // task rows are not proof that the whole run finished. Only failed task rows
     // carry enough evidence to safely backfill a terminal status.
@@ -518,10 +524,11 @@ export class WorkflowStore {
     this.db.close();
   }
 
-  getCompleted(identity: WorkflowTaskIdentity): CompletedWorkflowTaskRecord | null {
+  getCompleted(identity: WorkflowTaskIdentity, options: { readonly allowMockSourced?: boolean } = {}): CompletedWorkflowTaskRecord | null {
+    const allowMockSourced = options.allowMockSourced === true;
     const row = this.db.query<TaskRecordRow, [string, string, string, string, string]>(`
       select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-             agent_plugin, agent_name, status, output_json, metadata_json, created_at, updated_at
+             agent_plugin, agent_name, status, output_json, metadata_json, output_source, created_at, updated_at
       from workflow_task_records
       where workflow = ?
         and task_id = ?
@@ -529,6 +536,7 @@ export class WorkflowStore {
         and prompt_hash = ?
         and agent_manifest_hash = ?
         and status = 'completed'
+        ${allowMockSourced ? "" : "and (output_source is null or output_source != 'mock-output')"}
     `).get(
       identity.workflow,
       identity.taskId,
@@ -551,6 +559,7 @@ export class WorkflowStore {
       },
       output: JSON.parse(row.output_json) as unknown,
       ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
+      ...(row.output_source === "mock-output" ? { outputSource: "mock-output" as WorkflowTaskOutputSource } : {}),
     };
   }
 
@@ -663,7 +672,7 @@ export class WorkflowStore {
   } = {}): WorkflowCacheRecord[] {
     const rows = this.db.query<TaskRecordRow, []>(`
       select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-             agent_plugin, agent_name, status, output_json, metadata_json, created_at, updated_at
+             agent_plugin, agent_name, status, output_json, metadata_json, output_source, created_at, updated_at
       from workflow_task_records
       where status = 'completed'
       order by updated_at desc, created_at desc, workflow asc, task_id asc
@@ -689,6 +698,7 @@ export class WorkflowStore {
         status: row.status,
         output: JSON.parse(row.output_json) as unknown,
         ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
+        ...(row.output_source === "mock-output" ? { outputSource: "mock-output" as WorkflowTaskOutputSource } : {}),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       }));
@@ -1318,12 +1328,13 @@ export class WorkflowStore {
     readonly agent: { readonly plugin: string; readonly name: string };
     readonly output: unknown;
     readonly metadata?: Record<string, unknown>;
+    readonly outputSource?: WorkflowTaskOutputSource;
   }): void {
     this.db.query(`
       insert into workflow_task_records (
         workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
-        agent_plugin, agent_name, status, output_json, metadata_json, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, datetime('now'))
+        agent_plugin, agent_name, status, output_json, metadata_json, output_source, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, datetime('now'))
       on conflict(workflow, task_id, cache_key, prompt_hash, agent_manifest_hash)
       do update set
         agent_plugin = excluded.agent_plugin,
@@ -1331,6 +1342,7 @@ export class WorkflowStore {
         status = excluded.status,
         output_json = excluded.output_json,
         metadata_json = excluded.metadata_json,
+        output_source = excluded.output_source,
         updated_at = excluded.updated_at
     `).run(
       input.identity.workflow,
@@ -1342,6 +1354,7 @@ export class WorkflowStore {
       input.agent.name,
       JSON.stringify(input.output),
       input.metadata === undefined ? null : JSON.stringify(input.metadata),
+      input.outputSource ?? null,
     );
   }
 }

@@ -3,6 +3,21 @@
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { createServer } from "node:net";
+
+const getFreePort = (): Promise<number> =>
+  new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => (port ? resolvePort(port) : reject(new Error("could not allocate a free port"))));
+    });
+  });
+
+const MCP_SMOKE_TOKEN = "prism-npm-cli-smoke-token";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const skipBuild = process.argv.includes("--skip-build");
@@ -112,7 +127,7 @@ const assertTreeDoesNotContainForbiddenPaths = async (
   }
 };
 
-const createCanonicalToolFixture = async (pluginRoot: string): Promise<void> => {
+const createCanonicalToolFixture = async (pluginRoot: string, mcpPort: number): Promise<void> => {
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
@@ -121,6 +136,16 @@ const createCanonicalToolFixture = async (pluginRoot: string): Promise<void> => 
         version: "0.1.0",
         targets: {
           tools: ["hermes"],
+        },
+        runtime: {
+          mcp: {
+            hermes: {
+              transport: "streamable-http",
+              host: "127.0.0.1",
+              port: mcpPort,
+              tokenEnv: "PRISM_MCP_TOKEN",
+            },
+          },
         },
       },
       null,
@@ -143,6 +168,48 @@ export default defineTool({
 });
 `,
   );
+};
+
+const createWorkflowFixture = async (dir: string): Promise<{ readonly workflowPath: string; readonly mockPath: string }> => {
+  const workflowPath = join(dir, "smoke.workflow.ts");
+  const mockPath = join(dir, "smoke-workflow-mock.json");
+  await writeText(
+    workflowPath,
+    `import { Effect, Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const smokeAgent = {
+  kind: "agent-ref",
+  plugin: "smoke",
+  name: "echo",
+  description: "Smoke workflow agent.",
+  sourceHash: "${"0".repeat(64)}",
+  manifestHash: "${"0".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+const Out = Schema.Struct({ ok: Schema.Boolean, note: Schema.String });
+
+export default defineWorkflow({
+  name: "workflow-smoke",
+  run: (wf) =>
+    Effect.gen(function* () {
+      return yield* wf.runTask(defineTask({
+        id: "probe",
+        agent: smokeAgent,
+        worker: { worker: "grok" },
+        output: Out,
+        prompt: "probe",
+      }));
+    }),
+});
+`,
+  );
+  await writeText(
+    mockPath,
+    `${JSON.stringify({ probe: { ok: true, note: "workflows run from the packaged binary" } }, null, 2)}\n`,
+  );
+  return { workflowPath, mockPath };
 };
 
 const createPoisonedRuntimeRoot = async (root: string): Promise<string> => {
@@ -187,7 +254,8 @@ const main = async (): Promise<void> => {
     await mkdir(appRoot, { recursive: true });
     await mkdir(hermesRoot, { recursive: true });
     await writeText(join(appRoot, "package.json"), `{"private":true,"type":"module"}\n`);
-    await createCanonicalToolFixture(pluginRoot);
+    const mcpPort = await getFreePort();
+    await createCanonicalToolFixture(pluginRoot, mcpPort);
 
     const platformTarball = await packPackage(platformPackageDir, tarballDir);
     const wrapperTarball = await packPackage(wrapperPackageDir, tarballDir);
@@ -218,31 +286,57 @@ const main = async (): Promise<void> => {
         },
       },
     );
-    await run(
-      "Refreshing canonical tool fixture with installed Prism CLI",
+    const mcpEnv = { PRISM_HOME: prismHome, PRISM_MCP_TOKEN: MCP_SMOKE_TOKEN };
+    try {
+      await run(
+        "Refreshing canonical tool fixture with installed Prism CLI (serving HTTP MCP)",
+        [
+          "node",
+          prismBin,
+          "refresh",
+          "--plugin",
+          pluginRoot,
+          "--harness",
+          "hermes",
+          "--compile-only",
+          "--compile-root",
+          hermesRoot,
+          "--mcp-lifecycle",
+          "serve",
+        ],
+        { cwd: appRoot, env: mcpEnv },
+      );
+    } finally {
+      await run(
+        "Stopping the smoke HTTP MCP daemon",
+        ["node", prismBin, "mcp", "stop", pluginRoot, "--harness", "hermes", "--scope", "global"],
+        { cwd: appRoot, env: mcpEnv },
+      ).catch(() => undefined);
+    }
+
+    await assertTreeDoesNotContainForbiddenPaths(hermesRoot, forbiddenPaths);
+
+    const { workflowPath, mockPath } = await createWorkflowFixture(tempRoot);
+    const workflowOutput = await run(
+      "Running a workflow end-to-end with the installed Prism CLI",
       [
         "node",
         prismBin,
-        "refresh",
-        "--plugin",
-        pluginRoot,
-        "--harness",
-        "hermes",
-        "--compile-only",
-        "--compile-root",
-        hermesRoot,
-        "--mcp-lifecycle",
-        "none",
+        "workflow",
+        "run",
+        workflowPath,
+        "--mock-output",
+        mockPath,
+        "--store",
+        join(tempRoot, "workflow-smoke.sqlite"),
       ],
-      {
-        cwd: appRoot,
-        env: {
-          PRISM_HOME: prismHome,
-        },
-      },
+      { cwd: appRoot, capture: true, env: { PRISM_HOME: prismHome } },
     );
+    if (!workflowOutput.includes(`"ok": true`) || !workflowOutput.includes("packaged binary")) {
+      throw new Error(`Workflow end-to-end smoke did not produce the expected output. Got:\n${workflowOutput}`);
+    }
+    console.log("Workflow end-to-end smoke passed.");
 
-    await assertTreeDoesNotContainForbiddenPaths(hermesRoot, forbiddenPaths);
     failed = false;
     console.log("\nNpm CLI smoke passed.");
   } finally {

@@ -248,7 +248,6 @@ export default defineTool({
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
   expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(agentToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_TOKEN"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).not.toContain("cwd = ");
@@ -425,7 +424,6 @@ test("codex-cli lowerer renders canonical HTTP MCP config when HTTP runtime is c
               transport: "streamable-http",
               host: "127.0.0.1",
               port: 38464,
-              tokenEnv: "PRISM_MCP_CODEX_HTTP_TOKEN",
             },
           },
         },
@@ -495,7 +493,6 @@ export default defineTool({
   const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(agentToml?.content).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).not.toContain("http_headers");
@@ -508,7 +505,6 @@ export default defineTool({
   );
   expect(mcpRegion).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(mcpRegion).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(mcpRegion).toContain('bearer_token_env_var = "PRISM_MCP_CODEX_HTTP_TOKEN"');
   expect(mcpRegion).not.toContain('command = "bun"');
   expect(mcpRegion).not.toContain("args = ");
   expect(mcpRegion).not.toContain("http_headers");

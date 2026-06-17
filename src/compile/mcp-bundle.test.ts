@@ -279,7 +279,6 @@ const waitForHttpServer = async (port: number): Promise<void> => {
 
 const httpRpc = async (args: {
   readonly port: number;
-  readonly token: string;
   readonly sessionId?: string;
   readonly method: string;
   readonly params?: unknown;
@@ -287,7 +286,6 @@ const httpRpc = async (args: {
 }): Promise<{ readonly response: Response; readonly body: any }> => {
   const headers: Record<string, string> = {
     accept: "application/json, text/event-stream",
-    authorization: `Bearer ${args.token}`,
     "content-type": "application/json",
     "mcp-protocol-version": "2025-11-25",
   };
@@ -310,7 +308,6 @@ const httpRpc = async (args: {
 
 const httpNotify = async (args: {
   readonly port: number;
-  readonly token: string;
   readonly sessionId: string;
   readonly method: string;
   readonly params?: unknown;
@@ -319,7 +316,6 @@ const httpNotify = async (args: {
     method: "POST",
     headers: {
       accept: "application/json, text/event-stream",
-      authorization: `Bearer ${args.token}`,
       "content-type": "application/json",
       "mcp-session-id": args.sessionId,
       "mcp-protocol-version": "2025-11-25",
@@ -334,14 +330,12 @@ const httpNotify = async (args: {
 
 const httpDeleteSession = async (args: {
   readonly port: number;
-  readonly token: string;
   readonly sessionId: string;
 }): Promise<Response> =>
   fetch(`http://127.0.0.1:${args.port}/mcp`, {
     method: "DELETE",
     headers: {
       accept: "application/json, text/event-stream",
-      authorization: `Bearer ${args.token}`,
       "mcp-session-id": args.sessionId,
       "mcp-protocol-version": "2025-11-25",
     },
@@ -407,7 +401,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
   );
 
   const port = await getFreePort();
-  const token = "test-prism-token";
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
     sourcePluginName: "forge",
@@ -416,7 +409,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     bindings: builder?.toolBindings ?? [],
   });
   expect(bundle.content).toContain("Bun.serve");
-  expect(bundle.content).toContain("PRISM_MCP_TOKEN");
   expect(bundle.content).toContain("PRISM_MCP_TOOL_TIMEOUT_MS");
   expect(bundle.content).toContain("PRISM_MCP_MAX_CONCURRENT_CALLS");
   expect(bundle.content).toContain("PRISM_MCP_MAX_SESSIONS");
@@ -431,7 +423,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     env: {
       ...process.env,
       PRISM_MCP_HTTP_PORT: String(port),
-      PRISM_MCP_TOKEN: token,
       PRISM_MCP_SERVER_SHA256: "f".repeat(64),
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -443,7 +434,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
       method: "GET",
       headers: {
-        authorization: `Bearer ${token}`,
       },
     });
     expect(health.status).toBe(200);
@@ -461,22 +451,10 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     expect(typeof healthBody.uptimeMs).toBe("number");
     expect(healthBody.uptimeMs).toBeGreaterThanOrEqual(0);
 
-    const unauthorized = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: "POST",
-      headers: {
-        accept: "application/json, text/event-stream",
-        "content-type": "application/json",
-        "mcp-protocol-version": "2025-11-25",
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
-    });
-    expect(unauthorized.status).toBe(401);
-
     const forbiddenHost = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
-        authorization: `Bearer ${token}`,
         "content-type": "application/json",
         host: "evil.example",
         "mcp-protocol-version": "2025-11-25",
@@ -496,7 +474,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 
     const forbidden = await httpRpc({
       port,
-      token,
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "evil", version: "0.1.0" } },
       origin: "http://evil.example",
@@ -507,7 +484,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
-        authorization: `Bearer ${token}`,
         "content-type": "application/json",
         "mcp-protocol-version": "1900-01-01",
       },
@@ -517,7 +493,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 
     const firstInit = await httpRpc({
       port,
-      token,
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
@@ -528,7 +503,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 
     const secondInit = await httpRpc({
       port,
-      token,
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b", version: "0.1.0" } },
     });
@@ -537,12 +511,12 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     expect(secondSession).toBeTruthy();
     expect(secondSession).not.toBe(firstSession);
 
-    const missingSession = await httpRpc({ port, token, method: "tools/list" });
+    const missingSession = await httpRpc({ port, method: "tools/list" });
     expect(missingSession.response.status).toBe(400);
 
     const [firstList, secondList] = await Promise.all([
-      httpRpc({ port, token, sessionId: firstSession!, method: "tools/list" }),
-      httpRpc({ port, token, sessionId: secondSession!, method: "tools/list" }),
+      httpRpc({ port, sessionId: firstSession!, method: "tools/list" }),
+      httpRpc({ port, sessionId: secondSession!, method: "tools/list" }),
     ]);
     expect(firstList.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "forge_submit_review__review_details",
@@ -557,7 +531,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       Array.from({ length: 10 }, (_, index) =>
         httpRpc({
           port,
-          token,
           sessionId: index % 2 === 0 ? firstSession! : secondSession!,
           method: "tools/call",
           params: {
@@ -574,13 +547,11 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 
     const shutdown = await httpDeleteSession({
       port,
-      token,
       sessionId: firstSession!,
     });
     expect([200, 202]).toContain(shutdown.status);
     const firstAfterShutdown = await httpRpc({
       port,
-      token,
       sessionId: firstSession!,
       method: "tools/list",
     });
@@ -588,13 +559,11 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 
     const exit = await httpDeleteSession({
       port,
-      token,
       sessionId: secondSession!,
     });
     expect([200, 202]).toContain(exit.status);
     const secondAfterExit = await httpRpc({
       port,
-      token,
       sessionId: secondSession!,
       method: "tools/list",
     });
@@ -609,7 +578,6 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 test("MCP bundle Streamable HTTP works with the official SDK client", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const port = await getFreePort();
-  const token = "sdk-client-token";
   const compile = await Effect.runPromise(
     compilePluginForTarget({
       prismHome: testPrismHome(),
@@ -637,17 +605,12 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
     env: {
       ...process.env,
       PRISM_MCP_HTTP_PORT: String(port),
-      PRISM_MCP_HTTP_TOKEN: token,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
 
   const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
-    requestInit: {
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
-    },
+    requestInit: {},
   });
   const client = new Client({ name: "prism-sdk-test", version: "0.1.0" });
 
@@ -689,7 +652,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
   );
 
   const port = await getFreePort();
-  const token = "test-prism-token";
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
     sourcePluginName: "forge",
@@ -705,7 +667,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     env: {
       ...process.env,
       PRISM_MCP_HTTP_PORT: String(port),
-      PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -715,7 +676,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     await waitForHttpServer(port);
     const initialized = await httpRpc({
       port,
-      token,
       origin: "http://127.0.0.1:12345",
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
@@ -726,7 +686,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
     expect(initialized.response.headers.get("access-control-expose-headers")).toContain("mcp-session-id");
     const secondInitialized = await httpRpc({
       port,
-      token,
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-b", version: "0.1.0" } },
     });
@@ -737,7 +696,6 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
       [0, 1].map((index) =>
         httpRpc({
           port,
-          token,
           sessionId: index === 0 ? sessionId! : secondSessionId!,
           method: "tools/call",
           params: {
@@ -773,7 +731,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
   );
 
   const port = await getFreePort();
-  const token = "test-prism-token";
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
     sourcePluginName: "forge",
@@ -789,7 +746,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
     env: {
       ...process.env,
       PRISM_MCP_HTTP_PORT: String(port),
-      PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
       PRISM_MCP_TOOL_TIMEOUT_MS: "50",
     },
@@ -800,7 +756,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
     await waitForHttpServer(port);
     const initialized = await httpRpc({
       port,
-      token,
       method: "initialize",
       params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "client-a", version: "0.1.0" } },
     });
@@ -810,7 +765,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
 
     const timedOut = await httpRpc({
       port,
-      token,
       sessionId: sessionId!,
       method: "tools/call",
       params: {
@@ -831,7 +785,6 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
 
     const afterTimedOut = await httpRpc({
       port,
-      token,
       sessionId: sessionId!,
       method: "tools/call",
       params: {
@@ -860,7 +813,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
   );
 
   const port = await getFreePort();
-  const token = "test-prism-token";
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
     sourcePluginName: "forge",
@@ -876,7 +828,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
     env: {
       ...process.env,
       PRISM_MCP_HTTP_PORT: String(port),
-      PRISM_MCP_TOKEN: token,
       PRISM_MCP_MAX_SESSIONS: "1",
       PRISM_MCP_MAX_REQUEST_BYTES: "512",
     },
@@ -889,7 +840,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
       Array.from({ length: 6 }, (_, index) =>
         httpRpc({
           port,
-          token,
           method: "initialize",
           params: {
             protocolVersion: "2025-11-25",
@@ -906,7 +856,6 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
-        authorization: `Bearer ${token}`,
         "content-type": "application/json",
         "mcp-protocol-version": "2025-11-25",
       },
@@ -1044,13 +993,11 @@ export default defineTool({
   await writeText(serverPath, bundle.content);
 
   const port = await getFreePort();
-  const token = "schema-output-token";
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
       PRISM_MCP_HTTP_PORT: String(port),
-      PRISM_MCP_TOKEN: token,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -1058,7 +1005,6 @@ export default defineTool({
     await waitForHttpServer(port);
     const initialized = await httpRpc({
       port,
-      token,
       method: "initialize",
       params: {
         protocolVersion: "2025-11-25",
@@ -1071,7 +1017,6 @@ export default defineTool({
 
     const invalid = await httpRpc({
       port,
-      token,
       sessionId: sessionId!,
       method: "tools/call",
       params: {

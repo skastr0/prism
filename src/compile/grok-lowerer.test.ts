@@ -240,7 +240,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpBearerToken: "test-grok-token",
       mcpExposureProfile: "prism-generated-grok-plugin-fixture:grok",
       mcpRuntimePort: 38467,
       sourcePluginName: "grok-plugin-fixture",
@@ -305,7 +304,6 @@ export default defineTool({
   expect(grokEntry?.type).toBe("http");
   expect(grokEntry?.url).toBe("http://127.0.0.1:38467/mcp");
   expect(grokEntry?.headers).toEqual({
-    Authorization: "Bearer test-grok-token",
     "X-Prism-Mcp-Exposure": "prism-generated-grok-plugin-fixture:grok",
   });
   expect(mcpConfig?.content).not.toContain('"command": "bun"');
@@ -459,7 +457,6 @@ test("grok lowerer emits HTTP MCP config for generated MCP tools", async () => {
               transport: "streamable-http",
               host: "127.0.0.1",
               port: 38467,
-              tokenEnv: "PRISM_MCP_GROK_HTTP_TOKEN",
             },
           },
         },
@@ -496,7 +493,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpBearerToken: "grok-http-token",
       mcpExposureProfile: "prism-generated-grok-http-fixture:grok",
       sourcePluginName: "grok-http-fixture",
       sourcePluginVersion: "0.1.0",
@@ -516,7 +512,6 @@ export default defineTool({
   expect(entry?.type).toBe("http");
   expect(entry?.url).toBe("http://127.0.0.1:38467/mcp");
   expect(entry?.headers).toEqual({
-    Authorization: "Bearer grok-http-token",
     "X-Prism-Mcp-Exposure": "prism-generated-grok-http-fixture:grok",
   });
   expect(mcpConfig?.content).not.toContain('"command": "bun"');

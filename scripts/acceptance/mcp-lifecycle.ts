@@ -18,17 +18,6 @@ const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const CLI_PATH = join(REPO_ROOT, "src", "cli.ts");
 const PLUGIN_NAME = "mcp-lifecycle-acceptance";
 const SERVER_NAME = "prism-generated-mcp-lifecycle-acceptance";
-const TOKEN_ENV = ["PRISM", "MCP", "ACCEPTANCE", "TOKEN"].join("_");
-const TOKEN = [
-  "prism",
-  "mcp",
-  "lifecycle",
-  "acceptance",
-  "token",
-  "with",
-  "enough",
-  "entropy",
-].join("-");
 
 interface Assertion {
   readonly name: string;
@@ -59,7 +48,6 @@ const run = async (
     env: {
       ...process.env,
       PRISM_MCP_DISABLE_LAUNCHD: "1",
-      [TOKEN_ENV]: TOKEN,
       ...options.env,
     },
     stdout: "pipe",
@@ -97,22 +85,8 @@ const runtimePath = (prismHome: string): string => join(runtimeDir(prismHome), "
 
 const serverPath = (prismHome: string): string => join(runtimeDir(prismHome), "server.mjs");
 
-const tokenStorePath = (prismHome: string): string =>
-  join(prismHome, "runtime", "mcp", "tokens.json");
-
 const readRuntime = async (prismHome: string): Promise<Record<string, unknown>> =>
   JSON.parse(await readFile(runtimePath(prismHome), "utf8")) as Record<string, unknown>;
-
-const readStoredToken = async (prismHome: string): Promise<string> => {
-  const parsed = JSON.parse(await readFile(tokenStorePath(prismHome), "utf8")) as {
-    readonly tokens?: Record<string, { readonly token?: unknown }>;
-  };
-  const token = parsed.tokens?.[SERVER_NAME]?.token;
-  if (typeof token !== "string" || token.length === 0) {
-    throw new Error(`missing stored token for ${SERVER_NAME}`);
-  }
-  return token;
-};
 
 const readConfigs = async (roots: {
   readonly hermes: string;
@@ -181,8 +155,6 @@ const mcp = async (
     pluginRoot,
     "--harness",
     "hermes",
-    "--token-env",
-    TOKEN_ENV,
   ], { env: { PRISM_HOME: prismHome } });
   return result.stdout;
 };
@@ -230,15 +202,12 @@ const waitForNoServerProcesses = async (serverPath: string): Promise<boolean> =>
 
 const waitForRuntimeHealth = async (
   runtime: Record<string, unknown>,
-  token: string,
 ): Promise<Record<string, unknown>> => {
   const port = Number(runtime.port);
   const expectedServerSha256 = String(runtime.serverSha256 ?? "");
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`);
       if (response.ok) {
         const health = await response.json() as Record<string, unknown>;
         if (
@@ -259,7 +228,6 @@ const waitForRuntimeHealth = async (
 const spawnRespawnDaemon = (
   prismHome: string,
   runtime: Record<string, unknown>,
-  token: string,
 ) => {
   const port = Number(runtime.port);
   const serverSha256 = String(runtime.serverSha256 ?? "");
@@ -268,7 +236,6 @@ const spawnRespawnDaemon = (
     cwd: prismHome,
     env: {
       ...process.env,
-      [TOKEN_ENV]: token,
       PRISM_MCP_DISABLE_LAUNCHD: "1",
       PRISM_MCP_TRANSPORT: "streamable-http",
       PRISM_MCP_SERVER_NAME: SERVER_NAME,
@@ -278,7 +245,6 @@ const spawnRespawnDaemon = (
       PRISM_MCP_HTTP_PORT: String(port),
       PRISM_MCP_HTTP_PATH: "/mcp",
       PRISM_MCP_HTTP_HEALTH_PATH: "/healthz",
-      PRISM_MCP_HTTP_TOKEN: token,
       PRISM_MCP_TOOL_TIMEOUT_MS: "60000",
       PRISM_MCP_SERVER_SHA256: serverSha256,
     },
@@ -326,8 +292,8 @@ const setupPlugin = async (work: string): Promise<{
         targets: { tools: ["hermes", "codex-cli"] },
         runtime: {
           mcp: {
-            hermes: { transport: "streamable-http", tokenEnv: TOKEN_ENV },
-            "codex-cli": { transport: "streamable-http", tokenEnv: TOKEN_ENV },
+            hermes: { transport: "streamable-http" },
+            "codex-cli": { transport: "streamable-http" },
           },
         },
       },
@@ -412,7 +378,6 @@ const main = async (): Promise<void> => {
 
     const stableConfigHash = await hashConfigs(roots);
     const stablePort = afterCodexBundleChange.port;
-    const stableTokenSha = afterCodexBundleChange.tokenSha256;
     let restartStable = true;
     const restartDetails: string[] = [];
     for (let index = 0; index < 5; index++) {
@@ -423,26 +388,24 @@ const main = async (): Promise<void> => {
       const currentHash = await hashConfigs(roots);
       const pass =
         currentHash === stableConfigHash &&
-        runtime.port === stablePort &&
-        runtime.tokenSha256 === stableTokenSha;
+        runtime.port === stablePort;
       restartStable &&= pass;
       restartDetails.push(
-        `#${index + 1}: config=${currentHash.slice(0, 12)} port=${String(runtime.port)} token=${String(runtime.tokenSha256).slice(0, 12)} pass=${pass}`,
+        `#${index + 1}: config=${currentHash.slice(0, 12)} port=${String(runtime.port)} pass=${pass}`,
       );
     }
     record(
-      "five-restarts-keep-config-port-token-stable",
+      "five-restarts-keep-config-port-stable",
       restartStable,
       restartDetails.join("; "),
     );
 
     const runtimeBeforeRespawn = await readRuntime(prismHome);
     const deadPid = Number(runtimeBeforeRespawn.pid);
-    const storedToken = await readStoredToken(prismHome);
     process.kill(deadPid, "SIGKILL");
     await waitForPidExit(deadPid);
-    respawnedDaemon = spawnRespawnDaemon(prismHome, runtimeBeforeRespawn, storedToken);
-    const respawnHealth = await waitForRuntimeHealth(runtimeBeforeRespawn, storedToken);
+    respawnedDaemon = spawnRespawnDaemon(prismHome, runtimeBeforeRespawn);
+    const respawnHealth = await waitForRuntimeHealth(runtimeBeforeRespawn);
     const respawnPid = Number(respawnHealth.pid);
     const status = await mcp(pluginRoot, prismHome, "status");
     await compile(pluginRoot, prismHome, "hermes", roots.hermes);

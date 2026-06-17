@@ -322,7 +322,7 @@ Two hash scopes, both via the canonical stringifier (§2.2):
 Earlier sketch (`01`) showed a `grants.mcpServers: { "prism-generated-demo":
 […] }` shape. v1 **rejects** that. The manifest MUST NOT contain MCP server
 names, generated server identifiers (`generatedMcpServerName`), exposure profiles
-(`mcpExposureProfileForTarget`), bearer tokens, ports, or any MCP transport
+(`mcpExposureProfileForTarget`), ports, or any MCP transport
 detail.
 
 Rationale (simplicity / policy-vs-mechanism, per the braids doctrine):
@@ -410,7 +410,7 @@ to executable contract.
    grant and the providing trait (`05`); a dispatch to a harness absent from
    `perTarget` fails as uncompiled-target.
 7. **No MCP identifiers.** A structural assertion that the serialized manifest
-   contains no MCP server name, exposure profile, bearer token, or port (§6) —
+   contains no MCP server name, exposure profile, or port (§6) —
    echoing `01` AC "No Tower/board identifiers anywhere in generated output,"
    extended to transport identifiers.
 8. **Versioning refusal.** A manifest with an unknown major decodes to a typed

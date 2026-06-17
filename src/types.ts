@@ -86,7 +86,6 @@ export interface PluginRuntimeMcpHarnessConfig {
   transport?: PrismMcpTransport;
   host?: string;
   port?: number;
-  tokenEnv?: string;
   connectTimeoutMs?: number;
   toolTimeoutMs?: number;
 }

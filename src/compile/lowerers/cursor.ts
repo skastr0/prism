@@ -4,7 +4,6 @@ import { join } from "node:path";
 import {
   MCP_EXPOSURE_HEADER,
   generatedMcpServerName,
-  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
@@ -22,7 +21,6 @@ const TARGET_ID = "cursor" as const;
 export interface CursorLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpBearerToken?: string;
   readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -43,7 +41,6 @@ export interface LowerInput {
 type CursorMcpServerEntry = {
   readonly url: string;
   readonly headers?: {
-    readonly Authorization: string;
     readonly [MCP_EXPOSURE_HEADER]?: string;
   };
 };
@@ -57,13 +54,9 @@ const renderCursorMcpServerEntry = (options: {
 }): CursorMcpServerEntry =>
   ({
     url: renderMcpHttpUrl(options.runtime),
-    headers: {
-      Authorization: renderMcpBearerAuthorization({
-        tokenEnv: options.runtime.tokenEnv,
-        token: options.target.mcpBearerToken,
-      }),
-      [MCP_EXPOSURE_HEADER]: options.target.mcpExposureProfile,
-    },
+    ...(options.target.mcpExposureProfile
+      ? { headers: { [MCP_EXPOSURE_HEADER]: options.target.mcpExposureProfile } }
+      : {}),
   });
 
 const planMcpServer = (

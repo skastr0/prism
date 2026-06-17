@@ -14,11 +14,8 @@ import { loadPlugin } from "../compile/load.js";
 import type { PluginRegistry } from "../compile/registry.js";
 import {
   assertMcpHttpTargetSupported,
-  assertMcpTokenEnvName,
   generatedMcpServerName,
-  isMcpTokenEnvName,
   isLoopbackMcpHost,
-  mcpRuntimeUsesBearerTokenEnvConfig,
   resolveMcpRuntime,
 } from "../compile/mcp-runtime.js";
 import {
@@ -29,7 +26,6 @@ import {
   MCP_RUNTIME_METADATA_SCHEMA,
   computeFileSha256,
   detectMcpRuntimeStaleReasons,
-  hashMcpRuntimeToken,
   parseMcpRuntimeHealth,
   readMcpRuntimeMetadata,
   writeMcpRuntimeMetadata,
@@ -37,12 +33,6 @@ import {
   type McpRuntimeMetadata,
   type McpRuntimeStaleReason,
 } from "./runtime-metadata.js";
-import {
-  ensureMcpToken,
-  normalizePreferredMcpBearerToken,
-  readMcpToken,
-  rotateMcpToken,
-} from "./token-store.js";
 import {
   installLaunchAgent,
   launchAgentLabelForServer,
@@ -55,7 +45,6 @@ export type McpPortSelection = "auto" | number;
 export type McpDaemonState =
   | "running"
   | "stopped"
-  | "missing-token"
   | "stale-pid"
   | "stale-build"
   | "stale-health"
@@ -73,25 +62,17 @@ export interface McpLifecycleCommonOptions {
 export interface McpServeOptions extends McpLifecycleCommonOptions {
   readonly host?: string;
   readonly port?: McpPortSelection;
-  readonly tokenEnv?: string;
   readonly foreground?: boolean;
   readonly launchAgent?: boolean;
   readonly startupTimeoutMs?: number;
 }
 
 export interface McpStatusOptions extends McpLifecycleCommonOptions {
-  readonly tokenEnv?: string;
   readonly expectedServerSha256?: string;
 }
 
 export interface McpStopOptions extends McpLifecycleCommonOptions {
   readonly timeoutMs?: number;
-  readonly tokenEnv?: string;
-}
-
-export interface McpRotateTokenOptions extends McpLifecycleCommonOptions {
-  readonly timeoutMs?: number;
-  readonly tokenEnv?: string;
 }
 
 export interface McpRuntimeDescriptor {
@@ -108,9 +89,6 @@ export interface McpPreparedServer {
   readonly descriptor: McpRuntimeDescriptor;
   readonly host: string;
   readonly port: number;
-  readonly tokenEnv: string;
-  readonly token: string;
-  readonly tokenSha256: string;
   readonly serverSha256: string;
   readonly toolTimeoutMs: number;
   readonly mcpUrl: string;
@@ -137,14 +115,6 @@ export interface McpStopResult {
   readonly state: "stopped" | "already-stopped";
   readonly descriptor: McpRuntimeDescriptor;
   readonly metadata?: McpRuntimeMetadata;
-}
-
-export interface McpRotateTokenResult {
-  readonly state: "rotated" | "rotated-and-restarted";
-  readonly descriptor: McpRuntimeDescriptor;
-  readonly metadata?: McpRuntimeMetadata;
-  readonly tokenEnv: string;
-  readonly tokenSha256: string;
 }
 
 type McpLifecycleResolvedContext = {
@@ -394,79 +364,21 @@ const currentServerHash = async (descriptor: McpRuntimeDescriptor): Promise<stri
 
 const readRuntimeMetadataIfPresent = async (
   descriptor: McpRuntimeDescriptor,
-): Promise<McpRuntimeMetadata | undefined> =>
-  (await fileExists(descriptor.runtimePath))
-    ? await readMcpRuntimeMetadata(descriptor.runtimePath)
-    : undefined;
-
-const tokenForEnv = (tokenEnv: string): string | undefined => process.env[tokenEnv];
-
-const requireEnvMcpToken = (tokenEnv: string, harness: McpLifecycleHarness): string => {
-  const token = normalizePreferredMcpBearerToken({
-    preferredToken: tokenForEnv(tokenEnv),
-    preferredTokenEnv: tokenEnv,
-  });
-  if (!token) {
-    throw new Error(
-      `MCP token env '${tokenEnv}' must be set to a usable bearer token before serving '${harness}' Streamable HTTP config.`,
-    );
+): Promise<McpRuntimeMetadata | undefined> => {
+  if (!(await fileExists(descriptor.runtimePath))) return undefined;
+  try {
+    return await readMcpRuntimeMetadata(descriptor.runtimePath);
+  } catch {
+    return undefined;
   }
-  return token;
-};
-
-const ensureEnvSourcedMcpToken = async (options: {
-  readonly descriptor: McpRuntimeDescriptor;
-  readonly tokenEnv: string;
-  readonly harness: McpLifecycleHarness;
-}): Promise<string> => {
-  const envToken = requireEnvMcpToken(options.tokenEnv, options.harness);
-  const existing = await readMcpToken(options.descriptor.prismHome, options.descriptor.serverName);
-  const usableExisting = normalizePreferredMcpBearerToken({
-    preferredToken: existing,
-    preferredTokenEnv: options.tokenEnv,
-  });
-  if (usableExisting && usableExisting !== envToken) {
-    throw new Error(
-      `Stored MCP token for '${options.descriptor.serverName}' differs from env '${options.tokenEnv}'. Run 'prism mcp rotate-token ${options.descriptor.pluginPath} --harness ${options.harness} --token-env ${options.tokenEnv}' to rotate explicitly.`,
-    );
-  }
-  return ensureMcpToken(options.descriptor.prismHome, options.descriptor.serverName, {
-    preferredToken: envToken,
-    preferredTokenEnv: options.tokenEnv,
-  });
-};
-
-const resolveTokenForServer = async (options: {
-  readonly descriptor: McpRuntimeDescriptor;
-  readonly tokenEnv?: string;
-  readonly create: boolean;
-}): Promise<string | undefined> => {
-  const envToken = options.tokenEnv && isMcpTokenEnvName(options.tokenEnv)
-    ? tokenForEnv(options.tokenEnv)
-    : undefined;
-  if (options.create) {
-    return ensureMcpToken(options.descriptor.prismHome, options.descriptor.serverName, {
-      ...(envToken ? { preferredToken: envToken } : {}),
-      ...(options.tokenEnv ? { preferredTokenEnv: options.tokenEnv } : {}),
-    });
-  }
-  return await readMcpToken(options.descriptor.prismHome, options.descriptor.serverName) ??
-    normalizePreferredMcpBearerToken({
-    preferredToken: envToken,
-    preferredTokenEnv: options.tokenEnv,
-  });
 };
 
 const fetchHealth = async (
   healthUrl: string | undefined,
-  token: string,
 ): Promise<McpRuntimeHealth | undefined> => {
   if (!healthUrl) return undefined;
   try {
-    const response = await fetch(healthUrl, {
-      method: "GET",
-      headers: { authorization: `Bearer ${token}` },
-    });
+    const response = await fetch(healthUrl, { method: "GET" });
     if (!response.ok) return undefined;
     return parseMcpRuntimeHealth(await response.json());
   } catch {
@@ -649,8 +561,6 @@ const metadataForPreparedServer = (
   host: prepared.host,
   port: prepared.port,
   pid,
-  tokenEnv: prepared.tokenEnv,
-  tokenSha256: prepared.tokenSha256,
   serverSha256: prepared.serverSha256,
   startedAt: health.startedAt,
   healthUrl: prepared.healthUrl,
@@ -661,7 +571,6 @@ const metadataWithAdoptedHealth = (options: {
   readonly metadata: McpRuntimeMetadata;
   readonly health: McpRuntimeHealth;
   readonly expectedServerSha256?: string;
-  readonly tokenSha256?: string;
 }): McpRuntimeMetadata => ({
   schema: MCP_RUNTIME_METADATA_SCHEMA,
   serverName: options.metadata.serverName,
@@ -669,8 +578,6 @@ const metadataWithAdoptedHealth = (options: {
   ...(options.metadata.host ? { host: options.metadata.host } : {}),
   ...(options.metadata.port ? { port: options.metadata.port } : {}),
   pid: options.health.pid,
-  ...(options.metadata.tokenEnv ? { tokenEnv: options.metadata.tokenEnv } : {}),
-  ...(options.tokenSha256 ? { tokenSha256: options.tokenSha256 } : {}),
   ...(options.expectedServerSha256 ?? options.health.serverSha256 ?? options.metadata.serverSha256
     ? { serverSha256: options.expectedServerSha256 ?? options.health.serverSha256 ?? options.metadata.serverSha256 }
     : {}),
@@ -690,8 +597,6 @@ const stoppedMetadata = (metadata: McpRuntimeMetadata): McpRuntimeMetadata => ({
   transport: metadata.transport,
   ...(metadata.host ? { host: metadata.host } : {}),
   ...(metadata.port ? { port: metadata.port } : {}),
-  ...(metadata.tokenEnv ? { tokenEnv: metadata.tokenEnv } : {}),
-  ...(metadata.tokenSha256 ? { tokenSha256: metadata.tokenSha256 } : {}),
   ...(metadata.serverSha256 ? { serverSha256: metadata.serverSha256 } : {}),
   ...(metadata.healthUrl ? { healthUrl: metadata.healthUrl } : {}),
   ...(metadata.mcpUrl ? { mcpUrl: metadata.mcpUrl } : {}),
@@ -702,7 +607,6 @@ const stoppedMetadata = (metadata: McpRuntimeMetadata): McpRuntimeMetadata => ({
  * EnvironmentVariables) — never via bundle bytes.
  */
 const daemonIdentityEnv = (prepared: McpPreparedServer): Record<string, string> => ({
-  [prepared.tokenEnv]: prepared.token,
   PRISM_MCP_SERVER_NAME: prepared.descriptor.serverName,
   PRISM_MCP_WORKING_DIRECTORY: prepared.descriptor.prismHome,
   PRISM_MCP_REPO_ROOT: prepared.descriptor.prismHome,
@@ -710,7 +614,6 @@ const daemonIdentityEnv = (prepared: McpPreparedServer): Record<string, string> 
   PRISM_MCP_HTTP_PORT: String(prepared.port),
   PRISM_MCP_HTTP_PATH: "/mcp",
   PRISM_MCP_HTTP_HEALTH_PATH: "/healthz",
-  PRISM_MCP_HTTP_TOKEN: prepared.token,
   PRISM_MCP_TOOL_TIMEOUT_MS: String(prepared.toolTimeoutMs),
   PRISM_MCP_SERVER_SHA256: prepared.serverSha256,
 });
@@ -729,10 +632,7 @@ const waitForHealth = async (
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      const health = await fetchHealth(
-        prepared.healthUrl,
-        prepared.token,
-      );
+      const health = await fetchHealth(prepared.healthUrl);
       if (
         health &&
         (pid === undefined || health.pid === pid) &&
@@ -838,27 +738,23 @@ const tryAdoptHealthyGeneratedListener = async (options: {
   readonly metadata: McpRuntimeMetadata;
   readonly expectedServerSha256?: string;
   readonly healthUrl?: string;
-  readonly token?: string;
-  readonly tokenSha256?: string;
 }): Promise<McpStatusResult | undefined> => {
-  const { descriptor, metadata, token } = options;
-  if (!token || !options.healthUrl || !metadata.port) return undefined;
+  const { descriptor, metadata } = options;
+  if (!options.healthUrl || !metadata.port) return undefined;
   if (!(await listenerLooksLikeGeneratedServer(descriptor, metadata.port))) return undefined;
 
-  const health = await fetchHealth(options.healthUrl, token);
+  const health = await fetchHealth(options.healthUrl);
   if (!health) return undefined;
 
   const adopted = metadataWithAdoptedHealth({
     metadata,
     health,
     expectedServerSha256: options.expectedServerSha256,
-    tokenSha256: options.tokenSha256,
   });
   const staleReasons = uniqueStaleReasons(
     detectMcpRuntimeStaleReasons(adopted, {
       requireLivePid: true,
       expectedServerSha256: options.expectedServerSha256,
-      expectedTokenSha256: options.tokenSha256,
       health,
     }),
   );
@@ -871,8 +767,6 @@ const classifyStatus = async (options: {
   readonly descriptor: McpRuntimeDescriptor;
   readonly metadata?: McpRuntimeMetadata;
   readonly expectedServerSha256?: string;
-  readonly tokenEnv?: string;
-  readonly token?: string;
 }): Promise<McpStatusResult> => {
   const { descriptor, metadata } = options;
   if (!metadata) {
@@ -887,9 +781,6 @@ const classifyStatus = async (options: {
   const currentHash = await currentServerHash(descriptor);
   const expectedServerSha256 = options.expectedServerSha256 ?? metadata.serverSha256 ?? currentHash;
   const healthTarget = trustedHealthUrl(metadata);
-  const tokenEnv = options.tokenEnv;
-  const token = options.token;
-  const tokenSha256 = token ? hashMcpRuntimeToken(token) : undefined;
 
   if (!metadata.pid) {
     const staleReasons = uniqueStaleReasons([
@@ -917,8 +808,6 @@ const classifyStatus = async (options: {
         metadata,
         expectedServerSha256,
         healthUrl: healthTarget.url,
-        token,
-        tokenSha256,
       });
       if (adopted) return adopted;
       return {
@@ -965,8 +854,6 @@ const classifyStatus = async (options: {
       metadata,
       expectedServerSha256,
       healthUrl: healthTarget.url,
-      token,
-      tokenSha256,
     });
     if (adopted) return adopted;
   }
@@ -1008,22 +895,11 @@ const classifyStatus = async (options: {
     };
   }
 
-  if (!token) {
-    return {
-      state: "missing-token",
-      descriptor,
-      metadata,
-      staleReasons: localStaleReasons,
-      detail: `missing token env '${tokenEnv ?? "(unknown)"}'`,
-    };
-  }
-
-  const health = await fetchHealth(healthTarget.url, token);
+  const health = await fetchHealth(healthTarget.url);
   const staleReasons = uniqueStaleReasons([
     ...detectMcpRuntimeStaleReasons(metadata, {
       requireLivePid: true,
       expectedServerSha256,
-      expectedTokenSha256: tokenSha256,
       health,
     }),
     ...localStaleReasons,
@@ -1081,19 +957,12 @@ const statusWithResolvedContext = async (
 ): Promise<McpStatusResult> => {
   const { registry, descriptor } = context;
   const metadata = await readRuntimeMetadataIfPresent(descriptor);
-  const tokenEnv = options.tokenEnv ?? resolveMcpRuntime(registry, options.harness).tokenEnv;
-  const token = await resolveTokenForServer({
-    descriptor,
-    tokenEnv,
-    create: false,
-  });
+  resolveMcpRuntime(registry, options.harness);
 
   return classifyStatus({
     descriptor,
     metadata,
     expectedServerSha256: options.expectedServerSha256,
-    tokenEnv,
-    token,
   });
 };
 
@@ -1104,9 +973,7 @@ export const getMcpStatus = async (options: McpStatusOptions): Promise<McpStatus
   statusWithExpectedBundle(options);
 
 export const listMcpStatuses = async (
-  options: Omit<McpLifecycleCommonOptions, "pluginPath"> & {
-    readonly tokenEnv?: string;
-  },
+  options: Omit<McpLifecycleCommonOptions, "pluginPath">,
 ): Promise<ReadonlyArray<McpStatusResult>> => {
   assertSupportedLifecycleTarget({ ...options, pluginPath: "." });
   const prismHome = expandPath(options.prismHome);
@@ -1134,18 +1001,10 @@ export const listMcpStatuses = async (
       serverPath,
       runtimePath,
     };
-    const tokenEnv = options.tokenEnv ?? metadata?.tokenEnv;
-    const token = await resolveTokenForServer({
-      descriptor,
-      tokenEnv,
-      create: false,
-    });
     statuses.push(await classifyStatus({
       descriptor,
       metadata,
       expectedServerSha256: await currentServerHash(descriptor),
-      tokenEnv,
-      token,
     }));
   }
   return statuses;
@@ -1156,24 +1015,19 @@ const handleExistingMcpDaemon = async (options: {
   readonly context: McpLifecycleResolvedContext;
   readonly existing?: McpRuntimeMetadata;
   readonly prepared: McpPreparedServer;
-  readonly tokenEnv: string;
-  readonly token: string;
 }): Promise<McpServeResult | undefined> => {
-  const { existing, prepared, tokenEnv, token, context } = options;
+  const { existing, prepared, context } = options;
   if (!existing) return undefined;
 
   const status = await classifyStatus({
     descriptor: prepared.descriptor,
     metadata: existing,
     expectedServerSha256: prepared.serverSha256,
-    tokenEnv,
-    token,
   });
   if (status.state === "running") {
     if (
       status.metadata?.host !== prepared.host ||
-      status.metadata?.port !== prepared.port ||
-      status.metadata?.tokenEnv !== tokenEnv
+      status.metadata?.port !== prepared.port
     ) {
       await stopMcpResolved({
         pluginPath: options.serveOptions.pluginPath,
@@ -1181,7 +1035,6 @@ const handleExistingMcpDaemon = async (options: {
         scope: options.serveOptions.scope,
         projectPath: options.serveOptions.projectPath,
         prismHome: options.serveOptions.prismHome,
-        tokenEnv,
       }, context);
       return undefined;
     }
@@ -1200,10 +1053,9 @@ const handleExistingMcpDaemon = async (options: {
       pluginPath: options.serveOptions.pluginPath,
       harness: options.serveOptions.harness,
       scope: options.serveOptions.scope,
-      projectPath: options.serveOptions.projectPath,
-      prismHome: options.serveOptions.prismHome,
-      tokenEnv,
-    }, context);
+        projectPath: options.serveOptions.projectPath,
+        prismHome: options.serveOptions.prismHome,
+      }, context);
     return undefined;
   }
   if (status.state === "stale-pid" || status.state === "stopped" || status.state === "port-conflict") {
@@ -1232,17 +1084,12 @@ const prepareMcpServer = (options: {
   readonly descriptor: McpRuntimeDescriptor;
   readonly host: string;
   readonly port: number;
-  readonly tokenEnv: string;
-  readonly token: string;
   readonly serverSha256: string;
   readonly toolTimeoutMs: number;
 }): McpPreparedServer => ({
   descriptor: options.descriptor,
   host: options.host,
   port: options.port,
-  tokenEnv: options.tokenEnv,
-  token: options.token,
-  tokenSha256: hashMcpRuntimeToken(options.token),
   serverSha256: options.serverSha256,
   toolTimeoutMs: options.toolTimeoutMs,
   mcpUrl: `http://${options.host}:${options.port}/mcp`,
@@ -1258,7 +1105,7 @@ const runForegroundPreparedServer = async (
 
   try {
     // Bun, shims, and launchd can make the serving pid differ from the
-    // immediate child pid; startup identity is proven by token + server hash.
+    // immediate child pid; startup identity is proven by server hash.
     await waitForHealth(
       prepared,
       undefined,
@@ -1366,30 +1213,12 @@ const serveMcpResolved = async (
       ? options.port
       : configured.port ?? existing?.port ?? options.port;
   let selectedPort = await resolvePort(portSelection, registry, options.harness, host);
-  const tokenEnv = options.tokenEnv?.trim() || configured.tokenEnv;
-  assertMcpTokenEnvName(tokenEnv);
-  const token = mcpRuntimeUsesBearerTokenEnvConfig(options.harness)
-    ? await ensureEnvSourcedMcpToken({
-        descriptor,
-        tokenEnv,
-        harness: options.harness,
-      })
-    : await resolveTokenForServer({
-        descriptor,
-        tokenEnv,
-        create: true,
-      });
-  if (!token) {
-    throw new Error(`Missing required MCP bearer token for '${descriptor.serverName}'.`);
-  }
   // Serve consumes the compiled canonical bundle; it never rebuilds it.
   const serverSha256 = await readCanonicalServerBundleSha(descriptor);
   let prepared: McpPreparedServer = prepareMcpServer({
     descriptor,
     host,
     port: selectedPort,
-    tokenEnv,
-    token,
     serverSha256,
     toolTimeoutMs: configured.toolTimeoutMs,
   });
@@ -1399,8 +1228,6 @@ const serveMcpResolved = async (
     context,
     existing,
     prepared,
-    tokenEnv,
-    token,
   });
   if (existingResult) return existingResult;
 
@@ -1418,8 +1245,6 @@ const serveMcpResolved = async (
       descriptor,
       host,
       port: selectedPort,
-      tokenEnv,
-      token,
       serverSha256,
       toolTimeoutMs: configured.toolTimeoutMs,
     });
@@ -1457,7 +1282,7 @@ const stopMcpResolved = async (
   if (hasUnsafePidReason(status.staleReasons)) {
     throw new Error(`Refusing to stop MCP daemon in state '${status.state}': ${status.detail}`);
   }
-  if (!["running", "missing-token", "stale-build", "stale-health"].includes(status.state)) {
+  if (!["running", "stale-build", "stale-health"].includes(status.state)) {
     throw new Error(`Refusing to stop MCP daemon in state '${status.state}': ${status.detail}`);
   }
 
@@ -1488,60 +1313,6 @@ export const restartMcp = async (options: McpServeOptions): Promise<McpServeResu
   });
 };
 
-export const rotateMcpBearerToken = async (
-  options: McpRotateTokenOptions,
-): Promise<McpRotateTokenResult> => {
-  if (!mcpRuntimeUsesBearerTokenEnvConfig(options.harness)) {
-    throw new Error(
-      `MCP token rotation for '${options.harness}' is disabled until that harness renders HTTP bearer tokens through an environment-variable config entry. Run compile/refresh after changing tokens for this harness.`,
-    );
-  }
-  const context = await resolveLifecycleContext(options);
-  return withMcpServerLock(context.descriptor, async () => {
-    const { registry, descriptor } = context;
-    const tokenEnv = options.tokenEnv?.trim() || resolveMcpRuntime(registry, options.harness).tokenEnv;
-    assertMcpTokenEnvName(tokenEnv);
-    const envToken = requireEnvMcpToken(tokenEnv, options.harness);
-    const status = await statusWithResolvedContext({ ...options, tokenEnv }, context);
-    const wasRunning = status.state === "running";
-    if (wasRunning) {
-      await stopMcpResolved({ ...options, tokenEnv }, context);
-    } else if (status.metadata) {
-      await writeMcpRuntimeMetadata(descriptor.runtimePath, stoppedMetadata(status.metadata));
-    }
-
-    const token = await rotateMcpToken(descriptor.prismHome, descriptor.serverName, {
-      preferredToken: envToken,
-      preferredTokenEnv: tokenEnv,
-    });
-    const tokenSha256 = hashMcpRuntimeToken(token);
-
-    if (wasRunning) {
-      const restarted = await serveMcpResolved({ ...options, tokenEnv }, context);
-      return {
-        state: "rotated-and-restarted",
-        descriptor,
-        metadata: restarted.metadata,
-        tokenEnv,
-        tokenSha256,
-      };
-    }
-
-    const metadata = await readRuntimeMetadataIfPresent(descriptor);
-    const next = metadata
-      ? { ...stoppedMetadata(metadata), tokenEnv, tokenSha256 }
-      : undefined;
-    if (next) await writeMcpRuntimeMetadata(descriptor.runtimePath, next);
-    return {
-      state: "rotated",
-      descriptor,
-      ...(next ? { metadata: next } : {}),
-      tokenEnv,
-      tokenSha256,
-    };
-  });
-};
-
 export const formatMcpStatus = (status: McpStatusResult): string => {
   const pid = status.metadata?.pid ? ` pid=${status.metadata.pid}` : "";
   const url = status.metadata?.mcpUrl ? ` url=${status.metadata.mcpUrl}` : "";
@@ -1562,6 +1333,3 @@ export const formatMcpStopResult = (result: McpStopResult): string => {
   const pid = result.metadata?.pid ? ` pid=${result.metadata.pid}` : "";
   return `${result.state} ${result.descriptor.serverName}${pid}`;
 };
-
-export const formatMcpRotateTokenResult = (result: McpRotateTokenResult): string =>
-  `${result.state} ${result.descriptor.serverName} tokenEnv=${result.tokenEnv} tokenSha256=${result.tokenSha256}`;

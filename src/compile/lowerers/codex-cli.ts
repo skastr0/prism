@@ -164,7 +164,6 @@ const renderCodexMcpServerToml = (options: {
   return [
     tomlDottedTable(["mcp_servers", options.name]),
     `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
-    `bearer_token_env_var = ${quote(options.runtime.tokenEnv)}`,
     "enabled = true",
     "required = false",
     'default_tools_approval_mode = "approve"',

@@ -6,7 +6,6 @@ import {
 } from "./mcp-policy.js";
 import {
   getMcpHttpTargetSupport,
-  renderMcpBearerAuthorizationTemplate,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
@@ -38,7 +37,6 @@ test("MCP runtime defaults to Streamable HTTP per target", () => {
     targetId: "codex-cli",
     transport: "streamable-http",
     host: "127.0.0.1",
-    tokenEnv: "PRISM_MCP_TOKEN",
     connectTimeoutMs: DEFAULT_MCP_CONNECT_TIMEOUT_MS,
     toolTimeoutMs: DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
   });
@@ -52,7 +50,6 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
           transport: "streamable-http",
           host: "localhost",
           port: 38464,
-          tokenEnv: "PRISM_MCP_CODEX_TOKEN",
           connectTimeoutMs: 15_000,
           toolTimeoutMs: 90_000,
         },
@@ -67,14 +64,10 @@ test("MCP runtime validates supported Streamable HTTP target config", () => {
     transport: "streamable-http",
     host: "localhost",
     port: 38464,
-    tokenEnv: "PRISM_MCP_CODEX_TOKEN",
     connectTimeoutMs: 15_000,
     toolTimeoutMs: 90_000,
   });
   expect(renderMcpHttpUrl(runtime)).toBe("http://localhost:38464/mcp");
-  expect(renderMcpBearerAuthorizationTemplate(runtime.tokenEnv)).toBe(
-    "Bearer ${PRISM_MCP_CODEX_TOKEN}",
-  );
 });
 
 test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
@@ -85,7 +78,6 @@ test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
           transport: "streamable-http",
           host: "127.0.0.1",
           port: 38466,
-          tokenEnv: "PRISM_MCP_FACTORY_TOKEN",
         },
       },
     }),
@@ -106,7 +98,6 @@ test("MCP runtime supports Kimi Code Streamable HTTP config", () => {
           transport: "streamable-http",
           host: "127.0.0.1",
           port: 38467,
-          tokenEnv: "PRISM_MCP_KIMI_TOKEN",
         },
       },
     }),
@@ -127,7 +118,6 @@ test("MCP runtime supports Cursor Streamable HTTP config", () => {
           transport: "streamable-http",
           host: "127.0.0.1",
           port: 38468,
-          tokenEnv: "PRISM_MCP_CURSOR_TOKEN",
         },
       },
     }),
@@ -148,7 +138,6 @@ test("MCP runtime supports Grok Streamable HTTP config", () => {
           transport: "streamable-http",
           host: "127.0.0.1",
           port: 38469,
-          tokenEnv: "PRISM_MCP_GROK_TOKEN",
         },
       },
     }),
@@ -168,7 +157,6 @@ test("MCP runtime accepts a lifecycle-resolved Streamable HTTP port", () => {
         hermes: {
           transport: "streamable-http",
           host: "127.0.0.1",
-          tokenEnv: "PRISM_MCP_HERMES_TOKEN",
         },
       },
     }),
@@ -187,7 +175,6 @@ test("MCP runtime still rejects missing Streamable HTTP ports when required", ()
           hermes: {
             transport: "streamable-http",
             host: "127.0.0.1",
-            tokenEnv: "PRISM_MCP_HERMES_TOKEN",
           },
         },
       }),
@@ -197,7 +184,7 @@ test("MCP runtime still rejects missing Streamable HTTP ports when required", ()
   ).toThrow(/requires plugin\.json runtime\.mcp\.hermes\.port/);
 });
 
-test("MCP runtime rejects non-loopback HTTP hosts and invalid token env", () => {
+test("MCP runtime rejects non-loopback HTTP hosts", () => {
   expect(() =>
     resolveMcpRuntime(
       registry({
@@ -206,7 +193,6 @@ test("MCP runtime rejects non-loopback HTTP hosts and invalid token env", () => 
             transport: "streamable-http",
             host: "0.0.0.0",
             port: 38463,
-            tokenEnv: "PRISM_MCP_TOKEN",
           },
         },
       }),
@@ -214,23 +200,6 @@ test("MCP runtime rejects non-loopback HTTP hosts and invalid token env", () => 
       { requirePort: true },
     ),
   ).toThrow(/loopback host/);
-
-  expect(() =>
-    resolveMcpRuntime(
-      registry({
-        mcp: {
-          hermes: {
-            transport: "streamable-http",
-            host: "127.0.0.1",
-            port: 38463,
-            tokenEnv: "not-valid-env",
-          },
-        },
-      }),
-      "hermes",
-      { requirePort: true },
-    ),
-  ).toThrow(/environment variable name/);
 });
 
 test("MCP runtime rejects invalid timeout config", () => {

@@ -7,15 +7,13 @@ import {
   MCP_RUNTIME_METADATA_SCHEMA,
   computeFileSha256,
   detectMcpRuntimeStaleReasons,
-  hashMcpRuntimeToken,
   parseMcpRuntimeHealth,
   parseMcpRuntimeMetadata,
   readMcpRuntimeMetadata,
   writeMcpRuntimeMetadata,
 } from "./runtime-metadata.js";
 
-test("MCP runtime metadata parses a versioned schema and rejects secret token values", () => {
-  const tokenSha256 = hashMcpRuntimeToken("super-secret-token");
+test("MCP runtime metadata parses a versioned schema", () => {
   const metadata = parseMcpRuntimeMetadata({
     schema: MCP_RUNTIME_METADATA_SCHEMA,
     serverName: "prism-generated-tower",
@@ -23,8 +21,6 @@ test("MCP runtime metadata parses a versioned schema and rejects secret token va
     host: "127.0.0.1",
     port: 38463,
     pid: 12345,
-    tokenEnv: "PRISM_MCP_TOKEN",
-    tokenSha256,
     serverSha256: "a".repeat(64),
     startedAt: "2026-05-17T00:00:00.000Z",
     healthUrl: "http://127.0.0.1:38463/healthz",
@@ -38,22 +34,11 @@ test("MCP runtime metadata parses a versioned schema and rejects secret token va
     host: "127.0.0.1",
     port: 38463,
     pid: 12345,
-    tokenEnv: "PRISM_MCP_TOKEN",
-    tokenSha256,
     serverSha256: "a".repeat(64),
     startedAt: "2026-05-17T00:00:00.000Z",
     healthUrl: "http://127.0.0.1:38463/healthz",
     mcpUrl: "http://127.0.0.1:38463/mcp",
   });
-
-  expect(() =>
-    parseMcpRuntimeMetadata({
-      schema: MCP_RUNTIME_METADATA_SCHEMA,
-      serverName: "prism-generated-tower",
-      transport: "streamable-http",
-      token: "super-secret-token",
-    }),
-  ).toThrow(/secret key 'token' must not be stored/);
 
   expect(() =>
     parseMcpRuntimeMetadata({
@@ -68,24 +53,14 @@ test("MCP runtime metadata parses a versioned schema and rejects secret token va
       schema: MCP_RUNTIME_METADATA_SCHEMA,
       serverName: "prism-generated-tower",
       transport: "streamable-http",
-      tokenEnv: "actual-bearer-token",
-    }),
-  ).toThrow(/'tokenEnv' must be an environment variable name/);
-
-  expect(() =>
-    parseMcpRuntimeMetadata({
-      schema: MCP_RUNTIME_METADATA_SCHEMA,
-      serverName: "prism-generated-tower",
-      transport: "streamable-http",
-      mcpUrl: "http://127.0.0.1:38463/mcp?token=super-secret-token",
+      mcpUrl: "http://127.0.0.1:38463/mcp?session=demo",
     }),
   ).toThrow(/'mcpUrl' must not contain credentials, query parameters, or fragments/);
 });
 
-test("MCP runtime metadata read/write stores hashes without raw token values", async () => {
+test("MCP runtime metadata read/write stores endpoint and server hashes", async () => {
   const root = await mkdtemp(join(tmpdir(), "prism-runtime-metadata-test-"));
   const path = join(root, "mcp", "prism-generated-tower", "runtime.json");
-  const tokenSha256 = hashMcpRuntimeToken("super-secret-token");
 
   await writeMcpRuntimeMetadata(path, {
     schema: MCP_RUNTIME_METADATA_SCHEMA,
@@ -94,8 +69,6 @@ test("MCP runtime metadata read/write stores hashes without raw token values", a
     host: "127.0.0.1",
     port: 38463,
     pid: 12345,
-    tokenEnv: "PRISM_MCP_TOKEN",
-    tokenSha256,
     serverSha256: "b".repeat(64),
     startedAt: "2026-05-17T00:00:00.000Z",
     healthUrl: "http://127.0.0.1:38463/healthz",
@@ -103,12 +76,11 @@ test("MCP runtime metadata read/write stores hashes without raw token values", a
   });
 
   const raw = await readFile(path, "utf8");
-  expect(raw).toContain(tokenSha256);
-  expect(raw).not.toContain("super-secret-token");
+  expect(raw).toContain("b".repeat(64));
 
   await expect(readMcpRuntimeMetadata(path)).resolves.toMatchObject({
     serverName: "prism-generated-tower",
-    tokenSha256,
+    serverSha256: "b".repeat(64),
   });
 });
 
@@ -118,14 +90,12 @@ test("MCP runtime metadata detects stale pid and hash drift", () => {
     serverName: "prism-generated-tower",
     transport: "streamable-http",
     pid: 12345,
-    tokenSha256: "c".repeat(64),
     serverSha256: "d".repeat(64),
   });
 
   expect(
     detectMcpRuntimeStaleReasons(metadata, {
       requireLivePid: true,
-      expectedTokenSha256: "e".repeat(64),
       expectedServerSha256: "f".repeat(64),
       pidExists: () => false,
     }),
@@ -133,7 +103,6 @@ test("MCP runtime metadata detects stale pid and hash drift", () => {
     "pid-not-running",
     "missing-health",
     "server-sha256-mismatch",
-    "token-sha256-mismatch",
   ]);
 
   expect(
@@ -142,7 +111,6 @@ test("MCP runtime metadata detects stale pid and hash drift", () => {
       {
         requireLivePid: true,
         expectedServerSha256: "f".repeat(64),
-        expectedTokenSha256: "e".repeat(64),
         pidExists: () => true,
       },
     ),
@@ -150,17 +118,15 @@ test("MCP runtime metadata detects stale pid and hash drift", () => {
     "missing-pid",
     "missing-health",
     "missing-server-sha256",
-    "missing-token-sha256",
   ]);
 });
 
-test("MCP runtime metadata binds HTTP freshness to authenticated health data", () => {
+test("MCP runtime metadata binds HTTP freshness to health data", () => {
   const metadata = parseMcpRuntimeMetadata({
     schema: MCP_RUNTIME_METADATA_SCHEMA,
     serverName: "prism-generated-tower",
     transport: "streamable-http",
     pid: 12345,
-    tokenSha256: "c".repeat(64),
     serverSha256: "d".repeat(64),
     startedAt: "2026-05-17T00:00:00.000Z",
   });
@@ -179,7 +145,6 @@ test("MCP runtime metadata binds HTTP freshness to authenticated health data", (
     detectMcpRuntimeStaleReasons(metadata, {
       requireLivePid: true,
       expectedServerSha256: "d".repeat(64),
-      expectedTokenSha256: "c".repeat(64),
       pidExists: () => true,
       health,
     }),

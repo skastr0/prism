@@ -30,28 +30,20 @@ http://127.0.0.1:<managed-port>/mcp
 ```
 
 The daemon serves multiple Streamable HTTP sessions from one Bun process. Prism
-records runtime metadata beside the bundle and stores bearer tokens in:
-
-```text
-<PRISM_HOME>/runtime/mcp/tokens.json
-```
+records runtime metadata beside the bundle.
 
 ## Config Contract
 
 Generated configs use HTTP-native fields:
 
-- Codex CLI: `url`, `bearer_token_env_var`, `enabled_tools`
+- Codex CLI: `url`, `enabled_tools`
 - Claude Code: `.mcp.json` with `type: "http"`, `url`, and `headers`
 - Hermes: `config.yaml -> mcp_servers.<name>.url`, `headers`, and `tools.include`
 - Antigravity CLI: `mcp_config.json -> serverUrl` and `headers`
 - Factory Droid: `mcp.json -> type: "http"`, `url`, and `headers`
-- Kimi Code: plugin `mcpServers` with `url`, `headers` or `bearerTokenEnvVar`, and `enabledTools`
+- Kimi Code: plugin `mcpServers` with `url`, `headers`, and `enabledTools`
 - Cursor: `mcp.json -> url` and `headers`
 - Grok Build: plugin-local `.mcp.json` with `type: "http"`, `url`, and `headers`
-
-Codex and Claude render environment-token config entries so tracked configs do
-not serialize live bearer tokens. Other harnesses keep using their current
-verified HTTP config shape until they have a safe env-token surface.
 
 Grok generated MCP config uses the same shared Streamable HTTP daemon as the
 other generated-MCP plugin-bundle targets. Prism does not emit Grok stdio MCP
@@ -84,13 +76,11 @@ A Prism generated HTTP MCP runtime must:
 
 1. Bind to loopback by default.
 2. Validate `Host` and `Origin`.
-3. Require bearer authentication.
-4. Keep bearer token values out of runtime metadata.
-5. Bound sessions, request bytes, concurrent tool calls, and tool duration.
-6. Expose authenticated health data for lifecycle checks.
-7. Fail closed on missing bundles, stale bundle hashes, stale health, invalid
-   tokens, non-loopback hosts, or unsupported targets.
-8. Keep dry-runs side-effect free.
+3. Bound sessions, request bytes, concurrent tool calls, and tool duration.
+4. Expose health data for lifecycle checks.
+5. Fail closed on missing bundles, stale bundle hashes, stale health,
+   non-loopback hosts, or unsupported targets.
+6. Keep dry-runs side-effect free.
 
 ## Verification
 
@@ -98,10 +88,9 @@ The regression suite covers:
 
 - Streamable HTTP multi-session serving from one process.
 - Official SDK Streamable HTTP client compatibility.
-- Host/origin/auth failures before tool execution.
+- Host/origin/protocol failures before tool execution.
 - Session and request-size caps.
 - Tool concurrency and timeout release.
 - Output validation at runtime.
 - Cross-harness union bundle exposure profiles.
-- Codex/Claude env-token config rendering.
 - Stale daemon and stale bundle lifecycle gates.

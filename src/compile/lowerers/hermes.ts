@@ -7,7 +7,6 @@ import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
 import {
   generatedMcpServerName,
   MCP_EXPOSURE_HEADER,
-  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
@@ -32,7 +31,6 @@ const TARGET_ID = "hermes" as const;
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpBearerToken?: string;
   readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -94,7 +92,6 @@ const copyTargetedSkillArtifacts = async (
 const renderHermesMcpServerYaml = (options: {
   readonly serverName: string;
   readonly runtime: ResolvedMcpRuntime;
-  readonly bearerToken?: string;
   readonly exposureProfile?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): string[] => {
@@ -106,13 +103,11 @@ const renderHermesMcpServerYaml = (options: {
     `    enabled: true`,
     `    sampling:`,
     `      enabled: false`,
-    `    headers:`,
-    `      Authorization: ${yamlScalar(renderMcpBearerAuthorization({
-      tokenEnv: options.runtime.tokenEnv,
-      token: options.bearerToken,
-    }))}`,
     ...(options.exposureProfile
-      ? [`      ${MCP_EXPOSURE_HEADER}: ${yamlScalar(options.exposureProfile)}`]
+      ? [
+          `    headers:`,
+          `      ${MCP_EXPOSURE_HEADER}: ${yamlScalar(options.exposureProfile)}`,
+        ]
       : []),
     `    tools:`,
     `      include:`,
@@ -199,7 +194,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       content: renderHermesMcpServerYaml({
         serverName: mcp.serverName,
         runtime,
-        bearerToken: input.target.mcpBearerToken,
         exposureProfile: input.target.mcpExposureProfile,
         toolNames: mcp.toolNames,
       }).join("\n"),

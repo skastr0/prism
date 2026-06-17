@@ -12,7 +12,6 @@ import {
 import {
   generatedMcpServerName,
   MCP_EXPOSURE_HEADER,
-  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
@@ -47,7 +46,6 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface KimiCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpBearerToken?: string;
   readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -411,7 +409,6 @@ const planContextSkillWrite = (
 
 const renderKimiMcpServerEntry = (options: {
   readonly runtime: ReturnType<typeof resolveMcpRuntime>;
-  readonly bearerToken?: string;
   readonly exposureProfile?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): Record<string, unknown> => {
@@ -422,14 +419,6 @@ const renderKimiMcpServerEntry = (options: {
     toolTimeoutMs: options.runtime.toolTimeoutMs,
   };
   const headers = {
-    ...(options.bearerToken
-      ? {
-          Authorization: renderMcpBearerAuthorization({
-            tokenEnv: options.runtime.tokenEnv,
-            token: options.bearerToken,
-          }),
-        }
-      : {}),
     ...(options.exposureProfile
       ? { [MCP_EXPOSURE_HEADER]: options.exposureProfile }
       : {}),
@@ -439,12 +428,7 @@ const renderKimiMcpServerEntry = (options: {
   return {
     ...base,
     url: renderMcpHttpUrl(options.runtime),
-    ...(options.bearerToken
-      ? (hasHeaders ? { headers } : {})
-      : {
-          bearerTokenEnvVar: options.runtime.tokenEnv,
-          ...(hasHeaders ? { headers } : {}),
-        }),
+    ...(hasHeaders ? { headers } : {}),
   };
 };
 
@@ -469,7 +453,6 @@ const planMcpServer = (input: LowerInput): PlannedMcpServer => {
     toolNames,
     manifestEntry: renderKimiMcpServerEntry({
       runtime,
-      ...(input.target.mcpBearerToken ? { bearerToken: input.target.mcpBearerToken } : {}),
       ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
       toolNames,
     }),

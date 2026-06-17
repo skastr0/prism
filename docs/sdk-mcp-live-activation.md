@@ -15,11 +15,10 @@ Scope: PQ-040 activated the SDK-backed generated MCP runtime for the live `tower
 
 ## Config Proof
 
-- Hermes `~/.hermes/config.yaml` points both generated servers at local HTTP URLs with bearer authorization headers.
+- Hermes `~/.hermes/config.yaml` points both generated servers at local HTTP URLs.
 - Codex CLI `~/.codex/config.toml` parses successfully with `Bun.TOML.parse` and contains HTTP `mcp_servers` entries for both generated servers.
-- Claude Code generated plugin `.mcp.json` files point both generated servers at local HTTP URLs with bearer authorization headers.
-- Antigravity CLI generated plugin `mcp_config.json` files point both generated servers at local HTTP URLs with bearer authorization headers.
-- Raw bearer token values are intentionally not recorded in this document.
+- Claude Code generated plugin `.mcp.json` files point both generated servers at local HTTP URLs.
+- Antigravity CLI generated plugin `mcp_config.json` files point both generated servers at local HTTP URLs.
 
 ## Smoke Proof
 

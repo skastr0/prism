@@ -8,10 +8,6 @@ import { normalizeBundleSegment } from "./lowerers/shared.js";
 
 const GENERATED_SERVER_PREFIX = "prism-generated";
 const DEFAULT_HTTP_HOST = "127.0.0.1";
-const DEFAULT_TOKEN_ENV = ["PRISM", "MCP", "TOKEN"].join("_");
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-const ENV_BEARER_TOKEN_CONFIG_TARGETS: ReadonlySet<HarnessId> =
-  new Set<HarnessId>(["codex-cli", "claude-code"]);
 
 export type McpRuntimeTransport = "streamable-http";
 export const MCP_EXPOSURE_HEADER = "X-Prism-Mcp-Exposure" as const;
@@ -29,7 +25,6 @@ export interface ResolvedMcpRuntime {
   readonly transport: McpRuntimeTransport;
   readonly host: string;
   readonly port?: number;
-  readonly tokenEnv: string;
   readonly connectTimeoutMs: number;
   readonly toolTimeoutMs: number;
 }
@@ -84,9 +79,6 @@ export const getMcpHttpTargetSupport = (targetId: HarnessId): McpHttpTargetSuppo
     reason: `Target '${targetId}' does not have a verified Streamable HTTP MCP config renderer.`,
   };
 
-export const mcpRuntimeUsesBearerTokenEnvConfig = (targetId: HarnessId): boolean =>
-  ENV_BEARER_TOKEN_CONFIG_TARGETS.has(targetId);
-
 export const assertMcpHttpTargetSupported = (
   targetId: HarnessId,
   surface: keyof Pick<McpHttpTargetSupport, "config" | "lifecycle">,
@@ -119,15 +111,6 @@ const positiveIntegerConfigValue = (
 export const isLoopbackMcpHost = (host: string): boolean =>
   host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
 
-export const assertMcpTokenEnvName = (tokenEnv: string): void => {
-  if (!isMcpTokenEnvName(tokenEnv)) {
-    throw new Error("MCP token env must be an environment variable name.");
-  }
-};
-
-export const isMcpTokenEnvName = (tokenEnv: string): boolean =>
-  ENV_NAME_PATTERN.test(tokenEnv);
-
 const runtimeConfigForTarget = (
   registry: PluginRegistry,
   targetId: HarnessId,
@@ -151,7 +134,6 @@ export const resolveMcpRuntime = (
   }
   const transport: McpRuntimeTransport = "streamable-http";
   const host = stringValue(configured?.host) ?? DEFAULT_HTTP_HOST;
-  const tokenEnv = stringValue(configured?.tokenEnv) ?? DEFAULT_TOKEN_ENV;
   const configuredPort = numberValue(configured?.port);
   const resolvedPort = numberValue(options.resolvedPort);
   const port = configuredPort ?? resolvedPort;
@@ -192,14 +174,12 @@ export const resolveMcpRuntime = (
       `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
     );
   }
-  assertMcpTokenEnvName(tokenEnv);
 
   return {
     targetId,
     transport,
     host,
     ...(port !== undefined ? { port } : {}),
-    tokenEnv,
     connectTimeoutMs,
     toolTimeoutMs,
   };
@@ -213,12 +193,3 @@ export const renderMcpHttpUrl = (runtime: ResolvedMcpRuntime): string => {
   }
   return `http://${runtime.host}:${runtime.port}/mcp`;
 };
-
-export const renderMcpBearerAuthorizationTemplate = (tokenEnv: string): string =>
-  `Bearer \${${tokenEnv}}`;
-
-export const renderMcpBearerAuthorization = (options: {
-  readonly tokenEnv: string;
-  readonly token?: string;
-}): string =>
-  options.token ? `Bearer ${options.token}` : renderMcpBearerAuthorizationTemplate(options.tokenEnv);

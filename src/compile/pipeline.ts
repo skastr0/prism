@@ -78,7 +78,6 @@ import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
   mcpExposureProfileForTarget,
-  mcpRuntimeUsesBearerTokenEnvConfig,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
 import {
@@ -94,11 +93,6 @@ import {
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
-import {
-  ensureMcpToken,
-  normalizePreferredMcpBearerToken,
-  readMcpToken,
-} from "../mcp/token-store.js";
 import { getFreePort } from "../mcp/ports.js";
 
 interface LowererModule {
@@ -112,7 +106,6 @@ interface LowererModule {
     readonly target: {
       readonly scope: HarnessScope;
       readonly root: string;
-      readonly mcpBearerToken?: string;
       readonly mcpExposureProfile?: string;
       readonly mcpRuntimePort?: number;
       readonly sourcePluginName: string;
@@ -589,7 +582,6 @@ const renderMcpServeCommand = (options: {
     options.scope,
     ...(options.projectPath ? ["--project", shellQuote(options.projectPath)] : []),
     ...(configured?.port ? ["--port", String(configured.port)] : []),
-    ...(configured?.tokenEnv ? ["--token-env", shellQuote(configured.tokenEnv)] : []),
   ].join(" ");
 };
 
@@ -926,74 +918,6 @@ const selectTargetArtifacts = (
   };
 };
 
-const resolveCompileMcpBearerToken = (options: {
-  readonly registry: PluginRegistry;
-  readonly targetId: HarnessId;
-  readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly artifacts: TargetArtifacts;
-  readonly prismHome: string;
-  readonly dryRun: boolean;
-}): Effect.Effect<string | undefined, CompileError> => {
-  const bindings = mcpBindingsForAgentsAndTools(
-    options.registry.pluginName,
-    options.artifacts.tools,
-    options.agents,
-  );
-  if (
-    options.dryRun ||
-    bindings.length === 0 ||
-    !targetHasGeneratedMcpConfig(options.targetId)
-  ) {
-    return Effect.succeed(undefined);
-  }
-
-  return Effect.tryPromise({
-    try: async () => {
-      const runtime = resolveMcpRuntime(options.registry, options.targetId);
-      const preferredToken = process.env[runtime.tokenEnv];
-      if (mcpRuntimeUsesBearerTokenEnvConfig(options.targetId)) {
-        const envToken = normalizePreferredMcpBearerToken({
-          preferredToken,
-          preferredTokenEnv: runtime.tokenEnv,
-        });
-        if (!envToken) {
-          throw new Error(
-            `MCP token env '${runtime.tokenEnv}' must be set to a usable bearer token before compiling '${options.targetId}' Streamable HTTP config.`,
-          );
-        }
-
-        const serverName = generatedMcpServerName(options.registry.pluginName);
-        const existing = await readMcpToken(options.prismHome, serverName);
-        const usableExisting = normalizePreferredMcpBearerToken({
-          preferredToken: existing,
-          preferredTokenEnv: runtime.tokenEnv,
-        });
-        if (usableExisting && usableExisting !== envToken) {
-          throw new Error(
-            `Stored MCP token for '${serverName}' differs from env '${runtime.tokenEnv}'. Run 'prism mcp rotate-token ${options.registry.pluginPath} --harness ${options.targetId} --token-env ${runtime.tokenEnv}' to rotate explicitly.`,
-          );
-        }
-
-        await ensureMcpToken(options.prismHome, serverName, {
-          preferredToken: envToken,
-          preferredTokenEnv: runtime.tokenEnv,
-        });
-        return undefined;
-      }
-      return ensureMcpToken(
-        options.prismHome,
-        generatedMcpServerName(options.registry.pluginName),
-        {
-          ...(preferredToken ? { preferredToken } : {}),
-          preferredTokenEnv: runtime.tokenEnv,
-        },
-      );
-    },
-    catch: (error) =>
-      PluginManifestError.forPlugin(options.registry.pluginPath, error instanceof Error ? error.message : String(error)),
-  });
-};
-
 // ---------------------------------------------------------------------------
 // Union MCP bundle (overhaul WS3): ONE HTTP bundle per plugin, merging the
 // canonical tool bindings of every generated-MCP-config harness the plugin
@@ -1141,7 +1065,6 @@ const planTargetLowering = (options: {
   readonly scope: HarnessScope;
   readonly outputRoot: string;
   readonly mcpServer?: PreparedMcpServer;
-  readonly mcpBearerToken?: string;
   readonly mcpRuntimePort?: number;
 }): Effect.Effect<LowerOutput, CompileError> => {
   if (
@@ -1166,7 +1089,6 @@ const planTargetLowering = (options: {
       target: {
         scope: options.scope,
         root: options.outputRoot,
-        ...(options.mcpBearerToken ? { mcpBearerToken: options.mcpBearerToken } : {}),
         ...(options.mcpServer && targetHasGeneratedMcpConfig(options.targetId)
           ? {
               mcpExposureProfile: mcpExposureProfileForTarget(
@@ -1250,7 +1172,6 @@ const prepareLoweringInputs = (
   readonly artifacts: TargetArtifacts;
   readonly mcpServer?: PreparedMcpServer;
   readonly mcpRuntimePort?: number;
-  readonly mcpBearerToken?: string;
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
@@ -1293,15 +1214,6 @@ const prepareLoweringInputs = (
       agents: composedForLowering,
       artifacts,
     });
-    const mcpBearerToken = yield* resolveCompileMcpBearerToken({
-      registry,
-      targetId: context.targetId,
-      agents: composedForLowering,
-      artifacts,
-      prismHome: context.prismHome,
-      dryRun: options.dryRun,
-    });
-
     return {
       context,
       registry,
@@ -1312,7 +1224,6 @@ const prepareLoweringInputs = (
       artifacts,
       ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
-      ...(mcpBearerToken ? { mcpBearerToken } : {}),
     };
   });
 
@@ -1330,7 +1241,6 @@ export const planPluginForTarget = (
       artifacts,
       mcpServer,
       mcpRuntimePort,
-      mcpBearerToken,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1343,7 +1253,6 @@ export const planPluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       ...(mcpServer ? { mcpServer } : {}),
-      ...(mcpBearerToken ? { mcpBearerToken } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
 
@@ -1377,7 +1286,6 @@ export const compilePluginForTarget = (
       artifacts,
       mcpServer,
       mcpRuntimePort,
-      mcpBearerToken,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1390,7 +1298,6 @@ export const compilePluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       ...(mcpServer ? { mcpServer } : {}),
-      ...(mcpBearerToken ? { mcpBearerToken } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
     yield* assertHttpMcpLifecycleGate({

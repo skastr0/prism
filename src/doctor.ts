@@ -35,8 +35,7 @@ export type DoctorFindingFamily =
   | "namespace.stray"
   | "region.integrity"
   | "mcp.health"
-  | "determinism.selfcheck"
-  | "secret.literal-token";
+  | "determinism.selfcheck";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -408,18 +407,19 @@ const validateTomlConfig = async (options: {
       fix: "manual",
     }));
   }
-  if (/Authorization\s*=\s*["']Bearer\s+[^"']+["']/u.test(content)) {
-    findings.push(finding({
-      severity: "warning",
-      family: "secret.literal-token",
-      code: "config.literal-bearer-token",
-      message: `${options.harness} config contains a literal bearer token; prefer bearer_token_env_var`,
-      harness: options.harness,
-      path: options.path,
-      fix: "manual",
-    }));
-  }
   return findings;
+};
+
+const isLoopbackHttpUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1")
+    );
+  } catch {
+    return false;
+  }
 };
 
 const validateHarnessConfig = async (options: {
@@ -678,13 +678,12 @@ const validateCodexConfigReferences = async (
           path,
           fix: "refresh",
         }));
-      }
-      if (typeof server.bearer_token_env_var !== "string") {
+      } else if (!isLoopbackHttpUrl(server.url)) {
         findings.push(finding({
           severity: "error",
           family: "harness.config",
-          code: "config.codex-mcp-token-env-missing",
-          message: `Codex MCP server '${name}' is missing bearer_token_env_var`,
+          code: "config.codex-mcp-url-non-loopback",
+          message: `Codex MCP server '${name}' must use a loopback HTTP url`,
           harness: "codex-cli",
           path,
           fix: "refresh",
@@ -847,6 +846,17 @@ const validateClaudeGeneratedPlugin = async (
             path: mcpPath,
             fix: "refresh",
           }));
+        } else if (Object.keys(server).length > 0 && !isLoopbackHttpUrl(server.url as string)) {
+          findings.push(finding({
+            severity: "error",
+            family: "harness.config",
+            code: "config.claude-mcp-url-non-loopback",
+            message: `Claude generated plugin '${name}' must use a loopback HTTP url`,
+            harness: "claude-code",
+            root,
+            path: mcpPath,
+            fix: "refresh",
+          }));
         }
         const headers = server.headers;
         if (Object.keys(server).length > 0 && (!headers || typeof headers !== "object")) {
@@ -1002,49 +1012,6 @@ const findingsFromRefreshFailures = (result: RefreshResult): DoctorFinding[] =>
       path: failure.op.targetPath,
     })
   );
-
-const gitTrackedFiles = async (root: string): Promise<string[]> => {
-  const proc = Bun.spawn(["git", "-C", root, "ls-files"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    proc.exited,
-  ]);
-  if (exitCode !== 0) return [];
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => join(root, line));
-};
-
-const validateTrackedLiteralTokens = async (pluginPath: string): Promise<DoctorFinding[]> => {
-  const root = expandPath(pluginPath);
-  const tokenPattern = /(?:Authorization\s*[:=]\s*["']?Bearer\s+[A-Za-z0-9._~+/-]{16,}|Bearer\s+[A-Za-z0-9._~+/-]{32,})/u;
-  const findings: DoctorFinding[] = [];
-  for (const path of await gitTrackedFiles(root)) {
-    if (!pathContains(root, path)) continue;
-    if (/\.(png|jpg|jpeg|gif|webp|ico|pdf|zip|gz|tgz|lock)$/iu.test(path)) continue;
-    let content: string;
-    try {
-      content = await readFile(path);
-    } catch {
-      continue;
-    }
-    if (!tokenPattern.test(content)) continue;
-    findings.push(finding({
-      severity: "warning",
-      family: "secret.literal-token",
-      code: "source.literal-bearer-token",
-      message: "Tracked source file appears to contain a literal bearer token; prefer an environment variable reference",
-      path,
-      fix: "manual",
-    }));
-  }
-  return findings;
-};
 
 const validateMcpHealth = async (options: {
   readonly pluginPath?: string;
@@ -1241,7 +1208,6 @@ const inspectPlugin = async (options: DoctorOptions): Promise<{
   let refresh: RefreshResult | undefined;
   let fixFailed = false;
 
-  findings.push(...(await validateTrackedLiteralTokens(options.pluginPath)));
   if (options.fix) {
     const compileFix = await runCompileFixes(options);
     findings.push(...compileFix.findings);

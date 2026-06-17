@@ -9,7 +9,6 @@ import { promisify } from "node:util";
 import {
   formatMcpStatus,
   getMcpStatus,
-  rotateMcpBearerToken,
   restartMcp,
   serveMcp,
   stopMcp,
@@ -22,7 +21,6 @@ import { bindingFromToolSource } from "../compile/tool-bindings.js";
 
 const tempRoots: string[] = [];
 const execFileAsync = promisify(execFile);
-const lifecycleTestToken = "prism-lifecycle-test-token-with-enough-entropy";
 
 const effectImportPath = join(
   process.cwd(),
@@ -111,15 +109,6 @@ export default defineTool({
   };
 };
 
-const withTokenEnv = <A>(name: string, value: string, run: () => Promise<A>): Promise<A> => {
-  const previous = process.env[name];
-  process.env[name] = value;
-  return run().finally(() => {
-    if (previous === undefined) delete process.env[name];
-    else process.env[name] = previous;
-  });
-};
-
 const withEnv = <A>(
   values: Readonly<Record<string, string>>,
   run: () => Promise<A>,
@@ -197,13 +186,10 @@ const waitForServerProcessCount = async (
 
 const fetchHealth = async (
   port: number,
-  token: string,
 ): Promise<ReturnType<typeof parseMcpRuntimeHealth>> => {
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`);
       if (response.ok) return parseMcpRuntimeHealth(await response.json());
     } catch {
       // Server not listening yet.
@@ -252,14 +238,12 @@ const listenWithHttpHandler = (
 const serveOptions = (
   pluginRoot: string,
   prismHome: string,
-  tokenEnv: string,
 ): McpServeOptions => ({
   pluginPath: pluginRoot,
   harness: "hermes",
   scope: "global",
   prismHome,
   port: "auto",
-  tokenEnv,
   startupTimeoutMs: 5_000,
 });
 
@@ -271,46 +255,37 @@ afterEach(async () => {
 
 test("MCP lifecycle serializes mutations with a per-server lock", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_LOCK";
   const lockDir = join(prismHome, "runtime", "mcp", "hermes-tools");
   const lockPath = join(lockDir, ".lifecycle.lock");
   await mkdir(lockDir, { recursive: true });
   await writeFile(lockPath, "busy\n");
 
   await withEnv({ PRISM_MCP_LOCK_WAIT_MS: "50" }, async () => {
-    await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-      await expect(
-        serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv)),
-      ).rejects.toThrow(/Timed out waiting for MCP lifecycle lock/);
-    });
+    await expect(
+      serveMcp(serveOptions(pluginRoot, prismHome)),
+    ).rejects.toThrow(/Timed out waiting for MCP lifecycle lock/);
   });
 
   await new Promise((resolve) => setTimeout(resolve, 5));
   await withEnv({ PRISM_MCP_LOCK_WAIT_MS: "1000", PRISM_MCP_LOCK_STALE_MS: "1" }, async () => {
-    await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-      const started = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
-      try {
-        expect(started.state).toBe("started");
-        expect(await pathExists(lockPath)).toBe(false);
-      } finally {
-        await stopMcp({
-          pluginPath: pluginRoot,
-          harness: "hermes",
-          scope: "global",
-          prismHome,
-          tokenEnv,
-        }).catch(() => undefined);
-      }
-    });
+    const started = await serveMcp(serveOptions(pluginRoot, prismHome));
+    try {
+      expect(started.state).toBe("started");
+      expect(await pathExists(lockPath)).toBe(false);
+    } finally {
+      await stopMcp({
+        pluginPath: pluginRoot,
+        harness: "hermes",
+        scope: "global",
+        prismHome,
+      }).catch(() => undefined);
+    }
   });
 }, 15_000);
 
 test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", async () => {
   const { pluginRoot, prismHome, toolPath, rebuildBundle } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_IDEMPOTENT";
-
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const first = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const first = await serveMcp(serveOptions(pluginRoot, prismHome));
     try {
       expect(first.state).toBe("started");
       expect(first.metadata?.pid).toBeGreaterThan(0);
@@ -318,7 +293,7 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
       expect(first.metadata?.healthUrl).toContain("/healthz");
       await waitForServerProcessCount(first.descriptor.serverPath, 1);
 
-      const second = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+      const second = await serveMcp(serveOptions(pluginRoot, prismHome));
       expect(second.state).toBe("already-running");
       expect(second.metadata?.pid).toBe(first.metadata?.pid);
       await waitForServerProcessCount(first.descriptor.serverPath, 1);
@@ -333,7 +308,7 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
       // The lifecycle consumes compiled bundles: rebuilding the canonical
       // bundle makes the running daemon stale.
       await rebuildBundle();
-      const rebuilt = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+      const rebuilt = await serveMcp(serveOptions(pluginRoot, prismHome));
       expect(rebuilt.state).toBe("started");
       expect(rebuilt.metadata?.pid).toBeGreaterThan(0);
       expect(rebuilt.metadata?.pid).not.toBe(first.metadata?.pid);
@@ -344,7 +319,6 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       });
       expect(status.state).toBe("running");
       expect(status.health?.serverName).toBe("prism-generated-hermes-tools");
@@ -364,12 +338,11 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       });
       expect(adoptedStatus.state).toBe("running");
       expect(adoptedStatus.metadata?.pid).toBe(rebuilt.metadata?.pid);
 
-      const adoptedServe = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+      const adoptedServe = await serveMcp(serveOptions(pluginRoot, prismHome));
       expect(adoptedServe.state).toBe("already-running");
       const adoptedRuntime = JSON.parse(
         await readFile(rebuilt.descriptor.runtimePath, "utf8"),
@@ -389,11 +362,10 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       });
       expect(noPidAdoptedStatus.state).toBe("running");
       expect(noPidAdoptedStatus.metadata?.pid).toBe(rebuilt.metadata?.pid);
-      const noPidAdoptedServe = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+      const noPidAdoptedServe = await serveMcp(serveOptions(pluginRoot, prismHome));
       expect(noPidAdoptedServe.state).toBe("already-running");
       const noPidAdoptedRuntime = JSON.parse(
         await readFile(rebuilt.descriptor.runtimePath, "utf8"),
@@ -409,7 +381,6 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
       try {
         originalRuntimeText = await readFile(first.descriptor.runtimePath, "utf8");
         const runtime = JSON.parse(originalRuntimeText) as Record<string, unknown>;
-        runtime.tokenEnv = "PATH";
         runtime.healthUrl = `http://127.0.0.1:${attackerPort}/healthz`;
         runtime.port = attackerPort;
         await writeFile(first.descriptor.runtimePath, `${JSON.stringify(runtime, null, 2)}\n`);
@@ -419,7 +390,6 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
           harness: "hermes",
           scope: "global",
           prismHome,
-          tokenEnv,
         });
         expect(listenerMismatch.state).toBe("stale-health");
         expect(listenerMismatch.staleReasons).toContain("listener-pid-mismatch");
@@ -429,7 +399,6 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
             harness: "hermes",
             scope: "global",
             prismHome,
-            tokenEnv,
           }),
         ).rejects.toThrow(/Refusing to stop MCP daemon/);
         expect(pidIsRunning(rebuilt.metadata!.pid!)).toBe(true);
@@ -443,7 +412,6 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
           harness: "hermes",
           scope: "global",
           prismHome,
-          tokenEnv,
         });
         expect(pidMismatch.state).toBe("stale-health");
         expect(pidMismatch.staleReasons).toContain("pid-command-mismatch");
@@ -453,7 +421,6 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
             harness: "hermes",
             scope: "global",
             prismHome,
-            tokenEnv,
           }),
         ).rejects.toThrow(/Refusing to stop MCP daemon/);
         expect(pidIsRunning(process.pid)).toBe(true);
@@ -470,18 +437,13 @@ test("MCP lifecycle serve starts one daemon and repeated serve is idempotent", a
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       }).catch(() => undefined);
     }
-  });
 }, 15_000);
 
 test("MCP lifecycle moves a running daemon when a configured port appears", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_CONFIGURED_PORT";
-
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const first = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const first = await serveMcp(serveOptions(pluginRoot, prismHome));
     try {
       expect(first.state).toBe("started");
       expect(first.metadata?.port).toBeGreaterThan(0);
@@ -499,7 +461,6 @@ test("MCP lifecycle moves a running daemon when a configured port appears", asyn
                   transport: "streamable-http",
                   host: "127.0.0.1",
                   port: configuredPort,
-                  tokenEnv,
                 },
               },
             },
@@ -514,7 +475,6 @@ test("MCP lifecycle moves a running daemon when a configured port appears", asyn
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
         startupTimeoutMs: 5_000,
       });
       expect(moved.state).toBe("started");
@@ -528,22 +488,17 @@ test("MCP lifecycle moves a running daemon when a configured port appears", asyn
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       }).catch(() => undefined);
     }
-  });
 }, 15_000);
 
 test("MCP lifecycle stop and restart update runtime metadata safely", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_RESTART";
-
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const started = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const started = await serveMcp(serveOptions(pluginRoot, prismHome));
     expect(started.state).toBe("started");
     const firstPid = started.metadata?.pid;
 
-    const restartedLive = await restartMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const restartedLive = await restartMcp(serveOptions(pluginRoot, prismHome));
     expect(restartedLive.state).toBe("started");
     expect(restartedLive.metadata?.pid).toBeGreaterThan(0);
     expect(restartedLive.metadata?.pid).not.toBe(firstPid);
@@ -554,7 +509,6 @@ test("MCP lifecycle stop and restart update runtime metadata safely", async () =
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(stopped.state).toBe("stopped");
 
@@ -563,11 +517,10 @@ test("MCP lifecycle stop and restart update runtime metadata safely", async () =
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(stoppedStatus.state).toBe("stopped");
 
-    const restarted = await restartMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const restarted = await restartMcp(serveOptions(pluginRoot, prismHome));
     try {
       expect(restarted.state).toBe("started");
       expect(restarted.metadata?.pid).toBeGreaterThan(0);
@@ -577,63 +530,51 @@ test("MCP lifecycle stop and restart update runtime metadata safely", async () =
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       }).catch(() => undefined);
     }
-  });
 }, 15_000);
 
 test("MCP lifecycle foreground serve exits without writing runtime metadata", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_FOREGROUND";
   const port = await getFreePort("127.0.0.1");
 
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const foreground = serveMcp({
-      ...serveOptions(pluginRoot, prismHome, tokenEnv),
-      port,
-      foreground: true,
-    });
-    const health = await fetchHealth(port, lifecycleTestToken);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    process.kill(health.pid, "SIGTERM");
-
-    const result = await foreground;
-    expect(result.state).toBe("foreground-exited");
-    expect(await pathExists(result.descriptor.runtimePath)).toBe(false);
+  const foreground = serveMcp({
+    ...serveOptions(pluginRoot, prismHome),
+    port,
+    foreground: true,
   });
+  const health = await fetchHealth(port);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  process.kill(health.pid, "SIGTERM");
+
+  const result = await foreground;
+  expect(result.state).toBe("foreground-exited");
+  expect(await pathExists(result.descriptor.runtimePath)).toBe(false);
 }, 15_000);
 
-test("MCP lifecycle status uses stored tokens and reports stale pid states", async () => {
+test("MCP lifecycle status reports running and stale pid states", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_STATES";
-
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const started = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const started = await serveMcp(serveOptions(pluginRoot, prismHome));
     const pid = started.metadata?.pid;
     expect(pid).toBeGreaterThan(0);
 
-    delete process.env[tokenEnv];
-    const storedTokenStatus = await getMcpStatus({
+    const runningStatus = await getMcpStatus({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
-    expect(storedTokenStatus.state).toBe("running");
-    const stoppedWithoutToken = await stopMcp({
+    expect(runningStatus.state).toBe("running");
+    const stopped = await stopMcp({
       pluginPath: pluginRoot,
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
-    expect(stoppedWithoutToken.state).toBe("stopped");
+    expect(stopped.state).toBe("stopped");
     await waitForPidExit(pid!);
 
-    process.env[tokenEnv] = lifecycleTestToken;
-    const restarted = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const restarted = await serveMcp(serveOptions(pluginRoot, prismHome));
     const stalePidValue = restarted.metadata?.pid;
     expect(stalePidValue).toBeGreaterThan(0);
     process.kill(stalePidValue!, "SIGKILL");
@@ -643,7 +584,6 @@ test("MCP lifecycle status uses stored tokens and reports stale pid states", asy
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(stalePid.state).toBe("stale-pid");
     const stoppedStalePid = await stopMcp({
@@ -651,12 +591,11 @@ test("MCP lifecycle status uses stored tokens and reports stale pid states", asy
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(stoppedStalePid.state).toBe("already-stopped");
     expect(stoppedStalePid.metadata?.pid).toBeUndefined();
 
-    const restartedAfterStalePid = await restartMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const restartedAfterStalePid = await restartMcp(serveOptions(pluginRoot, prismHome));
     try {
       expect(restartedAfterStalePid.state).toBe("started");
       expect(restartedAfterStalePid.metadata?.pid).toBeGreaterThan(0);
@@ -666,18 +605,13 @@ test("MCP lifecycle status uses stored tokens and reports stale pid states", asy
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       }).catch(() => undefined);
     }
-  });
 }, 15_000);
 
 test("MCP lifecycle status reports stale build and port conflict states", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_CONFLICT";
-
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const started = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const started = await serveMcp(serveOptions(pluginRoot, prismHome));
     const pid = started.metadata?.pid;
     const serverPath = started.descriptor.serverPath;
     let originalServer = await readFile(serverPath, "utf8");
@@ -687,12 +621,11 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(staleBuild.state).toBe("stale-build");
     expect(staleBuild.staleReasons).toContain("server-file-sha256-mismatch");
     expect(formatMcpStatus(staleBuild)).toContain("reasons=server-file-sha256-mismatch");
-    const restarted = await restartMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const restarted = await restartMcp(serveOptions(pluginRoot, prismHome));
     expect(restarted.state).toBe("started");
     expect(restarted.metadata?.pid).toBeGreaterThan(0);
     expect(restarted.metadata?.pid).not.toBe(pid);
@@ -705,7 +638,6 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(missingServer.state).toBe("stale-build");
     expect(missingServer.staleReasons).toContain("missing-server-file");
@@ -715,7 +647,6 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
       harness: "hermes",
       scope: "global",
       prismHome,
-      tokenEnv,
     });
     expect(stopped.state).toBe("stopped");
     expect(stopped.metadata?.port).toBeGreaterThan(0);
@@ -729,7 +660,6 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       });
       expect(conflict.state).toBe("port-conflict");
       const stopConflict = await stopMcp({
@@ -737,10 +667,9 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       });
       expect(stopConflict.state).toBe("already-stopped");
-      const recoveredFromConflict = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+      const recoveredFromConflict = await serveMcp(serveOptions(pluginRoot, prismHome));
       try {
         expect(recoveredFromConflict.state).toBe("started");
         expect(recoveredFromConflict.metadata?.port).toBeGreaterThan(0);
@@ -751,14 +680,13 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
           harness: "hermes",
           scope: "global",
           prismHome,
-          tokenEnv,
         }).catch(() => undefined);
       }
     } finally {
       await closeServer(dummy);
     }
 
-    const recovered = await restartMcp(serveOptions(pluginRoot, prismHome, tokenEnv));
+    const recovered = await restartMcp(serveOptions(pluginRoot, prismHome));
     try {
       expect(recovered.state).toBe("started");
       expect(recovered.metadata?.pid).toBeGreaterThan(0);
@@ -768,84 +696,22 @@ test("MCP lifecycle status reports stale build and port conflict states", async 
         harness: "hermes",
         scope: "global",
         prismHome,
-        tokenEnv,
       }).catch(() => undefined);
     }
-  });
 }, 15_000);
-
-test("MCP lifecycle rotates tokens only through the explicit rotation path", async () => {
-  const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_ROTATE";
-  const firstToken = "prism-lifecycle-first-token-with-enough-entropy";
-  const secondToken = "prism-lifecycle-second-token-with-enough-entropy";
-
-  await withTokenEnv(tokenEnv, firstToken, async () => {
-    const codexServeOptions = {
-      ...serveOptions(pluginRoot, prismHome, tokenEnv),
-      harness: "codex-cli" as const,
-    };
-    delete process.env[tokenEnv];
-    await expect(serveMcp(codexServeOptions)).rejects.toThrow(/must be set to a usable bearer token/);
-
-    process.env[tokenEnv] = firstToken;
-    const started = await serveMcp(codexServeOptions);
-    try {
-      const firstHash = started.metadata?.tokenSha256;
-      expect(firstHash).toBeDefined();
-
-      const stable = await restartMcp(codexServeOptions);
-      const stableHash = stable.metadata?.tokenSha256;
-      expect(stableHash).toBe(firstHash);
-
-      process.env[tokenEnv] = secondToken;
-      const rotated = await rotateMcpBearerToken({
-        pluginPath: pluginRoot,
-        harness: "codex-cli",
-        scope: "global",
-        prismHome,
-        tokenEnv,
-      });
-      expect(rotated.state).toBe("rotated-and-restarted");
-      expect(rotated.tokenSha256).not.toBe(firstHash);
-      expect(rotated.metadata?.tokenSha256).toBe(rotated.tokenSha256);
-
-      await expect(
-        rotateMcpBearerToken({
-          pluginPath: pluginRoot,
-          harness: "hermes",
-          scope: "global",
-          prismHome,
-          tokenEnv,
-        }),
-      ).rejects.toThrow(/disabled until that harness renders HTTP bearer tokens/);
-    } finally {
-      await stopMcp({
-        pluginPath: pluginRoot,
-        harness: "codex-cli",
-        scope: "global",
-        prismHome,
-        tokenEnv,
-      }).catch(() => undefined);
-    }
-  });
-}, 20_000);
 
 test("MCP lifecycle serve fails typed when the compiled canonical bundle is missing", async () => {
   const { pluginRoot, prismHome } = await createHermesToolFixture();
-  const tokenEnv = "PRISM_MCP_TEST_TOKEN_MISSING_BUNDLE";
   await rm(join(prismHome, "runtime", "mcp", "hermes-tools", "server.mjs"));
 
-  await withTokenEnv(tokenEnv, lifecycleTestToken, async () => {
-    const failure = await serveMcp(serveOptions(pluginRoot, prismHome, tokenEnv)).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toBeDefined();
-    expect((failure as { _tag?: string })._tag).toBe("McpBundleMissingError");
-    expect(String((failure as Error).message)).toContain(
-      "Compiled MCP server bundle for plugin 'hermes-tools' is missing",
-    );
-    expect(String((failure as { hint?: string }).hint)).toContain("prism refresh");
-  });
+  const failure = await serveMcp(serveOptions(pluginRoot, prismHome)).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(failure).toBeDefined();
+  expect((failure as { _tag?: string })._tag).toBe("McpBundleMissingError");
+  expect(String((failure as Error).message)).toContain(
+    "Compiled MCP server bundle for plugin 'hermes-tools' is missing",
+  );
+  expect(String((failure as { hint?: string }).hint)).toContain("prism refresh");
 }, 15_000);

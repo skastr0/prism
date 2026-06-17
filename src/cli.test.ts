@@ -11,7 +11,6 @@ import { writePrismMcpServerBundle } from "./compile/mcp-runtime-path.js";
 import { bindingFromToolSource } from "./compile/tool-bindings.js";
 
 const tempRoots: string[] = [];
-const cliTestToken = "prism-cli-test-token-with-enough-entropy";
 
 const effectImportPath = join(
   process.cwd(),
@@ -344,7 +343,6 @@ const createCliMcpFixture = async (options?: {
   readonly harness?: "hermes" | "codex-cli" | "cursor";
   readonly streamableHttp?: boolean;
   readonly port?: number;
-  readonly tokenEnv?: string;
 }): Promise<{
   pluginRoot: string;
   hermesRoot: string;
@@ -374,7 +372,6 @@ const createCliMcpFixture = async (options?: {
                     transport: "streamable-http",
                     host: "127.0.0.1",
                     port: options.port,
-                    tokenEnv: options.tokenEnv ?? "PRISM_MCP_CLI_TEST_TOKEN",
                   },
                 },
               },
@@ -516,13 +513,11 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
 test("mcp serve/status/stop manages a Hermes daemon under a sandboxed PRISM_HOME", async () => {
   const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
   await prebuildCliCanonicalBundle(pluginRoot, prismHome);
-  const env = { PRISM_MCP_CLI_TEST_TOKEN: cliTestToken, PRISM_HOME: prismHome };
+  const env = { PRISM_HOME: prismHome };
   const common = [
     pluginRoot,
     "--harness",
     "hermes",
-    "--token-env",
-    "PRISM_MCP_CLI_TEST_TOKEN",
   ];
 
   const originalConfig = await readFile(join(hermesRoot, "config.yaml"), "utf8").catch(() => "");
@@ -541,8 +536,6 @@ test("mcp serve/status/stop manages a Hermes daemon under a sandboxed PRISM_HOME
       "status",
       "--harness",
       "hermes",
-      "--token-env",
-      "PRISM_MCP_CLI_TEST_TOKEN",
     ], env);
     expect(listStatus.exitCode).toBe(0);
     expect(listStatus.stdout).toContain("running");
@@ -551,21 +544,6 @@ test("mcp serve/status/stop manages a Hermes daemon under a sandboxed PRISM_HOME
     const secondServe = await runCli(["mcp", "serve", ...common, "--port", "auto"], env);
     expect(secondServe.exitCode).toBe(0);
     expect(secondServe.stdout).toContain("already-running prism-generated-cli-hermes-tools");
-
-    const rotated = await runCli([
-      "mcp",
-      "rotate-token",
-      pluginRoot,
-      "--harness",
-      "codex-cli",
-      "--token-env",
-      "PRISM_MCP_CLI_TEST_TOKEN",
-    ], {
-      ...env,
-      PRISM_MCP_CLI_TEST_TOKEN: "prism-cli-rotated-token-with-enough-entropy",
-    });
-    expect(rotated.exitCode).toBe(0);
-    expect(rotated.stdout).toContain("rotated-and-restarted prism-generated-cli-hermes-tools");
 
     const restart = await runCli(["mcp", "restart", ...common, "--port", "auto"], env);
     expect(restart.exitCode).toBe(0);
@@ -660,13 +638,11 @@ test("package CLI writes distributable payload", async () => {
 
 test("refresh serves Hermes HTTP MCP by default", async () => {
   const port = await getFreePort("127.0.0.1");
-  const tokenEnv = "PRISM_MCP_CLI_INSTALL_GATE_TOKEN";
   const { pluginRoot, hermesRoot } = await createCliMcpFixture({
     streamableHttp: true,
     port,
-    tokenEnv,
   });
-  const env = { [tokenEnv]: cliTestToken };
+  const env = {};
   const common = [
     "refresh",
     "--plugin",
@@ -684,7 +660,6 @@ test("refresh serves Hermes HTTP MCP by default", async () => {
     expect(served.stdout).toContain("Compile (hermes, global)");
     const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
     expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
-    expect(config).toContain(`Authorization: "Bearer ${cliTestToken}"`);
   } finally {
     await runCli([
       "mcp",
@@ -692,8 +667,6 @@ test("refresh serves Hermes HTTP MCP by default", async () => {
       pluginRoot,
       "--harness",
       "hermes",
-      "--token-env",
-      tokenEnv,
     ], env).catch(() => undefined);
   }
 }, 20_000);
@@ -1300,7 +1273,7 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
       projectRoot,
 
     ],
-    { HOME: homeRoot, PRISM_MCP_TOKEN: cliTestToken }
+    { HOME: homeRoot }
   );
 
   expect(result.exitCode).toBe(0);

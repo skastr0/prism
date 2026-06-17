@@ -13,7 +13,6 @@ import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   MCP_EXPOSURE_HEADER,
-  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
@@ -46,7 +45,6 @@ const PLUGIN_PREFIX = "prism-generated";
 export interface AntigravityCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpBearerToken?: string;
   readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -327,10 +325,6 @@ const planMcpServers = (input: LowerInput): Record<string, unknown> => {
     [pluginId]: {
       serverUrl: renderMcpHttpUrl(runtime),
       headers: {
-        Authorization: renderMcpBearerAuthorization({
-          tokenEnv: runtime.tokenEnv,
-          token: input.target.mcpBearerToken,
-        }),
         [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
       },
     },
@@ -395,7 +389,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       targetPath: join(root, "mcp_config.json"),
       content: json({ mcpServers }),
       plugin,
-      ...(input.target.mcpBearerToken ? { mode: 0o600 } : {}),
     });
   }
 

@@ -49,10 +49,8 @@ import {
   formatMcpServeResult,
   formatMcpStatus,
   formatMcpStopResult,
-  formatMcpRotateTokenResult,
   getMcpStatus,
   listMcpStatuses,
-  rotateMcpBearerToken,
   restartMcp,
   serveMcp,
   stopMcp,
@@ -938,7 +936,6 @@ mcpCommand
   .option("-p, --project <path>", "Project root when using --scope project")
   .option("--host <host>", "HTTP bind host")
   .option("--port <port>", "HTTP port or 'auto'")
-  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .option("--foreground", "Run the generated server in the current process group", false)
   .action(async (pluginPath: string, options) => {
     try {
@@ -951,7 +948,6 @@ mcpCommand
         prismHome: resolvePrismHome(),
         host: options.host,
         port: parseMcpPortSelection(options.port),
-        tokenEnv: options.tokenEnv,
         foreground: options.foreground,
       });
       console.log(formatMcpServeResult(result));
@@ -972,7 +968,6 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string | undefined, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -983,7 +978,6 @@ mcpCommand
           scope: options.scope,
           projectPath: options.project,
           prismHome: resolvePrismHome(),
-          tokenEnv: options.tokenEnv,
         });
         console.log(formatMcpStatus(status));
         return;
@@ -994,7 +988,6 @@ mcpCommand
         scope: options.scope,
         projectPath: options.project,
         prismHome: resolvePrismHome(),
-        tokenEnv: options.tokenEnv,
       });
       if (statuses.length === 0) {
         console.log("stopped         (no Prism MCP runtime files found)");
@@ -1020,7 +1013,6 @@ mcpCommand
     "global"
   )
   .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -1030,7 +1022,6 @@ mcpCommand
         scope: options.scope,
         projectPath: options.project,
         prismHome: resolvePrismHome(),
-        tokenEnv: options.tokenEnv,
       });
       console.log(formatMcpStopResult(result));
     } catch (error) {
@@ -1052,7 +1043,6 @@ mcpCommand
   .option("-p, --project <path>", "Project root when using --scope project")
   .option("--host <host>", "HTTP bind host")
   .option("--port <port>", "HTTP port or 'auto'")
-  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
   .action(async (pluginPath: string, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -1064,44 +1054,13 @@ mcpCommand
         prismHome: resolvePrismHome(),
         host: options.host,
         port: parseMcpPortSelection(options.port),
-        tokenEnv: options.tokenEnv,
       });
       console.log(formatMcpServeResult(result));
     } catch (error) {
       printCliError(error, "MCP restart error");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
-  });
-
-mcpCommand
-  .command("rotate-token <plugin-path>")
-  .description("Rotate a Prism-generated HTTP MCP daemon bearer token")
-  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
-  .option(
-    "--scope <scope>",
-    `Output scope (${HARNESS_SCOPES.join("|")})`,
-    parseHarnessScope,
-    "global"
-  )
-  .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--token-env <name>", "Environment variable name used by the generated MCP server")
-  .action(async (pluginPath: string, options) => {
-    try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      const result = await rotateMcpBearerToken({
-        pluginPath,
-        harness: options.harness,
-        scope: options.scope,
-        projectPath: options.project,
-        prismHome: resolvePrismHome(),
-        tokenEnv: options.tokenEnv,
-      });
-      console.log(formatMcpRotateTokenResult(result));
-    } catch (error) {
-      printCliError(error, "MCP rotate-token error");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    }
-  });
+});
 
 program
   .command("doctor [plugin-path]")

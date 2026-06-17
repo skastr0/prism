@@ -28,9 +28,9 @@ const writeText = async (path: string, content: string): Promise<void> => {
   await writeFile(path, content);
 };
 
-test("doctor reports invalid Codex TOML and literal bearer tokens", async () => {
+test("doctor reports invalid Codex TOML", async () => {
   const configPath = join(process.env.HOME!, ".codex", "config.toml");
-  await writeText(configPath, `[mcp_servers.demo]\nAuthorization = "Bearer secret"\n=\n`);
+  await writeText(configPath, `[mcp_servers.demo]\nurl = "http://127.0.0.1:38463/mcp"\n=\n`);
 
   const report = await runDoctor({
     harnesses: ["codex-cli"],
@@ -41,7 +41,6 @@ test("doctor reports invalid Codex TOML and literal bearer tokens", async () => 
 
   expect(report.schema).toBe("prism.doctor.report.v1");
   expect(report.findings.map((finding) => finding.code)).toContain("config.toml.invalid");
-  expect(report.findings.map((finding) => finding.code)).toContain("config.literal-bearer-token");
   expect(doctorExitCode(report)).toBe(EXIT_CODES.domainFailure);
 });
 
@@ -236,12 +235,10 @@ test("doctor validates generated harness config references", async () => {
     [
       '["mcp_servers"."prism-generated-demo"]',
       'url = "http://127.0.0.1:38463/mcp"',
-      'bearer_token_env_var = "PRISM_MCP_TOKEN"',
       'enabled_tools = "not-an-array"',
       "",
       '["mcp_servers"."prism-generated-filter"]',
       'url = "http://127.0.0.1:38464/mcp"',
-      'bearer_token_env_var = "PRISM_MCP_TOKEN"',
       'enabled_tools = ["missing_tool"]',
       "",
       '["mcp_servers"."prism-generated-legacy"]',
@@ -262,7 +259,6 @@ test("doctor validates generated harness config references", async () => {
           type: "http",
           url: "http://127.0.0.1:38465/mcp",
           headers: {
-            Authorization: "Bearer ${PRISM_MCP_TOKEN}",
             "X-Prism-Mcp-Exposure": "prism-generated-demo:claude-code",
           },
         },

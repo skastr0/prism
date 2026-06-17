@@ -315,7 +315,6 @@ test("antigravity-cli lowerer emits Streamable HTTP MCP config when opted in", a
               transport: "streamable-http",
               host: "127.0.0.1",
               port: 38466,
-              tokenEnv: "PRISM_MCP_ANTIGRAVITY_HTTP_TOKEN",
             },
           },
         },
@@ -351,7 +350,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpBearerToken: "antigravity-static-token",
       sourcePluginName: "antigravity-http-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -370,11 +368,8 @@ export default defineTool({
   };
   expect(parsed.mcpServers?.["prism-generated-antigravity-http-fixture"]).toEqual({
     serverUrl: "http://127.0.0.1:38466/mcp",
-    headers: {
-      Authorization: "Bearer antigravity-static-token",
-    },
+    headers: {},
   });
-  expect(mcpConfig?.mode).toBe(0o600);
 
   // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
   // plans no bundle write anywhere.

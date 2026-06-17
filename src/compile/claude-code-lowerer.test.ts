@@ -272,9 +272,7 @@ export default defineTool({
   expect(httpEntry).toEqual({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
-    headers: {
-      Authorization: "Bearer ${PRISM_MCP_TOKEN}",
-    },
+    headers: {},
   });
 
   // The bundle itself lives in PRISM_HOME — never in the generated plugin.
@@ -332,7 +330,6 @@ test("claude-code lowerer emits Streamable HTTP MCP config when opted in", async
               transport: "streamable-http",
               host: "127.0.0.1",
               port: 38465,
-              tokenEnv: "PRISM_MCP_CLAUDE_HTTP_TOKEN",
             },
           },
         },
@@ -389,7 +386,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpBearerToken: "claude-static-token",
       sourcePluginName: "claude-http-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -403,13 +399,11 @@ export default defineTool({
   expect(parsed.mcpServers?.["prism-generated-claude-http-fixture"]).toEqual({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
-    headers: {
-      Authorization: "Bearer claude-static-token",
-    },
+    headers: {},
   });
   expect(mcpConfig?.content).not.toContain('"command"');
   expect(mcpConfig?.content).not.toContain('"args"');
-  expect(mcpConfig?.mode).toBe(0o600);
+  expect(mcpConfig?.mode).toBeUndefined();
 
   // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
   // plans no bundle write anywhere.

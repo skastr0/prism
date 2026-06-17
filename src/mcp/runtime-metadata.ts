@@ -16,8 +16,6 @@ export interface McpRuntimeMetadata {
   readonly host?: string;
   readonly port?: number;
   readonly pid?: number;
-  readonly tokenEnv?: string;
-  readonly tokenSha256?: string;
   readonly serverSha256?: string;
   readonly startedAt?: string;
   readonly healthUrl?: string;
@@ -54,16 +52,13 @@ export type McpRuntimeStaleReason =
   | "missing-server-file"
   | "server-file-sha256-mismatch"
   | "missing-server-sha256"
-  | "server-sha256-mismatch"
-  | "missing-token-sha256"
-  | "token-sha256-mismatch";
+  | "server-sha256-mismatch";
 
 export interface McpRuntimeStalenessOptions {
   readonly requireLivePid?: boolean;
   readonly requireHealth?: boolean;
   readonly health?: McpRuntimeHealth;
   readonly expectedServerSha256?: string;
-  readonly expectedTokenSha256?: string;
   readonly pidExists?: (pid: number) => boolean;
 }
 
@@ -74,24 +69,13 @@ const METADATA_KEYS = new Set<keyof McpRuntimeMetadata>([
   "host",
   "port",
   "pid",
-  "tokenEnv",
-  "tokenSha256",
   "serverSha256",
   "startedAt",
   "healthUrl",
   "mcpUrl",
 ]);
 
-const SECRET_KEY_NAMES = new Set([
-  "token",
-  "authToken",
-  "bearerToken",
-  "accessToken",
-  "secret",
-]);
-
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/iu;
-const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -109,9 +93,6 @@ const asRecord = (value: unknown): Record<string, unknown> => {
 
 const assertKnownKeys = (record: Record<string, unknown>): void => {
   for (const key of Object.keys(record)) {
-    if (SECRET_KEY_NAMES.has(key)) {
-      fail(`secret key '${key}' must not be stored`);
-    }
     if (!METADATA_KEYS.has(key as keyof McpRuntimeMetadata)) {
       fail(`unexpected key '${key}'`);
     }
@@ -189,18 +170,6 @@ const optionalUrl = (
   return value;
 };
 
-const optionalEnvName = (
-  record: Record<string, unknown>,
-  key: string,
-): string | undefined => {
-  const value = optionalString(record, key);
-  if (value === undefined) return undefined;
-  if (!ENV_NAME_PATTERN.test(value)) {
-    fail(`'${key}' must be an environment variable name`);
-  }
-  return value;
-};
-
 const optionalStartedAt = (record: Record<string, unknown>): string | undefined => {
   const value = optionalString(record, "startedAt");
   if (value === undefined) return undefined;
@@ -216,8 +185,6 @@ export const sha256Hex = (value: string | Buffer | Uint8Array): string =>
 
 export const computeFileSha256 = async (path: string): Promise<string> =>
   sha256Hex(await readFile(path));
-
-export const hashMcpRuntimeToken = (token: string): string => sha256Hex(token);
 
 export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
   const record = asRecord(value);
@@ -236,8 +203,6 @@ export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
   const host = optionalString(record, "host");
   const port = optionalPositiveInteger(record, "port");
   const pid = optionalPositiveInteger(record, "pid");
-  const tokenEnv = optionalEnvName(record, "tokenEnv");
-  const tokenSha256 = optionalSha256(record, "tokenSha256");
   const serverSha256 = optionalSha256(record, "serverSha256");
   const startedAt = optionalStartedAt(record);
   const healthUrl = optionalUrl(record, "healthUrl");
@@ -250,8 +215,6 @@ export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
     ...(host !== undefined ? { host } : {}),
     ...(port !== undefined ? { port } : {}),
     ...(pid !== undefined ? { pid } : {}),
-    ...(tokenEnv !== undefined ? { tokenEnv } : {}),
-    ...(tokenSha256 !== undefined ? { tokenSha256 } : {}),
     ...(serverSha256 !== undefined ? { serverSha256 } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(healthUrl !== undefined ? { healthUrl } : {}),
@@ -384,15 +347,6 @@ export const detectMcpRuntimeStaleReasons = (
       reasons.push("missing-server-sha256");
     } else if (metadata.serverSha256 !== expected) {
       reasons.push("server-sha256-mismatch");
-    }
-  }
-
-  if (options.expectedTokenSha256 !== undefined) {
-    const expected = options.expectedTokenSha256.toLowerCase();
-    if (metadata.tokenSha256 === undefined) {
-      reasons.push("missing-token-sha256");
-    } else if (metadata.tokenSha256 !== expected) {
-      reasons.push("token-sha256-mismatch");
     }
   }
 

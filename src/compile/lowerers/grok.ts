@@ -12,7 +12,6 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   MCP_EXPOSURE_HEADER,
-  renderMcpBearerAuthorization,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
@@ -50,7 +49,6 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface GrokLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpBearerToken?: string;
   readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
@@ -297,18 +295,11 @@ const planMcpServer = async (
           type: "http",
           url: renderMcpHttpUrl(runtime),
           headers: {
-            Authorization: renderMcpBearerAuthorization({
-              tokenEnv: runtime.tokenEnv,
-              token: input.target.mcpBearerToken,
-            }),
             [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
           },
         },
       },
     }),
-    {
-      mode: input.target.mcpBearerToken ? 0o600 : undefined,
-    },
   );
 };
 

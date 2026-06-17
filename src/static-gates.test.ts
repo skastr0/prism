@@ -53,8 +53,8 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     pattern: /__PRISM_HTTP_PORT__/,
     allowedFiles: new Set([GATE_FILE]),
     reason:
-      "deleted in WS3 — HTTP identity (host/port/token) is never baked into bundle bytes; " +
-      "the server reads PRISM_MCP_HTTP_HOST/PRISM_MCP_HTTP_PORT/PRISM_MCP_HTTP_TOKEN at startup",
+      "deleted in WS3 — HTTP identity (host/port) is never baked into bundle bytes; " +
+      "the server reads PRISM_MCP_HTTP_HOST/PRISM_MCP_HTTP_PORT at startup",
   },
   {
     pattern: /executeStandardLowering/,

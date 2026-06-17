@@ -11,10 +11,8 @@
  *                    the process cwd (different directory depths) and the
  *                    PRISM_HOME must produce sha256-equal bundles. Bundle
  *                    bytes are f(plugin source, prism version, bun version).
- *   relocatability   No emitted bundle may contain `/Users/` absolute paths,
- *                    `Bearer ` literals, or `127.0.0.1:<digits>` literals;
- *                    no lowered config file may contain a `Bearer ` literal
- *                    where an env reference is supported (stdio codex).
+ *   relocatability   No emitted bundle may contain `/Users/` absolute paths
+ *                    or `127.0.0.1:<digits>` literals.
  *   warm-same-cwd    Re-running the same compile with identical cwd +
  *                    PRISM_HOME + --root must leave every bundle hash
  *                    unchanged.
@@ -112,9 +110,6 @@ const compareHashMaps = (
 
 const RELOCATABILITY_PATTERNS: ReadonlyArray<{ readonly name: string; readonly regex: RegExp }> = [
   { name: "/Users/ absolute path", regex: /\/Users\//u },
-  // `Bearer ${...}` env templates are fine (the union bundle's HTTP runtime
-  // composes the header from env at request time); a literal token is not.
-  { name: "Bearer literal", regex: /Bearer (?!\$\{)/u },
   { name: "127.0.0.1:<port> literal", regex: /127\.0\.0\.1:\d/u },
 ];
 
@@ -123,11 +118,9 @@ const scanRelocatability = async (
 ): Promise<{ readonly pass: boolean; readonly detail: string; readonly scanned: number }> => {
   const offenders: string[] = [];
   let scanned = 0;
-  const CONFIG_FILES = new Set(["config.toml", "mcp.json", ".mcp.json", "config.yaml"]);
   for (const { label, root } of roots) {
     for (const path of await listFilesRecursively(root).catch(() => [] as string[])) {
       const relative = path.slice(root.length + 1);
-      const baseName = relative.split("/").at(-1) ?? relative;
       if (path.endsWith(".mjs")) {
         scanned += 1;
         const content = await readFile(path, "utf8");
@@ -139,18 +132,10 @@ const scanRelocatability = async (
         }
         continue;
       }
-      // Configs that can reference tokens via env must never carry the
-      // literal token value (stdio compiles must carry no Bearer at all).
-      if (CONFIG_FILES.has(baseName)) {
-        const content = await readFile(path, "utf8");
-        if (/Bearer (?!\$\{)/u.test(content)) {
-          offenders.push(`${label}/${relative}: Bearer literal in lowered config`);
-        }
-      }
     }
   }
   return offenders.length === 0
-    ? { pass: scanned > 0, detail: `${scanned} bundle(s) + configs clean of /Users/, Bearer, 127.0.0.1:<port>`, scanned }
+    ? { pass: scanned > 0, detail: `${scanned} bundle(s) clean of /Users/ and 127.0.0.1:<port>`, scanned }
     : { pass: false, detail: offenders.join("; "), scanned };
 };
 

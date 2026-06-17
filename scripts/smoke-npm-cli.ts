@@ -17,7 +17,6 @@ const getFreePort = (): Promise<number> =>
     });
   });
 
-const MCP_SMOKE_TOKEN = "prism-npm-cli-smoke-token";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const skipBuild = process.argv.includes("--skip-build");
@@ -143,7 +142,6 @@ const createCanonicalToolFixture = async (pluginRoot: string, mcpPort: number): 
               transport: "streamable-http",
               host: "127.0.0.1",
               port: mcpPort,
-              tokenEnv: "PRISM_MCP_TOKEN",
             },
           },
         },
@@ -286,7 +284,7 @@ const main = async (): Promise<void> => {
         },
       },
     );
-    const mcpEnv = { PRISM_HOME: prismHome, PRISM_MCP_TOKEN: MCP_SMOKE_TOKEN };
+    const mcpEnv = { PRISM_HOME: prismHome };
     try {
       await run(
         "Refreshing canonical tool fixture with installed Prism CLI (serving HTTP MCP)",

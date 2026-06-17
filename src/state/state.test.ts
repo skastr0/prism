@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile as nodeWriteFile, mkdir } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exists, readFile } from "../fs.js";
+import { computeContentHash } from "../content-hash.js";
 import {
   emptySnapshotManifest,
   encodeSnapshotManifest,
@@ -88,6 +89,66 @@ describe("snapshot store", () => {
     expect(result.dropped.map((d) => d.root)).toEqual([deadRoot]);
     expect(await exists(snapshotPath(home, root))).toBe(true);
     expect(await exists(snapshotPath(home, deadRoot))).toBe(false);
+  });
+
+  test("gc drops stale entries whose target files are missing from live roots", async () => {
+    const staleFile = join(root, "stale.md");
+    const liveFile = join(root, "live.md");
+    await nodeWriteFile(liveFile, "live");
+    await commitSnapshot({
+      prismHome: home,
+      manifest: manifestWith([
+        { targetPath: staleFile, contentHash: "h1", mode: "owned", plugin: "removed-plugin" },
+        { targetPath: liveFile, contentHash: "h2", mode: "owned", plugin: "live-plugin" },
+      ]),
+    });
+
+    const result = await gcSnapshots(home);
+    expect(result.droppedEntries).toEqual([
+      {
+        path: snapshotPath(home, root),
+        root,
+        harness: "codex-cli",
+        targetPath: staleFile,
+        plugin: "removed-plugin",
+      },
+    ]);
+
+    const read = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(read.manifest.entries.map((e) => e.targetPath)).toEqual([liveFile]);
+  });
+
+  test("gc drops stale region entries whose marker fence is missing from a live file", async () => {
+    const configPath = join(root, "config.toml");
+    const marker =
+      "# --- prism:removed.hooks begin ---\nmanaged\n# --- prism:removed.hooks end ---";
+    await nodeWriteFile(configPath, "[features]\n");
+    await commitSnapshot({
+      prismHome: home,
+      manifest: manifestWith([
+        {
+          targetPath: configPath,
+          contentHash: computeContentHash(marker),
+          mode: "region",
+          regionKey: "marker # removed.hooks",
+          plugin: "removed-plugin",
+        },
+      ]),
+    });
+
+    const result = await gcSnapshots(home);
+    expect(result.droppedEntries).toEqual([
+      {
+        path: snapshotPath(home, root),
+        root,
+        harness: "codex-cli",
+        targetPath: configPath,
+        plugin: "removed-plugin",
+      },
+    ]);
+
+    const read = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(read.manifest.entries).toEqual([]);
   });
 });
 

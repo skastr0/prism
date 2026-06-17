@@ -226,6 +226,84 @@ test("doctor --fix drops snapshots for dead roots", async () => {
   expect(await Bun.file(path).exists()).toBe(false);
 });
 
+test("doctor --fix drops stale snapshot entries for missing owned files", async () => {
+  const prismHome = join(root, "prism-home");
+  const harnessRoot = join(process.env.HOME!, ".config", "opencode");
+  const missingPath = join(harnessRoot, "agents", "removed.md");
+  const livePath = join(harnessRoot, "agents", "live.md");
+  await writeText(livePath, "live\n");
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "opencode",
+      root: harnessRoot,
+      entries: [
+        {
+          targetPath: missingPath,
+          contentHash: computeContentHash("removed\n"),
+          mode: "owned",
+          plugin: "removed-plugin",
+        },
+        {
+          targetPath: livePath,
+          contentHash: computeContentHash("live\n"),
+          mode: "owned",
+          plugin: "live-plugin",
+        },
+      ],
+    },
+  });
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+
+  expect(report.findings.map((finding) => finding.code)).toContain("snapshot.stale-entry-dropped");
+  const read = await import("./state/store.js").then((m) => m.readSnapshot({ prismHome, harness: "opencode", root: harnessRoot }));
+  expect(read.manifest.entries.map((entry) => entry.targetPath)).toEqual([livePath]);
+});
+
+test("doctor --fix drops stale snapshot region entries for missing marker fences", async () => {
+  const prismHome = join(root, "prism-home");
+  const harnessRoot = join(process.env.HOME!, ".codex");
+  const configPath = join(harnessRoot, "config.toml");
+  const marker =
+    "# --- prism:removed.hooks begin ---\nmanaged\n# --- prism:removed.hooks end ---";
+  await writeText(configPath, "[features]\n");
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "codex-cli",
+      root: harnessRoot,
+      entries: [
+        {
+          targetPath: configPath,
+          contentHash: computeContentHash(marker),
+          mode: "region",
+          regionKey: "marker # removed.hooks",
+          plugin: "removed-plugin",
+        },
+      ],
+    },
+  });
+
+  const report = await runDoctor({
+    harnesses: ["codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+
+  expect(report.findings.map((finding) => finding.code)).toContain("snapshot.stale-entry-dropped");
+  const read = await import("./state/store.js").then((m) => m.readSnapshot({ prismHome, harness: "codex-cli", root: harnessRoot }));
+  expect(read.manifest.entries).toEqual([]);
+});
+
 test("doctor validates generated harness config references", async () => {
   const prismHome = join(root, "prism-home");
   const bundlePath = prismMcpServerPath(prismHome, "filter");

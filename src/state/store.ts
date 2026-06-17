@@ -34,10 +34,40 @@ import {
   decodeSnapshotManifest,
   emptySnapshotManifest,
   encodeSnapshotManifest,
+  type SnapshotEntry,
   type SnapshotManifest,
 } from "./snapshot.js";
+import { parseRegionRef } from "../sync/plan.js";
 
 const SNAPSHOT_DIR_SEGMENTS = ["state", "roots"] as const;
+
+const regexEscape = (value: string): string => value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+
+const markerLine = (
+  prefix: string,
+  key: string,
+  edge: "begin" | "end",
+  suffix = "",
+): string => `${prefix} --- prism:${key} ${edge} ---${suffix}`;
+
+const markerRegionPresent = (content: string, parsed: { readonly commentPrefix: string; readonly regionKey: string; readonly commentSuffix?: string }): boolean => {
+  const begin = markerLine(parsed.commentPrefix, parsed.regionKey, "begin", parsed.commentSuffix);
+  const end = markerLine(parsed.commentPrefix, parsed.regionKey, "end", parsed.commentSuffix);
+  return new RegExp(`${regexEscape(begin)}[\\s\\S]*?${regexEscape(end)}`).test(content);
+};
+
+const regionEntryPresent = (content: string, entry: SnapshotEntry): boolean => {
+  if (entry.mode !== "region" || entry.regionKey === undefined) return false;
+  const parsed = parseRegionRef(entry.regionKey);
+  if (!parsed) return false;
+  if (parsed.kind === "marker") {
+    return markerRegionPresent(content, parsed);
+  }
+  // JSON regions are owned fragments inside a shared file; absence of the
+  // file is already handled, and a missing JSON key is treated as stale so
+  // doctor does not keep reporting it on every run.
+  return true;
+};
 
 export const snapshotDir = (prismHome: string): string =>
   join(prismHome, ...SNAPSHOT_DIR_SEGMENTS);
@@ -103,17 +133,32 @@ export const commitSnapshot = async (options: {
 
 export interface SnapshotGcResult {
   readonly dropped: ReadonlyArray<{ readonly path: string; readonly root: string }>;
+  readonly droppedEntries: ReadonlyArray<{
+    readonly path: string;
+    readonly root: string;
+    readonly harness: string;
+    readonly targetPath: string;
+    readonly plugin: string;
+  }>;
 }
 
 /**
- * Drop manifests whose harness root no longer exists on disk. Corrupt files
+ * Drop manifests whose harness root no longer exists on disk, and drop entries
+ * whose target file no longer exists from live-root manifests. Corrupt files
  * are quarantined (consistent with read).
  */
 export const gcSnapshots = async (prismHome: string): Promise<SnapshotGcResult> => {
   const dir = snapshotDir(prismHome);
-  if (!(await exists(dir))) return { dropped: [] };
+  if (!(await exists(dir))) return { dropped: [], droppedEntries: [] };
 
   const dropped: Array<{ path: string; root: string }> = [];
+  const droppedEntries: Array<{
+    readonly path: string;
+    readonly root: string;
+    readonly harness: string;
+    readonly targetPath: string;
+    readonly plugin: string;
+  }> = [];
   for (const name of await listDir(dir)) {
     if (!name.endsWith(".json") || name.includes(".corrupt-")) continue;
     const path = join(dir, name);
@@ -122,10 +167,49 @@ export const gcSnapshots = async (prismHome: string): Promise<SnapshotGcResult> 
       await rename(path, `${path}.corrupt-${Date.now()}.json`);
       continue;
     }
-    if (!(await exists(decoded.right.root))) {
+    const manifest = decoded.right;
+    if (!(await exists(manifest.root))) {
       await removeFile(path);
-      dropped.push({ path, root: decoded.right.root });
+      dropped.push({ path, root: manifest.root });
+      continue;
+    }
+
+    const survivingEntries: SnapshotEntry[] = [];
+    let manifestChanged = false;
+    for (const entry of manifest.entries) {
+      if (!(await exists(entry.targetPath))) {
+        droppedEntries.push({
+          path,
+          root: manifest.root,
+          harness: manifest.harness,
+          targetPath: entry.targetPath,
+          plugin: entry.plugin,
+        });
+        manifestChanged = true;
+        continue;
+      }
+
+      if (entry.mode === "region" && entry.regionKey !== undefined) {
+        const content = await readFile(entry.targetPath);
+        if (!regionEntryPresent(content, entry)) {
+          droppedEntries.push({
+            path,
+            root: manifest.root,
+            harness: manifest.harness,
+            targetPath: entry.targetPath,
+            plugin: entry.plugin,
+          });
+          manifestChanged = true;
+          continue;
+        }
+      }
+
+      survivingEntries.push(entry);
+    }
+
+    if (manifestChanged) {
+      await commitSnapshot({ prismHome, manifest: { ...manifest, entries: survivingEntries } });
     }
   }
-  return { dropped };
+  return { dropped, droppedEntries };
 };

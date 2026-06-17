@@ -499,7 +499,7 @@ const validateSnapshotDiskState = async (options: {
 
 const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => {
   const result = await gcSnapshots(prismHome);
-  return result.dropped.map((dropped) => finding({
+  const findings: DoctorFinding[] = result.dropped.map((dropped) => finding({
     severity: "info",
     family: "snapshot.gc",
     code: "snapshot.dead-root-dropped",
@@ -507,6 +507,17 @@ const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => 
     root: dropped.root,
     path: dropped.path,
   }));
+  findings.push(...result.droppedEntries.map((dropped) => finding({
+    severity: "info",
+    family: "snapshot.gc",
+    code: "snapshot.stale-entry-dropped",
+    message: `Dropped stale snapshot entry for missing file: ${dropped.targetPath}`,
+    harness: dropped.harness as HarnessId,
+    plugin: dropped.plugin,
+    root: dropped.root,
+    path: dropped.targetPath,
+  })));
+  return findings;
 };
 
 const namespaceStrayCandidate = (relativePath: string): boolean =>

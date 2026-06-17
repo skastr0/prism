@@ -246,13 +246,16 @@ export default defineTool({
   expect(agentToml?.content).not.toContain('\neffort = "high"');
   expect(agentToml?.content).not.toContain("temperature");
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
-  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
+  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
   expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).not.toContain("cwd = ");
   expect(agentToml?.content).not.toContain('default_tools_approval_mode = "approve"');
-  expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
+  expect(agentToml?.content).not.toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
+  expect(agentToml?.content).toContain(
+    "# MCP tools requested from prism-generated-codex-mcp-fixture: codex_mcp_fixture_echo",
+  );
 
   const skill = findFile(lowered.files, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
@@ -491,13 +494,16 @@ export default defineTool({
   });
 
   const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
-  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
   expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).not.toContain("http_headers");
   expect(agentToml?.content).not.toContain("codex-static-token");
-  expect(agentToml?.content).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(agentToml?.content).not.toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(agentToml?.content).toContain(
+    "# MCP tools requested from prism-generated-codex-http-fixture: codex_http_fixture_echo",
+  );
   expect(agentToml?.mode).toBeUndefined();
 
   const mcpRegion = markerContent(
@@ -735,10 +741,16 @@ test("codex-cli consumer plugin references owner MCP servers without a self daem
   });
 
   const agentToml = findFile(lowered.files, join("agents", "orchestrator.toml"));
-  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-tower"]');
-  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-booth"]');
-  expect(agentToml?.content).toContain('enabled_tools = ["tower_claim_glyph"]');
-  expect(agentToml?.content).toContain('enabled_tools = ["booth_register_draft"]');
+  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-tower"]');
+  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-booth"]');
+  expect(agentToml?.content).not.toContain('enabled_tools = ["tower_claim_glyph"]');
+  expect(agentToml?.content).not.toContain('enabled_tools = ["booth_register_draft"]');
+  expect(agentToml?.content).toContain(
+    "# MCP tools requested from prism-generated-tower: tower_claim_glyph",
+  );
+  expect(agentToml?.content).toContain(
+    "# MCP tools requested from prism-generated-booth: booth_register_draft",
+  );
   expect(agentToml?.content).not.toContain("prism-generated-orbit-consumer-fixture");
   expect(agentToml?.content).not.toContain("url = ");
 

@@ -34,7 +34,6 @@ import type { HarnessScope, PluginTargetId } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
-  collectReferencedOwnerMcpServers,
   createGeneratedPluginWritePusher,
   createGeneratedPluginPlanState,
   matcherForResolvedToolHook,
@@ -313,9 +312,6 @@ const planCommands = async (
   }
 };
 
-const ownerMcpConfigPath = (target: ClaudeCodeLowerTarget, ownerPluginName: string): string =>
-  join(target.root, "skills", generatedPluginIdForOwner(ownerPluginName), ".mcp.json");
-
 const planMcpServer = async (
   input: LowerInput,
   files: DesiredFile[],
@@ -332,12 +328,6 @@ const planMcpServer = async (
   });
   const pluginId = generatedPluginId(input.target);
 
-  const ownerServers = await collectReferencedOwnerMcpServers(
-    input.target.sourcePluginName,
-    input.agents,
-    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
-  );
-
   const mcpServers: Record<string, unknown> = {};
   if (ownedBindings.length > 0) {
     mcpServers[pluginId] = {
@@ -348,9 +338,8 @@ const planMcpServer = async (
       },
     };
   }
-  for (const [serverName, config] of ownerServers) {
-    mcpServers[serverName] = config;
-  }
+
+  if (Object.keys(mcpServers).length === 0) return;
 
   pushWrite(
     files,

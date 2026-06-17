@@ -33,7 +33,6 @@ import { readFile } from "../../fs.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
-  collectReferencedOwnerMcpServers,
   nativeHookEventName,
   pushDesiredFile,
   renderPrePostSessionHookWrapperEntry,
@@ -325,9 +324,6 @@ const planHooks = async (
   });
 };
 
-const ownerMcpConfigPath = (target: AntigravityCliLowerTarget, ownerPluginName: string): string =>
-  join(target.root, "plugins", pluginIdForPlugin(ownerPluginName), "mcp_config.json");
-
 const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown>> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
@@ -339,12 +335,6 @@ const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown
     resolvedPort: input.target.mcpRuntimePort,
   });
 
-  const ownerServers = await collectReferencedOwnerMcpServers(
-    input.target.sourcePluginName,
-    input.agents,
-    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
-  );
-
   const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
   const mcpServers: Record<string, unknown> = {};
   if (ownedBindings.length > 0) {
@@ -354,9 +344,6 @@ const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown
         [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
       },
     };
-  }
-  for (const [serverName, config] of ownerServers) {
-    mcpServers[serverName] = config;
   }
   return mcpServers;
 };

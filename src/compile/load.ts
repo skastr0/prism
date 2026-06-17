@@ -2212,6 +2212,7 @@ const normalizeOrbitPhase = (
     ...(phase.cold_pickup_test !== undefined
       ? { cold_pickup_test: phase.cold_pickup_test }
       : {}),
+    ...(phase.workflow !== undefined ? { workflow: phase.workflow } : {}),
     ...(phase.body !== undefined ? { body: phase.body } : {}),
   };
 };

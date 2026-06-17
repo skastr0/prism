@@ -24,7 +24,6 @@ import {
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
-  referencedBindingsByOwner,
 } from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -74,13 +73,6 @@ interface PlannedHook {
   readonly matcher?: string;
   readonly relativePath: string;
 }
-
-interface PlannedMcpServer {
-  readonly toolNames: ReadonlyArray<string>;
-  readonly manifestEntry: Record<string, unknown>;
-}
-
-type PlannedMcpServers = ReadonlyMap<string, PlannedMcpServer>;
 
 interface InstalledPluginRecord {
   readonly id: string;
@@ -442,64 +434,7 @@ const renderKimiMcpServerEntry = (options: {
   };
 };
 
-const ownerKimiManifestPath = (target: KimiCodeLowerTarget, ownerPluginName: string): string =>
-  join(
-    target.root,
-    "plugins",
-    "managed",
-    generatedPluginIdForOwner(ownerPluginName),
-    "kimi.plugin.json",
-  );
-
-const readOwnerKimiMcpServers = async (
-  target: KimiCodeLowerTarget,
-  sourcePluginName: string,
-  agents: ReadonlyArray<ComposedAgent>,
-): Promise<PlannedMcpServers> => {
-  const referencedByOwner = referencedBindingsByOwner(sourcePluginName, agents);
-  if (referencedByOwner.size === 0) return new Map();
-
-  const servers = new Map<string, PlannedMcpServer>();
-  for (const [owner, bindings] of referencedByOwner) {
-    const path = ownerKimiManifestPath(target, owner);
-    let raw: string;
-    try {
-      raw = await readFile(path);
-    } catch (cause) {
-      throw new Error(
-        `Cannot reference tools from owner plugin '${owner}' because its generated Kimi plugin manifest is missing at ${path}. ` +
-          `Compile the owner plugin for Kimi Code first.`,
-        { cause },
-      );
-    }
-    const parsed = JSON.parse(raw) as {
-      mcpServers?: Record<string, Record<string, unknown>>;
-    };
-    if (!parsed.mcpServers) {
-      throw new Error(
-        `Owner plugin '${owner}' Kimi manifest at ${path} does not declare any MCP servers.`,
-      );
-    }
-    const referencedToolNames = new Set(
-      bindings.map((binding) => mcpToolNameForBinding(owner, binding)),
-    );
-    for (const [serverName, entry] of Object.entries(parsed.mcpServers)) {
-      const ownerEnabledTools = Array.isArray(entry.enabledTools)
-        ? entry.enabledTools.filter(
-            (tool): tool is string =>
-              typeof tool === "string" && referencedToolNames.has(tool),
-          )
-        : [];
-      servers.set(serverName, {
-        toolNames: ownerEnabledTools,
-        manifestEntry: { ...entry, enabledTools: ownerEnabledTools },
-      });
-    }
-  }
-  return servers;
-};
-
-const planMcpServer = async (input: LowerInput): Promise<PlannedMcpServers> => {
+const planMcpServer = async (input: LowerInput): Promise<ReadonlyMap<string, Record<string, unknown>>> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools ?? [],
@@ -510,26 +445,20 @@ const planMcpServer = async (input: LowerInput): Promise<PlannedMcpServers> => {
     resolvedPort: input.target.mcpRuntimePort,
   });
 
-  const ownerServers = await readOwnerKimiMcpServers(
-    input.target,
-    input.target.sourcePluginName,
-    input.agents,
-  );
-
-  const servers = new Map<string, PlannedMcpServer>(ownerServers);
+  const servers = new Map<string, Record<string, unknown>>();
   if (ownedBindings.length > 0) {
     const serverName = generatedMcpServerName(input.target.sourcePluginName);
     const toolNames = uniqueSorted(
       mcpToolNamesForBindings(input.target.sourcePluginName, ownedBindings),
     );
-    servers.set(serverName, {
-      toolNames,
-      manifestEntry: renderKimiMcpServerEntry({
+    servers.set(
+      serverName,
+      renderKimiMcpServerEntry({
         runtime,
         ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
         toolNames,
       }),
-    });
+    );
   }
 
   return servers;
@@ -664,7 +593,7 @@ const renderManifest = (
   input: LowerInput,
   desiredRelativePaths: ReadonlySet<string>,
   contexts: ReadonlyArray<{ label: string; content: string }>,
-  mcp: PlannedMcpServers,
+  mcp: ReadonlyMap<string, Record<string, unknown>>,
 ): string => {
   const manifest: Record<string, unknown> = {
     name: generatedPluginId(input.target),
@@ -685,7 +614,7 @@ const renderManifest = (
   if (mcp.size > 0) {
     const mcpServers: Record<string, unknown> = {};
     for (const [serverName, entry] of mcp) {
-      mcpServers[serverName] = entry.manifestEntry;
+      mcpServers[serverName] = entry;
     }
     manifest.mcpServers = mcpServers;
   }

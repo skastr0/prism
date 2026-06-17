@@ -2252,6 +2252,15 @@ export default defineOrbit({
       telos: "Build the change",
       real_world_change: "User can finish the workflow",
       cold_pickup_test: "A fresh agent sees the next step",
+      workflow: {
+        when: "Use when phase routing is repeatable.",
+        inputs: ["glyph"],
+        outputs: ["handoff"],
+        sequence: ["run builder", "verify handoff"],
+        coordination: "Keep one agent accountable for the phase output.",
+        finish_criteria: ["handoff is reviewable"],
+        escalation: "Stop when the handoff cannot be verified.",
+      },
       body: "Long phase body",
     },
     {
@@ -2286,6 +2295,15 @@ export default defineOrbit({
     telos: "Build the change",
     real_world_change: "User can finish the workflow",
     cold_pickup_test: "A fresh agent sees the next step",
+    workflow: {
+      when: "Use when phase routing is repeatable.",
+      inputs: ["glyph"],
+      outputs: ["handoff"],
+      sequence: ["run builder", "verify handoff"],
+      coordination: "Keep one agent accountable for the phase output.",
+      finish_criteria: ["handoff is reviewable"],
+      escalation: "Stop when the handoff cannot be verified.",
+    },
     body: "Long phase body",
   });
   expect(boundTemplate).toEqual({
@@ -3356,7 +3374,7 @@ export default defineAgent({
     join(projectRoot, ".codex", "agents", "worker.toml"),
     "utf8",
   );
-  expect(codexAgent).toContain('"exposure_core_agent_only"');
+  expect(codexAgent).toContain("# MCP tools requested from prism-generated-exposure-core: exposure_core_agent_only");
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
   const consumerConfigSection = codexConfig.slice(
     codexConfig.indexOf("# --- prism:codex.mcp.prism-generated-exposure-demo begin ---"),
@@ -3772,7 +3790,7 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
 
   const agent = await readFile(join(codexRoot, "agents", "reviewer.toml"), "utf8");
   expect(agent).toContain('name = "reviewer"');
-  expect(agent).toContain('["mcp_servers"."prism-generated-codex-project-demo"]');
+  expect(agent).toContain('# MCP tools requested from prism-generated-codex-project-demo:');
 
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "codex-project-demo"))).toBe(true);
   expect(await pathExists(join(codexRoot, "mcp"))).toBe(false);

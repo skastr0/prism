@@ -164,8 +164,7 @@ const renderCodexOwnerMcpServerRef = (options: {
   readonly name: string;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => [
-  tomlDottedTable(["mcp_servers", options.name]),
-  `enabled_tools = ${tomlArray(options.enabledTools)}`,
+  `# MCP tools requested from ${options.name}: ${options.enabledTools.join(", ")}`,
 ];
 
 const renderAgentToml = (
@@ -204,6 +203,7 @@ const renderAgentToml = (
     if (enabledTools.length === 0) continue;
     lines.push(
       "",
+      "# prism diagnostic: Codex agent role files cannot carry partial mcp_servers tables.",
       ...renderCodexOwnerMcpServerRef({
         name: generatedMcpServerName(ownerPlugin),
         enabledTools,

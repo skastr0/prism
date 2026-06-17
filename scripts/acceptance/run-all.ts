@@ -30,6 +30,7 @@ const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
   { script: "crash-convergence.ts", expected: "PASS" },
   { script: "mcp-determinism.ts", expected: null },
   { script: "mcp-lifecycle.ts", expected: null },
+  { script: "orbit-workflows.ts", expected: "PASS" },
 ];
 
 interface GateRow {

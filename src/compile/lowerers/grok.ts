@@ -26,7 +26,6 @@ import {
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
-import { collectReferencedOwnerMcpServers } from "./shared.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
@@ -285,9 +284,6 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
-const ownerMcpConfigPath = (target: GrokLowerTarget, ownerPluginName: string): string =>
-  join(target.root, "plugins", generatedPluginIdForOwner(ownerPluginName), ".mcp.json");
-
 const planMcpServer = async (
   input: LowerInput,
   files: DesiredFile[],
@@ -304,12 +300,6 @@ const planMcpServer = async (
   });
   const pluginId = generatedPluginId(input.target);
 
-  const ownerServers = await collectReferencedOwnerMcpServers(
-    input.target.sourcePluginName,
-    input.agents,
-    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
-  );
-
   const mcpServers: Record<string, unknown> = {};
   if (ownedBindings.length > 0) {
     mcpServers[pluginId] = {
@@ -319,9 +309,6 @@ const planMcpServer = async (
         [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
       },
     };
-  }
-  for (const [serverName, config] of ownerServers) {
-    mcpServers[serverName] = config;
   }
 
   if (Object.keys(mcpServers).length === 0) return;

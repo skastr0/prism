@@ -32,6 +32,7 @@
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
     "acceptance:mcp-determinism": "bun scripts/acceptance/mcp-determinism.ts",
     "acceptance:mcp-lifecycle": "bun scripts/acceptance/mcp-lifecycle.ts",
+    "acceptance:orbit-workflows": "bun scripts/acceptance/orbit-workflows.ts",
     "acceptance:all": "bun scripts/acceptance/run-all.ts"
   },
   "dependencies": {

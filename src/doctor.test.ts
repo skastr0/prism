@@ -366,3 +366,38 @@ test("doctor validates generated harness config references", async () => {
   expect(codes).toContain("config.claude-mcp-stdio-removed");
   expect(codes).toContain("config.claude-hook-command-missing");
 });
+
+test("doctor warns when Codex hooks.json contains Prism-managed hooks", async () => {
+  const prismHome = join(root, "prism-home");
+  await writeText(
+    join(process.env.HOME!, ".codex", "hooks.json"),
+    `${JSON.stringify({
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              { type: "command", command: "node '/Users/someone/.codex/hooks/prism-generated-demo-session-start.mjs'" },
+              { type: "command", command: "bash '/Users/someone/.codex/herdr-agent-state.sh' session" },
+            ],
+          },
+        ],
+      },
+    }, null, 2)}\n`,
+  );
+
+  const report = await runDoctor({
+    harnesses: ["codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const splitFinding = report.findings.find((finding) => finding.code === "config.codex-hooks-json-split");
+  expect(splitFinding).toBeDefined();
+  expect(splitFinding?.severity).toBe("warning");
+  expect(splitFinding?.data).toBeDefined();
+  const prismCommands = splitFinding?.data?.prismCommands as unknown[];
+  expect(Array.isArray(prismCommands)).toBe(true);
+  expect(prismCommands).toHaveLength(1);
+  expect(String(prismCommands[0])).toContain("prism-generated-demo");
+});

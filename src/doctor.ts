@@ -754,6 +754,60 @@ const validateCodexConfigReferences = async (
   return findings;
 };
 
+const isPrismHookCommand = (command: string): boolean => {
+  if (command.includes("prism-generated-")) return true;
+  if (command.includes("prism hook ")) return true;
+  const path = pathFromCommandString(command);
+  if (path && (path.includes("/.codex/hooks/") || path.includes("/hooks/prism-"))) return true;
+  return false;
+};
+
+const collectCodexHooksJsonCommands = (value: unknown): string[] => {
+  const commands: string[] = [];
+  const visit = (current: unknown): void => {
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item);
+      return;
+    }
+    if (!current || typeof current !== "object") return;
+    const record = current as Record<string, unknown>;
+    if (typeof record.command === "string") commands.push(record.command);
+    for (const item of Object.values(record)) visit(item);
+  };
+  visit(value);
+  return commands;
+};
+
+const validateCodexHooksJson = async (root: string): Promise<DoctorFinding[]> => {
+  const path = join(root, "hooks.json");
+  if (!(await exists(path))) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path));
+  } catch {
+    return [];
+  }
+
+  const prismCommands = collectCodexHooksJsonCommands(parsed).filter(isPrismHookCommand);
+  if (prismCommands.length === 0) return [];
+
+  return [finding({
+    severity: "warning",
+    family: "harness.config",
+    code: "config.codex-hooks-json-split",
+    message:
+      `Codex hooks.json contains ${prismCommands.length} Prism-managed hook(s). ` +
+      `Codex merges hooks.json with config.toml hooks, so these may duplicate or conflict with ` +
+      `Prism's config.toml hooks. Remove Prism hooks from hooks.json and keep them in config.toml.`,
+    harness: "codex-cli",
+    root,
+    path,
+    fix: "manual",
+    data: { prismCommands },
+  })];
+};
+
 const generatedPluginPathFromOpenCodeEntry = (entry: string): string | undefined => {
   if (entry.startsWith("file://")) {
     try {
@@ -971,8 +1025,12 @@ const validateHarnessConfigReferences = async (options: {
 }): Promise<DoctorFinding[]> => {
   const path = configPathForHarness(options.harness, options.scope, options.projectPath);
   switch (options.harness) {
-    case "codex-cli":
-      return path ? validateCodexConfigReferences(path, options.prismHome) : [];
+    case "codex-cli": {
+      const codexFindings = path ? await validateCodexConfigReferences(path, options.prismHome) : [];
+      const root = rootForHarness(options.harness, options.scope, options.projectPath);
+      if (root) codexFindings.push(...(await validateCodexHooksJson(root)));
+      return codexFindings;
+    }
     case "opencode":
       return path ? validateOpenCodeConfigReferences(path) : [];
     case "claude-code":

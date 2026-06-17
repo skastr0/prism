@@ -35,7 +35,7 @@ import type {
   HarnessScope,
   PluginManifest,
 } from "./types.js";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import {
   compilePluginForTarget,
@@ -45,6 +45,7 @@ import {
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
+import { topologicallySortedPlugins } from "./plugin-order.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
 import {
   formatMcpServeResult,
@@ -1891,9 +1892,10 @@ async function refreshValidPlugins(
   readonly results: PluginRefreshResult[];
   readonly workflowRefsReport: SyncReport | null;
 }> {
+  const sortedPlugins = topologicallySortedPlugins(validPlugins);
   const results: PluginRefreshResult[] = [];
 
-  for (const plugin of validPlugins) {
+  for (const plugin of sortedPlugins) {
     results.push(await refreshDiscoveredPlugin(plugin, options));
   }
 

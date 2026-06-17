@@ -638,6 +638,59 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
   }
 });
 
+test("MCP bundle tool schemas emit enum instead of const for string literals", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  if (!builder) throw new Error("builder agent was not composed");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    sourcePluginRoot: pluginRoot,
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder.toolBindings,
+  });
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const port = await getFreePort();
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_HTTP_PORT: String(port),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForHttpServer(port);
+    const init = await httpRpc({ port, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "schema-test", version: "0.1.0" } } });
+    expect(init.response.status).toBe(200);
+    const sessionId = init.response.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+    const listed = await httpRpc({ port, sessionId: sessionId!, method: "tools/list" });
+    expect(listed.response.status).toBe(200);
+    const schemas = JSON.stringify(listed.body.result.tools.map((tool: { inputSchema?: unknown }) => tool.inputSchema));
+    // Kimi and some other MCP clients reject JSON Schema "const" and report
+    // "must be equal to constant". Prism emits "enum": [value] instead.
+    expect(schemas).not.toContain('"const":');
+    expect(schemas).toContain('"enum":');
+  } finally {
+    child.kill("SIGTERM");
+    await waitForChildClose(child).catch(() => undefined);
+  }
+});
+
 test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(

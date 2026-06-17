@@ -618,7 +618,11 @@ const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema => {
     case "UnknownKeyword":
       return { type: "object", additionalProperties: true };
     case "Literal":
-      return { const: ast.literal };
+      // Emit enum with a single value instead of const. Some MCP clients
+      // (including Kimi) do not accept JSON Schema "const" and report
+      // "must be equal to constant". enum: [value] is draft-07 compatible
+      // and universally supported.
+      return { enum: [ast.literal] };
     case "Union": {
       const allLiterals = ast.types.every((type) => type._tag === "Literal");
       if (allLiterals) {
@@ -670,8 +674,16 @@ const inputJsonSchemaFromEffectSchema = (schema: Schema.Schema.AnyNoContext): Js
   return astToJsonSchema(schema.ast);
 };
 
-const literalToZod = (literal: string | number | boolean | null): ZodSchema =>
-  z.literal(literal);
+const literalToZod = (literal: string | number | boolean | null): ZodSchema => {
+  // Use z.enum for string literals so the emitted JSON Schema uses "enum"
+  // instead of "const". Some MCP clients (including Kimi) reject "const"
+  // with "must be equal to constant". enum is draft-07 compatible and
+  // universally supported.
+  if (typeof literal === "string") {
+    return z.enum([literal] as [string, ...string[]]);
+  }
+  return z.literal(literal);
+};
 
 const unionToZod = (members: ZodSchema[]): ZodSchema => {
   if (members.length === 0) return z.undefined();

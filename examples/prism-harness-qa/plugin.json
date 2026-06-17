@@ -1,0 +1,14 @@
+{
+  "name": "prism-harness-qa",
+  "version": "0.1.0",
+  "description": "Reference QA plugin for verifying Prism compile and workflow output across harnesses.",
+  "targets": {
+    "rules": ["coding-harness"],
+    "commands": ["coding-harness"],
+    "skills": ["coding-harness", "claw-harness"],
+    "agents": ["coding-harness"],
+    "orbits": ["coding-harness"],
+    "tools": ["coding-harness", "claw-harness"],
+    "hooks": ["coding-harness"]
+  }
+}

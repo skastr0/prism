@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "root": "prism-harness-qa",
+  "rootVersion": "0.1.0",
+  "entries": [
+    {
+      "name": "prism-harness-qa",
+      "version": "0.1.0",
+      "sourcePath": ".",
+      "contentHash": "1d241c3c9c162433d9bd318441d62b3800849a6ac4bdea8d3e2a12926208e91f",
+      "dependencies": {},
+      "sources": [
+        {
+          "path": "agents/qa-tester.agent.ts",
+          "contentHash": "153ae0064de69df49c690b5a3500f78b3ab6f631ccda5f58d57de6254b14e6da"
+        },
+        {
+          "path": "identities/qa-tester.identity.md",
+          "contentHash": "e5f801d29de8f6a4fda9903225bccc61a66a74ef329503cc3ef79b60b53a4569"
+        },
+        {
+          "path": "orbits/qa-orbit.orbit.ts",
+          "contentHash": "c35fe5e01fd17052f4dc251d3c2c7700b49a382319a9f59372cececfa245711a"
+        },
+        {
+          "path": "skills/qa-helper/SKILL.md",
+          "contentHash": "3a8325256380a2072fab988ad4e25fa8e54123636b46c462d17c0cf61f0ed40a"
+        },
+        {
+          "path": "traits/qa-capable.trait.ts",
+          "contentHash": "50a2a1bb2b7b5b319ac1efc73072e5b5be6d6990d6b3ac96254bd666a6ef0e82"
+        }
+      ]
+    }
+  ],
+  "generatedAt": "2026-06-17T10:22:11.135Z"
+}

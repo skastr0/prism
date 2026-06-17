@@ -247,11 +247,11 @@ export default defineTool({
   expect(agentToml?.content).not.toContain("temperature");
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
-  expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
+  expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).not.toContain("cwd = ");
-  expect(agentToml?.content).toContain('default_tools_approval_mode = "approve"');
+  expect(agentToml?.content).not.toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
 
   const skill = findFile(lowered.files, join("skills", "testing", "SKILL.md"));
@@ -492,7 +492,7 @@ export default defineTool({
 
   const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
   expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
-  expect(agentToml?.content).toContain('url = "http://127.0.0.1:38464/mcp"');
+  expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
   expect(agentToml?.content).not.toContain("http_headers");
@@ -669,4 +669,80 @@ test("codex-cli lowerer fails closed for unsupported model config keys", async (
       },
     }),
   ).rejects.toThrow("unsupported Codex model config key 'temperature'");
+});
+
+test("codex-cli consumer plugin references owner MCP servers without a self daemon", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "orbit-consumer-fixture");
+  const towerToolPath = join(root, "tower", "tools", "claim_glyph.tool.ts");
+  const boothToolPath = join(root, "booth", "tools", "register_draft.tool.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "orbit-consumer-fixture",
+        version: "0.1.0",
+        targets: {
+          agents: ["codex-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const lowered = await planLowering({
+    agents: [
+      {
+        name: "orchestrator",
+        description: "Consumes Tower and Booth tools",
+        body: "# Orchestrator",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [
+          {
+            kind: "permission",
+            logicalName: "claim_glyph",
+            toolPluginName: "tower",
+            toolName: "claim_glyph",
+            toolSourcePath: towerToolPath,
+          },
+          {
+            kind: "permission",
+            logicalName: "register_draft",
+            toolPluginName: "booth",
+            toolName: "register_draft",
+            toolSourcePath: boothToolPath,
+          },
+        ],
+      },
+    ],
+    orbits: [],
+    tools: [],
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "orbit-consumer-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const agentToml = findFile(lowered.files, join("agents", "orchestrator.toml"));
+  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-tower"]');
+  expect(agentToml?.content).toContain('["mcp_servers"."prism-generated-booth"]');
+  expect(agentToml?.content).toContain('enabled_tools = ["tower_claim_glyph"]');
+  expect(agentToml?.content).toContain('enabled_tools = ["booth_register_draft"]');
+  expect(agentToml?.content).not.toContain("prism-generated-orbit-consumer-fixture");
+  expect(agentToml?.content).not.toContain("url = ");
+
+  expect(
+    findRegion(lowered.regions, "codex.mcp.prism-generated-orbit-consumer-fixture"),
+  ).toBeUndefined();
 });

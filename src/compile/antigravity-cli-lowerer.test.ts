@@ -10,16 +10,8 @@ import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
 
-const effectImportPath = join(
-  process.cwd(),
-  "node_modules",
-  "effect",
-  "dist",
-  "esm",
-  "index.js",
-).replace(/\\/g, "/");
-
-const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const PRISM_IMPORT = "prism";
+const EFFECT_IMPORT = "effect";
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-antigravity-lowerer-"));
@@ -92,7 +84,7 @@ test("antigravity-cli lowerer emits executable hook wrappers with Antigravity ou
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
+    `import { defineToolspace } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineToolspace({
   name: "workspace",
@@ -103,8 +95,8 @@ export default defineToolspace({
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
-    `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineHook({
   name: "audit-shell",
@@ -126,8 +118,8 @@ export default defineHook({
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell-after.hook.ts"),
-    `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
+import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineHook({
   name: "audit-shell-after",
@@ -141,8 +133,8 @@ export default defineHook({
 
   await writeText(
     join(pluginRoot, "hooks", "pre-invoke.hook.ts"),
-    `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
+import { defineHook, hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineHook({
   name: "pre-invoke",
@@ -159,8 +151,8 @@ export default defineHook({
 
   await writeText(
     join(pluginRoot, "hooks", "keep-going.hook.ts"),
-    `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
+import { defineHook, hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineHook({
   name: "keep-going",
@@ -227,6 +219,9 @@ export default defineHook({
     artifactDirectoryPath: join(pluginRoot, "artifacts"),
     workspacePaths: [pluginRoot],
   });
+  if (blocked.exitCode !== 0) {
+    console.log("BLOCKED exit", blocked.exitCode, "stderr:", blocked.stderr, "stdout:", blocked.stdout);
+  }
   expect(blocked.exitCode).toBe(0);
   expect(blocked.stderr).toBe("");
   expect(JSON.parse(blocked.stdout.trim())).toEqual({
@@ -325,8 +320,8 @@ test("antigravity-cli lowerer emits Streamable HTTP MCP config when opted in", a
   );
   await writeText(
     toolPath,
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+    `import { Schema } from ${JSON.stringify(EFFECT_IMPORT)};
+import { defineTool } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineTool({
   name: "echo",

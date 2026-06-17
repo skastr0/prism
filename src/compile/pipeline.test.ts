@@ -3323,15 +3323,32 @@ export default defineAgent({
       }),
     );
   }
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: coreRoot,
+      target: "codex-cli",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
-  // ONE union bundle per plugin: it contains the agent-bound dependency tool
-  // even though only codex exposes it.
-  const unionBundle = await readFile(
+  // Owner-only runtime bundles: the consumer bundle contains consumer-owned
+  // canonical tools, while dependency-owned tools stay in the dependency
+  // owner's bundle.
+  const consumerBundle = await readFile(
     prismMcpServerPath(testPrismHome(), "exposure-demo"),
     "utf8",
   );
-  expect(unionBundle).toContain("exposure_core_agent_only");
-  expect(unionBundle).toContain("exposure_demo_shared");
+  expect(consumerBundle).toContain("exposure_demo_shared");
+  expect(consumerBundle).not.toContain("exposure_core_agent_only");
+  const ownerBundle = await readFile(
+    prismMcpServerPath(testPrismHome(), "exposure-core"),
+    "utf8",
+  );
+  expect(ownerBundle).toContain("exposure_core_agent_only");
+  expect(ownerBundle).not.toContain("exposure_demo_shared");
 
   // Codex (harness A): the agent TOML exposes the agent-bound tool, the
   // global table stays canonical-tools-only.
@@ -3341,10 +3358,15 @@ export default defineAgent({
   );
   expect(codexAgent).toContain('"exposure_core_agent_only"');
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
-  expect(codexConfig).toContain('enabled_tools = ["exposure_demo_shared"]');
-  expect(codexConfig).not.toContain('enabled_tools = ["exposure_core_agent_only"');
+  const consumerConfigSection = codexConfig.slice(
+    codexConfig.indexOf("# --- prism:codex.mcp.prism-generated-exposure-demo begin ---"),
+    codexConfig.indexOf("# --- prism:codex.mcp.prism-generated-exposure-demo end ---"),
+  );
+  expect(consumerConfigSection).toContain('enabled_tools = ["exposure_demo_shared"]');
+  expect(consumerConfigSection).not.toContain('enabled_tools = ["exposure_core_agent_only"');
+  expect(codexConfig).toContain('enabled_tools = ["exposure_core_agent_only"]');
 
-  expect(unionBundle).toContain('"prism-generated-exposure-demo:claude-code"');
+  expect(consumerBundle).toContain('"prism-generated-exposure-demo:claude-code"');
 
   // Claude (harness B): deny-by-default moves to the HTTP exposure profile,
   // because Streamable HTTP clients do not spawn per-client subprocess env.
@@ -5266,6 +5288,7 @@ test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind",
       root: hermesRoot,
       dryRun: false,
       mcpLifecycle: "none",
+      emitWorkflowRefs: false,
     }),
   );
 
@@ -8467,7 +8490,7 @@ test("compilePluginForTarget rejects Kimi Code project scope", async () => {
   });
 });
 
-test("compilePluginForTarget gates Factory HTTP MCP for agent-bound dependency tools", async () => {
+test("compilePluginForTarget keeps Factory agent dependency tools owner-owned", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "factory-http-agent-demo");
   const coreRoot = join(root, "factory-tool-core");
@@ -8570,7 +8593,7 @@ export default defineAgent({
 `,
   );
 
-  const exit = await Effect.runPromiseExit(
+  const consumerCompiled = await Effect.runPromise(
     compilePluginForTarget({
       prismHome: testPrismHome(),
       pluginPath: pluginRoot,
@@ -8582,18 +8605,16 @@ export default defineAgent({
     }),
   );
 
-  const failure = getFailure(exit);
-  expect(failure._tag).toBe("PluginManifestError");
-  if (failure._tag === "PluginManifestError") {
-    expect(failure.message).toContain("factory-droid Streamable HTTP MCP daemon");
-    expect(failure.message).toContain("refusing to write url config");
-  }
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"))).toBe(false);
+  expect(consumerCompiled.operations.some((operation) =>
+    operation.targetPath.endsWith("server.mjs")
+  )).toBe(false);
 
   try {
-    const compiled = await Effect.runPromise(
+    const ownerCompiled = await Effect.runPromise(
       compilePluginForTarget({
         prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
+        pluginPath: coreRoot,
         target: "factory-droid",
         scope: "global",
         root: factoryRoot,
@@ -8601,19 +8622,19 @@ export default defineAgent({
         mcpLifecycle: "serve",
       }),
     );
-    // The union bundle carries the agent-bound dependency tool and lives at
-    // the canonical PRISM_HOME path.
+    // The owner bundle carries the agent-bound dependency tool and lives at
+    // the canonical PRISM_HOME path; the consumer does not duplicate it.
     const bundleContent = await readFile(
-      prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"),
+      prismMcpServerPath(testPrismHome(), "factory-tool-core"),
       "utf8",
     );
     expect(bundleContent).toContain("factory_tool_core_submit_work");
-    expect(compiled.operations.some((operation) =>
+    expect(ownerCompiled.operations.some((operation) =>
       operation.targetPath.endsWith("server.mjs")
     )).toBe(false);
   } finally {
     await stopMcp({
-      pluginPath: pluginRoot,
+      pluginPath: coreRoot,
       harness: "factory-droid",
       scope: "global",
       prismHome: testPrismHome(),

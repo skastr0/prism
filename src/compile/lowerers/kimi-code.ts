@@ -24,6 +24,7 @@ import {
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
+  referencedBindingsByOwner,
 } from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -455,17 +456,11 @@ const readOwnerKimiMcpServers = async (
   sourcePluginName: string,
   agents: ReadonlyArray<ComposedAgent>,
 ): Promise<PlannedMcpServers> => {
-  const owners = new Set<string>();
-  for (const agent of agents) {
-    for (const binding of agent.toolBindings) {
-      const owner = ownerPluginForBinding(sourcePluginName, binding);
-      if (owner !== sourcePluginName) owners.add(owner);
-    }
-  }
-  if (owners.size === 0) return new Map();
+  const referencedByOwner = referencedBindingsByOwner(sourcePluginName, agents);
+  if (referencedByOwner.size === 0) return new Map();
 
   const servers = new Map<string, PlannedMcpServer>();
-  for (const owner of [...owners].sort((left, right) => left.localeCompare(right))) {
+  for (const [owner, bindings] of referencedByOwner) {
     const path = ownerKimiManifestPath(target, owner);
     let raw: string;
     try {
@@ -485,10 +480,19 @@ const readOwnerKimiMcpServers = async (
         `Owner plugin '${owner}' Kimi manifest at ${path} does not declare any MCP servers.`,
       );
     }
+    const referencedToolNames = new Set(
+      bindings.map((binding) => mcpToolNameForBinding(owner, binding)),
+    );
     for (const [serverName, entry] of Object.entries(parsed.mcpServers)) {
+      const ownerEnabledTools = Array.isArray(entry.enabledTools)
+        ? entry.enabledTools.filter(
+            (tool): tool is string =>
+              typeof tool === "string" && referencedToolNames.has(tool),
+          )
+        : [];
       servers.set(serverName, {
-        toolNames: Array.isArray(entry.enabledTools) ? entry.enabledTools : [],
-        manifestEntry: entry,
+        toolNames: ownerEnabledTools,
+        manifestEntry: { ...entry, enabledTools: ownerEnabledTools },
       });
     }
   }

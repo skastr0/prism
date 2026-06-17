@@ -31,7 +31,10 @@ import {
   removeTempBuildRoot,
   writeTempBuildFile,
 } from "../temp-build-fs.js";
-import { mcpBindingsForAgentsAndTools, ownerPluginForBinding } from "../tool-bindings.js";
+import {
+  mcpBindingsForAgentsAndTools,
+  referencedBindingsByOwner,
+} from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 
 /** What every lowerer produces: desired whole files + shared-file regions. */
@@ -68,20 +71,29 @@ export const normalizeBundleSegment = (value: string, fallback = "plugin"): stri
 export const yamlScalar = (value: string | number | boolean): string =>
   typeof value === "string" ? JSON.stringify(value) : String(value);
 
-const ownerPluginIdsFromAgents = (
-  compilingPluginName: string,
-  agents: ReadonlyArray<ComposedAgent>,
-): string[] => {
-  const owners = new Set<string>();
-  for (const agent of agents) {
-    for (const binding of agent.toolBindings) {
-      const owner = ownerPluginForBinding(compilingPluginName, binding);
-      if (owner !== compilingPluginName) {
-        owners.add(owner);
-      }
-    }
-  }
-  return [...owners].sort((left, right) => left.localeCompare(right));
+const referencedToolNames = (
+  ownerPluginName: string,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+  nameForBinding: (ownerPluginName: string, binding: ResolvedContractBinding) => string,
+): ReadonlySet<string> =>
+  new Set(bindings.map((binding) => nameForBinding(ownerPluginName, binding)));
+
+const filterServerEnabledTools = (
+  config: unknown,
+  ownerPluginName: string,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+  nameForBinding: (ownerPluginName: string, binding: ResolvedContractBinding) => string,
+): unknown => {
+  if (config === null || typeof config !== "object") return config;
+  const record = config as Record<string, unknown>;
+  const enabledTools = record.enabledTools;
+  if (!Array.isArray(enabledTools)) return config;
+
+  const referenced = referencedToolNames(ownerPluginName, bindings, nameForBinding);
+  const filtered = enabledTools.filter(
+    (tool): tool is string => typeof tool === "string" && referenced.has(tool),
+  );
+  return { ...record, enabledTools: filtered };
 };
 
 /**
@@ -89,19 +101,29 @@ const ownerPluginIdsFromAgents = (
  * agents and return a map of server name -> server config that the consumer
  * plugin should merge into its own MCP config. Fail closed if an owner plugin
  * has not been compiled for this harness yet.
+ *
+ * When `nameForBinding` is supplied and the owner config declares
+ * `enabledTools`, the merged config is filtered to only the tools actually
+ * referenced by the consumer's agents.
  */
 export const collectReferencedOwnerMcpServers = async (
   compilingPluginName: string,
   agents: ReadonlyArray<ComposedAgent>,
   resolveOwnerMcpPath: (ownerPluginName: string) => string,
+  options?: {
+    readonly nameForBinding?: (
+      ownerPluginName: string,
+      binding: ResolvedContractBinding,
+    ) => string;
+  },
 ): Promise<ReadonlyMap<string, unknown>> => {
-  const owners = ownerPluginIdsFromAgents(compilingPluginName, agents);
-  if (owners.length === 0) {
+  const referencedByOwner = referencedBindingsByOwner(compilingPluginName, agents);
+  if (referencedByOwner.size === 0) {
     return new Map();
   }
 
   const servers = new Map<string, unknown>();
-  for (const owner of owners) {
+  for (const [owner, bindings] of referencedByOwner) {
     const path = resolveOwnerMcpPath(owner);
     let raw: string;
     try {
@@ -121,7 +143,11 @@ export const collectReferencedOwnerMcpServers = async (
         `Owner plugin '${owner}' MCP config at ${path} does not contain expected server '${serverName}'.`,
       );
     }
-    servers.set(serverName, config);
+    const filteredConfig =
+      options?.nameForBinding !== undefined
+        ? filterServerEnabledTools(config, owner, bindings, options.nameForBinding)
+        : config;
+    servers.set(serverName, filteredConfig);
   }
   return servers;
 };

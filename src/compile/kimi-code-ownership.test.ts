@@ -111,6 +111,78 @@ test("kimi-code lowerer owner-qualifies foreign tool bindings and merges owner M
   expect(parsed.mcpServers).not.toHaveProperty("prism-generated-consumer-plugin");
 });
 
+test("kimi-code lowerer filters owner enabledTools to referenced tool union", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".kimi-code");
+  const ownerPluginName = "ot";
+  const ownerPluginId = `prism-generated-${ownerPluginName}`;
+  const ownerServerName = ownerPluginId;
+
+  const ownerManifestPath = join(outputRoot, "plugins", "managed", ownerPluginId, "kimi.plugin.json");
+  await writeText(
+    ownerManifestPath,
+    JSON.stringify(
+      {
+        name: ownerPluginId,
+        version: "0.1.0",
+        mcpServers: {
+          [ownerServerName]: {
+            enabled: true,
+            url: "http://127.0.0.1:55555/mcp",
+            enabledTools: ["ot_echo", "ot_unused"],
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+
+  const consumerAgent: ComposedAgent = {
+    name: "consumer",
+    description: "Consumer agent that references one owner tool",
+    body: "# Consumer\n",
+    color: undefined,
+    model: {},
+    targetOverride: {},
+    skills: [],
+    allowedSkills: [],
+    allowedTools: [],
+    toolBindings: [
+      {
+        kind: "permission",
+        logicalName: "echo",
+        toolPluginName: ownerPluginName,
+        toolName: "echo",
+        toolSourcePath: join(root, "owner-tools", "tools", "echo.tool.ts"),
+      },
+    ],
+  };
+
+  const { files: operations } = await planLowering({
+    agents: [consumerAgent],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    registry: undefined,
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "consumer-plugin",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: join(root, "consumer-plugin"),
+    },
+  });
+
+  const manifest = findContentOperation(operations, "kimi.plugin.json");
+  const parsed = JSON.parse(manifest?.content ?? "{}") as {
+    mcpServers?: Record<string, { enabledTools?: string[] }>;
+  };
+  const ownerEntry = parsed.mcpServers?.[ownerServerName];
+  expect(ownerEntry?.enabledTools).toEqual(["ot_echo"]);
+  expect(ownerEntry?.enabledTools).not.toContain("ot_unused");
+});
+
 test("kimi-code lowerer fails closed when owner Kimi manifest is missing", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".kimi-code");

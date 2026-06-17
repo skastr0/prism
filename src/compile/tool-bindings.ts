@@ -108,6 +108,34 @@ export const groupAgentToolBindingsByOwner = (
 ): ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>> =>
   groupBindingsByOwner(compilingPluginName, agent.toolBindings);
 
+/**
+ * Collect every foreign-owner binding referenced by any agent, grouped by
+ * owner plugin name and deduplicated. This is the consumer-side view of the
+ * tools it needs from each owner plugin.
+ */
+export const referencedBindingsByOwner = (
+  compilingPluginName: string,
+  agents: ReadonlyArray<ComposedAgent>,
+): ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>> => {
+  const groups = new Map<string, ResolvedContractBinding[]>();
+  for (const agent of agents) {
+    for (const [owner, bindings] of groupAgentToolBindingsByOwner(
+      compilingPluginName,
+      agent,
+    )) {
+      if (owner === compilingPluginName) continue;
+      const list = groups.get(owner) ?? [];
+      list.push(...bindings);
+      groups.set(owner, list);
+    }
+  }
+  return new Map(
+    [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([owner, ownerBindings]) => [owner, dedupeBindings(ownerBindings)]),
+  );
+};
+
 export const mcpBindingsForAgentsAndTools = (
   sourcePluginName: string,
   tools: ReadonlyArray<CanonicalTool> | undefined,

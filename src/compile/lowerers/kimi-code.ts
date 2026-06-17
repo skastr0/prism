@@ -21,8 +21,11 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
   bindingsOwnedByPlugin,
+  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -72,10 +75,11 @@ interface PlannedHook {
 }
 
 interface PlannedMcpServer {
-  readonly serverName?: string;
   readonly toolNames: ReadonlyArray<string>;
-  readonly manifestEntry?: Record<string, unknown>;
+  readonly manifestEntry: Record<string, unknown>;
 }
+
+type PlannedMcpServers = ReadonlyMap<string, PlannedMcpServer>;
 
 interface InstalledPluginRecord {
   readonly id: string;
@@ -215,13 +219,18 @@ const renderSkill = (frontmatter: Record<string, unknown>, body: string): string
 const renderKimiAgentRoleSkill = (
   agent: ComposedAgent,
   target: KimiCodeLowerTarget,
-  mcpServerName?: string,
 ): string => {
-  const tools = mcpServerName
-    ? agent.toolBindings.map((binding) =>
-        kimiMcpToolName(mcpServerName, target.sourcePluginName, binding),
-      )
-    : [];
+  const generatedTools: string[] = [];
+  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+    target.sourcePluginName,
+    agent,
+  )) {
+    const serverName = generatedMcpServerName(ownerPlugin);
+    for (const binding of bindings) {
+      generatedTools.push(kimiMcpToolName(serverName, ownerPlugin, binding));
+    }
+  }
+  const tools = uniqueSorted(generatedTools, { dropEmpty: true });
   const nativeTools = uniqueSorted(agent.allowedTools, { dropEmpty: true });
   const skills = uniqueSorted([...agent.skills, ...agent.allowedSkills], { dropEmpty: true });
 
@@ -240,7 +249,7 @@ const renderKimiAgentRoleSkill = (
     }
     if (tools.length > 0) {
       sections.push("", "Generated MCP tools for this role:");
-      for (const tool of uniqueSorted(tools)) sections.push(`- \`${tool}\``);
+      for (const tool of tools) sections.push(`- \`${tool}\``);
     }
     if (skills.length > 0) {
       sections.push("", `Related Kimi skills: ${skills.map((skill) => `\`${skill}\``).join(", ")}.`);
@@ -333,7 +342,6 @@ const planAgentRoleSkills = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
   files: DesiredFile[],
-  mcpServerName?: string,
 ): void => {
   for (const agent of input.agents) {
     pushWrite(
@@ -341,7 +349,7 @@ const planAgentRoleSkills = (
       desiredRelativePaths,
       input.target,
       `skills/${roleSkillName(agent.name)}/SKILL.md`,
-      renderKimiAgentRoleSkill(agent, input.target, mcpServerName),
+      renderKimiAgentRoleSkill(agent, input.target),
     );
   }
 };
@@ -433,7 +441,61 @@ const renderKimiMcpServerEntry = (options: {
   };
 };
 
-const planMcpServer = (input: LowerInput): PlannedMcpServer => {
+const ownerKimiManifestPath = (target: KimiCodeLowerTarget, ownerPluginName: string): string =>
+  join(
+    target.root,
+    "plugins",
+    "managed",
+    generatedPluginIdForOwner(ownerPluginName),
+    "kimi.plugin.json",
+  );
+
+const readOwnerKimiMcpServers = async (
+  target: KimiCodeLowerTarget,
+  sourcePluginName: string,
+  agents: ReadonlyArray<ComposedAgent>,
+): Promise<PlannedMcpServers> => {
+  const owners = new Set<string>();
+  for (const agent of agents) {
+    for (const binding of agent.toolBindings) {
+      const owner = ownerPluginForBinding(sourcePluginName, binding);
+      if (owner !== sourcePluginName) owners.add(owner);
+    }
+  }
+  if (owners.size === 0) return new Map();
+
+  const servers = new Map<string, PlannedMcpServer>();
+  for (const owner of [...owners].sort((left, right) => left.localeCompare(right))) {
+    const path = ownerKimiManifestPath(target, owner);
+    let raw: string;
+    try {
+      raw = await readFile(path);
+    } catch (cause) {
+      throw new Error(
+        `Cannot reference tools from owner plugin '${owner}' because its generated Kimi plugin manifest is missing at ${path}. ` +
+          `Compile the owner plugin for Kimi Code first.`,
+        { cause },
+      );
+    }
+    const parsed = JSON.parse(raw) as {
+      mcpServers?: Record<string, Record<string, unknown>>;
+    };
+    if (!parsed.mcpServers) {
+      throw new Error(
+        `Owner plugin '${owner}' Kimi manifest at ${path} does not declare any MCP servers.`,
+      );
+    }
+    for (const [serverName, entry] of Object.entries(parsed.mcpServers)) {
+      servers.set(serverName, {
+        toolNames: Array.isArray(entry.enabledTools) ? entry.enabledTools : [],
+        manifestEntry: entry,
+      });
+    }
+  }
+  return servers;
+};
+
+const planMcpServer = async (input: LowerInput): Promise<PlannedMcpServers> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools ?? [],
@@ -443,21 +505,30 @@ const planMcpServer = (input: LowerInput): PlannedMcpServer => {
     requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  if (ownedBindings.length === 0) return { toolNames: [] };
 
-  const serverName = generatedMcpServerName(input.target.sourcePluginName);
-  const toolNames = uniqueSorted(
-    mcpToolNamesForBindings(input.target.sourcePluginName, ownedBindings),
+  const ownerServers = await readOwnerKimiMcpServers(
+    input.target,
+    input.target.sourcePluginName,
+    input.agents,
   );
-  return {
-    serverName,
-    toolNames,
-    manifestEntry: renderKimiMcpServerEntry({
-      runtime,
-      ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
+
+  const servers = new Map<string, PlannedMcpServer>(ownerServers);
+  if (ownedBindings.length > 0) {
+    const serverName = generatedMcpServerName(input.target.sourcePluginName);
+    const toolNames = uniqueSorted(
+      mcpToolNamesForBindings(input.target.sourcePluginName, ownedBindings),
+    );
+    servers.set(serverName, {
       toolNames,
-    }),
-  };
+      manifestEntry: renderKimiMcpServerEntry({
+        runtime,
+        ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
+        toolNames,
+      }),
+    });
+  }
+
+  return servers;
 };
 
 const kimiNativeHookEvent = (event: Hook["event"]): string =>
@@ -518,18 +589,17 @@ const planHooks = async (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
   files: DesiredFile[],
-  mcpServerName?: string,
 ): Promise<PlannedHook[]> => {
   const bindings = mcpBindingsForAgentsAndTools(
     input.target.sourcePluginName,
     input.tools ?? [],
     input.agents,
   );
-  const canonicalToolNames = collectBindingNameMap(bindings, (binding) =>
-    mcpServerName
-      ? kimiMcpToolName(mcpServerName, input.target.sourcePluginName, binding)
-      : mcpToolNameForBinding(input.target.sourcePluginName, binding),
-  );
+  const canonicalToolNames = collectBindingNameMap(bindings, (binding) => {
+    const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
+    const serverName = generatedMcpServerName(owner);
+    return kimiMcpToolName(serverName, owner, binding);
+  });
 
   const planned: PlannedHook[] = [];
   for (const hook of [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name))) {
@@ -590,7 +660,7 @@ const renderManifest = (
   input: LowerInput,
   desiredRelativePaths: ReadonlySet<string>,
   contexts: ReadonlyArray<{ label: string; content: string }>,
-  mcp: PlannedMcpServer,
+  mcp: PlannedMcpServers,
 ): string => {
   const manifest: Record<string, unknown> = {
     name: generatedPluginId(input.target),
@@ -608,8 +678,12 @@ const renderManifest = (
   if (contexts.length > 0 && desiredRelativePaths.has("skills/prism-context/SKILL.md")) {
     manifest.sessionStart = { skill: "prism-context" };
   }
-  if (mcp.serverName && mcp.manifestEntry) {
-    manifest.mcpServers = { [mcp.serverName]: mcp.manifestEntry };
+  if (mcp.size > 0) {
+    const mcpServers: Record<string, unknown> = {};
+    for (const [serverName, entry] of mcp) {
+      mcpServers[serverName] = entry.manifestEntry;
+    }
+    manifest.mcpServers = mcpServers;
   }
 
   return json(manifest);
@@ -637,13 +711,13 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     return { files: [], regions: [] };
   }
 
-  const mcp = planMcpServer(input);
+  const mcp = await planMcpServer(input);
   await planTargetedSkillWrites(input, state.desiredRelativePaths, state.files);
-  planAgentRoleSkills(input, state.desiredRelativePaths, state.files, mcp.serverName);
+  planAgentRoleSkills(input, state.desiredRelativePaths, state.files);
   planOrbitSkillWrites(input, state.desiredRelativePaths, state.files);
   await planCommandSkillWrites(input, state.desiredRelativePaths, state.files);
   planContextSkillWrite(input, state.desiredRelativePaths, state.files, contexts);
-  const hooks = await planHooks(input, state.desiredRelativePaths, state.files, mcp.serverName);
+  const hooks = await planHooks(input, state.desiredRelativePaths, state.files);
 
   pushWrite(
     state.files,

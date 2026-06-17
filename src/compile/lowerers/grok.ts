@@ -21,8 +21,12 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
   bindingsOwnedByPlugin,
+  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
+import { collectReferencedOwnerMcpServers } from "./shared.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
@@ -133,13 +137,28 @@ const grokOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> | u
 
 const composeGrokTools = (
   agent: ComposedAgent,
+  target: GrokLowerTarget,
   override: Record<string, unknown> | undefined,
-): string[] =>
-  uniqueSorted([
+): string[] => {
+  const generatedTools: string[] = [];
+  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+    target.sourcePluginName,
+    agent,
+  )) {
+    const ownerPluginId = generatedPluginIdForOwner(ownerPlugin);
+    for (const binding of bindings) {
+      generatedTools.push(
+        grokMcpToolNameForBinding(ownerPlugin, ownerPluginId, binding),
+      );
+    }
+  }
+  return uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
     ...agent.allowedTools,
+    ...generatedTools,
   ]);
+};
 
 const composeGrokDisallowedTools = (
   override: Record<string, unknown> | undefined,
@@ -166,7 +185,7 @@ const composeGrokEffort = (
     stringValue(model.variant),
   );
 
-const composeAgentFrontmatter = (agent: ComposedAgent): Record<string, unknown> => {
+const composeAgentFrontmatter = (agent: ComposedAgent, target: GrokLowerTarget): Record<string, unknown> => {
   const override = grokOverrideForAgent(agent);
   const model = agent.model ?? {};
 
@@ -181,7 +200,7 @@ const composeAgentFrontmatter = (agent: ComposedAgent): Record<string, unknown> 
     reasoning_effort: stringValue(override?.reasoning_effort),
     temperature: firstDefined(numberValue(override?.temperature), numberValue(model.temperature)),
     top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
-    tools: composeGrokTools(agent, override),
+    tools: composeGrokTools(agent, target, override),
     disallowedTools: composeGrokDisallowedTools(override),
     skills: uniqueSorted(agent.allowedSkills),
   };
@@ -189,8 +208,9 @@ const composeAgentFrontmatter = (agent: ComposedAgent): Record<string, unknown> 
 
 const renderAgentMarkdown = (
   agent: ComposedAgent,
+  target: GrokLowerTarget,
 ): string => {
-  return `${serializeFrontmatter(composeAgentFrontmatter(agent))}\n\n${agent.body}\n`;
+  return `${serializeFrontmatter(composeAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
 };
 
 const grokNativeHookEvent = prePostSessionNativeHookEvent;
@@ -208,10 +228,12 @@ const renderHooksJson = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
-  const pluginId = generatedPluginId(target);
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => grokMcpToolNameForBinding(target.sourcePluginName, pluginId, binding),
+    (binding) => {
+      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
+      return grokMcpToolNameForBinding(owner, generatedPluginIdForOwner(owner), binding);
+    },
   );
 
   for (const hook of hooks) {
@@ -263,6 +285,9 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
+const ownerMcpConfigPath = (target: GrokLowerTarget, ownerPluginName: string): string =>
+  join(target.root, "plugins", generatedPluginIdForOwner(ownerPluginName), ".mcp.json");
+
 const planMcpServer = async (
   input: LowerInput,
   files: DesiredFile[],
@@ -279,33 +304,34 @@ const planMcpServer = async (
   });
   const pluginId = generatedPluginId(input.target);
 
-  if (ownedBindings.length === 0) {
-    pushWrite(
-      files,
-      desiredRelativePaths,
-      input.target,
-      ".mcp.json",
-      json({ mcpServers: {} }),
-    );
-    return;
+  const ownerServers = await collectReferencedOwnerMcpServers(
+    input.target.sourcePluginName,
+    input.agents,
+    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
+  );
+
+  const mcpServers: Record<string, unknown> = {};
+  if (ownedBindings.length > 0) {
+    mcpServers[pluginId] = {
+      type: "http",
+      url: renderMcpHttpUrl(runtime),
+      headers: {
+        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
+      },
+    };
   }
+  for (const [serverName, config] of ownerServers) {
+    mcpServers[serverName] = config;
+  }
+
+  if (Object.keys(mcpServers).length === 0) return;
 
   pushWrite(
     files,
     desiredRelativePaths,
     input.target,
     ".mcp.json",
-    json({
-      mcpServers: {
-        [pluginId]: {
-          type: "http",
-          url: renderMcpHttpUrl(runtime),
-          headers: {
-            [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
-          },
-        },
-      },
-    }),
+    json({ mcpServers }),
   );
 };
 
@@ -325,7 +351,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     input,
     state,
     pushWrite,
-    renderAgentMarkdown,
+    renderAgentMarkdown: (agent) => renderAgentMarkdown(agent, input.target),
   });
   await planGeneratedPluginSkillWrites({ input, state, pushWrite });
   await planStandardGeneratedPluginOrbitSkillWrites({

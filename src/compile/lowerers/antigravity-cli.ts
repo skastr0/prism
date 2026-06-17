@@ -22,14 +22,18 @@ import type { CanonicalTool, Hook, Orbit } from "../sources.js";
 import {
   collectBindingNameMap,
   bindingsOwnedByPlugin,
+  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
+
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
 import { readFile } from "../../fs.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
+  collectReferencedOwnerMcpServers,
   nativeHookEventName,
   pushDesiredFile,
   renderPrePostSessionHookWrapperEntry,
@@ -96,15 +100,24 @@ const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: Antigr
     if (typeof override.model === "string") frontmatter.model = override.model;
   }
 
-  const serverName = pluginIdForPlugin(target.sourcePluginName);
+  const generatedTools: string[] = [];
+  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+    target.sourcePluginName,
+    agent,
+  )) {
+    const ownerServerName = pluginIdForPlugin(ownerPlugin);
+    for (const binding of bindings) {
+      generatedTools.push(
+        antigravityMcpToolNameForBinding(ownerPlugin, ownerServerName, binding),
+      );
+    }
+  }
   const tools = uniqueSorted([
     ...(Array.isArray(override?.tools) && override.tools.every((tool) => typeof tool === "string")
       ? override.tools
       : []),
     ...agent.allowedTools,
-    ...agent.toolBindings.map((binding) =>
-      antigravityMcpToolNameForBinding(target.sourcePluginName, serverName, binding),
-    ),
+    ...generatedTools,
   ], { dropEmpty: true });
   if (tools.length > 0) frontmatter.tools = tools;
 
@@ -267,15 +280,16 @@ const planHooks = async (
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
   if (hooks.length === 0 || !input.registry || !artifactTargetsAntigravity(input.registry, "hooks")) return;
 
-  const serverName = pluginIdForPlugin(input.target.sourcePluginName);
   const canonicalToolNames = collectBindingNameMap(
     mcpBindingsForAgentsAndTools(
       input.target.sourcePluginName,
       input.tools,
       input.agents,
     ),
-    (binding) =>
-      antigravityMcpToolNameForBinding(input.target.sourcePluginName, serverName, binding),
+    (binding) => {
+      const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
+      return antigravityMcpToolNameForBinding(owner, pluginIdForPlugin(owner), binding);
+    },
   );
   const config: Record<string, Record<string, unknown>> = {};
   for (const hook of hooks) {
@@ -311,7 +325,10 @@ const planHooks = async (
   });
 };
 
-const planMcpServers = (input: LowerInput): Record<string, unknown> => {
+const ownerMcpConfigPath = (target: AntigravityCliLowerTarget, ownerPluginName: string): string =>
+  join(target.root, "plugins", pluginIdForPlugin(ownerPluginName), "mcp_config.json");
+
+const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown>> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
@@ -321,17 +338,27 @@ const planMcpServers = (input: LowerInput): Record<string, unknown> => {
     requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  if (ownedBindings.length === 0) return {};
+
+  const ownerServers = await collectReferencedOwnerMcpServers(
+    input.target.sourcePluginName,
+    input.agents,
+    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
+  );
 
   const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
-  return {
-    [pluginId]: {
+  const mcpServers: Record<string, unknown> = {};
+  if (ownedBindings.length > 0) {
+    mcpServers[pluginId] = {
       serverUrl: renderMcpHttpUrl(runtime),
       headers: {
         [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
       },
-    },
-  };
+    };
+  }
+  for (const [serverName, config] of ownerServers) {
+    mcpServers[serverName] = config;
+  }
+  return mcpServers;
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
@@ -374,7 +401,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     }
   }
 
-  const mcpServers = planMcpServers(input);
+  const mcpServers = await planMcpServers(input);
   await planHooks(input, files);
 
   const manifest: Record<string, unknown> = {

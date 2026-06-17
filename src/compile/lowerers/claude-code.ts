@@ -23,14 +23,18 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
   bindingsOwnedByPlugin,
+  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { listDirRecursive, readFile } from "../../fs.js";
 import { resolveManifestTargets } from "../../manifest.js";
 import type { HarnessScope, PluginTargetId } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
+  collectReferencedOwnerMcpServers,
   createGeneratedPluginWritePusher,
   createGeneratedPluginPlanState,
   matcherForResolvedToolHook,
@@ -142,14 +146,23 @@ const composeAgentFrontmatter = (
 ): Record<string, unknown> => {
   const override = agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
   const model = agent.model ?? {};
-  const pluginId = generatedPluginId(target);
+  const generatedTools: string[] = [];
+  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+    target.sourcePluginName,
+    agent,
+  )) {
+    const ownerPluginId = generatedPluginIdForOwner(ownerPlugin);
+    for (const binding of bindings) {
+      generatedTools.push(
+        claudeMcpPermissionNameForBinding(ownerPlugin, ownerPluginId, binding),
+      );
+    }
+  }
   const tools = uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
     ...agent.allowedTools,
-    ...agent.toolBindings.map((binding) =>
-      claudeMcpPermissionNameForBinding(target.sourcePluginName, pluginId, binding),
-    ),
+    ...generatedTools,
   ]);
 
   return {
@@ -217,10 +230,12 @@ const renderHooksJson = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
-  const pluginId = generatedPluginId(target);
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => claudeMcpPermissionNameForBinding(target.sourcePluginName, pluginId, binding),
+    (binding) => {
+      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
+      return claudeMcpPermissionNameForBinding(owner, generatedPluginIdForOwner(owner), binding);
+    },
   );
 
   for (const hook of hooks) {
@@ -298,6 +313,9 @@ const planCommands = async (
   }
 };
 
+const ownerMcpConfigPath = (target: ClaudeCodeLowerTarget, ownerPluginName: string): string =>
+  join(target.root, "skills", generatedPluginIdForOwner(ownerPluginName), ".mcp.json");
+
 const planMcpServer = async (
   input: LowerInput,
   files: DesiredFile[],
@@ -314,15 +332,24 @@ const planMcpServer = async (
   });
   const pluginId = generatedPluginId(input.target);
 
-  if (ownedBindings.length === 0) {
-    pushWrite(
-      files,
-      desiredRelativePaths,
-      input.target,
-      ".mcp.json",
-      json({ mcpServers: {} }),
-    );
-    return;
+  const ownerServers = await collectReferencedOwnerMcpServers(
+    input.target.sourcePluginName,
+    input.agents,
+    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
+  );
+
+  const mcpServers: Record<string, unknown> = {};
+  if (ownedBindings.length > 0) {
+    mcpServers[pluginId] = {
+      type: "http",
+      url: renderMcpHttpUrl(runtime),
+      headers: {
+        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
+      },
+    };
+  }
+  for (const [serverName, config] of ownerServers) {
+    mcpServers[serverName] = config;
   }
 
   pushWrite(
@@ -330,17 +357,7 @@ const planMcpServer = async (
     desiredRelativePaths,
     input.target,
     ".mcp.json",
-    json({
-      mcpServers: {
-        [pluginId]: {
-          type: "http",
-          url: renderMcpHttpUrl(runtime),
-          headers: {
-            [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
-          },
-        },
-      },
-    }),
+    json({ mcpServers }),
   );
 };
 

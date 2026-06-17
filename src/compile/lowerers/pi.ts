@@ -14,8 +14,12 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   bindingsFromCanonicalTools,
+  bindingsOwnedByPlugin,
   collectBindingNameMap,
+  groupAgentToolBindingsByOwner,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -113,12 +117,23 @@ const composeAgentTools = (
   agent: ComposedAgent,
   target: PiLowerTarget,
   override: Record<string, unknown> | undefined,
-): string[] => uniqueSorted([
-  ...stringArray(override?.tools),
-  ...stringArray(override?.["allowed-tools"]),
-  ...agent.allowedTools,
-  ...agent.toolBindings.map((binding) => mcpToolNameForBinding(target.sourcePluginName, binding)),
-], { dropEmpty: true });
+): string[] => {
+  const generatedTools: string[] = [];
+  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+    target.sourcePluginName,
+    agent,
+  )) {
+    for (const binding of bindings) {
+      generatedTools.push(mcpToolNameForBinding(ownerPlugin, binding));
+    }
+  }
+  return uniqueSorted([
+    ...stringArray(override?.tools),
+    ...stringArray(override?.["allowed-tools"]),
+    ...agent.allowedTools,
+    ...generatedTools,
+  ], { dropEmpty: true });
+};
 
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
@@ -330,7 +345,10 @@ const planHookWrappers = async (
   ]);
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding),
+    (binding) => {
+      const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
+      return mcpToolNameForBinding(owner, binding);
+    },
   );
   const planned: PlannedHook[] = [];
 
@@ -491,8 +509,11 @@ const planExtension = async (options: {
   readonly plannedHooks: ReadonlyArray<PlannedHook>;
 }): Promise<void> => {
   const bindings = uniqueBindings(options.input.target.sourcePluginName, [
-    ...bindingsFromCanonicalTools(options.input.target.sourcePluginName, options.input.tools ?? []),
-    ...options.input.agents.flatMap((agent) => agent.toolBindings),
+    ...bindingsOwnedByPlugin(
+      options.input.target.sourcePluginName,
+      options.input.tools ?? [],
+      options.input.agents,
+    ),
   ]);
   const setupSource = renderPiSetupSource({
     contexts: options.contexts,
@@ -525,7 +546,11 @@ const hasPackageOutput = (
   input: LowerInput,
   contexts: ReadonlyArray<ContextFile>,
 ): boolean =>
-  input.agents.some((agent) => agent.toolBindings.length > 0) ||
+  bindingsOwnedByPlugin(
+    input.target.sourcePluginName,
+    input.tools ?? [],
+    input.agents,
+  ).length > 0 ||
   input.orbits.length > 0 ||
   (input.tools?.length ?? 0) > 0 ||
   (input.skills?.length ?? 0) > 0 ||

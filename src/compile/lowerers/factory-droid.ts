@@ -21,12 +21,16 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
   bindingsOwnedByPlugin,
+  groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
+  collectReferencedOwnerMcpServers,
   createGeneratedPluginPlanState,
   createGeneratedPluginWritePusher,
   matcherForResolvedToolHook,
@@ -138,14 +142,22 @@ const composeFactoryTools = (
   target: FactoryDroidLowerTarget,
   override: Record<string, unknown> | undefined,
 ): string | string[] | undefined => {
-  const pluginId = generatedPluginId(target);
   const explicitArrayTools = [
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
   ];
-  const generatedTools = agent.toolBindings.map((binding) =>
-    factoryMcpToolNameForBinding(target.sourcePluginName, pluginId, binding),
-  );
+  const generatedTools: string[] = [];
+  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+    target.sourcePluginName,
+    agent,
+  )) {
+    const ownerPluginId = generatedPluginIdForOwner(ownerPlugin);
+    for (const binding of bindings) {
+      generatedTools.push(
+        factoryMcpToolNameForBinding(ownerPlugin, ownerPluginId, binding),
+      );
+    }
+  }
   const category = stringValue(override?.tools);
   const merged = uniqueSorted(
     [...explicitArrayTools, ...agent.allowedTools, ...generatedTools],
@@ -224,10 +236,12 @@ const renderHooksJson = async (
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
-  const pluginId = generatedPluginId(target);
   const canonicalToolNames = collectBindingNameMap(
     bindings,
-    (binding) => factoryMcpToolNameForBinding(target.sourcePluginName, pluginId, binding),
+    (binding) => {
+      const owner = ownerPluginForBinding(target.sourcePluginName, binding);
+      return factoryMcpToolNameForBinding(owner, generatedPluginIdForOwner(owner), binding);
+    },
   );
 
   for (const hook of hooks) {
@@ -291,6 +305,9 @@ const factoryBundleOwnsPluginSkills = (input: LowerInput): boolean =>
   (input.tools?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0;
 
+const ownerMcpConfigPath = (target: FactoryDroidLowerTarget, ownerPluginName: string): string =>
+  join(target.root, "plugins", generatedPluginIdForOwner(ownerPluginName), "mcp.json");
+
 const planMcpServer = async (
   input: LowerInput,
   files: DesiredFile[],
@@ -307,15 +324,24 @@ const planMcpServer = async (
   });
   const pluginId = generatedPluginId(input.target);
 
-  if (ownedBindings.length === 0) {
-    pushWrite(
-      files,
-      desiredRelativePaths,
-      input.target,
-      "mcp.json",
-      json({ mcpServers: {} }),
-    );
-    return;
+  const ownerServers = await collectReferencedOwnerMcpServers(
+    input.target.sourcePluginName,
+    input.agents,
+    (ownerPluginName) => ownerMcpConfigPath(input.target, ownerPluginName),
+  );
+
+  const mcpServers: Record<string, unknown> = {};
+  if (ownedBindings.length > 0) {
+    mcpServers[pluginId] = {
+      type: "http",
+      url: renderMcpHttpUrl(runtime),
+      headers: {
+        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
+      },
+    };
+  }
+  for (const [serverName, config] of ownerServers) {
+    mcpServers[serverName] = config;
   }
 
   pushWrite(
@@ -323,17 +349,7 @@ const planMcpServer = async (
     desiredRelativePaths,
     input.target,
     "mcp.json",
-    json({
-      mcpServers: {
-        [pluginId]: {
-          type: "http",
-          url: renderMcpHttpUrl(runtime),
-          headers: {
-            [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
-          },
-        },
-      },
-    }),
+    json({ mcpServers }),
   );
 };
 

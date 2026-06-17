@@ -21,6 +21,7 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
 import {
   collectBindingNameMap,
+  bindingsOwnedByPlugin,
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -233,10 +234,12 @@ const renderAntigravityHookWrapperEntry = (
   hook: Hook,
   nativeEvent: string,
   hookRuntimePath: string,
+  hookSourcePath: string,
 ): string =>
   renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
+    hookSourcePath,
     harness: TARGET_ID,
     nativeEvent,
     cwdExpression: "input?.cwd ?? input?.workspace?.cwd ?? input?.workspacePaths?.[0]",
@@ -253,8 +256,8 @@ const bundleHookWrapper = (hook: Hook, nativeEvent: string): Promise<string> =>
     hook,
     tempPrefix: "prism-ag-hook-",
     buildLabel: `Antigravity '${hook.name}'`,
-    renderEntry: (entryHook, hookRuntimePath) =>
-      renderAntigravityHookWrapperEntry(entryHook, nativeEvent, hookRuntimePath),
+    renderEntry: (entryHook, hookRuntimePath, hookSourcePath) =>
+      renderAntigravityHookWrapperEntry(entryHook, nativeEvent, hookRuntimePath, hookSourcePath),
   });
 
 const planHooks = async (
@@ -309,16 +312,16 @@ const planHooks = async (
 };
 
 const planMcpServers = (input: LowerInput): Record<string, unknown> => {
-  const bindings = mcpBindingsForAgentsAndTools(
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: bindings.length > 0,
+    requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  if (bindings.length === 0) return {};
+  if (ownedBindings.length === 0) return {};
 
   const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
   return {

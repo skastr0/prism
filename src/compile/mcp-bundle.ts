@@ -25,6 +25,7 @@ import {
   mcpSdkWebStandardHttpBundleImportPath,
   zodV4BundleImportPath,
 } from "./runtime-deps.js";
+import { resolveBunExecutable } from "../bun-runtime.js";
 import {
   generatedToolNameForBinding,
   normalizeGeneratedPluginName,
@@ -1633,8 +1634,11 @@ const validationErrorDetail = (error: unknown): string => {
 
 const validateBuiltMcpServerBundle = async (builtPath: string): Promise<void> => {
   try {
-    await execFileAsync("bun", [builtPath], {
-      env: { ...process.env, PRISM_MCP_VALIDATE: "1" },
+    await execFileAsync(resolveBunExecutable(), [builtPath], {
+      env: {
+        ...process.env,
+        PRISM_MCP_VALIDATE: "1",
+      },
       timeout: 5_000,
       maxBuffer: 1024 * 1024,
     });

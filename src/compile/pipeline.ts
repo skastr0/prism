@@ -92,7 +92,7 @@ import {
 } from "./mcp-bundle.js";
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
-import { mcpBindingsForAgentsAndTools } from "./tool-bindings.js";
+import { bindingsOwnedByPlugin } from "./tool-bindings.js";
 import { getFreePort } from "../mcp/ports.js";
 
 interface LowererModule {
@@ -162,6 +162,7 @@ export interface CompileOptions {
   readonly dryRun: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
   readonly packageMode?: boolean;
+  readonly emitWorkflowRefs?: boolean;
 }
 
 export type CompileMcpLifecycleMode = "none" | "verify" | "serve";
@@ -204,6 +205,28 @@ export interface PlannedCompileResult {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
 }
+
+const compileProjectKey = (projectPath?: string): string =>
+  deriveProjectKey(projectPath ? expandPath(projectPath) : process.cwd()).key;
+
+export const syncWorkflowRefsForProject = async (options: {
+  readonly prismHome: string;
+  readonly projectPath?: string;
+  readonly dryRun?: boolean;
+}): Promise<Awaited<ReturnType<typeof syncDesiredRoot>>> => {
+  const projectKey = compileProjectKey(options.projectPath);
+  const { manifest } = await readCompileManifest(options.prismHome, projectKey);
+  return syncDesiredRoot({
+    prismHome: options.prismHome,
+    desired: planWorkflowRefsEmit({
+      prismHome: options.prismHome,
+      projectKey,
+      manifest,
+    }),
+    scopePlugins: new Set([WORKFLOW_REFS_HARNESS]),
+    dryRun: options.dryRun ?? false,
+  });
+};
 
 const SUPPORTED_TARGETS = [
   "opencode",
@@ -589,8 +612,8 @@ const mcpBindingsForTarget = (options: {
   readonly registry: PluginRegistry;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
-}): ReturnType<typeof mcpBindingsForAgentsAndTools> =>
-  mcpBindingsForAgentsAndTools(
+}): ReturnType<typeof bindingsOwnedByPlugin> =>
+  bindingsOwnedByPlugin(
     options.registry.pluginName,
     options.artifacts.tools,
     options.agents,
@@ -969,7 +992,7 @@ const resolveUnionMcpBundleInputs = (
       const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
       const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
       const agentsWithOrbitTools = applyOrbitToolPermissions(agents, orbitToolPermissions);
-      const targetBindings = mcpBindingsForAgentsAndTools(
+      const targetBindings = bindingsOwnedByPlugin(
         registry.pluginName,
         tools,
         agentsWithOrbitTools,
@@ -999,7 +1022,7 @@ const prepareUnionMcpServer = (options: {
   readonly artifacts: TargetArtifacts;
 }): Effect.Effect<PreparedMcpServer | undefined, CompileError> =>
   Effect.gen(function* () {
-    const targetBindings = mcpBindingsForAgentsAndTools(
+    const targetBindings = bindingsOwnedByPlugin(
       options.registry.pluginName,
       options.artifacts.tools,
       options.agents,
@@ -1338,9 +1361,7 @@ export const compilePluginForTarget = (
       // filesystem-safe dir name. This fixes the clobbering bug where two
       // projects with a same-named local plugin stomped each other in the old
       // single flat global manifest.
-      const projectKey = deriveProjectKey(
-        options.projectPath ? expandPath(options.projectPath) : process.cwd(),
-      ).key;
+      const projectKey = compileProjectKey(options.projectPath);
       yield* Effect.promise(() =>
         updateCompileManifestForTarget({
           prismHome: context.prismHome,
@@ -1353,20 +1374,11 @@ export const compilePluginForTarget = (
           ...(surfaces.orbits ? { orbits } : {}),
         }),
       );
-      if (options.projectPath) {
-        const { manifest } = yield* Effect.promise(() =>
-          readCompileManifest(context.prismHome, projectKey)
-        );
+      if (options.emitWorkflowRefs !== false) {
         workflowRefsReport = yield* Effect.promise(() =>
-          syncDesiredRoot({
+          syncWorkflowRefsForProject({
             prismHome: context.prismHome,
-            desired: planWorkflowRefsEmit({
-              prismHome: context.prismHome,
-              projectKey,
-              manifest,
-            }),
-            scopePlugins: new Set([WORKFLOW_REFS_HARNESS]),
-            dryRun: false,
+            ...(options.projectPath ? { projectPath: options.projectPath } : {}),
           }),
         );
       }

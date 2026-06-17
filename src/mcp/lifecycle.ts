@@ -1,5 +1,4 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
 import { access, mkdir, open, readdir, readFile, readlink, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -39,6 +38,7 @@ import {
   stopLaunchAgent,
 } from "./launchd.js";
 import { getFreePort, isPortAvailable } from "./ports.js";
+import { resolveBunExecutable } from "../bun-runtime.js";
 
 export type McpLifecycleHarness = HarnessId;
 export type McpPortSelection = "auto" | number;
@@ -312,18 +312,13 @@ const terminatePid = async (
   await waitForPidExit(pid, timeoutMs);
 };
 
-const bunCommand = (): string =>
-  /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath) && existsSync(process.execPath)
-    ? process.execPath
-    : "bun";
-
 // launchd's PATH resolution for non-system bins (mise, homebrew) is unreliable
 // and silently fails with EX_CONFIG (78) before the program ever runs. Resolve
 // bun to an absolute path so plists never depend on launchd's PATH lookup.
 let cachedBunAbsolutePath: string | undefined;
 const bunAbsolutePathForPlist = async (): Promise<string> => {
   if (cachedBunAbsolutePath) return cachedBunAbsolutePath;
-  const fallback = bunCommand();
+  const fallback = resolveBunExecutable();
   if (fallback.startsWith("/")) {
     cachedBunAbsolutePath = fallback;
     return fallback;
@@ -658,7 +653,7 @@ const spawnServerProcess = (
   prepared: McpPreparedServer,
   options: { readonly foreground: boolean },
 ): ChildProcess => {
-  const child = spawn(bunCommand(), [prepared.descriptor.serverPath], {
+  const child = spawn(resolveBunExecutable(), [prepared.descriptor.serverPath], {
     cwd: prepared.descriptor.prismHome,
     env: daemonEnv(prepared),
     detached: !options.foreground,
@@ -818,12 +813,13 @@ const classifyStatus = async (options: {
         detail: `port ${metadata.port} is occupied but no Prism pid is recorded`,
       };
     }
+    const hostIsNonLoopback = staleReasons.includes("metadata-host-non-loopback");
     return {
       state: "stopped",
       descriptor,
       metadata,
       staleReasons,
-      detail: staleReasons.length > 0
+      detail: hostIsNonLoopback
         ? "runtime metadata is present but no daemon pid is recorded and host is not loopback"
         : "runtime metadata is present but no daemon pid is recorded",
     };

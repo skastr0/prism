@@ -9,13 +9,16 @@ import {
   ampPluginToolNameForBinding,
   generateAmpPluginBundle,
 } from "../mcp-bundle.js";
+import { prepareHookBundleSource } from "../load.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  bindingsFromCanonicalTools,
+  bindingsOwnedByPlugin,
   collectBindingNameMap,
+  mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import {
   collectArtifactSourceFiles,
@@ -124,6 +127,7 @@ const uniqueBindings = (
 interface PlannedAmpHook {
   readonly hook: Hook;
   readonly importName: string;
+  readonly importPath?: string;
   readonly nativeEvent: "tool.call" | "tool.result" | "session.start";
   readonly matcher?: string;
 }
@@ -136,11 +140,27 @@ interface PlannedAmpCommand {
   readonly prompt: string;
 }
 
-const collectAmpBindings = (input: LowerInput): ReadonlyArray<ResolvedContractBinding> =>
-  uniqueBindings(input.target.sourcePluginName, [
-    ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
-    ...input.agents.flatMap((agent) => agent.toolBindings),
-  ]);
+/** Bindings this compile invocation may register through the generated Amp plugin. */
+const collectAmpOwnedBindings = (
+  input: LowerInput,
+): ReadonlyArray<ResolvedContractBinding> =>
+  uniqueBindings(
+    input.target.sourcePluginName,
+    bindingsOwnedByPlugin(input.target.sourcePluginName, input.tools, input.agents),
+  );
+
+/** Full referenced surface for hook matchers and role-skill documentation. */
+const collectAmpReferencedBindings = (
+  input: LowerInput,
+): ReadonlyArray<ResolvedContractBinding> =>
+  uniqueBindings(
+    input.target.sourcePluginName,
+    mcpBindingsForAgentsAndTools(
+      input.target.sourcePluginName,
+      input.tools,
+      input.agents,
+    ),
+  );
 
 const stringField = (record: Record<string, unknown>, field: string): string | undefined => {
   const value = record[field];
@@ -245,7 +265,7 @@ const renderAmpHookImports = (hooks: ReadonlyArray<PlannedAmpHook>): string =>
     : [
         `import { Effect } from ${JSON.stringify(effectBundleImportPath())};`,
         ...hooks.map((hook) =>
-          `import ${hook.importName} from ${JSON.stringify(hook.hook.sourcePath.replace(/\\/g, "/"))};`
+          `import ${hook.importName} from ${JSON.stringify((hook.importPath ?? hook.hook.sourcePath).replace(/\\/g, "/"))};`
         ),
       ].join("\n");
 
@@ -409,9 +429,6 @@ const renderAmpAgentSkillMarkdown = (
   target: AmpCodeLowerTarget,
 ): string => {
   const name = generatedAgentSkillName(agent.name);
-  const toolNames = agent.toolBindings.map((binding) =>
-    ampPluginToolNameForBinding(target.sourcePluginName, binding),
-  );
   const skillNames = [...new Set([...agent.skills, ...agent.allowedSkills])]
     .sort((left, right) => left.localeCompare(right));
   const lines: string[] = [];
@@ -428,16 +445,36 @@ const renderAmpAgentSkillMarkdown = (
     agent.body,
   );
 
-  if (toolNames.length > 0) {
+  if (agent.toolBindings.length > 0) {
+    const toolsByOwner = new Map<string, string[]>();
+    for (const binding of agent.toolBindings) {
+      const toolName = ampPluginToolNameForBinding(target.sourcePluginName, binding);
+      const ownerPlugin = generatedPluginId(
+        ownerPluginForBinding(target.sourcePluginName, binding),
+      );
+      const ownerTools = toolsByOwner.get(ownerPlugin) ?? [];
+      ownerTools.push(toolName);
+      toolsByOwner.set(ownerPlugin, ownerTools);
+    }
+
     lines.push(
       "",
-      "## Generated Amp Tools",
+      "## Available Amp Tools",
       "",
-      "These tools are registered by the generated Prism Amp plugin and are available globally in this Amp workspace:",
+      "Owner generated Amp plugins register these tools globally in this workspace. Consumer role skills reference owner plugins rather than re-bundling foreign tool logic:",
       "",
     );
-    for (const toolName of [...new Set(toolNames)].sort((left, right) => left.localeCompare(right))) {
-      lines.push(`- \`${toolName}\``);
+    for (const [ownerPlugin, ownerToolNames] of [...toolsByOwner.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
+      lines.push(`From \`${ownerPlugin}\`:`);
+      lines.push("");
+      for (const toolName of [...new Set(ownerToolNames)].sort((left, right) =>
+        left.localeCompare(right),
+      )) {
+        lines.push(`- \`${toolName}\``);
+      }
+      lines.push("");
     }
   }
 
@@ -488,28 +525,48 @@ const planAmpPlugin = async (
   input: LowerInput,
   files: DesiredFile[],
 ): Promise<void> => {
-  const bindings = collectAmpBindings(input);
-  const hooks = await planAmpHooks(input, bindings);
+  const ownedBindings = collectAmpOwnedBindings(input);
+  const referencedBindings = collectAmpReferencedBindings(input);
+  const hooks = await planAmpHooks(input, referencedBindings);
   const commands = await collectAmpCommands(input);
-  if (bindings.length === 0 && hooks.length === 0 && commands.length === 0) {
+  if (ownedBindings.length === 0 && hooks.length === 0 && commands.length === 0) {
     // Nothing desired: the sync engine prunes a previously managed plugin file.
     return;
   }
 
-  const bundle = await generateAmpPluginBundle({
-    sourcePluginName: input.target.sourcePluginName,
-    sourcePluginRoot: input.target.sourcePluginPath ?? input.registry?.pluginPath,
-    dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
-    version: input.target.sourcePluginVersion,
-    bindings,
-    setupImports: renderAmpHookImports(hooks),
-    setupSource: joinAmpSetupSections(commands, hooks),
-  });
-  pushDesiredFile(files, {
-    targetPath: generatedPluginPath(input.target),
-    content: bundle.content,
-    plugin: input.target.sourcePluginName,
-  });
+  const preparedHookSources: Array<{
+    readonly hook: PlannedAmpHook;
+    readonly prepared: Awaited<ReturnType<typeof prepareHookBundleSource>>;
+  }> = [];
+  try {
+    for (const hook of hooks) {
+      preparedHookSources.push({
+        hook,
+        prepared: await prepareHookBundleSource(hook.hook.sourcePath),
+      });
+    }
+    const preparedHooks = preparedHookSources.map(({ hook, prepared }) => ({
+      ...hook,
+      importPath: prepared.transformedPath,
+    }));
+
+    const bundle = await generateAmpPluginBundle({
+      sourcePluginName: input.target.sourcePluginName,
+      sourcePluginRoot: input.target.sourcePluginPath ?? input.registry?.pluginPath,
+      dependencyPluginRoots: input.registry ? Object.entries(input.registry.dependencyPaths) : undefined,
+      version: input.target.sourcePluginVersion,
+      bindings: ownedBindings,
+      setupImports: renderAmpHookImports(preparedHooks),
+      setupSource: joinAmpSetupSections(commands, preparedHooks),
+    });
+    pushDesiredFile(files, {
+      targetPath: generatedPluginPath(input.target),
+      content: bundle.content,
+      plugin: input.target.sourcePluginName,
+    });
+  } finally {
+    await Promise.all(preparedHookSources.map(({ prepared }) => prepared.cleanup()));
+  }
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {

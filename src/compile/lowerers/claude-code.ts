@@ -22,6 +22,7 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
+  bindingsOwnedByPlugin,
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import { listDirRecursive, readFile } from "../../fs.js";
@@ -243,10 +244,15 @@ const renderHooksJson = async (
   return json({ hooks: groupedHooks });
 };
 
-const renderHookWrapperEntry = (hook: Hook, hookRuntimePath: string): string =>
+const renderHookWrapperEntry = (
+  hook: Hook,
+  hookRuntimePath: string,
+  hookSourcePath: string,
+): string =>
   renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
+    hookSourcePath,
     harness: TARGET_ID,
     nativeEvent: claudeNativeHookEvent(hook.event),
     cwdExpression: "input?.cwd ?? input?.workspace?.cwd",
@@ -297,18 +303,18 @@ const planMcpServer = async (
   files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  const bindings = mcpBindingsForAgentsAndTools(
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: bindings.length > 0,
+    requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
   const pluginId = generatedPluginId(input.target);
 
-  if (bindings.length === 0) {
+  if (ownedBindings.length === 0) {
     pushWrite(
       files,
       desiredRelativePaths,

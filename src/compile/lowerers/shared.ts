@@ -24,6 +24,7 @@ import type { ResolvedHookMatch } from "../hooks.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import { effectBundleImportPath } from "../runtime-deps.js";
+import { prepareHookBundleSource } from "../load.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   makeTempBuildRoot,
@@ -210,10 +211,10 @@ const nativeToolInput = (input) =>
 ${options?.nativeSessionSource ?? DEFAULT_HOOK_WRAPPER_SESSION_SOURCE}`;
 
 const renderHookWrapperImports = (
-  hook: Hook,
+  hookSourcePath: string,
   hookRuntimePath: string,
 ): string => `import { Effect } from ${JSON.stringify(effectBundleImportPath())};
-import hook from ${JSON.stringify(hook.sourcePath.replace(/\\/g, "/"))};
+import hook from ${JSON.stringify(hookSourcePath.replace(/\\/g, "/"))};
 import { decodeNativeHookPayloadForEvent, decodeHookResultForEvent } from ${JSON.stringify(hookRuntimePath.replace(/\\/g, "/"))};`;
 
 const renderHookWrapperNormalizePayload = (options: {
@@ -292,6 +293,7 @@ ${blockDecisionSource}
 export const renderPrePostSessionHookWrapperEntry = (options: {
   readonly hook: Hook;
   readonly hookRuntimePath: string;
+  readonly hookSourcePath?: string;
   readonly harness: string;
   readonly nativeEvent: string;
   readonly cwdExpression: string;
@@ -304,7 +306,7 @@ export const renderPrePostSessionHookWrapperEntry = (options: {
   readonly resultHandlingSource?: string;
 }): string =>
   [
-    renderHookWrapperImports(options.hook, options.hookRuntimePath),
+    renderHookWrapperImports(options.hookSourcePath ?? options.hook.sourcePath, options.hookRuntimePath),
     renderHookWrapperInputHelpers({
       nativeToolInputExpression: options.nativeToolInputExpression,
       nativeSessionSource: options.nativeSessionSource,
@@ -330,11 +332,16 @@ export const bundleGeneratedHookWrapper = async (options: {
   readonly hook: Hook;
   readonly tempPrefix: string;
   readonly buildLabel: string;
-  readonly renderEntry: (hook: Hook, hookRuntimePath: string) => string;
+  readonly renderEntry: (
+    hook: Hook,
+    hookRuntimePath: string,
+    hookSourcePath: string,
+  ) => string;
 }): Promise<string> => {
   const tempRoot = await makeTempBuildRoot(options.tempPrefix);
 
   try {
+    const bundleSource = await prepareHookBundleSource(options.hook.sourcePath);
     const hookRuntimePath = await writeTempBuildFile(
       tempRoot,
       "hook-runtime.mjs",
@@ -343,11 +350,15 @@ export const bundleGeneratedHookWrapper = async (options: {
     const entry = await writeTempBuildFile(
       tempRoot,
       "hook-entry.ts",
-      options.renderEntry(options.hook, hookRuntimePath),
+      options.renderEntry(options.hook, hookRuntimePath, bundleSource.transformedPath),
     );
 
     const outdir = join(tempRoot, "dist");
-    await buildHookWrapperWithBun(entry, outdir, options.buildLabel);
+    try {
+      await buildHookWrapperWithBun(entry, outdir, options.buildLabel);
+    } finally {
+      await bundleSource.cleanup();
+    }
 
     const built = normalizeBuiltHookWrapper(await readFile(join(outdir, "wrapper.mjs")));
     return built.startsWith("#!") ? built : `#!/usr/bin/env node\n${built}`;

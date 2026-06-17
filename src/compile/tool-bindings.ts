@@ -25,6 +25,83 @@ export const bindingsFromCanonicalTools = (
     .map((tool) => bindingFromToolSource(pluginName, tool.sourcePath))
     .sort((left, right) => left.toolName.localeCompare(right.toolName));
 
+const bindingIdentity = (binding: ResolvedContractBinding): string => {
+  if (binding.kind === "synthetic") {
+    return [
+      "synthetic",
+      binding.contract?.pluginName ?? "",
+      binding.contract?.name ?? "",
+      binding.logicalName,
+      binding.toolPluginName,
+      binding.toolName,
+    ].join(":");
+  }
+  return `permission:${binding.toolPluginName}:${binding.toolName}:${binding.logicalName}`;
+};
+
+const dedupeBindings = (
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+): ReadonlyArray<ResolvedContractBinding> => {
+  const seen = new Map<string, ResolvedContractBinding>();
+  for (const binding of bindings) {
+    seen.set(bindingIdentity(binding), binding);
+  }
+  return [...seen.values()].sort((left, right) =>
+    bindingIdentity(left).localeCompare(bindingIdentity(right)),
+  );
+};
+
+export const bindingIsOwnedByPlugin = (
+  compilingPluginName: string,
+  binding: ResolvedContractBinding,
+): boolean =>
+  binding.kind === "synthetic" || binding.toolPluginName === compilingPluginName;
+
+export const ownerPluginForBinding = (
+  compilingPluginName: string,
+  binding: ResolvedContractBinding,
+): string =>
+  binding.kind === "synthetic" ? compilingPluginName : binding.toolPluginName;
+
+export const bindingsOwnedByPlugin = (
+  compilingPluginName: string,
+  tools: ReadonlyArray<CanonicalTool> | undefined,
+  agents: ReadonlyArray<ComposedAgent>,
+): ReadonlyArray<ResolvedContractBinding> => {
+  const bindings: ResolvedContractBinding[] = [
+    ...bindingsFromCanonicalTools(compilingPluginName, tools ?? []),
+  ];
+  for (const agent of agents) {
+    for (const binding of agent.toolBindings) {
+      if (bindingIsOwnedByPlugin(compilingPluginName, binding)) {
+        bindings.push(binding);
+      }
+    }
+  }
+  return dedupeBindings(bindings);
+};
+
+export const groupBindingsByOwner = (
+  compilingPluginName: string,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+): ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>> => {
+  const groups = new Map<string, ResolvedContractBinding[]>();
+  for (const binding of bindings) {
+    const owner = ownerPluginForBinding(compilingPluginName, binding);
+    const list = groups.get(owner) ?? [];
+    list.push(binding);
+    groups.set(owner, list);
+  }
+  return new Map(
+    [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([owner, ownerBindings]) => [
+        owner,
+        dedupeBindings(ownerBindings),
+      ]),
+  );
+};
+
 export const mcpBindingsForAgentsAndTools = (
   sourcePluginName: string,
   tools: ReadonlyArray<CanonicalTool> | undefined,

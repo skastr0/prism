@@ -11,7 +11,7 @@ import {
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
-import { mcpBindingsForAgentsAndTools } from "../tool-bindings.js";
+import { bindingsOwnedByPlugin } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredRegion } from "../../sync/desired.js";
 import type { LowerOutput } from "./shared.js";
@@ -66,17 +66,17 @@ const planMcpServer = (
   readonly entry?: CursorMcpServerEntry;
 } => {
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
-  const bindings = mcpBindingsForAgentsAndTools(
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: bindings.length > 0,
+    requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
 
-  if (bindings.length === 0) return { serverName };
+  if (ownedBindings.length === 0) return { serverName };
 
   return {
     serverName,

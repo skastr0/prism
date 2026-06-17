@@ -20,6 +20,7 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
+  bindingsOwnedByPlugin,
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -433,20 +434,20 @@ const renderKimiMcpServerEntry = (options: {
 };
 
 const planMcpServer = (input: LowerInput): PlannedMcpServer => {
-  const bindings = mcpBindingsForAgentsAndTools(
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools ?? [],
     input.agents,
   );
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: bindings.length > 0,
+    requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  if (bindings.length === 0) return { toolNames: [] };
+  if (ownedBindings.length === 0) return { toolNames: [] };
 
   const serverName = generatedMcpServerName(input.target.sourcePluginName);
   const toolNames = uniqueSorted(
-    mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
+    mcpToolNamesForBindings(input.target.sourcePluginName, ownedBindings),
   );
   return {
     serverName,
@@ -487,10 +488,12 @@ const renderKimiHookWrapperEntry = (
   hook: Hook,
   nativeEvent: string,
   hookRuntimePath: string,
+  hookSourcePath: string,
 ): string =>
   renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
+    hookSourcePath,
     harness: TARGET_ID,
     nativeEvent,
     cwdExpression: "input?.cwd",
@@ -507,8 +510,8 @@ const bundleHookWrapper = (hook: Hook, nativeEvent: string): Promise<string> =>
     hook,
     tempPrefix: "prism-kimi-hook-",
     buildLabel: `Kimi '${hook.name}'`,
-    renderEntry: (currentHook, hookRuntimePath) =>
-      renderKimiHookWrapperEntry(currentHook, nativeEvent, hookRuntimePath),
+    renderEntry: (currentHook, hookRuntimePath, hookSourcePath) =>
+      renderKimiHookWrapperEntry(currentHook, nativeEvent, hookRuntimePath, hookSourcePath),
   });
 
 const planHooks = async (

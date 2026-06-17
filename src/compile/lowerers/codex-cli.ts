@@ -5,10 +5,7 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
-import {
-  mcpToolNameForBinding,
-  mcpToolNamesForBindings,
-} from "../mcp-bundle.js";
+import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   generatedMcpServerName,
   renderMcpHttpUrl,
@@ -20,7 +17,9 @@ import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   bindingsFromCanonicalTools,
+  bindingsOwnedByPlugin,
   collectBindingNameMap,
+  groupBindingsByOwner,
   mcpBindingsForAgentsAndTools,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
@@ -65,11 +64,6 @@ interface PlannedHook {
   readonly nativeEvent: string;
   readonly matcher?: string;
   readonly relativePath: string;
-}
-
-interface AgentMcpServerConfig {
-  readonly name: string;
-  readonly runtime: ResolvedMcpRuntime;
 }
 
 const quote = (value: string): string => JSON.stringify(value);
@@ -151,11 +145,6 @@ const composeModelConfig = (agent: ComposedAgent): Record<string, unknown> => {
   return output;
 };
 
-const mcpToolNamesForAgent = (sourcePluginName: string, agent: ComposedAgent): string[] =>
-  uniqueSorted(
-    agent.toolBindings.map((binding) => mcpToolNameForBinding(sourcePluginName, binding)),
-  );
-
 const renderCodexMcpServerToml = (options: {
   readonly name: string;
   readonly runtime: ResolvedMcpRuntime;
@@ -171,10 +160,17 @@ const renderCodexMcpServerToml = (options: {
   ];
 };
 
+const renderCodexOwnerMcpServerRef = (options: {
+  readonly name: string;
+  readonly enabledTools: ReadonlyArray<string>;
+}): string[] => [
+  tomlDottedTable(["mcp_servers", options.name]),
+  `enabled_tools = ${tomlArray(options.enabledTools)}`,
+];
+
 const renderAgentToml = (
   agent: ComposedAgent,
   target: CodexCliLowerTarget,
-  mcpServer?: AgentMcpServerConfig,
 ): string => {
   const developerInstructions = agent.allowedSkills.length > 0
     ? `${agent.body}\n\n## Prism Skills\nUse these installed skills when they match the task: ${uniqueSorted(agent.allowedSkills).join(", ")}.`
@@ -200,13 +196,17 @@ const renderAgentToml = (
     );
   }
 
-  const mcpToolNames = mcpToolNamesForAgent(target.sourcePluginName, agent);
-  if (mcpServer && mcpToolNames.length > 0) {
+  const ownerGroups = groupBindingsByOwner(target.sourcePluginName, agent.toolBindings);
+  for (const [ownerPlugin, bindings] of ownerGroups) {
+    const enabledTools = uniqueSorted(
+      bindings.map((binding) => mcpToolNameForBinding(target.sourcePluginName, binding)),
+    );
+    if (enabledTools.length === 0) continue;
     lines.push(
       "",
-      ...renderCodexMcpServerToml({
-        ...mcpServer,
-        enabledTools: mcpToolNames,
+      ...renderCodexOwnerMcpServerRef({
+        name: generatedMcpServerName(ownerPlugin),
+        enabledTools,
       }),
     );
   }
@@ -270,6 +270,7 @@ const renderHookWrapperEntry = (
   hook: Hook,
   nativeEvent: string,
   hookRuntimePath: string,
+  hookSourcePath: string,
 ): string => {
   const supportsAdditionalContext =
     nativeEvent === "SessionStart" ||
@@ -279,6 +280,7 @@ const renderHookWrapperEntry = (
   return renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
+    hookSourcePath,
     harness: TARGET_ID,
     nativeEvent,
     cwdExpression: "input?.cwd",
@@ -327,8 +329,8 @@ const bundleHookWrapper = async (hook: Hook, nativeEvent: string): Promise<strin
     hook,
     tempPrefix: "prism-codex-hook-",
     buildLabel: `Codex '${hook.name}'`,
-    renderEntry: (currentHook, hookRuntimePath) =>
-      renderHookWrapperEntry(currentHook, nativeEvent, hookRuntimePath),
+    renderEntry: (currentHook, hookRuntimePath, hookSourcePath) =>
+      renderHookWrapperEntry(currentHook, nativeEvent, hookRuntimePath, hookSourcePath),
   });
 };
 
@@ -391,54 +393,44 @@ const planMcpServer = (
 ): {
   mcpServerName?: string;
   mcpRuntime?: ResolvedMcpRuntime;
-  toolNames: string[];
   globalToolNames: string[];
 } => {
-  const bindings = mcpBindingsForAgentsAndTools(
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
   const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: bindings.length > 0,
+    requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  if (bindings.length === 0) return { toolNames: [], globalToolNames: [] };
+  if (ownedBindings.length === 0) return { globalToolNames: [] };
 
   const mcpServerName = generatedMcpServerName(input.target.sourcePluginName);
   return {
     mcpServerName,
     mcpRuntime: runtime,
-    toolNames: uniqueSorted(
-      mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
-    ),
-    globalToolNames: uniqueSorted(
-      bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map((binding) =>
-        mcpToolNameForBinding(input.target.sourcePluginName, binding),
+    globalToolNames: uniqueSorted([
+      ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map(
+        (binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding),
       ),
-    ),
+      ...ownedBindings
+        .filter((binding) => binding.kind === "synthetic")
+        .map((binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding)),
+    ]),
   };
 };
 
 type PlannedMcpServer = ReturnType<typeof planMcpServer>;
 
-const agentMcpServerConfig = (mcp: PlannedMcpServer): AgentMcpServerConfig | undefined =>
-  mcp.mcpServerName && mcp.mcpRuntime
-    ? {
-        name: mcp.mcpServerName,
-        runtime: mcp.mcpRuntime,
-      }
-    : undefined;
-
 const planAgentWrites = (
   input: LowerInput,
   files: DesiredFile[],
-  agentMcpServer?: AgentMcpServerConfig,
 ): void => {
   for (const agent of input.agents) {
     pushDesiredFile(files, {
       targetPath: join(input.target.root, "agents", `${agent.name}.toml`),
-      content: renderAgentToml(agent, input.target, agentMcpServer),
+      content: renderAgentToml(agent, input.target),
       plugin: input.target.sourcePluginName,
     });
   }
@@ -560,7 +552,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const mcp = planMcpServer(input);
 
-  planAgentWrites(input, files, agentMcpServerConfig(mcp));
+  planAgentWrites(input, files);
   await planManagedSkillWrites(input, files);
   planOrbitWrites(input, files);
   await planRulesWrite(input, files);

@@ -10,7 +10,7 @@ import { Effect, Schema } from "effect";
 import { createRequire } from "node:module";
 import { basename, join, relative, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type * as TypeScript from "typescript";
 import matter from "gray-matter";
 import {
@@ -70,7 +70,8 @@ import { resolvePrismHome } from "../prism-home.js";
 import { deriveProjectKey, projectGeneratedAgentsPath } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
-import { typescriptBundleImportPath } from "./runtime-deps.js";
+import { effectBundleImportPath, typescriptBundleImportPath } from "./runtime-deps.js";
+import { AUTHORING_RUNTIME_JS, getAuthoringRuntimePath } from "./authoring-runtime.js";
 import type { PluginManifestTargets, PluginRuntimeConfig } from "../types.js";
 import {
   isPluginTargetId,
@@ -143,73 +144,6 @@ const importTsModule = <T>(
       }),
   });
 
-const AUTHORING_RUNTIME_JS = `
-const withNamedRef = (kind, first, second) =>
-  second === undefined ? { kind, name: first } : { kind, plugin: first, name: second };
-
-export const traitRef = (first, second) => withNamedRef("trait-ref", first, second);
-export const agentRef = (first, second) => withNamedRef("agent-ref", first, second);
-export const orbitRef = (first, second) => withNamedRef("orbit-ref", first, second);
-
-export const toolRef = (first, second, third) =>
-  third === undefined
-    ? { kind: "tool-ref", toolspace: first, name: second }
-    : { kind: "tool-ref", plugin: first, toolspace: second, name: third };
-
-export const toolGroupRef = (first, second, third) =>
-  third === undefined
-    ? { kind: "tool-group-ref", toolspace: first, name: second }
-    : { kind: "tool-group-ref", plugin: first, toolspace: second, name: third };
-
-export const modelProfileRef = (first, second, third) =>
-  third === undefined
-    ? { kind: "model-profile-ref", modelspace: first, name: second }
-    : { kind: "model-profile-ref", plugin: first, modelspace: second, name: third };
-
-export const skillRef = (first, second) => withNamedRef("skill-ref", first, second);
-
-export const skillspaceRef = (first, second, third) =>
-  third === undefined
-    ? { kind: "skillspace-ref", skillspace: first, name: second }
-    : { kind: "skillspace-ref", plugin: first, skillspace: second, name: third };
-
-export const schemaSlot = (options = {}) => ({ kind: "schema", ...options });
-export const bindTrait = (trait, options = {}) => ({
-  kind: "trait-binding",
-  trait,
-  ...(options.tools ? { tools: options.tools } : {}),
-});
-
-export const defineAgent = (agent) => agent;
-export const defineTrait = (trait) => trait;
-export const defineOrbit = (orbit) => orbit;
-export const defineTool = (tool) => tool;
-export const defineToolspace = (toolspace) => toolspace;
-export const defineModelspace = (modelspace) => modelspace;
-export const defineSkillspace = (skillspace) => skillspace;
-export const defineHook = (hook) => hook;
-
-export const hookEvent = {
-  toolBefore: "tool.before",
-  toolAfter: "tool.after",
-  promptSubmit: "prompt.submit",
-  permissionRequest: "permission.request",
-  sessionStart: "session.start",
-  sessionEnd: "session.end",
-};
-
-export const hookTool = {
-  any: () => ({ kind: "hook-any-tool" }),
-  tool: (tool) => ({ kind: "hook-toolspace-tool", tool }),
-  group: (group) => ({ kind: "hook-toolspace-group", group }),
-  canonical: (ref) => ({ kind: "hook-canonical-tool", ref }),
-};
-
-export const hookMatcher = {
-  tool: hookTool,
-};
-`;
-
 const makeEffectRuntimeJs = (): string => {
   const namedExports = Object.keys(EffectModule)
     .filter((key) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && key !== "default")
@@ -280,11 +214,10 @@ export const getImportRuntimePaths = async (): Promise<{
 }> => {
   importRuntimePaths ??= (async () => {
     const fs = await import("node:fs/promises");
+    const authoringPath = await Effect.runPromise(getAuthoringRuntimePath());
     const dir = await fs.mkdtemp(join(tmpdir(), "prism-authoring-"));
-    const authoringPath = join(dir, "prism-authoring-runtime.mjs");
     const effectPath = join(dir, "effect-runtime.mjs");
     const workflowDslPath = join(dir, "workflow-dsl-runtime.mjs");
-    await fs.writeFile(authoringPath, AUTHORING_RUNTIME_JS, "utf8");
     await fs.writeFile(effectPath, makeEffectRuntimeJs(), "utf8");
     await fs.writeFile(workflowDslPath, WORKFLOW_DSL_RUNTIME_JS, "utf8");
     return { authoring: authoringPath, effect: effectPath, workflowDsl: workflowDslPath };
@@ -382,6 +315,14 @@ interface LoadSpecifierOverrides {
   readonly effect: string;
   /** Target for bare `prism/refs` imports; absent when not applicable (plugin compile). */
   readonly prismRefs?: string;
+  /**
+   * Optional absolute path to the local Prism source entry. When provided,
+   * absolute imports pointing at this path are rewritten to bare `prism` so
+   * they follow the same override as native bare imports. Used for hook bundle
+   * preparation where test fixtures and local helpers may import the source
+   * entry by absolute path.
+   */
+  readonly prismSourcePath?: string;
 }
 
 const escapeRegExpLiteral = (value: string): string =>
@@ -416,6 +357,9 @@ const rewriteImportSpecifiers = async (
   // wins (the bare-prism regex anchors on the closing quote and so cannot match
   // `prism/refs`, but order keeps the intent explicit).
   let rewritten = rewrittenPluginDeps;
+  if (overrides.prismSourcePath !== undefined) {
+    rewritten = replaceBareSpecifier(rewritten, overrides.prismSourcePath, "prism");
+  }
   if (overrides.prismRefs !== undefined) {
     rewritten = replaceBareSpecifier(rewritten, "prism/refs", overrides.prismRefs);
   }
@@ -673,7 +617,11 @@ export interface PrepareImportWrapperOptions {
 export const prepareImportWrapper = async (
   sourcePath: string,
   options: PrepareImportWrapperOptions = {},
-): Promise<{ readonly specifier: string; readonly cleanup: () => Promise<void> }> => {
+): Promise<{
+  readonly specifier: string;
+  readonly transformedPath: string;
+  readonly cleanup: () => Promise<void>;
+}> => {
   const pluginRoot = await findPluginRoot(sourcePath);
   const mode = options.workflow ? "workflow" : "plugin";
   const overrides = options.workflow
@@ -688,12 +636,115 @@ export const prepareImportWrapper = async (
 
   return {
     specifier: `${toFileSpecifier(transformedPath)}?t=${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    transformedPath,
     cleanup: async () => {
       if (cleaned) return;
       cleaned = true;
       transformed.activeImports = Math.max(0, transformed.activeImports - 1);
       transformed.lastUsed = Date.now();
       scheduleTransformedPluginRootCleanup(transformed);
+    },
+  };
+};
+
+const normalizeImportPath = (path: string): string => path.replace(/\\/g, "/");
+
+const pluginBundleSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
+  const runtimePaths = await getImportRuntimePaths();
+  return {
+    prism: normalizeImportPath(runtimePaths.authoring),
+    effect: normalizeImportPath(runtimePaths.effect),
+  };
+};
+
+/**
+ * Prepare a plugin source file for bundling by `bun build`.
+ *
+ * Unlike `prepareImportWrapper`, which produces `file:///` specifiers suitable
+ * for runtime `import()`, this helper produces absolute POSIX paths so the
+ * bundler can resolve `prism`/`effect` imports without relying on ambient
+ * `node_modules`. The transformed plugin root is cached and cleaned up the
+ * same way as `prepareImportWrapper`.
+ */
+export const prepareBundleSource = async (
+  sourcePath: string,
+): Promise<{ readonly transformedPath: string; readonly cleanup: () => Promise<void> }> => {
+  const pluginRoot = await findPluginRoot(sourcePath);
+  const overrides = await pluginBundleSpecifierOverrides();
+  const cacheKey = `bundle:${pluginRoot}`;
+  const transformed = await getTransformedPluginRoot(cacheKey, pluginRoot, overrides);
+  transformed.activeImports += 1;
+  transformed.lastUsed = Date.now();
+  let cleaned = false;
+  const transformedPath = join(transformed.root, relative(pluginRoot, sourcePath));
+
+  return {
+    transformedPath,
+    cleanup: async () => {
+      if (cleaned) return;
+      cleaned = true;
+      transformed.activeImports = Math.max(0, transformed.activeImports - 1);
+      transformed.lastUsed = Date.now();
+      scheduleTransformedPluginRootCleanup(transformed);
+    },
+  };
+};
+
+const resolvePrismSourceEntry = async (): Promise<string> => {
+  const url = await import.meta.resolve("../index.ts", import.meta.url);
+  return normalizeImportPath(fileURLToPath(url));
+};
+
+const hookBundleSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => {
+  const runtimePaths = await getImportRuntimePaths();
+  return {
+    // Hook bundles use the lightweight authoring runtime for `prism` rather
+    // than the full source entry, because the bundled wrapper provides the
+    // real execution environment and only needs the hook definition helpers.
+    prism: normalizeImportPath(runtimePaths.authoring),
+    effect: effectBundleImportPath(),
+    // Normalize absolute imports that point back at the local Prism source
+    // entry (common in test fixtures) to bare `prism` so they follow the same
+    // override.
+    prismSourcePath: await resolvePrismSourceEntry(),
+    // `prism/refs` is not used in hook bundles.
+  };
+};
+
+/**
+ * Prepare a plugin source file for bundling into an executable hook wrapper.
+ *
+ * Unlike `prepareBundleSource`, which rewrites `prism` to the compile-time
+ * authoring runtime stub, this helper rewrites `prism` to the real Prism source
+ * entry so the bundled hook can execute. `effect` is rewritten to the same
+ * runtime Effect module used by the wrapper, preventing duplicate Effect
+ * instances. Absolute imports that point back at the local Prism source entry
+ * (common in test fixtures and local helper files) are normalized to bare
+ * `prism` first.
+ */
+export const prepareHookBundleSource = async (
+  sourcePath: string,
+): Promise<{ readonly transformedPath: string; readonly cleanup: () => Promise<void> }> => {
+  const pluginRoot = await findPluginRoot(sourcePath);
+  const overrides = await hookBundleSpecifierOverrides();
+  // Hook bundles must reflect source edits made between compiles in the same
+  // process (e.g. packaging a plugin, editing a hook, then packaging again).
+  // The shared transformed-root cache keys only by pluginRoot, so a fresh copy
+  // is built per bundle and removed immediately after.
+  const fs = await import("node:fs/promises");
+  const outputParent = await fs.mkdtemp(join(tmpdir(), "prism-hook-sources-"));
+  await copyTransformedPluginTree({ pluginRoot, outputParent, overrides, visited: new Set<string>() });
+
+  const transformedRoot = join(outputParent, basename(pluginRoot));
+  const transformedPath = join(transformedRoot, relative(pluginRoot, sourcePath));
+  let cleaned = false;
+
+  return {
+    transformedPath,
+    cleanup: async () => {
+      if (cleaned) return;
+      cleaned = true;
+      await fs.rm(outputParent, { recursive: true, force: true });
     },
   };
 };

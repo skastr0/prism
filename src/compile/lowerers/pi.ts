@@ -294,10 +294,12 @@ const renderPiHookResultHandling = (): string =>
 const renderHookWrapperEntry = (
   hook: Hook,
   hookRuntimePath: string,
+  hookSourcePath: string,
 ): string =>
   renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
+    hookSourcePath,
     harness: TARGET_ID,
     nativeEvent: piNativeHookEvent(hook.event),
     cwdExpression: "input?.cwd",

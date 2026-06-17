@@ -660,6 +660,18 @@ const resolveCompileMcpRuntimePort = (options: {
   return Effect.tryPromise({
     try: async () => {
       if (options.compileOptions.dryRun) {
+        // Reuse the running daemon's port so `plan` previews the same URL
+        // that `refresh` already wrote. Otherwise `plan` allocates a fresh
+        // free port and reports every MCP URL artifact as source-changed.
+        const status = await getMcpStatus({
+          pluginPath: options.compileOptions.pluginPath,
+          harness: options.targetId,
+          scope: options.compileOptions.scope,
+          projectPath: options.compileOptions.projectPath,
+          prismHome: options.prismHome,
+        });
+        const runningPort = status.state === "running" ? portFromMcpMetadata(status.metadata) : undefined;
+        if (runningPort !== undefined) return runningPort;
         return getFreePort(runtime.host);
       }
 

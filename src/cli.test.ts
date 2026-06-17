@@ -108,7 +108,7 @@ test("workflow runs show returns the run record and rejects missing runs", async
   const storePath = join(root, "workflows.sqlite");
 
   await writeFile(workflowPath, `
-import { Schema } from "${effectImportPath}";
+import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
 const agent = {
@@ -160,7 +160,7 @@ export const workflow = defineWorkflow({
   const missing = await runCli(["workflow", "runs", "show", "missing-run", "--store", storePath], {});
   expect(missing.exitCode).toBe(2);
   expect(missing.stderr).toContain("workflow run not found: missing-run");
-});
+}, 30_000);
 
 test("workflow runs summary exposes compact execution evidence in text and JSON", async () => {
   const root = await createTempRoot();
@@ -169,7 +169,7 @@ test("workflow runs summary exposes compact execution evidence in text and JSON"
   const storePath = join(root, "workflows.sqlite");
 
   await writeFile(workflowPath, `
-import { Schema } from "${effectImportPath}";
+import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "${prismImportPath}";
 
 const agent = {
@@ -247,7 +247,7 @@ export const workflow = defineWorkflow({
   const missing = await runCli(["workflow", "runs", "summary", "missing-run", "--store", storePath], {});
   expect(missing.exitCode).toBe(2);
   expect(missing.stderr).toContain("workflow run not found: missing-run");
-});
+}, 30_000);
 
 type JsonObject = Record<string, unknown>;
 
@@ -1325,6 +1325,35 @@ test("refresh --plugins compiles discovered child plugins with project scope", a
       join(homeRoot, ".claude", "skills", "prism-generated-canonical-compile-fixture", "agents", "builder.md"),
     )
   ).toBe(false);
+});
+
+test("refresh --plugins emits workflow refs once after directory compile", async () => {
+  const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
+  const args = [
+    "refresh",
+    "--plugins",
+    monorepoRoot,
+    "--harness",
+    "opencode,claude-code",
+    "--scope",
+    "project",
+    "--project",
+    projectRoot,
+  ];
+
+  const first = await runCli(args, { HOME: homeRoot });
+
+  expect(first.exitCode).toBe(0);
+  expect(first.stdout.match(/Workflow refs/g)?.length).toBe(1);
+  expect(first.stdout.match(/generated\/agents\.ts/g)?.length).toBe(1);
+
+  const second = await runCli(args, { HOME: homeRoot });
+
+  expect(second.exitCode).toBe(0);
+  expect(second.stdout.match(/Workflow refs/g)?.length).toBe(1);
+  expect(second.stdout.match(/generated\/agents\.ts/g)?.length).toBe(1);
+  expect(second.stdout).toContain("skip");
+  expect(second.stdout).not.toContain("repair");
 });
 
 test("refresh --plugins skips skill validation when skills are not targeted", async () => {

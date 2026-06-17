@@ -1,6 +1,6 @@
 # Lowerer Capability Matrix
 
-Checked: 2026-05-31
+Checked: 2026-06-17
 
 Prism keeps two related contracts separate:
 
@@ -102,7 +102,12 @@ plus a managed `<kimi-root>/plugins/installed.json` record so Kimi loads the
 plugin as an enabled user-scoped plugin.
 Targeted skills, concrete orbit skills, command workflows, and compiled agents
 lower as Kimi skills; compiled agents are role/workflow skills because official
-Kimi subagents are runtime dispatches rather than persistent custom-agent files.
+Kimi has no headless agent/sub-agent file surface. The Prism workflow worker loads
+the generated plugin's `skills/` directory via `--skills-dir` and runs the role
+skill with `--prompt --output-format stream-json`. Kimi's prompt mode does not
+allow `--yolo` or `--auto`, so tool-use automation is limited to what the model
+can emit in a single prompt response; full headless tool execution requires Kimi
+ACP server mode, which Prism does not yet implement.
 Canonical tools lower through plugin-declared MCP servers using Kimi's
 plugin MCP runtime names and `mcp__<server>__<tool>` qualification. Hooks are not plugin manifest fields; Prism
 patches managed `[[hooks]]` entries in `<kimi-root>/config.toml` and stores hook
@@ -165,4 +170,4 @@ leaves Cursor's native approval flow intact.
 - Factory plugin/settings hierarchy: https://docs.factory.ai/guides/building/building-plugins and https://docs.factory.ai/enterprise/hierarchical-settings-and-org-control
 - Grok Build skills/plugins: https://docs.x.ai/build/features/skills-plugins-marketplaces
 - Cursor rules, skills, commands, plugins, and MCP: https://cursor.com/docs/rules, https://cursor.com/docs/skills, https://cursor.com/docs/cli/reference/slash-commands, https://cursor.com/docs/reference/plugins, and https://cursor.com/docs/mcp
-- Codex public use cases mention skills and plugins, but Prism's Codex CLI contract is primarily tracked from the local Codex configuration surface and current repo tests until fuller public CLI extension docs exist: https://developers.openai.com/codex/use-cases
+- Codex public docs describe skills and plugins as reusable workflow/package surfaces, while Prism's Codex CLI config contract remains tracked from the local Codex configuration surface and current repo tests: https://developers.openai.com/codex/skills and https://developers.openai.com/codex/plugins

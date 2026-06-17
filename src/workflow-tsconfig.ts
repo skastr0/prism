@@ -26,7 +26,7 @@
  * This file is Prism-owned and must never be committed to the user's project.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -77,8 +77,16 @@ const platformPackageRootFromBinary = (): string | undefined => {
     return undefined;
   }
   // In a compiled Bun binary process.execPath is the real binary path (not a
-  // virtual $bunfs path), so we can safely navigate from it.
-  const binaryDir = dirname(process.execPath);
+  // virtual $bunfs path), so we can safely navigate from it. Resolve symlinks
+  // first: dev installs often link the binary into a directory like ~/.local/bin,
+  // and navigation from the symlink path would otherwise miss the package root.
+  let binaryPath: string;
+  try {
+    binaryPath = realpathSync(process.execPath);
+  } catch {
+    binaryPath = process.execPath;
+  }
+  const binaryDir = dirname(binaryPath);
   const candidate = dirname(binaryDir);
 
   if (!existsSync(join(candidate, "package.json"))) {
@@ -114,9 +122,17 @@ const platformPackageRootFromBinary = (): string | undefined => {
  * navigation. `process.execPath` is always the real path and is preferred here.
  */
 const platformPackageRootFromSource = (): string | undefined => {
-  // Try process.execPath first (reliable in compiled Bun binaries).
+  // Try process.execPath first (reliable in compiled Bun binaries). Resolve
+  // symlinks so dev-symlinked binaries still navigate to the real package/repo
+  // root.
   if (typeof process.execPath === "string" && process.execPath.length > 0) {
-    const candidate = dirname(dirname(process.execPath));
+    let binaryPath: string;
+    try {
+      binaryPath = realpathSync(process.execPath);
+    } catch {
+      binaryPath = process.execPath;
+    }
+    const candidate = dirname(dirname(binaryPath));
     if (existsSync(join(candidate, "package.json"))) {
       return candidate;
     }
@@ -171,6 +187,18 @@ const resolvePrismTypesDir = (): string | undefined => {
     const tmp = join(repoRoot, "dist", "dts-tmp");
     if (existsSync(join(tmp, "index.d.ts"))) {
       return tmp;
+    }
+
+    // 3. Source-checkout fallback: pre-built platform package types under
+    // packages/npm/. This covers `bun run src/cli.ts` workflows when the
+    // lightweight build:cli target has not yet emitted dist/dts-tmp/.
+    if (existsSync(join(repoRoot, "packages", "npm"))) {
+      for (const name of platformPackageDirNames()) {
+        const candidate = join(repoRoot, "packages", "npm", name, "types");
+        if (existsSync(join(candidate, "index.d.ts"))) {
+          return candidate;
+        }
+      }
     }
   }
 

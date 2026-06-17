@@ -40,6 +40,7 @@ import { readFile } from "node:fs/promises";
 import {
   compilePluginForTarget,
   formatOperations,
+  syncWorkflowRefsForProject,
   type CompileResult,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
@@ -69,6 +70,7 @@ import {
   type RefreshResult,
 } from "./refresh.js";
 import type { SyncReport } from "./sync/apply.js";
+import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
@@ -1644,6 +1646,53 @@ function pluginResultJsonEnvelope(
   };
 }
 
+function workflowRefsJsonEnvelope(report: SyncReport): unknown {
+  return {
+    harness: report.harness,
+    root: report.root,
+    converged: report.converged,
+    counts: report.ops.reduce<Record<string, number>>((acc, op) => {
+      acc[op.kind] = (acc[op.kind] ?? 0) + 1;
+      return acc;
+    }, {}),
+    operations: report.ops.map((op) => ({
+      kind: op.kind,
+      targetPath: op.targetPath,
+      ...("reason" in op ? { reason: op.reason } : {}),
+      ...(op.kind === "blocked" ? { hint: op.hint } : {}),
+    })),
+    failures: report.failures.map((failure) => ({
+      kind: failure.op.kind,
+      targetPath: failure.op.targetPath,
+      message: failure.message,
+    })),
+    blocked: blockedTargetErrors(report).map((blocked) => ({
+      targetPath: blocked.targetPath,
+      message: blocked.message,
+      hint: blocked.hint,
+    })),
+  };
+}
+
+function workflowRefsReportHasFailures(report: SyncReport | null): boolean {
+  return report !== null && (report.failures.length > 0 || blockedTargetErrors(report).length > 0);
+}
+
+function printWorkflowRefsReport(report: SyncReport, indent = ""): void {
+  console.log(`\n${indent}🛠  Workflow refs:`);
+  console.log(`${indent}   Root: ${report.root}`);
+  const operationText = formatOperations(report.ops);
+  if (operationText.trim().length > 0) {
+    console.log(indentBlock(operationText, indent.length > 0 ? `${indent}   ` : ""));
+  }
+  for (const blocked of blockedTargetErrors(report)) {
+    console.error(`\n${indent}⛔ ${renderPrismError(blocked)}`);
+  }
+  for (const failure of report.failures) {
+    console.error(`\n${indent}❌ ${failure.op.kind} ${failure.op.targetPath}: ${failure.message}`);
+  }
+}
+
 function compileResultJsonEnvelope(result: CompileResult): unknown {
   return {
     target: result.target,
@@ -1708,7 +1757,7 @@ async function runRefreshDirectoryCommand(
   const { validPlugins, invalidPlugins } = await loadPluginManifests(pluginPaths);
   if (!options.json) printRefreshDirectoryManifestResults(validPlugins, invalidPlugins);
 
-  const results = await refreshValidPlugins(validPlugins, {
+  const { results, workflowRefsReport } = await refreshValidPlugins(validPlugins, {
     harnesses,
     scope: options.scope,
     projectPath: options.project,
@@ -1727,12 +1776,17 @@ async function runRefreshDirectoryCommand(
       schema: "prism.plan.collection.v1",
       mode,
       plugins: results.map((result) => pluginResultJsonEnvelope(mode, result)),
+      ...(workflowRefsReport ? { workflowRefs: workflowRefsJsonEnvelope(workflowRefsReport) } : {}),
       invalidPlugins: invalidPlugins.map(({ pluginPath, error }) => ({
         pluginPath,
         message: formatManifestLoadError(pluginPath, error),
       })),
     }, null, 2));
-    if (results.some((result) => !result.success) || invalidPlugins.length > 0) {
+    if (
+      results.some((result) => !result.success) ||
+      invalidPlugins.length > 0 ||
+      workflowRefsReportHasFailures(workflowRefsReport)
+    ) {
       exitWith(EXIT_CODES.domainFailure);
     }
     return;
@@ -1745,7 +1799,7 @@ async function runRefreshDirectoryCommand(
     results,
   });
 
-  if (hasFailures) {
+  if (hasFailures || workflowRefsReportHasFailures(workflowRefsReport)) {
     console.log(`\n⚠️  Some plugins failed validation, compile, or refresh`);
     exitWith(EXIT_CODES.domainFailure);
   }
@@ -1833,14 +1887,32 @@ function printRefreshDirectoryManifestResults(
 async function refreshValidPlugins(
   validPlugins: LoadedPlugin[],
   options: DirectoryRefreshOptions
-): Promise<PluginRefreshResult[]> {
+): Promise<{
+  readonly results: PluginRefreshResult[];
+  readonly workflowRefsReport: SyncReport | null;
+}> {
   const results: PluginRefreshResult[] = [];
 
   for (const plugin of validPlugins) {
     results.push(await refreshDiscoveredPlugin(plugin, options));
   }
 
-  return results;
+  const workflowRefsReport = await syncDirectoryWorkflowRefs(results, options);
+  if (!options.json && workflowRefsReport) printWorkflowRefsReport(workflowRefsReport, "   ");
+
+  return { results, workflowRefsReport };
+}
+
+async function syncDirectoryWorkflowRefs(
+  results: ReadonlyArray<PluginRefreshResult>,
+  options: DirectoryRefreshOptions,
+): Promise<SyncReport | null> {
+  if (options.dryRun) return null;
+  if (!results.some((result) => result.compileResults.length > 0)) return null;
+  return syncWorkflowRefsForProject({
+    prismHome: resolvePrismHome(),
+    ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+  });
 }
 
 async function refreshDiscoveredPlugin(
@@ -1873,6 +1945,7 @@ async function refreshDiscoveredPlugin(
     clean: options.clean,
     dryRun: options.dryRun,
     quiet: options.json,
+    emitWorkflowRefs: false,
   });
 
   if (!compilePhase.success) {
@@ -2238,6 +2311,7 @@ async function runCompilePhaseForPlugin(options: {
   dryRun: boolean;
   indent?: string;
   quiet?: boolean;
+  emitWorkflowRefs?: boolean;
 }): Promise<CompilePhaseOutcome> {
   const indent = options.indent ?? "";
   const compileBackups: string[] = [];
@@ -2266,6 +2340,9 @@ async function runCompilePhaseForPlugin(options: {
         prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
         mcpLifecycle: options.mcpLifecycle,
+        ...(options.emitWorkflowRefs !== undefined
+          ? { emitWorkflowRefs: options.emitWorkflowRefs }
+          : {}),
       })
     );
 

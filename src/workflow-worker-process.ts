@@ -4,6 +4,7 @@ export interface WorkflowWorkerProcessOptions {
   readonly cwd: string;
   readonly abortSignal?: AbortSignal;
   readonly processTimeoutMs?: number;
+  readonly env?: Record<string, string>;
 }
 
 export interface WorkflowWorkerProcessResult {
@@ -35,6 +36,7 @@ export const runWorkflowWorkerProcess = async (
   const child = Bun.spawn({
     cmd: [options.command, ...options.args],
     cwd: options.cwd,
+    env: options.env === undefined ? undefined : { ...process.env, ...options.env },
     stdout: "pipe",
     stderr: "pipe",
   });

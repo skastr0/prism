@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test as bunTest } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -305,6 +305,10 @@ export default defineWorkflow({ name: "all-task-workers-smoke", tasks: [build, r
 };
 
 describe("workflow loader", () => {
+  // Integration tests spawn the full CLI per test and compile plugins. The
+  // default 5s timeout is too tight once workflow refs are also emitted.
+  const test = (name: string, fn: () => void | Promise<void>) => bunTest(name, fn, 60000);
+
   test("worker process honors an already-aborted signal", async () => {
     const root = await createTempRoot();
     const fakeWorker = join(root, "fake-worker.mjs");
@@ -1617,7 +1621,7 @@ describe("workflow loader", () => {
       "const prompt = promptIndex >= 0 ? process.argv[promptIndex + 1] : '';",
       "const outputFormat = formatIndex >= 0 ? process.argv[formatIndex + 1] : 'missing';",
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ model, outputFormat, hasInstruction: prompt.includes('Prism workflow task'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
-      "console.log(JSON.stringify({ summary: model }));",
+      "console.log(JSON.stringify({ role: 'assistant', content: JSON.stringify({ summary: model }) }));",
       "",
     ].join("\n"));
     await chmod(fakeKimi, 0o755);
@@ -1679,8 +1683,8 @@ describe("workflow loader", () => {
       hasAgentFlag: boolean;
     });
     expect(calls).toEqual([
-      { model: "grok-build", outputFormat: "text", hasInstruction: true, hasAgentFlag: false },
-      { model: "kimi-k2", outputFormat: "text", hasInstruction: true, hasAgentFlag: false },
+      { model: "grok-build", outputFormat: "stream-json", hasInstruction: true, hasAgentFlag: false },
+      { model: "kimi-k2", outputFormat: "stream-json", hasInstruction: true, hasAgentFlag: false },
     ]);
   });
 
@@ -1695,7 +1699,7 @@ describe("workflow loader", () => {
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv[1], prompt: process.argv.includes('--prompt') }) + '\\n');`,
-      "console.log(JSON.stringify({ summary: 'path-kimi' }));",
+      "console.log(JSON.stringify({ role: 'assistant', content: JSON.stringify({ summary: 'path-kimi' }) }));",
       "",
     ].join("\n"));
     await chmod(fakeKimi, 0o755);

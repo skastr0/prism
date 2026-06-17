@@ -102,6 +102,12 @@ export const groupBindingsByOwner = (
   );
 };
 
+export const groupAgentToolBindingsByOwner = (
+  compilingPluginName: string,
+  agent: ComposedAgent,
+): ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>> =>
+  groupBindingsByOwner(compilingPluginName, agent.toolBindings);
+
 export const mcpBindingsForAgentsAndTools = (
   sourcePluginName: string,
   tools: ReadonlyArray<CanonicalTool> | undefined,

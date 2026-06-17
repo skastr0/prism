@@ -31,7 +31,8 @@ import {
   removeTempBuildRoot,
   writeTempBuildFile,
 } from "../temp-build-fs.js";
-import { mcpBindingsForAgentsAndTools } from "../tool-bindings.js";
+import { mcpBindingsForAgentsAndTools, ownerPluginForBinding } from "../tool-bindings.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
 
 /** What every lowerer produces: desired whole files + shared-file regions. */
 export interface LowerOutput {
@@ -66,6 +67,64 @@ export const normalizeBundleSegment = (value: string, fallback = "plugin"): stri
 
 export const yamlScalar = (value: string | number | boolean): string =>
   typeof value === "string" ? JSON.stringify(value) : String(value);
+
+const ownerPluginIdsFromAgents = (
+  compilingPluginName: string,
+  agents: ReadonlyArray<ComposedAgent>,
+): string[] => {
+  const owners = new Set<string>();
+  for (const agent of agents) {
+    for (const binding of agent.toolBindings) {
+      const owner = ownerPluginForBinding(compilingPluginName, binding);
+      if (owner !== compilingPluginName) {
+        owners.add(owner);
+      }
+    }
+  }
+  return [...owners].sort((left, right) => left.localeCompare(right));
+};
+
+/**
+ * Read the `.mcp.json` of every foreign owner plugin referenced by the given
+ * agents and return a map of server name -> server config that the consumer
+ * plugin should merge into its own MCP config. Fail closed if an owner plugin
+ * has not been compiled for this harness yet.
+ */
+export const collectReferencedOwnerMcpServers = async (
+  compilingPluginName: string,
+  agents: ReadonlyArray<ComposedAgent>,
+  resolveOwnerMcpPath: (ownerPluginName: string) => string,
+): Promise<ReadonlyMap<string, unknown>> => {
+  const owners = ownerPluginIdsFromAgents(compilingPluginName, agents);
+  if (owners.length === 0) {
+    return new Map();
+  }
+
+  const servers = new Map<string, unknown>();
+  for (const owner of owners) {
+    const path = resolveOwnerMcpPath(owner);
+    let raw: string;
+    try {
+      raw = await readFile(path);
+    } catch (cause) {
+      throw new Error(
+        `Cannot reference tools from owner plugin '${owner}' because its generated plugin MCP config is missing at ${path}. ` +
+          `Compile the owner plugin for this harness first.`,
+        { cause },
+      );
+    }
+    const parsed = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
+    const serverName = generatedPluginIdForOwner(owner);
+    const config = parsed.mcpServers?.[serverName];
+    if (config === undefined) {
+      throw new Error(
+        `Owner plugin '${owner}' MCP config at ${path} does not contain expected server '${serverName}'.`,
+      );
+    }
+    servers.set(serverName, config);
+  }
+  return servers;
+};
 
 export const serializeSimpleFrontmatter = (values: Record<string, unknown>): string => {
   const lines = ["---"];

@@ -35,6 +35,9 @@ export const generatedSyntheticToolName = (
 ): string =>
   `${generatedToolNamespace(sourcePluginName)}_${sanitizeGeneratedToolSegment(contractName, "tool")}`;
 
+export const generatedPluginIdForOwner = (ownerPluginName: string): string =>
+  `prism-generated-${normalizeGeneratedPluginName(ownerPluginName)}`;
+
 export const generatedToolNameForBinding = (
   sourcePluginName: string,
   binding: ResolvedContractBinding,

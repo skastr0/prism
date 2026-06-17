@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 
-import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync } from "fs";
 import { homedir, platform, arch } from "os";
+import { isAbsolute, join, resolve } from "path";
 
 const INSTALL_DIR = process.env.INSTALL_DIR || join(homedir(), ".local", "bin");
-const BINARY_NAME = "prism";
+const DEV_BINARY_NAME = process.env.PRISM_DEV_BIN || "prism-dev";
+const PRODUCTION_BINARY_NAME = "prism";
 
 function detectPlatform(): string {
   const os = platform();
@@ -40,11 +41,27 @@ function detectPlatform(): string {
   return `${platformStr}-${archStr}`;
 }
 
+const repoRoot = resolve(import.meta.dir, "..");
+
+const resolveSymlinkTarget = (linkPath: string): string | undefined => {
+  try {
+    const target = readlinkSync(linkPath);
+    return isAbsolute(target) ? resolve(target) : resolve(linkPath, "..", target);
+  } catch {
+    return undefined;
+  }
+};
+
+const isLegacyDevPrismInstall = (linkPath: string, distBinaryPath: string): boolean => {
+  const target = resolveSymlinkTarget(linkPath);
+  return target === distBinaryPath;
+};
+
 async function install() {
   const platformArch = detectPlatform();
   console.log(`Detected platform: ${platformArch}`);
 
-  const binaryPath = join("dist", `${BINARY_NAME}-${platformArch}`);
+  const binaryPath = resolve(repoRoot, "dist", `prism-${platformArch}`);
 
   if (!existsSync(binaryPath)) {
     console.error(`Binary not found: ${binaryPath}`);
@@ -54,21 +71,36 @@ async function install() {
 
   mkdirSync(INSTALL_DIR, { recursive: true });
 
-  const destPath = join(INSTALL_DIR, BINARY_NAME);
-
-  console.log(`Installing to ${destPath}...`);
-  await Bun.$`cp ${binaryPath} ${destPath}`;
-  await Bun.$`chmod +x ${destPath}`;
-
-  // Sign binary on macOS
-  if (platform() === "darwin") {
-    await Bun.$`codesign --sign - --force ${destPath}`;
-    console.log("Binary signed (ad-hoc)");
+  const productionPath = join(INSTALL_DIR, PRODUCTION_BINARY_NAME);
+  if (existsSync(productionPath) && isLegacyDevPrismInstall(productionPath, binaryPath)) {
+    rmSync(productionPath);
+    console.log(
+      `Removed legacy dev symlink at ${productionPath}.`,
+    );
+    console.log("Use mise-managed prism for production and prism-dev for local builds.");
+  } else if (existsSync(productionPath)) {
+    console.log(`Leaving production binary untouched: ${productionPath}`);
   }
 
-  console.log(`\n✓ Installed ${BINARY_NAME} to ${destPath}`);
+  const destPath = join(INSTALL_DIR, DEV_BINARY_NAME);
 
-  // Check if INSTALL_DIR is in PATH
+  if (existsSync(destPath)) {
+    rmSync(destPath);
+  }
+
+  // Sign the dist binary on macOS so the dev symlink stays executable.
+  if (platform() === "darwin") {
+    await Bun.$`codesign --sign - --force ${binaryPath}`;
+    console.log("Dev binary signed (ad-hoc)");
+  }
+
+  console.log(`Linking ${destPath} -> ${binaryPath}...`);
+  await Bun.$`ln -s ${binaryPath} ${destPath}`;
+
+  console.log(`\n✓ Installed ${DEV_BINARY_NAME} to ${destPath}`);
+  console.log(`  Production prism stays on mise/rig: prism`);
+  console.log(`  Rebuild with 'bun run build:cli' — ${DEV_BINARY_NAME} picks up dist/ automatically.`);
+
   const pathDirs = (process.env.PATH || "").split(":");
   if (!pathDirs.includes(INSTALL_DIR)) {
     console.log(`
@@ -86,7 +118,7 @@ Add it to your shell configuration:
 `);
   }
 
-  console.log(`\nRun '${BINARY_NAME} --help' to get started.`);
+  console.log(`\nRun '${DEV_BINARY_NAME} --help' to try the dev build.`);
 }
 
 install();

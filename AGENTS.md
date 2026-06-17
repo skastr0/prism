@@ -71,8 +71,8 @@ bun run typecheck
 # Build CLI
 bun run build
 
-# Install globally (to ~/.local/bin)
-bun run install:local
+# Install dev binary as prism-dev (symlink to dist/; does not touch mise-managed prism)
+bun run install:dev
 ```
 
 ## Running
@@ -1013,7 +1013,7 @@ Before changing Prism workflows, read `docs/workflows/14-architecture-boundaries
 2. Run `bun run typecheck` to verify types
 3. Test with `bun run dev -- <command>`
 4. Build with `bun run build`
-5. Reinstall with `bun run install:local`
+5. Reinstall dev binary with `bun run install:dev` when dist/ layout changes
 
 ## Testing Changes
 

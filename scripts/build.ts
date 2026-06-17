@@ -66,6 +66,6 @@ for (const { platform, arch } of targets) {
 console.log(`
 Build complete! Binaries in ${distDir}/
 
-To install locally:
-  bun run install:local
+To install a dev binary (does not touch production prism):
+  bun run install:dev
 `);

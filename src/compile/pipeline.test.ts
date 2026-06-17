@@ -7165,6 +7165,18 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
 
 test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin bundle", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: protocolRoot,
+      target: "claude-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
   const claude = await Effect.runPromise(
     compilePluginForTarget({
@@ -7192,6 +7204,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
   expect(mcpConfig).toContain('"prism-generated-canonical-compile-fixture"');
+  expect(mcpConfig).toContain('"prism-generated-protocol-core"');
   expect(mcpConfig).toContain('"type": "http"');
   expect(mcpConfig).toMatch(/"url": "http:\/\/127\.0\.0\.1:\d+\/mcp"/u);
   expect(mcpConfig).toContain(
@@ -7203,6 +7216,14 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   ).toBe(true);
   expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
+
+  await stopMcp({
+    pluginPath: protocolRoot,
+    harness: "claude-code",
+    scope: "project",
+    projectPath: projectRoot,
+    prismHome: testPrismHome(),
+  }).catch(() => undefined);
 });
 
 test("compilePluginForTarget lowers Grok plugin-bundle surfaces", async () => {
@@ -8593,23 +8614,6 @@ export default defineAgent({
 `,
   );
 
-  const consumerCompiled = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "factory-droid",
-      scope: "global",
-      root: factoryRoot,
-      dryRun: false,
-      mcpLifecycle: "none",
-    }),
-  );
-
-  expect(await pathExists(prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"))).toBe(false);
-  expect(consumerCompiled.operations.some((operation) =>
-    operation.targetPath.endsWith("server.mjs")
-  )).toBe(false);
-
   try {
     const ownerCompiled = await Effect.runPromise(
       compilePluginForTarget({
@@ -8622,6 +8626,33 @@ export default defineAgent({
         mcpLifecycle: "serve",
       }),
     );
+
+    const consumerCompiled = await Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "factory-droid",
+        scope: "global",
+        root: factoryRoot,
+        dryRun: false,
+        mcpLifecycle: "none",
+      }),
+    );
+
+    expect(await pathExists(prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"))).toBe(false);
+    expect(consumerCompiled.operations.some((operation) =>
+      operation.targetPath.endsWith("server.mjs")
+    )).toBe(false);
+
+    const consumerMcpPath = join(
+      factoryRoot,
+      "plugins",
+      "prism-generated-factory-http-agent-demo",
+      "mcp.json",
+    );
+    const consumerMcp = JSON.parse(await readFile(consumerMcpPath, "utf8"));
+    expect(consumerMcp.mcpServers).toHaveProperty("prism-generated-factory-tool-core");
+
     // The owner bundle carries the agent-bound dependency tool and lives at
     // the canonical PRISM_HOME path; the consumer does not duplicate it.
     const bundleContent = await readFile(

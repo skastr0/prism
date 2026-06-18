@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -37,6 +36,10 @@ import {
   type OrbitParameter,
 } from "./sources.js";
 import { createCanonicalCompileFixture } from "./test-fixtures.js";
+import {
+  getFreePort,
+  roundTripCompiledBundle,
+} from "./test-helpers/mcp-http-roundtrip.js";
 import {
   formatManifestTargets,
   getManifestArtifactTargets,
@@ -100,7 +103,14 @@ const readDirectoryTextFiles = async (
 
 const generatedPluginEntry = (projectRoot: string, pluginId: string): string =>
   pathToFileURL(
-    join(projectRoot, ".opencode", "plugins", pluginId),
+    join(
+      projectRoot,
+      ".opencode",
+      "plugins",
+      pluginId,
+      "dist",
+      "server.mjs",
+    ),
   ).href;
 
 const generatedStaleSourcePluginEntry = (projectRoot: string, pluginId: string): string =>
@@ -179,22 +189,6 @@ const withEnv = <A>(name: string, value: string, run: () => Promise<A>): Promise
     else process.env[name] = previous;
   });
 };
-
-const getFreePort = (host: string): Promise<number> =>
-  new Promise((resolvePort, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, host, () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to allocate port"));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolvePort(port));
-    });
-  });
 
 const createHermesHttpToolPlugin = async (options?: {
   readonly target?: "hermes" | "codex-cli" | "claude-code";
@@ -3446,6 +3440,37 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
     entry.targetPath === join(cursorRoot, "mcp.json") &&
     entry.mode === "region"
   )).toBe(true);
+});
+
+test("compilePluginForTarget emits a runnable MCP bundle into PRISM_HOME", async () => {
+  const { pluginRoot } = await createStandaloneToolFixture();
+  const root = await createTempRoot();
+  const cursorRoot = join(root, "cursor-home");
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "cursor",
+      scope: "global",
+      root: cursorRoot,
+      dryRun: false,
+    }),
+  );
+
+  const serverPath = prismMcpServerPath(testPrismHome(), "tool-only-demo");
+  const port = await getFreePort("127.0.0.1");
+  const result = await roundTripCompiledBundle({
+    serverPath,
+    port,
+    toolName: "tool_only_demo_echo_message",
+    toolArgs: { message: "hello from pipeline round-trip" },
+  });
+
+  expect(result.toolNames).toContain("tool_only_demo_echo_message");
+  expect(result.callResult.structuredContent).toEqual({
+    message: "hello from pipeline round-trip",
+  });
 });
 
 test("compilePluginForTarget removes the stale Cursor MCP config entry when tools target is removed", async () => {

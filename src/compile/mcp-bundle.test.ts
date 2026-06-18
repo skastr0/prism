@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
@@ -11,6 +10,12 @@ import { compilePluginForTarget } from "./pipeline.js";
 import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "./mcp-bundle.js";
 import { Contract } from "./sources.js";
 import { resolvePrismHome } from "../prism-home.js";
+import {
+  getFreePort,
+  httpRpc,
+  waitForChildClose,
+  waitForHttpServer,
+} from "./test-helpers/mcp-http-roundtrip.js";
 
 const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;
@@ -230,80 +235,6 @@ export default defineAgent({
   );
 
   return { pluginRoot, projectRoot };
-};
-
-const waitForChildClose = (
-  child: ChildProcessWithoutNullStreams,
-): Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }> =>
-  new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error("timed out waiting for child process to exit"));
-    }, 5_000);
-
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-
-const getFreePort = (): Promise<number> =>
-  new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to allocate TCP port"));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-
-const waitForHttpServer = async (port: number): Promise<void> => {
-  const url = `http://127.0.0.1:${port}/mcp`;
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try {
-      const response = await fetch(url, { method: "OPTIONS" });
-      if (response.status === 204) return;
-    } catch {
-      // Server is not listening yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`HTTP MCP server did not start on ${url}`);
-};
-
-const httpRpc = async (args: {
-  readonly port: number;
-  readonly sessionId?: string;
-  readonly method: string;
-  readonly params?: unknown;
-  readonly origin?: string;
-}): Promise<{ readonly response: Response; readonly body: any }> => {
-  const headers: Record<string, string> = {
-    accept: "application/json, text/event-stream",
-    "content-type": "application/json",
-    "mcp-protocol-version": "2025-11-25",
-  };
-  if (args.sessionId) headers["mcp-session-id"] = args.sessionId;
-  if (args.origin) headers.origin = args.origin;
-
-  const response = await fetch(`http://127.0.0.1:${args.port}/mcp`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: args.method,
-      params: args.params,
-    }),
-  });
-  const text = await response.text();
-  return { response, body: text.length > 0 ? JSON.parse(text) : undefined };
 };
 
 const httpNotify = async (args: {

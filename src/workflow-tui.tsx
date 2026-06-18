@@ -146,21 +146,23 @@ function RunPane({
       }}
     >
       {state.runs.length === 0 ? (
-        <text content="No workflow runs in this cwd store." style={{ fg: "#565f89", wrapMode: "word" }} />
+        <text content="No workflow runs in this cwd store." style={{ width: "100%", fg: "#565f89", wrapMode: "word" }} />
       ) : (
         state.runs.map((run) => {
           const selected = run.run.runId === selectedRunId;
+          const content = `${selected ? ">" : " "} ${shortId(run.run.runId)} ${run.run.status} t${run.totals.totalTasks} ${badgeText(run.cacheBadges)} ${run.run.workflow}`;
           return (
-            <box key={run.run.runId} style={{ flexDirection: "column", marginBottom: 1 }}>
-              <text
-                content={`${selected ? ">" : " "} ${shortId(run.run.runId)} ${run.run.workflow}`}
-                style={{ fg: selected ? "#ffffff" : "#c0caf5", attributes: selected ? 1 : 0, wrapMode: "none" }}
-              />
-              <text
-                content={`  ${run.run.status} tasks ${run.totals.totalTasks} ${renderBadgeLine(run.cacheBadges)}`}
-                style={{ fg: statusColor(run.run.status), wrapMode: "none" }}
-              />
-            </box>
+            <text
+              key={run.run.runId}
+              content={content}
+              style={{
+                width: "100%",
+                fg: selected ? "#ffffff" : statusColor(run.run.status),
+                attributes: selected ? 1 : 0,
+                wrapMode: "none",
+                truncate: true,
+              }}
+            />
           );
         })
       )}
@@ -205,19 +207,29 @@ function TaskList({
       }}
     >
       {run === null ? (
-        <text content="Select a run." style={{ fg: "#565f89" }} />
+        <text content="Select a run." style={{ width: "100%", fg: "#565f89" }} />
       ) : run.tasks.length === 0 ? (
-        <text content="No task events yet." style={{ fg: "#565f89" }} />
+        <text content="No task events yet." style={{ width: "100%", fg: "#565f89" }} />
       ) : (
         phaseGroups.flatMap((group) => [
-          <text key={`phase-${group.phase}`} content={group.phase} style={{ fg: "#bb9af7", attributes: 1 }} />,
+          <text
+            key={`phase-${group.phase}`}
+            content={group.phase}
+            style={{ width: "100%", fg: "#bb9af7", attributes: 1, wrapMode: "none", truncate: true }}
+          />,
           ...group.tasks.map(({ task, index }) => {
             const selected = index === selectedTaskIndex;
             return (
               <text
                 key={`${task.taskId}-${index}`}
                 content={`${selected ? ">" : " "} ${task.taskId} ${task.status} ${badgeText(task.badges)}`}
-                style={{ fg: selected ? "#ffffff" : statusColor(task.status), attributes: selected ? 1 : 0, wrapMode: "none" }}
+                style={{
+                  width: "100%",
+                  fg: selected ? "#ffffff" : statusColor(task.status),
+                  attributes: selected ? 1 : 0,
+                  wrapMode: "none",
+                  truncate: true,
+                }}
               />
             );
           }),
@@ -317,7 +329,7 @@ function Footer({
     <box style={{ height: 2, width: "100%", border: ["top"], borderColor: "#3b4261", paddingLeft: 1 }}>
       <text
         content={`j/k move  tab pane  enter select/confirm  s stop  ${updateHint}  r refresh  a auto:${autoRefresh ? "on" : "off"}(${pollMs}ms)  q quit`}
-        style={{ fg: "#a9b1d6", wrapMode: "none" }}
+        style={{ width: "100%", fg: "#a9b1d6", wrapMode: "none", truncate: true }}
       />
     </box>
   );

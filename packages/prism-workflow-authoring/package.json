@@ -1,0 +1,5 @@
+{
+  "name": "prism-workflow-authoring",
+  "private": true,
+  "description": "Quartz/typecheck surface for workflow .ts files and generated prism/refs"
+}

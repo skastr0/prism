@@ -118,6 +118,24 @@ export class McpBundleMissingError extends Schema.TaggedError<McpBundleMissingEr
 }
 
 // ---------------------------------------------------------------------------
+// McpPortConflictError — the requested explicit MCP daemon port is already in
+// use by another process. Auto-port selection would reallocate, but an explicit
+// --port must fail closed so callers do not silently land on a different port.
+// ---------------------------------------------------------------------------
+
+export class McpPortConflictError extends Schema.TaggedError<McpPortConflictError>()(
+  "McpPortConflictError",
+  {
+    host: Schema.String,
+    port: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Port ${this.port} on ${this.host} is already in use.`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // BlockedTargetError — the sync engine's only guarded case: first-time
 // placement over a foreign file whose bytes differ. Never thrown mid-batch;
 // the compile result lists these (collect, don't abort) and the CLI edge
@@ -150,6 +168,7 @@ export type PrismError =
   | PrismConfigError
   | BundleBuildError
   | McpBundleMissingError
+  | McpPortConflictError
   | BlockedTargetError;
 
 export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
@@ -169,6 +188,7 @@ export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "PrismConfigError",
   "BundleBuildError",
   "McpBundleMissingError",
+  "McpPortConflictError",
   "BlockedTargetError",
 ]);
 
@@ -221,6 +241,11 @@ export const describePrismError = (error: PrismError): PrismErrorRender => {
         headline: error.message,
         hint: error.hint,
         path: error.bundlePath,
+      };
+    case "McpPortConflictError":
+      return {
+        headline: error.message,
+        hint: "choose a different port or stop the process listening on this port, then retry",
       };
     case "BlockedTargetError":
       return {

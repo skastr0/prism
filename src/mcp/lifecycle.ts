@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { Effect } from "effect";
 import { getHarness, harnessSupportsProjectScope } from "../harnesses.js";
 import { expandPath } from "../fs.js";
-import { McpBundleMissingError } from "../errors.js";
+import { McpBundleMissingError, McpPortConflictError } from "../errors.js";
 import type { HarnessId, HarnessScope } from "../types.js";
 import { loadPlugin } from "../compile/load.js";
 import type { PluginRegistry } from "../compile/registry.js";
@@ -1234,7 +1234,7 @@ const serveMcpResolved = async (
       requestedPort: options.port,
       selectedPort,
     })) {
-      throw new Error(`Port ${selectedPort} on ${host} is already in use.`);
+      throw new McpPortConflictError({ host, port: selectedPort });
     }
     selectedPort = await getFreePort(host);
     prepared = prepareMcpServer({

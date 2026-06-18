@@ -101,6 +101,15 @@ test("workflow run help exposes the runtime task concurrency limit", async () =>
   expect(result.stdout).toContain("Maximum concurrent workflow task executions");
 });
 
+test("workflow monitor help exposes store and polling options", async () => {
+  const result = await runCli(["workflow", "monitor", "--help"], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("--store");
+  expect(result.stdout).toContain("--poll-ms");
+  expect(result.stdout).toContain("--fail-stale-after-ms");
+});
+
 test("workflow runs show returns the run record and rejects missing runs", async () => {
   const root = await createTempRoot();
   const workflowPath = join(root, "inspect.workflow.ts");

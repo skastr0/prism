@@ -77,6 +77,13 @@ import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
+import {
+  requestWorkflowRunnerTermination,
+  startDetachedWorkflowRun,
+  updateDetachedWorkflowRun,
+  workflowRunOptionsSnapshot,
+} from "./workflow-controls.js";
+import { runWorkflowMonitor } from "./workflow-tui.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -184,83 +191,6 @@ const parsePositiveInteger = (value: string): number =>
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const currentCliCommand = (): string[] => {
-  const entrypoint = process.argv[1];
-  if (entrypoint === undefined) {
-    return [process.execPath];
-  }
-  if (/\.[cm]?[jt]s$/u.test(entrypoint)) {
-    return [process.execPath, "run", entrypoint];
-  }
-  return [entrypoint];
-};
-
-const startDetachedWorkflowRun = (
-  file: string,
-  options: {
-    readonly mockOutput?: string;
-    readonly worker?: string;
-    readonly model?: string;
-    readonly maxConcurrentTasks?: number;
-    readonly cache?: boolean;
-  },
-  run: { readonly runId: string; readonly storePath: string; readonly token: string },
-): void => {
-  const args = [
-    "workflow",
-    "run",
-    file,
-    "--store",
-    run.storePath,
-    "--run-id",
-    run.runId,
-    "--run-token",
-    run.token,
-    ...(options.worker !== undefined ? ["--worker", options.worker] : []),
-    ...(options.model !== undefined ? ["--model", options.model] : []),
-    ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
-    ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
-    ...(options.cache === false ? ["--no-cache"] : []),
-  ];
-
-  Bun.spawn({
-    cmd: [...currentCliCommand(), ...args],
-    cwd: process.cwd(),
-    env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1", PRISM_WORKFLOW_DETACHED_RUN_ID: run.runId },
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-  }).unref();
-};
-
-const requestWorkflowRunnerTermination = (
-  store: WorkflowStore,
-  run: { readonly runId: string; readonly runnerPid?: number },
-  reason: string,
-): void => {
-  if (run.runnerPid === undefined) {
-    return;
-  }
-  try {
-    process.kill(run.runnerPid, "SIGTERM");
-    store.recordEvent({
-      runId: run.runId,
-      type: "runner.termination_requested",
-      payload: { reason, runnerPid: run.runnerPid, signal: "SIGTERM" },
-    });
-  } catch (error) {
-    store.recordEvent({
-      runId: run.runId,
-      type: "runner.termination_skipped",
-      payload: {
-        reason,
-        runnerPid: run.runnerPid,
-        cause: error instanceof Error ? error.message : String(error),
-      },
-    });
-  }
-};
-
 workflow
   .command("validate <file>")
   .description("Load a workflow module and print its typed task summary")
@@ -270,6 +200,29 @@ workflow
       console.log(JSON.stringify(summary, null, 2));
     } catch (error) {
       printCliError(error, "Workflow validation failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
+  .command("monitor [workflow-file]")
+  .description("Open the workflow run monitor TUI for the current project store")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--poll-ms <ms>", "Auto-refresh interval", parsePositiveInteger, 500)
+  .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed while monitoring", parsePositiveInteger)
+  .action(async (_workflowFile: string | undefined, options: {
+    readonly store?: string;
+    readonly pollMs: number;
+    readonly failStaleAfterMs?: number;
+  }) => {
+    try {
+      await runWorkflowMonitor({
+        storePath: options.store ?? defaultWorkflowStorePath(process.cwd()),
+        pollMs: options.pollMs,
+        ...(options.failStaleAfterMs !== undefined ? { failStaleAfterMs: options.failStaleAfterMs } : {}),
+      });
+    } catch (error) {
+      printCliError(error, "Workflow monitor failed");
       exitWith(EXIT_CODES.domainFailure);
     }
   });
@@ -325,6 +278,11 @@ workflow
         store = await WorkflowStore.open(storePath);
         const runId = store.createRun(workflow.name, randomUUID());
         const token = randomUUID();
+        store.recordRunSnapshot({
+          runId,
+          workflowFile: expandPath(file),
+          options: workflowRunOptionsSnapshot(options),
+        });
         store.setRunHandoffToken(runId, token);
         store.close();
         store = undefined;
@@ -347,6 +305,11 @@ workflow
       } else {
         executionRunId = store.createRun(workflow.name);
       }
+      store.recordRunSnapshot({
+        runId: executionRunId,
+        workflowFile: expandPath(file),
+        options: workflowRunOptionsSnapshot(options),
+      });
       terminationController = new AbortController();
       terminationHandler = () => {
         terminationController?.abort();
@@ -739,53 +702,13 @@ workflowRuns
     readonly model?: string;
     readonly maxConcurrentTasks?: number;
   }) => {
-    let store: WorkflowStore | undefined;
     try {
-      // Like `--detach`, the update parent only needs the workflow name; the
-      // spawned detached child re-loads and runs the authoritative typecheck.
-      const workflow = await loadWorkflowFile(file, { skipTypecheck: true });
-      if (options.mockOutput === undefined && options.worker !== undefined) {
-        getWorkflowWorkerAdapter(options.worker);
-      }
       const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
-      store = await WorkflowStore.open(storePath);
-      const previousRun = store.getRun(runId);
-      if (previousRun === null) {
-        throw new CliUsageError(`workflow run not found: ${runId}`);
-      }
-      if (previousRun.status !== "running") {
-        throw new CliUsageError(`workflow run is not running: ${runId}`);
-      }
-      const nextRunId = randomUUID();
-      const token = randomUUID();
-      const stoppedRun = store.restartRunningRun({
-        previousRunId: runId,
-        nextRunId,
-        nextWorkflow: workflow.name,
-        handoffToken: token,
-        reason: "update-requested",
-        mode: "restart-with-cache",
-      });
-      if (stoppedRun === null) {
-        throw new CliUsageError(`workflow run is no longer running: ${runId}`);
-      }
-      requestWorkflowRunnerTermination(store, stoppedRun, "update-requested");
-      store.close();
-      store = undefined;
-      startDetachedWorkflowRun(file, options, { runId: nextRunId, storePath, token });
-      console.log(JSON.stringify({
-        previousRun: stoppedRun,
-        runId: nextRunId,
-        workflow: workflow.name,
-        status: "running",
-        detached: true,
-        update: { previousRunId: runId, mode: "restart-with-cache" },
-      }, null, 2));
+      const result = await updateDetachedWorkflowRun({ runId, file, storePath, options });
+      console.log(JSON.stringify(result, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs update failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    } finally {
-      store?.close();
     }
   });
 

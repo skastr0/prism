@@ -136,6 +136,79 @@ export interface WorkflowRunTaskCompactSummary {
   readonly lastEventAt?: string;
 }
 
+export interface WorkflowRunSnapshot {
+  readonly runId: string;
+  readonly workflowFile: string;
+  readonly options?: Record<string, unknown>;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface WorkflowRunTaskSnapshot {
+  readonly runId: string;
+  readonly ordinal: number;
+  readonly taskId: string;
+  readonly phase?: string;
+  readonly prompt: string;
+  readonly cacheKey: string;
+  readonly promptHash: string;
+  readonly agentManifestHash: string;
+  readonly agent: {
+    readonly plugin: string;
+    readonly name: string;
+    readonly description: string;
+    readonly sourceHash: string;
+    readonly manifestHash: string;
+  };
+  readonly worker?: {
+    readonly worker?: string;
+    readonly model?: string;
+    readonly profile?: string;
+  };
+  readonly outputSchema?: unknown;
+  readonly finishCriteria: ReadonlyArray<string>;
+  readonly createdAt: string;
+}
+
+export type WorkflowCacheBadge =
+  | "hit"
+  | "miss"
+  | "skipped"
+  | "cached"
+  | "fresh"
+  | "write"
+  | "mock"
+  | `repair ${number}`;
+
+export interface WorkflowMonitorTask extends WorkflowRunTaskCompactSummary {
+  readonly ordinal: number | null;
+  readonly phase?: string;
+  readonly cacheKey?: string;
+  readonly prompt?: string;
+  readonly output?: unknown;
+  readonly metadata?: Record<string, unknown>;
+  readonly badges: ReadonlyArray<WorkflowCacheBadge>;
+  readonly snapshot?: WorkflowRunTaskSnapshot;
+}
+
+export interface WorkflowMonitorRun {
+  readonly run: WorkflowRunRecord;
+  readonly snapshot?: WorkflowRunSnapshot;
+  readonly totals: WorkflowRunCompactSummary["totals"];
+  readonly cacheBadges: ReadonlyArray<WorkflowCacheBadge>;
+}
+
+export interface WorkflowMonitorRunDetail extends WorkflowMonitorRun {
+  readonly tasks: ReadonlyArray<WorkflowMonitorTask>;
+  readonly events: ReadonlyArray<WorkflowEventRecord>;
+  readonly canUpdate: boolean;
+}
+
+export interface WorkflowMonitorState {
+  readonly runs: ReadonlyArray<WorkflowMonitorRun>;
+  readonly selectedRun: WorkflowMonitorRunDetail | null;
+}
+
 export interface WorkflowRunCompactSummary {
   readonly kind: "workflow-execution-evidence";
   readonly semanticCorrectness: "not-evaluated";
@@ -263,6 +336,33 @@ interface EventRow {
   readonly created_at: string;
 }
 
+interface RunSnapshotRow {
+  readonly run_id: string;
+  readonly workflow_file: string;
+  readonly options_json: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+interface RunTaskSnapshotRow {
+  readonly run_id: string;
+  readonly ordinal: number;
+  readonly task_id: string;
+  readonly phase: string | null;
+  readonly prompt: string;
+  readonly cache_key: string;
+  readonly prompt_hash: string;
+  readonly agent_manifest_hash: string;
+  readonly agent_plugin: string;
+  readonly agent_name: string;
+  readonly agent_description: string;
+  readonly agent_source_hash: string;
+  readonly worker_json: string | null;
+  readonly output_schema_json: string | null;
+  readonly finish_criteria_json: string;
+  readonly created_at: string;
+}
+
 export const defaultWorkflowStorePath = (projectPath: string): string =>
   join(projectPath, ".prism", "workflows", "workflows.sqlite");
 
@@ -352,6 +452,38 @@ const elapsedMs = (start: string | undefined, finish: string | undefined): numbe
   return finishMs - startMs;
 };
 
+const uniqueBadges = (badges: ReadonlyArray<WorkflowCacheBadge>): WorkflowCacheBadge[] =>
+  Array.from(new Set(badges));
+
+const eventPayloadRecord = (event: WorkflowEventRecord): Record<string, unknown> | null =>
+  objectPayload(event.payload);
+
+const taskBadges = (
+  summary: WorkflowRunTaskCompactSummary,
+  events: ReadonlyArray<WorkflowEventRecord>,
+): WorkflowCacheBadge[] => {
+  const badges: WorkflowCacheBadge[] = [];
+  if (summary.cacheLookup !== undefined) badges.push(summary.cacheLookup);
+  if (summary.execution === "cached") badges.push("cached");
+  if (summary.execution === "fresh") badges.push("fresh");
+  if (summary.repairCount > 0) badges.push(`repair ${summary.repairCount}`);
+  if (events.some((event) => event.type === "task.cache_write.completed")) badges.push("write");
+  if (events.some((event) => eventPayloadRecord(event)?.outputSource === "mock-output")) {
+    badges.push("mock");
+  }
+  return uniqueBadges(badges);
+};
+
+const runBadges = (summary: WorkflowRunCompactSummary): WorkflowCacheBadge[] => {
+  const badges: WorkflowCacheBadge[] = [];
+  if (summary.totals.cacheHits > 0) badges.push("hit");
+  if (summary.totals.freshExecutions > 0) badges.push("fresh");
+  if (summary.totals.repairs > 0) badges.push(`repair ${summary.totals.repairs}`);
+  if (summary.tasks.some((task) => task.cacheLookup === "miss")) badges.push("miss");
+  if (summary.tasks.some((task) => task.cacheLookup === "skipped")) badges.push("skipped");
+  return uniqueBadges(badges);
+};
+
 export const workflowTaskIdentity = (
   workflow: string,
   task: AnyWorkflowTask,
@@ -391,6 +523,67 @@ export const workflowTaskIdentity = (
       },
     } as StableJsonValue),
     agentManifestHash: task.agent.manifestHash,
+  };
+};
+
+const taskPhase = (task: AnyWorkflowTask): string | undefined => {
+  const value = (task as { readonly phase?: unknown }).phase;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
+const taskOutputSchemaSnapshot = (task: AnyWorkflowTask): unknown => {
+  const ast = (task.output as { readonly ast?: unknown }).ast;
+  return ast ?? null;
+};
+
+const taskFinishCriteria = (task: AnyWorkflowTask): ReadonlyArray<string> =>
+  task.finish?.criteria?.map((criterion) => criterion.name) ?? [];
+
+const taskWorkerSnapshot = (
+  task: AnyWorkflowTask,
+  runtimeOptions: WorkflowRuntimeOptions,
+): WorkflowRunTaskSnapshot["worker"] => {
+  const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker;
+  const model = task.worker?.model ?? runtimeOptions.fallbackModel;
+  const profile = task.worker?.profile;
+  if (worker === undefined && model === undefined && profile === undefined) return undefined;
+  return {
+    ...(worker !== undefined ? { worker } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(profile !== undefined ? { profile } : {}),
+  };
+};
+
+export const workflowRunTaskSnapshotForTask = (input: {
+  readonly runId: string;
+  readonly ordinal: number;
+  readonly workflow: string;
+  readonly task: AnyWorkflowTask;
+  readonly runtimeOptions?: WorkflowRuntimeOptions;
+}): Omit<WorkflowRunTaskSnapshot, "createdAt"> => {
+  const runtimeOptions = input.runtimeOptions ?? {};
+  const identity = workflowTaskIdentity(input.workflow, input.task, runtimeOptions);
+  const phase = taskPhase(input.task);
+  const worker = taskWorkerSnapshot(input.task, runtimeOptions);
+  return {
+    runId: input.runId,
+    ordinal: input.ordinal,
+    taskId: input.task.id,
+    ...(phase !== undefined ? { phase } : {}),
+    prompt: input.task.prompt,
+    cacheKey: identity.cacheKey,
+    promptHash: identity.promptHash,
+    agentManifestHash: identity.agentManifestHash,
+    agent: {
+      plugin: input.task.agent.plugin,
+      name: input.task.agent.name,
+      description: input.task.agent.description,
+      sourceHash: input.task.agent.sourceHash,
+      manifestHash: input.task.agent.manifestHash,
+    },
+    ...(worker !== undefined ? { worker } : {}),
+    outputSchema: taskOutputSchemaSnapshot(input.task),
+    finishCriteria: taskFinishCriteria(input.task),
   };
 };
 
@@ -494,6 +687,34 @@ export class WorkflowStore {
         payload_json text not null,
         created_at text not null default (datetime('now')),
         primary key (run_id, sequence)
+      );
+
+      create table if not exists workflow_run_snapshots (
+        run_id text primary key,
+        workflow_file text not null,
+        options_json text,
+        created_at text not null default (datetime('now')),
+        updated_at text not null default (datetime('now'))
+      );
+
+      create table if not exists workflow_run_task_snapshots (
+        run_id text not null,
+        ordinal integer not null,
+        task_id text not null,
+        phase text,
+        prompt text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        agent_description text not null,
+        agent_source_hash text not null,
+        worker_json text,
+        output_schema_json text,
+        finish_criteria_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, ordinal)
       );
     `);
     addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
@@ -708,6 +929,116 @@ export class WorkflowStore {
     this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, workflow);
     this.recordEvent({ runId, type: "run.started", payload: { workflow } });
     return runId;
+  }
+
+  recordRunSnapshot(input: {
+    readonly runId: string;
+    readonly workflowFile: string;
+    readonly options?: Record<string, unknown>;
+  }): void {
+    this.db.query(`
+      insert into workflow_run_snapshots (run_id, workflow_file, options_json, updated_at)
+      values (?, ?, ?, datetime('now'))
+      on conflict(run_id)
+      do update set
+        workflow_file = excluded.workflow_file,
+        options_json = excluded.options_json,
+        updated_at = excluded.updated_at
+    `).run(
+      input.runId,
+      input.workflowFile,
+      input.options === undefined ? null : JSON.stringify(input.options),
+    );
+  }
+
+  getRunSnapshot(runId: string): WorkflowRunSnapshot | null {
+    const row = this.db.query<RunSnapshotRow, [string]>(`
+      select run_id, workflow_file, options_json, created_at, updated_at
+      from workflow_run_snapshots
+      where run_id = ?
+    `).get(runId);
+    if (row == null) return null;
+    return {
+      runId: row.run_id,
+      workflowFile: row.workflow_file,
+      ...(row.options_json !== null ? { options: JSON.parse(row.options_json) as Record<string, unknown> } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  recordRunTaskSnapshot(input: Omit<WorkflowRunTaskSnapshot, "createdAt">): void {
+    this.db.query(`
+      insert into workflow_run_task_snapshots (
+        run_id, ordinal, task_id, phase, prompt, cache_key, prompt_hash,
+        agent_manifest_hash, agent_plugin, agent_name, agent_description,
+        agent_source_hash, worker_json, output_schema_json, finish_criteria_json
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(run_id, ordinal)
+      do update set
+        task_id = excluded.task_id,
+        phase = excluded.phase,
+        prompt = excluded.prompt,
+        cache_key = excluded.cache_key,
+        prompt_hash = excluded.prompt_hash,
+        agent_manifest_hash = excluded.agent_manifest_hash,
+        agent_plugin = excluded.agent_plugin,
+        agent_name = excluded.agent_name,
+        agent_description = excluded.agent_description,
+        agent_source_hash = excluded.agent_source_hash,
+        worker_json = excluded.worker_json,
+        output_schema_json = excluded.output_schema_json,
+        finish_criteria_json = excluded.finish_criteria_json
+    `).run(
+      input.runId,
+      input.ordinal,
+      input.taskId,
+      input.phase ?? null,
+      input.prompt,
+      input.cacheKey,
+      input.promptHash,
+      input.agentManifestHash,
+      input.agent.plugin,
+      input.agent.name,
+      input.agent.description,
+      input.agent.sourceHash,
+      input.worker === undefined ? null : JSON.stringify(input.worker),
+      input.outputSchema === undefined ? null : JSON.stringify(input.outputSchema),
+      JSON.stringify(input.finishCriteria),
+    );
+  }
+
+  listRunTaskSnapshots(runId: string): WorkflowRunTaskSnapshot[] {
+    const rows = this.db.query<RunTaskSnapshotRow, [string]>(`
+      select run_id, ordinal, task_id, phase, prompt, cache_key, prompt_hash,
+             agent_manifest_hash, agent_plugin, agent_name, agent_description,
+             agent_source_hash, worker_json, output_schema_json,
+             finish_criteria_json, created_at
+      from workflow_run_task_snapshots
+      where run_id = ?
+      order by ordinal asc
+    `).all(runId);
+    return rows.map((row) => ({
+      runId: row.run_id,
+      ordinal: row.ordinal,
+      taskId: row.task_id,
+      ...(row.phase !== null ? { phase: row.phase } : {}),
+      prompt: row.prompt,
+      cacheKey: row.cache_key,
+      promptHash: row.prompt_hash,
+      agentManifestHash: row.agent_manifest_hash,
+      agent: {
+        plugin: row.agent_plugin,
+        name: row.agent_name,
+        description: row.agent_description,
+        sourceHash: row.agent_source_hash,
+        manifestHash: row.agent_manifest_hash,
+      },
+      ...(row.worker_json !== null ? { worker: JSON.parse(row.worker_json) as WorkflowRunTaskSnapshot["worker"] } : {}),
+      ...(row.output_schema_json !== null ? { outputSchema: JSON.parse(row.output_schema_json) as unknown } : {}),
+      finishCriteria: JSON.parse(row.finish_criteria_json) as string[],
+      createdAt: row.created_at,
+    }));
   }
 
   setRunHandoffToken(runId: string, token: string): void {
@@ -1320,6 +1651,81 @@ export class WorkflowStore {
         durationMs,
       },
       tasks,
+    };
+  }
+
+  workflowMonitorState(selectedRunId?: string): WorkflowMonitorState {
+    const runs = this.listRuns()
+      .map((run): WorkflowMonitorRun => {
+        const summary = this.compactRunSummary(run.runId);
+        const totals = summary?.totals ?? {
+          totalTasks: 0,
+          freshExecutions: 0,
+          cacheHits: 0,
+          repairs: 0,
+          status: run.status,
+          durationMs: null,
+        };
+        const snapshot = this.getRunSnapshot(run.runId);
+        return {
+          run,
+          ...(snapshot !== null ? { snapshot } : {}),
+          totals,
+          cacheBadges: summary === null ? [] : runBadges(summary),
+        };
+      })
+      .reverse();
+
+    const selectedId = selectedRunId ?? runs[0]?.run.runId;
+    const selectedRun = selectedId === undefined ? null : this.workflowMonitorRunDetail(selectedId);
+    return { runs, selectedRun };
+  }
+
+  workflowMonitorRunDetail(runId: string): WorkflowMonitorRunDetail | null {
+    const summary = this.compactRunSummary(runId);
+    if (summary === null) return null;
+    const events = this.listRunEvents(runId);
+    const taskRows = this.listRunTasks(runId);
+    const snapshots = this.listRunTaskSnapshots(runId);
+    const taskById = new Map(taskRows.map((task) => [task.taskId, task]));
+    const snapshotById = new Map(snapshots.map((snapshot) => [snapshot.taskId, snapshot]));
+    const eventsByTask = new Map<string, WorkflowEventRecord[]>();
+    for (const event of events) {
+      if (event.taskId === null) continue;
+      eventsByTask.set(event.taskId, [...(eventsByTask.get(event.taskId) ?? []), event]);
+    }
+    const taskOrder = new Map(snapshots.map((snapshot) => [snapshot.taskId, snapshot.ordinal]));
+    const rowOrder = new Map(taskRows.map((task, index) => [task.taskId, index]));
+    const tasks = summary.tasks.map((task): WorkflowMonitorTask => {
+      const snapshot = snapshotById.get(task.taskId);
+      const row = taskById.get(task.taskId);
+      const taskEvents = eventsByTask.get(task.taskId) ?? [];
+      return {
+        ...task,
+        ordinal: snapshot?.ordinal ?? rowOrder.get(task.taskId) ?? null,
+        ...(snapshot?.phase !== undefined ? { phase: snapshot.phase } : {}),
+        ...(snapshot?.cacheKey !== undefined ? { cacheKey: snapshot.cacheKey } : {}),
+        ...(snapshot?.prompt !== undefined ? { prompt: snapshot.prompt } : {}),
+        ...(row !== undefined ? { output: row.output } : {}),
+        ...(row?.metadata !== undefined ? { metadata: row.metadata } : {}),
+        badges: taskBadges(task, taskEvents),
+        ...(snapshot !== undefined ? { snapshot } : {}),
+      };
+    }).sort((left, right) => {
+      const leftOrder = left.ordinal ?? taskOrder.get(left.taskId) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = right.ordinal ?? taskOrder.get(right.taskId) ?? Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.taskId.localeCompare(right.taskId);
+    });
+    const snapshot = this.getRunSnapshot(runId);
+    return {
+      run: summary.run,
+      ...(snapshot !== null ? { snapshot } : {}),
+      totals: summary.totals,
+      cacheBadges: runBadges(summary),
+      tasks,
+      events,
+      canUpdate: summary.run.status === "running" && snapshot !== null,
     };
   }
 

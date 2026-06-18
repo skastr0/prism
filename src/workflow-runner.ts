@@ -11,7 +11,13 @@ import {
   type WorkflowRuntime,
   type WorkflowRuntimeOptions,
 } from "./workflows.js";
-import { workflowTaskIdentity, type WorkflowJudgeIdentity, type WorkflowStore, type WorkflowTaskIdentity } from "./workflow-store.js";
+import {
+  workflowRunTaskSnapshotForTask,
+  workflowTaskIdentity,
+  type WorkflowJudgeIdentity,
+  type WorkflowStore,
+  type WorkflowTaskIdentity,
+} from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskExecution {
@@ -585,11 +591,21 @@ const executeWorkflowTask = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly useCache: boolean;
   readonly mockOutput: boolean;
+  readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly limiter?: TaskExecutionLimiter;
   readonly abortSignal?: AbortSignal;
 }): Promise<WorkflowRunTaskResult> => {
   const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache, mockOutput } = input;
   assertRunStillRunning(store, runId);
+  if (store !== undefined && runId !== null) {
+    store.recordRunTaskSnapshot(workflowRunTaskSnapshotForTask({
+      runId,
+      ordinal,
+      workflow: identity.workflow,
+      task,
+      runtimeOptions: input.runtimeOptions,
+    }));
+  }
   recordEvent(store, runId, task.id, "task.started", { cacheKey: identity.cacheKey });
   const { cached, cacheHit } = recordCacheLookup(store, runId, task, identity, useCache, mockOutput);
 
@@ -892,6 +908,7 @@ const runStaticWorkflow = async (input: {
       executeTask: input.executeTask,
       useCache: input.useCache,
       mockOutput: input.mockOutput,
+      runtimeOptions: input.runtimeOptions,
       limiter: input.limiter,
       abortSignal: input.abortSignal,
     }));
@@ -927,6 +944,7 @@ const runDynamicWorkflow = async (input: {
           executeTask: input.executeTask,
           useCache: input.useCache,
           mockOutput: input.mockOutput,
+          runtimeOptions: input.runtimeOptions,
           limiter: input.limiter,
           abortSignal: input.abortSignal,
         });

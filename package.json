@@ -37,12 +37,15 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@opentui/core": "0.4.1",
+    "@opentui/react": "0.4.1",
     "@skastr0/prism-core": "workspace:*",
     "@opencode-ai/plugin": "^1.15.13",
     "commander": "^13.1.0",
     "effect": "^3.21.1",
     "gray-matter": "^4.0.3",
     "jsonc-parser": "^3.3.1",
+    "react": "19.2.7",
     "typescript": "^5.8.3",
     "zod": "4.4.3"
   },
@@ -50,6 +53,7 @@
     "uuid": "13.0.1"
   },
   "devDependencies": {
+    "@types/react": "^19.2.7",
     "@types/bun": "^1.2.14"
   },
   "license": "MIT",

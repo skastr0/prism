@@ -126,6 +126,7 @@ export interface WorkflowTaskDefinition<
   readonly agent: Agent;
   readonly prompt: string;
   readonly output: Output;
+  readonly phase?: string;
   readonly cacheKey?: string;
   readonly worker?: WorkflowTaskWorkerOptions;
   readonly finish?: WorkflowFinishOptions<Schema.Schema.Type<Output>>;

@@ -907,6 +907,60 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("records task snapshots for monitor display without changing cache identity", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const buildA = defineTask({
+      id: "build",
+      phase: "Build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      cacheKey: "builder-cache",
+      worker: { worker: "grok", model: "grok-build" },
+    });
+    const buildB = defineTask({
+      ...buildA,
+      phase: "Review",
+    });
+    expect(workflowTaskIdentity("monitor-smoke", buildA)).toEqual(workflowTaskIdentity("monitor-smoke", buildB));
+
+    const workflow = defineWorkflow({ name: "monitor-smoke", tasks: [buildA] as const });
+    const first = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "fresh" }),
+    });
+    store.recordRunSnapshot({
+      runId: first.runId!,
+      workflowFile: join(root, "monitor.workflow.ts"),
+      options: { worker: "grok", model: "grok-build" },
+    });
+    const second = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        throw new Error("cache should avoid executor");
+      },
+    });
+
+    expect(store.listRunTaskSnapshots(first.runId!)).toEqual([
+      expect.objectContaining({
+        taskId: "build",
+        phase: "Build",
+        prompt: "Build the slice.",
+        cacheKey: "builder-cache",
+        agent: expect.objectContaining({ plugin: "forge", name: "builder" }),
+        worker: { worker: "grok", model: "grok-build" },
+        finishCriteria: [],
+      }),
+    ]);
+    expect(store.workflowMonitorState(first.runId!).selectedRun).toMatchObject({
+      snapshot: expect.objectContaining({ workflowFile: join(root, "monitor.workflow.ts") }),
+      tasks: [expect.objectContaining({ taskId: "build", phase: "Build", badges: expect.arrayContaining(["miss", "fresh", "write"]) })],
+    });
+    expect(store.workflowMonitorState(second.runId!).selectedRun?.tasks[0]?.badges).toEqual(expect.arrayContaining(["hit", "cached"]));
+    store.close();
+  });
+
   test("builds compact execution evidence for completed, failed, cached, repaired, and event-only tasks", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

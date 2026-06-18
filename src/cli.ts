@@ -102,6 +102,11 @@ class CliUsageError extends Error {
   override readonly name = "CliUsageError";
 }
 
+function withoutOrdinal<T extends { readonly ordinal?: number | undefined }>(record: T): Omit<T, "ordinal"> {
+  const { ordinal: _, ...rest } = record;
+  return rest;
+}
+
 // Refresh command
 program
   .command("refresh [plugin-path]")
@@ -533,7 +538,11 @@ workflowRuns
       if (run === null) {
         throw new CliUsageError(`workflow run not found: ${runId}`);
       }
-      console.log(JSON.stringify({ run, taskSummary: store.summarizeRunTasks(runId), tasks: store.listRunTasks(runId) }, null, 2));
+      console.log(JSON.stringify({
+        run,
+        taskSummary: store.summarizeRunTasks(runId).map(withoutOrdinal),
+        tasks: store.listRunTasks(runId).map(withoutOrdinal),
+      }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs show failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
@@ -671,7 +680,11 @@ workflowRuns
           throw new CliUsageError(`workflow run not found: ${runId}`);
         }
         if (run.status !== "running") {
-          console.log(JSON.stringify({ run, taskSummary: store.summarizeRunTasks(runId), tasks: store.listRunTasks(runId) }, null, 2));
+          console.log(JSON.stringify({
+            run,
+            taskSummary: store.summarizeRunTasks(runId).map(withoutOrdinal),
+            tasks: store.listRunTasks(runId).map(withoutOrdinal),
+          }, null, 2));
           return;
         }
         if (Date.now() - started >= options.timeoutMs) {

@@ -28,6 +28,7 @@ interface GateScript {
 const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
   { script: "idempotency-git.ts", expected: "PASS" },
   { script: "crash-convergence.ts", expected: "PASS" },
+  { script: "matrix-codex-opencode.ts", expected: "PASS" },
   { script: "mcp-determinism.ts", expected: null },
   { script: "mcp-lifecycle.ts", expected: null },
   { script: "orbit-workflows.ts", expected: "PASS" },

@@ -13,4 +13,4 @@ This plugin exercises every Prism compile surface that Kimi Code supports:
 - **Traits** → compile-time capability conformance for agents
 - **Hooks** → `config.toml` hook entries
 
-It is used by `src/compile/kimi-code-lowerer.test.ts` to assert exact lowerer output and by the Kimi smoke workflow task once live execution is safe.
+It is used by `src/compile/kimi-code-lowerer.test.ts` to assert exact lowerer output, by the Kimi smoke workflow task once live execution is safe, and by `scripts/acceptance/matrix-codex-opencode.ts` as the TS-007 cross-harness acceptance fixture.

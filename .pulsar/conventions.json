@@ -5,17 +5,20 @@
     ".": {
       "visibility": "public-api",
       "allowed_imports": [
+        "@opentui/core",
+        "@opentui/react",
         "@opencode-ai/plugin",
         "@skastr0/prism-core",
         "commander",
         "effect",
         "gray-matter",
+        "react",
         "typescript"
       ]
     }
   },
   "naming_conventions": {
-    "function": "camelCase",
+    "function": "camelCase | PascalCase",
     "class": "PascalCase",
     "interface": "PascalCase",
     "type": "PascalCase",

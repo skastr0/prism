@@ -353,13 +353,17 @@ function WorkflowMonitorApp({
     }
   };
 
+  const scheduleRefresh = (runId?: string): void => {
+    refresh(runId).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  };
+
   useEffect(() => {
-    void refresh();
+    scheduleRefresh();
   }, []);
 
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = setInterval(() => void refresh(), pollMs);
+    const timer = setInterval(scheduleRefresh, pollMs);
     return () => clearInterval(timer);
   }, [autoRefresh, pollMs, selectedRunId, failStaleAfterMs]);
 
@@ -407,7 +411,7 @@ function WorkflowMonitorApp({
       return;
     }
     if (key.name === "r") {
-      void refresh();
+      scheduleRefresh();
       return;
     }
     if (key.name === "a") {
@@ -433,7 +437,7 @@ function WorkflowMonitorApp({
         const nextRunId = state.runs[nextIndex]?.run.runId;
         setSelectedRunId(nextRunId);
         setSelectedTaskIndex(0);
-        void refresh(nextRunId);
+        scheduleRefresh(nextRunId);
       } else {
         setSelectedTaskIndex((index) => clamp(index + move, 0, Math.max(0, (selectedRun?.tasks.length ?? 1) - 1)));
       }

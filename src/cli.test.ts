@@ -110,6 +110,13 @@ test("workflow monitor help exposes store and polling options", async () => {
   expect(result.stdout).toContain("--fail-stale-after-ms");
 });
 
+test("workflow runs update help exposes cache control", async () => {
+  const result = await runCli(["workflow", "runs", "update", "--help"], {});
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("--no-cache");
+});
+
 test("workflow runs show returns the run record and rejects missing runs", async () => {
   const root = await createTempRoot();
   const workflowPath = join(root, "inspect.workflow.ts");

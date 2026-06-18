@@ -655,6 +655,7 @@ describe("workflow store", () => {
     expect(store.listRunTasks(firstRunId)).toEqual([
       {
         runId: firstRunId,
+        ordinal: 0,
         taskId: "build",
         cacheKey: "builder-cache",
         status: "completed",
@@ -683,6 +684,7 @@ describe("workflow store", () => {
     expect(store.listRunTasks(secondRunId)).toEqual([
       {
         runId: secondRunId,
+        ordinal: 0,
         taskId: "build",
         cacheKey: "builder-cache",
         status: "completed",
@@ -1309,6 +1311,46 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("monitor summaries preserve repeated dynamic task ids by invocation ordinal", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const repeated = defineTask({
+      id: "review",
+      agent: reviewer,
+      prompt: "Review the item.",
+      output: ReviewOutput,
+      cacheKey: "repeated-review-cache",
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-duplicate-task-id-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const first = yield* wf.runTask(repeated);
+        const second = yield* wf.runTask(repeated);
+        return { first: first.verdict, second: second.verdict };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ verdict: "pass" }),
+    });
+
+    expect(result.tasks.map((task) => task.id)).toEqual(["review", "review"]);
+    expect(store.listRunTasks(result.runId!).map((task) => ({ ordinal: task.ordinal, taskId: task.taskId }))).toEqual([
+      { ordinal: 0, taskId: "review" },
+      { ordinal: 1, taskId: "review" },
+    ]);
+    expect(store.compactRunSummary(result.runId!)?.tasks.map((task) => ({ ordinal: task.ordinal, taskId: task.taskId }))).toEqual([
+      { ordinal: 0, taskId: "review" },
+      { ordinal: 1, taskId: "review" },
+    ]);
+    expect(store.workflowMonitorRunDetail(result.runId!)?.tasks.map((task) => ({ ordinal: task.ordinal, taskId: task.taskId }))).toEqual([
+      { ordinal: 0, taskId: "review" },
+      { ordinal: 1, taskId: "review" },
+    ]);
+    store.close();
+  });
+
   test("dynamic workflow failures after completed tasks mark the run failed", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
@@ -1335,6 +1377,7 @@ describe("workflow store", () => {
     expect(store.listRunTasks(runId)).toEqual([
       {
         runId,
+        ordinal: 0,
         taskId: "build",
         cacheKey: "build",
         status: "completed",
@@ -1421,6 +1464,7 @@ describe("workflow store", () => {
     expect(store.listRunTasks(recordedRunId)).toEqual([
       {
         runId: recordedRunId,
+        ordinal: 0,
         taskId: "build",
         cacheKey: "builder-cache",
         status: "failed",
@@ -1485,6 +1529,7 @@ describe("workflow store", () => {
     expect(store.listRunTasks(runId)).toEqual([
       {
         runId,
+        ordinal: 0,
         taskId: "build",
         cacheKey: "builder-cache",
         status: "failed",
@@ -1579,6 +1624,7 @@ describe("workflow store", () => {
     expect(store.listRunTasks(runId)).toEqual([
       {
         runId,
+        ordinal: 0,
         taskId: "build",
         cacheKey: "build",
         status: "completed",
@@ -1589,6 +1635,7 @@ describe("workflow store", () => {
       },
       {
         runId,
+        ordinal: 1,
         taskId: "review",
         cacheKey: "review",
         status: "failed",

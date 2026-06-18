@@ -45,11 +45,38 @@ export const workflowRunOptionsSnapshot = (
   ...(options.cache === false ? { cache: false } : {}),
 });
 
+const workflowDetachedRunOptionsFromSnapshot = (
+  options: Record<string, unknown> | undefined,
+): WorkflowDetachedRunOptions => ({
+  ...(typeof options?.mockOutput === "string" ? { mockOutput: options.mockOutput } : {}),
+  ...(typeof options?.worker === "string" ? { worker: options.worker } : {}),
+  ...(typeof options?.model === "string" ? { model: options.model } : {}),
+  ...(typeof options?.maxConcurrentTasks === "number" && Number.isInteger(options.maxConcurrentTasks)
+    ? { maxConcurrentTasks: options.maxConcurrentTasks }
+    : {}),
+  ...(options?.cache === false ? { cache: false } : {}),
+});
+
+const mergeWorkflowRunOptions = (
+  previous: Record<string, unknown> | undefined,
+  next: WorkflowDetachedRunOptions,
+): WorkflowDetachedRunOptions => {
+  const base = workflowDetachedRunOptionsFromSnapshot(previous);
+  return {
+    ...base,
+    ...(next.mockOutput !== undefined ? { mockOutput: next.mockOutput } : {}),
+    ...(next.worker !== undefined ? { worker: next.worker } : {}),
+    ...(next.model !== undefined ? { model: next.model } : {}),
+    ...(next.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: next.maxConcurrentTasks } : {}),
+    ...(next.cache === false ? { cache: false } : {}),
+  };
+};
+
 export const startDetachedWorkflowRun = (
   file: string,
   options: WorkflowDetachedRunOptions,
   run: { readonly runId: string; readonly storePath: string; readonly token: string },
-): void => {
+): number => {
   const args = [
     "workflow",
     "run",
@@ -67,14 +94,16 @@ export const startDetachedWorkflowRun = (
     ...(options.cache === false ? ["--no-cache"] : []),
   ];
 
-  Bun.spawn({
+  const child = Bun.spawn({
     cmd: [...currentCliCommand(), ...args],
     cwd: process.cwd(),
     env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1", PRISM_WORKFLOW_DETACHED_RUN_ID: run.runId },
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
-  }).unref();
+  });
+  child.unref();
+  return child.pid;
 };
 
 export const requestWorkflowRunnerTermination = (
@@ -124,9 +153,6 @@ export const updateDetachedWorkflowRun = async (input: {
   readonly options: WorkflowDetachedRunOptions;
 }): Promise<WorkflowUpdateResult> => {
   const workflow = await loadWorkflowFile(input.file, { skipTypecheck: true });
-  if (input.options.mockOutput === undefined && input.options.worker !== undefined) {
-    getWorkflowWorkerAdapter(input.options.worker);
-  }
   const store = await WorkflowStore.open(expandPath(input.storePath));
   try {
     const previousRun = store.getRun(input.runId);
@@ -135,6 +161,10 @@ export const updateDetachedWorkflowRun = async (input: {
     }
     if (previousRun.status !== "running") {
       throw new Error(`workflow run is not running: ${input.runId}`);
+    }
+    const effectiveOptions = mergeWorkflowRunOptions(store.getRunSnapshot(input.runId)?.options, input.options);
+    if (effectiveOptions.mockOutput === undefined && effectiveOptions.worker !== undefined) {
+      getWorkflowWorkerAdapter(effectiveOptions.worker);
     }
     const nextRunId = randomUUID();
     const token = randomUUID();
@@ -152,10 +182,21 @@ export const updateDetachedWorkflowRun = async (input: {
     store.recordRunSnapshot({
       runId: nextRunId,
       workflowFile: expandPath(input.file),
-      options: workflowRunOptionsSnapshot(input.options),
+      options: workflowRunOptionsSnapshot(effectiveOptions),
     });
     requestWorkflowRunnerTermination(store, stoppedRun, "update-requested");
-    startDetachedWorkflowRun(input.file, input.options, { runId: nextRunId, storePath: input.storePath, token });
+    try {
+      const runnerPid = startDetachedWorkflowRun(input.file, effectiveOptions, { runId: nextRunId, storePath: input.storePath, token });
+      store.markRunRunnerStarted(nextRunId, runnerPid);
+    } catch (error) {
+      store.recordEvent({
+        runId: nextRunId,
+        type: "runner.start_failed",
+        payload: { cause: error instanceof Error ? error.message : String(error) },
+      });
+      store.stopRunningRun(nextRunId, "runner-start-failed");
+      throw error;
+    }
     return {
       previousRun: stoppedRun,
       runId: nextRunId,

@@ -322,7 +322,7 @@ function Footer({
   );
 }
 
-function WorkflowMonitorApp({
+export function WorkflowMonitorApp({
   storePath,
   pollMs,
   failStaleAfterMs,

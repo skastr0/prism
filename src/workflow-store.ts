@@ -80,6 +80,7 @@ export type WorkflowRunTaskStatus = "completed" | "failed" | "escalated";
 
 export interface WorkflowRunTaskRecord {
   readonly runId: string;
+  readonly ordinal: number;
   readonly taskId: string;
   readonly cacheKey: string;
   readonly status: WorkflowRunTaskStatus;
@@ -97,6 +98,7 @@ export type WorkflowRunTaskProgressStatus = "running" | "completed" | "failed" |
 export type WorkflowRunTaskCacheLookup = "hit" | "miss" | "skipped";
 
 export interface WorkflowRunTaskProgress {
+  readonly ordinal?: number;
   readonly taskId: string;
   readonly status: WorkflowRunTaskProgressStatus;
   readonly cacheKey?: string;
@@ -115,6 +117,7 @@ export type WorkflowRunTaskExecutionSource = "cached" | "fresh" | "unknown";
 export type WorkflowRunTaskEvidenceSource = "this-run" | "prior-cache-record" | "run-events" | "unknown";
 
 export interface WorkflowRunTaskCompactSummary {
+  readonly ordinal?: number;
   readonly taskId: string;
   readonly status: WorkflowRunTaskProgressStatus;
   readonly execution: WorkflowRunTaskExecutionSource;
@@ -181,7 +184,6 @@ export type WorkflowCacheBadge =
   | `repair ${number}`;
 
 export interface WorkflowMonitorTask extends WorkflowRunTaskCompactSummary {
-  readonly ordinal: number | null;
   readonly phase?: string;
   readonly cacheKey?: string;
   readonly prompt?: string;
@@ -482,6 +484,17 @@ const runBadges = (summary: WorkflowRunCompactSummary): WorkflowCacheBadge[] => 
   if (summary.tasks.some((task) => task.cacheLookup === "miss")) badges.push("miss");
   if (summary.tasks.some((task) => task.cacheLookup === "skipped")) badges.push("skipped");
   return uniqueBadges(badges);
+};
+
+const taskRecordKey = (task: { readonly taskId: string; readonly ordinal: number }): string =>
+  `task:${task.ordinal}:${task.taskId}`;
+
+const eventTaskKey = (
+  taskId: string,
+  rowKeysByTaskId: ReadonlyMap<string, ReadonlyArray<string>>,
+): string => {
+  const keys = rowKeysByTaskId.get(taskId);
+  return keys?.[0] ?? `event:${taskId}`;
 };
 
 export const workflowTaskIdentity = (
@@ -1409,6 +1422,7 @@ export class WorkflowStore {
     `).all(runId);
     return rows.map((row) => ({
       runId: row.run_id,
+      ordinal: row.ordinal,
       taskId: row.task_id,
       cacheKey: row.cache_key,
       status: row.status,
@@ -1424,9 +1438,14 @@ export class WorkflowStore {
 
   summarizeRunTasks(runId: string): WorkflowRunTaskProgress[] {
     const summaries = new Map<string, WorkflowRunTaskProgress>();
-    const upsert = (taskId: string, patch: WorkflowRunTaskProgressPatch): void => {
-      const existing = summaries.get(taskId);
-      summaries.set(taskId, {
+    const taskRows = this.listRunTasks(runId);
+    const rowKeysByTaskId = new Map<string, string[]>();
+    for (const task of taskRows) {
+      rowKeysByTaskId.set(task.taskId, [...(rowKeysByTaskId.get(task.taskId) ?? []), taskRecordKey(task)]);
+    }
+    const upsert = (key: string, taskId: string, patch: WorkflowRunTaskProgressPatch): void => {
+      const existing = summaries.get(key);
+      summaries.set(key, {
         taskId,
         status: existing?.status ?? "running",
         repairs: existing?.repairs ?? 0,
@@ -1435,8 +1454,9 @@ export class WorkflowStore {
       });
     };
 
-    for (const task of this.listRunTasks(runId)) {
-      upsert(task.taskId, {
+    for (const task of taskRows) {
+      upsert(taskRecordKey(task), task.taskId, {
+        ordinal: task.ordinal,
         status: task.status,
         cacheKey: task.cacheKey,
         cached: task.cached,
@@ -1448,7 +1468,8 @@ export class WorkflowStore {
       if (event.taskId === null) continue;
       const taskId = event.taskId;
       const payload = objectPayload(event.payload);
-      const existing = summaries.get(taskId);
+      const key = eventTaskKey(taskId, rowKeysByTaskId);
+      const existing = summaries.get(key);
       const patch: WorkflowRunTaskProgressPatch = {
         lastEventType: event.type,
         lastEventAt: event.createdAt,
@@ -1477,7 +1498,7 @@ export class WorkflowStore {
         if (payload !== null && typeof payload.cached === "boolean") patch.cached = payload.cached;
         if (payload !== null && typeof payload.cacheKey === "string") patch.cacheKey = payload.cacheKey;
       }
-      upsert(taskId, patch);
+      upsert(key, taskId, patch);
     }
 
     return Array.from(summaries.values());
@@ -1488,8 +1509,13 @@ export class WorkflowStore {
     if (run === null) return null;
 
     const summaries = new Map<string, WorkflowRunTaskCompactAccumulator>();
-    const upsert = (taskId: string, patch: WorkflowRunTaskCompactPatch): void => {
-      const existing = summaries.get(taskId);
+    const taskRows = this.listRunTasks(runId);
+    const rowKeysByTaskId = new Map<string, string[]>();
+    for (const task of taskRows) {
+      rowKeysByTaskId.set(task.taskId, [...(rowKeysByTaskId.get(task.taskId) ?? []), taskRecordKey(task)]);
+    }
+    const upsert = (key: string, taskId: string, patch: WorkflowRunTaskCompactPatch): void => {
+      const existing = summaries.get(key);
       const metadata = patch.metadata !== undefined
         && (existing?.metadata === undefined || existing.evidenceSource === "run-events" || existing.evidenceSource === "unknown")
         ? patch.metadata
@@ -1506,6 +1532,7 @@ export class WorkflowStore {
         ?? null;
       const next: WorkflowRunTaskCompactAccumulator = {
         taskId,
+        ...(patch.ordinal !== undefined || existing?.ordinal !== undefined ? { ordinal: patch.ordinal ?? existing?.ordinal } : {}),
         status: patch.status ?? existing?.status ?? "running",
         execution: patch.execution ?? existing?.execution ?? "unknown",
         evidenceSource: patch.evidenceSource ?? existing?.evidenceSource ?? "unknown",
@@ -1526,11 +1553,12 @@ export class WorkflowStore {
         ...(patch.orderIndex !== undefined || existing?.orderIndex !== undefined ? { orderIndex: patch.orderIndex ?? existing?.orderIndex } : {}),
         ...(metadata !== undefined ? { metadata } : {}),
       };
-      summaries.set(taskId, next);
+      summaries.set(key, next);
     };
 
-    for (const [index, task] of this.listRunTasks(runId).entries()) {
-      upsert(task.taskId, {
+    for (const [index, task] of taskRows.entries()) {
+      upsert(taskRecordKey(task), task.taskId, {
+        ordinal: task.ordinal,
         status: task.status,
         execution: task.cached ? "cached" : "fresh",
         evidenceSource: task.cached ? "prior-cache-record" : "this-run",
@@ -1556,7 +1584,8 @@ export class WorkflowStore {
       }
       const taskId = event.taskId;
       const payload = objectPayload(event.payload);
-      const existing = summaries.get(taskId);
+      const key = eventTaskKey(taskId, rowKeysByTaskId);
+      const existing = summaries.get(key);
       const patch: WorkflowRunTaskCompactPatch = {
         evidenceSource: existing?.evidenceSource ?? "run-events",
         firstEventSequence: event.sequence,
@@ -1618,7 +1647,7 @@ export class WorkflowStore {
           patch.execution = payload.cached ? "cached" : "fresh";
         }
       }
-      upsert(taskId, patch);
+      upsert(key, taskId, patch);
     }
 
     const tasks = Array.from(summaries.values()).sort((left, right) => {
@@ -1687,22 +1716,21 @@ export class WorkflowStore {
     const events = this.listRunEvents(runId);
     const taskRows = this.listRunTasks(runId);
     const snapshots = this.listRunTaskSnapshots(runId);
-    const taskById = new Map(taskRows.map((task) => [task.taskId, task]));
-    const snapshotById = new Map(snapshots.map((snapshot) => [snapshot.taskId, snapshot]));
+    const taskByOrdinal = new Map(taskRows.map((task) => [task.ordinal, task]));
+    const snapshotByOrdinal = new Map(snapshots.map((snapshot) => [snapshot.ordinal, snapshot]));
     const eventsByTask = new Map<string, WorkflowEventRecord[]>();
     for (const event of events) {
       if (event.taskId === null) continue;
       eventsByTask.set(event.taskId, [...(eventsByTask.get(event.taskId) ?? []), event]);
     }
-    const taskOrder = new Map(snapshots.map((snapshot) => [snapshot.taskId, snapshot.ordinal]));
-    const rowOrder = new Map(taskRows.map((task, index) => [task.taskId, index]));
     const tasks = summary.tasks.map((task): WorkflowMonitorTask => {
-      const snapshot = snapshotById.get(task.taskId);
-      const row = taskById.get(task.taskId);
+      const snapshot = task.ordinal !== undefined ? snapshotByOrdinal.get(task.ordinal) : undefined;
+      const row = task.ordinal !== undefined ? taskByOrdinal.get(task.ordinal) : undefined;
       const taskEvents = eventsByTask.get(task.taskId) ?? [];
+      const ordinal = snapshot?.ordinal ?? row?.ordinal ?? task.ordinal;
       return {
         ...task,
-        ordinal: snapshot?.ordinal ?? rowOrder.get(task.taskId) ?? null,
+        ...(ordinal !== undefined ? { ordinal } : {}),
         ...(snapshot?.phase !== undefined ? { phase: snapshot.phase } : {}),
         ...(snapshot?.cacheKey !== undefined ? { cacheKey: snapshot.cacheKey } : {}),
         ...(snapshot?.prompt !== undefined ? { prompt: snapshot.prompt } : {}),
@@ -1712,8 +1740,8 @@ export class WorkflowStore {
         ...(snapshot !== undefined ? { snapshot } : {}),
       };
     }).sort((left, right) => {
-      const leftOrder = left.ordinal ?? taskOrder.get(left.taskId) ?? Number.MAX_SAFE_INTEGER;
-      const rightOrder = right.ordinal ?? taskOrder.get(right.taskId) ?? Number.MAX_SAFE_INTEGER;
+      const leftOrder = left.ordinal ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = right.ordinal ?? Number.MAX_SAFE_INTEGER;
       if (leftOrder !== rightOrder) return leftOrder - rightOrder;
       return left.taskId.localeCompare(right.taskId);
     });

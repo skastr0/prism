@@ -20,6 +20,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@opencode-ai/plugin": "^1.15.13",
     "@opentui/core-linux-x64": "0.4.1",
+    "@opentui/core-linux-x64-musl": "0.4.1",
     "effect": "^3.21.1",
     "typescript": "^5.8.3",
     "zod": "4.4.3"

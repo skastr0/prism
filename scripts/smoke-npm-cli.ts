@@ -30,6 +30,13 @@ const platformPackageByTarget = {
 
 type SupportedTarget = keyof typeof platformPackageByTarget;
 
+const openTuiNativePackagesByTarget: Record<SupportedTarget, readonly string[]> = {
+  "darwin-arm64": ["@opentui/core-darwin-arm64"],
+  "darwin-x64": ["@opentui/core-darwin-x64"],
+  "linux-arm64": ["@opentui/core-linux-arm64", "@opentui/core-linux-arm64-musl"],
+  "linux-x64": ["@opentui/core-linux-x64", "@opentui/core-linux-x64-musl"],
+};
+
 const currentTarget = (): SupportedTarget => {
   const target = `${process.platform}-${process.arch}`;
   if (target in platformPackageByTarget) {
@@ -87,6 +94,19 @@ const packPackage = async (packageDir: string, tarballDir: string): Promise<stri
     throw new Error(`npm pack did not return a tarball for ${packageDir}`);
   }
   return join(tarballDir, filename);
+};
+
+const assertPlatformNativeDependencies = async (): Promise<void> => {
+  for (const [binaryTarget, packageDir] of Object.entries(platformPackageByTarget) as Array<[SupportedTarget, string]>) {
+    const packageJson = JSON.parse(await readFile(join(repoRoot, packageDir, "package.json"), "utf8")) as {
+      readonly dependencies?: Record<string, string>;
+    };
+    for (const dependency of openTuiNativePackagesByTarget[binaryTarget]) {
+      if (packageJson.dependencies?.[dependency] !== "0.4.1") {
+        throw new Error(`${packageDir} must depend on ${dependency}@0.4.1 for OpenTUI native loading`);
+      }
+    }
+  }
 };
 
 const bufferIncludes = (buffer: Buffer, needle: string): boolean =>
@@ -237,6 +257,7 @@ const main = async (): Promise<void> => {
     const binaryPath = join(repoRoot, "dist", `prism-${binaryTarget}`);
     assertNoForbiddenPaths(`dist/${basename(binaryPath)}`, await readFile(binaryPath), forbiddenPaths);
   }
+  await assertPlatformNativeDependencies();
 
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-npm-cli-smoke-"));
   let failed = true;

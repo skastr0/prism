@@ -695,12 +695,14 @@ workflowRuns
   .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
+  .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
     readonly worker?: string;
     readonly model?: string;
     readonly maxConcurrentTasks?: number;
+    readonly cache?: boolean;
   }) => {
     try {
       const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));

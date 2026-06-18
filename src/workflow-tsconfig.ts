@@ -272,6 +272,34 @@ export const resolveWorkflowTypeDirs = (): WorkflowTypeDirs => ({
   effectDtsDir: resolveEffectDtsDir(),
 });
 
+/** Generated workflow ref modules under ~/.prism/state/projects/<key>/generated/. */
+export const WORKFLOW_REFS_MODULES = [
+  "agents",
+  "models",
+  "skills",
+  "traits",
+  "orbits",
+  "tools",
+] as const;
+
+export type WorkflowRefsModule = (typeof WORKFLOW_REFS_MODULES)[number];
+
+/**
+ * Build path mappings for every generated `prism/refs` module. `prism/refs`
+ * itself resolves to `agents.ts` because that is the primary import surface.
+ */
+export const buildWorkflowRefsPaths = (
+  refsDir: string,
+): Record<string, string[]> => {
+  const paths: Record<string, string[]> = {
+    "prism/refs": [join(refsDir, "agents.ts")],
+  };
+  for (const module of WORKFLOW_REFS_MODULES) {
+    paths[`prism/refs/${module}`] = [join(refsDir, `${module}.ts`)];
+  }
+  return paths;
+};
+
 /**
  * Build the `compilerOptions.paths` map for typechecking a workflow file from
  * the resolved type dirs and (optionally) the project-keyed generated refs.
@@ -282,8 +310,8 @@ export const resolveWorkflowTypeDirs = (): WorkflowTypeDirs => ({
  */
 export const buildWorkflowPaths = (options: {
   readonly typeDirs: WorkflowTypeDirs;
-  /** Absolute path to the generated refs file (~/.../generated/agents.ts). */
-  readonly refsFile?: string;
+  /** Absolute path to the generated refs directory (~/.../generated/). */
+  readonly refsDir?: string;
 }): Record<string, string[]> => {
   const paths: Record<string, string[]> = {};
   const { prismTypesDir, effectDtsDir } = options.typeDirs;
@@ -292,8 +320,8 @@ export const buildWorkflowPaths = (options: {
     paths["prism"] = [join(prismTypesDir, "index.d.ts")];
     paths["prism/*"] = [join(prismTypesDir, "*.d.ts")];
   }
-  if (options.refsFile) {
-    paths["prism/refs"] = [options.refsFile];
+  if (options.refsDir) {
+    Object.assign(paths, buildWorkflowRefsPaths(options.refsDir));
   }
   if (effectDtsDir) {
     paths["effect"] = [join(effectDtsDir, "index.d.ts")];
@@ -358,12 +386,7 @@ export const generateWorkflowTsconfig = async (
   // paths — the typecheck pre-step detects a missing prism/effect surface and
   // warns+proceeds rather than reporting a misleading "Cannot find module".
   //
-  // "prism/refs" maps to the generated refs entry file (agents.ts), matching
-  // what the loader injects per project key at typecheck time.
-  const refsFile = options.refsDir
-    ? join(options.refsDir, "agents.ts")
-    : undefined;
-  const paths = buildWorkflowPaths({ typeDirs, refsFile });
+  const paths = buildWorkflowPaths({ typeDirs, refsDir: options.refsDir });
 
   const include: string[] = [];
   if (options.workflowDir) {

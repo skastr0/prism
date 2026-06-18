@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { dirname, resolve as resolvePath } from "node:path";
 import type * as TypeScript from "typescript";
 import { expandPath } from "./fs.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
@@ -266,7 +266,7 @@ const resolveWorkflowTypeEnvironment = (
 
   const paths = buildWorkflowPaths({
     typeDirs,
-    refsFile: hasRefs ? refsPath : undefined,
+    refsDir: hasRefs ? dirname(refsPath) : undefined,
   });
 
   // Merge any on-disk Prism-generated tsconfig's non-path options as a base.

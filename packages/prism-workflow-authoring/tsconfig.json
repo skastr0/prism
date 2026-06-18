@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "prism": ["../npm/prism-darwin-arm64/types/index.d.ts"],
+      "prism/*": ["../npm/prism-darwin-arm64/types/*.d.ts"],
+      "prism/refs": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/agents.ts"
+      ],
+      "prism/refs/agents": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/agents.ts"
+      ],
+      "prism/refs/models": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/models.ts"
+      ],
+      "prism/refs/skills": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/skills.ts"
+      ],
+      "prism/refs/traits": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/traits.ts"
+      ],
+      "prism/refs/orbits": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/orbits.ts"
+      ],
+      "prism/refs/tools": [
+        "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/tools.ts"
+      ],
+      "effect": ["../../node_modules/effect/dist/dts/index.d.ts"],
+      "effect/*": ["../../node_modules/effect/dist/dts/*.d.ts"]
+    }
+  },
+  "include": [
+    "../../.prism/workflows/**/*.workflow.ts",
+    "../../examples/**/workflows/**/*.workflow.ts",
+    "/Users/guilhermecastro/.prism/state/projects/e3b7727eaa735dd7ffba661bd8becb528e4b8eff2292ac2ae3414dd2b6d8d2d1/generated/**/*.ts"
+  ]
+}

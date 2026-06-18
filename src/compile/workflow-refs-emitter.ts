@@ -47,6 +47,60 @@ const camelKey = (value: string): string => {
 
 const sortStrings = (values: Iterable<string>): string[] => [...values].sort();
 
+type EmittedModelProfileRef = {
+  readonly kind: "model-profile-ref";
+  readonly plugin: string;
+  readonly modelspace: string;
+  readonly profile: string;
+};
+
+type EmittedManagedSkillRef = {
+  readonly kind: "managed-skill-ref";
+  readonly plugin: string;
+  readonly name: string;
+};
+
+type EmittedSkillspaceRef = {
+  readonly kind: "skillspace-ref";
+  readonly plugin: string;
+  readonly skillspace: string;
+  readonly skills: readonly string[];
+};
+
+type EmittedTraitRef = {
+  readonly kind: "trait-ref";
+  readonly id: string;
+  readonly ref: string;
+};
+
+type EmittedOrbitRef = {
+  readonly kind: "orbit-ref";
+  readonly plugin: string;
+  readonly name: string;
+};
+
+type EmittedCanonicalToolRef = {
+  readonly kind: "canonical-tool-ref";
+  readonly plugin: string;
+  readonly name: string;
+};
+
+type EmittedToolspaceToolRef = {
+  readonly kind: "toolspace-tool-ref";
+  readonly plugin: string;
+  readonly toolspace: string;
+  readonly name: string;
+};
+
+type EmittedToolGroupValue = EmittedCanonicalToolRef | Record<string, EmittedToolspaceToolRef>;
+
+type UsedToolEntry = CompileManifestCanonicalTool | CompileManifestToolspaceTool;
+
+const toolSortKey = (entry: UsedToolEntry): string =>
+  "toolspace" in entry && entry.toolspace !== undefined
+    ? `${entry.toolspace}/${entry.name}`
+    : entry.name;
+
 const pluginNames = (manifest: CompileManifest): string[] =>
   [...new Set(Object.values(manifest.agents).map((agent) => agent.plugin))].sort();
 
@@ -294,7 +348,7 @@ export const renderWorkflowModelsModule = (options: {
 }): string => {
   const profiles = collectUsedModelProfiles(options.manifest);
 
-  const byPlugin: Record<string, Record<string, Record<string, any>>> = {};
+  const byPlugin: Record<string, Record<string, Record<string, EmittedModelProfileRef>>> = {};
   for (const { plugin, modelspace, profile } of profiles) {
     const pk = camelKey(plugin);
     const msk = camelKey(modelspace);
@@ -361,7 +415,7 @@ export const renderWorkflowSkillsModule = (options: {
 }): string => {
   const used = collectUsedSkills(options.manifest);
 
-  const byPlugin: Record<string, Record<string, any>> = {};
+  const byPlugin: Record<string, Record<string, EmittedManagedSkillRef | EmittedSkillspaceRef>> = {};
   for (const entry of used) {
     const pk = camelKey(entry.plugin);
     if (!byPlugin[pk]) byPlugin[pk] = {};
@@ -428,7 +482,7 @@ export const renderWorkflowTraitsModule = (options: {
 }): string => {
   const used = collectUsedTraits(options.manifest);
 
-  const byPlugin: Record<string, Record<string, any>> = {};
+  const byPlugin: Record<string, Record<string, EmittedTraitRef>> = {};
   for (const entry of used) {
     // group by owner plugin from id prefix (e.g. "forge:foo" -> "forge")
     const colon = entry.id.indexOf(":");
@@ -485,7 +539,7 @@ const collectUsedOrbits = (
 
   // Only top-level manifest.orbits (populated by build when authoritative orbit-targeting compile).
   // No agent-derived fallback, no sourcePath/phases/body per architecture boundaries.
-  const oRec = (manifest as any).orbits as Record<string, CompileManifestOrbit> | undefined;
+  const oRec = manifest.orbits;
   if (oRec && Object.keys(oRec).length > 0) {
     for (const entry of Object.values(oRec)) {
       const k = `${entry.plugin}:${entry.name}`;
@@ -503,19 +557,19 @@ const collectUsedOrbits = (
 
 const collectUsedTools = (
   manifest: CompileManifest,
-): Array<{ plugin: string; name: string } | { plugin: string; toolspace: string; name: string }> => {
-  const entries: Array<{ plugin: string; name: string } | { plugin: string; toolspace: string; name: string }> = [];
+): UsedToolEntry[] => {
+  const entries: UsedToolEntry[] = [];
   const seen = new Set<string>();
 
-  const tRec = (manifest as any).tools as Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> | undefined;
+  const tRec = manifest.tools;
   if (tRec && Object.keys(tRec).length > 0) {
     for (const entry of Object.values(tRec)) {
       const k = "toolspace" in entry && entry.toolspace !== undefined
         ? `${entry.plugin}:${entry.toolspace}/${entry.name}`
-        : `${entry.plugin}:${(entry as { readonly name: string }).name}`;
+        : `${entry.plugin}:${entry.name}`;
       if (!seen.has(k)) {
         seen.add(k);
-        entries.push({ ...entry } as any);
+        entries.push(entry);
       }
     }
   } else {
@@ -558,9 +612,9 @@ const collectUsedTools = (
 
   return entries.sort((a, b) =>
     a.plugin === b.plugin
-      ? ((a as any).toolspace ?? (a as any).name ?? "") === ((b as any).toolspace ?? (b as any).name ?? "")
+      ? toolSortKey(a) === toolSortKey(b)
         ? 0
-        : ((a as any).toolspace ?? (a as any).name ?? "").localeCompare(((b as any).toolspace ?? (b as any).name ?? ""))
+        : toolSortKey(a).localeCompare(toolSortKey(b))
       : a.plugin.localeCompare(b.plugin),
   );
 };
@@ -570,7 +624,7 @@ export const renderWorkflowOrbitsModule = (options: {
 }): string => {
   const used = collectUsedOrbits(options.manifest);
 
-  const byPlugin: Record<string, Record<string, any>> = {};
+  const byPlugin: Record<string, Record<string, EmittedOrbitRef>> = {};
   for (const entry of used) {
     const pk = camelKey(entry.plugin);
     if (!byPlugin[pk]) byPlugin[pk] = {};
@@ -620,26 +674,33 @@ export const renderWorkflowToolsModule = (options: {
 }): string => {
   const used = collectUsedTools(options.manifest);
 
-  const byPlugin: Record<string, Record<string, any>> = {};
+  const byPlugin: Record<string, Record<string, EmittedToolGroupValue>> = {};
   for (const entry of used) {
     const pk = camelKey(entry.plugin);
     if (!byPlugin[pk]) byPlugin[pk] = {};
-    if ("toolspace" in entry && entry.toolspace) {
+    if ("toolspace" in entry && entry.toolspace !== undefined) {
       const tsk = camelKey(entry.toolspace);
-      if (!byPlugin[pk][tsk]) byPlugin[pk][tsk] = {};
+      const toolspaceGroup = byPlugin[pk][tsk];
+      const nested: Record<string, EmittedToolspaceToolRef> =
+        toolspaceGroup && !("kind" in toolspaceGroup)
+          ? toolspaceGroup
+          : {};
+      if (!toolspaceGroup || "kind" in toolspaceGroup) {
+        byPlugin[pk][tsk] = nested;
+      }
       const nk = camelKey(entry.name);
-      byPlugin[pk][tsk][nk] = {
+      nested[nk] = {
         kind: "toolspace-tool-ref",
         plugin: entry.plugin,
         toolspace: entry.toolspace,
         name: entry.name,
       };
     } else {
-      const nk = camelKey((entry as { name: string }).name);
+      const nk = camelKey(entry.name);
       byPlugin[pk][nk] = {
         kind: "canonical-tool-ref",
         plugin: entry.plugin,
-        name: (entry as { name: string }).name,
+        name: entry.name,
       };
     }
   }

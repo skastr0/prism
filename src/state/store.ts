@@ -31,9 +31,9 @@ import {
   writeFile,
 } from "../fs.js";
 import {
-  decodeSnapshotManifest,
   emptySnapshotManifest,
   encodeSnapshotManifest,
+  migrateSnapshotManifest,
   type SnapshotEntry,
   type SnapshotManifest,
 } from "./snapshot.js";
@@ -93,7 +93,16 @@ export const readSnapshot = async (options: {
   const empty = emptySnapshotManifest({ harness: options.harness, root: resolve(options.root) });
   if (!(await exists(path))) return { manifest: empty };
 
-  const decoded = decodeSnapshotManifest(await readFile(path));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path));
+  } catch {
+    const quarantinedPath = `${path}.corrupt-${Date.now()}.json`;
+    await rename(path, quarantinedPath);
+    return { manifest: empty, quarantinedPath };
+  }
+
+  const decoded = migrateSnapshotManifest(parsed);
   if (decoded._tag === "Right") return { manifest: decoded.right };
 
   const quarantinedPath = `${path}.corrupt-${Date.now()}.json`;
@@ -162,7 +171,14 @@ export const gcSnapshots = async (prismHome: string): Promise<SnapshotGcResult> 
   for (const name of await listDir(dir)) {
     if (!name.endsWith(".json") || name.includes(".corrupt-")) continue;
     const path = join(dir, name);
-    const decoded = decodeSnapshotManifest(await readFile(path));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path));
+    } catch {
+      await rename(path, `${path}.corrupt-${Date.now()}.json`);
+      continue;
+    }
+    const decoded = migrateSnapshotManifest(parsed);
     if (decoded._tag === "Left") {
       await rename(path, `${path}.corrupt-${Date.now()}.json`);
       continue;

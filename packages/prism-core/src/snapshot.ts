@@ -58,6 +58,22 @@ export const decodeSnapshotManifest = Schema.decodeUnknownEither(
   Schema.parseJson(SnapshotManifestSchema),
 );
 
+const decodeSnapshotManifestUnknown = Schema.decodeUnknownEither(SnapshotManifestSchema);
+
+/**
+ * Migrate a parsed snapshot manifest to the latest version.
+ *
+ * Today only version 1 exists, so this is the identity for valid v1 payloads.
+ * When a v2 format is introduced, this function will branch on `input.version`
+ * and transform older shapes forward before the final schema decode.
+ */
+export const migrateSnapshotManifest = (
+  input: unknown,
+): ReturnType<typeof decodeSnapshotManifestUnknown> => {
+  // Future migration hook: inspect input.version and apply v2/v3/etc. forward transforms.
+  return decodeSnapshotManifestUnknown(input);
+};
+
 export const encodeSnapshotManifest = (manifest: SnapshotManifest): string => {
   const sorted: SnapshotManifest = {
     ...manifest,

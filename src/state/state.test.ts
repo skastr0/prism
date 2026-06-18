@@ -69,11 +69,59 @@ describe("snapshot store", () => {
     expect(await exists(path)).toBe(false);
   });
 
+  test("version skew quarantines and degrades to empty", async () => {
+    const path = snapshotPath(home, root);
+    await mkdir(join(home, "state", "roots"), { recursive: true });
+    await nodeWriteFile(
+      path,
+      JSON.stringify({ ...emptySnapshotManifest({ harness: "codex-cli", root }), version: 2 }),
+    );
+    const result = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(result.manifest.entries).toEqual([]);
+    expect(result.quarantinedPath).toContain(".corrupt-");
+    expect(await exists(result.quarantinedPath!)).toBe(true);
+    expect(await exists(path)).toBe(false);
+  });
+
+  test("missing version quarantines and degrades to empty", async () => {
+    const path = snapshotPath(home, root);
+    await mkdir(join(home, "state", "roots"), { recursive: true });
+    await nodeWriteFile(
+      path,
+      JSON.stringify({ harness: "codex-cli", root, entries: [] }),
+    );
+    const result = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(result.manifest.entries).toEqual([]);
+    expect(result.quarantinedPath).toContain(".corrupt-");
+    expect(await exists(result.quarantinedPath!)).toBe(true);
+    expect(await exists(path)).toBe(false);
+  });
+
   test("tmp fence: refuses tempdir roots into a non-tempdir PRISM_HOME", async () => {
     const fakeRealHome = "/Users/nobody/.prism-fence-test";
     await expect(
       commitSnapshot({ prismHome: fakeRealHome, manifest: manifestWith([]) }),
     ).rejects.toThrow(/test-pollution signature/);
+  });
+
+  test("ownership entries are keyed by targetPath with regionKey iff mode is region", async () => {
+    const ownedFile = join(root, "owned.md");
+    const sharedFile = join(root, "shared.md");
+    await nodeWriteFile(ownedFile, "owned");
+    await nodeWriteFile(sharedFile, "shared");
+    const manifest = manifestWith([
+      { targetPath: sharedFile, contentHash: "h1", mode: "region", regionKey: "marker # p1.rules", plugin: "p1" },
+      { targetPath: ownedFile, contentHash: "h2", mode: "owned", plugin: "p2" },
+      // Duplicate targetPath with different plugin is allowed because identity is targetPath alone.
+      { targetPath: ownedFile, contentHash: "h3", mode: "owned", plugin: "p3" },
+    ]);
+    await commitSnapshot({ prismHome: home, manifest });
+
+    const read = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    const paths = read.manifest.entries.map((entry) => entry.targetPath);
+    expect(paths).toEqual([ownedFile, ownedFile, sharedFile]);
+    expect(read.manifest.entries.every((entry) => entry.mode === "region" ? entry.regionKey !== undefined : entry.regionKey === undefined)).toBe(true);
+    expect(read.manifest.entries.map((entry) => entry.plugin)).toEqual(["p2", "p3", "p1"]);
   });
 
   test("gc drops manifests for dead roots and keeps live ones", async () => {
@@ -150,6 +198,54 @@ describe("snapshot store", () => {
     const read = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
     expect(read.manifest.entries).toEqual([]);
   });
+
+  test("gc keeps region entries whose marker fence is present in a live file", async () => {
+    const configPath = join(root, "config.toml");
+    const marker =
+      "# --- prism:kept.hooks begin ---\nmanaged\n# --- prism:kept.hooks end ---";
+    await nodeWriteFile(configPath, `[features]\n${marker}\n`);
+    await commitSnapshot({
+      prismHome: home,
+      manifest: manifestWith([
+        {
+          targetPath: configPath,
+          contentHash: computeContentHash(marker),
+          mode: "region",
+          regionKey: "marker # kept.hooks",
+          plugin: "kept-plugin",
+        },
+      ]),
+    });
+
+    const result = await gcSnapshots(home);
+    expect(result.droppedEntries).toEqual([]);
+
+    const read = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(read.manifest.entries.map((entry) => entry.targetPath)).toEqual([configPath]);
+  });
+
+  test("gc does not drop json region entries when the json key is absent", async () => {
+    const configPath = join(root, "config.json");
+    await nodeWriteFile(configPath, JSON.stringify({ other: true }));
+    await commitSnapshot({
+      prismHome: home,
+      manifest: manifestWith([
+        {
+          targetPath: configPath,
+          contentHash: "h1",
+          mode: "region",
+          regionKey: "json removed.key [\"removed\"]",
+          plugin: "json-plugin",
+        },
+      ]),
+    });
+
+    const result = await gcSnapshots(home);
+    expect(result.droppedEntries).toEqual([]);
+
+    const read = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(read.manifest.entries.map((entry) => entry.targetPath)).toEqual([configPath]);
+  });
 });
 
 describe("snapshot lock", () => {
@@ -222,5 +318,39 @@ describe("run backups", () => {
     }
     const removed = await pruneRunBackups(home, 2);
     expect(removed).toEqual(["20260608T0000-a"]);
+  });
+
+  test("backup path layout is a pure function of runId, root, and targetPath", async () => {
+    const target = join(root, "sub", "config.toml");
+    await mkdir(join(root, "sub"), { recursive: true });
+    await nodeWriteFile(target, "original");
+
+    const backupPath = await backupOnceForRun({
+      prismHome: home,
+      runId: "20260610T0001-aaaa",
+      root,
+      targetPath: target,
+    });
+
+    expect(backupPath).not.toBeNull();
+    expect(backupPath).toStartWith(join(home, "backups", "20260610T0001-aaaa"));
+    expect(backupPath).toEndWith(join("sub", "config.toml"));
+  });
+
+  test("backup path falls back to a hash for targets outside the root", async () => {
+    const outsideTarget = join(home, "outside.toml");
+    await nodeWriteFile(outsideTarget, "outside");
+
+    const backupPath = await backupOnceForRun({
+      prismHome: home,
+      runId: "20260610T0001-aaaa",
+      root,
+      targetPath: outsideTarget,
+    });
+
+    expect(backupPath).not.toBeNull();
+    expect(backupPath).toStartWith(join(home, "backups", "20260610T0001-aaaa"));
+    // Outside-root targets do not mirror the relative path; they hash to a 16-char hex fragment.
+    expect(backupPath!.split("/").pop()).toMatch(/^[0-9a-f]{16}$/);
   });
 });

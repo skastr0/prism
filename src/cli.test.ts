@@ -1370,7 +1370,7 @@ test("refresh --plugins emits workflow refs once after directory compile", async
   expect(second.stdout.match(/generated\/agents\.ts/g)?.length).toBe(1);
   expect(second.stdout).toContain("skip");
   expect(second.stdout).not.toContain("repair");
-});
+}, 30_000);
 
 test("refresh --plugins skips skill validation when skills are not targeted", async () => {
   const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();

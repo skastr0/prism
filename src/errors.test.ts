@@ -19,6 +19,7 @@ import {
   BundleBuildError,
   isPrismError,
   McpBundleMissingError,
+  McpPortConflictError,
   PluginManifestError,
   PRISM_ERROR_TAGS,
   PrismConfigError,
@@ -103,6 +104,7 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
     pluginName: "demo",
     bundlePath: "/tmp/prism-home/runtime/mcp/demo/server.mjs",
   }),
+  new McpPortConflictError({ host: "127.0.0.1", port: 8080 }),
   new BlockedTargetError({
     targetPath: "/tmp/root/.codex/agents/builder.md",
     plugin: "demo",

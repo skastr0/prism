@@ -20,7 +20,7 @@ import {
   writeMcpRuntimeMetadata,
 } from "./runtime-metadata.js";
 import { resolveBunExecutable } from "../bun-runtime.js";
-import { createMinimalMcpPluginFixture, type MinimalMcpPluginFixture } from "./test-fixtures/minimal-mcp-plugin.js";
+import { createMinimalMcpPluginFixture, type MinimalMcpPluginFixture } from "../testing/mcp-fixture.js";
 
 const execFileAsync = promisify(execFile);
 const fixtures: MinimalMcpPluginFixture[] = [];

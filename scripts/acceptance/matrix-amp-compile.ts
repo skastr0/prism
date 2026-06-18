@@ -1,20 +1,9 @@
 /**
- * Acceptance gate: matrix-codex-opencode (TS-007 first row).
+ * Acceptance gate: matrix-amp-compile (TS-012).
  *
- * Runs the install-phase acceptance matrix for codex-cli and opencode using the
- * in-repo `examples/prism-harness-qa` fixture plugin, with per-harness overlay
- * slices. The test:
- *
- *   1. Creates a temp sandbox with isolated PRISM_HOME and per-harness roots.
- *   2. Runs `refreshPlugin` once and asserts creates/patches and convergence.
- *   3. Runs `refreshPlugin` again and asserts zero writes (full idempotency).
- *   4. Vacuums each harness root (empty desired state, full-world prune) and
- *      asserts all Prism-owned files and snapshot entries are removed.
- *
- * Compile-phase surfaces are intentionally excluded from this row; MCP daemon
- * lifecycle has dedicated gates (TS-005/TS-006).
- *
- * Usage: bun scripts/acceptance/matrix-codex-opencode.ts
+ * Covers Amp Code compile-phase plugin-bundle output plus install-phase rules.
+ * Amp's generated tools use the native plugin API, so this gate runs with MCP
+ * lifecycle disabled ("none") and still converges.
  */
 
 import { resolve } from "node:path";
@@ -37,10 +26,10 @@ const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
 const FIXTURE: MatrixFixtureSpec = {
   pluginPath: PLUGIN_PATH,
   pluginName: "prism-harness-qa",
-  harnesses: ["codex-cli", "opencode"],
-  compileTargets: ["opencode"],
+  harnesses: ["amp-code"],
+  compileTargets: ["amp-code"],
   scope: "global",
-  surfaces: [HARNESS_SURFACE_MATRIX["codex-cli"], HARNESS_SURFACE_MATRIX.opencode],
+  surfaces: [HARNESS_SURFACE_MATRIX["amp-code"]],
 };
 
 const record = (
@@ -82,7 +71,7 @@ const main = async (): Promise<void> => {
 
   const failed = assertions.filter((a) => !a.pass);
   const summary = formatMatrixSummary({
-    gate: "matrix-codex-opencode",
+    gate: "matrix-amp-compile",
     fixture: FIXTURE,
     run1: result ? assertRun1Creates(result.run1) : [],
     run2: result ? assertRun2Converged(result.run2) : [],

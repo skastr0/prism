@@ -1,20 +1,11 @@
 /**
- * Acceptance gate: matrix-codex-opencode (TS-007 first row).
+ * Acceptance gate: matrix-direct-file-install (TS-012).
  *
- * Runs the install-phase acceptance matrix for codex-cli and opencode using the
- * in-repo `examples/prism-harness-qa` fixture plugin, with per-harness overlay
- * slices. The test:
- *
- *   1. Creates a temp sandbox with isolated PRISM_HOME and per-harness roots.
- *   2. Runs `refreshPlugin` once and asserts creates/patches and convergence.
- *   3. Runs `refreshPlugin` again and asserts zero writes (full idempotency).
- *   4. Vacuums each harness root (empty desired state, full-world prune) and
- *      asserts all Prism-owned files and snapshot entries are removed.
- *
- * Compile-phase surfaces are intentionally excluded from this row; MCP daemon
- * lifecycle has dedicated gates (TS-005/TS-006).
- *
- * Usage: bun scripts/acceptance/matrix-codex-opencode.ts
+ * Covers install-phase direct-file surfaces for harnesses that do not require
+ * compile-phase MCP lifecycle:
+ *   - factory-droid: commands + AGENTS.md region
+ *   - openclaw: skills-only
+ *   - cursor: generated local plugin commands + skills + .cursorrules region
  */
 
 import { resolve } from "node:path";
@@ -37,10 +28,13 @@ const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
 const FIXTURE: MatrixFixtureSpec = {
   pluginPath: PLUGIN_PATH,
   pluginName: "prism-harness-qa",
-  harnesses: ["codex-cli", "opencode"],
-  compileTargets: ["opencode"],
+  harnesses: ["factory-droid", "openclaw", "cursor"],
   scope: "global",
-  surfaces: [HARNESS_SURFACE_MATRIX["codex-cli"], HARNESS_SURFACE_MATRIX.opencode],
+  surfaces: [
+    HARNESS_SURFACE_MATRIX["factory-droid"],
+    HARNESS_SURFACE_MATRIX.openclaw,
+    HARNESS_SURFACE_MATRIX.cursor,
+  ],
 };
 
 const record = (
@@ -82,7 +76,7 @@ const main = async (): Promise<void> => {
 
   const failed = assertions.filter((a) => !a.pass);
   const summary = formatMatrixSummary({
-    gate: "matrix-codex-opencode",
+    gate: "matrix-direct-file-install",
     fixture: FIXTURE,
     run1: result ? assertRun1Creates(result.run1) : [],
     run2: result ? assertRun2Converged(result.run2) : [],

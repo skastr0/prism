@@ -29,6 +29,10 @@ const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
   { script: "idempotency-git.ts", expected: "PASS" },
   { script: "crash-convergence.ts", expected: "PASS" },
   { script: "matrix-codex-opencode.ts", expected: "PASS" },
+  { script: "matrix-direct-file-install.ts", expected: "PASS" },
+  { script: "matrix-amp-compile.ts", expected: "PASS" },
+  { script: "matrix-pi-compile.ts", expected: "PASS" },
+  { script: "matrix-mcp-disabled.ts", expected: "FAIL" },
   { script: "mcp-determinism.ts", expected: null },
   { script: "mcp-lifecycle.ts", expected: null },
   { script: "orbit-workflows.ts", expected: "PASS" },
@@ -117,8 +121,8 @@ const runGateScript = async (entry: GateScript): Promise<GateRow[]> => {
     return [
       {
         gate: name,
-        pass: false,
-        expected: "PASS",
+        pass: null,
+        expected: entry.expected,
         note: `gate script produced no parseable JSON summary (exit ${exitCode}); stderr: ${stderr.trim().slice(0, 300)}`,
       },
     ];

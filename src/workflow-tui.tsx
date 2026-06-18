@@ -1,6 +1,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
+import { exitWith } from "./exit.js";
 import { expandPath } from "./fs.js";
 import {
   defaultWorkflowStorePath,
@@ -404,7 +405,7 @@ export function WorkflowMonitorApp({
     }
     if (key.name === "q") {
       renderer?.destroy();
-      process.exit(0);
+      exitWith(0);
     }
     if (key.name === "tab") {
       setPane((current) => (current === "runs" ? "tasks" : "runs"));

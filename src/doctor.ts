@@ -1,10 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
 import { exists, expandPath, listDir, listDirRecursive, pathContains, readFile } from "./fs.js";
 import type { HarnessId, HarnessScope } from "./types.js";
+import { HarnessRoots, type HarnessRootsEnv } from "./services/prism-env.js";
 import { refreshPlugin, type RefreshResult } from "./refresh.js";
 import { EXIT_CODES, type ExitCode } from "./exit.js";
 import { computeContentHash } from "./content-hash.js";
@@ -67,6 +68,8 @@ export interface DoctorOptions {
   readonly projectPath?: string;
   readonly prismHome: string;
   readonly fix: boolean;
+  /** Optional harness-root resolver; when provided, global roots come from here instead of HOME. */
+  readonly roots?: HarnessRootsEnv;
 }
 
 const finding = (input: Omit<DoctorFinding, "schema">): DoctorFinding => ({
@@ -78,9 +81,10 @@ const rootForHarness = (
   harnessId: HarnessId,
   scope: HarnessScope,
   projectPath: string | undefined,
+  roots?: HarnessRootsEnv,
 ): string | undefined => {
   const harness = getHarness(harnessId);
-  const root = resolveHarnessRoot(harness, scope, projectPath);
+  const root = resolveHarnessRoot(harness, scope, projectPath, roots);
   return root ? expandPath(root) : undefined;
 };
 
@@ -88,10 +92,11 @@ const configPathForHarness = (
   harnessId: HarnessId,
   scope: HarnessScope,
   projectPath: string | undefined,
+  roots?: HarnessRootsEnv,
 ): string | undefined => {
   const harness = getHarness(harnessId);
   if (!harness.configFile) return undefined;
-  const root = rootForHarness(harnessId, scope, projectPath);
+  const root = rootForHarness(harnessId, scope, projectPath, roots);
   return root ? join(root, harness.configFile) : undefined;
 };
 
@@ -101,13 +106,14 @@ const rootsForHarness = (
   harnessId: HarnessId,
   scope: HarnessScope,
   projectPath: string | undefined,
+  roots?: HarnessRootsEnv,
 ): string[] => {
   const harness = getHarness(harnessId);
-  const roots = [expandPath(harness.globalConfigPath)];
-  const scopedRoot = resolveHarnessRoot(harness, scope, projectPath);
-  if (scopedRoot) roots.push(expandPath(scopedRoot));
-  if (projectPath) roots.push(expandPath(projectPath));
-  return unique(roots.map((root) => resolve(root)));
+  const rootsList = [roots ? roots.resolve(harnessId) : expandPath(harness.globalConfigPath)];
+  const scopedRoot = resolveHarnessRoot(harness, scope, projectPath, roots);
+  if (scopedRoot) rootsList.push(expandPath(scopedRoot));
+  if (projectPath) rootsList.push(expandPath(projectPath));
+  return unique(rootsList.map((root) => resolve(root)));
 };
 
 const countOccurrences = (content: string, needle: string): number => {
@@ -426,8 +432,9 @@ const validateHarnessConfig = async (options: {
   readonly harness: HarnessId;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<DoctorFinding[]> => {
-  const path = configPathForHarness(options.harness, options.scope, options.projectPath);
+  const path = configPathForHarness(options.harness, options.scope, options.projectPath, options.roots);
   if (!path) return [];
 
   switch (options.harness) {
@@ -446,10 +453,11 @@ const validateSnapshotDiskState = async (options: {
   readonly harnesses: ReadonlyArray<HarnessId>;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<DoctorFinding[]> => {
   const selectedRoots = new Set(
     options.harnesses.flatMap((harness) =>
-      rootsForHarness(harness, options.scope, options.projectPath),
+      rootsForHarness(harness, options.scope, options.projectPath, options.roots),
     ),
   );
   const findings: DoctorFinding[] = [];
@@ -555,6 +563,7 @@ const detectNamespaceStrays = async (options: {
   readonly harnesses: ReadonlyArray<HarnessId>;
   readonly scope: HarnessScope;
   readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<DoctorFinding[]> => {
   const snapshots = await readAllSnapshots(options.prismHome);
   const owned = new Set(
@@ -565,7 +574,7 @@ const detectNamespaceStrays = async (options: {
   const findings: DoctorFinding[] = [];
 
   for (const harnessId of options.harnesses) {
-    for (const root of rootsForHarness(harnessId, options.scope, options.projectPath)) {
+    for (const root of rootsForHarness(harnessId, options.scope, options.projectPath, options.roots)) {
       if (!(await exists(root))) continue;
       for (const dir of namespaceScanDirs(harnessId)) {
         const base = join(root, dir);
@@ -1002,10 +1011,11 @@ const validateClaudeGeneratedPluginReferences = async (
   scope: HarnessScope,
   projectPath: string | undefined,
   prismHome: string,
+  roots?: HarnessRootsEnv,
 ): Promise<DoctorFinding[]> => {
-  const roots = rootsForHarness("claude-code", scope, projectPath);
+  const rootsList = rootsForHarness("claude-code", scope, projectPath, roots);
   const findings: DoctorFinding[] = [];
-  for (const root of roots) {
+  for (const root of rootsList) {
     const skillsRoot = join(root, "skills");
     if (!(await exists(skillsRoot))) continue;
     for (const entry of await listDir(skillsRoot)) {
@@ -1022,19 +1032,20 @@ const validateHarnessConfigReferences = async (options: {
   readonly scope: HarnessScope;
   readonly projectPath?: string;
   readonly prismHome: string;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<DoctorFinding[]> => {
-  const path = configPathForHarness(options.harness, options.scope, options.projectPath);
+  const path = configPathForHarness(options.harness, options.scope, options.projectPath, options.roots);
   switch (options.harness) {
     case "codex-cli": {
       const codexFindings = path ? await validateCodexConfigReferences(path, options.prismHome) : [];
-      const root = rootForHarness(options.harness, options.scope, options.projectPath);
+      const root = rootForHarness(options.harness, options.scope, options.projectPath, options.roots);
       if (root) codexFindings.push(...(await validateCodexHooksJson(root)));
       return codexFindings;
     }
     case "opencode":
       return path ? validateOpenCodeConfigReferences(path) : [];
     case "claude-code":
-      return validateClaudeGeneratedPluginReferences(options.scope, options.projectPath, options.prismHome);
+      return validateClaudeGeneratedPluginReferences(options.scope, options.projectPath, options.prismHome, options.roots);
     default:
       return [];
   }
@@ -1142,24 +1153,28 @@ const validateDeterminismSelfcheck = async (options: {
   readonly scope: HarnessScope;
   readonly projectPath?: string;
   readonly prismHome: string;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<DoctorFinding[]> => {
   if (!options.pluginPath) return [];
   const manifest = await readManifest(options.pluginPath);
   const harness = options.harnesses.find((id) => manifestHasCompileTargets(manifest, id));
   if (!harness) return [];
 
-  const run = () =>
-    Effect.runPromiseExit(
-      compilePluginForTarget({
-        pluginPath: expandPath(options.pluginPath!),
-        target: harness,
-        scope: options.scope,
-        projectPath: options.projectPath,
-        prismHome: options.prismHome,
-        dryRun: true,
-        mcpLifecycle: "serve",
-      }),
-    );
+  const run = () => {
+    const program = compilePluginForTarget({
+      pluginPath: expandPath(options.pluginPath!),
+      target: harness,
+      scope: options.scope,
+      projectPath: options.projectPath,
+      prismHome: options.prismHome,
+      dryRun: true,
+      mcpLifecycle: "serve",
+    });
+    const provisioned = options.roots
+      ? program.pipe(Effect.provide(Layer.succeed(HarnessRoots, options.roots)))
+      : program;
+    return Effect.runPromiseExit(provisioned);
+  };
 
   const first = await run();
   const second = await run();
@@ -1206,17 +1221,19 @@ const runCompileFixes = async (options: DoctorOptions): Promise<{
 
   for (const harness of options.harnesses) {
     if (!manifestHasCompileTargets(manifest, harness)) continue;
-    const result = await Effect.runPromiseExit(
-      compilePluginForTarget({
-        pluginPath: expandPath(options.pluginPath),
-        target: harness,
-        scope: options.scope,
-        projectPath: options.projectPath,
-        prismHome: options.prismHome,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
+    const program = compilePluginForTarget({
+      pluginPath: expandPath(options.pluginPath),
+      target: harness,
+      scope: options.scope,
+      projectPath: options.projectPath,
+      prismHome: options.prismHome,
+      dryRun: false,
+      mcpLifecycle: "serve",
+    });
+    const provisioned = options.roots
+      ? program.pipe(Effect.provide(Layer.succeed(HarnessRoots, options.roots)))
+      : program;
+    const result = await Effect.runPromiseExit(provisioned);
 
     if (result._tag === "Failure") {
       const described = describePrismCause(result.cause);
@@ -1298,6 +1315,7 @@ const inspectPlugin = async (options: DoctorOptions): Promise<{
       scope: options.scope,
       ...(options.projectPath ? { projectPath: options.projectPath } : {}),
       prismHome: options.prismHome,
+      roots: options.roots,
     })),
   );
 
@@ -1309,6 +1327,7 @@ const inspectPlugin = async (options: DoctorOptions): Promise<{
       prismHome: options.prismHome,
       overwrite: false,
       dryRun: false,
+      roots: options.roots,
     });
     fixFailed = fixFailed || !applied.success;
     findings.push(...findingsFromRefreshFailures(applied));
@@ -1321,6 +1340,7 @@ const inspectPlugin = async (options: DoctorOptions): Promise<{
     prismHome: options.prismHome,
     overwrite: false,
     dryRun: true,
+    roots: options.roots,
   });
   if (options.fix) fixFailed = fixFailed || !refresh.success;
   findings.push(...findingsFromRefresh(refresh));
@@ -1348,6 +1368,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
         harness,
         scope: options.scope,
         ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+        roots: options.roots,
       })),
     );
     findings.push(
@@ -1356,6 +1377,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
         scope: options.scope,
         prismHome: options.prismHome,
         ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+        roots: options.roots,
       })),
     );
   }
@@ -1366,6 +1388,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       harnesses: options.harnesses,
       scope: options.scope,
       ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
     })),
   );
   findings.push(
@@ -1374,6 +1397,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       harnesses: options.harnesses,
       scope: options.scope,
       ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
     })),
   );
 

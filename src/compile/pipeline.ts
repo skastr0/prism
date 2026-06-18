@@ -5,9 +5,10 @@
  * concrete orbit skills → Lower → Emit.
  */
 
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
+import { HarnessRoots } from "../services/prism-env.js";
 import { expandPath } from "../fs.js";
 import { deriveProjectKey } from "../project-key.js";
 import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
@@ -546,10 +547,12 @@ const resolveCompileTargetContext = (
       );
     }
 
+    const rootsOption = yield* Effect.serviceOption(HarnessRoots);
     const outputRoot = resolveHarnessRoot(
       harness,
       options.scope,
-      options.projectPath
+      options.projectPath,
+      Option.getOrUndefined(rootsOption),
     );
     if (options.root) {
       return {

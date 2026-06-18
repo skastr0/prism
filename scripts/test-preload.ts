@@ -11,7 +11,14 @@
  *  2. Hard-fails the run if PRISM_HOME still resolves to the real `~/.prism`.
  *  3. Re-asserts after every test that no test left PRISM_HOME pointing at
  *     the real `~/.prism` (catches env clobbering mid-suite).
+ *
+ * NOTE: A HOME guard is intentionally deferred. Existing tests compute expected
+ * harness-root paths with `os.homedir()`, and Bun's implementation ignores
+ * runtime `process.env.HOME` changes, so sandboxing HOME here would diverge
+ * from those expectations. New tests should use `withPrismSandbox` from
+ * `src/testing/prism-sandbox.ts` instead of mutating HOME.
  */
+
 import { afterEach } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";

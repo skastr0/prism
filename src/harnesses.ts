@@ -3,7 +3,9 @@
  */
 
 import { join } from "node:path";
+import { Layer } from "effect";
 import { expandPath } from "./fs.js";
+import { HarnessRoots, type HarnessRootsEnv } from "./services/prism-env.js";
 import type { HarnessConfig, HarnessId, HarnessScope } from "./types.js";
 
 export const HARNESSES: Record<HarnessId, HarnessConfig> = {
@@ -274,13 +276,26 @@ export function isValidHarnessId(id: string): id is HarnessId {
   return id in HARNESSES;
 }
 
+/**
+ * Live layer mapping each harness to its registry globalConfigPath, expanded
+ * through the current HOME. This belongs with the registry because it is the
+ * only module that owns the harness definitions.
+ */
+export const HarnessRootsLive: Layer.Layer<HarnessRoots> = Layer.succeed(
+  HarnessRoots,
+  {
+    resolve: (harnessId: HarnessId) => expandPath(HARNESSES[harnessId].globalConfigPath),
+  },
+);
+
 export function resolveHarnessRoot(
   harness: HarnessConfig,
   scope: HarnessScope,
-  projectPath?: string
+  projectPath?: string,
+  roots?: HarnessRootsEnv,
 ): string | null {
   if (scope === "global") {
-    return expandPath(harness.globalConfigPath);
+    return roots ? roots.resolve(harness.id) : expandPath(harness.globalConfigPath);
   }
 
   if (!harness.projectConfigPath || !projectPath) {

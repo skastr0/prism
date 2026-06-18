@@ -1,5 +1,6 @@
 import { basename, join, resolve } from "node:path";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
+import type { HarnessRootsEnv } from "./services/prism-env.js";
 import {
   type ArtifactSourceFile,
   collectArtifactSourceFiles,
@@ -36,6 +37,8 @@ export interface RefreshOptions {
   readonly prismHome: string;
   readonly overwrite: boolean;
   readonly dryRun: boolean;
+  /** Optional harness-root resolver; when provided, global roots come from here instead of HOME. */
+  readonly roots?: HarnessRootsEnv;
 }
 
 export interface RefreshWarning {
@@ -60,6 +63,11 @@ export interface RefreshResult extends PlannedRefresh {
   readonly converged: boolean;
   readonly success: boolean;
 }
+
+const resolveGlobalHarnessRoot = (
+  harness: HarnessConfig,
+  roots?: HarnessRootsEnv,
+): string => (roots ? roots.resolve(harness.id) : expandPath(harness.globalConfigPath));
 
 const FILE_ROUTER_SCOPE_SUFFIX = "#file-router";
 
@@ -311,6 +319,7 @@ const getProjectRuleTargetPath = (
   rulesFile: string | null,
   expandedProjectPath: string,
   relativeFile: string,
+  roots?: HarnessRootsEnv,
 ): string => {
   if (harness.rulesDir && harness.projectConfigPath) {
     return join(
@@ -331,7 +340,7 @@ const getProjectRuleTargetPath = (
   if (!rulesFile) {
     throw new Error(`${harness.id} has global rules without a rules file or rules directory`);
   }
-  return join(expandPath(harness.globalConfigPath), rulesFile);
+  return join(resolveGlobalHarnessRoot(harness, roots), rulesFile);
 };
 
 const addRuleRegion = async (options: {
@@ -368,6 +377,7 @@ const addRulesForHarness = async (options: {
   readonly plugin: string;
   readonly harness: HarnessConfig;
   readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<void> => {
   if (!shouldPlanFileRouterRules(options.manifest, options.harness)) return;
 
@@ -376,7 +386,7 @@ const addRulesForHarness = async (options: {
     options.pluginPath,
     options.harness.id,
   );
-  const globalRoot = expandPath(options.harness.globalConfigPath);
+  const globalRoot = resolveGlobalHarnessRoot(options.harness, options.roots);
 
   for (const file of globalFiles) {
     if (rulesFile) {
@@ -421,6 +431,7 @@ const addRulesForHarness = async (options: {
       rulesFile,
       expandedProjectPath,
       relativeFile,
+      options.roots,
     );
     if (options.harness.rulesDir) {
       await addManagedFile({
@@ -487,6 +498,7 @@ const addCommandsForHarness = async (options: {
   readonly pluginPath: string;
   readonly plugin: string;
   readonly harness: HarnessConfig;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<void> => {
   if (!shouldPlanFileRouterCommands(options.manifest, options.harness)) return;
 
@@ -494,7 +506,7 @@ const addCommandsForHarness = async (options: {
   const commandFiles = files.filter((file) => file.relativePath.endsWith(".md"));
   if (commandFiles.length === 0) return;
 
-  const root = expandPath(options.harness.globalConfigPath);
+  const root = resolveGlobalHarnessRoot(options.harness, options.roots);
   if (options.harness.id === "cursor") {
     const pluginRoot = cursorGeneratedCommandPluginRoot(root, options.manifest.name);
     options.builder.addFile(options.harness.id, root, {
@@ -620,6 +632,7 @@ const addSkillsForHarness = async (options: {
   readonly pluginPath: string;
   readonly plugin: string;
   readonly harness: HarnessConfig;
+  readonly roots?: HarnessRootsEnv;
 }): Promise<void> => {
   if (!shouldPlanFileRouterSkills(options.manifest, options.harness)) return;
 
@@ -631,7 +644,7 @@ const addSkillsForHarness = async (options: {
     options.harness.id,
     selectedFiles,
   );
-  const root = expandPath(options.harness.globalConfigPath);
+  const root = resolveGlobalHarnessRoot(options.harness, options.roots);
   const targetDir = join(root, options.harness.skillsDir!);
 
   for (const [skillDirName, validation] of [...validatedSkills.entries()].sort((a, b) =>
@@ -672,10 +685,15 @@ export const planPluginRefresh = async (options: RefreshOptions): Promise<Planne
 
   for (const harnessId of options.harnesses) {
     const harness = getHarness(harnessId);
-    builder.rootFor(harness.id, expandPath(harness.globalConfigPath));
+    builder.rootFor(harness.id, resolveGlobalHarnessRoot(harness, options.roots));
     if (options.projectPath) {
       builder.rootFor(harness.id, expandPath(options.projectPath));
-      const projectHarnessRoot = resolveHarnessRoot(harness, "project", options.projectPath);
+      const projectHarnessRoot = resolveHarnessRoot(
+        harness,
+        "project",
+        options.projectPath,
+        options.roots,
+      );
       if (projectHarnessRoot) builder.rootFor(harness.id, projectHarnessRoot);
     }
 
@@ -686,9 +704,18 @@ export const planPluginRefresh = async (options: RefreshOptions): Promise<Planne
       plugin,
       harness,
       ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
     });
-    await addCommandsForHarness({ builder, manifest, pluginPath, plugin, harness });
-    await addSkillsForHarness({ builder, warnings, manifest, pluginPath, plugin, harness });
+    await addCommandsForHarness({ builder, manifest, pluginPath, plugin, harness, roots: options.roots });
+    await addSkillsForHarness({
+      builder,
+      warnings,
+      manifest,
+      pluginPath,
+      plugin,
+      harness,
+      roots: options.roots,
+    });
   }
 
   return {

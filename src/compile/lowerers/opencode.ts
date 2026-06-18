@@ -12,8 +12,9 @@
  *   2. Idempotent patches to <opencode-root>/opencode.json:
  *        - agent.<name> block (compiler-owned keys only; hand-authored keys preserved)
  *        - plugin array entry for the source-plugin-owned generated plugin
- *          (for example `prism-generated-review-core`) when any agent has
- *          tool bindings
+ *          module (for example
+ *          `plugins/prism-generated-review-core/dist/server.mjs`) when any
+ *          agent has tool bindings
  *
  *   3. Per-orbit skills at <opencode-root>/skills/<name>/SKILL.md.
  *      Orbits remain source-language constructs; the generated skill is
@@ -143,7 +144,7 @@ const generatedPluginEntryForName = (
   pluginName: string,
 ): string =>
   pathToFileURL(
-    generatedPluginRootForName(target, pluginName)
+    join(generatedPluginRootForName(target, pluginName), "dist", "server.mjs")
   ).href;
 
 const generatedToolDenyPatternForName = (pluginName: string): string =>

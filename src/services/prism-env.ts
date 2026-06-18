@@ -14,6 +14,7 @@
 
 import { Context, Effect, Layer } from "effect";
 import { resolvePrismHome } from "../prism-home.js";
+import type { HarnessId } from "../types.js";
 
 export interface PrismEnv {
   /** Absolute path of the Prism home directory. */
@@ -34,3 +35,33 @@ export const PrismHomeLive: Layer.Layer<PrismHome> = Layer.effect(
 /** In-memory layer for tests — no env read, no disk. */
 export const PrismHomeTest = (home: string): Layer.Layer<PrismHome> =>
   Layer.succeed(PrismHome, { home });
+
+/**
+ * HarnessRoots — the Effect service carrying the resolved base directory for
+ * each harness global root. Production resolves via the harness registry's
+ * globalConfigPath; tests provide a map of harness IDs to temp directories so
+ * refresh/compile/doctor never touch real harness configs.
+ */
+export interface HarnessRootsEnv {
+  /** Resolve the global root directory for a harness. */
+  readonly resolve: (harnessId: HarnessId) => string;
+}
+
+export class HarnessRoots extends Context.Tag("prism/HarnessRoots")<
+  HarnessRoots,
+  HarnessRootsEnv
+>() {}
+
+/** In-memory layer for tests — maps harnesses to caller-supplied roots. */
+export const HarnessRootsTest = (
+  roots: Partial<Record<HarnessId, string>>,
+): Layer.Layer<HarnessRoots> =>
+  Layer.succeed(HarnessRoots, {
+    resolve: (harnessId) => {
+      const root = roots[harnessId];
+      if (root === undefined) {
+        throw new Error(`HarnessRootsTest: no root configured for ${harnessId}`);
+      }
+      return root;
+    },
+  });

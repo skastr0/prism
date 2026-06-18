@@ -245,7 +245,15 @@ test("opencode generated plugin registration is a plugin-array membership region
   if (pluginRegion?.kind !== "json-array-member") throw new Error("unreachable");
   expect(pluginRegion.jsonPath).toEqual(["plugin"]);
   expect(pluginRegion.value).toBe(
-    pathToFileURL(join(outputRoot, "plugins", "prism-generated-opencode-lowerer-test")).href,
+    pathToFileURL(
+      join(
+        outputRoot,
+        "plugins",
+        "prism-generated-opencode-lowerer-test",
+        "dist",
+        "server.mjs",
+      ),
+    ).href,
   );
 
   const permissionRegion = lowered.regions.find(

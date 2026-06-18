@@ -46,6 +46,7 @@ export const buildDts = async (): Promise<string> => {
     },
     files: [
       join(repoRoot, "src", "index.ts"),
+      join(repoRoot, "src", "workflow-errors.ts"),
       join(repoRoot, "src", "workflows.ts"),
     ],
   };

@@ -10,7 +10,14 @@ import {
   type WorkflowJudgeVerdict,
   type WorkflowRuntime,
   type WorkflowRuntimeOptions,
+  type WorkflowRuntimeError,
 } from "./workflows.js";
+import {
+  toWorkflowRuntimeError,
+  WorkflowRunStoppedError,
+  WorkflowTaskDecodeError,
+  WorkflowTaskEscalatedError,
+} from "./workflow-errors.js";
 import {
   workflowRunTaskSnapshotForTask,
   workflowTaskIdentity,
@@ -43,33 +50,12 @@ export interface WorkflowRunResult {
   readonly output?: unknown;
 }
 
-export class WorkflowTaskDecodeError extends Error {
-  override readonly name = "WorkflowTaskDecodeError";
-  constructor(
-    readonly taskId: string,
-    readonly cause: unknown,
-  ) {
-    super(`workflow task ${taskId} returned output that failed schema decode`);
-  }
-}
-
-export class WorkflowRunStoppedError extends Error {
-  override readonly name = "WorkflowRunStoppedError";
-  constructor(readonly runId: string) {
-    super(`workflow run ${runId} is no longer running`);
-  }
-}
-
-export class WorkflowTaskEscalatedError extends Error {
-  override readonly name = "WorkflowTaskEscalatedError";
-  constructor(
-    readonly taskId: string,
-    readonly criterion: string,
-    readonly feedback?: string,
-  ) {
-    super(`workflow task ${taskId} escalated by judge criterion '${criterion}'${feedback !== undefined ? `: ${feedback}` : ""}`);
-  }
-}
+export {
+  WorkflowRunStoppedError,
+  WorkflowTaskDecodeError,
+  WorkflowTaskEscalatedError,
+  type WorkflowRuntimeError,
+} from "./workflow-errors.js";
 
 export type WorkflowTaskRepairMode = "native-continuation" | "fresh-executor-invocation" | "none";
 
@@ -917,7 +903,9 @@ const runStaticWorkflow = async (input: {
 };
 
 const runDynamicWorkflow = async (input: {
-  readonly workflow: AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> };
+  readonly workflow: AnyWorkflowDefinition & {
+    readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, WorkflowRuntimeError, never>;
+  };
   readonly runId: string | null;
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
@@ -953,7 +941,7 @@ const runDynamicWorkflow = async (input: {
         tasks[taskOrdinal] = result;
         return result.output as never;
       },
-      catch: (error) => error,
+      catch: (error) => toWorkflowRuntimeError(error),
     }),
   };
   try {
@@ -995,7 +983,9 @@ export const runWorkflow = async (
   const runId = options.store === undefined ? null : options.runId ?? options.store.createRun(workflow.name);
   if ("run" in workflow) {
     const result = await runDynamicWorkflow({
-      workflow: workflow as AnyWorkflowDefinition & { readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },
+      workflow: workflow as AnyWorkflowDefinition & {
+        readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, WorkflowRuntimeError, never>;
+      },
       runId,
       store: options.store,
       executeTask: options.executeTask,

@@ -1,4 +1,9 @@
 import { Effect, Schema } from "effect";
+import type { Either } from "effect/Either";
+import type { ParseError } from "effect/ParseResult";
+import type { WorkflowRuntimeError } from "./workflow-errors.js";
+
+export type { WorkflowRuntimeError } from "./workflow-errors.js";
 
 export interface WorkflowModelRef {
   readonly modelspace?: string;
@@ -44,6 +49,8 @@ export interface WorkflowAgentRef {
 
 export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
 
+export type WorkflowFinishCriterionError = Error;
+
 export type WorkflowWorkerId =
   | "amp-code"
   | "antigravity-cli"
@@ -69,7 +76,7 @@ export interface WorkflowFinishCriterionContext<Output> {
 export interface WorkflowDeterministicFinishCriterion<Output> {
   readonly kind?: "deterministic";
   readonly name: string;
-  readonly check: (context: WorkflowFinishCriterionContext<Output>) => Effect.Effect<void, unknown>;
+  readonly check: (context: WorkflowFinishCriterionContext<Output>) => Effect.Effect<void, WorkflowFinishCriterionError>;
   readonly repairPrompt?: (error: unknown, context: WorkflowFinishCriterionContext<Output>) => string;
 }
 
@@ -105,7 +112,7 @@ export interface WorkflowJudgeFinishCriterion<Output, Evidence = unknown> {
   readonly name: string;
   readonly goal?: string | ((context: Omit<WorkflowJudgeEvidenceSelectionContext<Output>, "goal">) => string);
   readonly selectEvidence?: (context: WorkflowJudgeEvidenceSelectionContext<Output>) => Evidence;
-  readonly evaluate: (context: WorkflowJudgeCriterionContext<Output, Evidence>) => Effect.Effect<WorkflowJudgeVerdict, unknown>;
+  readonly evaluate: (context: WorkflowJudgeCriterionContext<Output, Evidence>) => Effect.Effect<WorkflowJudgeVerdict, WorkflowFinishCriterionError>;
 }
 
 export type WorkflowFinishCriterion<Output> =
@@ -151,7 +158,7 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
 }
 
 export interface WorkflowRuntime {
-  runTask: <Task extends AnyWorkflowTask>(task: Task) => Effect.Effect<WorkflowTaskOutput<Task>, unknown>;
+  runTask: <Task extends AnyWorkflowTask>(task: Task) => Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError>;
 }
 
 export interface WorkflowRuntimeOptions {
@@ -159,11 +166,15 @@ export interface WorkflowRuntimeOptions {
   readonly fallbackModel?: string;
 }
 
-export interface DynamicWorkflowDefinition<Name extends string> {
+export interface DynamicWorkflowDefinition<
+  Name extends string,
+  Result = unknown,
+  Err = WorkflowRuntimeError,
+> {
   readonly kind: "workflow";
   readonly name: Name;
   readonly tasks: readonly [];
-  readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown>;
+  readonly run: (runtime: WorkflowRuntime) => Effect.Effect<Result, Err, never>;
 }
 
 export type AnyWorkflowDefinition =
@@ -182,14 +193,20 @@ export const defineTask = <
 export function defineWorkflow<const Name extends string, const Tasks extends ReadonlyArray<AnyWorkflowTask>>(
   definition: { readonly name: Name; readonly tasks: Tasks },
 ): WorkflowDefinition<Name, Tasks>;
-export function defineWorkflow<const Name extends string>(
-  definition: { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },
-): DynamicWorkflowDefinition<Name>;
-export function defineWorkflow<const Name extends string>(
+export function defineWorkflow<const Name extends string, Result, Err = WorkflowRuntimeError>(
+  definition: {
+    readonly name: Name;
+    readonly run: (runtime: WorkflowRuntime) => Effect.Effect<Result, Err, never>;
+  },
+): DynamicWorkflowDefinition<Name, Result, Err>;
+export function defineWorkflow<const Name extends string, Result, Err = WorkflowRuntimeError>(
   definition:
     | { readonly name: Name; readonly tasks: ReadonlyArray<AnyWorkflowTask> }
-    | { readonly name: Name; readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, unknown> },
-): WorkflowDefinition<Name, ReadonlyArray<AnyWorkflowTask>> | DynamicWorkflowDefinition<Name> {
+    | {
+      readonly name: Name;
+      readonly run: (runtime: WorkflowRuntime) => Effect.Effect<Result, Err, never>;
+    },
+): WorkflowDefinition<Name, ReadonlyArray<AnyWorkflowTask>> | DynamicWorkflowDefinition<Name, Result, Err> {
   if ("run" in definition) {
     return {
       kind: "workflow",
@@ -207,4 +224,5 @@ export function defineWorkflow<const Name extends string>(
 export const decodeTaskOutput = <Task extends AnyWorkflowTask>(
   task: Task,
   value: unknown,
-) => Schema.decodeUnknownEither(task.output)(value);
+): Either<Schema.Schema.Type<Task["output"]>, ParseError> =>
+  Schema.decodeUnknownEither(task.output)(value);

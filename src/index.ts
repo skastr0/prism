@@ -13,6 +13,7 @@
  * These helpers are identity constructors for authoring ergonomics.
  */
 
+export * from "./workflow-errors.js";
 export * from "./workflows.js";
 export * from "./workflow-tsconfig.js";
 export * from "./workflow-antigravity-worker.js";

@@ -12,6 +12,17 @@ const effectImportPath = join(
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
+const DEFAULT_TARGET_HARNESSES = ["opencode", "claude-code"] as const;
+const GOLDEN_TARGET_HARNESSES = [
+  "opencode",
+  "claude-code",
+  "antigravity-cli",
+  "grok",
+  "factory-droid",
+  "pi",
+  "kimi-code",
+] as const;
+
 interface CanonicalCompileFixtureOptions {
   pluginRoot: string;
   projectRoot: string;
@@ -48,11 +59,10 @@ const fixturePaths = (options: CanonicalCompileFixtureOptions): CanonicalFixture
   withCanonicalToolBindings: options.withCanonicalToolBindings ?? true,
 });
 
-const writeFixtureManifests = async ({
-  pluginRoot,
-  coreRoot,
-  protocolRoot,
-}: CanonicalFixturePaths): Promise<void> => {
+const writeFixtureManifests = async (
+  { pluginRoot, coreRoot, protocolRoot }: CanonicalFixturePaths,
+  targetHarnesses: readonly string[],
+): Promise<void> => {
   await writeJsonFixture(join(pluginRoot, "plugin.json"), {
     name: "canonical-compile-fixture",
     version: "0.1.0",
@@ -61,11 +71,13 @@ const writeFixtureManifests = async ({
       "protocol-core": "./deps/protocol-core",
     },
     targets: {
-      agents: ["opencode", "claude-code"],
-      orbits: ["opencode", "claude-code"],
-      tools: ["opencode", "claude-code"],
-      toolspaces: ["opencode", "claude-code"],
-      modelspaces: ["opencode", "claude-code"],
+      agents: [...targetHarnesses],
+      orbits: [...targetHarnesses],
+      tools: [...targetHarnesses],
+      toolspaces: [...targetHarnesses],
+      modelspaces: [...targetHarnesses],
+      skills: [...targetHarnesses],
+      hooks: [...targetHarnesses],
     },
   });
 
@@ -73,9 +85,9 @@ const writeFixtureManifests = async ({
     name: "agent-core",
     version: "0.1.0",
     targets: {
-      toolspaces: ["opencode", "claude-code"],
-      modelspaces: ["opencode", "claude-code"],
-      skillspaces: ["opencode", "claude-code"],
+      toolspaces: [...targetHarnesses],
+      modelspaces: [...targetHarnesses],
+      skillspaces: [...targetHarnesses],
     },
   });
 
@@ -83,12 +95,38 @@ const writeFixtureManifests = async ({
     name: "protocol-core",
     version: "0.1.0",
     targets: {
-      tools: ["opencode", "claude-code"],
+      tools: [...targetHarnesses],
     },
   });
 };
 
-const writeWorkspaceToolspace = async ({ coreRoot }: CanonicalFixturePaths): Promise<void> => {
+const opencodeToolNames: Record<string, string> = {
+  read_repo: "read",
+  search_repo: "grep",
+  run_shell: "bash",
+};
+
+const claudeCodeToolNames: Record<string, string> = {
+  read_repo: "Read",
+  search_repo: "Grep",
+  run_shell: "Bash",
+};
+
+const nativeToolName = (harness: string, tool: string): string => {
+  if (harness === "opencode") return opencodeToolNames[tool] ?? tool;
+  if (harness === "claude-code") return claudeCodeToolNames[tool] ?? tool;
+  return tool;
+};
+
+const renderToolTargets = (targetHarnesses: readonly string[], tool: string): string =>
+  targetHarnesses
+    .map((harness) => `        ${JSON.stringify(harness)}: { name: ${JSON.stringify(nativeToolName(harness, tool))} },`)
+    .join("\n");
+
+const writeWorkspaceToolspace = async (
+  { coreRoot }: CanonicalFixturePaths,
+  targetHarnesses: readonly string[],
+): Promise<void> => {
   await writeText(
     join(coreRoot, "toolspaces", "workspace-tools.toolspace.ts"),
     `import { defineToolspace, toolRef } from ${JSON.stringify(prismImportPath)};
@@ -100,22 +138,19 @@ export default defineToolspace({
     read_repo: {
       description: "Read repository files",
       targets: {
-        opencode: { name: "read" },
-        "claude-code": { name: "Read" },
+${renderToolTargets(targetHarnesses, "read_repo")}
       },
     },
     search_repo: {
       description: "Search repository contents",
       targets: {
-        opencode: { name: "grep" },
-        "claude-code": { name: "Grep" },
+${renderToolTargets(targetHarnesses, "search_repo")}
       },
     },
     run_shell: {
       description: "Run shell commands",
       targets: {
-        opencode: { name: "bash" },
-        "claude-code": { name: "Bash" },
+${renderToolTargets(targetHarnesses, "run_shell")}
       },
     },
   },
@@ -133,7 +168,52 @@ export default defineToolspace({
   );
 };
 
-const writeDefaultModelspace = async ({ coreRoot }: CanonicalFixturePaths): Promise<void> => {
+const builderModelBlock = (harness: string): string => {
+  if (harness === "opencode") {
+    return JSON.stringify({ model: "openai/gpt-5.4", variant: "xhigh", temperature: 0.2 });
+  }
+  if (harness === "claude-code") {
+    return JSON.stringify({ model: "sonnet", temperature: 0.1 });
+  }
+  return JSON.stringify({ model: `${harness}-builder` });
+};
+
+const reviewerModelBlock = (harness: string): string => {
+  if (harness === "opencode") {
+    return JSON.stringify({
+      strategy: "round-robin",
+      models: [
+        { model: "openai/gpt-5.4-reviewer-a", variant: "medium", temperature: 0.1 },
+        { model: "openai/gpt-5.4-reviewer-b", variant: "medium", temperature: 0.1 },
+      ],
+    });
+  }
+  if (harness === "claude-code") {
+    return JSON.stringify({ model: "opus", temperature: 0.1 });
+  }
+  return JSON.stringify({ model: `${harness}-reviewer` });
+};
+
+const renderModelTargets = (targetHarnesses: readonly string[]): string =>
+  targetHarnesses
+    .map(
+      (harness) =>
+        `        ${JSON.stringify(harness)}: ${builderModelBlock(harness)},`,
+    )
+    .join("\n");
+
+const renderReviewerModelTargets = (targetHarnesses: readonly string[]): string =>
+  targetHarnesses
+    .map(
+      (harness) =>
+        `        ${JSON.stringify(harness)}: ${reviewerModelBlock(harness)},`,
+    )
+    .join("\n");
+
+const writeDefaultModelspace = async (
+  { coreRoot }: CanonicalFixturePaths,
+  targetHarnesses: readonly string[],
+): Promise<void> => {
   await writeText(
     join(coreRoot, "modelspaces", "default-models.modelspace.ts"),
     `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
@@ -145,39 +225,13 @@ export default defineModelspace({
     builder: {
       description: "Primary build profile",
       targets: {
-        opencode: {
-          model: "openai/gpt-5.4",
-          variant: "xhigh",
-          temperature: 0.2,
-        },
-        "claude-code": {
-          model: "sonnet",
-          temperature: 0.1,
-        },
+${renderModelTargets(targetHarnesses)}
       },
     },
     reviewer: {
       description: "Primary review profile",
       targets: {
-        opencode: {
-          strategy: "round-robin",
-          models: [
-            {
-              model: "openai/gpt-5.4-reviewer-a",
-              variant: "medium",
-              temperature: 0.1,
-            },
-            {
-              model: "openai/gpt-5.4-reviewer-b",
-              variant: "medium",
-              temperature: 0.1,
-            },
-          ],
-        },
-        "claude-code": {
-          model: "opus",
-          temperature: 0.1,
-        },
+${renderReviewerModelTargets(targetHarnesses)}
       },
     },
   },
@@ -186,7 +240,15 @@ export default defineModelspace({
   );
 };
 
-const writeCoreSkillspace = async ({ coreRoot }: CanonicalFixturePaths): Promise<void> => {
+const renderSkillTargets = (targetHarnesses: readonly string[]): string =>
+  targetHarnesses
+    .map((harness) => `        ${JSON.stringify(harness)}: { name: "testing" },`)
+    .join("\n");
+
+const writeCoreSkillspace = async (
+  { coreRoot }: CanonicalFixturePaths,
+  targetHarnesses: readonly string[],
+): Promise<void> => {
   await writeText(
     join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
     `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
@@ -197,8 +259,7 @@ export default defineSkillspace({
   skills: {
     testing: {
       targets: {
-        opencode: { name: "testing" },
-        "claude-code": { name: "testing" },
+${renderSkillTargets(targetHarnesses)}
       },
     },
   },
@@ -207,10 +268,13 @@ export default defineSkillspace({
   );
 };
 
-const writeFixtureSpaces = async (paths: CanonicalFixturePaths): Promise<void> => {
-  await writeWorkspaceToolspace(paths);
-  await writeDefaultModelspace(paths);
-  await writeCoreSkillspace(paths);
+const writeFixtureSpaces = async (
+  paths: CanonicalFixturePaths,
+  targetHarnesses: readonly string[],
+): Promise<void> => {
+  await writeWorkspaceToolspace(paths, targetHarnesses);
+  await writeDefaultModelspace(paths, targetHarnesses);
+  await writeCoreSkillspace(paths, targetHarnesses);
 };
 
 const writeFixtureIdentities = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
@@ -733,14 +797,68 @@ export const createCanonicalCompileFixture = async (
   const paths = fixturePaths(options);
   await mkdir(paths.projectRoot, { recursive: true });
 
-  await writeFixtureManifests(paths);
-  await writeFixtureSpaces(paths);
+  await writeFixtureManifests(paths, [...DEFAULT_TARGET_HARNESSES]);
+  await writeFixtureSpaces(paths, [...DEFAULT_TARGET_HARNESSES]);
   await writeFixtureIdentities(paths);
   await writeProtocolSchema(paths);
   await writeFixtureTools(paths);
   await writeFixtureTraits(paths);
   await writeFixtureAgents(paths, options);
   await writeDeliveryOrbit(paths, options);
+
+  return { pluginRoot: paths.pluginRoot, projectRoot: paths.projectRoot };
+};
+
+const writeGoldenHook = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
+  await writeText(
+    join(pluginRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-start",
+  description: "Run once at the start of each session",
+  event: hookEvent.sessionStart,
+  async handle(payload) {
+    return { decision: "continue" };
+  },
+});
+`,
+  );
+};
+
+const writeGoldenSkill = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
+  await writeText(
+    join(pluginRoot, "skills", "golden-skill", "SKILL.md"),
+    `---
+name: golden-skill
+description: A targeted skill for golden lowerer tests
+---
+
+# Golden Skill
+
+This skill is bundled by harnesses that copy targeted skills into generated plugins.
+`,
+  );
+};
+
+export const createGoldenCompileFixture = async (options: {
+  pluginRoot: string;
+  projectRoot: string;
+}): Promise<{ pluginRoot: string; projectRoot: string }> => {
+  const paths = fixturePaths({ pluginRoot: options.pluginRoot, projectRoot: options.projectRoot });
+  await mkdir(paths.projectRoot, { recursive: true });
+
+  await writeFixtureManifests(paths, GOLDEN_TARGET_HARNESSES);
+  await writeFixtureSpaces(paths, GOLDEN_TARGET_HARNESSES);
+  await writeFixtureIdentities(paths);
+  await writeProtocolSchema(paths);
+  await writeFixtureTools(paths);
+  await writeFixtureTraits(paths);
+  await writeFixtureAgents(paths, { pluginRoot: options.pluginRoot, projectRoot: options.projectRoot });
+  await writeDeliveryOrbit(paths, { pluginRoot: options.pluginRoot, projectRoot: options.projectRoot });
+  await writeGoldenHook(paths);
+  await writeGoldenSkill(paths);
 
   return { pluginRoot: paths.pluginRoot, projectRoot: paths.projectRoot };
 };

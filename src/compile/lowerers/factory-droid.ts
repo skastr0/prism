@@ -12,15 +12,17 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   MCP_EXPOSURE_HEADER,
+  mcpExposureProfileForTarget,
   renderMcpHttpUrl,
   resolveMcpRuntime,
+  resolveOwnerMcpRuntime,
 } from "../mcp-runtime.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  bindingsOwnedByPlugin,
+  allReferencedBindingsByOwner,
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
@@ -54,6 +56,7 @@ export interface FactoryDroidLowerTarget {
   readonly root: string;
   readonly mcpExposureProfile?: string;
   readonly mcpRuntimePort?: number;
+  readonly prismHome?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -309,24 +312,37 @@ const planMcpServer = async (
   files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  const ownedBindings = bindingsOwnedByPlugin(
+  const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: ownedBindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
-  const pluginId = generatedPluginId(input.target);
+  if (bindingsByOwner.size === 0) return;
 
   const mcpServers: Record<string, unknown> = {};
-  if (ownedBindings.length > 0) {
+  for (const [ownerPluginName, bindings] of bindingsByOwner) {
+    const isSelf = ownerPluginName === input.target.sourcePluginName;
+    const runtime = isSelf
+      ? resolveMcpRuntime(input.registry, TARGET_ID, {
+          requirePort: bindings.length > 0,
+          resolvedPort: input.target.mcpRuntimePort,
+        })
+      : input.target.prismHome && input.registry
+        ? await resolveOwnerMcpRuntime({
+            prismHome: input.target.prismHome,
+            registry: input.registry,
+            targetId: TARGET_ID,
+            ownerPluginName,
+          })
+        : undefined;
+    if (!runtime) continue;
+
+    const pluginId = generatedPluginIdForOwner(ownerPluginName);
     mcpServers[pluginId] = {
       type: "http",
       url: renderMcpHttpUrl(runtime),
       headers: {
-        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
+        [MCP_EXPOSURE_HEADER]: mcpExposureProfileForTarget(pluginId, TARGET_ID),
       },
     };
   }

@@ -109,6 +109,7 @@ interface LowererModule {
       readonly root: string;
       readonly mcpExposureProfile?: string;
       readonly mcpRuntimePort?: number;
+      readonly prismHome?: string;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
       readonly sourcePluginPath?: string;
@@ -1102,6 +1103,7 @@ const planTargetLowering = (options: {
   readonly registry: PluginRegistry;
   readonly scope: HarnessScope;
   readonly outputRoot: string;
+  readonly prismHome: string;
   readonly mcpServer?: PreparedMcpServer;
   readonly mcpRuntimePort?: number;
 }): Effect.Effect<LowerOutput, CompileError> => {
@@ -1136,6 +1138,7 @@ const planTargetLowering = (options: {
             }
           : {}),
         ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
+        prismHome: options.prismHome,
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
         sourcePluginPath: options.registry.pluginPath,
@@ -1290,6 +1293,7 @@ export const planPluginForTarget = (
       registry,
       scope: options.scope,
       outputRoot: context.outputRoot,
+      prismHome: context.prismHome,
       ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
@@ -1335,6 +1339,7 @@ export const compilePluginForTarget = (
       registry,
       scope: options.scope,
       outputRoot: context.outputRoot,
+      prismHome: context.prismHome,
       ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });

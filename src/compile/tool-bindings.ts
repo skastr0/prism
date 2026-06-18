@@ -136,6 +136,35 @@ export const referencedBindingsByOwner = (
   );
 };
 
+/**
+ * Collect every binding that needs an MCP server entry for this compile,
+ * grouping by the plugin that owns the underlying canonical tool. This
+ * includes the compiling plugin's own tools plus every foreign-owner tool
+ * referenced by its agents.
+ */
+export const allReferencedBindingsByOwner = (
+  compilingPluginName: string,
+  tools: ReadonlyArray<CanonicalTool> | undefined,
+  agents: ReadonlyArray<ComposedAgent>,
+): ReadonlyMap<string, ReadonlyArray<ResolvedContractBinding>> => {
+  const groups = new Map<string, ResolvedContractBinding[]>();
+  for (const binding of bindingsOwnedByPlugin(compilingPluginName, tools, agents)) {
+    const list = groups.get(compilingPluginName) ?? [];
+    list.push(binding);
+    groups.set(compilingPluginName, list);
+  }
+  for (const [owner, bindings] of referencedBindingsByOwner(compilingPluginName, agents)) {
+    const list = groups.get(owner) ?? [];
+    list.push(...bindings);
+    groups.set(owner, list);
+  }
+  return new Map(
+    [...groups.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([owner, ownerBindings]) => [owner, dedupeBindings(ownerBindings)]),
+  );
+};
+
 export const mcpBindingsForAgentsAndTools = (
   sourcePluginName: string,
   tools: ReadonlyArray<CanonicalTool> | undefined,

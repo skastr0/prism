@@ -3,8 +3,11 @@ import {
   DEFAULT_MCP_CONNECT_TIMEOUT_MS,
   DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
 } from "./mcp-policy.js";
-import type { PluginRegistry } from "./registry.js";
+import { type PluginRegistry, collectPluginRegistries } from "./registry.js";
 import { normalizeBundleSegment } from "./lowerers/shared.js";
+import { prismMcpRuntimeDir } from "./mcp-runtime-path.js";
+import { readMcpRuntimeMetadata } from "../mcp/runtime-metadata.js";
+import { join } from "node:path";
 
 const GENERATED_SERVER_PREFIX = "prism-generated";
 const DEFAULT_HTTP_HOST = "127.0.0.1";
@@ -192,4 +195,53 @@ export const renderMcpHttpUrl = (runtime: ResolvedMcpRuntime): string => {
     );
   }
   return `http://${runtime.host}:${runtime.port}/mcp`;
+};
+
+const ownerRuntimeMetadataPath = (prismHome: string, pluginName: string): string =>
+  join(prismMcpRuntimeDir(prismHome), normalizeBundleSegment(pluginName), "runtime.json");
+
+const resolvedMcpRuntimeFromMetadata = (
+  targetId: HarnessId,
+  metadata: { readonly host?: string; readonly port?: number },
+): ResolvedMcpRuntime | undefined => {
+  if (!metadata.host || !metadata.port || !isLoopbackMcpHost(metadata.host)) return undefined;
+  return {
+    targetId,
+    transport: "streamable-http",
+    host: metadata.host,
+    port: metadata.port,
+    connectTimeoutMs: DEFAULT_MCP_CONNECT_TIMEOUT_MS,
+    toolTimeoutMs: DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
+  };
+};
+
+/**
+ * Resolve the MCP runtime for a foreign-owner plugin referenced by a consumer.
+ * Prefer the running daemon's recorded metadata so auto-selected ports are
+ * accurate, then fall back to the owner plugin.json static runtime config.
+ */
+export const resolveOwnerMcpRuntime = async (options: {
+  readonly prismHome: string;
+  readonly registry: PluginRegistry;
+  readonly targetId: HarnessId;
+  readonly ownerPluginName: string;
+}): Promise<ResolvedMcpRuntime | undefined> => {
+  const ownerRegistry = collectPluginRegistries(options.registry).get(options.ownerPluginName);
+  if (!ownerRegistry) return undefined;
+
+  try {
+    const metadata = await readMcpRuntimeMetadata(
+      ownerRuntimeMetadataPath(options.prismHome, options.ownerPluginName),
+    );
+    const fromMetadata = resolvedMcpRuntimeFromMetadata(options.targetId, metadata);
+    if (fromMetadata) return fromMetadata;
+  } catch {
+    // Metadata missing or unreadable; fall back to static config below.
+  }
+
+  try {
+    return resolveMcpRuntime(ownerRegistry, options.targetId);
+  } catch {
+    return undefined;
+  }
 };

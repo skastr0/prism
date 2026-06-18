@@ -272,7 +272,9 @@ export default defineTool({
   expect(httpEntry).toEqual({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
-    headers: {},
+    headers: {
+      "X-Prism-Mcp-Exposure": "prism-generated-claude-plugin-fixture:claude-code",
+    },
   });
 
   // The bundle itself lives in PRISM_HOME — never in the generated plugin.
@@ -399,7 +401,9 @@ export default defineTool({
   expect(parsed.mcpServers?.["prism-generated-claude-http-fixture"]).toEqual({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
-    headers: {},
+    headers: {
+      "X-Prism-Mcp-Exposure": "prism-generated-claude-http-fixture:claude-code",
+    },
   });
   expect(mcpConfig?.content).not.toContain('"command"');
   expect(mcpConfig?.content).not.toContain('"args"');

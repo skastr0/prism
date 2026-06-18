@@ -17,6 +17,17 @@ const targets = [
   { platform: "linux", arch: "arm64" },
 ];
 
+const externalNativePackages = [
+  "@opentui/core-darwin-x64",
+  "@opentui/core-darwin-arm64",
+  "@opentui/core-linux-x64",
+  "@opentui/core-linux-arm64",
+  "@opentui/core-linux-x64-musl",
+  "@opentui/core-linux-arm64-musl",
+  "@opentui/core-win32-x64",
+  "@opentui/core-win32-arm64",
+];
+
 console.log("Cleaning dist directory...");
 await rm(distDir, { recursive: true, force: true });
 await mkdir(distDir, { recursive: true });
@@ -43,6 +54,7 @@ for (const { platform, arch } of targets) {
           readFileSync(join(repoRoot, "src", "compile", "runtime", "schema-bridge.ts"), "utf8")
         ),
       },
+      external: externalNativePackages,
       minify: true,
     });
 

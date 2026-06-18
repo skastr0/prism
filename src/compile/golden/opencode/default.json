@@ -1,0 +1,211 @@
+{
+  "files": [
+    {
+      "content": "---\nname: builder\ndescription: Builder agent for canonical compile integration tests\npermission:\n  bash: allow\n  canonical_compile_fixture_commit_work: allow\n  canonical_compile_fixture_submit_review: deny\n  canonical_compile_fixture_submit_review__review_findings_slot: deny\n  canonical_compile_fixture_submit_review__security_review_slot: deny\n  canonical_compile_fixture_submit_work: deny\n  grep: allow\n  protocol_core_create_glyph: allow\n  protocol_core_external_submit: allow\n  read: allow\n  skill:\n    \"*\": deny\n    delivery-contract: allow\n    testing: allow\n---\n\n# Builder\n\nYou implement one committed glyph and validate it before review.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### committable\n\nCommit owned implementation changes only after the submitted work is complete.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "path": "<HARNESS_ROOT>/agents/builder.md"
+    },
+    {
+      "content": "---\nname: reviewer\ndescription: Reviewer agent for canonical compile integration tests\npermission:\n  canonical_compile_fixture_commit_work: deny\n  canonical_compile_fixture_submit_review: deny\n  canonical_compile_fixture_submit_review__review_findings_slot: allow\n  canonical_compile_fixture_submit_review__security_review_slot: deny\n  canonical_compile_fixture_submit_work: deny\n  grep: allow\n  protocol_core_create_glyph: deny\n  protocol_core_external_submit: allow\n  read: allow\n  skill:\n    \"*\": deny\n    delivery-contract: allow\n    testing: allow\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "path": "<HARNESS_ROOT>/agents/reviewer.md"
+    },
+    {
+      "content": "---\nname: security-reviewer\ndescription: Security reviewer variant using the same reviewable trait\npermission:\n  canonical_compile_fixture_commit_work: deny\n  canonical_compile_fixture_submit_review: deny\n  canonical_compile_fixture_submit_review__review_findings_slot: deny\n  canonical_compile_fixture_submit_review__security_review_slot: allow\n  canonical_compile_fixture_submit_work: deny\n  grep: allow\n  protocol_core_create_glyph: deny\n  protocol_core_external_submit: allow\n  read: allow\n  skill:\n    \"*\": deny\n    testing: allow\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "path": "<HARNESS_ROOT>/agents/security-reviewer.md"
+    },
+    {
+      "content": "<BUNDLE_HASH:6ccf62dda4c76edfe5917b27d6d9a31d092ab02db32928d58258aed62895d372>",
+      "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
+    },
+    {
+      "content": "<BUNDLE_HASH:dfb71bc480956eb15200435b5099eba4026e9085aa946e5fde734363e1a9f649>",
+      "path": "<HARNESS_ROOT>/plugins/prism-generated-protocol-core/dist/server.mjs"
+    },
+    {
+      "content": "---\nname: delivery-contract\ndescription: Validate that work moves through the right trait-conforming agents\n---\n\n# delivery-contract\n\nValidate that work moves through the right trait-conforming agents\n\n_Runtime-facing lowering of a concrete orbit. This skill is derived from the agents, traits, and tools wired into the orbit definition; treat it as the authoritative orchestration surface._\n\n## Orchestrator\n\nThe orchestrator agent for this orbit is `builder`. It owns work-item state transitions and signal handling, and is not a phase agent.\n\nBuilder agent for canonical compile integration tests\n\n**Traits**: `canonical-compile-fixture:committable`, `canonical-compile-fixture:self-assessing`, `canonical-compile-fixture:submittable`.\n\nOrchestrator-only tools:\n\n- `create_glyph` (canonical `protocol-core:create_glyph`) — Create a protocol-owned glyph\n\n## Phases\n\n### 1. Implement change — agent `builder`\n\n- **Input**: Work item is ready to build\n- **Done**: Implementation is ready for review\n\n#### Agent `builder`\n\nBuilder agent for canonical compile integration tests\n\n**Traits**: `canonical-compile-fixture:committable`, `canonical-compile-fixture:self-assessing`, `canonical-compile-fixture:submittable`.\n\n### 2. Review change — agent `reviewer`\n\n- **Input**: Implementation is ready for review\n- **Done**: Review findings are recorded\n\n#### Agent `reviewer`\n\nReviewer agent for canonical compile integration tests\n\n**Traits**: `canonical-compile-fixture:reviewable`, `canonical-compile-fixture:self-assessing`, `canonical-compile-fixture:submittable`.\n\n### 3. Hand off work — agents `builder`, `reviewer`\n\n- **Input**: Build and review are complete\n- **Done**: Work has been handed off cleanly\n\nMultiple agents may fulfil this phase. Pick the one whose identity and traits best match the work in front of you.\n\n#### Agent `builder`\n\nBuilder agent for canonical compile integration tests\n\n**Traits**: `canonical-compile-fixture:committable`, `canonical-compile-fixture:self-assessing`, `canonical-compile-fixture:submittable`.\n\n#### Agent `reviewer`\n\nReviewer agent for canonical compile integration tests\n\n**Traits**: `canonical-compile-fixture:reviewable`, `canonical-compile-fixture:self-assessing`, `canonical-compile-fixture:submittable`.\n\n## Submission protocol per phase agent\n\nEach phase agent submits work via a dispatch tool that the orbit relies on:\n\n- `builder` → `commit_work` (canonical `commit-work`) — Commit validated implementation work\n- `builder` → `submit_work` (canonical `protocol-core:external-submit`) — Submit completed work through an external protocol plugin\n- `reviewer` → `submit_review` (canonical `submit-review`) — Submit review findings\n  - Fills slot `verdict` with schema `ReviewFindingsSlot`.\n- `reviewer` → `submit_work` (canonical `protocol-core:external-submit`) — Submit completed work through an external protocol plugin\n\n## Trait protocols active in this orbit\n\nEach trait active in this orbit is summarized once: its description, the agents that bind it, and any tools or skills it grants. Per-trait agent-side instructions live with the trait source and are compiled into the bound agents directly; they are not re-rendered here.\n\n### `canonical-compile-fixture:committable`\n\nCan create implementation commits\n\n- Bound by: `builder`\n- Grants tool(s): `commit_work`\n\n### `canonical-compile-fixture:reviewable`\n\nCan submit review findings\n\n- Bound by: `reviewer`\n- Grants tool(s): `submit_review`\n\n### `canonical-compile-fixture:self-assessing`\n\nRuns validation before handing work off\n\n- Bound by: `builder`, `reviewer`\n\n### `canonical-compile-fixture:submittable`\n\nCan submit completed work\n\n- Bound by: `builder`, `reviewer`\n- Grants tool(s): `submit_work`\n\n## Phase transitions\n\nOrbit work moves through the phase sequence declared here. The orchestrator owns transitions when an orchestrator is declared; phase agents stay inside the current phase contract until their output lands.\n\nUse the phase workflow, telos, real-world change, and cold-pickup test to decide whether a phase is complete. Userland orbits may define stricter state names, queues, or artifact families in their own metadata and tools.\n\nPhase ownership of state transitions:\n\n- **Implement change** — owned by `builder`.\n- **Review change** — owned by `reviewer`.\n- **Hand off work** — owned by `builder`, `reviewer`.\n- **Transitions, signal claim/consume, and work-item state mutations** — owned by orchestrator `builder`.\n\nUse this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.\n",
+      "path": "<HARNESS_ROOT>/skills/delivery-contract/SKILL.md"
+    }
+  ],
+  "regions": [
+    {
+      "jsonPath": [
+        "agent",
+        "builder",
+        "maxSteps"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.builder.maxSteps",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": 12
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "builder",
+        "mode"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.builder.mode",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "subagent"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "builder",
+        "model"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.builder.model",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "openai/gpt-5.4"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "builder",
+        "temperature"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.builder.temperature",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": 0.2
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "builder",
+        "variant"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.builder.variant",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "xhigh"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "reviewer",
+        "mode"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.reviewer.mode",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "subagent"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "reviewer",
+        "model"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.reviewer.model",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "openai/gpt-5.4-reviewer-a"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "reviewer",
+        "temperature"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.reviewer.temperature",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": 0.1
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "reviewer",
+        "variant"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.reviewer.variant",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "medium"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "security-reviewer",
+        "mode"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.security-reviewer.mode",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "subagent"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "security-reviewer",
+        "model"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.security-reviewer.model",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "openai/gpt-5.4-reviewer-b"
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "security-reviewer",
+        "temperature"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.security-reviewer.temperature",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": 0.1
+    },
+    {
+      "jsonPath": [
+        "agent",
+        "security-reviewer",
+        "variant"
+      ],
+      "kind": "json-key",
+      "regionKey": "agent.security-reviewer.variant",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "medium"
+    },
+    {
+      "jsonPath": [
+        "permission",
+        "canonical_compile_fixture_*"
+      ],
+      "kind": "json-key",
+      "regionKey": "permission.prism-generated-canonical-compile-fixture",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "deny"
+    },
+    {
+      "jsonPath": [
+        "permission",
+        "protocol_core_*"
+      ],
+      "kind": "json-key",
+      "regionKey": "permission.prism-generated-protocol-core",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "deny"
+    },
+    {
+      "jsonPath": [
+        "plugin"
+      ],
+      "kind": "json-array-member",
+      "regionKey": "plugin.prism-generated-canonical-compile-fixture",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "file://<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/dist/server.mjs"
+    },
+    {
+      "jsonPath": [
+        "plugin"
+      ],
+      "kind": "json-array-member",
+      "regionKey": "plugin.prism-generated-protocol-core",
+      "targetPath": "<HARNESS_ROOT>/opencode.json",
+      "value": "file://<HARNESS_ROOT>/plugins/prism-generated-protocol-core/dist/server.mjs"
+    }
+  ]
+}

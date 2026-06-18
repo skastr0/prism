@@ -62,7 +62,22 @@ const fixturePaths = (options: CanonicalCompileFixtureOptions): CanonicalFixture
 const writeFixtureManifests = async (
   { pluginRoot, coreRoot, protocolRoot }: CanonicalFixturePaths,
   targetHarnesses: readonly string[],
+  options?: {
+    readonly includeSkillsAndHooks?: boolean;
+    readonly protocolRuntimeConfig?: Record<string, unknown>;
+  },
 ): Promise<void> => {
+  const pluginTargets: Record<string, string[]> = {
+    agents: [...targetHarnesses],
+    orbits: [...targetHarnesses],
+    tools: [...targetHarnesses],
+    toolspaces: [...targetHarnesses],
+    modelspaces: [...targetHarnesses],
+  };
+  if (options?.includeSkillsAndHooks) {
+    pluginTargets.skills = [...targetHarnesses];
+    pluginTargets.hooks = [...targetHarnesses];
+  }
   await writeJsonFixture(join(pluginRoot, "plugin.json"), {
     name: "canonical-compile-fixture",
     version: "0.1.0",
@@ -70,15 +85,7 @@ const writeFixtureManifests = async (
       "agent-core": "./deps/agent-core",
       "protocol-core": "./deps/protocol-core",
     },
-    targets: {
-      agents: [...targetHarnesses],
-      orbits: [...targetHarnesses],
-      tools: [...targetHarnesses],
-      toolspaces: [...targetHarnesses],
-      modelspaces: [...targetHarnesses],
-      skills: [...targetHarnesses],
-      hooks: [...targetHarnesses],
-    },
+    targets: pluginTargets,
   });
 
   await writeJsonFixture(join(coreRoot, "plugin.json"), {
@@ -91,13 +98,17 @@ const writeFixtureManifests = async (
     },
   });
 
-  await writeJsonFixture(join(protocolRoot, "plugin.json"), {
+  const protocolManifest: Record<string, unknown> = {
     name: "protocol-core",
     version: "0.1.0",
     targets: {
       tools: [...targetHarnesses],
     },
-  });
+  };
+  if (options?.protocolRuntimeConfig !== undefined) {
+    protocolManifest.runtime = options.protocolRuntimeConfig;
+  }
+  await writeJsonFixture(join(protocolRoot, "plugin.json"), protocolManifest);
 };
 
 const opencodeToolNames: Record<string, string> = {
@@ -827,6 +838,14 @@ export default defineHook({
   );
 };
 
+const goldenProtocolRuntimeConfig = (): Record<string, unknown> => {
+  const mcp: Record<string, { port: number; transport: string }> = {};
+  for (const [index, harness] of GOLDEN_TARGET_HARNESSES.entries()) {
+    mcp[harness] = { port: 11000 + index, transport: "streamable-http" };
+  }
+  return { mcp };
+};
+
 const writeGoldenSkill = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "skills", "golden-skill", "SKILL.md"),
@@ -849,7 +868,10 @@ export const createGoldenCompileFixture = async (options: {
   const paths = fixturePaths({ pluginRoot: options.pluginRoot, projectRoot: options.projectRoot });
   await mkdir(paths.projectRoot, { recursive: true });
 
-  await writeFixtureManifests(paths, GOLDEN_TARGET_HARNESSES);
+  await writeFixtureManifests(paths, GOLDEN_TARGET_HARNESSES, {
+    includeSkillsAndHooks: true,
+    protocolRuntimeConfig: goldenProtocolRuntimeConfig(),
+  });
   await writeFixtureSpaces(paths, GOLDEN_TARGET_HARNESSES);
   await writeFixtureIdentities(paths);
   await writeProtocolSchema(paths);

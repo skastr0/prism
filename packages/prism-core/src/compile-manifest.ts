@@ -80,6 +80,15 @@ export const CompileManifestModelspaceSchema = Schema.Struct({
   plugin: Schema.String,
   modelspace: Schema.String,
   profiles: Schema.Array(Schema.String),
+  profilesData: Schema.optional(
+    Schema.Record({
+      key: Schema.String,
+      value: Schema.Record({
+        key: Schema.String,
+        value: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+      }),
+    }),
+  ),
 });
 export type CompileManifestModelspace = typeof CompileManifestModelspaceSchema.Type;
 
@@ -255,6 +264,13 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
     plugin: entry.plugin,
     modelspace: entry.modelspace,
     profiles: sortStrings(entry.profiles),
+    profilesData: entry.profilesData
+      ? sortRecord(entry.profilesData, (profileMap) =>
+          sortRecord(profileMap, (targetBlock) =>
+            stableJsonValue(targetBlock as StableJsonValue) as Record<string, unknown>,
+          ),
+        )
+      : undefined,
   })),
   skills: sortRecord(manifest.skills, (entry) =>
     "skillspace" in entry && entry.skillspace !== undefined

@@ -4,7 +4,10 @@ import {
   decodeTaskOutput,
   defineTask,
   defineWorkflow,
+  resolveWorkflowTaskModel,
+  WorkflowModelResolutionError,
   type WorkflowAgentRef,
+  type WorkflowModelProfileRef,
   type WorkflowTaskOutput,
 } from "./workflows.js";
 
@@ -16,6 +19,26 @@ const builder = {
   sourceHash: "a".repeat(64),
   manifestHash: "b".repeat(64),
   installs: ["grok", "codex-cli"],
+} as const satisfies WorkflowAgentRef;
+
+const modelProfile = {
+  kind: "model-profile-ref",
+  plugin: "agent-foundations",
+  modelspace: "empirical-modelspaces",
+  profile: "trusted-production",
+  targets: {
+    opencode: { strategy: "any-of", models: [{ model: "crof/kimi-k2.6" }, { model: "fallback/kimi" }] },
+    "claude-code": { model: "claude-opus-4-8", effort: "max" },
+  },
+} as const satisfies WorkflowModelProfileRef;
+
+const modelspaceBackedBuilder = {
+  ...builder,
+  model: {
+    modelspace: "agent-foundations:empirical-modelspaces",
+    profile: "trusted-production",
+    targets: modelProfile.targets,
+  },
 } as const satisfies WorkflowAgentRef;
 
 const PatchReport = Schema.Struct({
@@ -51,6 +74,54 @@ describe("workflow authoring primitives", () => {
     });
 
     expect(build.worker?.model).toBe("grok-build");
+  });
+
+  test("resolves task model refs through the selected workflow worker", () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Use the selected model profile.",
+      output: PatchReport,
+      worker: { worker: "opencode", model: modelProfile },
+    });
+
+    expect(resolveWorkflowTaskModel(build)).toBe("crof/kimi-k2.6");
+  });
+
+  test("uses the agent modelspace before CLI fallback model", () => {
+    const build = defineTask({
+      id: "build",
+      agent: modelspaceBackedBuilder,
+      prompt: "Use the agent model profile.",
+      output: PatchReport,
+      worker: { worker: "claude-code" },
+    });
+
+    expect(resolveWorkflowTaskModel(build, { fallbackModel: "sonnet" })).toBe("claude-opus-4-8");
+  });
+
+  test("preserves raw task model strings as an escape hatch", () => {
+    const build = defineTask({
+      id: "build",
+      agent: modelspaceBackedBuilder,
+      prompt: "Use the raw model.",
+      output: PatchReport,
+      worker: { worker: "opencode", model: "provider/manual-model" },
+    });
+
+    expect(resolveWorkflowTaskModel(build)).toBe("provider/manual-model");
+  });
+
+  test("fails closed when a model ref does not support the selected worker", () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Use the selected model profile.",
+      output: PatchReport,
+      worker: { worker: "codex-cli", model: modelProfile },
+    });
+
+    expect(() => resolveWorkflowTaskModel(build)).toThrow(WorkflowModelResolutionError);
   });
 
   test("decodes task output at the workflow boundary", () => {

@@ -238,6 +238,7 @@ export const buildCompileManifestForTarget = (options: {
   // Smallest additive surface for workflow refs; populated only from already-composed
   // bindings (no plugin source reads). Keyed by "ownerPlugin:localModelspace" for
   // collision-free stable lookup. Profiles collected per (plugin, modelspace).
+  const registries = collectPluginRegistries(options.registry);
   const modelspaceAccum: Record<string, { plugin: string; modelspace: string; profiles: Set<string> }> = {};
   for (const agent of Object.values(agents)) {
     const mb = agent.composed.modelBindings;
@@ -261,10 +262,21 @@ export const buildCompileManifestForTarget = (options: {
   }
   const modelspaces: Record<string, CompileManifestModelspace> = {};
   for (const [key, acc] of Object.entries(modelspaceAccum)) {
+    const msSource = registries.get(acc.plugin)?.modelspaces.get(acc.modelspace);
+    const profilesData: Record<string, Record<string, Record<string, unknown>>> = {};
+    if (msSource) {
+      for (const profileName of acc.profiles) {
+        const profile = msSource.profiles[profileName];
+        if (profile) {
+          profilesData[profileName] = profile.targets as Record<string, Record<string, unknown>>;
+        }
+      }
+    }
     modelspaces[key] = {
       plugin: acc.plugin,
       modelspace: acc.modelspace,
       profiles: sortStrings([...acc.profiles]),
+      ...(Object.keys(profilesData).length > 0 ? { profilesData } : {}),
     };
   }
 
@@ -403,7 +415,6 @@ export const buildCompileManifestForTarget = (options: {
   }
   const orbits: Record<string, CompileManifestOrbit> = orbitsRecord;
 
-  const registries = collectPluginRegistries(options.registry);
   const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
   const livePluginNames = new Set(Object.values(agents).map((agent) => agent.plugin));
   for (const pluginName of currentPluginHashes.keys()) livePluginNames.add(pluginName);

@@ -83,6 +83,7 @@ describe("workflow refs emitter", () => {
     expect(output).toContain('name: "codebase-archeologist"');
     expect(output).not.toContain("sourcePath");
     expect(output).toContain('installs: ["grok"]');
+    expect(output).toContain('"targets":{"grok":{"model":"grok-code-fast-1"}}');
     expect(output).toContain('as const satisfies Record<string, Record<string, WorkflowAgentRef>>');
   });
 
@@ -97,6 +98,7 @@ describe("workflow refs emitter", () => {
     expect(output).toContain('plugin":"forge"');
     expect(output).toContain('modelspace":"models"');
     expect(output).toContain('profile":"fast"');
+    expect(output).toContain('targets":{"grok":{"model":"grok-code-fast-1"}}');
     expect(output).not.toContain("sourcePath");
     expect(output).toContain('as const satisfies Record<string, Record<string, Record<string, WorkflowModelProfileRef>>>');
     expect(output).toContain("WorkflowModelspaceRef");

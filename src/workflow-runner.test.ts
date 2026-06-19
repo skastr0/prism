@@ -422,7 +422,7 @@ describe("workflow runner", () => {
 
     await runWorkflow(workflow, {
       executeTask: async (task) => {
-        models.push(task.worker?.model);
+        models.push(typeof task.worker?.model === "string" ? task.worker.model : undefined);
         return task.id === "build" ? { summary: "built" } : { verdict: "pass" };
       },
     });

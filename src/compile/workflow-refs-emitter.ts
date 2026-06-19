@@ -52,6 +52,7 @@ type EmittedModelProfileRef = {
   readonly plugin: string;
   readonly modelspace: string;
   readonly profile: string;
+  readonly targets: Readonly<Record<string, Record<string, unknown>>>;
 };
 
 type EmittedManagedSkillRef = {
@@ -114,9 +115,28 @@ const pluginAgents = (
 
 const collectUsedModelProfiles = (
   manifest: CompileManifest,
-): Array<{ plugin: string; modelspace: string; profile: string }> => {
-  const entries: Array<{ plugin: string; modelspace: string; profile: string }> = [];
+): Array<{ plugin: string; modelspace: string; profile: string; targets: Readonly<Record<string, Record<string, unknown>>> }> => {
+  const entries: Array<{ plugin: string; modelspace: string; profile: string; targets: Record<string, Record<string, unknown>> }> = [];
   const seen = new Set<string>();
+  const targetsByKey = new Map<string, Record<string, Record<string, unknown>>>();
+
+  for (const agent of Object.values(manifest.agents)) {
+    const mb = agent.composed.modelBindings;
+    if (!mb.modelspace || !mb.profile) continue;
+    let p = agent.plugin;
+    let ms = mb.modelspace;
+    const colon = mb.modelspace.indexOf(":");
+    if (colon !== -1) {
+      p = mb.modelspace.slice(0, colon);
+      ms = mb.modelspace.slice(colon + 1);
+    }
+    const key = `${p}:${ms}:${mb.profile}`;
+    const targets = targetsByKey.get(key) ?? {};
+    for (const [harness, slice] of Object.entries(agent.composed.perTarget)) {
+      if (slice.model !== null) targets[harness] = slice.model;
+    }
+    targetsByKey.set(key, targets);
+  }
 
   const msRec = manifest.modelspaces;
   if (msRec && Object.keys(msRec).length > 0) {
@@ -125,7 +145,15 @@ const collectUsedModelProfiles = (
         const k = `${entry.plugin}:${entry.modelspace}:${profile}`;
         if (!seen.has(k)) {
           seen.add(k);
-          entries.push({ plugin: entry.plugin, modelspace: entry.modelspace, profile });
+          const msKey = `${entry.plugin}:${entry.modelspace}`;
+          const msEntry = manifest.modelspaces[msKey];
+          const targets = msEntry?.profilesData?.[profile] ?? targetsByKey.get(k) ?? {};
+          entries.push({
+            plugin: entry.plugin,
+            modelspace: entry.modelspace,
+            profile,
+            targets,
+          });
         }
       }
     }
@@ -144,7 +172,7 @@ const collectUsedModelProfiles = (
         const k = `${p}:${ms}:${mb.profile}`;
         if (!seen.has(k)) {
           seen.add(k);
-          entries.push({ plugin: p, modelspace: ms, profile: mb.profile });
+          entries.push({ plugin: p, modelspace: ms, profile: mb.profile, targets: targetsByKey.get(k) ?? {} });
         }
       }
     }
@@ -275,10 +303,16 @@ const renderAgentRef = (options: {
   readonly agent: CompileManifestAgent;
 }): string => {
   const modelBindings = options.agent.composed.modelBindings;
+  let modelTargets: Record<string, Record<string, unknown>> = {};
+  if (modelBindings.modelspace && modelBindings.profile) {
+    for (const [harness, slice] of Object.entries(options.agent.composed.perTarget)) {
+      if (slice.model !== null) modelTargets[harness] = slice.model;
+    }
+  }
   const model =
     modelBindings.modelspace || modelBindings.profile
       ? `,
-      model: ${JSON.stringify(modelBindings)}`
+      model: ${JSON.stringify({ ...modelBindings, targets: modelTargets })}`
       : "";
 
   return `{
@@ -324,6 +358,7 @@ ${body}
 export interface WorkflowModelRef {
   readonly modelspace?: string;
   readonly profile?: string;
+  readonly targets?: Readonly<Record<string, Record<string, unknown>>>;
 }
 
 export interface WorkflowAgentRef {
@@ -349,7 +384,7 @@ export const renderWorkflowModelsModule = (options: {
   const profiles = collectUsedModelProfiles(options.manifest);
 
   const byPlugin: Record<string, Record<string, Record<string, EmittedModelProfileRef>>> = {};
-  for (const { plugin, modelspace, profile } of profiles) {
+  for (const { plugin, modelspace, profile, targets } of profiles) {
     const pk = camelKey(plugin);
     const msk = camelKey(modelspace);
     const profk = camelKey(profile);
@@ -360,6 +395,7 @@ export const renderWorkflowModelsModule = (options: {
       plugin,
       modelspace,
       profile,
+      targets,
     };
   }
 
@@ -402,6 +438,7 @@ export interface WorkflowModelProfileRef {
   readonly plugin: string;
   readonly modelspace: string;
   readonly profile: string;
+  readonly targets: Readonly<Record<string, Record<string, unknown>>>;
 }
 
 export const models = {

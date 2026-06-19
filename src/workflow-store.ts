@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
-import type { AnyWorkflowTask, WorkflowJudgeVerdict, WorkflowRuntimeOptions } from "./workflows.js";
+import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowJudgeVerdict, type WorkflowRuntimeOptions } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskIdentity {
@@ -35,8 +35,6 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
     case "hermes":
     case "kimi-code":
       return "prompt-agent-v1";
-    case "antigravity-cli":
-      return "prompt-agent-timeout-recovery-v1";
     case null:
       return "mock-or-custom-v1";
     default:
@@ -503,6 +501,10 @@ export const workflowTaskIdentity = (
   runtimeOptions: WorkflowRuntimeOptions = {},
 ): WorkflowTaskIdentity => {
   const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker ?? null;
+  const model = resolveWorkflowTaskModel(task, {
+    worker: worker ?? undefined,
+    fallbackModel: runtimeOptions.fallbackModel,
+  });
   return {
     workflow,
     taskId: task.id,
@@ -514,7 +516,7 @@ export const workflowTaskIdentity = (
       prompt: task.prompt,
       worker,
       workerSemantics: workflowWorkerSemanticsVersion(worker),
-      model: task.worker?.model ?? runtimeOptions.fallbackModel ?? null,
+      model: model ?? null,
       profile: task.worker?.profile ?? null,
       outputSchema: ((task.output as { readonly ast?: unknown }).ast ?? null) as StableJsonValue,
       finish: {
@@ -557,7 +559,7 @@ const taskWorkerSnapshot = (
   runtimeOptions: WorkflowRuntimeOptions,
 ): WorkflowRunTaskSnapshot["worker"] => {
   const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker;
-  const model = task.worker?.model ?? runtimeOptions.fallbackModel;
+  const model = resolveWorkflowTaskModel(task, { worker, fallbackModel: runtimeOptions.fallbackModel });
   const profile = task.worker?.profile;
   if (worker === undefined && model === undefined && profile === undefined) return undefined;
   return {

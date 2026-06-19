@@ -8,7 +8,10 @@ export type { WorkflowRuntimeError } from "./workflow-errors.js";
 export interface WorkflowModelRef {
   readonly modelspace?: string;
   readonly profile?: string;
+  readonly targets?: Readonly<Record<string, WorkflowModelTarget>>;
 }
+
+export type WorkflowModelTarget = Readonly<Record<string, unknown>>;
 
 export interface WorkflowModelspaceRef {
   readonly kind: "modelspace-ref";
@@ -21,6 +24,7 @@ export interface WorkflowModelProfileRef {
   readonly plugin: string;
   readonly modelspace: string;
   readonly profile: string;
+  readonly targets?: Readonly<Record<string, WorkflowModelTarget>>;
 }
 
 export interface WorkflowManagedSkillRef {
@@ -53,7 +57,6 @@ export type WorkflowFinishCriterionError = Error;
 
 export type WorkflowWorkerId =
   | "amp-code"
-  | "antigravity-cli"
   | "claude-code"
   | "codex-cli"
   | "grok"
@@ -63,9 +66,153 @@ export type WorkflowWorkerId =
 
 export interface WorkflowTaskWorkerOptions {
   readonly worker?: WorkflowWorkerId;
-  readonly model?: string;
+  readonly model?: string | WorkflowModelProfileRef;
+  readonly modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   readonly profile?: string;
 }
+
+export type WorkflowResolvedModelEntry = Readonly<{ readonly model: string }>;
+
+export type WorkflowResolvedModelTarget = Readonly<Record<string, WorkflowResolvedModelEntry | WorkflowResolvedModelEntry[]>>;
+
+export class WorkflowModelResolutionError extends Error {
+  override readonly name = "WorkflowModelResolutionError";
+}
+
+const isWorkflowModelProfileRef = (value: unknown): value is WorkflowModelProfileRef =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as { readonly kind?: unknown }).kind === "model-profile-ref" &&
+  typeof (value as { readonly plugin?: unknown }).plugin === "string" &&
+  typeof (value as { readonly modelspace?: unknown }).modelspace === "string" &&
+  typeof (value as { readonly profile?: unknown }).profile === "string";
+
+const modelTargetForWorker = (
+  ref: WorkflowModelProfileRef | WorkflowModelRef,
+  worker: string | undefined,
+): WorkflowModelTarget | undefined => {
+  if (worker === undefined) {
+    throw new WorkflowModelResolutionError(
+      `cannot resolve modelspace profile ${"plugin" in ref ? `${ref.plugin}:` : ""}${ref.modelspace ?? "<unknown>"}/${ref.profile ?? "<unknown>"} without a workflow worker`,
+    );
+  }
+  return ref.targets?.[worker];
+};
+
+const firstModelString = (target: WorkflowModelTarget | undefined): string | undefined => {
+  if (target === undefined) return undefined;
+  const direct = target.model;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const models = target.models;
+  if (Array.isArray(models)) {
+    for (const candidate of models) {
+      if (typeof candidate === "object" && candidate !== null) {
+        const model = (candidate as { readonly model?: unknown }).model;
+        if (typeof model === "string" && model.length > 0) return model;
+      }
+    }
+  }
+  return undefined;
+};
+
+const describeModelRef = (ref: WorkflowModelProfileRef | WorkflowModelRef): string => {
+  const plugin = "plugin" in ref ? `${ref.plugin}:` : "";
+  return `${plugin}${ref.modelspace ?? "<unknown>"}/${ref.profile ?? "<unknown>"}`;
+};
+
+const identityKeyFromModel = (modelSlug: string): string => {
+  const bare = modelSlug.includes("/")
+    ? modelSlug.split("/").pop() ?? modelSlug
+    : modelSlug;
+  const parts = bare
+    .split(/[^A-Za-z0-9]+/u)
+    .filter((part) => part.length > 0);
+  if (parts.length === 0) return "model";
+  const [first, ...rest] = parts;
+  return [
+    first![0]!.toLowerCase() + first!.slice(1),
+    ...rest.map((part) => part[0]!.toUpperCase() + part.slice(1)),
+  ].join("");
+};
+
+const resolveModelTargetForPicker = (
+  target: WorkflowModelTarget,
+): WorkflowResolvedModelTarget => {
+  const result: Record<string, WorkflowResolvedModelEntry | WorkflowResolvedModelEntry[]> = {};
+
+  const direct = target.model;
+  if (typeof direct === "string" && direct.length > 0) {
+    result[identityKeyFromModel(direct)] = { model: direct };
+  }
+
+  const models = target.models;
+  if (Array.isArray(models)) {
+    const byKey: Record<string, WorkflowResolvedModelEntry[]> = {};
+    for (const candidate of models) {
+      if (typeof candidate === "object" && candidate !== null) {
+        const model = (candidate as { readonly model?: unknown }).model;
+        if (typeof model === "string" && model.length > 0) {
+          const key = identityKeyFromModel(model);
+          if (!byKey[key]) byKey[key] = [];
+          byKey[key].push({ model });
+        }
+      }
+    }
+    for (const [key, entries] of Object.entries(byKey)) {
+      if (entries.length === 1) {
+        result[key] = entries[0]!;
+      } else {
+        result[key] = entries;
+      }
+    }
+  }
+
+  return result;
+};
+
+export const resolveWorkflowTaskModel = (
+  task: AnyWorkflowTask,
+  options: { readonly worker?: string; readonly fallbackModel?: string } = {},
+): string | undefined => {
+  const explicit = task.worker?.model;
+  if (typeof explicit === "string") return explicit;
+
+  const worker = task.worker?.worker ?? options.worker;
+  if (isWorkflowModelProfileRef(explicit)) {
+    const target = modelTargetForWorker(explicit, worker);
+    const model = firstModelString(target);
+    if (model !== undefined) return model;
+    throw new WorkflowModelResolutionError(
+      `modelspace profile ${describeModelRef(explicit)} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
+    );
+  }
+
+  if (task.worker?.modelResolver !== undefined) {
+    const agentTarget = task.agent.model?.targets?.[worker ?? ""];
+    if (agentTarget === undefined) {
+      throw new WorkflowModelResolutionError(
+        `agent ${task.agent.plugin}:${task.agent.name} has no model target for worker '${worker ?? "<missing>"}' — cannot resolve modelResolver`,
+      );
+    }
+    const resolved = resolveModelTargetForPicker(agentTarget);
+    const picked = task.worker.modelResolver(resolved);
+    if (typeof picked === "string" && picked.length > 0) return picked;
+    throw new WorkflowModelResolutionError(
+      `modelResolver for agent ${task.agent.plugin}:${task.agent.name} returned an invalid model string for worker '${worker ?? "<missing>"}'`,
+    );
+  }
+
+  if (task.agent.model?.modelspace !== undefined || task.agent.model?.profile !== undefined) {
+    const target = modelTargetForWorker(task.agent.model, worker);
+    const model = firstModelString(target);
+    if (model !== undefined) return model;
+    throw new WorkflowModelResolutionError(
+      `agent ${task.agent.plugin}:${task.agent.name} modelspace profile ${describeModelRef(task.agent.model ?? {})} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
+    );
+  }
+
+  return options.fallbackModel;
+};
 
 export interface WorkflowFinishCriterionContext<Output> {
   readonly output: Output;

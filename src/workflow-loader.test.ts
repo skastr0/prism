@@ -142,6 +142,52 @@ export default defineWorkflow({
 `;
 };
 
+const failureCapturingWorkflowSource = () => {
+  return `
+import { Effect, Either, Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const reviewer = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "verification-reviewer",
+  description: "Verification reviewer",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["opencode"],
+};
+
+const reviewOutput = Schema.Struct({ verdict: Schema.Literal("pass") });
+const fusionOutput = Schema.Struct({
+  reviewerStatus: Schema.Literal("completed", "failed"),
+  verdict: Schema.Literal("needs-work"),
+});
+
+export default defineWorkflow({
+  name: "failure-capturing-review",
+  run: (wf) => Effect.gen(function* () {
+    const review = defineTask({
+      id: "reviewer",
+      agent: reviewer,
+      prompt: "Review the packet.",
+      output: reviewOutput,
+      worker: { worker: "opencode" },
+    });
+    const reviewed = yield* Effect.either(wf.runTask(review));
+    const reviewerStatus = Either.isRight(reviewed) ? "completed" as const : "failed" as const;
+    const fusion = yield* wf.runTask(defineTask({
+      id: "fusion",
+      agent: reviewer,
+      prompt: \`Fuse reviewer status: \${reviewerStatus}\`,
+      output: fusionOutput,
+      worker: { worker: "opencode" },
+    }));
+    return { reviewerStatus, fusion };
+  }),
+});
+`;
+};
+
 const workerModelWorkflowSource = (worker?: string) => {
   return `
 import { Schema } from "effect";
@@ -473,6 +519,105 @@ describe("workflow loader", () => {
     };
     expect(result.output).toEqual({ summary: "dynamic build", verdict: "pass" });
     expect(result.tasks.map((task) => task.id)).toEqual(["build", "review"]);
+  });
+
+  test("CLI dynamic workflows can capture reviewer task failures and continue to fusion", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const outputFile = join(root, "outputs.json");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, failureCapturingWorkflowSource());
+    await writeFile(outputFile, JSON.stringify({
+      fusion: { reviewerStatus: "failed", verdict: "needs-work" },
+    }));
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--mock-output",
+        outputFile,
+        "--store",
+        storeFile,
+        "--no-cache",
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as {
+      output: { reviewerStatus: string; fusion: { reviewerStatus: string; verdict: string } };
+      tasks: Array<{ id: string; cached: boolean; output: unknown }>;
+    };
+    expect(result.output).toEqual({
+      reviewerStatus: "failed",
+      fusion: { reviewerStatus: "failed", verdict: "needs-work" },
+    });
+    expect(result.tasks.map((task) => task.id)).toEqual(["fusion"]);
+    expect(result.tasks[0]?.output).toEqual({ reviewerStatus: "failed", verdict: "needs-work" });
+    expect(result.tasks[0]?.cached).toBe(false);
+  });
+
+  test("CLI dynamic workflows pass completed reviewer output into fusion", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const outputFile = join(root, "outputs.json");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, failureCapturingWorkflowSource());
+    await writeFile(outputFile, JSON.stringify({
+      reviewer: { verdict: "pass" },
+      fusion: { reviewerStatus: "completed", verdict: "needs-work" },
+    }));
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--mock-output",
+        outputFile,
+        "--store",
+        storeFile,
+        "--no-cache",
+      ],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as {
+      output: { reviewerStatus: string; fusion: { reviewerStatus: string; verdict: string } };
+      tasks: Array<{ id: string; cached: boolean; output: unknown }>;
+    };
+    expect(result.output).toEqual({
+      reviewerStatus: "completed",
+      fusion: { reviewerStatus: "completed", verdict: "needs-work" },
+    });
+    expect(result.tasks.map((task) => task.id)).toEqual(["reviewer", "fusion"]);
+    expect(result.tasks[0]?.output).toEqual({ verdict: "pass" });
+    expect(result.tasks[1]?.cached).toBe(false);
   });
 
   test("CLI mock run reuses cached task output from the store", async () => {

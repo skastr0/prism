@@ -123,6 +123,24 @@ interface HarnessCheck {
   readonly detail?: string;
 }
 
+interface ModelSelectionExpectedTask {
+  readonly id: string;
+  readonly challenge: string;
+  readonly expectedModel: string;
+}
+
+interface ModelSelectionResult {
+  readonly harness: "opencode";
+  readonly workflow: string;
+  readonly invalidWorkflow: string;
+  readonly refresh: CommandResult;
+  readonly validate: CommandResult;
+  readonly invalidValidate: CommandResult;
+  readonly run?: CommandResult;
+  readonly invalidRun?: CommandResult;
+  readonly checks?: readonly HarnessCheck[];
+}
+
 interface ConfigSeedEntry {
   readonly label: string;
   readonly harnesses: readonly Harness[];
@@ -146,6 +164,36 @@ interface ConfigSeedRule {
 }
 
 const args = process.argv.slice(2);
+
+const MODEL_SELECTION_WORKFLOW = "model-selection.workflow.ts";
+const MODEL_SELECTION_INVALID_WORKFLOW = "model-selection-invalid.workflow.ts";
+const TEMP_PLUGIN_PREFIX = "pwe2e-plugin-";
+const TEMP_HOME_PREFIX = "pwe2e-home-";
+const TEMP_PRISM_HOME_PREFIX = "pwe2e-prism-";
+export const WORKFLOW_E2E_PROOF_PREFIX = "prism-tool-proof:";
+export const OPENCODE_MODEL_SELECTION_SMOKE_MODEL = "ollama-cloud/deepseek-v4-flash";
+const MODEL_SELECTION_EXPECTED_TASKS: readonly ModelSelectionExpectedTask[] = [
+  {
+    id: "agent-default-modelspace",
+    challenge: "model-agent-default-2026-06-20-001",
+    expectedModel: OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  },
+  {
+    id: "explicit-model-profile",
+    challenge: "model-explicit-profile-2026-06-20-001",
+    expectedModel: OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  },
+  {
+    id: "raw-model-override",
+    challenge: "model-raw-override-2026-06-20-001",
+    expectedModel: OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  },
+  {
+    id: "model-resolver",
+    challenge: "model-resolver-2026-06-20-001",
+    expectedModel: OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  },
+];
 
 const argValue = (name: string): string | undefined => {
   const index = args.indexOf(name);
@@ -360,7 +408,7 @@ const writeE2EManifest = async (pluginRoot: string): Promise<void> => {
 };
 
 const preparePluginRoot = async (roots: string[]): Promise<string> => {
-  const parent = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-plugin-"));
+  const parent = await mkdtemp(join(tmpdir(), TEMP_PLUGIN_PREFIX));
   roots.push(parent);
   const pluginRoot = join(parent, "prism-harness-qa");
   await cp(PLUGIN_PATH, pluginRoot, { recursive: true });
@@ -406,9 +454,10 @@ const seedLiveConfigs = async (input: {
   const rules = CONFIG_SEED_RULES.filter((rule) =>
     rule.harnesses.some((harness) => input.harnesses.has(harness))
   );
-  const entries = await Promise.all(
-    rules.map((rule) => copyLiveConfigSeed(rule, input.liveHome, input.tempHome)),
-  );
+  const entries: ConfigSeedEntry[] = [];
+  for (const rule of rules) {
+    entries.push(await copyLiveConfigSeed(rule, input.liveHome, input.tempHome));
+  }
   return { liveHome: input.liveHome, tempHome: input.tempHome, entries };
 };
 
@@ -641,8 +690,102 @@ export const evaluateHarnessChecks = (
   ];
 };
 
+const taskOutputProofPass = (
+  task: { readonly output?: unknown } | undefined,
+  challenge: string,
+): boolean => {
+  const output = objectRecord(task?.output);
+  return (
+    output?.challenge === challenge &&
+    output?.proof === `${WORKFLOW_E2E_PROOF_PREFIX}${challenge}` &&
+    output?.source === "prism-generated-tool"
+  );
+};
+
+export const evaluateModelSelectionChecks = (
+  run: Pick<CommandResult, "exitCode" | "stdout" | "stderr"> | undefined,
+): readonly HarnessCheck[] => {
+  if (run === undefined) {
+    return [skipped("model-selection-run", "workflow was not run")];
+  }
+  if (run.exitCode !== 0) {
+    return [check("model-selection-run", false, "model-selection workflow exited non-zero")];
+  }
+
+  let tasks: readonly Array<{ readonly id?: unknown; readonly output?: unknown; readonly metadata?: unknown }>;
+  try {
+    const parsed = JSON.parse(run.stdout) as {
+      readonly tasks?: readonly Array<{ readonly id?: unknown; readonly output?: unknown; readonly metadata?: unknown }>;
+    };
+    tasks = parsed.tasks ?? [];
+  } catch (error) {
+    return [check("model-selection-run", false, error instanceof Error ? error.message : String(error))];
+  }
+
+  const byId = new Map<string, { readonly output?: unknown; readonly metadata?: unknown }>();
+  for (const task of tasks) {
+    if (typeof task.id === "string") byId.set(task.id, task);
+  }
+
+  return [
+    check("model-selection-run", true),
+    ...MODEL_SELECTION_EXPECTED_TASKS.flatMap((expected): HarnessCheck[] => {
+      const task = byId.get(expected.id);
+      const metadata = task?.metadata;
+      const finish = objectRecord(objectRecord(metadata)?.finish);
+      const repairs = numberField(finish, "repairs");
+      return [
+        check(`${expected.id}-proof`, taskOutputProofPass(task, expected.challenge), "deterministic generated-tool proof did not match"),
+        check(
+          `${expected.id}-model`,
+          stringField(metadata, "model") === expected.expectedModel,
+          `expected ${expected.expectedModel}, got ${stringField(metadata, "model") ?? "<missing>"}`,
+        ),
+        check(`${expected.id}-no-finish-repairs`, repairs === 0, `finish repairs was ${repairs ?? "<missing>"}`),
+      ];
+    }),
+  ];
+};
+
+export const evaluateInvalidModelSelectionCheck = (
+  run: Pick<CommandResult, "exitCode" | "stdout" | "stderr"> | undefined,
+): HarnessCheck => {
+  if (run === undefined) return skipped("invalid-modelspace-fail-closed", "workflow was not run");
+  if (run.exitCode === 0) {
+    return check("invalid-modelspace-fail-closed", false, "invalid modelspace workflow unexpectedly succeeded");
+  }
+  const text = `${run.stdout}\n${run.stderr}`;
+  return check(
+    "invalid-modelspace-fail-closed",
+    /modelspace profile .* has no concrete model for workflow worker 'opencode'/iu.test(text),
+    "missing expected modelspace fail-closed diagnostic",
+  );
+};
+
 const checksPass = (checks: readonly HarnessCheck[] | undefined): boolean =>
   checks === undefined ? false : checks.every((item) => item.status !== "fail");
+
+const harnessResultPass = (result: HarnessResult, validateOnly: boolean): boolean =>
+  result.refresh.exitCode === 0 &&
+  result.validate.exitCode === 0 &&
+  (validateOnly || (result.proof?.pass === true && checksPass(result.checks)));
+
+const modelSelectionPass = (result: ModelSelectionResult | undefined, validateOnly: boolean): boolean =>
+  result === undefined ||
+  (
+    result.refresh.exitCode === 0 &&
+    result.validate.exitCode === 0 &&
+    result.invalidValidate.exitCode === 0 &&
+    (validateOnly || checksPass(result.checks))
+  );
+
+const acceptancePass = (input: {
+  readonly results: readonly HarnessResult[];
+  readonly modelSelection?: ModelSelectionResult;
+  readonly validateOnly: boolean;
+}): boolean =>
+  input.results.every((result) => harnessResultPass(result, input.validateOnly)) &&
+  modelSelectionPass(input.modelSelection, input.validateOnly);
 
 const towerBody = (input: {
   readonly mode: Mode;
@@ -689,6 +832,86 @@ const submitTowerEvidence = async (
   ], env);
 };
 
+const runModelSelectionScenario = async (input: {
+  readonly mode: Mode;
+  readonly pluginRoot: string;
+  readonly env: Record<string, string | undefined>;
+  readonly validateOnly: boolean;
+}): Promise<ModelSelectionResult> => {
+  const refresh = await runCommand([
+    process.execPath,
+    "run",
+    "src/cli.ts",
+    "refresh",
+    input.pluginRoot,
+    "--harness",
+    "opencode",
+    "--scope",
+    "global",
+  ], input.env);
+
+  const validate = await runCommand([
+    process.execPath,
+    "run",
+    "src/cli.ts",
+    "workflow",
+    "validate",
+    join(input.pluginRoot, "workflows", MODEL_SELECTION_WORKFLOW),
+  ], input.env);
+
+  const invalidValidate = await runCommand([
+    process.execPath,
+    "run",
+    "src/cli.ts",
+    "workflow",
+    "validate",
+    join(input.pluginRoot, "workflows", MODEL_SELECTION_INVALID_WORKFLOW),
+  ], input.env);
+
+  let run: CommandResult | undefined;
+  let invalidRun: CommandResult | undefined;
+  if (!input.validateOnly) {
+    run = await runCommand([
+      process.execPath,
+      "run",
+      "src/cli.ts",
+      "workflow",
+      "run",
+      join(input.pluginRoot, "workflows", MODEL_SELECTION_WORKFLOW),
+      "--store",
+      join(STORE_ROOT, `prism-workflow-e2e-${input.mode}-model-selection-opencode.sqlite`),
+      "--no-cache",
+    ], input.env);
+    invalidRun = await runCommand([
+      process.execPath,
+      "run",
+      "src/cli.ts",
+      "workflow",
+      "run",
+      join(input.pluginRoot, "workflows", MODEL_SELECTION_INVALID_WORKFLOW),
+      "--store",
+      join(STORE_ROOT, `prism-workflow-e2e-${input.mode}-model-selection-invalid-opencode.sqlite`),
+      "--no-cache",
+    ], input.env);
+  }
+
+  const checks = input.validateOnly
+    ? undefined
+    : [...evaluateModelSelectionChecks(run), evaluateInvalidModelSelectionCheck(invalidRun)];
+
+  return {
+    harness: "opencode",
+    workflow: MODEL_SELECTION_WORKFLOW,
+    invalidWorkflow: MODEL_SELECTION_INVALID_WORKFLOW,
+    refresh,
+    validate,
+    invalidValidate,
+    ...(run ? { run } : {}),
+    ...(invalidRun ? { invalidRun } : {}),
+    ...(checks ? { checks } : {}),
+  };
+};
+
 const main = async (): Promise<void> => {
   const mode = parseMode();
   const selected = parseHarnesses();
@@ -697,11 +920,13 @@ const main = async (): Promise<void> => {
   const env: Record<string, string | undefined> = {};
   const pluginRoot = await preparePluginRoot(roots);
   const entries = MATRIX.filter((entry) => selected === undefined || selected.includes(entry.harness));
+  const shouldRunModelSelection = entries.some((entry) => entry.harness === "opencode");
   let configSeed: ConfigSeedSummary | undefined;
+  let modelSelection: ModelSelectionResult | undefined;
 
   if (mode === "temp") {
-    const home = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-home-"));
-    const prismHome = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-prism-home-"));
+    const home = await mkdtemp(join(tmpdir(), TEMP_HOME_PREFIX));
+    const prismHome = await mkdtemp(join(tmpdir(), TEMP_PRISM_HOME_PREFIX));
     roots.push(home, prismHome);
     if (hasFlag("--seed-live-configs")) {
       configSeed = await seedLiveConfigs({
@@ -774,19 +999,21 @@ const main = async (): Promise<void> => {
       const tower = await submitTowerEvidence(mode, partial, env);
       results.push({ ...partial, ...(tower ? { tower } : {}) });
     }
+
+    if (shouldRunModelSelection) {
+      modelSelection = await runModelSelectionScenario({ mode, pluginRoot, env, validateOnly });
+    }
   } finally {
     if (!(mode === "temp" && hasFlag("--keep-temp"))) {
-      await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
+      for (const root of roots) {
+        await rm(root, { recursive: true, force: true });
+      }
     } else {
       await writeFile("/tmp/prism-workflow-e2e-temp-roots.json", JSON.stringify({ roots }, null, 2));
     }
   }
 
-  const pass = results.every((result) =>
-    result.refresh.exitCode === 0 &&
-    result.validate.exitCode === 0 &&
-    (validateOnly || (result.proof?.pass === true && checksPass(result.checks))),
-  );
+  const pass = acceptancePass({ results, modelSelection, validateOnly });
 
   console.log(JSON.stringify({
     schema: "prism.acceptance.workflow-e2e-matrix.v1",
@@ -795,6 +1022,7 @@ const main = async (): Promise<void> => {
     validateOnly,
     setupBlockers: results.flatMap((result) => result.setupBlocker ? [result.setupBlocker] : []),
     ...(configSeed ? { configSeed } : {}),
+    ...(modelSelection ? { modelSelection } : {}),
     results,
   }, null, 2));
 

@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
-import { CONFIG_SEED_RULES, classifySetupBlocker, evaluateHarnessChecks, TOWER_COMMENT_FAMILY } from "./workflow-e2e-matrix";
+import {
+  CONFIG_SEED_RULES,
+  classifySetupBlocker,
+  evaluateHarnessChecks,
+  evaluateInvalidModelSelectionCheck,
+  evaluateModelSelectionChecks,
+  OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  TOWER_COMMENT_FAMILY,
+  WORKFLOW_E2E_PROOF_PREFIX,
+} from "./workflow-e2e-matrix";
 
 describe("workflow-e2e Tower evidence", () => {
   test("uses the Tower glyphs comment family", () => {
@@ -409,5 +418,104 @@ describe("workflow-e2e matrix evidence checks", () => {
       expect(checks.find((item) => item.name === "no-finish-repairs")?.status).toBe("pass");
       expect(checks.every((item) => item.status !== "fail")).toBe(true);
     }
+  });
+});
+
+describe("workflow-e2e model selection evidence checks", () => {
+  const modelSelectionRun = (overrides: Record<string, { readonly model?: string; readonly proof?: string; readonly repairs?: number }> = {}) => ({
+    exitCode: 0,
+    stderr: "",
+    stdout: JSON.stringify({
+      tasks: [
+        ["agent-default-modelspace", "model-agent-default-2026-06-20-001"],
+        ["explicit-model-profile", "model-explicit-profile-2026-06-20-001"],
+        ["raw-model-override", "model-raw-override-2026-06-20-001"],
+        ["model-resolver", "model-resolver-2026-06-20-001"],
+      ].map(([id, challenge]) => {
+        const override = overrides[id] ?? {};
+        return {
+          id,
+          output: {
+            challenge,
+            proof: override.proof ?? `${WORKFLOW_E2E_PROOF_PREFIX}${challenge}`,
+            source: "prism-generated-tool",
+          },
+          metadata: {
+            model: override.model ?? OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+            finish: { repairs: override.repairs ?? 0 },
+          },
+        };
+      }),
+    }),
+  });
+
+  test("passes agent-default, explicit profile, raw override, and modelResolver evidence", () => {
+    const checks = evaluateModelSelectionChecks(modelSelectionRun());
+
+    expect(checks.every((item) => item.status !== "fail")).toBe(true);
+    expect(checks.map((item) => item.name)).toContain("agent-default-modelspace-model");
+    expect(checks.map((item) => item.name)).toContain("explicit-model-profile-model");
+    expect(checks.map((item) => item.name)).toContain("raw-model-override-model");
+    expect(checks.map((item) => item.name)).toContain("model-resolver-model");
+  });
+
+  test("flags model-selection proof, model, and finish-repair regressions", () => {
+    const checks = evaluateModelSelectionChecks(modelSelectionRun({
+      "agent-default-modelspace": { proof: "TOOL_UNREACHABLE" },
+      "explicit-model-profile": { model: "provider/wrong" },
+      "model-resolver": { repairs: 1 },
+    }));
+
+    expect(checks.filter((item) => item.status === "fail").map((item) => item.name)).toEqual([
+      "agent-default-modelspace-proof",
+      "explicit-model-profile-model",
+      "model-resolver-no-finish-repairs",
+    ]);
+  });
+
+  test("flags skipped and non-zero model-selection runs", () => {
+    expect(evaluateModelSelectionChecks(undefined)).toEqual([{
+      name: "model-selection-run",
+      status: "skipped",
+      detail: "workflow was not run",
+    }]);
+
+    expect(evaluateModelSelectionChecks({
+      exitCode: 1,
+      stdout: "",
+      stderr: "failed",
+    })).toEqual([{
+      name: "model-selection-run",
+      status: "fail",
+      detail: "model-selection workflow exited non-zero",
+    }]);
+  });
+
+  test("passes invalid modelspace fail-closed checks only on the expected diagnostic", () => {
+    expect(evaluateInvalidModelSelectionCheck({
+      exitCode: 1,
+      stdout: "",
+      stderr: "modelspace profile prism-harness-qa:qa-models/unavailable has no concrete model for workflow worker 'opencode'",
+    }).status).toBe("pass");
+
+    expect(evaluateInvalidModelSelectionCheck({
+      exitCode: 0,
+      stdout: "{}",
+      stderr: "",
+    })).toEqual({
+      name: "invalid-modelspace-fail-closed",
+      status: "fail",
+      detail: "invalid modelspace workflow unexpectedly succeeded",
+    });
+
+    expect(evaluateInvalidModelSelectionCheck({
+      exitCode: 1,
+      stdout: "",
+      stderr: "some other workflow failure",
+    })).toEqual({
+      name: "invalid-modelspace-fail-closed",
+      status: "fail",
+      detail: "missing expected modelspace fail-closed diagnostic",
+    });
   });
 });

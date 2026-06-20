@@ -594,6 +594,43 @@ const opencodeChallengeToolCallMatches = (
   }
 };
 
+const CODEX_CHALLENGE_TOOL_COMPLETED_PATTERN = /^mcp:\s+prism-generated-prism-harness-qa\/[A-Za-z0-9_.-]*challenge_echo\s+\(completed\)\s*$/u;
+
+const isCodexChallengeOutputLine = (
+  line: string,
+  expectedChallenge: string,
+): boolean => {
+  if (!line.trimStart().startsWith("{")) return false;
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    const output = objectRecord(parsed);
+    return output?.challenge === expectedChallenge &&
+      output.proof === `prism-tool-proof:${expectedChallenge}` &&
+      output.source === "prism-generated-tool";
+  } catch {
+    return false;
+  }
+};
+
+const codexChallengeToolCallMatches = (
+  stderrExcerpt: string,
+  expectedChallenge: string,
+): boolean => {
+  const lines = stderrExcerpt.split(/\r?\n/u).map((line) => line.trim());
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (!CODEX_CHALLENGE_TOOL_COMPLETED_PATTERN.test(line)) continue;
+    // Codex currently prints the tool result immediately after the completed MCP line.
+    // Keep this bounded and stop at another MCP line so evidence fails closed if the
+    // stderr shape changes or output from another tool is interleaved.
+    for (const candidate of lines.slice(index + 1, index + 4)) {
+      if (candidate.startsWith("mcp:")) break;
+      if (isCodexChallengeOutputLine(candidate, expectedChallenge)) return true;
+    }
+  }
+  return false;
+};
+
 const check = (
   name: string,
   pass: boolean,
@@ -703,10 +740,16 @@ const generatedToolCallObservedCheck = (
         "expected OpenCode stderr excerpt to include a challenge_echo call with matching JSON challenge input",
       );
     }
+    case "codex-cli": {
+      const stderrExcerpt = stringField(metadata, "stderrExcerpt") ?? "";
+      return check(
+        "generated-tool-call-observed",
+        codexChallengeToolCallMatches(stderrExcerpt, entry.challenge),
+        "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+      );
+    }
     case "amp-code":
       return notApplicable("generated-tool-call-observed", "Amp Code native execute output does not expose structured tool-use telemetry");
-    case "codex-cli":
-      return notApplicable("generated-tool-call-observed", "Codex CLI workflow output does not expose structured tool-use telemetry");
     case "grok":
       return notApplicable("generated-tool-call-observed", "Grok live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
     case "hermes":

@@ -362,6 +362,154 @@ describe("workflow-e2e matrix evidence checks", () => {
     });
   });
 
+  test("requires Codex stderr evidence to show generated MCP challenge_echo execution", () => {
+    const entry = {
+      harness: "codex-cli" as const,
+      workflow: "smoke-codex-cli.workflow.ts",
+      challenge: "codex-cli-2026-06-20-001",
+      expectedModel: "gpt-5.4-mini",
+    };
+
+    const passing = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: [
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo started",
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+            "{\"challenge\":\"codex-cli-2026-06-20-001\",\"proof\":\"prism-tool-proof:codex-cli-2026-06-20-001\",\"source\":\"prism-generated-tool\"}",
+          ].join("\n"),
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(passing.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("pass");
+
+    const wrongChallenge = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: [
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo started",
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+            "{\"challenge\":\"other-challenge\",\"proof\":\"prism-tool-proof:other-challenge\",\"source\":\"prism-generated-tool\"}",
+          ].join("\n"),
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(wrongChallenge.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+    });
+
+    const wrongSource = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: [
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+            "{\"challenge\":\"codex-cli-2026-06-20-001\",\"proof\":\"prism-tool-proof:codex-cli-2026-06-20-001\",\"source\":\"fallback-json\"}",
+          ].join("\n"),
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(wrongSource.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+    });
+
+    const missingJsonOutput = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(missingJsonOutput.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+    });
+
+    const malformedJsonOutput = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: [
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+            "{\"challenge\":\"codex-cli-2026-06-20-001\",\"proof\":",
+          ].join("\n"),
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(malformedJsonOutput.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+    });
+
+    const interleavedMcpOutput = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: [
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+            "mcp: other-server/other_tool (completed)",
+            "{\"challenge\":\"codex-cli-2026-06-20-001\",\"proof\":\"prism-tool-proof:codex-cli-2026-06-20-001\",\"source\":\"prism-generated-tool\"}",
+          ].join("\n"),
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(interleavedMcpOutput.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+    });
+
+    const missingStderr = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(missingStderr.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+    });
+  });
+
   test("flags model mismatches", () => {
     const checks = evaluateHarnessChecks(
       {
@@ -482,7 +630,16 @@ describe("workflow-e2e matrix evidence checks", () => {
         workflow: "smoke-codex-cli.workflow.ts",
         challenge: "codex-cli-2026-06-20-001",
         expectedModel: "gpt-5.4-mini",
-        metadata: { adapter: "codex-cli", model: "gpt-5.4-mini", finish: { repairs: 0 } },
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          stderrExcerpt: [
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo started",
+            "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
+            "{\"challenge\":\"codex-cli-2026-06-20-001\",\"proof\":\"prism-tool-proof:codex-cli-2026-06-20-001\",\"source\":\"prism-generated-tool\"}",
+          ].join("\n"),
+          finish: { repairs: 0 },
+        },
       },
       {
         harness: "amp-code" as const,

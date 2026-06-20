@@ -600,6 +600,7 @@ const towerBody = (input: {
   workflow: input.result.workflow,
   challenge: input.result.challenge,
   proof: input.result.proof,
+  checks: input.result.checks,
   refreshExitCode: input.result.refresh.exitCode,
   validateExitCode: input.result.validate.exitCode,
   runExitCode: input.result.run?.exitCode,

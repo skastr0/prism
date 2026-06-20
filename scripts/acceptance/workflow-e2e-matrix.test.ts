@@ -148,31 +148,44 @@ describe("workflow-e2e matrix evidence checks", () => {
   });
 
   test("does not flag informational blocked wording as a tool interruption", () => {
-    const checks = evaluateHarnessChecks(
+    const entries = [
       {
-        harness: "opencode",
+        harness: "opencode" as const,
         workflow: "smoke-opencode.workflow.ts",
         challenge: "opencode-2026-06-20-001",
         expectedModel: "ollama-cloud/deepseek-v4-flash",
+        metadata: {
+          adapter: "opencode-cli",
+          nativeAgent: "qa-tester",
+          model: "ollama-cloud/deepseek-v4-flash",
+          finish: { repairs: 0 },
+        },
       },
       {
+        harness: "grok" as const,
+        workflow: "smoke-grok.workflow.ts",
+        challenge: "grok-2026-06-20-001",
+        expectedModel: "grok-build",
+        metadata: {
+          adapter: "grok-cli",
+          nativeAgent: "qa-tester",
+          model: "grok-build",
+          finish: { repairs: 0 },
+        },
+      },
+    ];
+
+    for (const { metadata, ...entry } of entries) {
+      const checks = evaluateHarnessChecks(entry, {
         run: {
           ...completedRun,
           stderr: "tool configuration blocked by policy pack is unavailable",
         },
-        proof: {
-          pass: true,
-          metadata: {
-            adapter: "opencode-cli",
-            nativeAgent: "qa-tester",
-            model: "ollama-cloud/deepseek-v4-flash",
-            finish: { repairs: 0 },
-          },
-        },
-      },
-    );
+        proof: { pass: true, metadata },
+      });
 
-    expect(checks.find((item) => item.name === "no-blocked-tool-interruption")?.status).toBe("pass");
+      expect(checks.find((item) => item.name === "no-blocked-tool-interruption")?.status).toBe("pass");
+    }
   });
 
   test("flags model mismatches", () => {
@@ -313,6 +326,30 @@ describe("workflow-e2e matrix evidence checks", () => {
 
       expect(checks.find((item) => item.name === "intended-agent-selection")?.status).toBe("not-applicable");
       expect(checks.find((item) => item.name === "no-default-agent-fallback")?.status).toBe("not-applicable");
+      expect(checks.every((item) => item.status !== "fail")).toBe(true);
+    }
+  });
+
+  test("accepts Amp Code deep and rush mode metadata", () => {
+    for (const mode of ["deep", "rush"] as const) {
+      const checks = evaluateHarnessChecks(
+        {
+          harness: "amp-code",
+          workflow: `smoke-amp-code-${mode}.workflow.ts`,
+          challenge: `amp-code-${mode}-2026-06-20-001`,
+          expectedModel: mode,
+        },
+        {
+          run: completedRun,
+          proof: {
+            pass: true,
+            metadata: { adapter: "amp-code", model: mode, finish: { repairs: 0 } },
+          },
+        },
+      );
+
+      expect(checks.find((item) => item.name === "model-resolved")?.status).toBe("pass");
+      expect(checks.find((item) => item.name === "no-finish-repairs")?.status).toBe("pass");
       expect(checks.every((item) => item.status !== "fail")).toBe(true);
     }
   });

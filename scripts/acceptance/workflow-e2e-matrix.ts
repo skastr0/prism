@@ -19,6 +19,7 @@ const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
 const STORE_ROOT = "/tmp";
 const WORKFLOW_HARNESSES = ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"] as const;
 const COMPILED_AGENT_HARNESSES = ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"] as const;
+export const TOWER_COMMENT_FAMILY = "glyphs";
 
 type Harness = "opencode" | "claude-code" | "codex-cli" | "grok" | "hermes" | "kimi-code" | "amp-code";
 type Mode = "temp" | "live";
@@ -621,7 +622,7 @@ const submitTowerEvidence = async (
     "comments",
     "add",
     "--family",
-    "glyph",
+    TOWER_COMMENT_FAMILY,
     "--orbit",
     "forge",
     "--id",

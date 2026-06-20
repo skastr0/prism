@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
-import { CONFIG_SEED_RULES, evaluateHarnessChecks } from "./workflow-e2e-matrix";
+import { CONFIG_SEED_RULES, evaluateHarnessChecks, TOWER_COMMENT_FAMILY } from "./workflow-e2e-matrix";
+
+describe("workflow-e2e Tower evidence", () => {
+  test("uses the Tower glyphs comment family", () => {
+    expect(TOWER_COMMENT_FAMILY).toBe("glyphs");
+  });
+});
 
 describe("workflow-e2e live config seeding", () => {
   test("copies only the explicit auth/config files needed by seeded temp runs", () => {

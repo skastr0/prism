@@ -171,6 +171,7 @@ describe("workflow-e2e matrix evidence checks", () => {
             adapter: "opencode-cli",
             nativeAgent: "qa-tester",
             model: "ollama-cloud/deepseek-v4-flash",
+            stderrExcerpt: "tool prism_harness_qa_challenge_echo {\"challenge\":\"opencode-2026-06-20-001\"}",
             finish: { repairs: 0 },
           },
         },
@@ -200,6 +201,7 @@ describe("workflow-e2e matrix evidence checks", () => {
             adapter: "claude-code",
             nativeAgent: "default",
             model: "sonnet",
+            claudeToolCallNames: ["mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo"],
             finish: { repairs: 0 },
           },
         },
@@ -224,6 +226,7 @@ describe("workflow-e2e matrix evidence checks", () => {
           adapter: "opencode-cli",
           nativeAgent: "qa-tester",
           model: "ollama-cloud/deepseek-v4-flash",
+          stderrExcerpt: "tool prism_harness_qa_challenge_echo {\"challenge\":\"opencode-2026-06-20-001\"}",
           finish: { repairs: 0 },
         },
       },
@@ -254,6 +257,111 @@ describe("workflow-e2e matrix evidence checks", () => {
     }
   });
 
+  test("requires Claude stream-json tool-use telemetry for generated MCP proof", () => {
+    const entry = {
+      harness: "claude-code" as const,
+      workflow: "smoke-claude-code.workflow.ts",
+      challenge: "claude-code-2026-06-20-001",
+      expectedModel: "sonnet",
+    };
+
+    const passing = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "claude-code",
+          nativeAgent: "qa-tester",
+          model: "sonnet",
+          claudeToolCallNames: ["mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo"],
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(passing.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("pass");
+
+    const missingToolUse = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "claude-code",
+          nativeAgent: "qa-tester",
+          model: "sonnet",
+          claudeToolCallNames: [],
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(missingToolUse.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected Claude stream-json tool_use for challenge_echo, got <none>",
+    });
+  });
+
+  test("requires OpenCode stderr evidence to look like a generated tool call", () => {
+    const entry = {
+      harness: "opencode" as const,
+      workflow: "smoke-opencode.workflow.ts",
+      challenge: "opencode-2026-06-20-001",
+      expectedModel: "ollama-cloud/deepseek-v4-flash",
+    };
+
+    const passing = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "opencode-cli",
+          nativeAgent: "qa-tester",
+          model: "ollama-cloud/deepseek-v4-flash",
+          stderrExcerpt: "tool prism_harness_qa_challenge_echo {\"challenge\":\"opencode-2026-06-20-001\"}",
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(passing.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("pass");
+
+    const mentionOnly = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "opencode-cli",
+          nativeAgent: "qa-tester",
+          model: "ollama-cloud/deepseek-v4-flash",
+          stderrExcerpt: "challenge_echo was mentioned in a prompt but no tool call was logged",
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(mentionOnly.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected OpenCode stderr excerpt to include a challenge_echo call with matching JSON challenge input",
+    });
+
+    const wrongChallenge = evaluateHarnessChecks(entry, {
+      run: completedRun,
+      proof: {
+        pass: true,
+        metadata: {
+          adapter: "opencode-cli",
+          nativeAgent: "qa-tester",
+          model: "ollama-cloud/deepseek-v4-flash",
+          stderrExcerpt: "tool prism_harness_qa_challenge_echo {\"challenge\":\"other-challenge\"}",
+          finish: { repairs: 0 },
+        },
+      },
+    });
+    expect(wrongChallenge.find((item) => item.name === "generated-tool-call-observed")).toEqual({
+      name: "generated-tool-call-observed",
+      status: "fail",
+      detail: "expected OpenCode stderr excerpt to include a challenge_echo call with matching JSON challenge input",
+    });
+  });
+
   test("flags model mismatches", () => {
     const checks = evaluateHarnessChecks(
       {
@@ -270,6 +378,7 @@ describe("workflow-e2e matrix evidence checks", () => {
             adapter: "opencode-cli",
             nativeAgent: "qa-tester",
             model: "provider/wrong-model",
+            stderrExcerpt: "tool prism_harness_qa_challenge_echo {\"challenge\":\"opencode-2026-06-20-001\"}",
             finish: { repairs: 0 },
           },
         },

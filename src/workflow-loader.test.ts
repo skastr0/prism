@@ -1431,8 +1431,17 @@ describe("workflow loader", () => {
     const fakeClaude = join(root, "fake-claude.mjs");
     const claudeRoot = join(root, ".claude");
     const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
+    const generatedToolName = "mcp__prism-generated-forge__prism_forge_build";
     await writeFile(file, workerModelWorkflowSource("claude-code"));
-    await mkdir(generatedPluginRoot, { recursive: true });
+    await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
+    await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [
+      "---",
+      "name: builder",
+      "tools:",
+      `  - "${generatedToolName}"`,
+      "---",
+      "",
+    ].join("\n"));
     await writeFile(join(generatedPluginRoot, ".mcp.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
     await writeFile(fakeClaude, [
       "#!/usr/bin/env node",
@@ -1441,15 +1450,18 @@ describe("workflow loader", () => {
       "const outputFormatIndex = process.argv.indexOf('--output-format');",
       "const agentIndex = process.argv.indexOf('--agent');",
       "const pluginDirIndex = process.argv.indexOf('--plugin-dir');",
+      "const allowedToolsArg = process.argv.find((arg) => arg.startsWith('--allowedTools='));",
       "const mcpConfigArg = process.argv.find((arg) => arg.startsWith('--mcp-config='));",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const outputFormat = outputFormatIndex >= 0 ? process.argv[outputFormatIndex + 1] : 'missing';",
       "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
       "const pluginDir = pluginDirIndex >= 0 ? process.argv[pluginDirIndex + 1] : 'missing';",
+      "const allowedTools = allowedToolsArg ? allowedToolsArg.slice('--allowedTools='.length) : 'missing';",
       "const mcpConfig = mcpConfigArg ? mcpConfigArg.slice('--mcp-config='.length) : 'missing';",
       "const strictMcpConfig = process.argv.includes('--strict-mcp-config');",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, pluginDir, mcpConfig, strictMcpConfig, cwd: process.cwd() }) + '\\n');`,
-      "console.log(JSON.stringify({ result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, pluginDir, allowedTools, mcpConfig, strictMcpConfig, cwd: process.cwd() }) + '\\n');`,
+      `console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: ${JSON.stringify(generatedToolName)} }] } }));`,
+      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);
@@ -1484,7 +1496,7 @@ describe("workflow loader", () => {
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       return JSON.parse(stdout) as {
-        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; nativeAgent?: string; sessionId?: string; totalCostUsd?: number } }>;
+        tasks: Array<{ output: { summary: string }; cached: boolean; metadata?: { adapter?: string; model?: string; nativeAgent?: string; sessionId?: string; totalCostUsd?: number; claudeMcpToolCallCount?: number } }>;
       };
     };
 
@@ -1495,6 +1507,7 @@ describe("workflow loader", () => {
     expect(result.tasks.map((task) => task.metadata?.nativeAgent)).toEqual(["builder", "builder"]);
     expect(result.tasks[0]?.metadata?.sessionId).toBe("claude-session");
     expect(result.tasks[0]?.metadata?.totalCostUsd).toBe(0.01);
+    expect(result.tasks[0]?.metadata?.claudeMcpToolCallCount).toBe(1);
     expect(cachedResult.tasks.map((task) => task.cached)).toEqual([true, true]);
     expect(cachedResult.tasks.map((task) => task.output.summary)).toEqual(["grok-build", "sonnet"]);
 
@@ -1506,13 +1519,14 @@ describe("workflow loader", () => {
       model: string;
       agent: string;
       pluginDir: string;
+      allowedTools: string;
       mcpConfig: string;
       strictMcpConfig: boolean;
       cwd: string;
     });
     expect(calls).toEqual([
-      { print: true, outputFormat: "json", noSession: false, model: "grok-build", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), strictMcpConfig: true, cwd: expectedCwd },
-      { print: true, outputFormat: "json", noSession: false, model: "sonnet", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), strictMcpConfig: true, cwd: expectedCwd },
+      { print: true, outputFormat: "stream-json", noSession: false, model: "grok-build", agent: "builder", pluginDir: generatedPluginRoot, allowedTools: generatedToolName, mcpConfig: join(generatedPluginRoot, ".mcp.json"), strictMcpConfig: true, cwd: expectedCwd },
+      { print: true, outputFormat: "stream-json", noSession: false, model: "sonnet", agent: "builder", pluginDir: generatedPluginRoot, allowedTools: generatedToolName, mcpConfig: join(generatedPluginRoot, ".mcp.json"), strictMcpConfig: true, cwd: expectedCwd },
     ]);
   });
 
@@ -1573,6 +1587,119 @@ describe("workflow loader", () => {
     expect(await Bun.file(callsFile).exists()).toBe(false);
   });
 
+  test("CLI fails closed when Claude calls an MCP tool outside the generated agent allow-list", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeClaude = join(root, "fake-claude-unexpected-mcp.mjs");
+    const claudeRoot = join(root, ".claude");
+    const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
+    const allowedToolName = "mcp__prism-generated-forge__prism_forge_build";
+    const unexpectedToolName = "mcp__prism-generated-forge__prism_forge_delete";
+    await writeFile(file, workerModelWorkflowSource("claude-code"));
+    await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
+    await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [
+      "---",
+      "name: builder",
+      "tools:",
+      `  - "${allowedToolName}"`,
+      "---",
+      "",
+    ].join("\n"));
+    await writeFile(join(generatedPluginRoot, ".mcp.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      `console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: ${JSON.stringify(unexpectedToolName)} }] } }));`,
+      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'unexpected' }), is_error: false, session_id: 'claude-session' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "claude-code",
+        "--store",
+        storeFile,
+        "--model",
+        "sonnet",
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("called MCP tools outside generated agent allow-list");
+    expect(stderr).toContain(unexpectedToolName);
+  });
+
+  test("CLI fails closed when Claude calls MCP tools for a generated agent with no declared MCP allow-list", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeClaude = join(root, "fake-claude-empty-allow-list.mjs");
+    const claudeRoot = join(root, ".claude");
+    const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
+    const unexpectedToolName = "mcp__prism-generated-forge__prism_forge_build";
+    await writeFile(file, workerModelWorkflowSource("claude-code"));
+    await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
+    await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [
+      "---",
+      "name: builder",
+      "---",
+      "",
+    ].join("\n"));
+    await writeFile(join(generatedPluginRoot, ".mcp.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      `console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: ${JSON.stringify(unexpectedToolName)} }] } }));`,
+      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'unexpected' }), is_error: false, session_id: 'claude-session' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "claude-code",
+        "--store",
+        storeFile,
+        "--model",
+        "sonnet",
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("called MCP tools outside generated agent allow-list");
+    expect(stderr).toContain(unexpectedToolName);
+  });
+
   test("CLI fails Claude runs when the JSON envelope reports an error", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
@@ -1581,7 +1708,7 @@ describe("workflow loader", () => {
     await writeFile(file, workflowSource("default", { worker: "claude-code" }));
     await writeFile(fakeClaude, [
       "#!/usr/bin/env node",
-      "console.log(JSON.stringify({ result: 'Not logged in', is_error: true }));",
+      "console.log(JSON.stringify({ type: 'result', result: 'Not logged in', is_error: true }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);
@@ -1621,7 +1748,7 @@ describe("workflow loader", () => {
     await writeFile(file, workflowSource("default", { worker: "claude-code" }));
     await writeFile(fakeClaude, [
       "#!/usr/bin/env node",
-      "console.log(JSON.stringify({ result: { summary: 'not task text' }, is_error: false }));",
+      "console.log(JSON.stringify({ type: 'result', result: { summary: 'not task text' }, is_error: false }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);

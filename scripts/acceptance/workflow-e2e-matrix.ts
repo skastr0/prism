@@ -571,6 +571,29 @@ const numberField = (value: unknown, key: string): number | undefined => {
   return typeof field === "number" ? field : undefined;
 };
 
+const stringArrayField = (value: unknown, key: string): readonly string[] => {
+  const record = objectRecord(value);
+  const field = record?.[key];
+  return Array.isArray(field) ? field.filter((item): item is string => typeof item === "string") : [];
+};
+
+const OPENCODE_CHALLENGE_TOOL_CALL_PATTERN = /(?:^|\n)[^\n]*\b[A-Za-z0-9_.-]*challenge_echo\b\s+(\{[^\n}]*"challenge"\s*:[^\n}]*\})/u;
+
+const opencodeChallengeToolCallMatches = (
+  stderrExcerpt: string,
+  expectedChallenge: string,
+): boolean => {
+  const match = stderrExcerpt.match(OPENCODE_CHALLENGE_TOOL_CALL_PATTERN);
+  const json = match?.[1];
+  if (json === undefined) return false;
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    return objectRecord(parsed)?.challenge === expectedChallenge;
+  } catch {
+    return false;
+  }
+};
+
 const check = (
   name: string,
   pass: boolean,
@@ -657,6 +680,42 @@ const noDefaultFallbackCheck = (
   }
 };
 
+const generatedToolCallObservedCheck = (
+  entry: MatrixEntry,
+  metadata: unknown,
+  run: CommandResult | undefined,
+): HarnessCheck => {
+  if (run?.exitCode !== 0) return incomplete("generated-tool-call-observed", run);
+  switch (entry.harness) {
+    case "claude-code": {
+      const toolCalls = stringArrayField(metadata, "claudeToolCallNames");
+      return check(
+        "generated-tool-call-observed",
+        toolCalls.some((name) => name.startsWith("mcp__prism-generated-") && name.includes("challenge_echo")),
+        `expected Claude stream-json tool_use for challenge_echo, got ${toolCalls.length === 0 ? "<none>" : toolCalls.join(", ")}`,
+      );
+    }
+    case "opencode": {
+      const stderrExcerpt = stringField(metadata, "stderrExcerpt") ?? "";
+      return check(
+        "generated-tool-call-observed",
+        opencodeChallengeToolCallMatches(stderrExcerpt, entry.challenge),
+        "expected OpenCode stderr excerpt to include a challenge_echo call with matching JSON challenge input",
+      );
+    }
+    case "amp-code":
+      return notApplicable("generated-tool-call-observed", "Amp Code native execute output does not expose structured tool-use telemetry");
+    case "codex-cli":
+      return notApplicable("generated-tool-call-observed", "Codex CLI workflow output does not expose structured tool-use telemetry");
+    case "grok":
+      return notApplicable("generated-tool-call-observed", "Grok live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
+    case "hermes":
+      return notApplicable("generated-tool-call-observed", "Hermes live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
+    case "kimi-code":
+      return notApplicable("generated-tool-call-observed", "Kimi Code live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
+  }
+};
+
 export const evaluateHarnessChecks = (
   entry: MatrixEntry,
   input: Pick<HarnessResult, "run" | "proof">,
@@ -677,6 +736,7 @@ export const evaluateHarnessChecks = (
     runCompleted
       ? check("model-resolved", model === entry.expectedModel, `expected ${entry.expectedModel}, got ${model ?? "<missing>"}`)
       : incomplete("model-resolved", input.run),
+    generatedToolCallObservedCheck(entry, metadata, input.run),
     expectedAgentCheck(entry, metadata, input.run),
     noDefaultFallbackCheck(entry, metadata, input.run),
     check(

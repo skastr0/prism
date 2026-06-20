@@ -11,6 +11,7 @@ type ChallengeOutput = Schema.Schema.Type<typeof challengeOutput>;
 
 export const challengePrompt = (challenge: string): string =>
   "Verify that the generated MCP challenge_echo tool is reachable. " +
+  `The exact challenge string is ${JSON.stringify(challenge)}; copy it byte-for-byte and do not reorder, normalize, shorten, or derive it from the task id. ` +
   "Call the generated tool named challenge_echo with input " +
   `${JSON.stringify({ challenge })}; in Claude Code it may appear as ` +
   "mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo. " +

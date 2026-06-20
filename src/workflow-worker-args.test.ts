@@ -55,6 +55,7 @@ describe("workflow worker argument builders", () => {
       generatedPlugin: {
         pluginDir: "/home/test/.claude/skills/prism-generated-prism-harness-qa",
         mcpConfig: "/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json",
+        allowedTools: ["mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo"],
       },
     });
 
@@ -63,8 +64,11 @@ describe("workflow worker argument builders", () => {
       "--plugin-dir",
       "/home/test/.claude/skills/prism-generated-prism-harness-qa",
     ]);
+    expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "stream-json"]);
+    expect(args).toContain("--verbose");
     expect(args).toContain("--mcp-config=/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json");
     expect(args).toContain("--strict-mcp-config");
+    expect(args).toContain("--allowedTools=mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo");
   });
 
   test("amp accepts only deep and rush workflow modes", () => {

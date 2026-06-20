@@ -78,6 +78,7 @@ export const buildClaudeArgs = (input: {
   ...(input.model !== undefined ? ["--model", input.model] : []),
   ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
   ...(input.generatedPlugin?.mcpConfig !== undefined ? [`--mcp-config=${input.generatedPlugin.mcpConfig}`] : []),
+  ...(input.generatedPlugin?.mcpConfig !== undefined ? ["--strict-mcp-config"] : []),
   input.prompt,
 ];
 

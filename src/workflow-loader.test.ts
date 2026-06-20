@@ -1207,7 +1207,8 @@ describe("workflow loader", () => {
       "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
       "const pluginDir = pluginDirIndex >= 0 ? process.argv[pluginDirIndex + 1] : 'missing';",
       "const mcpConfig = mcpConfigArg ? mcpConfigArg.slice('--mcp-config='.length) : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, pluginDir, mcpConfig, cwd: process.cwd() }) + '\\n');`,
+      "const strictMcpConfig = process.argv.includes('--strict-mcp-config');",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, pluginDir, mcpConfig, strictMcpConfig, cwd: process.cwd() }) + '\\n');`,
       "console.log(JSON.stringify({ result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
       "",
     ].join("\n"));
@@ -1266,11 +1267,12 @@ describe("workflow loader", () => {
       agent: string;
       pluginDir: string;
       mcpConfig: string;
+      strictMcpConfig: boolean;
       cwd: string;
     });
     expect(calls).toEqual([
-      { print: true, outputFormat: "json", noSession: false, model: "grok-build", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), cwd: expectedCwd },
-      { print: true, outputFormat: "json", noSession: false, model: "sonnet", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: false, model: "grok-build", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), strictMcpConfig: true, cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: false, model: "sonnet", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), strictMcpConfig: true, cwd: expectedCwd },
     ]);
   });
 

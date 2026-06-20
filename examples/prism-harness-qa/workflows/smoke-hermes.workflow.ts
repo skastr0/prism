@@ -1,6 +1,6 @@
-import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 import { models } from "prism/refs/models";
+import { challengeFinish, challengeOutput, challengePrompt } from "./challenge-proof";
 
 const challenge = "hermes-2026-06-20-001";
 
@@ -14,20 +14,12 @@ const hermesQaAgent = {
   installs: [],
 } as const;
 
-const challengeOutput = Schema.Struct({
-  challenge: Schema.String,
-  proof: Schema.String,
-  source: Schema.Literal("prism-generated-tool"),
-});
-
 const verifyChallenge = defineTask({
   id: "verify-challenge",
   agent: hermesQaAgent,
-  prompt:
-    "Verify that the generated MCP challenge_echo tool is reachable. " +
-    `Call challenge_echo with challenge ${JSON.stringify(challenge)}. ` +
-    "Return exactly the tool response JSON.",
+  prompt: challengePrompt(challenge),
   output: challengeOutput,
+  finish: challengeFinish(challenge),
   worker: {
     worker: "hermes",
     model: models.prismHarnessQa.qaModels.smoke,

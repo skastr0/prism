@@ -50,6 +50,7 @@ describe("workflow worker argument builders", () => {
       "/home/test/.claude/skills/prism-generated-prism-harness-qa",
     ]);
     expect(args).toContain("--mcp-config=/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json");
+    expect(args).toContain("--strict-mcp-config");
   });
 
   test("amp accepts only deep and rush workflow modes", () => {

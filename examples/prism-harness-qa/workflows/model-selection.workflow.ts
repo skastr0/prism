@@ -1,13 +1,7 @@
-import { Schema } from "effect";
 import { defineTask, defineWorkflow, type WorkflowTaskWorkerOptions } from "prism";
 import { agents } from "prism/refs";
 import { models } from "prism/refs/models";
-
-const challengeOutput = Schema.Struct({
-  challenge: Schema.String,
-  proof: Schema.String,
-  source: Schema.Literal("prism-generated-tool"),
-});
+import { challengeFinish, challengeOutput, challengePrompt } from "./challenge-proof";
 
 const task = (
   id: string,
@@ -17,11 +11,9 @@ const task = (
   defineTask({
     id,
     agent: agents.prismHarnessQa.qaTester,
-    prompt:
-      "Verify that the generated MCP challenge_echo tool is reachable. " +
-      `Call challenge_echo with challenge ${JSON.stringify(challenge)}. ` +
-      "Return exactly the tool response JSON.",
+    prompt: challengePrompt(challenge),
     output: challengeOutput,
+    finish: challengeFinish(challenge),
     worker,
   });
 

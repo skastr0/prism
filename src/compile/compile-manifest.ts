@@ -183,6 +183,252 @@ const recomputeCoverage = (
   });
 };
 
+type ModelspaceProfilesData = Record<string, Record<string, Record<string, unknown>>>;
+
+type ModelspaceAccum = {
+  plugin: string;
+  modelspace: string;
+  profiles: Set<string>;
+  profilesData: ModelspaceProfilesData;
+};
+
+const seedModelspaceAccumFromBase = (
+  base: CompileManifest,
+  loadedRegistryNames: ReadonlySet<string>,
+): Record<string, ModelspaceAccum> => {
+  const accum: Record<string, ModelspaceAccum> = {};
+  for (const [key, entry] of Object.entries(base.modelspaces ?? {})) {
+    if (loadedRegistryNames.has(entry.plugin)) continue;
+    accum[key] = {
+      plugin: entry.plugin,
+      modelspace: entry.modelspace,
+      profiles: new Set(entry.profiles ?? []),
+      profilesData: { ...(entry.profilesData ?? {}) },
+    };
+  }
+  return accum;
+};
+
+const addLoadedModelspaces = (
+  accum: Record<string, ModelspaceAccum>,
+  registries: ReadonlyMap<string, PluginRegistry>,
+): void => {
+  for (const registry of registries.values()) {
+    for (const modelspace of registry.modelspaces.values()) {
+      const key = `${registry.pluginName}:${modelspace.name}`;
+      const existing = accum[key] ?? {
+        plugin: registry.pluginName,
+        modelspace: modelspace.name,
+        profiles: new Set<string>(),
+        profilesData: {},
+      };
+      for (const [profileName, profile] of Object.entries(modelspace.profiles)) {
+        existing.profiles.add(profileName);
+        existing.profilesData[profileName] = profile.targets as Record<string, Record<string, unknown>>;
+      }
+      accum[key] = existing;
+    }
+  }
+};
+
+const addAgentModelBindings = (
+  accum: Record<string, ModelspaceAccum>,
+  agents: Readonly<Record<string, CompileManifestAgent>>,
+): void => {
+  for (const agent of Object.values(agents)) {
+    const mb = agent.composed.modelBindings;
+    if (!mb.modelspace || !mb.profile) continue;
+    let owner = agent.plugin;
+    let local = mb.modelspace;
+    const colon = mb.modelspace.indexOf(":");
+    if (colon !== -1) {
+      owner = mb.modelspace.slice(0, colon);
+      local = mb.modelspace.slice(colon + 1);
+    }
+    const key = `${owner}:${local}`;
+    accum[key] ??= { plugin: owner, modelspace: local, profiles: new Set(), profilesData: {} };
+    accum[key].profiles.add(mb.profile);
+  }
+};
+
+const materializeModelspaces = (
+  accum: Record<string, ModelspaceAccum>,
+): Record<string, CompileManifestModelspace> => {
+  const modelspaces: Record<string, CompileManifestModelspace> = {};
+  for (const [key, acc] of Object.entries(accum)) {
+    modelspaces[key] = {
+      plugin: acc.plugin,
+      modelspace: acc.modelspace,
+      profiles: sortStrings([...acc.profiles]),
+      ...(Object.keys(acc.profilesData).length > 0 ? { profilesData: acc.profilesData } : {}),
+    };
+  }
+  return modelspaces;
+};
+
+const deriveModelspacesForManifest = (options: {
+  readonly base: CompileManifest;
+  readonly registry: PluginRegistry;
+  readonly agents: Readonly<Record<string, CompileManifestAgent>>;
+}): Record<string, CompileManifestModelspace> => {
+  const registries = collectPluginRegistries(options.registry);
+  const loadedRegistryNames = new Set(registries.keys());
+  const accum = seedModelspaceAccumFromBase(options.base, loadedRegistryNames);
+  addLoadedModelspaces(accum, registries);
+  addAgentModelBindings(accum, options.agents);
+  return materializeModelspaces(accum);
+};
+
+const deriveSkillsForManifest = (
+  agents: Readonly<Record<string, CompileManifestAgent>>,
+): Record<string, CompileManifestManagedSkill | CompileManifestSkillspace> => {
+  const skillAccum: Record<
+    string,
+    { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
+  > = {};
+  for (const agent of Object.values(agents)) {
+    const allSkillRefs = new Set<string>([
+      ...agent.skills,
+      ...agent.composed.grants.skills,
+      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.allowedSkills),
+    ]);
+    for (const ref of allSkillRefs) {
+      const named = parseNamedRef(ref);
+      const space = parseSpaceItemRef(ref, "/");
+      if (space) {
+        const owner = space.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${space.space}`;
+        skillAccum[key] ??= { plugin: owner, skillspace: space.space, skills: new Set() };
+        skillAccum[key].skills!.add(space.name);
+      } else {
+        const owner = named.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${named.name}`;
+        skillAccum[key] ??= { plugin: owner, name: named.name };
+      }
+    }
+  }
+
+  const skills: Record<string, CompileManifestManagedSkill | CompileManifestSkillspace> = {};
+  for (const [key, acc] of Object.entries(skillAccum)) {
+    if (acc.skillspace) {
+      skills[key] = {
+        plugin: acc.plugin,
+        skillspace: acc.skillspace,
+        skills: sortStrings([...acc.skills!]),
+      };
+    } else if (acc.name) {
+      skills[key] = {
+        plugin: acc.plugin,
+        name: acc.name,
+      };
+    }
+  }
+  return skills;
+};
+
+const deriveTraitsForManifest = (
+  agents: Readonly<Record<string, CompileManifestAgent>>,
+): Record<string, CompileManifestTrait> => {
+  const traits: Record<string, CompileManifestTrait> = {};
+  for (const agent of Object.values(agents)) {
+    for (const t of agent.traits) {
+      traits[t.id] ??= { id: t.id, ref: t.ref };
+    }
+  }
+  return traits;
+};
+
+const deriveToolsForManifest = (
+  agents: Readonly<Record<string, CompileManifestAgent>>,
+): Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> => {
+  const toolAccum: Record<
+    string,
+    { plugin: string; name?: string; toolspace?: string }
+  > = {};
+  for (const agent of Object.values(agents)) {
+    const allToolRefs = new Set<string>([
+      ...agent.composed.grants.tools,
+      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.toolGrants),
+    ]);
+    for (const ref of allToolRefs) {
+      const named = parseNamedRef(ref);
+      const space = parseSpaceItemRef(ref, "/");
+      if (space) {
+        const owner = space.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${space.space}/${space.name}`;
+        toolAccum[key] ??= { plugin: owner, toolspace: space.space, name: space.name };
+      } else {
+        const owner = named.pluginPrefix ?? agent.plugin;
+        const key = `${owner}:${named.name}`;
+        toolAccum[key] ??= { plugin: owner, name: named.name };
+      }
+    }
+  }
+
+  const tools: Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> = {};
+  for (const [key, acc] of Object.entries(toolAccum)) {
+    if (acc.toolspace && acc.name) {
+      tools[key] = {
+        plugin: acc.plugin,
+        toolspace: acc.toolspace,
+        name: acc.name,
+      };
+    } else if (acc.name) {
+      tools[key] = {
+        plugin: acc.plugin,
+        name: acc.name,
+      };
+    }
+  }
+  return tools;
+};
+
+const deriveOrbitsForManifest = (options: {
+  readonly base: CompileManifest;
+  readonly registryPluginName: string;
+  readonly orbits?: ReadonlyArray<{ readonly name: string }>;
+}): Record<string, CompileManifestOrbit> => {
+  const orbitsRecord: Record<string, { plugin: string; name: string }> = {
+    ...(options.base as any).orbits ?? {},
+  };
+  if (options.orbits !== undefined) {
+    for (const key of Object.keys(orbitsRecord)) {
+      if (orbitsRecord[key]!.plugin === options.registryPluginName) {
+        delete orbitsRecord[key];
+      }
+    }
+    for (const orbit of options.orbits) {
+      const id = `${options.registryPluginName}:${orbit.name}`;
+      orbitsRecord[id] = { plugin: options.registryPluginName, name: orbit.name };
+    }
+  }
+  return orbitsRecord;
+};
+
+const derivePluginsForManifest = (options: {
+  readonly base: CompileManifest;
+  readonly registry: PluginRegistry;
+  readonly agents: Readonly<Record<string, CompileManifestAgent>>;
+  readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
+}): CompileManifest["plugins"] => {
+  const registries = collectPluginRegistries(options.registry);
+  const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
+  const livePluginNames = new Set(Object.values(options.agents).map((agent) => agent.plugin));
+  for (const pluginName of currentPluginHashes.keys()) livePluginNames.add(pluginName);
+
+  const plugins: Record<string, CompileManifest["plugins"][string]> = {};
+  for (const pluginName of sortStrings(livePluginNames)) {
+    const sourceHash = currentPluginHashes.get(pluginName) ?? options.base.plugins[pluginName]?.sourceHash;
+    if (!sourceHash) continue;
+    const version = registries.get(pluginName)?.pluginVersion ?? options.base.plugins[pluginName]?.version;
+    plugins[pluginName] = {
+      ...(version ? { version } : {}),
+      sourceHash,
+    };
+  }
+  return plugins;
+};
+
 export const buildCompileManifestForTarget = (options: {
   readonly base: CompileManifest;
   readonly registry: PluginRegistry;
@@ -234,201 +480,30 @@ export const buildCompileManifestForTarget = (options: {
     agents[id] = { ...updated, manifestHash: computeAgentManifestHash(updated) };
   }
 
-  // Derive top-level modelspaces collection from agent composed.modelBindings.
-  // Smallest additive surface for workflow refs; populated only from already-composed
-  // bindings (no plugin source reads). Keyed by "ownerPlugin:localModelspace" for
-  // collision-free stable lookup. Profiles collected per (plugin, modelspace).
-  const registries = collectPluginRegistries(options.registry);
-  const modelspaceAccum: Record<string, { plugin: string; modelspace: string; profiles: Set<string> }> = {};
-  for (const agent of Object.values(agents)) {
-    const mb = agent.composed.modelBindings;
-    if (mb.modelspace && mb.profile) {
-      let owner = mb.modelspace;
-      let local = mb.modelspace;
-      const colon = mb.modelspace.indexOf(":");
-      if (colon !== -1) {
-        owner = mb.modelspace.slice(0, colon);
-        local = mb.modelspace.slice(colon + 1);
-      } else {
-        owner = agent.plugin;
-        local = mb.modelspace;
-      }
-      const key = `${owner}:${local}`;
-      if (!modelspaceAccum[key]) {
-        modelspaceAccum[key] = { plugin: owner, modelspace: local, profiles: new Set() };
-      }
-      modelspaceAccum[key].profiles.add(mb.profile);
-    }
-  }
-  const modelspaces: Record<string, CompileManifestModelspace> = {};
-  for (const [key, acc] of Object.entries(modelspaceAccum)) {
-    const msSource = registries.get(acc.plugin)?.modelspaces.get(acc.modelspace);
-    const profilesData: Record<string, Record<string, Record<string, unknown>>> = {};
-    if (msSource) {
-      for (const profileName of acc.profiles) {
-        const profile = msSource.profiles[profileName];
-        if (profile) {
-          profilesData[profileName] = profile.targets as Record<string, Record<string, unknown>>;
-        }
-      }
-    }
-    modelspaces[key] = {
-      plugin: acc.plugin,
-      modelspace: acc.modelspace,
-      profiles: sortStrings([...acc.profiles]),
-      ...(Object.keys(profilesData).length > 0 ? { profilesData } : {}),
-    };
-  }
+  const modelspaces = deriveModelspacesForManifest({
+    base: options.base,
+    registry: options.registry,
+    agents,
+  });
 
-  // Derive top-level skills collection (managed + skillspaces) post-merge from
-  // the agent skills/grants/allowedSkills strings (manifest truth only; no source
-  // paths, no registry scans). Uses parseNamedRef/parseSpaceItemRef to classify
-  // bare/prefixed managed vs p:space/name skillspace refs. Keyed "owner:local"
-  // for collision-free lookup. Parallel to modelspaces derivation.
-  const skillAccum: Record<
-    string,
-    { plugin: string; name?: string; skillspace?: string; skills?: Set<string> }
-  > = {};
-  for (const agent of Object.values(agents)) {
-    const allSkillRefs = new Set<string>([
-      ...agent.skills,
-      ...agent.composed.grants.skills,
-      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.allowedSkills),
-    ]);
-    for (const ref of allSkillRefs) {
-      const named = parseNamedRef(ref);
-      const space = parseSpaceItemRef(ref, "/");
-      if (space) {
-        const owner = space.pluginPrefix ?? agent.plugin;
-        const key = `${owner}:${space.space}`;
-        if (!skillAccum[key]) {
-          skillAccum[key] = { plugin: owner, skillspace: space.space, skills: new Set() };
-        }
-        skillAccum[key].skills!.add(space.name);
-      } else {
-        const owner = named.pluginPrefix ?? agent.plugin;
-        const key = `${owner}:${named.name}`;
-        if (!skillAccum[key]) {
-          skillAccum[key] = { plugin: owner, name: named.name };
-        }
-      }
-    }
-  }
-  const skills: Record<string, CompileManifestManagedSkill | CompileManifestSkillspace> = {};
-  for (const [key, acc] of Object.entries(skillAccum)) {
-    if (acc.skillspace) {
-      skills[key] = {
-        plugin: acc.plugin,
-        skillspace: acc.skillspace,
-        skills: sortStrings([...acc.skills!]),
-      };
-    } else if (acc.name) {
-      skills[key] = {
-        plugin: acc.plugin,
-        name: acc.name,
-      };
-    }
-  }
+  const skills = deriveSkillsForManifest(agents);
 
-  // Derive top-level traits Record keyed by id from composed agents' traits only.
-  // Dedupe by id (preserve first {id,ref}); no registry scans, no source paths, no
-  // plugin source reads. This provides manifest truth for workflow trait refs.
-  // Inserted after skills derivation (modelspaces/skills precedent) and before any
-  // registries/plugins collection.
-  const traitAccum: Record<string, CompileManifestTrait> = {};
-  for (const agent of Object.values(agents)) {
-    for (const t of agent.traits) {
-      if (!traitAccum[t.id]) {
-        traitAccum[t.id] = { id: t.id, ref: t.ref };
-      }
-    }
-  }
-  const traits: Record<string, CompileManifestTrait> = traitAccum;
+  const traits = deriveTraitsForManifest(agents);
 
-  // Derive top-level tools collection (canonical + toolspace tools) post-merge from
-  // the agent composed.grants.tools + perTarget.toolGrants strings (manifest truth only;
-  // no source paths, no registry, no input/output/handle, no permissions/MCP details).
-  // Uses parseNamedRef + parseSpaceItemRef(ref, '/') to classify "plugin:name" canon vs
-  // "plugin:space/name" toolspace. Keyed `${owner}:${name}` or `${owner}:${space}/${name}`.
-  // Populated for workflow refs parity; identity-only.
-  const toolAccum: Record<
-    string,
-    { plugin: string; name?: string; toolspace?: string }
-  > = {};
-  for (const agent of Object.values(agents)) {
-    const allToolRefs = new Set<string>([
-      ...agent.composed.grants.tools,
-      ...Object.values(agent.composed.perTarget).flatMap((slice) => slice.toolGrants),
-    ]);
-    for (const ref of allToolRefs) {
-      const named = parseNamedRef(ref);
-      const space = parseSpaceItemRef(ref, "/");
-      if (space) {
-        const owner = space.pluginPrefix ?? agent.plugin;
-        const key = `${owner}:${space.space}/${space.name}`;
-        if (!toolAccum[key]) {
-          toolAccum[key] = { plugin: owner, toolspace: space.space, name: space.name };
-        }
-      } else {
-        const owner = named.pluginPrefix ?? agent.plugin;
-        const key = `${owner}:${named.name}`;
-        if (!toolAccum[key]) {
-          toolAccum[key] = { plugin: owner, name: named.name };
-        }
-      }
-    }
-  }
-  const tools: Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> = {};
-  for (const [key, acc] of Object.entries(toolAccum)) {
-    if (acc.toolspace && acc.name) {
-      tools[key] = {
-        plugin: acc.plugin,
-        toolspace: acc.toolspace,
-        name: acc.name,
-      };
-    } else if (acc.name) {
-      tools[key] = {
-        plugin: acc.plugin,
-        name: acc.name,
-      };
-    }
-  }
+  const tools = deriveToolsForManifest(agents);
 
-  // Derive top-level orbits Record (keyed "plugin:name") from the authoritative
-  // orbits list when passed (this target compile targeted orbits for the plugin).
-  // Only plugin+name (no sourcePath, no phases/body). Prune only this plugin's
-  // prior entries when authoritative; carry other plugins from base (non-clearing
-  // when compile targets other surfaces only).
-  const orbitsRecord: Record<string, { plugin: string; name: string }> = {
-    ...(options.base as any).orbits ?? {},
-  };
-  if (options.orbits !== undefined) {
-    for (const key of Object.keys(orbitsRecord)) {
-      if (orbitsRecord[key]!.plugin === options.registry.pluginName) {
-        delete orbitsRecord[key];
-      }
-    }
-    for (const o of options.orbits) {
-      const id = `${options.registry.pluginName}:${o.name}`;
-      orbitsRecord[id] = { plugin: options.registry.pluginName, name: o.name };
-    }
-  }
-  const orbits: Record<string, CompileManifestOrbit> = orbitsRecord;
+  const orbits = deriveOrbitsForManifest({
+    base: options.base,
+    registryPluginName: options.registry.pluginName,
+    ...(options.orbits ? { orbits: options.orbits } : {}),
+  });
 
-  const currentPluginHashes = computePluginSourceHashes(options.cacheDescriptors);
-  const livePluginNames = new Set(Object.values(agents).map((agent) => agent.plugin));
-  for (const pluginName of currentPluginHashes.keys()) livePluginNames.add(pluginName);
-
-  const plugins: Record<string, CompileManifest["plugins"][string]> = {};
-  for (const pluginName of sortStrings(livePluginNames)) {
-    const sourceHash = currentPluginHashes.get(pluginName) ?? options.base.plugins[pluginName]?.sourceHash;
-    if (!sourceHash) continue;
-    const version = registries.get(pluginName)?.pluginVersion ?? options.base.plugins[pluginName]?.version;
-    plugins[pluginName] = {
-      ...(version ? { version } : {}),
-      sourceHash,
-    };
-  }
+  const plugins = derivePluginsForManifest({
+    base: options.base,
+    registry: options.registry,
+    agents,
+    cacheDescriptors: options.cacheDescriptors,
+  });
 
   return withTopHash({
     version: 1,

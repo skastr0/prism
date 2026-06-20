@@ -6,9 +6,10 @@
     "rules": ["coding-harness"],
     "commands": ["coding-harness"],
     "skills": ["coding-harness", "claw-harness"],
-    "agents": ["coding-harness"],
-    "orbits": ["coding-harness"],
-    "tools": ["coding-harness", "claw-harness"],
-    "hooks": ["coding-harness"]
+    "agents": ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"],
+    "orbits": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"],
+    "modelspaces": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"],
+    "tools": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"],
+    "hooks": ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"]
   }
 }

@@ -9,7 +9,7 @@ export default defineOrbit({
       agents: [agentRef("qa-tester")],
       notes: {
         Input: "A fresh Kimi session with the generated Prism plugin loaded.",
-        Done: "The QA tester role confirms the plugin is reachable and the echo tool responds.",
+        Done: "The QA tester role confirms the plugin is reachable and the challenge_echo tool responds.",
       },
     },
   ],

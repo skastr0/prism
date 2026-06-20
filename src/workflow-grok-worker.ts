@@ -1,10 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
-import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface GrokWorkflowWorkerOptions {
@@ -12,6 +9,7 @@ export interface GrokWorkflowWorkerOptions {
   readonly bin?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
 
@@ -19,56 +17,73 @@ export class WorkflowWorkerError extends Error {
   override readonly name = "WorkflowWorkerError";
 }
 
+export const buildGrokArgs = (input: {
+  readonly cwd: string;
+  readonly agent: string;
+  readonly model?: string;
+  readonly effort?: string;
+  readonly prompt: string;
+}): ReadonlyArray<string> => [
+  "--model",
+  input.model ?? "grok-build",
+  "--agent",
+  input.agent,
+  "--cwd",
+  input.cwd,
+  "--no-alt-screen",
+  "--output-format",
+  "plain",
+  ...(input.effort ? ["--effort", input.effort] : []),
+  "--single",
+  input.prompt,
+];
+
 export const runGrokWorkflowTask = async (
   task: AnyWorkflowTask,
   options: GrokWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
-  const tempRoot = await mkdtemp(join(tmpdir(), "prism-workflow-grok-"));
-  const promptPath = join(tempRoot, "prompt.md");
   const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  await writeFile(promptPath, prompt);
   const command = options.bin ?? process.env.PRISM_WORKFLOW_GROK_BIN ?? "grok";
-  const args = [
-    "--model",
-    options.model ?? "grok-build",
-    "--agent",
-    task.agent.name,
-    "--cwd",
-    options.cwd,
-    "--no-alt-screen",
-    "--output-format",
-    "plain",
-    "--prompt-file",
-    promptPath,
-    ...(options.effort ? ["--effort", options.effort] : []),
-  ];
+  const processTimeoutMs = options.processTimeoutMs
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS)
+    ?? 120_000;
+  const args = buildGrokArgs({
+    cwd: options.cwd,
+    agent: task.agent.name,
+    model: options.model,
+    effort: options.effort,
+    prompt,
+  });
 
-  try {
-    const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
-      command,
-      args,
-      cwd: options.cwd,
-      abortSignal: options.abortSignal,
-    });
-    if (aborted) {
-      throw new WorkflowWorkerError("grok was aborted by Prism workflow stop");
-    }
-    if (exitCode !== 0) {
-      throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
-    }
-    return {
-      output: parseWorkflowWorkerJsonOutput(stdout),
-      metadata: {
-        adapter: "grok-cli",
-        nativeAgent: task.agent.name,
-        model: options.model ?? "grok-build",
-        durationMs,
-        ...summarizeWorkflowWorkerStderr(stderr),
-      },
-    };
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+    command,
+    args,
+    cwd: options.cwd,
+    processTimeoutMs,
+    abortSignal: options.abortSignal,
+  });
+  if (aborted) {
+    throw new WorkflowWorkerError("grok was aborted by Prism workflow stop");
   }
+  if (timedOut) {
+    throw new WorkflowWorkerError(
+      `grok exceeded Prism process timeout after ${processTimeoutMs}ms${workflowWorkerProcessExcerpt(stdout, stderr)}`,
+    );
+  }
+  if (exitCode !== 0) {
+    throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+  }
+  return {
+    output: parseWorkflowWorkerJsonOutput(stdout),
+    metadata: {
+      adapter: "grok-cli",
+      nativeAgent: task.agent.name,
+      model: options.model ?? "grok-build",
+      durationMs,
+      processTimeoutMs,
+      ...summarizeWorkflowWorkerStderr(stderr),
+    },
+  };
 };
 
 export { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError } from "./workflow-worker-contract.js";

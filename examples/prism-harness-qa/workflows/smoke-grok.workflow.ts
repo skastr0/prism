@@ -2,24 +2,26 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 import { agents } from "prism/refs";
 
-const echoSmokeOutput = Schema.Struct({
-  echoed: Schema.String,
-  timestamp: Schema.Number,
-  reachable: Schema.Boolean,
+const challenge = "grok-2026-06-20-001";
+
+const challengeOutput = Schema.Struct({
+  challenge: Schema.String,
+  proof: Schema.String,
+  source: Schema.Literal("prism-generated-tool"),
 });
 
-const verifyEcho = defineTask({
-  id: "verify-echo",
+const verifyChallenge = defineTask({
+  id: "verify-challenge",
   agent: agents.prismHarnessQa.qaTester,
   prompt:
-    "Verify that the generated MCP echo tool is reachable. " +
-    "Call the echo tool with the message 'hello-grok'. " +
-    "Return a JSON object with the echoed string, the timestamp from the tool response, and a boolean reachable flag.",
-  output: echoSmokeOutput,
+    "Verify that the generated MCP challenge_echo tool is reachable. " +
+    `Call challenge_echo with challenge ${JSON.stringify(challenge)}. ` +
+    "Return exactly the tool response JSON.",
+  output: challengeOutput,
   worker: { worker: "grok", model: "grok-build" },
 });
 
 export default defineWorkflow({
   name: "grok-smoke",
-  tasks: [verifyEcho],
+  tasks: [verifyChallenge],
 });

@@ -8,6 +8,7 @@ import {
   WorkflowModelResolutionError,
   type WorkflowAgentRef,
   type WorkflowModelProfileRef,
+  type WorkflowWorkerId,
   type WorkflowTaskOutput,
 } from "./workflows.js";
 
@@ -47,6 +48,14 @@ const PatchReport = Schema.Struct({
 });
 
 describe("workflow authoring primitives", () => {
+  test("workflow worker id excludes quarantined antigravity", () => {
+    const worker = "antigravity-cli";
+    // @ts-expect-error Antigravity is quarantined from live workflow dispatch.
+    const liveWorker: WorkflowWorkerId = worker;
+    void liveWorker;
+    expect(worker).toBe("antigravity-cli");
+  });
+
   test("preserve literal task and agent refs", () => {
     const build = defineTask({
       id: "build",
@@ -110,6 +119,25 @@ describe("workflow authoring primitives", () => {
     });
 
     expect(resolveWorkflowTaskModel(build)).toBe("provider/manual-model");
+  });
+
+  test("resolves modelResolver from the selected agent model target", () => {
+    const build = defineTask({
+      id: "build",
+      agent: modelspaceBackedBuilder,
+      prompt: "Pick a model from the target object.",
+      output: PatchReport,
+      worker: {
+        worker: "opencode",
+        modelResolver: (models) => {
+          const first = models.kimiK26;
+          if (Array.isArray(first)) return first[0]?.model ?? "";
+          return first?.model ?? "";
+        },
+      },
+    });
+
+    expect(resolveWorkflowTaskModel(build)).toBe("crof/kimi-k2.6");
   });
 
   test("fails closed when a model ref does not support the selected worker", () => {

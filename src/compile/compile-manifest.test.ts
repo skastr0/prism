@@ -14,6 +14,7 @@ import {
 } from "./compile-manifest.js";
 import type { ComposedAgent } from "./compose.js";
 import { emptyRegistry } from "./registry.js";
+import { Modelspace } from "./sources.js";
 
 let home: string;
 const projectKey = "test-project-key";
@@ -27,6 +28,19 @@ afterEach(async () => {
 });
 
 const registry = () => emptyRegistry("/tmp/forge", "forge", "1.0.0");
+
+const registryWithModels = () => {
+  const reg = registry();
+  reg.modelspaces.set("models", new Modelspace({
+    name: "models",
+    sourcePath: "/tmp/forge/modelspaces/models.modelspace.ts",
+    profiles: {
+      builder: { targets: { opencode: { model: "builder-opencode" } } },
+      unreferenced: { targets: { opencode: { model: "unreferenced-opencode" } } },
+    },
+  }));
+  return reg;
+};
 
 const descriptorFor = (name: string, hash: string): AgentCacheDescriptor => ({
   key: `${name}-key`,
@@ -147,6 +161,22 @@ describe("compile manifest writer", () => {
     // tools also populated (from the agent grants in this build)
     expect(Object.keys(withOrbits.tools || {}).length).toBeGreaterThan(0);
     expect(JSON.stringify(withOrbits.tools)).not.toContain("sourcePath");
+  });
+
+  test("includes every loaded modelspace profile, not only agent-bound profiles", () => {
+    const manifest = buildCompileManifestForTarget({
+      base: emptyCompileManifest(),
+      registry: registryWithModels(),
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "a".repeat(64), ["run_shell"])],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
+    });
+
+    expect(manifest.modelspaces["forge:models"]?.profiles).toEqual(["builder", "unreferenced"]);
+    expect(manifest.modelspaces["forge:models"]?.profilesData?.unreferenced).toEqual({
+      opencode: { model: "unreferenced-opencode" },
+    });
   });
 
   test("commit/read round-trips deterministically and corrupt files quarantine", async () => {

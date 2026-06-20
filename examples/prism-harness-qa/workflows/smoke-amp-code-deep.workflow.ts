@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
 import { agents } from "prism/refs";
 
-const challenge = "kimi-code-2026-06-20-001";
+const challenge = "amp-code-deep-2026-06-20-001";
 
 const challengeOutput = Schema.Struct({
   challenge: Schema.String,
@@ -18,10 +18,10 @@ const verifyChallenge = defineTask({
     `Call challenge_echo with challenge ${JSON.stringify(challenge)}. ` +
     "Return exactly the tool response JSON.",
   output: challengeOutput,
-  worker: { worker: "kimi-code" },
+  worker: { worker: "amp-code", model: "deep" },
 });
 
 export default defineWorkflow({
-  name: "kimi-code-smoke",
+  name: "amp-code-deep-smoke",
   tasks: [verifyChallenge],
 });

@@ -1,5 +1,4 @@
-import type { AnyWorkflowTask, WorkflowWorkerId } from "./workflows.js";
-import { runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
+import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowWorkerId } from "./workflows.js";
 import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
@@ -40,19 +39,11 @@ export class UnsupportedWorkflowWorkerError extends Error {
 }
 
 const workflowWorkerAdapters = {
-  "antigravity-cli": {
-    id: "antigravity-cli",
-    runTask: (task, options) => runAntigravityWorkflowTask(task, {
-      cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
-      abortSignal: options.abortSignal,
-    }),
-  },
   "amp-code": {
     id: "amp-code",
     runTask: (task, options) => runAmpWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
     }),
   },
@@ -60,12 +51,12 @@ const workflowWorkerAdapters = {
     id: "claude-code",
     runTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "claude-code", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
     }),
     continueTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "claude-code", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
       repair: options.context?.repair,
     }),
@@ -74,7 +65,7 @@ const workflowWorkerAdapters = {
     id: "codex-cli",
     runTask: (task, options) => runCodexWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "codex-cli", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
     }),
   },
@@ -82,7 +73,7 @@ const workflowWorkerAdapters = {
     id: "grok",
     runTask: (task, options) => runGrokWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "grok", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
     }),
   },
@@ -90,7 +81,7 @@ const workflowWorkerAdapters = {
     id: "hermes",
     runTask: (task, options) => runHermesWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "hermes", fallbackModel: options.model }),
       profile: task.worker?.profile ?? options.profile,
       abortSignal: options.abortSignal,
     }),
@@ -99,7 +90,7 @@ const workflowWorkerAdapters = {
     id: "kimi-code",
     runTask: (task, options) => runKimiWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "kimi-code", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
     }),
   },
@@ -107,7 +98,7 @@ const workflowWorkerAdapters = {
     id: "opencode",
     runTask: (task, options) => runOpenCodeWorkflowTask(task, {
       cwd: options.cwd,
-      model: task.worker?.model ?? options.model,
+      model: resolveWorkflowTaskModel(task, { worker: "opencode", fallbackModel: options.model }),
       abortSignal: options.abortSignal,
     }),
   },

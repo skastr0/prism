@@ -1,6 +1,6 @@
 # prism-harness-qa
 
-Reference QA plugin for Prism's Kimi Code harness.
+Reference QA plugin for Prism harness E2E checks.
 
 This plugin exercises every Prism compile surface that Kimi Code supports:
 
@@ -9,8 +9,8 @@ This plugin exercises every Prism compile surface that Kimi Code supports:
 - **Skills** → bundled as-is under `skills/`
 - **Agents** → `prism-agent-*` role skills
 - **Orbits** → orbit skills with phase references
-- **Tools** → generated MCP server in `kimi.plugin.json`
+- **Tools** → generated MCP server exposing the deterministic `challenge_echo` proof tool
 - **Traits** → compile-time capability conformance for agents
 - **Hooks** → `config.toml` hook entries
 
-It is used by `src/compile/kimi-code-lowerer.test.ts` to assert exact lowerer output, by the Kimi smoke workflow task once live execution is safe, and by `scripts/acceptance/matrix-codex-opencode.ts` as the TS-007 cross-harness acceptance fixture.
+It is used by lowerer tests, by the smoke workflow tasks once live execution is safe, and by acceptance scripts as the cross-harness fixture.

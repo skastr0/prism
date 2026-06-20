@@ -1,0 +1,44 @@
+import { defineModelspace } from "prism";
+
+export default defineModelspace({
+  name: "qa-models",
+  description: "Harness smoke-test model profiles for Prism workflow E2E checks.",
+  profiles: {
+    smoke: {
+      description: "Default smoke-test model profile used by qa-tester.",
+      targets: {
+        "amp-code": { model: "deep" },
+        "claude-code": { model: "sonnet" },
+        "codex-cli": { model: "gpt-5.4-mini" },
+        grok: { model: "grok-build" },
+        hermes: { model: "grok-composer-2.5-fast" },
+        "kimi-code": { model: "kimi-code/kimi-for-coding" },
+        opencode: { model: "ollama-cloud/deepseek-v4-flash" },
+      },
+    },
+    explicit: {
+      description: "Secondary profile used by workflow model-ref tests.",
+      targets: {
+        "amp-code": { model: "rush" },
+        "claude-code": { model: "opus" },
+        "codex-cli": { model: "gpt-5.5" },
+        grok: { model: "grok-composer-2.5-fast" },
+        hermes: { model: "grok-4.20-reasoning" },
+        "kimi-code": { model: "kimi-code/kimi-for-coding" },
+        opencode: {
+          strategy: "ordered",
+          models: [
+            { model: "ollama-cloud/deepseek-v4-flash" },
+            { model: "ollama-cloud/glm-5.2" },
+          ],
+        },
+      },
+    },
+    unavailable: {
+      description: "Negative test profile intentionally omits opencode.",
+      targets: {
+        "claude-code": { model: "sonnet" },
+      },
+    },
+  },
+});

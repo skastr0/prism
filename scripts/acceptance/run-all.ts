@@ -23,6 +23,7 @@ interface GateScript {
   /** Expectation for scripts that do not declare per-gate expectations themselves. */
   readonly expected: "PASS" | "FAIL" | null;
   readonly script: string;
+  readonly args?: ReadonlyArray<string>;
 }
 
 const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
@@ -36,6 +37,7 @@ const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
   { script: "mcp-determinism.ts", expected: null },
   { script: "mcp-lifecycle.ts", expected: null },
   { script: "orbit-workflows.ts", expected: "PASS" },
+  { script: "workflow-e2e-matrix.ts", args: ["--mode", "temp", "--validate-only"], expected: "PASS" },
 ];
 
 interface GateRow {
@@ -99,7 +101,7 @@ const runGateScript = async (entry: GateScript): Promise<GateRow[]> => {
   const name = entry.script.replace(/\.ts$/u, "");
   console.error(`[run-all] running ${entry.script} ...`);
   const proc = Bun.spawn({
-    cmd: ["bun", join(ACCEPTANCE_DIR, entry.script)],
+    cmd: ["bun", join(ACCEPTANCE_DIR, entry.script), ...(entry.args ?? [])],
     cwd: ACCEPTANCE_DIR,
     env: process.env,
     stdout: "pipe",

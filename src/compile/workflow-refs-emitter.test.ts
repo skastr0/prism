@@ -105,6 +105,31 @@ describe("workflow refs emitter", () => {
     expect(output).toContain("WorkflowModelProfileRef");
   });
 
+  test("renders modelspace profiles not referenced by agents", () => {
+    const base = manifest();
+    const output = renderWorkflowModelsModule({
+      manifest: {
+        ...base,
+        modelspaces: {
+          ...base.modelspaces,
+          "forge:models": {
+            plugin: "forge",
+            modelspace: "models",
+            profiles: ["fast", "unreferenced"],
+            profilesData: {
+              fast: { grok: { model: "grok-code-fast-1" } },
+              unreferenced: { opencode: { model: "provider/unreferenced" } },
+            },
+          },
+        },
+      },
+    });
+
+    expect(output).toContain('"fast":');
+    expect(output).toContain('"unreferenced":');
+    expect(output).toContain('"provider/unreferenced"');
+  });
+
   test("plans a machine-global, project-keyed generated desired root for the sync engine", () => {
     const prismHome = "/tmp/prism-home";
     const projectKey = "workspace-key";

@@ -67,7 +67,7 @@ import {
 } from "./errors.js";
 import { PluginManifestError } from "../errors.js";
 import { resolvePrismHome } from "../prism-home.js";
-import { deriveProjectKey, projectGeneratedAgentsPath } from "../project-key.js";
+import { deriveProjectKey, projectGeneratedAgentsPath, projectGeneratedRefsDir } from "../project-key.js";
 import { packageNameFromSpecifier } from "./bundle-utils.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
 import { effectBundleImportPath, typescriptBundleImportPath } from "./runtime-deps.js";
@@ -315,6 +315,8 @@ interface LoadSpecifierOverrides {
   readonly effect: string;
   /** Target for bare `prism/refs` imports; absent when not applicable (plugin compile). */
   readonly prismRefs?: string;
+  /** Targets for `prism/refs/<module>` imports; absent when not applicable. */
+  readonly prismRefsModules?: Readonly<Record<string, string>>;
   /**
    * Optional absolute path to the local Prism source entry. When provided,
    * absolute imports pointing at this path are rewritten to bare `prism` so
@@ -361,6 +363,9 @@ const rewriteImportSpecifiers = async (
     rewritten = replaceBareSpecifier(rewritten, overrides.prismSourcePath, "prism");
   }
   if (overrides.prismRefs !== undefined) {
+    for (const [specifier, target] of Object.entries(overrides.prismRefsModules ?? {})) {
+      rewritten = replaceBareSpecifier(rewritten, specifier, target);
+    }
     rewritten = replaceBareSpecifier(rewritten, "prism/refs", overrides.prismRefs);
   }
   rewritten = replaceBareSpecifier(rewritten, "prism", overrides.prism);
@@ -584,6 +589,16 @@ const workflowRefsTargetPath = (): string => {
   return projectGeneratedAgentsPath(prismHome, key);
 };
 
+const workflowRefsModuleTargets = (cacheBust: string): Record<string, string> => {
+  const prismHome = resolvePrismHome();
+  const { key } = deriveProjectKey();
+  const refsDir = projectGeneratedRefsDir(prismHome, key);
+  const modules = ["agents", "models", "skills", "traits", "orbits", "tools"] as const;
+  return Object.fromEntries(
+    modules.map((module) => [`prism/refs/${module}`, `${toFileSpecifier(join(refsDir, `${module}.ts`))}${cacheBust}`]),
+  );
+};
+
 /**
  * Build the specifier overrides for a workflow load. `prism` resolves to the
  * workflow DSL runtime, `effect` to the embedded Effect bridge, and `prism/refs`
@@ -597,6 +612,7 @@ const workflowSpecifierOverrides = async (): Promise<LoadSpecifierOverrides> => 
     prism: toFileSpecifier(runtimePaths.workflowDsl),
     effect: toFileSpecifier(runtimePaths.effect),
     prismRefs: `${toFileSpecifier(workflowRefsTargetPath())}${cacheBust}`,
+    prismRefsModules: workflowRefsModuleTargets(cacheBust),
   };
 };
 

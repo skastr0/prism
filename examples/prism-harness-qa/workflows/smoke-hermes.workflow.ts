@@ -1,8 +1,18 @@
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
-import { agents } from "prism/refs";
+import { models } from "prism/refs/models";
 
-const challenge = "kimi-code-2026-06-20-001";
+const challenge = "hermes-2026-06-20-001";
+
+const hermesQaAgent = {
+  kind: "agent-ref",
+  plugin: "prism-harness-qa",
+  name: "qa-tester",
+  description: "Prompted Hermès QA contract for generated-tool workflow smoke tests.",
+  sourceHash: "hermes-workflow-inline-contract",
+  manifestHash: "hermes-workflow-inline-contract",
+  installs: [],
+} as const;
 
 const challengeOutput = Schema.Struct({
   challenge: Schema.String,
@@ -12,16 +22,19 @@ const challengeOutput = Schema.Struct({
 
 const verifyChallenge = defineTask({
   id: "verify-challenge",
-  agent: agents.prismHarnessQa.qaTester,
+  agent: hermesQaAgent,
   prompt:
     "Verify that the generated MCP challenge_echo tool is reachable. " +
     `Call challenge_echo with challenge ${JSON.stringify(challenge)}. ` +
     "Return exactly the tool response JSON.",
   output: challengeOutput,
-  worker: { worker: "kimi-code" },
+  worker: {
+    worker: "hermes",
+    model: models.prismHarnessQa.qaModels.smoke,
+  },
 });
 
 export default defineWorkflow({
-  name: "kimi-code-smoke",
+  name: "hermes-smoke",
   tasks: [verifyChallenge],
 });

@@ -1,34 +1,27 @@
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";
+import { agents } from "prism/refs";
 
-const qaTester = {
-  kind: "agent-ref" as const,
-  plugin: "prism-harness-qa",
-  name: "qa-tester",
-  description: "Quality-assurance tester for Prism OpenCode harness parity.",
-  sourceHash: "0".repeat(64),
-  manifestHash: "0".repeat(64),
-  installs: ["opencode"],
-};
+const challenge = "opencode-2026-06-20-001";
 
-const echoSmokeOutput = Schema.Struct({
-  echoed: Schema.String,
-  timestamp: Schema.Number,
-  reachable: Schema.Boolean,
+const challengeOutput = Schema.Struct({
+  challenge: Schema.String,
+  proof: Schema.String,
+  source: Schema.Literal("prism-generated-tool"),
 });
 
-const verifyEcho = defineTask({
-  id: "verify-echo",
-  agent: qaTester,
+const verifyChallenge = defineTask({
+  id: "verify-challenge",
+  agent: agents.prismHarnessQa.qaTester,
   prompt:
-    "Verify that the generated MCP echo tool is reachable. " +
-    "Call the echo tool with the message 'hello-opencode'. " +
-    "Return a JSON object with the echoed string, the timestamp from the tool response, and a boolean reachable flag.",
-  output: echoSmokeOutput,
+    "Verify that the generated MCP challenge_echo tool is reachable. " +
+    `Call challenge_echo with challenge ${JSON.stringify(challenge)}. ` +
+    "Return exactly the tool response JSON.",
+  output: challengeOutput,
   worker: { worker: "opencode" },
 });
 
 export default defineWorkflow({
   name: "opencode-smoke",
-  tasks: [verifyEcho],
+  tasks: [verifyChallenge],
 });

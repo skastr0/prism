@@ -15,21 +15,37 @@ export class AmpWorkflowWorkerError extends Error {
   override readonly name = "AmpWorkflowWorkerError";
 }
 
+export type AmpWorkflowMode = "deep" | "rush";
+
+export const assertAmpWorkflowMode = (mode: string | undefined): AmpWorkflowMode | undefined => {
+  if (mode === undefined) return undefined;
+  if (mode === "deep" || mode === "rush") return mode;
+  throw new AmpWorkflowWorkerError(`unsupported Amp workflow mode '${mode}'. Supported modes: deep, rush`);
+};
+
+export const buildAmpArgs = (input: {
+  readonly mode?: string;
+  readonly prompt: string;
+}): ReadonlyArray<string> => {
+  const mode = assertAmpWorkflowMode(input.mode);
+  return [
+    "--no-ide",
+    "--no-notifications",
+    "--no-color",
+    "--no-archive-after-execute",
+    ...(mode !== undefined ? ["--mode", mode] : []),
+    "--execute",
+    input.prompt,
+  ];
+};
+
 export const runAmpWorkflowTask = async (
   task: AnyWorkflowTask,
   options: AmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_AMP_BIN ?? "amp";
   const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const args = [
-    "--no-ide",
-    "--no-notifications",
-    "--no-color",
-    "--no-archive-after-execute",
-    ...(options.model !== undefined ? ["--mode", options.model] : []),
-    "--execute",
-    prompt,
-  ];
+  const args = buildAmpArgs({ mode: options.model, prompt });
 
   const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
     command,

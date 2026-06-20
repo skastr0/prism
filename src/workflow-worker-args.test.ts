@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildAmpArgs, assertAmpWorkflowMode } from "./workflow-amp-worker.js";
+import { buildClaudeArgs } from "./workflow-claude-worker.js";
 import { buildGrokArgs } from "./workflow-grok-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { supportedWorkflowWorkers, UnsupportedWorkflowWorkerError, getWorkflowWorkerAdapter } from "./workflow-workers.js";
@@ -29,6 +30,25 @@ describe("workflow worker argument builders", () => {
     expect(args).toContain("--agent");
     expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
     expect(args).not.toContain("subagent");
+  });
+
+  test("claude loads generated plugin MCP config explicitly", () => {
+    const args = buildClaudeArgs({
+      agent: "qa-tester",
+      model: "sonnet",
+      prompt: "return json",
+      generatedPlugin: {
+        pluginDir: "/home/test/.claude/skills/prism-generated-prism-harness-qa",
+        mcpConfig: "/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json",
+      },
+    });
+
+    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
+    expect(args.slice(args.indexOf("--plugin-dir"), args.indexOf("--plugin-dir") + 2)).toEqual([
+      "--plugin-dir",
+      "/home/test/.claude/skills/prism-generated-prism-harness-qa",
+    ]);
+    expect(args).toContain("--mcp-config=/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json");
   });
 
   test("amp accepts only deep and rush workflow modes", () => {

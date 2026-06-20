@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
@@ -14,6 +18,11 @@ export interface ClaudeWorkflowWorkerOptions {
 
 export class ClaudeWorkflowWorkerError extends Error {
   override readonly name = "ClaudeWorkflowWorkerError";
+}
+
+export interface ClaudeGeneratedPluginDiscovery {
+  readonly pluginDir?: string;
+  readonly mcpConfig?: string;
 }
 
 interface ClaudeJsonEnvelope {
@@ -38,6 +47,39 @@ const parseClaudeEnvelope = (stdout: string): ClaudeJsonEnvelope => {
   }
 };
 
+const claudeRoot = (): string =>
+  process.env.PRISM_WORKFLOW_CLAUDE_ROOT ?? join(homedir(), ".claude");
+
+export const discoverClaudeGeneratedPlugin = (
+  task: AnyWorkflowTask,
+): ClaudeGeneratedPluginDiscovery => {
+  const pluginDir = join(claudeRoot(), "skills", generatedPluginIdForOwner(task.agent.plugin));
+  if (!existsSync(pluginDir)) return {};
+
+  const mcpConfig = join(pluginDir, ".mcp.json");
+  return {
+    pluginDir,
+    ...(existsSync(mcpConfig) ? { mcpConfig } : {}),
+  };
+};
+
+export const buildClaudeArgs = (input: {
+  readonly agent: string;
+  readonly model?: string;
+  readonly prompt: string;
+  readonly resumeSessionId?: string;
+  readonly generatedPlugin?: ClaudeGeneratedPluginDiscovery;
+}): ReadonlyArray<string> => [
+  "--print",
+  "--output-format",
+  "json",
+  ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : ["--agent", input.agent]),
+  ...(input.model !== undefined ? ["--model", input.model] : []),
+  ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
+  ...(input.generatedPlugin?.mcpConfig !== undefined ? [`--mcp-config=${input.generatedPlugin.mcpConfig}`] : []),
+  input.prompt,
+];
+
 export const runClaudeWorkflowTask = async (
   task: AnyWorkflowTask,
   options: ClaudeWorkflowWorkerOptions,
@@ -47,14 +89,13 @@ export const runClaudeWorkflowTask = async (
   const prompt = options.repair !== undefined && resumeSessionId !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const args = [
-    "--print",
-    "--output-format",
-    "json",
-    ...(resumeSessionId !== undefined ? ["--resume", resumeSessionId] : ["--agent", task.agent.name]),
-    ...(options.model !== undefined ? ["--model", options.model] : []),
+  const args = buildClaudeArgs({
+    agent: task.agent.name,
+    model: options.model,
+    resumeSessionId,
+    generatedPlugin: discoverClaudeGeneratedPlugin(task),
     prompt,
-  ];
+  });
 
   const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
     command,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test as bunTest } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
@@ -821,17 +821,25 @@ describe("workflow loader", () => {
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "claude-calls.jsonl");
     const fakeClaude = join(root, "fake-claude.mjs");
+    const claudeRoot = join(root, ".claude");
+    const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
     await writeFile(file, workerModelWorkflowSource("claude-code"));
+    await mkdir(generatedPluginRoot, { recursive: true });
+    await writeFile(join(generatedPluginRoot, ".mcp.json"), `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
     await writeFile(fakeClaude, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
       "const outputFormatIndex = process.argv.indexOf('--output-format');",
       "const agentIndex = process.argv.indexOf('--agent');",
+      "const pluginDirIndex = process.argv.indexOf('--plugin-dir');",
+      "const mcpConfigArg = process.argv.find((arg) => arg.startsWith('--mcp-config='));",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const outputFormat = outputFormatIndex >= 0 ? process.argv[outputFormatIndex + 1] : 'missing';",
       "const agent = agentIndex >= 0 ? process.argv[agentIndex + 1] : 'missing';",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, cwd: process.cwd() }) + '\\n');`,
+      "const pluginDir = pluginDirIndex >= 0 ? process.argv[pluginDirIndex + 1] : 'missing';",
+      "const mcpConfig = mcpConfigArg ? mcpConfigArg.slice('--mcp-config='.length) : 'missing';",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ print: process.argv.includes('--print'), outputFormat, noSession: process.argv.includes('--no-session-persistence'), model, agent, pluginDir, mcpConfig, cwd: process.cwd() }) + '\\n');`,
       "console.log(JSON.stringify({ result: JSON.stringify({ summary: model }), is_error: false, session_id: 'claude-session', total_cost_usd: 0.01, duration_ms: 12, num_turns: 1 }));",
       "",
     ].join("\n"));
@@ -854,7 +862,7 @@ describe("workflow loader", () => {
           "sonnet",
         ],
         cwd: root,
-        env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
+        env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -888,11 +896,13 @@ describe("workflow loader", () => {
       noSession: boolean;
       model: string;
       agent: string;
+      pluginDir: string;
+      mcpConfig: string;
       cwd: string;
     });
     expect(calls).toEqual([
-      { print: true, outputFormat: "json", noSession: false, model: "grok-build", agent: "builder", cwd: expectedCwd },
-      { print: true, outputFormat: "json", noSession: false, model: "sonnet", agent: "builder", cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: false, model: "grok-build", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), cwd: expectedCwd },
+      { print: true, outputFormat: "json", noSession: false, model: "sonnet", agent: "builder", pluginDir: generatedPluginRoot, mcpConfig: join(generatedPluginRoot, ".mcp.json"), cwd: expectedCwd },
     ]);
   });
 

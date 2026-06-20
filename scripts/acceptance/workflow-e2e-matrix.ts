@@ -27,17 +27,58 @@ interface MatrixEntry {
   readonly harness: Harness;
   readonly workflow: string;
   readonly challenge: string;
+  readonly expectedModel: string;
 }
 
 const MATRIX: readonly MatrixEntry[] = [
-  { harness: "opencode", workflow: "smoke-opencode.workflow.ts", challenge: "opencode-2026-06-20-001" },
-  { harness: "claude-code", workflow: "smoke-claude-code.workflow.ts", challenge: "claude-code-2026-06-20-001" },
-  { harness: "codex-cli", workflow: "smoke-codex-cli.workflow.ts", challenge: "codex-cli-2026-06-20-001" },
-  { harness: "grok", workflow: "smoke-grok.workflow.ts", challenge: "grok-2026-06-20-001" },
-  { harness: "hermes", workflow: "smoke-hermes.workflow.ts", challenge: "hermes-2026-06-20-001" },
-  { harness: "kimi-code", workflow: "smoke-kimi-code.workflow.ts", challenge: "kimi-code-2026-06-20-001" },
-  { harness: "amp-code", workflow: "smoke-amp-code-deep.workflow.ts", challenge: "amp-code-deep-2026-06-20-001" },
-  { harness: "amp-code", workflow: "smoke-amp-code-rush.workflow.ts", challenge: "amp-code-rush-2026-06-20-001" },
+  {
+    harness: "opencode",
+    workflow: "smoke-opencode.workflow.ts",
+    challenge: "opencode-2026-06-20-001",
+    expectedModel: "ollama-cloud/deepseek-v4-flash",
+  },
+  {
+    harness: "claude-code",
+    workflow: "smoke-claude-code.workflow.ts",
+    challenge: "claude-code-2026-06-20-001",
+    expectedModel: "sonnet",
+  },
+  {
+    harness: "codex-cli",
+    workflow: "smoke-codex-cli.workflow.ts",
+    challenge: "codex-cli-2026-06-20-001",
+    expectedModel: "gpt-5.4-mini",
+  },
+  {
+    harness: "grok",
+    workflow: "smoke-grok.workflow.ts",
+    challenge: "grok-2026-06-20-001",
+    expectedModel: "grok-build",
+  },
+  {
+    harness: "hermes",
+    workflow: "smoke-hermes.workflow.ts",
+    challenge: "hermes-2026-06-20-001",
+    expectedModel: "grok-composer-2.5-fast",
+  },
+  {
+    harness: "kimi-code",
+    workflow: "smoke-kimi-code.workflow.ts",
+    challenge: "kimi-code-2026-06-20-001",
+    expectedModel: "kimi-code/kimi-for-coding",
+  },
+  {
+    harness: "amp-code",
+    workflow: "smoke-amp-code-deep.workflow.ts",
+    challenge: "amp-code-deep-2026-06-20-001",
+    expectedModel: "deep",
+  },
+  {
+    harness: "amp-code",
+    workflow: "smoke-amp-code-rush.workflow.ts",
+    challenge: "amp-code-rush-2026-06-20-001",
+    expectedModel: "rush",
+  },
 ];
 
 const ALL_HARNESSES = new Set<Harness>(MATRIX.map((entry) => entry.harness));
@@ -63,7 +104,14 @@ interface HarnessResult {
     readonly metadata?: unknown;
     readonly detail?: string;
   };
+  readonly checks?: readonly HarnessCheck[];
   readonly tower?: CommandResult | { readonly skipped: string };
+}
+
+interface HarnessCheck {
+  readonly name: string;
+  readonly status: "pass" | "fail" | "not-applicable" | "skipped";
+  readonly detail?: string;
 }
 
 interface ConfigSeedEntry {
@@ -390,6 +438,158 @@ const proofFromRun = (entry: MatrixEntry, run: CommandResult): HarnessResult["pr
   }
 };
 
+const EXPECTED_ADAPTERS: Readonly<Record<Harness, string>> = {
+  "amp-code": "amp-code",
+  "claude-code": "claude-code",
+  "codex-cli": "codex-cli",
+  grok: "grok-cli",
+  hermes: "hermes",
+  "kimi-code": "kimi-code",
+  opencode: "opencode-cli",
+};
+
+const BLOCKED_TOOL_OUTPUT_PATTERN =
+  /\b(blocked tool|tool use blocked|permission denied|requires approval|approval required|tool use rejected|interrupted by user)\b/iu;
+
+const objectRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+const stringField = (value: unknown, key: string): string | undefined => {
+  const record = objectRecord(value);
+  const field = record?.[key];
+  return typeof field === "string" ? field : undefined;
+};
+
+const numberField = (value: unknown, key: string): number | undefined => {
+  const record = objectRecord(value);
+  const field = record?.[key];
+  return typeof field === "number" ? field : undefined;
+};
+
+const check = (
+  name: string,
+  pass: boolean,
+  detail?: string,
+): HarnessCheck => ({
+  name,
+  status: pass ? "pass" : "fail",
+  ...(!pass && detail !== undefined ? { detail } : {}),
+});
+
+const notApplicable = (name: string, detail: string): HarnessCheck => ({
+  name,
+  status: "not-applicable",
+  detail,
+});
+
+const skipped = (name: string, detail: string): HarnessCheck => ({
+  name,
+  status: "skipped",
+  detail,
+});
+
+const incomplete = (name: string, run: CommandResult | undefined): HarnessCheck =>
+  skipped(name, run === undefined ? "workflow was not run" : `workflow exited ${run.exitCode}`);
+
+const expectedAgentCheck = (
+  entry: MatrixEntry,
+  metadata: unknown,
+  run: CommandResult | undefined,
+): HarnessCheck => {
+  if (run?.exitCode !== 0) return incomplete("intended-agent-selection", run);
+  switch (entry.harness) {
+    case "opencode":
+    case "claude-code":
+    case "grok":
+      return check(
+        "intended-agent-selection",
+        stringField(metadata, "nativeAgent") === "qa-tester",
+        `expected nativeAgent qa-tester, got ${stringField(metadata, "nativeAgent") ?? "<missing>"}`,
+      );
+    case "hermes":
+    case "kimi-code": {
+      const agent = objectRecord(objectRecord(metadata)?.agent);
+      const agentName = typeof agent?.name === "string" ? agent.name : undefined;
+      return check(
+        "intended-agent-selection",
+        stringField(metadata, "agentSelection") === "prompted-contract" && agentName === "qa-tester",
+        `expected prompted-contract qa-tester, got ${stringField(metadata, "agentSelection") ?? "<missing>"} ${agentName ?? "<missing>"}`,
+      );
+    }
+    case "codex-cli":
+      return notApplicable("intended-agent-selection", "Codex CLI workflow execution has no Prism native agent file surface");
+    case "amp-code":
+      return notApplicable("intended-agent-selection", "Amp Code workflow execution uses mode selection rather than Prism native agents");
+  }
+};
+
+const noDefaultFallbackCheck = (
+  entry: MatrixEntry,
+  metadata: unknown,
+  run: CommandResult | undefined,
+): HarnessCheck => {
+  if (run?.exitCode !== 0) return incomplete("no-default-agent-fallback", run);
+  switch (entry.harness) {
+    case "opencode":
+    case "claude-code":
+    case "grok":
+      return check(
+        "no-default-agent-fallback",
+        stringField(metadata, "nativeAgent") === "qa-tester",
+        `nativeAgent was ${stringField(metadata, "nativeAgent") ?? "<missing>"}`,
+      );
+    case "hermes":
+    case "kimi-code":
+      return check(
+        "no-default-agent-fallback",
+        stringField(metadata, "agentSelection") === "prompted-contract",
+        `agentSelection was ${stringField(metadata, "agentSelection") ?? "<missing>"}`,
+      );
+    case "codex-cli":
+      return notApplicable("no-default-agent-fallback", "Codex CLI has no Prism native agent selection surface");
+    case "amp-code":
+      return notApplicable("no-default-agent-fallback", "Amp Code workflow mode is validated separately");
+  }
+};
+
+export const evaluateHarnessChecks = (
+  entry: MatrixEntry,
+  input: Pick<HarnessResult, "run" | "proof">,
+): readonly HarnessCheck[] => {
+  const metadata = input.proof?.metadata;
+  const finish = objectRecord(objectRecord(metadata)?.finish);
+  const diagnosticText = input.run?.stderr ?? "";
+  const runCompleted = input.run?.exitCode === 0;
+  const adapter = stringField(metadata, "adapter");
+  const model = stringField(metadata, "model");
+  const repairs = numberField(finish, "repairs");
+
+  return [
+    check("deterministic-generated-tool-proof", input.proof?.pass === true, input.proof?.detail),
+    runCompleted
+      ? check("intended-worker", adapter === EXPECTED_ADAPTERS[entry.harness], `expected ${EXPECTED_ADAPTERS[entry.harness]}, got ${adapter ?? "<missing>"}`)
+      : incomplete("intended-worker", input.run),
+    runCompleted
+      ? check("model-resolved", model === entry.expectedModel, `expected ${entry.expectedModel}, got ${model ?? "<missing>"}`)
+      : incomplete("model-resolved", input.run),
+    expectedAgentCheck(entry, metadata, input.run),
+    noDefaultFallbackCheck(entry, metadata, input.run),
+    check(
+      "no-blocked-tool-interruption",
+      !BLOCKED_TOOL_OUTPUT_PATTERN.test(diagnosticText),
+      "workflow stderr contained a blocked-tool/interruption pattern",
+    ),
+    runCompleted
+      ? check("no-finish-repairs", repairs === 0, `finish repairs was ${repairs ?? "<missing>"}`)
+      : incomplete("no-finish-repairs", input.run),
+  ];
+};
+
+const checksPass = (checks: readonly HarnessCheck[] | undefined): boolean =>
+  checks === undefined ? false : checks.every((item) => item.status !== "fail");
+
 const towerBody = (input: {
   readonly mode: Mode;
   readonly result: HarnessResult;
@@ -500,6 +700,7 @@ const main = async (): Promise<void> => {
         ], env);
         proof = proofFromRun(entry, run);
       }
+      const checks = validateOnly ? undefined : evaluateHarnessChecks(entry, { run, proof });
 
       const partial: HarnessResult = {
         harness: entry.harness,
@@ -509,6 +710,7 @@ const main = async (): Promise<void> => {
         validate,
         ...(run ? { run } : {}),
         ...(proof ? { proof } : {}),
+        ...(checks ? { checks } : {}),
       };
 
       const tower = await submitTowerEvidence(mode, partial, env);
@@ -525,7 +727,7 @@ const main = async (): Promise<void> => {
   const pass = results.every((result) =>
     result.refresh.exitCode === 0 &&
     result.validate.exitCode === 0 &&
-    (validateOnly || result.proof?.pass === true),
+    (validateOnly || (result.proof?.pass === true && checksPass(result.checks))),
   );
 
   console.log(JSON.stringify({

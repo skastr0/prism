@@ -5,7 +5,7 @@ import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
-import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface GrokWorkflowWorkerOptions {
@@ -329,9 +329,7 @@ export const runGrokWorkflowTask = async (
     throw new WorkflowWorkerError("grok was aborted by Prism workflow stop");
   }
   if (timedOut) {
-    throw new WorkflowWorkerError(
-      `grok exceeded Prism process timeout after ${processTimeoutMs}ms${workflowWorkerProcessExcerpt(stdout, stderr)}`,
-    );
+    throw new WorkflowWorkerError(`grok exceeded Prism process timeout after ${processTimeoutMs}ms`);
   }
   if (exitCode !== 0) {
     throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);

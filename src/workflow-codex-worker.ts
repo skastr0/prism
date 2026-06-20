@@ -4,13 +4,14 @@ import { join } from "node:path";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
-import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface CodexWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
 
@@ -25,6 +26,9 @@ export const runCodexWorkflowTask = async (
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-workflow-codex-"));
   const outputPath = join(tempRoot, "last-message.txt");
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CODEX_BIN ?? "codex";
+  const processTimeoutMs = options.processTimeoutMs
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS)
+    ?? 360_000;
   const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const args = [
     "exec",
@@ -40,14 +44,18 @@ export const runCodexWorkflowTask = async (
   ];
 
   try {
-    const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
+    const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
       command,
       args,
       cwd: options.cwd,
+      processTimeoutMs,
       abortSignal: options.abortSignal,
     });
     if (aborted) {
       throw new CodexWorkflowWorkerError("codex was aborted by Prism workflow stop");
+    }
+    if (timedOut) {
+      throw new CodexWorkflowWorkerError(`codex exceeded Prism process timeout after ${processTimeoutMs}ms`);
     }
     if (exitCode !== 0) {
       throw new CodexWorkflowWorkerError(`codex exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
@@ -61,6 +69,7 @@ export const runCodexWorkflowTask = async (
         adapter: "codex-cli",
         model: options.model,
         durationMs,
+        processTimeoutMs,
         ...summarizeWorkflowWorkerStderr(stderr),
       },
     };

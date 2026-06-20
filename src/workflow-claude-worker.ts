@@ -5,13 +5,14 @@ import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
-import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
 
 export interface ClaudeWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly repair?: WorkflowTaskRepairContext;
 }
@@ -85,6 +86,9 @@ export const runClaudeWorkflowTask = async (
   options: ClaudeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CLAUDE_BIN ?? "claude";
+  const processTimeoutMs = options.processTimeoutMs
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CLAUDE_PROCESS_TIMEOUT_MS)
+    ?? 360_000;
   const resumeSessionId = options.repair?.continuation?.sessionId;
   const prompt = options.repair !== undefined && resumeSessionId !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
@@ -97,14 +101,18 @@ export const runClaudeWorkflowTask = async (
     prompt,
   });
 
-  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
+    processTimeoutMs,
     abortSignal: options.abortSignal,
   });
   if (aborted) {
     throw new ClaudeWorkflowWorkerError("claude was aborted by Prism workflow stop");
+  }
+  if (timedOut) {
+    throw new ClaudeWorkflowWorkerError(`claude exceeded Prism process timeout after ${processTimeoutMs}ms`);
   }
   if (exitCode !== 0) {
     throw new ClaudeWorkflowWorkerError(`claude exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
@@ -125,6 +133,7 @@ export const runClaudeWorkflowTask = async (
       nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
+      processTimeoutMs,
       ...summarizeWorkflowWorkerStderr(stderr),
       sessionId: envelope.session_id,
       claudeDurationMs: envelope.duration_ms,

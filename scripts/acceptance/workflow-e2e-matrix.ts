@@ -7,11 +7,12 @@
  *
  * Usage:
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode temp
+ *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode temp --seed-live-configs
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
  */
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, join, relative, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
@@ -65,6 +66,28 @@ interface HarnessResult {
   readonly tower?: CommandResult | { readonly skipped: string };
 }
 
+interface ConfigSeedEntry {
+  readonly label: string;
+  readonly harnesses: readonly Harness[];
+  readonly from: string;
+  readonly to: string;
+  readonly copied: boolean;
+}
+
+interface ConfigSeedSummary {
+  readonly liveHome: string;
+  readonly tempHome: string;
+  readonly entries: readonly ConfigSeedEntry[];
+}
+
+interface ConfigSeedRule {
+  readonly label: string;
+  readonly harnesses: readonly Harness[];
+  readonly from: string;
+  readonly to: string;
+  readonly exclude?: ReadonlyArray<RegExp>;
+}
+
 const args = process.argv.slice(2);
 
 const argValue = (name: string): string | undefined => {
@@ -74,6 +97,130 @@ const argValue = (name: string): string | undefined => {
 };
 
 const hasFlag = (name: string): boolean => args.includes(name);
+
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const volatileHarnessPath = /(^|\/)(app-server-control|cache|caches|logs|sessions|tmp|temp)($|\/)|\.sock$/u;
+
+export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
+  {
+    label: "claude-code-settings",
+    harnesses: ["claude-code"],
+    from: ".claude/settings.json",
+    to: ".claude/settings.json",
+  },
+  {
+    label: "claude-code-credentials",
+    harnesses: ["claude-code"],
+    from: ".claude/.credentials.json",
+    to: ".claude/.credentials.json",
+  },
+  {
+    label: "claude-code-user-config",
+    harnesses: ["claude-code"],
+    from: ".claude.json",
+    to: ".claude.json",
+  },
+  {
+    label: "opencode-config",
+    harnesses: ["opencode"],
+    from: ".config/opencode/opencode.json",
+    to: ".config/opencode/opencode.json",
+  },
+  {
+    label: "opencode-auth",
+    harnesses: ["opencode"],
+    from: ".local/share/opencode/auth.json",
+    to: ".local/share/opencode/auth.json",
+  },
+  {
+    label: "codex-cli-config",
+    harnesses: ["codex-cli"],
+    from: ".codex/config.toml",
+    to: ".codex/config.toml",
+  },
+  {
+    label: "codex-cli-auth",
+    harnesses: ["codex-cli"],
+    from: ".codex/auth.json",
+    to: ".codex/auth.json",
+  },
+  {
+    label: "codex-cli-model-cache",
+    harnesses: ["codex-cli"],
+    from: ".codex/models_cache.json",
+    to: ".codex/models_cache.json",
+  },
+  {
+    label: "grok-auth",
+    harnesses: ["grok"],
+    from: ".grok/auth.json",
+    to: ".grok/auth.json",
+  },
+  {
+    label: "grok-model-cache",
+    harnesses: ["grok"],
+    from: ".grok/models_cache.json",
+    to: ".grok/models_cache.json",
+  },
+  {
+    label: "grok-version",
+    harnesses: ["grok"],
+    from: ".grok/version.json",
+    to: ".grok/version.json",
+  },
+  {
+    label: "hermes-config",
+    harnesses: ["hermes"],
+    from: ".hermes/config.yaml",
+    to: ".hermes/config.yaml",
+  },
+  {
+    label: "kimi-code-config",
+    harnesses: ["kimi-code"],
+    from: ".kimi-code/config.toml",
+    to: ".kimi-code/config.toml",
+  },
+  {
+    label: "kimi-code-device",
+    harnesses: ["kimi-code"],
+    from: ".kimi-code/device_id",
+    to: ".kimi-code/device_id",
+  },
+  {
+    label: "kimi-code-oauth",
+    harnesses: ["kimi-code"],
+    from: ".kimi-code/oauth",
+    to: ".kimi-code/oauth",
+    exclude: [volatileHarnessPath],
+  },
+  {
+    label: "kimi-code-credentials",
+    harnesses: ["kimi-code"],
+    from: ".kimi-code/credentials",
+    to: ".kimi-code/credentials",
+    exclude: [volatileHarnessPath],
+  },
+  {
+    label: "amp-code-settings",
+    harnesses: ["amp-code"],
+    from: ".config/amp/settings.json",
+    to: ".config/amp/settings.json",
+  },
+  {
+    label: "amp-code-settings-haiku",
+    harnesses: ["amp-code"],
+    from: ".config/amp/settings-haiku.json",
+    to: ".config/amp/settings-haiku.json",
+  },
+];
 
 const parseMode = (): Mode => {
   const value = argValue("--mode") ?? "temp";
@@ -144,6 +291,44 @@ const preparePluginRoot = async (roots: string[]): Promise<string> => {
   ]);
   await writeE2EManifest(pluginRoot);
   return pluginRoot;
+};
+
+const copyLiveConfigSeed = async (
+  rule: ConfigSeedRule,
+  liveHome: string,
+  tempHome: string,
+): Promise<ConfigSeedEntry> => {
+  const source = join(liveHome, rule.from);
+  const target = join(tempHome, rule.to);
+  if (!(await pathExists(source))) {
+    return { label: rule.label, harnesses: rule.harnesses, from: source, to: target, copied: false };
+  }
+
+  await mkdir(dirname(target), { recursive: true });
+  await cp(source, target, {
+    recursive: true,
+    force: true,
+    filter: (candidate) => {
+      const rel = relative(source, candidate).split("\\").join("/");
+      if (rel === "") return true;
+      return !(rule.exclude ?? []).some((pattern) => pattern.test(rel));
+    },
+  });
+  return { label: rule.label, harnesses: rule.harnesses, from: source, to: target, copied: true };
+};
+
+const seedLiveConfigs = async (input: {
+  readonly liveHome: string;
+  readonly tempHome: string;
+  readonly harnesses: ReadonlySet<Harness>;
+}): Promise<ConfigSeedSummary> => {
+  const rules = CONFIG_SEED_RULES.filter((rule) =>
+    rule.harnesses.some((harness) => input.harnesses.has(harness))
+  );
+  const entries = await Promise.all(
+    rules.map((rule) => copyLiveConfigSeed(rule, input.liveHome, input.tempHome)),
+  );
+  return { liveHome: input.liveHome, tempHome: input.tempHome, entries };
 };
 
 const workflowPath = (pluginRoot: string, entry: MatrixEntry): string =>
@@ -231,17 +416,24 @@ const main = async (): Promise<void> => {
   const roots: string[] = [];
   const env: Record<string, string | undefined> = {};
   const pluginRoot = await preparePluginRoot(roots);
+  const entries = MATRIX.filter((entry) => selected === undefined || selected.includes(entry.harness));
+  let configSeed: ConfigSeedSummary | undefined;
 
   if (mode === "temp") {
     const home = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-home-"));
     const prismHome = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-prism-home-"));
     roots.push(home, prismHome);
+    if (hasFlag("--seed-live-configs")) {
+      configSeed = await seedLiveConfigs({
+        liveHome: resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir()),
+        tempHome: home,
+        harnesses: new Set(entries.map((entry) => entry.harness)),
+      });
+    }
     env.HOME = home;
     env.PRISM_HOME = prismHome;
     env.KIMI_CODE_HOME = join(home, ".kimi-code");
   }
-
-  const entries = MATRIX.filter((entry) => selected === undefined || selected.includes(entry.harness));
   const results: HarnessResult[] = [];
 
   try {
@@ -317,10 +509,13 @@ const main = async (): Promise<void> => {
     mode,
     pass,
     validateOnly,
+    ...(configSeed ? { configSeed } : {}),
     results,
   }, null, 2));
 
   process.exitCode = pass ? 0 : 1;
 };
 
-await main();
+if (import.meta.main) {
+  await main();
+}

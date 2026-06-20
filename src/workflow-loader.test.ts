@@ -1137,6 +1137,52 @@ describe("workflow loader", () => {
     expect(stderr).toContain("amp exited with 2: amp auth failed");
   });
 
+  test("CLI kills Amp runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeAmp = join(root, "fake-amp-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "amp-code" }));
+    await writeFile(fakeAmp, [
+      "#!/usr/bin/env node",
+      "console.error('starting amp hang SECRET_TIMEOUT_TRANSCRIPT');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeAmp, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "amp-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        PRISM_WORKFLOW_AMP_BIN: fakeAmp,
+        PRISM_WORKFLOW_AMP_PROCESS_TIMEOUT_MS: "250",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("amp exceeded Prism process timeout after 250ms");
+    expect(stderr).not.toContain("SECRET_TIMEOUT_TRANSCRIPT");
+  });
+
   test("CLI runs a workflow through the Claude Code worker adapter", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
@@ -1308,6 +1354,52 @@ describe("workflow loader", () => {
     expect(stderr).toContain("claude JSON envelope did not contain a string result");
   });
 
+  test("CLI kills Claude runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeClaude = join(root, "fake-claude-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "claude-code" }));
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "console.error('starting claude hang SECRET_TIMEOUT_TRANSCRIPT');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "claude-code",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude,
+        PRISM_WORKFLOW_CLAUDE_PROCESS_TIMEOUT_MS: "250",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("claude exceeded Prism process timeout after 250ms");
+    expect(stderr).not.toContain("SECRET_TIMEOUT_TRANSCRIPT");
+  });
+
   test("CLI runs a workflow through the Codex worker adapter", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
@@ -1427,6 +1519,52 @@ describe("workflow loader", () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("codex did not write --output-last-message");
+  });
+
+  test("CLI kills Codex runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeCodex = join(root, "fake-codex-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "codex-cli" }));
+    await writeFile(fakeCodex, [
+      "#!/usr/bin/env node",
+      "console.error('starting codex hang SECRET_TIMEOUT_TRANSCRIPT');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeCodex, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "codex-cli",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        PRISM_WORKFLOW_CODEX_BIN: fakeCodex,
+        PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS: "250",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("codex exceeded Prism process timeout after 250ms");
+    expect(stderr).not.toContain("SECRET_TIMEOUT_TRANSCRIPT");
   });
 
   test("CLI runs a workflow through the Hermes worker adapter", async () => {
@@ -1590,7 +1728,7 @@ describe("workflow loader", () => {
     await writeFile(file, workflowSource("default", { worker: "hermes" }));
     await writeFile(fakeHermes, [
       "#!/usr/bin/env node",
-      "console.log('starting hermes hang');",
+      "console.log('starting hermes hang SECRET_TIMEOUT_TRANSCRIPT');",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"));
@@ -1625,6 +1763,7 @@ describe("workflow loader", () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("hermes exceeded Prism process timeout after 250ms");
+    expect(stderr).not.toContain("SECRET_TIMEOUT_TRANSCRIPT");
   });
 
   test("CLI runs a workflow through the Kimi Code worker adapter", async () => {
@@ -1810,7 +1949,7 @@ describe("workflow loader", () => {
     await writeFile(file, workflowSource("default", { worker: "kimi-code" }));
     await writeFile(fakeKimi, [
       "#!/usr/bin/env node",
-      "console.log('starting kimi hang');",
+      "console.log('starting kimi hang SECRET_TIMEOUT_TRANSCRIPT');",
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"));
@@ -1845,6 +1984,7 @@ describe("workflow loader", () => {
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("kimi-code exceeded Prism process timeout after 250ms");
+    expect(stderr).not.toContain("SECRET_TIMEOUT_TRANSCRIPT");
   });
 
   test("CLI runs a workflow through the OpenCode worker adapter", async () => {
@@ -1965,6 +2105,52 @@ describe("workflow loader", () => {
     const expectedCwd = await realpath(root);
     const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { hasModelFlag: boolean; model: string; cwd: string; agent: string });
     expect(calls).toEqual([{ hasModelFlag: false, model: "missing", cwd: expectedCwd, agent: "builder" }]);
+  });
+
+  test("CLI kills OpenCode runs that exceed the Prism process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeOpenCode = join(root, "fake-opencode-hangs.mjs");
+    await writeFile(file, workflowSource("default", { worker: "opencode" }));
+    await writeFile(fakeOpenCode, [
+      "#!/usr/bin/env node",
+      "console.error('starting opencode hang SECRET_TIMEOUT_TRANSCRIPT');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeOpenCode, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "opencode",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: {
+        ...process.env,
+        PRISM_WORKFLOW_OPENCODE_BIN: fakeOpenCode,
+        PRISM_WORKFLOW_OPENCODE_PROCESS_TIMEOUT_MS: "250",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("opencode exceeded Prism process timeout after 250ms");
+    expect(stderr).not.toContain("SECRET_TIMEOUT_TRANSCRIPT");
   });
 
   test("CLI routes mixed task-level workers in one workflow run", async () => {

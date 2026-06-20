@@ -184,7 +184,7 @@ const terminalErrorMessage = (input: {
 }): string => {
   const excerpt = workflowWorkerProcessExcerpt(input.result.stdout, input.result.stderr);
   if (input.reason === "aborted") {
-    return `agy was aborted by Prism workflow stop${excerpt}`;
+    return "agy was aborted by Prism workflow stop";
   }
   if (input.reason === "non-zero-exit") {
     return `agy exited with ${input.result.exitCode}: ${input.result.stderr.trim() || input.result.stdout.trim()}`;
@@ -305,7 +305,7 @@ export const runAntigravityWorkflowTask = async (
         // Preserve the existing timeout failure unless AGY printed a complete Prism worker JSON value before stalling.
       }
       return yield* Effect.fail(
-        new AntigravityWorkflowWorkerError(`agy exceeded Prism process timeout after ${processTimeoutMs}ms${workflowWorkerProcessExcerpt(result.stdout, result.stderr)}`),
+        new AntigravityWorkflowWorkerError(`agy exceeded Prism process timeout after ${processTimeoutMs}ms`),
       );
     }
 

@@ -1,7 +1,7 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
-import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface HermesWorkflowWorkerOptions {
@@ -50,11 +50,10 @@ export const runHermesWorkflowTask = async (
     abortSignal: options.abortSignal,
   });
   if (aborted) {
-    throw new HermesWorkflowWorkerError(`hermes was aborted by Prism workflow stop${workflowWorkerProcessExcerpt(stdout, stderr)}`);
+    throw new HermesWorkflowWorkerError("hermes was aborted by Prism workflow stop");
   }
   if (timedOut) {
-    const excerpt = workflowWorkerProcessExcerpt(stdout, stderr);
-    throw new HermesWorkflowWorkerError(`hermes exceeded Prism process timeout after ${processTimeoutMs}ms${excerpt}`);
+    throw new HermesWorkflowWorkerError(`hermes exceeded Prism process timeout after ${processTimeoutMs}ms`);
   }
   if (exitCode !== 0) {
     throw new HermesWorkflowWorkerError(`hermes exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);

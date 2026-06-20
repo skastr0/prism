@@ -1,7 +1,7 @@
 import type { AnyWorkflowTask } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
-import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
+import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface OpenCodeWorkflowWorkerOptions {
@@ -58,9 +58,7 @@ export const runOpenCodeWorkflowTask = async (
     throw new OpenCodeWorkflowWorkerError("opencode was aborted by Prism workflow stop");
   }
   if (timedOut) {
-    throw new OpenCodeWorkflowWorkerError(
-      `opencode exceeded Prism process timeout after ${processTimeoutMs}ms${workflowWorkerProcessExcerpt(stdout, stderr)}`,
-    );
+    throw new OpenCodeWorkflowWorkerError(`opencode exceeded Prism process timeout after ${processTimeoutMs}ms`);
   }
   if (exitCode !== 0) {
     throw new OpenCodeWorkflowWorkerError(`opencode exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);

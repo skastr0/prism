@@ -20,6 +20,7 @@ describe("workflow-e2e live config seeding", () => {
       ".grok/auth.json",
       ".grok/models_cache.json",
       ".grok/version.json",
+      ".hermes/auth.json",
       ".hermes/config.yaml",
       ".kimi-code/config.toml",
       ".kimi-code/credentials",
@@ -37,6 +38,7 @@ describe("workflow-e2e live config seeding", () => {
 
     expect(paths).not.toContain(".codex");
     expect(paths).not.toContain(".grok");
+    expect(paths).not.toContain(".hermes");
     expect(paths).not.toContain(".local/share/amp");
     expect(paths).not.toContain(".local/share/opencode");
     expect(paths).not.toContain(".codex/installation_id");

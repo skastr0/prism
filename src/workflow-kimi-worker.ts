@@ -22,6 +22,22 @@ export class KimiWorkflowWorkerError extends Error {
   override readonly name = "KimiWorkflowWorkerError";
 }
 
+const KIMI_AUTH_OUTPUT_PATTERN =
+  /(^|\n)\s*(?:error:\s*)?(?:failed to run prompt:\s*)?auth\.login_required:[^{}\n]*requires login[^{}\n]*/iu;
+
+const KIMI_AUTH_PROMPT_PATTERNS = [
+  {
+    name: "kimi-oauth-login-required",
+    pattern: KIMI_AUTH_OUTPUT_PATTERN,
+  },
+] as const;
+
+export const isKimiAuthOutput = (output: string): boolean =>
+  KIMI_AUTH_OUTPUT_PATTERN.test(output);
+
+const kimiAuthErrorMessage =
+  "kimi-code requires OAuth login before workflow run; run `kimi login` or refresh Kimi Code credentials, then retry";
+
 const generatedKimiPluginId = (sourcePluginName: string): string =>
   `prism-generated-${sourcePluginName}`;
 
@@ -72,19 +88,26 @@ export const runKimiWorkflowTask = async (
     join(kimiHome, "plugins", "managed", generatedKimiPluginId(task.agent.plugin), "skills"),
   ];
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
     env: { KIMI_CODE_HOME: kimiHome },
+    earlyExitPatterns: KIMI_AUTH_PROMPT_PATTERNS,
   });
   if (aborted) {
     throw new KimiWorkflowWorkerError("kimi-code was aborted by Prism workflow stop");
   }
+  if (earlyExit === "kimi-oauth-login-required") {
+    throw new KimiWorkflowWorkerError(kimiAuthErrorMessage);
+  }
   if (timedOut) {
     throw new KimiWorkflowWorkerError(`kimi-code exceeded Prism process timeout after ${processTimeoutMs}ms`);
+  }
+  if (exitCode !== 0 && isKimiAuthOutput(`${stdout}\n${stderr}`)) {
+    throw new KimiWorkflowWorkerError(kimiAuthErrorMessage);
   }
   if (exitCode !== 0) {
     throw new KimiWorkflowWorkerError(`kimi-code exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);

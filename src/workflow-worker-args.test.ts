@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { buildAmpArgs, assertAmpWorkflowMode } from "./workflow-amp-worker.js";
 import { buildClaudeArgs } from "./workflow-claude-worker.js";
 import { buildGrokArgs, isGrokAuthOutput } from "./workflow-grok-worker.js";
+import { isKimiAuthOutput } from "./workflow-kimi-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { supportedWorkflowWorkers, UnsupportedWorkflowWorkerError, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 
@@ -24,6 +25,13 @@ describe("workflow worker argument builders", () => {
     expect(isGrokAuthOutput("You are not authenticated.")).toBe(true);
     expect(isGrokAuthOutput("error: provider requires login before use")).toBe(true);
     expect(isGrokAuthOutput(JSON.stringify({ summary: "You are not authenticated." }))).toBe(false);
+  });
+
+  test("kimi auth output detection is line-based", () => {
+    expect(isKimiAuthOutput(
+      'error: failed to run prompt: auth.login_required: OAuth provider "managed:kimi-code" requires login before it can be used.',
+    )).toBe(true);
+    expect(isKimiAuthOutput(JSON.stringify({ summary: "auth.login_required: requires login" }))).toBe(false);
   });
 
   test("opencode invokes the generated agent directly", () => {

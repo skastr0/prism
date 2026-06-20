@@ -183,6 +183,12 @@ export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
     to: ".hermes/config.yaml",
   },
   {
+    label: "hermes-auth",
+    harnesses: ["hermes"],
+    from: ".hermes/auth.json",
+    to: ".hermes/auth.json",
+  },
+  {
     label: "kimi-code-config",
     harnesses: ["kimi-code"],
     from: ".kimi-code/config.toml",

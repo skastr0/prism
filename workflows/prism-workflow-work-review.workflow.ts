@@ -196,7 +196,7 @@ export default defineWorkflow({
         brief,
         "opencode-regression-review",
         "opencode",
-        agents.forge.verificationReviewer,
+        agents.forge.orchestratorEngineer,
         models.prismHarnessQa.qaModels.smoke,
         "Regression proof quality: tests, modelspace coverage, direct agent selection, and false-positive prevention.",
       );

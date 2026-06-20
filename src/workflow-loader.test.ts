@@ -1276,6 +1276,63 @@ describe("workflow loader", () => {
     ]);
   });
 
+  test("CLI fails closed when generated Claude MCP config is missing for MCP-backed agents", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const callsFile = join(root, "claude-called");
+    const fakeClaude = join(root, "fake-claude.mjs");
+    const claudeRoot = join(root, ".claude");
+    const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
+    await writeFile(file, workerModelWorkflowSource("claude-code"));
+    await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
+    await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [
+      "---",
+      "name: builder",
+      "tools:",
+      "  - \"mcp__prism-generated-forge__forge_echo\"",
+      "---",
+      "",
+    ].join("\n"));
+    await writeFile(fakeClaude, [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(callsFile)}, 'called');`,
+      "console.log(JSON.stringify({ result: JSON.stringify({ summary: 'unexpected' }), is_error: false }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeClaude, 0o755);
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--worker",
+        "claude-code",
+        "--store",
+        storeFile,
+        "--model",
+        "sonnet",
+      ],
+      cwd: root,
+      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("references MCP tools but is missing");
+    expect(await Bun.file(callsFile).exists()).toBe(false);
+  });
+
   test("CLI fails Claude runs when the JSON envelope reports an error", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

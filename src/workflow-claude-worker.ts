@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
@@ -51,6 +51,8 @@ const parseClaudeEnvelope = (stdout: string): ClaudeJsonEnvelope => {
 const claudeRoot = (): string =>
   process.env.PRISM_WORKFLOW_CLAUDE_ROOT ?? join(homedir(), ".claude");
 
+const CLAUDE_MCP_TOOL_PATTERN = /\bmcp__[^ \n]+__/u;
+
 export const discoverClaudeGeneratedPlugin = (
   task: AnyWorkflowTask,
 ): ClaudeGeneratedPluginDiscovery => {
@@ -58,6 +60,12 @@ export const discoverClaudeGeneratedPlugin = (
   if (!existsSync(pluginDir)) return {};
 
   const mcpConfig = join(pluginDir, ".mcp.json");
+  const agentFile = join(pluginDir, "agents", `${task.agent.name}.md`);
+  if (!existsSync(mcpConfig) && existsSync(agentFile) && CLAUDE_MCP_TOOL_PATTERN.test(readFileSync(agentFile, "utf8"))) {
+    throw new ClaudeWorkflowWorkerError(
+      `generated Claude plugin '${pluginDir}' for agent '${task.agent.plugin}:${task.agent.name}' references MCP tools but is missing '${mcpConfig}'`,
+    );
+  }
   return {
     pluginDir,
     ...(existsSync(mcpConfig) ? { mcpConfig } : {}),

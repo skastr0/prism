@@ -3,11 +3,20 @@
  *
  * Run from the prism git root:
  *   prism workflow validate workflows/prism-workflow-e2e-plan-council.workflow.ts
- *   prism workflow run workflows/prism-workflow-e2e-plan-council.workflow.ts --store /tmp/prism-e2e-plan-council.sqlite
+ *   prism workflow run workflows/prism-workflow-e2e-plan-council.workflow.ts --store /tmp/prism-e2e-plan-council.sqlite --no-cache
+ *
+ * Failed reviewer harnesses are captured as evidence so one auth-gated live
+ * route does not prevent the remaining council from producing suggestions.
  */
-import { Effect, Schema } from "effect";
-import { defineTask, defineWorkflow } from "prism";
+import { Effect, Either, Schema } from "effect";
+import {
+  defineTask,
+  defineWorkflow,
+  type WorkflowRuntime,
+  type WorkflowTaskWorkerOptions,
+} from "prism";
 import { agents } from "prism/refs";
+import { models } from "prism/refs/models";
 
 const PLAN_BRIEF = `Review the Prism workflow E2E implementation plan and current repo direction.
 
@@ -32,6 +41,22 @@ const LensReport = Schema.Struct({
   runbookNotes: Schema.Array(Schema.String),
 });
 
+const CompletedLensResult = Schema.Struct({
+  taskId: Schema.String,
+  harness: Schema.Literal("grok", "claude-code", "opencode"),
+  status: Schema.Literal("completed"),
+  report: LensReport,
+});
+
+const FailedLensResult = Schema.Struct({
+  taskId: Schema.String,
+  harness: Schema.Literal("grok", "claude-code", "opencode"),
+  status: Schema.Literal("failed"),
+  error: Schema.String,
+});
+
+const LensResult = Schema.Union(CompletedLensResult, FailedLensResult);
+
 const FusionReview = Schema.Struct({
   verdict: Schema.Literal("ship", "adjust", "block"),
   orderedActions: Schema.Array(Schema.String),
@@ -41,7 +66,16 @@ const FusionReview = Schema.Struct({
   dissent: Schema.Array(Schema.String),
 });
 
+type LensReport = Schema.Schema.Type<typeof LensReport>;
+type LensResult = Schema.Schema.Type<typeof LensResult>;
+type FusionReview = Schema.Schema.Type<typeof FusionReview>;
+
 const qaTester = agents.prismHarnessQa.qaTester;
+
+const errorToMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/\s+/g, " ").slice(0, 800);
+};
 
 const lensTask = (
   id:
@@ -53,58 +87,131 @@ const lensTask = (
   worker: "grok" | "claude-code" | "opencode",
   lens: string,
 ) => {
-  const workerOptions =
-    worker === "grok"
-      ? { worker, model: "grok-build" as const }
-      : worker === "opencode"
-        ? { worker, model: "ollama-cloud/deepseek-v4-flash" as const }
-        : { worker, model: "sonnet" as const };
-
   return defineTask({
     id,
     agent: qaTester,
     prompt: `${PLAN_BRIEF}\n\nLens: ${lens}\nSet harness to "${worker}" and lens to ${JSON.stringify(lens)}.`,
     output: LensReport,
-    cacheKey: `prism-e2e-plan-council-${id}-v1`,
-    worker: workerOptions,
+    worker: { worker, model: models.prismHarnessQa.qaModels.smoke },
   });
+};
+
+type LensTask = ReturnType<typeof lensTask>;
+
+const captureLens = (
+  wf: WorkflowRuntime,
+  task: LensTask,
+  harness: "grok" | "claude-code" | "opencode",
+) =>
+  Effect.gen(function* () {
+    const result = yield* Effect.either(wf.runTask(task));
+    if (Either.isRight(result)) {
+      return {
+        taskId: task.id,
+        harness,
+        status: "completed" as const,
+        report: result.right,
+      } satisfies LensResult;
+    }
+    return {
+      taskId: task.id,
+      harness,
+      status: "failed" as const,
+      error: errorToMessage(result.left),
+    } satisfies LensResult;
+  });
+
+const fusionWorker = (lensResults: ReadonlyArray<LensResult>): WorkflowTaskWorkerOptions | null => {
+  const completed = lensResults.find((result) => result.status === "completed");
+  return completed ? { worker: completed.harness, model: models.prismHarnessQa.qaModels.smoke } : null;
+};
+
+const localFusionReview = (lensResults: ReadonlyArray<LensResult>): FusionReview => {
+  const completedReports = lensResults.flatMap((result) => result.status === "completed" ? [result.report] : []);
+  return {
+    verdict: completedReports.some((report) => report.verdict === "block")
+      ? "block"
+      : lensResults.some((result) => result.status === "failed") || completedReports.some((report) => report.verdict === "adjust")
+        ? "adjust"
+        : "ship",
+    orderedActions: [
+      ...completedReports.flatMap((report) => report.recommendedChanges),
+      ...lensResults.flatMap((result) =>
+        result.status === "failed"
+          ? [`Resolve ${result.harness} setup for ${result.taskId}: ${result.error}`]
+          : [],
+      ),
+    ],
+    mustFixBeforeLive: lensResults.flatMap((result) => {
+      if (result.status === "failed") return [`${result.taskId}: ${result.error}`];
+      return result.report.verdict === "block"
+        ? result.report.topRisks.map((risk) => `${result.taskId}: ${risk}`)
+        : [];
+    }),
+    regressionTests: completedReports.flatMap((report) => report.testsToAdd),
+    acceptanceRunbook: [
+      ...completedReports.flatMap((report) => report.runbookNotes),
+      "rerun prism-workflow-e2e-plan-council with --no-cache after harness auth refresh",
+    ],
+    dissent: lensResults.map((result) =>
+      result.status === "completed"
+        ? `${result.taskId}: ${result.report.verdict}`
+        : `${result.taskId}: setup-blocked: ${result.error}`,
+    ),
+  };
 };
 
 export const workflow = defineWorkflow({
   name: "prism-workflow-e2e-plan-council",
   run: (wf) =>
     Effect.gen(function* () {
+      const lensTasks = [
+        ["grok", lensTask("grok-worker-lens", "grok", "Grok worker invocation, headless flags, and generated plugin behavior")],
+        ["grok", lensTask("grok-ops-lens", "grok", "E2E operations runbook, temp roots, live roots, and evidence capture")],
+        ["claude-code", lensTask("claude-contract-lens", "claude-code", "Contracts, schemas, modelspace refs, and fail-closed behavior")],
+        ["claude-code", lensTask("claude-risk-lens", "claude-code", "Risk review before live harness mutation and Tower dispatches")],
+        ["opencode", lensTask("opencode-direct-lens", "opencode", "OpenCode direct agent mode and no default-agent fallback")],
+      ] as const;
       const lenses = yield* Effect.all(
-        [
-          wf.runTask(lensTask("grok-worker-lens", "grok", "Grok worker invocation, headless flags, and generated plugin behavior")),
-          wf.runTask(lensTask("grok-ops-lens", "grok", "E2E operations runbook, temp roots, live roots, and evidence capture")),
-          wf.runTask(lensTask("claude-contract-lens", "claude-code", "Contracts, schemas, modelspace refs, and fail-closed behavior")),
-          wf.runTask(lensTask("claude-risk-lens", "claude-code", "Risk review before live harness mutation and Tower dispatches")),
-          wf.runTask(lensTask("opencode-direct-lens", "opencode", "OpenCode direct agent mode and no default-agent fallback")),
-        ],
+        lensTasks.map(([harness, task]) => captureLens(wf, task, harness)),
         { concurrency: "unbounded" },
       );
 
-      const fusion = yield* wf.runTask(
-        defineTask({
-          id: "fusion-review",
-          agent: qaTester,
-          prompt: `Fuse these council reports into a concise implementation review.
+      const selectedFusionWorker = fusionWorker(lenses);
+      if (selectedFusionWorker === null) {
+        return { lenses, fusion: localFusionReview(lenses), fusionSource: "local" as const };
+      }
+
+      const aiFusion = yield* Effect.either(
+        wf.runTask(
+          defineTask({
+            id: "fusion-review",
+            agent: qaTester,
+            prompt: `Fuse these council reports into a concise implementation review.
 
 Reports:
 ${JSON.stringify(lenses, null, 2)}
 
 Rules:
 - Preserve real dissent.
+- Classify failed reviewer harnesses as setup blockers instead of discarding them.
 - Separate changes required before committed regression tests from changes required only before live harness runs.
 - Prefer actions that can be checked by bun tests or prism workflow validate/run.
+- Every field must be an array of plain strings except verdict.
 - Return only JSON matching the schema.`,
-          output: FusionReview,
-          cacheKey: "prism-e2e-plan-council-fusion-v1",
-          worker: { worker: "claude-code", model: "sonnet" },
-        }),
+            output: FusionReview,
+            worker: selectedFusionWorker,
+          }),
+        ),
       );
 
-      return { lenses, fusion };
+      if (Either.isRight(aiFusion)) return { lenses, fusion: aiFusion.right, fusionSource: "ai" as const };
+
+      return {
+        lenses,
+        fusion: localFusionReview(lenses),
+        fusionSource: "local" as const,
+        fusionError: errorToMessage(aiFusion.left),
+      };
     }),
 });

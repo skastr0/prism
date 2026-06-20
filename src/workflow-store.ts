@@ -746,7 +746,7 @@ export class WorkflowStore {
     db.exec(`
       update workflow_runs
       set status = 'failed', finished_at = coalesce(finished_at, datetime('now'))
-      where status in ('running', 'unknown')
+      where status = 'unknown'
         and exists (
           select 1 from workflow_run_tasks
           where workflow_run_tasks.run_id = workflow_runs.run_id

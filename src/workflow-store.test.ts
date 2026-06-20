@@ -127,6 +127,75 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("does not backfill active running runs with caught failed task rows", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+    const store = await WorkflowStore.open(path);
+    const runId = store.createRun("dynamic-review");
+    store.recordRunTask({
+      runId,
+      ordinal: 0,
+      identity: {
+        workflow: "dynamic-review",
+        taskId: "optional-reviewer",
+        cacheKey: "optional-reviewer",
+        promptHash: "a".repeat(64),
+        agentManifestHash: "b".repeat(64),
+      },
+      agent: { plugin: "forge", name: "reviewer" },
+      status: "failed",
+      cached: false,
+      output: { error: "reviewer setup blocker" },
+      metadata: contractMetadata,
+    });
+    store.close();
+
+    const reopened = await WorkflowStore.open(path);
+
+    expect(reopened.getRun(runId)?.status).toBe("running");
+    expect(reopened.listRunTasks(runId)).toEqual([
+      expect.objectContaining({
+        taskId: "optional-reviewer",
+        status: "failed",
+        output: { error: "reviewer setup blocker" },
+      }),
+    ]);
+    reopened.close();
+  });
+
+  test("backfills unknown runs with failed task rows in current-schema ledgers", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+    const store = await WorkflowStore.open(path);
+    const runId = store.createRun("legacy-current-schema");
+    store.recordRunTask({
+      runId,
+      ordinal: 0,
+      identity: {
+        workflow: "legacy-current-schema",
+        taskId: "failed-task",
+        cacheKey: "failed-task",
+        promptHash: "a".repeat(64),
+        agentManifestHash: "b".repeat(64),
+      },
+      agent: { plugin: "forge", name: "reviewer" },
+      status: "failed",
+      cached: false,
+      output: { error: "legacy failure" },
+      metadata: contractMetadata,
+    });
+    store.close();
+
+    const db = new Database(path);
+    db.query("update workflow_runs set status = 'unknown' where run_id = ?").run(runId);
+    db.close();
+
+    const reopened = await WorkflowStore.open(path);
+
+    expect(reopened.getRun(runId)?.status).toBe("failed");
+    reopened.close();
+  });
+
   test("fails stale running runs without touching fresh running runs", async () => {
     const root = await createTempRoot();
     const path = join(root, "workflows.sqlite");

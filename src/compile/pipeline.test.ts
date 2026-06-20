@@ -19,6 +19,7 @@ import {
 } from "./compile-manifest.js";
 import { WORKFLOW_REFS_HARNESS, workflowAgentsPath, workflowModelsPath, workflowRefsRoot, workflowSkillsPath, workflowToolsPath } from "./workflow-refs-emitter.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
+import { grokMcpServerNameForPlugin } from "./lowerers/grok.js";
 import { deriveProjectKey } from "../project-key.js";
 import { expandPath } from "../fs.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
@@ -7392,10 +7393,12 @@ export default defineAgent({
       headers?: Record<string, string>;
     }>;
   };
-  expect(mcpConfig.mcpServers?.["prism-generated-grok-pipeline-demo"]?.type).toBe("http");
-  expect(mcpConfig.mcpServers?.["prism-generated-grok-pipeline-demo"]?.url)
+  const grokMcpServerName = grokMcpServerNameForPlugin("grok-pipeline-demo");
+  expect(grokMcpServerName).toMatch(/^p_[0-9a-f]{8}$/u);
+  expect(mcpConfig.mcpServers?.[grokMcpServerName]?.type).toBe("http");
+  expect(mcpConfig.mcpServers?.[grokMcpServerName]?.url)
     .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  expect(mcpConfig.mcpServers?.["prism-generated-grok-pipeline-demo"]?.headers).toMatchObject({
+  expect(mcpConfig.mcpServers?.[grokMcpServerName]?.headers).toMatchObject({
     "X-Prism-Mcp-Exposure": "prism-generated-grok-pipeline-demo:grok",
   });
   const mcpServer = await readFile(

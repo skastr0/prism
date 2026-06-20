@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
-import { planLowering } from "./lowerers/grok.js";
+import { grokMcpServerNameForPlugin, planLowering } from "./lowerers/grok.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -20,6 +20,7 @@ const effectImportPath = join(
 ).replace(/\\/g, "/");
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const GROK_MAX_TOOL_NAME_LENGTH = 64;
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-grok-lowerer-"));
@@ -292,7 +293,9 @@ export default defineTool({
   expect(skill?.content).toContain("# Testing");
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  expect(mcpConfig?.content).toContain('"prism-generated-grok-plugin-fixture"');
+  const grokMcpServerName = grokMcpServerNameForPlugin("grok-plugin-fixture");
+  expect(grokMcpServerName).toMatch(/^p_[0-9a-f]{8}$/u);
+  expect(mcpConfig?.content).toContain(`"${grokMcpServerName}"`);
   const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
     mcpServers?: Record<string, {
       type?: string;
@@ -300,7 +303,7 @@ export default defineTool({
       headers?: Record<string, string>;
     }>;
   };
-  const grokEntry = mcpParsed.mcpServers?.["prism-generated-grok-plugin-fixture"];
+  const grokEntry = mcpParsed.mcpServers?.[grokMcpServerName];
   expect(grokEntry?.type).toBe("http");
   expect(grokEntry?.url).toBe("http://127.0.0.1:38467/mcp");
   expect(grokEntry?.headers).toEqual({
@@ -320,8 +323,10 @@ export default defineTool({
   expect(hookConfig?.content).toContain('"SessionEnd"');
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_terminal_cmd"');
+  const generatedEchoTool = `${grokMcpServerName}__grok_plugin_fixture_echo`;
+  expect(generatedEchoTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   expect(hookConfig?.content).toContain(
-    '"matcher": "prism-generated-grok-plugin-fixture__grok_plugin_fixture_echo"',
+    `"matcher": "${generatedEchoTool}"`,
   );
   expect(hookConfig?.content).toContain(
     join(outputRoot, "plugins", "prism-generated-grok-plugin-fixture", "hooks", "audit-shell.mjs"),
@@ -508,7 +513,9 @@ export default defineTool({
       headers?: Record<string, string>;
     }>;
   };
-  const entry = parsed.mcpServers?.["prism-generated-grok-http-fixture"];
+  const grokMcpServerName = grokMcpServerNameForPlugin("grok-http-fixture");
+  expect(grokMcpServerName).toMatch(/^p_[0-9a-f]{8}$/u);
+  const entry = parsed.mcpServers?.[grokMcpServerName];
   expect(entry?.type).toBe("http");
   expect(entry?.url).toBe("http://127.0.0.1:38467/mcp");
   expect(entry?.headers).toEqual({

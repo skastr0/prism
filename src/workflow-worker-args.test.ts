@@ -15,6 +15,7 @@ describe("workflow worker argument builders", () => {
     });
 
     expect(args).toContain("--single");
+    expect(args.slice(args.indexOf("--allow"), args.indexOf("--allow") + 2)).toEqual(["--allow", "MCPTool"]);
     expect(args).not.toContain("--prompt-file");
     expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
   });

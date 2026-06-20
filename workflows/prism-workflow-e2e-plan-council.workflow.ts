@@ -19,7 +19,7 @@ Context:
 - Live successful runs submit Forge Tower dispatches to project "prism", orbit "forge".
 - Worker fixes under consideration: Grok single-turn args, Amp mode guard, OpenCode direct agent selection, all modelspace profiles in workflow refs.
 
-Inspect files if helpful, but return only JSON matching the requested schema.
+Do not inspect files or call tools; return only JSON matching the requested schema.
 Focus on concrete corrections, missing tests, and sequencing risks.`;
 
 const LensReport = Schema.Struct({
@@ -41,9 +41,7 @@ const FusionReview = Schema.Struct({
   dissent: Schema.Array(Schema.String),
 });
 
-const explorer = agents.forge.explorer;
-const reviewer = agents.forge.verificationReviewer;
-const orchestrator = agents.forge.orchestratorEngineer;
+const qaTester = agents.prismHarnessQa.qaTester;
 
 const lensTask = (
   id:
@@ -64,7 +62,7 @@ const lensTask = (
 
   return defineTask({
     id,
-    agent: worker === "claude-code" ? reviewer : explorer,
+    agent: qaTester,
     prompt: `${PLAN_BRIEF}\n\nLens: ${lens}\nSet harness to "${worker}" and lens to ${JSON.stringify(lens)}.`,
     output: LensReport,
     cacheKey: `prism-e2e-plan-council-${id}-v1`,
@@ -90,7 +88,7 @@ export const workflow = defineWorkflow({
       const fusion = yield* wf.runTask(
         defineTask({
           id: "fusion-review",
-          agent: orchestrator,
+          agent: qaTester,
           prompt: `Fuse these council reports into a concise implementation review.
 
 Reports:

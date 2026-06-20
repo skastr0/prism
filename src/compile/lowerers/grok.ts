@@ -8,6 +8,7 @@
 import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
+import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
@@ -25,7 +26,6 @@ import {
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
-import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
@@ -33,7 +33,6 @@ import {
   createGeneratedPluginWritePusher,
   createGeneratedPluginPlanState,
   matcherForResolvedToolHook,
-  normalizeBundleSegment,
   planGeneratedPluginAgentWrites,
   planGeneratedPluginHookWrites,
   planGeneratedPluginManifest,
@@ -48,7 +47,19 @@ import {
 } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
-const GENERATED_PLUGIN_PREFIX = "prism-generated";
+const GROK_MCP_NAME_SEPARATOR = "__";
+
+const stableHash8 = (input: string): string => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index++) {
+    hash ^= input.codePointAt(index)!;
+    hash = Math.trunc(Math.imul(hash, 0x01000193));
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+};
+
+export const grokMcpServerNameForPlugin = (sourcePluginName: string): string =>
+  `p_${stableHash8(sourcePluginName)}`;
 
 export interface GrokLowerTarget {
   readonly scope: HarnessScope;
@@ -71,7 +82,7 @@ export interface LowerInput {
 }
 
 const generatedPluginId = (target: GrokLowerTarget): string =>
-  `${GENERATED_PLUGIN_PREFIX}-${normalizeBundleSegment(target.sourcePluginName)}`;
+  generatedPluginIdForOwner(target.sourcePluginName);
 
 const generatedPluginRoot = (target: GrokLowerTarget): string =>
   join(target.root, "plugins", generatedPluginId(target));
@@ -144,10 +155,9 @@ const composeGrokTools = (
     target.sourcePluginName,
     agent,
   )) {
-    const ownerPluginId = generatedPluginIdForOwner(ownerPlugin);
     for (const binding of bindings) {
       generatedTools.push(
-        grokMcpToolNameForBinding(ownerPlugin, ownerPluginId, binding),
+        grokMcpToolNameForBinding(ownerPlugin, binding),
       );
     }
   }
@@ -216,9 +226,9 @@ const grokNativeHookEvent = prePostSessionNativeHookEvent;
 
 const grokMcpToolNameForBinding = (
   sourcePluginName: string,
-  pluginId: string,
   binding: ResolvedContractBinding,
-): string => `${pluginId}__${mcpToolNameForBinding(sourcePluginName, binding)}`;
+): string =>
+  `${grokMcpServerNameForPlugin(sourcePluginName)}${GROK_MCP_NAME_SEPARATOR}${mcpToolNameForBinding(sourcePluginName, binding)}`;
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
@@ -231,7 +241,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return grokMcpToolNameForBinding(owner, generatedPluginIdForOwner(owner), binding);
+      return grokMcpToolNameForBinding(owner, binding);
     },
   );
 
@@ -298,11 +308,11 @@ const planMcpServer = async (
     requirePort: ownedBindings.length > 0,
     resolvedPort: input.target.mcpRuntimePort,
   });
-  const pluginId = generatedPluginId(input.target);
+  const mcpServerName = grokMcpServerNameForPlugin(input.target.sourcePluginName);
 
   const mcpServers: Record<string, unknown> = {};
   if (ownedBindings.length > 0) {
-    mcpServers[pluginId] = {
+    mcpServers[mcpServerName] = {
       type: "http",
       url: renderMcpHttpUrl(runtime),
       headers: {

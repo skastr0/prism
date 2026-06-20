@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { planLowering } from "./lowerers/grok.js";
+import { grokMcpServerNameForPlugin, planLowering } from "./lowerers/grok.js";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -29,7 +29,7 @@ test("grok lowerer owner-qualifies foreign tool bindings without copying owner M
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const ownerPluginName = "ot";
-  const ownerPluginId = `prism-generated-${ownerPluginName}`;
+  const ownerMcpServerName = grokMcpServerNameForPlugin(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -68,7 +68,7 @@ test("grok lowerer owner-qualifies foreign tool bindings without copying owner M
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  expect(agent?.content).toContain("prism-generated-ot__ot_echo");
+  expect(agent?.content).toContain(`${ownerMcpServerName}__ot_echo`);
   expect(agent?.content).not.toContain("prism-generated-consumer-plugin__ot_echo");
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");

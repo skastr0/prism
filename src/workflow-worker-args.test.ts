@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildAmpArgs, assertAmpWorkflowMode } from "./workflow-amp-worker.js";
 import { buildClaudeArgs } from "./workflow-claude-worker.js";
-import { buildGrokArgs } from "./workflow-grok-worker.js";
+import { buildGrokArgs, isGrokAuthOutput } from "./workflow-grok-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { supportedWorkflowWorkers, UnsupportedWorkflowWorkerError, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 
@@ -18,6 +18,12 @@ describe("workflow worker argument builders", () => {
     expect(args.slice(args.indexOf("--allow"), args.indexOf("--allow") + 2)).toEqual(["--allow", "MCPTool"]);
     expect(args).not.toContain("--prompt-file");
     expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
+  });
+
+  test("grok auth output detection is line-based", () => {
+    expect(isGrokAuthOutput("You are not authenticated.")).toBe(true);
+    expect(isGrokAuthOutput("error: provider requires login before use")).toBe(true);
+    expect(isGrokAuthOutput(JSON.stringify({ summary: "You are not authenticated." }))).toBe(false);
   });
 
   test("opencode invokes the generated agent directly", () => {

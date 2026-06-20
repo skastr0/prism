@@ -45,6 +45,16 @@ interface GrokGeneratedPluginBundle {
 
 const GENERATED_PLUGIN_PREFIX = "prism-generated-";
 const GROK_MCP_TOOL_PATTERN = /\b(p_[0-9a-f]{8})__/gu;
+const GROK_AUTH_OUTPUT_PATTERN = /(^|\n)\s*(?:To sign in, open this URL in your browser:|Waiting for authorization\.{3}|You are not authenticated\.?|(?:error:\s*)?[^{}\n]*requires login[^{}\n]*)/iu;
+const GROK_AUTH_PROMPT_PATTERNS = [
+  {
+    name: "xai-oauth-device-login",
+    pattern: GROK_AUTH_OUTPUT_PATTERN,
+  },
+] as const;
+
+export const isGrokAuthOutput = (output: string): boolean =>
+  GROK_AUTH_OUTPUT_PATTERN.test(output);
 
 const pathExists = async (path: string): Promise<boolean> => {
   try {
@@ -317,19 +327,26 @@ export const runGrokWorkflowTask = async (
     prompt,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
     env: runtime.env,
+    earlyExitPatterns: GROK_AUTH_PROMPT_PATTERNS,
   }).finally(() => runtime.cleanup().catch(() => undefined));
   if (aborted) {
     throw new WorkflowWorkerError("grok was aborted by Prism workflow stop");
   }
+  if (earlyExit === "xai-oauth-device-login") {
+    throw new WorkflowWorkerError("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
+  }
   if (timedOut) {
     throw new WorkflowWorkerError(`grok exceeded Prism process timeout after ${processTimeoutMs}ms`);
+  }
+  if (exitCode !== 0 && isGrokAuthOutput(`${stdout}\n${stderr}`)) {
+    throw new WorkflowWorkerError("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
   }
   if (exitCode !== 0) {
     throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);

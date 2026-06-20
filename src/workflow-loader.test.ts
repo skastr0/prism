@@ -648,6 +648,101 @@ describe("workflow loader", () => {
     ]);
   });
 
+  test("CLI fails Grok auth prompts before process timeout without leaking device-login transcript", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeGrok = join(root, "fake-grok-auth.mjs");
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "console.log('To sign in, open this URL in your browser:');",
+      "console.log('https://accounts.x.ai/oauth2/device?user_code=TEST-CODE');",
+      "console.log('Waiting for authorization...');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+
+    const started = Date.now();
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      env: workflowTestEnv({
+        HOME: join(root, "home"),
+        PRISM_WORKFLOW_GROK_BIN: fakeGrok,
+        PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS: "20000",
+      }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(Date.now() - started).toBeLessThan(10000);
+    expect(stderr).toContain("grok requires xAI OAuth login before workflow run");
+    expect(stderr).not.toContain("accounts.x.ai");
+    expect(stderr).not.toContain("TEST-CODE");
+  });
+
+  test("CLI fails Grok unauthenticated output before process timeout", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    const fakeGrok = join(root, "fake-grok-unauthenticated.mjs");
+    await writeFile(file, workflowSource("default", { worker: "grok" }));
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "console.log('You are not authenticated.');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+
+    const started = Date.now();
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--store",
+        storeFile,
+      ],
+      cwd: process.cwd(),
+      env: workflowTestEnv({
+        HOME: join(root, "home"),
+        PRISM_WORKFLOW_GROK_BIN: fakeGrok,
+        PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS: "20000",
+      }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(Date.now() - started).toBeLessThan(10000);
+    expect(stderr).toContain("grok requires xAI OAuth login before workflow run");
+    expect(stderr).not.toContain("You are not authenticated");
+  });
+
   test("CLI runs generated Grok agents through an isolated native MCP config", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");

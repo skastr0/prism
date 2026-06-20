@@ -25,6 +25,9 @@ describe("workflow-e2e live config seeding", () => {
       ".kimi-code/credentials",
       ".kimi-code/device_id",
       ".kimi-code/oauth",
+      ".local/share/amp/device-id.json",
+      ".local/share/amp/secrets.json",
+      ".local/share/amp/session.json",
       ".local/share/opencode/auth.json",
     ].sort());
   });
@@ -34,6 +37,7 @@ describe("workflow-e2e live config seeding", () => {
 
     expect(paths).not.toContain(".codex");
     expect(paths).not.toContain(".grok");
+    expect(paths).not.toContain(".local/share/amp");
     expect(paths).not.toContain(".local/share/opencode");
     expect(paths).not.toContain(".codex/installation_id");
     expect(paths).not.toContain(".grok/agent_id");

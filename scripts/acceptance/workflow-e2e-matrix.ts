@@ -220,6 +220,24 @@ export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
     from: ".config/amp/settings-haiku.json",
     to: ".config/amp/settings-haiku.json",
   },
+  {
+    label: "amp-code-session",
+    harnesses: ["amp-code"],
+    from: ".local/share/amp/session.json",
+    to: ".local/share/amp/session.json",
+  },
+  {
+    label: "amp-code-secrets",
+    harnesses: ["amp-code"],
+    from: ".local/share/amp/secrets.json",
+    to: ".local/share/amp/secrets.json",
+  },
+  {
+    label: "amp-code-device-id",
+    harnesses: ["amp-code"],
+    from: ".local/share/amp/device-id.json",
+    to: ".local/share/amp/device-id.json",
+  },
 ];
 
 const parseMode = (): Mode => {

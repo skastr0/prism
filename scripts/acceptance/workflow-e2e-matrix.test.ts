@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
-import { CONFIG_SEED_RULES, evaluateHarnessChecks, TOWER_COMMENT_FAMILY } from "./workflow-e2e-matrix";
+import { CONFIG_SEED_RULES, classifySetupBlocker, evaluateHarnessChecks, TOWER_COMMENT_FAMILY } from "./workflow-e2e-matrix";
 
 describe("workflow-e2e Tower evidence", () => {
   test("uses the Tower glyphs comment family", () => {
@@ -78,6 +78,57 @@ describe("workflow-e2e challenge proof finish criteria", () => {
 
     expect(verdict.verdict).toBe("fail");
     expect("repairPrompt" in criterion).toBe(false);
+  });
+});
+
+describe("workflow-e2e setup blocker classification", () => {
+  const failedRun = (stderr: string) => ({
+    exitCode: 1,
+    stdout: "",
+    stderr,
+  });
+
+  test("classifies current auth/setup blockers without treating them as pass", () => {
+    expect(classifySetupBlocker(
+      { harness: "grok" },
+      failedRun("Workflow run failed: grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry"),
+    )).toEqual({
+      harness: "grok",
+      code: "grok-oauth-login-required",
+      message: "Grok requires xAI OAuth login before workflow run.",
+      retryCommand: "grok login",
+    });
+
+    expect(classifySetupBlocker(
+      { harness: "hermes" },
+      failedRun("hermes exited with 1: xAI OAuth state is missing access_token. Re-authenticate with `hermes model`."),
+    )).toEqual({
+      harness: "hermes",
+      code: "hermes-xai-oauth-access-token-missing",
+      message: "Hermes xAI OAuth state is missing an access token.",
+      retryCommand: "hermes model",
+    });
+
+    expect(classifySetupBlocker(
+      { harness: "kimi-code" },
+      failedRun("Workflow run failed: kimi-code requires OAuth login before workflow run; run `kimi login` or refresh Kimi Code credentials, then retry"),
+    )).toEqual({
+      harness: "kimi-code",
+      code: "kimi-oauth-login-required",
+      message: "Kimi Code requires OAuth login before workflow run.",
+      retryCommand: "kimi login",
+    });
+  });
+
+  test("does not classify unrelated harness failures as setup blockers", () => {
+    expect(classifySetupBlocker(
+      { harness: "opencode" },
+      failedRun("workflow output failed schema validation"),
+    )).toBeUndefined();
+    expect(classifySetupBlocker(
+      { harness: "grok" },
+      { exitCode: 0, stdout: "{}", stderr: "" },
+    )).toBeUndefined();
   });
 });
 

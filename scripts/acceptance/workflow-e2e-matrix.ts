@@ -99,6 +99,7 @@ interface HarnessResult {
   readonly refresh: CommandResult;
   readonly validate: CommandResult;
   readonly run?: CommandResult;
+  readonly setupBlocker?: HarnessSetupBlocker;
   readonly proof?: {
     readonly pass: boolean;
     readonly output?: unknown;
@@ -107,6 +108,13 @@ interface HarnessResult {
   };
   readonly checks?: readonly HarnessCheck[];
   readonly tower?: CommandResult | { readonly skipped: string };
+}
+
+interface HarnessSetupBlocker {
+  readonly harness: Harness;
+  readonly code: string;
+  readonly message: string;
+  readonly retryCommand?: string;
 }
 
 interface HarnessCheck {
@@ -439,6 +447,51 @@ const proofFromRun = (entry: MatrixEntry, run: CommandResult): HarnessResult["pr
   }
 };
 
+export const classifySetupBlocker = (
+  entry: Pick<MatrixEntry, "harness">,
+  run: Pick<CommandResult, "exitCode" | "stdout" | "stderr"> | undefined,
+): HarnessSetupBlocker | undefined => {
+  if (run === undefined || run.exitCode === 0) return undefined;
+  const output = `${run.stdout}\n${run.stderr}`;
+  switch (entry.harness) {
+    case "grok":
+      if (/grok requires xAI OAuth login|run `grok login`|refresh Grok credentials/iu.test(output)) {
+        return {
+          harness: entry.harness,
+          code: "grok-oauth-login-required",
+          message: "Grok requires xAI OAuth login before workflow run.",
+          retryCommand: "grok login",
+        };
+      }
+      return undefined;
+    case "hermes":
+      if (/xAI OAuth state is missing access_token|Run `hermes model` to re-authenticate|Re-authenticate with `hermes model`/iu.test(output)) {
+        return {
+          harness: entry.harness,
+          code: "hermes-xai-oauth-access-token-missing",
+          message: "Hermes xAI OAuth state is missing an access token.",
+          retryCommand: "hermes model",
+        };
+      }
+      return undefined;
+    case "kimi-code":
+      if (/kimi-code requires OAuth login|run `kimi login`|refresh Kimi Code credentials/iu.test(output)) {
+        return {
+          harness: entry.harness,
+          code: "kimi-oauth-login-required",
+          message: "Kimi Code requires OAuth login before workflow run.",
+          retryCommand: "kimi login",
+        };
+      }
+      return undefined;
+    case "amp-code":
+    case "claude-code":
+    case "codex-cli":
+    case "opencode":
+      return undefined;
+  }
+};
+
 const EXPECTED_ADAPTERS: Readonly<Record<Harness, string>> = {
   "amp-code": "amp-code",
   "claude-code": "claude-code",
@@ -601,6 +654,7 @@ const towerBody = (input: {
   workflow: input.result.workflow,
   challenge: input.result.challenge,
   proof: input.result.proof,
+  setupBlocker: input.result.setupBlocker,
   checks: input.result.checks,
   refreshExitCode: input.result.refresh.exitCode,
   validateExitCode: input.result.validate.exitCode,
@@ -703,6 +757,7 @@ const main = async (): Promise<void> => {
         proof = proofFromRun(entry, run);
       }
       const checks = validateOnly ? undefined : evaluateHarnessChecks(entry, { run, proof });
+      const setupBlocker = classifySetupBlocker(entry, run);
 
       const partial: HarnessResult = {
         harness: entry.harness,
@@ -711,6 +766,7 @@ const main = async (): Promise<void> => {
         refresh,
         validate,
         ...(run ? { run } : {}),
+        ...(setupBlocker ? { setupBlocker } : {}),
         ...(proof ? { proof } : {}),
         ...(checks ? { checks } : {}),
       };
@@ -737,6 +793,7 @@ const main = async (): Promise<void> => {
     mode,
     pass,
     validateOnly,
+    setupBlockers: results.flatMap((result) => result.setupBlocker ? [result.setupBlocker] : []),
     ...(configSeed ? { configSeed } : {}),
     results,
   }, null, 2));

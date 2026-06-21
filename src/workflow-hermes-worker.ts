@@ -69,12 +69,8 @@ export const buildHermesArgs = (input: {
   const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--yolo"] : [];
   return [
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
-    "chat",
-    "--query",
+    "--oneshot",
     input.prompt,
-    "--quiet",
-    "--source",
-    "prism-workflow",
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...permissionArgs,
   ];

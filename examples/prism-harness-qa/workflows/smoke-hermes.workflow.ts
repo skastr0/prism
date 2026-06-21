@@ -3,6 +3,7 @@ import { models } from "prism/refs/models";
 import { challengeFinish, challengeOutput, challengePrompt } from "./challenge-proof";
 
 const challenge = "hermes-2026-06-20-001";
+const hermesProfile = process.env.PRISM_E2E_HERMES_PROFILE;
 
 const hermesQaAgent = {
   kind: "agent-ref",
@@ -23,6 +24,7 @@ const verifyChallenge = defineTask({
   worker: {
     worker: "hermes",
     model: models.prismHarnessQa.qaModels.smoke,
+    ...(hermesProfile !== undefined && hermesProfile.length > 0 ? { profile: hermesProfile } : {}),
   },
 });
 

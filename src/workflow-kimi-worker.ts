@@ -110,12 +110,13 @@ export const buildKimiArgs = (input: {
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
   assertKimiPermission(mode);
-  const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--yolo"] : [];
+  // Kimi prompt mode rejects `--prompt` combined with `--yolo`; workflow execution
+  // must stay in prompt mode so permissive/full-access map to the strongest
+  // compatible invocation rather than an invalid flag pair.
   return [
     ...(input.model !== undefined ? ["--model", input.model] : []),
     "--output-format",
     "stream-json",
-    ...permissionArgs,
     "--prompt",
     input.prompt,
     "--skills-dir",

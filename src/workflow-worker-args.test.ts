@@ -188,7 +188,10 @@ describe("claude-code permission arg mapping", () => {
 describe("hermes permission arg mapping", () => {
   test("legacy emits no --yolo", () => {
     const args = buildHermesArgs({ prompt: "p", permission: "legacy" });
+    expect(args.slice(0, 2)).toEqual(["--oneshot", "p"]);
     expect(args).not.toContain("--yolo");
+    expect(args).not.toContain("chat");
+    expect(args).not.toContain("--query");
   });
 
   test("permissive emits --yolo", () => {
@@ -224,6 +227,11 @@ describe("hermes permission arg mapping", () => {
   test("full-access emits --yolo", () => {
     const args = buildHermesArgs({ prompt: "p", permission: "full-access" });
     expect(args).toContain("--yolo");
+  });
+
+  test("profile precedes oneshot for Hermes profile selection", () => {
+    const args = buildHermesArgs({ prompt: "p", profile: "lyra03", permission: "legacy" });
+    expect(args.slice(0, 4)).toEqual(["--profile", "lyra03", "--oneshot", "p"]);
   });
 });
 
@@ -352,16 +360,16 @@ describe("kimi-code permission arg mapping", () => {
     expect(args).not.toContain("--yolo");
   });
 
-  test("permissive emits --yolo", () => {
+  test("permissive omits --yolo because Kimi prompt mode rejects it", () => {
     const args = buildKimiArgs({ model: "moonshot/kimi-k2", prompt: "p", skillsDir: "/s", permission: "permissive" });
-    expect(args).toContain("--yolo");
+    expect(args).not.toContain("--yolo");
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "moonshot/kimi-k2"]);
     expect(args.slice(args.indexOf("--skills-dir"), args.indexOf("--skills-dir") + 2)).toEqual(["--skills-dir", "/s"]);
   });
 
-  test("default emits permissive --yolo", () => {
+  test("default omits --yolo", () => {
     const args = buildKimiArgs({ prompt: "p", skillsDir: "/s" });
-    expect(args).toContain("--yolo");
+    expect(args).not.toContain("--yolo");
   });
 
   test("restricted throws", () => {
@@ -384,9 +392,9 @@ describe("kimi-code permission arg mapping", () => {
       .toThrow(WorkflowPermissionError);
   });
 
-  test("full-access emits --yolo", () => {
+  test("full-access omits --yolo because Kimi prompt mode rejects it", () => {
     const args = buildKimiArgs({ prompt: "p", skillsDir: "/s", permission: "full-access" });
-    expect(args).toContain("--yolo");
+    expect(args).not.toContain("--yolo");
   });
 });
 

@@ -1258,7 +1258,8 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'antigravity-cli'");
+    expect(stderr).toContain("workflow type error");
+    expect(stderr).toContain("Type '\"antigravity-cli\"' is not assignable to type 'WorkflowWorkerId | undefined'");
     expect(await Bun.file(callsFile).exists()).toBe(false);
   });
 
@@ -2007,14 +2008,14 @@ describe("workflow loader", () => {
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
-      "const queryIndex = process.argv.indexOf('--query');",
+      "const queryIndex = process.argv.indexOf('--oneshot');",
       "const sourceIndex = process.argv.indexOf('--source');",
       "const profileIndex = process.argv.indexOf('--profile');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const query = queryIndex >= 0 ? process.argv[queryIndex + 1] : '';",
       "const source = sourceIndex >= 0 ? process.argv[sourceIndex + 1] : 'missing';",
       "const profile = profileIndex >= 0 ? process.argv[profileIndex + 1] : undefined;",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv.includes('chat') ? 'chat' : process.argv[2], model, quiet: process.argv.includes('--quiet'), source, profile, hasInstruction: query.includes('Prism workflow task'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv.includes('--oneshot') ? 'oneshot' : process.argv[2], model, quiet: process.argv.includes('--quiet'), source, profile, hasInstruction: query.includes('Prism workflow task'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
       "console.error('session_id: hermes-session-123');",
       "console.log(JSON.stringify({ summary: model }));",
       "",
@@ -2099,13 +2100,13 @@ describe("workflow loader", () => {
       hasAgentFlag: boolean;
     });
     expect(calls).toEqual([
-      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", profile: "ansel12", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
-      { command: "chat", model: "nous/qwen3-coder", quiet: true, source: "prism-workflow", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
-      { command: "chat", model: "grok-build", quiet: true, source: "prism-workflow", profile: "ada07", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
+      { command: "oneshot", model: "grok-build", quiet: false, source: "missing", profile: "ansel12", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
+      { command: "oneshot", model: "nous/qwen3-coder", quiet: false, source: "missing", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
+      { command: "oneshot", model: "grok-build", quiet: false, source: "missing", profile: "ada07", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
     ]);
   });
 
-  test("CLI fails Hermes runs when chat exits non-zero", async () => {
+  test("CLI fails Hermes runs when oneshot exits non-zero", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");

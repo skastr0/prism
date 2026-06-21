@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
 import {
   CONFIG_SEED_RULES,
@@ -7,7 +10,9 @@ import {
   evaluateHarnessChecks,
   evaluateInvalidModelSelectionCheck,
   evaluateModelSelectionChecks,
+  hermesAuthHasXaiOauthCredential,
   OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  resolveHermesProfileForE2E,
   TOWER_COMMENT_FAMILY,
   WORKFLOW_E2E_PROOF_PREFIX,
 } from "./workflow-e2e-matrix";
@@ -59,6 +64,30 @@ describe("workflow-e2e live config seeding", () => {
     expect(paths).not.toContain(".codex/installation_id");
     expect(paths).not.toContain(".grok/agent_id");
     expect(paths).not.toContain(".grok/.metadata_version");
+  });
+
+  test("detects a Hermes profile with xAI OAuth credentials for seeded runs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-hermes-profile-test-"));
+    try {
+      await mkdir(join(root, ".hermes", "profiles", "empty"), { recursive: true });
+      await mkdir(join(root, ".hermes", "profiles", "lyra03"), { recursive: true });
+      await writeFile(join(root, ".hermes", "profiles", "empty", "auth.json"), `${JSON.stringify({
+        providers: { "xai-oauth": { tokens: { id_token: "present" } } },
+        credential_pool: { "xai-oauth": [] },
+      })}\n`);
+      await writeFile(join(root, ".hermes", "profiles", "lyra03", "auth.json"), `${JSON.stringify({
+        providers: { "xai-oauth": { tokens: { id_token: "present" } } },
+        credential_pool: { "xai-oauth": [{ access_token: "present", refresh_token: "present" }] },
+      })}\n`);
+
+      expect(hermesAuthHasXaiOauthCredential({
+        credential_pool: { "xai-oauth": [{ access_token: "present" }] },
+      })).toBe(true);
+      expect(await resolveHermesProfileForE2E(root, undefined)).toBe("lyra03");
+      expect(await resolveHermesProfileForE2E(root, "manual-profile")).toBe("manual-profile");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -592,6 +621,33 @@ describe("workflow-e2e matrix evidence checks", () => {
 
       expect(checks.every((item) => item.status !== "fail")).toBe(true);
     }
+  });
+
+  test("accepts profile metadata for Hermes", () => {
+    const checks = evaluateHarnessChecks(
+      {
+        harness: "hermes",
+        workflow: "smoke-hermes.workflow.ts",
+        challenge: "hermes-2026-06-20-001",
+        expectedModel: "grok-composer-2.5-fast",
+      },
+      {
+        run: completedRun,
+        proof: {
+          pass: true,
+          metadata: {
+            adapter: "hermes",
+            agentSelection: "profile",
+            profile: "lyra03",
+            agent: { name: "qa-tester" },
+            model: "grok-composer-2.5-fast",
+            finish: { repairs: 0 },
+          },
+        },
+      },
+    );
+
+    expect(checks.every((item) => item.status !== "fail")).toBe(true);
   });
 
   test("reports generated-tool telemetry gaps without stale auth-blocked wording", () => {

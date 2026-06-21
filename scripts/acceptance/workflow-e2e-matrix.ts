@@ -10,7 +10,7 @@
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode temp --seed-live-configs
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
  */
-import { cp, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
@@ -152,6 +152,7 @@ interface ConfigSeedEntry {
 interface ConfigSeedSummary {
   readonly liveHome: string;
   readonly tempHome: string;
+  readonly hermesProfile?: string;
   readonly entries: readonly ConfigSeedEntry[];
 }
 
@@ -213,6 +214,70 @@ const pathExists = async (path: string): Promise<boolean> => {
 };
 
 const volatileHarnessPath = /(^|\/)(app-server-control|cache|caches|logs|sessions|tmp|temp)($|\/)|\.sock$/u;
+const HERMES_PROFILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
+
+const safeHermesProfileName = (profile: string): boolean =>
+  profile.length > 0 && HERMES_PROFILE_NAME_PATTERN.test(profile) && profile !== "." && profile !== "..";
+
+const objectValue = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+export const hermesAuthHasXaiOauthCredential = (auth: unknown): boolean => {
+  const root = objectValue(auth);
+  const providers = objectValue(root?.providers);
+  const xaiProvider = objectValue(providers?.["xai-oauth"]);
+  const providerTokens = objectValue(xaiProvider?.tokens);
+  if (typeof providerTokens?.access_token === "string" && providerTokens.access_token.length > 0) {
+    return true;
+  }
+
+  const credentialPool = objectValue(root?.credential_pool);
+  const xaiPool = credentialPool?.["xai-oauth"];
+  if (!Array.isArray(xaiPool)) return false;
+  return xaiPool.some((entry) => {
+    const record = objectValue(entry);
+    return typeof record?.access_token === "string" && record.access_token.length > 0;
+  });
+};
+
+const readJsonIfExists = async (path: string): Promise<unknown | undefined> => {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+export const resolveHermesProfileForE2E = async (
+  liveHome: string,
+  requestedProfile: string | undefined,
+): Promise<string | undefined> => {
+  if (requestedProfile !== undefined && requestedProfile.length > 0) {
+    if (!safeHermesProfileName(requestedProfile)) {
+      throw new Error(`unsafe PRISM_E2E_HERMES_PROFILE value: ${requestedProfile}`);
+    }
+    return requestedProfile;
+  }
+
+  const profilesRoot = join(liveHome, ".hermes", "profiles");
+  let profileNames: string[];
+  try {
+    profileNames = (await readdir(profilesRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && safeHermesProfileName(entry.name))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return undefined;
+  }
+
+  for (const profile of profileNames) {
+    const auth = await readJsonIfExists(join(profilesRoot, profile, "auth.json"));
+    if (hermesAuthHasXaiOauthCredential(auth)) return profile;
+  }
+  return undefined;
+};
 
 export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
   {
@@ -450,6 +515,7 @@ const seedLiveConfigs = async (input: {
   readonly liveHome: string;
   readonly tempHome: string;
   readonly harnesses: ReadonlySet<Harness>;
+  readonly hermesProfile?: string;
 }): Promise<ConfigSeedSummary> => {
   const rules = CONFIG_SEED_RULES.filter((rule) =>
     rule.harnesses.some((harness) => input.harnesses.has(harness))
@@ -458,7 +524,27 @@ const seedLiveConfigs = async (input: {
   for (const rule of rules) {
     entries.push(await copyLiveConfigSeed(rule, input.liveHome, input.tempHome));
   }
-  return { liveHome: input.liveHome, tempHome: input.tempHome, entries };
+  if (input.harnesses.has("hermes") && input.hermesProfile !== undefined) {
+    const profileRoot = `.hermes/profiles/${input.hermesProfile}`;
+    entries.push(await copyLiveConfigSeed({
+      label: "hermes-profile-config",
+      harnesses: ["hermes"],
+      from: `${profileRoot}/config.yaml`,
+      to: `${profileRoot}/config.yaml`,
+    }, input.liveHome, input.tempHome));
+    entries.push(await copyLiveConfigSeed({
+      label: "hermes-profile-auth",
+      harnesses: ["hermes"],
+      from: `${profileRoot}/auth.json`,
+      to: `${profileRoot}/auth.json`,
+    }, input.liveHome, input.tempHome));
+  }
+  return {
+    liveHome: input.liveHome,
+    tempHome: input.tempHome,
+    ...(input.hermesProfile !== undefined ? { hermesProfile: input.hermesProfile } : {}),
+    entries,
+  };
 };
 
 const workflowPath = (pluginRoot: string, entry: MatrixEntry): string =>
@@ -675,10 +761,14 @@ const expectedAgentCheck = (
     case "kimi-code": {
       const agent = objectRecord(objectRecord(metadata)?.agent);
       const agentName = typeof agent?.name === "string" ? agent.name : undefined;
+      const agentSelection = stringField(metadata, "agentSelection");
+      const acceptedSelection = entry.harness === "hermes"
+        ? agentSelection === "prompted-contract" || agentSelection === "profile"
+        : agentSelection === "prompted-contract";
       return check(
         "intended-agent-selection",
-        stringField(metadata, "agentSelection") === "prompted-contract" && agentName === "qa-tester",
-        `expected prompted-contract qa-tester, got ${stringField(metadata, "agentSelection") ?? "<missing>"} ${agentName ?? "<missing>"}`,
+        acceptedSelection && agentName === "qa-tester",
+        `expected ${entry.harness === "hermes" ? "profile/prompted-contract" : "prompted-contract"} qa-tester, got ${agentSelection ?? "<missing>"} ${agentName ?? "<missing>"}`,
       );
     }
     case "codex-cli":
@@ -704,6 +794,11 @@ const noDefaultFallbackCheck = (
         `nativeAgent was ${stringField(metadata, "nativeAgent") ?? "<missing>"}`,
       );
     case "hermes":
+      return check(
+        "no-default-agent-fallback",
+        stringField(metadata, "agentSelection") === "prompted-contract" || stringField(metadata, "agentSelection") === "profile",
+        `agentSelection was ${stringField(metadata, "agentSelection") ?? "<missing>"}`,
+      );
     case "kimi-code":
       return check(
         "no-default-agent-fallback",
@@ -1024,6 +1119,13 @@ const main = async (): Promise<void> => {
   const pluginRoot = await preparePluginRoot(roots);
   const entries = MATRIX.filter((entry) => selected === undefined || selected.includes(entry.harness));
   const shouldRunModelSelection = entries.some((entry) => entry.harness === "opencode");
+  const liveHome = resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir());
+  const hermesProfile = entries.some((entry) => entry.harness === "hermes")
+    ? await resolveHermesProfileForE2E(liveHome, process.env.PRISM_E2E_HERMES_PROFILE)
+    : undefined;
+  if (hermesProfile !== undefined) {
+    env.PRISM_E2E_HERMES_PROFILE = hermesProfile;
+  }
   let configSeed: ConfigSeedSummary | undefined;
   let modelSelection: ModelSelectionResult | undefined;
 
@@ -1033,9 +1135,10 @@ const main = async (): Promise<void> => {
     roots.push(home, prismHome);
     if (hasFlag("--seed-live-configs")) {
       configSeed = await seedLiveConfigs({
-        liveHome: resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir()),
+        liveHome,
         tempHome: home,
         harnesses: new Set(entries.map((entry) => entry.harness)),
+        hermesProfile,
       });
     }
     env.HOME = home;
@@ -1124,6 +1227,7 @@ const main = async (): Promise<void> => {
     pass,
     validateOnly,
     setupBlockers: results.flatMap((result) => result.setupBlocker ? [result.setupBlocker] : []),
+    ...(hermesProfile !== undefined ? { hermesProfile } : {}),
     ...(configSeed ? { configSeed } : {}),
     ...(modelSelection ? { modelSelection } : {}),
     results,

@@ -594,6 +594,62 @@ describe("workflow-e2e matrix evidence checks", () => {
     }
   });
 
+  test("reports generated-tool telemetry gaps without stale auth-blocked wording", () => {
+    const entries = [
+      {
+        harness: "grok" as const,
+        workflow: "smoke-grok.workflow.ts",
+        challenge: "grok-2026-06-20-001",
+        expectedModel: "grok-build",
+        metadata: {
+          adapter: "grok-cli",
+          nativeAgent: "qa-tester",
+          model: "grok-build",
+          finish: { repairs: 0 },
+        },
+      },
+      {
+        harness: "hermes" as const,
+        workflow: "smoke-hermes.workflow.ts",
+        challenge: "hermes-2026-06-20-001",
+        expectedModel: "grok-composer-2.5-fast",
+        metadata: {
+          adapter: "hermes",
+          agentSelection: "prompted-contract",
+          agent: { name: "qa-tester" },
+          model: "grok-composer-2.5-fast",
+          finish: { repairs: 0 },
+        },
+      },
+      {
+        harness: "kimi-code" as const,
+        workflow: "smoke-kimi-code.workflow.ts",
+        challenge: "kimi-code-2026-06-20-001",
+        expectedModel: "kimi-code/kimi-for-coding",
+        metadata: {
+          adapter: "kimi-code",
+          agentSelection: "prompted-contract",
+          agent: { name: "qa-tester" },
+          model: "kimi-code/kimi-for-coding",
+          finish: { repairs: 0 },
+        },
+      },
+    ];
+
+    for (const { metadata, ...entry } of entries) {
+      const checks = evaluateHarnessChecks(entry, {
+        run: completedRun,
+        proof: { pass: true, metadata },
+      });
+      const telemetry = checks.find((item) => item.name === "generated-tool-call-observed");
+
+      expect(telemetry?.status).toBe("not-applicable");
+      expect(telemetry?.detail).toContain("does not expose structured generated-tool telemetry");
+      expect(telemetry?.detail).not.toContain("auth-blocked");
+      expect(checks.every((item) => item.status !== "fail")).toBe(true);
+    }
+  });
+
   test("rejects flattened prompted-contract metadata for Hermes and Kimi Code", () => {
     for (const harness of ["hermes", "kimi-code"] as const) {
       const checks = evaluateHarnessChecks(

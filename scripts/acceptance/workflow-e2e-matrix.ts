@@ -751,11 +751,11 @@ const generatedToolCallObservedCheck = (
     case "amp-code":
       return notApplicable("generated-tool-call-observed", "Amp Code native execute output does not expose structured tool-use telemetry");
     case "grok":
-      return notApplicable("generated-tool-call-observed", "Grok live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
+      return notApplicable("generated-tool-call-observed", "Grok workflow output does not expose structured generated-tool telemetry; deterministic proof is validated separately");
     case "hermes":
-      return notApplicable("generated-tool-call-observed", "Hermes live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
+      return notApplicable("generated-tool-call-observed", "Hermes workflow output does not expose structured generated-tool telemetry; deterministic proof is validated separately");
     case "kimi-code":
-      return notApplicable("generated-tool-call-observed", "Kimi Code live route is currently auth-blocked; proof gate will be strengthened when tool telemetry is available");
+      return notApplicable("generated-tool-call-observed", "Kimi Code workflow output does not expose structured generated-tool telemetry; deterministic proof is validated separately");
   }
 };
 

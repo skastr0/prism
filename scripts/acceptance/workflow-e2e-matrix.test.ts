@@ -12,6 +12,7 @@ import {
   evaluateModelSelectionChecks,
   hermesAuthHasXaiOauthCredential,
   OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  resolveHermesAuthScopeForE2E,
   resolveHermesProfileForE2E,
   TOWER_COMMENT_FAMILY,
   WORKFLOW_E2E_PROOF_PREFIX,
@@ -66,7 +67,7 @@ describe("workflow-e2e live config seeding", () => {
     expect(paths).not.toContain(".grok/.metadata_version");
   });
 
-  test("detects a Hermes profile with xAI OAuth credentials for seeded runs", async () => {
+  test("defaults Hermes seeded runs to root auth and requires explicit profile scope", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-hermes-profile-test-"));
     try {
       await mkdir(join(root, ".hermes", "profiles", "empty"), { recursive: true });
@@ -83,6 +84,10 @@ describe("workflow-e2e live config seeding", () => {
       expect(hermesAuthHasXaiOauthCredential({
         credential_pool: { "xai-oauth": [{ access_token: "present" }] },
       })).toBe(true);
+      expect(resolveHermesAuthScopeForE2E(undefined, undefined)).toBe("root");
+      expect(resolveHermesAuthScopeForE2E("root", "lyra03")).toBe("root");
+      expect(resolveHermesAuthScopeForE2E("profile", undefined)).toBe("profile");
+      expect(() => resolveHermesAuthScopeForE2E(undefined, "lyra03")).toThrow("requires PRISM_E2E_HERMES_AUTH_SCOPE=profile");
       expect(await resolveHermesProfileForE2E(root, undefined)).toBe("lyra03");
       expect(await resolveHermesProfileForE2E(root, "manual-profile")).toBe("manual-profile");
     } finally {
@@ -623,31 +628,48 @@ describe("workflow-e2e matrix evidence checks", () => {
     }
   });
 
-  test("accepts profile metadata for Hermes", () => {
-    const checks = evaluateHarnessChecks(
-      {
-        harness: "hermes",
-        workflow: "smoke-hermes.workflow.ts",
-        challenge: "hermes-2026-06-20-001",
-        expectedModel: "grok-composer-2.5-fast",
+  test("requires explicit profile scope before accepting Hermes profile metadata", () => {
+    const entry = {
+      harness: "hermes" as const,
+      workflow: "smoke-hermes.workflow.ts",
+      challenge: "hermes-2026-06-20-001",
+      expectedModel: "grok-composer-2.5-fast",
+    };
+    const proof = {
+      pass: true,
+      metadata: {
+        adapter: "hermes",
+        agentSelection: "profile",
+        profile: "lyra03",
+        agent: { name: "qa-tester" },
+        model: "grok-composer-2.5-fast",
+        finish: { repairs: 0 },
       },
+    };
+
+    const rootChecks = evaluateHarnessChecks(
+      entry,
       {
         run: completedRun,
-        proof: {
-          pass: true,
-          metadata: {
-            adapter: "hermes",
-            agentSelection: "profile",
-            profile: "lyra03",
-            agent: { name: "qa-tester" },
-            model: "grok-composer-2.5-fast",
-            finish: { repairs: 0 },
-          },
-        },
+        proof,
       },
     );
 
-    expect(checks.every((item) => item.status !== "fail")).toBe(true);
+    expect(rootChecks.filter((item) => item.status === "fail").map((item) => item.name)).toEqual([
+      "intended-agent-selection",
+      "no-default-agent-fallback",
+    ]);
+
+    const profileChecks = evaluateHarnessChecks(
+      entry,
+      {
+        run: completedRun,
+        proof,
+      },
+      { hermesAuthScope: "profile" },
+    );
+
+    expect(profileChecks.every((item) => item.status !== "fail")).toBe(true);
   });
 
   test("reports generated-tool telemetry gaps without stale auth-blocked wording", () => {

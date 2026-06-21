@@ -23,6 +23,7 @@ export const TOWER_COMMENT_FAMILY = "glyphs";
 
 type Harness = "opencode" | "claude-code" | "codex-cli" | "grok" | "hermes" | "kimi-code" | "amp-code";
 type Mode = "temp" | "live";
+export type HermesAuthScope = "root" | "profile";
 
 interface MatrixEntry {
   readonly harness: Harness;
@@ -152,6 +153,7 @@ interface ConfigSeedEntry {
 interface ConfigSeedSummary {
   readonly liveHome: string;
   readonly tempHome: string;
+  readonly hermesAuthScope?: HermesAuthScope;
   readonly hermesProfile?: string;
   readonly entries: readonly ConfigSeedEntry[];
 }
@@ -218,6 +220,20 @@ const HERMES_PROFILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
 
 const safeHermesProfileName = (profile: string): boolean =>
   profile.length > 0 && HERMES_PROFILE_NAME_PATTERN.test(profile) && profile !== "." && profile !== "..";
+
+export const resolveHermesAuthScopeForE2E = (
+  requestedScope: string | undefined,
+  requestedProfile: string | undefined,
+): HermesAuthScope => {
+  if (requestedScope === undefined || requestedScope.length === 0) {
+    if (requestedProfile !== undefined && requestedProfile.length > 0) {
+      throw new Error("PRISM_E2E_HERMES_PROFILE requires PRISM_E2E_HERMES_AUTH_SCOPE=profile; default Hermes E2E auth scope is root");
+    }
+    return "root";
+  }
+  if (requestedScope === "root" || requestedScope === "profile") return requestedScope;
+  throw new Error(`invalid PRISM_E2E_HERMES_AUTH_SCOPE ${requestedScope}; expected root or profile`);
+};
 
 const objectValue = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -515,6 +531,7 @@ const seedLiveConfigs = async (input: {
   readonly liveHome: string;
   readonly tempHome: string;
   readonly harnesses: ReadonlySet<Harness>;
+  readonly hermesAuthScope?: HermesAuthScope;
   readonly hermesProfile?: string;
 }): Promise<ConfigSeedSummary> => {
   const rules = CONFIG_SEED_RULES.filter((rule) =>
@@ -542,6 +559,7 @@ const seedLiveConfigs = async (input: {
   return {
     liveHome: input.liveHome,
     tempHome: input.tempHome,
+    ...(input.hermesAuthScope !== undefined ? { hermesAuthScope: input.hermesAuthScope } : {}),
     ...(input.hermesProfile !== undefined ? { hermesProfile: input.hermesProfile } : {}),
     entries,
   };
@@ -746,6 +764,7 @@ const expectedAgentCheck = (
   entry: MatrixEntry,
   metadata: unknown,
   run: CommandResult | undefined,
+  options?: { readonly hermesAuthScope?: HermesAuthScope },
 ): HarnessCheck => {
   if (run?.exitCode !== 0) return incomplete("intended-agent-selection", run);
   switch (entry.harness) {
@@ -762,13 +781,13 @@ const expectedAgentCheck = (
       const agent = objectRecord(objectRecord(metadata)?.agent);
       const agentName = typeof agent?.name === "string" ? agent.name : undefined;
       const agentSelection = stringField(metadata, "agentSelection");
-      const acceptedSelection = entry.harness === "hermes"
-        ? agentSelection === "prompted-contract" || agentSelection === "profile"
-        : agentSelection === "prompted-contract";
+      const expectedSelection = entry.harness === "hermes" && options?.hermesAuthScope === "profile"
+        ? "profile"
+        : "prompted-contract";
       return check(
         "intended-agent-selection",
-        acceptedSelection && agentName === "qa-tester",
-        `expected ${entry.harness === "hermes" ? "profile/prompted-contract" : "prompted-contract"} qa-tester, got ${agentSelection ?? "<missing>"} ${agentName ?? "<missing>"}`,
+        agentSelection === expectedSelection && agentName === "qa-tester",
+        `expected ${expectedSelection} qa-tester, got ${agentSelection ?? "<missing>"} ${agentName ?? "<missing>"}`,
       );
     }
     case "codex-cli":
@@ -782,6 +801,7 @@ const noDefaultFallbackCheck = (
   entry: MatrixEntry,
   metadata: unknown,
   run: CommandResult | undefined,
+  options?: { readonly hermesAuthScope?: HermesAuthScope },
 ): HarnessCheck => {
   if (run?.exitCode !== 0) return incomplete("no-default-agent-fallback", run);
   switch (entry.harness) {
@@ -794,11 +814,14 @@ const noDefaultFallbackCheck = (
         `nativeAgent was ${stringField(metadata, "nativeAgent") ?? "<missing>"}`,
       );
     case "hermes":
-      return check(
-        "no-default-agent-fallback",
-        stringField(metadata, "agentSelection") === "prompted-contract" || stringField(metadata, "agentSelection") === "profile",
-        `agentSelection was ${stringField(metadata, "agentSelection") ?? "<missing>"}`,
-      );
+      {
+        const expectedSelection = options?.hermesAuthScope === "profile" ? "profile" : "prompted-contract";
+        return check(
+          "no-default-agent-fallback",
+          stringField(metadata, "agentSelection") === expectedSelection,
+          `agentSelection was ${stringField(metadata, "agentSelection") ?? "<missing>"}`,
+        );
+      }
     case "kimi-code":
       return check(
         "no-default-agent-fallback",
@@ -857,6 +880,7 @@ const generatedToolCallObservedCheck = (
 export const evaluateHarnessChecks = (
   entry: MatrixEntry,
   input: Pick<HarnessResult, "run" | "proof">,
+  options?: { readonly hermesAuthScope?: HermesAuthScope },
 ): readonly HarnessCheck[] => {
   const metadata = input.proof?.metadata;
   const finish = objectRecord(objectRecord(metadata)?.finish);
@@ -875,8 +899,8 @@ export const evaluateHarnessChecks = (
       ? check("model-resolved", model === entry.expectedModel, `expected ${entry.expectedModel}, got ${model ?? "<missing>"}`)
       : incomplete("model-resolved", input.run),
     generatedToolCallObservedCheck(entry, metadata, input.run),
-    expectedAgentCheck(entry, metadata, input.run),
-    noDefaultFallbackCheck(entry, metadata, input.run),
+    expectedAgentCheck(entry, metadata, input.run, options),
+    noDefaultFallbackCheck(entry, metadata, input.run, options),
     check(
       "no-blocked-tool-interruption",
       !BLOCKED_TOOL_OUTPUT_PATTERN.test(diagnosticText),
@@ -1120,10 +1144,13 @@ const main = async (): Promise<void> => {
   const entries = MATRIX.filter((entry) => selected === undefined || selected.includes(entry.harness));
   const shouldRunModelSelection = entries.some((entry) => entry.harness === "opencode");
   const liveHome = resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir());
-  const hermesProfile = entries.some((entry) => entry.harness === "hermes")
+  const hermesAuthScope = entries.some((entry) => entry.harness === "hermes")
+    ? resolveHermesAuthScopeForE2E(process.env.PRISM_E2E_HERMES_AUTH_SCOPE, process.env.PRISM_E2E_HERMES_PROFILE)
+    : undefined;
+  const hermesProfile = hermesAuthScope === "profile"
     ? await resolveHermesProfileForE2E(liveHome, process.env.PRISM_E2E_HERMES_PROFILE)
     : undefined;
-  if (hermesProfile !== undefined) {
+  if (hermesAuthScope === "profile" && hermesProfile !== undefined) {
     env.PRISM_E2E_HERMES_PROFILE = hermesProfile;
   }
   let configSeed: ConfigSeedSummary | undefined;
@@ -1138,6 +1165,7 @@ const main = async (): Promise<void> => {
         liveHome,
         tempHome: home,
         harnesses: new Set(entries.map((entry) => entry.harness)),
+        hermesAuthScope,
         hermesProfile,
       });
     }
@@ -1187,7 +1215,7 @@ const main = async (): Promise<void> => {
         ], env);
         proof = proofFromRun(entry, run);
       }
-      const checks = validateOnly ? undefined : evaluateHarnessChecks(entry, { run, proof });
+      const checks = validateOnly ? undefined : evaluateHarnessChecks(entry, { run, proof }, { hermesAuthScope });
       const setupBlocker = classifySetupBlocker(entry, run);
 
       const partial: HarnessResult = {
@@ -1227,6 +1255,7 @@ const main = async (): Promise<void> => {
     pass,
     validateOnly,
     setupBlockers: results.flatMap((result) => result.setupBlocker ? [result.setupBlocker] : []),
+    ...(hermesAuthScope !== undefined ? { hermesAuthScope } : {}),
     ...(hermesProfile !== undefined ? { hermesProfile } : {}),
     ...(configSeed ? { configSeed } : {}),
     ...(modelSelection ? { modelSelection } : {}),

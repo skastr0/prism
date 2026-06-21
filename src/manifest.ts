@@ -666,6 +666,21 @@ function validateManifestStructure(manifest: Record<string, unknown>): string[] 
   }
 
   errors.push(...validateTargetDeclarations(manifest.targets as Record<string, unknown>));
+  errors.push(...validateInlineSkillsDeclaration(manifest.inlineSkills));
+  return errors;
+}
+
+function validateInlineSkillsDeclaration(inlineSkills: unknown): string[] {
+  if (inlineSkills === undefined) return [];
+  if (!Array.isArray(inlineSkills)) {
+    return ["'inlineSkills' must be an array of skill directory names"];
+  }
+  const errors: string[] = [];
+  inlineSkills.forEach((entry, index) => {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      errors.push(`inlineSkills[${index}] must be a non-empty string`);
+    }
+  });
   return errors;
 }
 

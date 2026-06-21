@@ -111,6 +111,9 @@ export interface PluginManifest {
 
   // Project patterns for project-specific rules
   projects?: Record<string, ProjectConfig>;
+
+  // Skill directory names (under skills/) to render fully inline as an always-on rule region.
+  inlineSkills?: string[];
 }
 
 export interface ProjectConfig {

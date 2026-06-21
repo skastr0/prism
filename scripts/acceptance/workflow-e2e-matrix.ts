@@ -8,6 +8,7 @@
  * Usage:
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode temp
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode temp --seed-live-configs
+ *     Seeds non-secret config/cache files only. OAuth/session state is never copied.
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
  */
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -154,6 +155,7 @@ interface ConfigSeedEntry {
 interface ConfigSeedSummary {
   readonly liveHome: string;
   readonly tempHome: string;
+  readonly credentialStrategy: "config-only-no-oauth-copy";
   readonly hermesAuthScope?: HermesAuthScope;
   readonly hermesProfile?: string;
   readonly entries: readonly ConfigSeedEntry[];
@@ -216,8 +218,16 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const volatileHarnessPath = /(^|\/)(app-server-control|cache|caches|logs|sessions|tmp|temp)($|\/)|\.sock$/u;
 const HERMES_PROFILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
+const mutableLiveConfigSeedPath = /(^|\/)(auth\.json|\.credentials\.json|credentials|oauth|session\.json|secrets\.json|device_id|device-id\.json|installation_id|agent_id|\.metadata_version)$/u;
+const mutableLiveConfigSeedExactPaths = new Set([
+  ".claude.json",
+]);
+
+export const isMutableLiveConfigSeedPath = (path: string): boolean => {
+  const normalized = path.split("\\").join("/");
+  return mutableLiveConfigSeedExactPaths.has(normalized) || mutableLiveConfigSeedPath.test(normalized);
+};
 
 const safeHermesProfileName = (profile: string): boolean =>
   profile.length > 0 && HERMES_PROFILE_NAME_PATTERN.test(profile) && profile !== "." && profile !== "..";
@@ -297,23 +307,13 @@ export const resolveHermesProfileForE2E = async (
 };
 
 export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
+  // Config seeding is intentionally config/cache-only. Never copy OAuth,
+  // session, refresh-token, or device identity files into disposable homes.
   {
     label: "claude-code-settings",
     harnesses: ["claude-code"],
     from: ".claude/settings.json",
     to: ".claude/settings.json",
-  },
-  {
-    label: "claude-code-credentials",
-    harnesses: ["claude-code"],
-    from: ".claude/.credentials.json",
-    to: ".claude/.credentials.json",
-  },
-  {
-    label: "claude-code-user-config",
-    harnesses: ["claude-code"],
-    from: ".claude.json",
-    to: ".claude.json",
   },
   {
     label: "opencode-config",
@@ -322,22 +322,10 @@ export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
     to: ".config/opencode/opencode.json",
   },
   {
-    label: "opencode-auth",
-    harnesses: ["opencode"],
-    from: ".local/share/opencode/auth.json",
-    to: ".local/share/opencode/auth.json",
-  },
-  {
     label: "codex-cli-config",
     harnesses: ["codex-cli"],
     from: ".codex/config.toml",
     to: ".codex/config.toml",
-  },
-  {
-    label: "codex-cli-auth",
-    harnesses: ["codex-cli"],
-    from: ".codex/auth.json",
-    to: ".codex/auth.json",
   },
   {
     label: "codex-cli-model-cache",
@@ -364,36 +352,10 @@ export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
     to: ".hermes/config.yaml",
   },
   {
-    label: "hermes-auth",
-    harnesses: ["hermes"],
-    from: ".hermes/auth.json",
-    to: ".hermes/auth.json",
-  },
-  {
     label: "kimi-code-config",
     harnesses: ["kimi-code"],
     from: ".kimi-code/config.toml",
     to: ".kimi-code/config.toml",
-  },
-  {
-    label: "kimi-code-device",
-    harnesses: ["kimi-code"],
-    from: ".kimi-code/device_id",
-    to: ".kimi-code/device_id",
-  },
-  {
-    label: "kimi-code-oauth",
-    harnesses: ["kimi-code"],
-    from: ".kimi-code/oauth",
-    to: ".kimi-code/oauth",
-    exclude: [volatileHarnessPath],
-  },
-  {
-    label: "kimi-code-credentials",
-    harnesses: ["kimi-code"],
-    from: ".kimi-code/credentials",
-    to: ".kimi-code/credentials",
-    exclude: [volatileHarnessPath],
   },
   {
     label: "amp-code-settings",
@@ -406,24 +368,6 @@ export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
     harnesses: ["amp-code"],
     from: ".config/amp/settings-haiku.json",
     to: ".config/amp/settings-haiku.json",
-  },
-  {
-    label: "amp-code-session",
-    harnesses: ["amp-code"],
-    from: ".local/share/amp/session.json",
-    to: ".local/share/amp/session.json",
-  },
-  {
-    label: "amp-code-secrets",
-    harnesses: ["amp-code"],
-    from: ".local/share/amp/secrets.json",
-    to: ".local/share/amp/secrets.json",
-  },
-  {
-    label: "amp-code-device-id",
-    harnesses: ["amp-code"],
-    from: ".local/share/amp/device-id.json",
-    to: ".local/share/amp/device-id.json",
   },
 ];
 
@@ -510,6 +454,10 @@ const copyLiveConfigSeed = async (
   liveHome: string,
   tempHome: string,
 ): Promise<ConfigSeedEntry> => {
+  if (isMutableLiveConfigSeedPath(rule.from) || isMutableLiveConfigSeedPath(rule.to)) {
+    throw new Error(`refusing to seed mutable auth/session state for ${rule.label}: ${rule.from} -> ${rule.to}`);
+  }
+
   const source = join(liveHome, rule.from);
   const target = join(tempHome, rule.to);
   if (!(await pathExists(source))) {
@@ -551,16 +499,11 @@ const seedLiveConfigs = async (input: {
       from: `${profileRoot}/config.yaml`,
       to: `${profileRoot}/config.yaml`,
     }, input.liveHome, input.tempHome));
-    entries.push(await copyLiveConfigSeed({
-      label: "hermes-profile-auth",
-      harnesses: ["hermes"],
-      from: `${profileRoot}/auth.json`,
-      to: `${profileRoot}/auth.json`,
-    }, input.liveHome, input.tempHome));
   }
   return {
     liveHome: input.liveHome,
     tempHome: input.tempHome,
+    credentialStrategy: "config-only-no-oauth-copy",
     ...(input.hermesAuthScope !== undefined ? { hermesAuthScope: input.hermesAuthScope } : {}),
     ...(input.hermesProfile !== undefined ? { hermesProfile: input.hermesProfile } : {}),
     entries,

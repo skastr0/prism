@@ -12,6 +12,7 @@ import {
   evaluateInvalidModelSelectionCheck,
   evaluateModelSelectionChecks,
   hermesAuthHasXaiOauthCredential,
+  isMutableLiveConfigSeedPath,
   OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
   removeWorkflowE2ETempRoots,
   resolveHermesAuthScopeForE2E,
@@ -54,14 +55,11 @@ describe("workflow-e2e Tower evidence", () => {
 });
 
 describe("workflow-e2e live config seeding", () => {
-  test("copies only the explicit auth/config files needed by seeded temp runs", () => {
+  test("copies only the explicit non-secret config files needed by seeded temp runs", () => {
     const paths = CONFIG_SEED_RULES.map((rule) => rule.from).sort();
 
     expect(paths).toEqual([
-      ".claude.json",
-      ".claude/.credentials.json",
       ".claude/settings.json",
-      ".codex/auth.json",
       ".codex/config.toml",
       ".codex/models_cache.json",
       ".config/amp/settings-haiku.json",
@@ -69,9 +67,45 @@ describe("workflow-e2e live config seeding", () => {
       ".config/opencode/opencode.json",
       ".grok/models_cache.json",
       ".grok/version.json",
-      ".hermes/auth.json",
       ".hermes/config.yaml",
       ".kimi-code/config.toml",
+    ].sort());
+  });
+
+  test("does not seed broad harness roots, OAuth state, or runtime identity sentinels", () => {
+    const paths = CONFIG_SEED_RULES.map((rule) => rule.from);
+
+    expect(paths.filter(isMutableLiveConfigSeedPath)).toEqual([]);
+    expect(paths).not.toContain(".codex");
+    expect(paths).not.toContain(".codex/auth.json");
+    expect(paths).not.toContain(".grok");
+    expect(paths).not.toContain(".grok/auth.json");
+    expect(paths).not.toContain(".hermes");
+    expect(paths).not.toContain(".hermes/auth.json");
+    expect(paths).not.toContain(".kimi-code/credentials");
+    expect(paths).not.toContain(".kimi-code/device_id");
+    expect(paths).not.toContain(".kimi-code/oauth");
+    expect(paths).not.toContain(".local/share/amp");
+    expect(paths).not.toContain(".local/share/amp/device-id.json");
+    expect(paths).not.toContain(".local/share/amp/secrets.json");
+    expect(paths).not.toContain(".local/share/amp/session.json");
+    expect(paths).not.toContain(".local/share/opencode");
+    expect(paths).not.toContain(".local/share/opencode/auth.json");
+    expect(paths).not.toContain(".claude.json");
+    expect(paths).not.toContain(".claude/.credentials.json");
+    expect(paths).not.toContain(".codex/installation_id");
+    expect(paths).not.toContain(".grok/agent_id");
+    expect(paths).not.toContain(".grok/.metadata_version");
+  });
+
+  test("classifies mutable live config seed paths as unsafe", () => {
+    expect([
+      ".claude.json",
+      ".claude/.credentials.json",
+      ".codex/auth.json",
+      ".grok/auth.json",
+      ".hermes/auth.json",
+      ".hermes/profiles/lyra03/auth.json",
       ".kimi-code/credentials",
       ".kimi-code/device_id",
       ".kimi-code/oauth",
@@ -79,21 +113,18 @@ describe("workflow-e2e live config seeding", () => {
       ".local/share/amp/secrets.json",
       ".local/share/amp/session.json",
       ".local/share/opencode/auth.json",
-    ].sort());
-  });
+    ].filter((path) => !isMutableLiveConfigSeedPath(path))).toEqual([]);
 
-  test("does not seed broad harness roots or runtime identity sentinels", () => {
-    const paths = CONFIG_SEED_RULES.map((rule) => rule.from);
-
-    expect(paths).not.toContain(".codex");
-    expect(paths).not.toContain(".grok");
-    expect(paths).not.toContain(".grok/auth.json");
-    expect(paths).not.toContain(".hermes");
-    expect(paths).not.toContain(".local/share/amp");
-    expect(paths).not.toContain(".local/share/opencode");
-    expect(paths).not.toContain(".codex/installation_id");
-    expect(paths).not.toContain(".grok/agent_id");
-    expect(paths).not.toContain(".grok/.metadata_version");
+    expect([
+      ".claude/settings.json",
+      ".codex/config.toml",
+      ".codex/models_cache.json",
+      ".config/amp/settings.json",
+      ".config/opencode/opencode.json",
+      ".grok/models_cache.json",
+      ".hermes/config.yaml",
+      ".kimi-code/config.toml",
+    ].filter(isMutableLiveConfigSeedPath)).toEqual([]);
   });
 
   test("defaults Hermes seeded runs to root auth and requires explicit profile scope", async () => {

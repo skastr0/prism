@@ -1,0 +1,14 @@
+{
+  "sourceRunId": "705e25b8-2fe5-4b49-bdbb-2911c673aff1",
+  "workflow": "prism-workflow-premium-council",
+  "executiveSummary": "Compile-emitted workflow-surface.json is the keystone; CLI and skills project it in three layers (per-project truth, per-orbit routed skill, thin global index).",
+  "rankedInitiatives": [
+    "Keystone: workflow-surface-emitter in compile pipeline",
+    "CLI: catalog, docs, typecheck, workflows ls|show|graph",
+    "Doc layering: B truth + C routed + A index",
+    "Scaffold: init --with-workflow, workflow scaffold",
+    "Doctor/freshness + contamination guard",
+    "Maintenance: cache prune, runs gc"
+  ],
+  "compileOutputsDebate": "Layer, do not pick: B canonical, C routed, A thin pointer to CLI"
+}

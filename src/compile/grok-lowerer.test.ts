@@ -6,6 +6,9 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { grokMcpServerNameForPlugin, planLowering } from "./lowerers/grok.js";
+import { mcpToolNameForBinding } from "./mcp-bundle.js";
+import type { ResolvedContractBinding } from "./resolve.js";
+import { Contract } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -177,6 +180,25 @@ export default defineTool({
   if (!hook) throw new Error("expected audit-shell hook");
   if (!canonicalHook) throw new Error("expected audit-echo hook");
   if (!sessionEndHook) throw new Error("expected session-ended hook");
+  const echoBinding: ResolvedContractBinding = {
+    kind: "permission",
+    logicalName: "echo",
+    toolPluginName: "grok-plugin-fixture",
+    toolName: "echo",
+    toolSourcePath: toolPath,
+  };
+  const longSyntheticBinding: ResolvedContractBinding = {
+    kind: "synthetic",
+    logicalName: "echo_review",
+    contract: new Contract({
+      name: "echo__requirements_trace_review_details",
+      sourcePath: `${join(pluginRoot, "traits", "review.trait.ts")}#echo`,
+      pluginName: "grok-plugin-fixture",
+    }),
+    toolPluginName: "grok-plugin-fixture",
+    toolName: "echo_review",
+    toolSourcePath: toolPath,
+  };
 
   const { files: operations } = await planLowering({
     agents: [
@@ -205,15 +227,7 @@ export default defineTool({
         skills: [],
         allowedSkills: ["testing"],
         allowedTools: ["grep_search"],
-        toolBindings: [
-          {
-            kind: "permission",
-            logicalName: "echo",
-            toolPluginName: "grok-plugin-fixture",
-            toolName: "echo",
-            toolSourcePath: toolPath,
-          },
-        ],
+        toolBindings: [echoBinding, longSyntheticBinding],
       },
       {
         name: "fallback",
@@ -324,7 +338,15 @@ export default defineTool({
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_terminal_cmd"');
   const generatedEchoTool = `${grokMcpServerName}__grok_plugin_fixture_echo`;
+  const generatedSyntheticTool = `${grokMcpServerName}__${mcpToolNameForBinding(
+    "grok-plugin-fixture",
+    longSyntheticBinding,
+  )}`;
   expect(generatedEchoTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(generatedSyntheticTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(generatedSyntheticTool.split("__")).toHaveLength(2);
+  expect(agent?.content).toContain(`- "${generatedSyntheticTool}"`);
+  expect(agent?.content).not.toContain(`${grokMcpServerName}__grok_plugin_fixture_echo__requirements_trace_review_details`);
   expect(hookConfig?.content).toContain(
     `"matcher": "${generatedEchoTool}"`,
   );

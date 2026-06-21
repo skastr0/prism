@@ -10,6 +10,7 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generateMcpServerBundle, mcpToolNamesForBindings } from "./mcp-bundle.js";
+import { generatedSyntheticToolName } from "./generated-plugin.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
 import {
   compileManifestPath,
@@ -2762,7 +2763,12 @@ test("slot source capture tolerates trait refs before slot-filled bindings", asy
     "prism-generated-canonical-compile-fixture",
   );
   const bundle = await readFile(join(generatedRoot, "dist", "server.mjs"), "utf8");
-  expect(bundle).toContain("submit_review__review_findings_slot");
+  expect(bundle).toContain(
+    generatedSyntheticToolName(
+      "canonical-compile-fixture",
+      "submit_review__review_findings_slot",
+    ),
+  );
   expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
 });
 
@@ -3924,6 +3930,10 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     join(projectRoot, ".opencode", "agents", "builder.md"),
     "utf8",
   );
+  const reviewFindingsToolName = generatedSyntheticToolName(
+    "canonical-compile-fixture",
+    "submit_review__review_findings_slot",
+  );
   expect(opencodeAgent).toContain("name: builder");
   expect(opencodeAgent).toContain(
     "description: Builder agent for canonical compile integration tests",
@@ -3939,7 +3949,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(opencodeAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
   expect(opencodeAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_glyph");
   expect(opencodeAgent).toContain(
-    "canonical_compile_fixture_submit_review__review_findings_slot: deny",
+    `${reviewFindingsToolName}: deny`,
   );
   const submittableInstructionIndex = opencodeAgent.indexOf(
     "Submit completed work through the typed submission surface before handing off.",
@@ -3962,9 +3972,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(reviewerAgent).not.toContain("canonical_compile_fixture_builder_submit_work");
   expect(reviewerAgent).toContain("protocol_core_create_glyph: deny");
   expect(reviewerAgent).not.toContain("canonical_compile_fixture_delivery_contract__builder__create_glyph");
-  expect(reviewerAgent).toMatch(
-    /canonical_compile_fixture_submit_review__review_findings_slot: allow/,
-  );
+  expect(reviewerAgent).toContain(`${reviewFindingsToolName}: allow`);
 
   const generatedRoot = join(
     projectRoot,
@@ -3987,7 +3995,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
     worktree: projectRoot,
   });
   const generatedToolNames = Object.keys(generatedPlugin.tool ?? {});
-  expect(generatedToolNames).toContain("canonical_compile_fixture_submit_review__review_findings_slot");
+  expect(generatedToolNames).toContain(reviewFindingsToolName);
   expect(generatedToolNames).not.toContain("protocol_core_external_submit");
   expect(generatedToolNames).not.toContain("canonical_compile_fixture_builder_submit_work");
   expect(await pathExists(join(generatedRoot, "src", "server.ts"))).toBe(false);
@@ -4005,7 +4013,7 @@ test("compilePluginForTarget lowers executable canonical tools for opencode", as
   expect(generatedServerSource).not.toContain('"protocol_core_external_submit":');
   expect(generatedServerSource).not.toContain("canonical_compile_fixture_builder_submit_work");
   expect(generatedServerSource).not.toContain("delivery-contract__builder__create_glyph");
-  expect(generatedServerSource).toContain("submit_review__review_findings_slot");
+  expect(generatedServerSource).toContain(reviewFindingsToolName);
   expect(generatedServerSource).not.toContain("Schema.omit");
   expect(generatedServerSource).not.toContain("prism-generated-protocol-core/src/plugins");
 
@@ -7173,9 +7181,11 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
   ).toBe(false);
 
   const consumerServer = await readFile(join(consumerGeneratedRoot, "dist", "server.mjs"), "utf8");
-  expect(consumerServer).toContain(
-    "external_synthetic_consumer_submit_work__worker_details",
+  const workerDetailsToolName = generatedSyntheticToolName(
+    "external-synthetic-consumer",
+    "submit_work__worker_details",
   );
+  expect(consumerServer).toContain(workerDetailsToolName);
   const protocolServer = await readFile(join(protocolGeneratedRoot, "dist", "server.mjs"), "utf8");
   expect(protocolServer).toContain("protocol_core_external_submit");
 
@@ -7184,11 +7194,11 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     "utf8",
   );
   expect(opencodeAgent).toContain(
-    "external_synthetic_consumer_submit_work__worker_details: allow",
+    `${workerDetailsToolName}: allow`,
   );
   expect(opencodeAgent).toContain("protocol_core_external_submit: deny");
 
-  expect(consumerServer).toContain("submit_work__worker_details");
+  expect(consumerServer).toContain(workerDetailsToolName);
   expect(consumerServer).not.toContain("prism-generated-protocol-core/src/plugins/protocol-core/tools/external-submit.tool");
 
   const opencodeConfig = JSON.parse(

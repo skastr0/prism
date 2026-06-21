@@ -1,7 +1,7 @@
 {
   "files": [
     {
-      "content": "<BUNDLE_HASH:dd784009a938213e25a93694b2626c6689916b8d86719c8ad54897f12588c554>",
+      "content": "<BUNDLE_HASH:51ac7883133a1ecf55303edf91afde8567c61aa2d24c3246f2e4838610c95ecf>",
       "path": "<HARNESS_ROOT>/packages/prism-generated-canonical-compile-fixture/extensions/prism-extension.js"
     },
     {
@@ -26,11 +26,11 @@
       "path": "<TEMP_ROOT>/roots/agents/builder.md"
     },
     {
-      "content": "---\nname: \"reviewer\"\ndescription: \"Reviewer agent for canonical compile integration tests\"\nmodel: \"pi-reviewer\"\ntools:\n  - \"canonical_compile_fixture_submit_review__review_findings_slot\"\n  - \"protocol_core_external_submit\"\n  - \"read_repo\"\n  - \"search_repo\"\nskills:\n  - \"delivery-contract\"\n  - \"testing\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "content": "---\nname: \"reviewer\"\ndescription: \"Reviewer agent for canonical compile integration tests\"\nmodel: \"pi-reviewer\"\ntools:\n  - \"canonical_compile_fixture_submit_review_rev_73c884a8\"\n  - \"protocol_core_external_submit\"\n  - \"read_repo\"\n  - \"search_repo\"\nskills:\n  - \"delivery-contract\"\n  - \"testing\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
       "path": "<TEMP_ROOT>/roots/agents/reviewer.md"
     },
     {
-      "content": "---\nname: \"security-reviewer\"\ndescription: \"Security reviewer variant using the same reviewable trait\"\nmodel: \"pi-reviewer\"\ntools:\n  - \"canonical_compile_fixture_submit_review__security_review_slot\"\n  - \"protocol_core_external_submit\"\n  - \"read_repo\"\n  - \"search_repo\"\nskills:\n  - \"testing\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "content": "---\nname: \"security-reviewer\"\ndescription: \"Security reviewer variant using the same reviewable trait\"\nmodel: \"pi-reviewer\"\ntools:\n  - \"canonical_compile_fixture_submit_review_sec_dbfb2428\"\n  - \"protocol_core_external_submit\"\n  - \"read_repo\"\n  - \"search_repo\"\nskills:\n  - \"testing\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
       "path": "<TEMP_ROOT>/roots/agents/security-reviewer.md"
     }
   ],

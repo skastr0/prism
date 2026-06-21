@@ -304,13 +304,14 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
 
   expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("forge"));
   expect(bundle.toolNames).toEqual([
-    "forge_submit_review__review_details",
+    "forge_submit_review_review_details",
     "orbit_core_create_glyph",
   ]);
   expect(bundle.content).toContain("tools/list");
   expect(bundle.content).toContain("tools/call");
   expect(bundle.content).toContain("orbit_core_create_glyph");
-  expect(bundle.content).toContain("forge_submit_review__review_details");
+  expect(bundle.content).toContain("forge_submit_review_review_details");
+  expect(bundle.content).not.toContain("forge_submit_review__review_details");
   expect(bundle.content).toContain("PRISM_MCP_WORKING_DIRECTORY");
   expect(bundle.content).toContain("PRISM_MCP_REPO_ROOT");
   expect(bundle.content).toContain("PRISM_MCP_TOOL_TIMEOUT_MS");
@@ -450,11 +451,11 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       httpRpc({ port, sessionId: secondSession!, method: "tools/list" }),
     ]);
     expect(firstList.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "forge_submit_review__review_details",
+      "forge_submit_review_review_details",
       "orbit_core_create_glyph",
     ]);
     expect(secondList.body.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "forge_submit_review__review_details",
+      "forge_submit_review_review_details",
       "orbit_core_create_glyph",
     ]);
 

@@ -189,10 +189,11 @@ export const buildClaudeArgs = (input: {
 
   const permissionArgs: string[] = [];
   if (mode === "permissive" || mode === "full-access") {
+    // Claude exposes no separate stronger full-access flag; both modes map to the documented bypass.
     permissionArgs.push("--dangerously-skip-permissions");
   }
   if (mode === "restricted" && input.restrictedTools !== undefined && input.restrictedTools.length > 0) {
-    permissionArgs.push("--allowedTools", input.restrictedTools.join(","));
+    permissionArgs.push(`--allowedTools=${input.restrictedTools.join(",")}`);
   }
 
   return [

@@ -101,6 +101,20 @@ describe("workflow authoring primitives", () => {
     expect(resolveWorkflowTaskModel(build)).toBe("crof/kimi-k2.6");
   });
 
+  test("resolved opencode modelspace target flows into worker args", () => {
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Use the selected model profile.",
+      output: PatchReport,
+      worker: { worker: "opencode", model: modelProfile },
+    });
+
+    const model = resolveWorkflowTaskModel(build);
+    const args = buildOpenCodeArgs({ cwd: "/tmp", agent: build.agent.name, model, prompt: build.prompt, permission: "legacy" });
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "crof/kimi-k2.6"]);
+  });
+
   test("uses the agent modelspace before CLI fallback model", () => {
     const build = defineTask({
       id: "build",

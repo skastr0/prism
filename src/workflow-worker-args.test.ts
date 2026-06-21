@@ -96,8 +96,10 @@ describe("opencode permission arg mapping", () => {
   });
 
   test("permissive emits --dangerously-skip-permissions", () => {
-    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "permissive" });
+    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", model: "provider/model", prompt: "p", permission: "permissive" });
     expect(args).toContain("--dangerously-skip-permissions");
+    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "a"]);
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "provider/model"]);
   });
 
   test("default emits permissive --dangerously-skip-permissions", () => {
@@ -152,9 +154,7 @@ describe("claude-code permission arg mapping", () => {
 
   test("restricted with tools list emits --allowedTools", () => {
     const args = buildClaudeArgs({ agent: "a", prompt: "p", permission: "restricted", restrictedTools: ["Read", "Edit"] });
-    expect(args).toContain("--allowedTools");
-    const idx = args.indexOf("--allowedTools");
-    expect(args[idx + 1]).toBe("Read,Edit");
+    expect(args).toContain("--allowedTools=Read,Edit");
   });
 
   test("restricted with no tools list throws", () => {

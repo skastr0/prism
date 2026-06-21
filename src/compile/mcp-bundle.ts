@@ -1268,6 +1268,12 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
 const server = Bun.serve({
   hostname: httpHost,
   port: httpPort,
+  // MCP connections sit idle between tool calls. Bun's default idleTimeout is
+  // 10s, which silently closes the socket; clients that reuse the closed
+  // connection (observed with Grok) then hang until their own multi-minute
+  // timeout. 255 is Bun's maximum. For idle gaps beyond 255s the client must
+  // reconnect on its own; see keepalive follow-up.
+  idleTimeout: 255,
   fetch: async (request) => {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
@@ -1289,6 +1295,15 @@ const server = Bun.serve({
 });
 
 const stopServer = async (): Promise<void> => {
+  // Graceful drain: stop accepting new connections, let in-flight tool calls
+  // finish within a bounded window, then close sessions and force-close anything
+  // still open (e.g. idle SSE streams). Avoids dropping live tool calls on
+  // restart/SIGTERM.
+  server.stop();
+  const drainDeadline = Date.now() + 10_000;
+  while (activeToolCalls > 0 && Date.now() < drainDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
   process.exit(0);

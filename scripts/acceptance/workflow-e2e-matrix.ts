@@ -13,6 +13,7 @@
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { cleanupPrismMcpProcessesUnder } from "../../src/testing/mcp-process-cleanup.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
@@ -501,6 +502,13 @@ const preparePluginRoot = async (roots: string[]): Promise<string> => {
   ]);
   await writeE2EManifest(pluginRoot);
   return pluginRoot;
+};
+
+export const removeWorkflowE2ETempRoots = async (roots: readonly string[]): Promise<void> => {
+  await Promise.all(roots.map((root) => cleanupPrismMcpProcessesUnder(root)));
+  for (const root of roots) {
+    await rm(root, { recursive: true, force: true });
+  }
 };
 
 const copyLiveConfigSeed = async (
@@ -1239,9 +1247,7 @@ const main = async (): Promise<void> => {
     }
   } finally {
     if (!(mode === "temp" && hasFlag("--keep-temp"))) {
-      for (const root of roots) {
-        await rm(root, { recursive: true, force: true });
-      }
+      await removeWorkflowE2ETempRoots(roots);
     } else {
       await writeFile("/tmp/prism-workflow-e2e-temp-roots.json", JSON.stringify({ roots }, null, 2));
     }

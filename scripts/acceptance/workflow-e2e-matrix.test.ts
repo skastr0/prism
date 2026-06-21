@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
 import {
   CONFIG_SEED_RULES,
@@ -12,11 +13,39 @@ import {
   evaluateModelSelectionChecks,
   hermesAuthHasXaiOauthCredential,
   OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
+  removeWorkflowE2ETempRoots,
   resolveHermesAuthScopeForE2E,
   resolveHermesProfileForE2E,
   TOWER_COMMENT_FAMILY,
   WORKFLOW_E2E_PROOF_PREFIX,
 } from "./workflow-e2e-matrix";
+
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const processIsRunning = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const waitForProcessRunning = async (pid: number): Promise<void> => {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (processIsRunning(pid)) return;
+    await delay(50);
+  }
+  throw new Error(`process ${pid} did not start`);
+};
 
 describe("workflow-e2e Tower evidence", () => {
   test("uses the Tower glyphs comment family", () => {
@@ -91,6 +120,36 @@ describe("workflow-e2e live config seeding", () => {
       expect(await resolveHermesProfileForE2E(root, undefined)).toBe("lyra03");
       expect(await resolveHermesProfileForE2E(root, "manual-profile")).toBe("manual-profile");
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("workflow-e2e temp cleanup", () => {
+  test("reaps MCP servers before deleting temp roots", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-cleanup-test-"));
+    const server = join(root, "runtime", "mcp", "fixture", "server.mjs");
+    await mkdir(join(root, "runtime", "mcp", "fixture"), { recursive: true });
+    await writeFile(server, "setInterval(() => {}, 1000);\n");
+
+    const proc = Bun.spawn({
+      cmd: [process.execPath, server],
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+
+    try {
+      await waitForProcessRunning(proc.pid);
+      expect(processIsRunning(proc.pid)).toBe(true);
+
+      await removeWorkflowE2ETempRoots([root]);
+
+      expect(processIsRunning(proc.pid)).toBe(false);
+      expect(await pathExists(root)).toBe(false);
+    } finally {
+      if (processIsRunning(proc.pid)) {
+        process.kill(proc.pid, "SIGKILL");
+      }
       await rm(root, { recursive: true, force: true });
     }
   });

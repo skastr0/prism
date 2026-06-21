@@ -100,6 +100,10 @@ export const buildAmpArgs = (input: {
   readonly mode?: string;
   readonly prompt: string;
   readonly permission?: WorkflowPermissionMode;
+  /**
+   * Required for permissive/full-access. runAmpWorkflowTask supplies a temp
+   * settings file with amp.dangerouslyAllowAll enabled before invoking this.
+   */
   readonly settingsFile?: string;
 }): ReadonlyArray<string> => {
   const mode = assertAmpWorkflowMode(input.mode);

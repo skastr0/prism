@@ -145,6 +145,7 @@ describe("claude-code permission arg mapping", () => {
     expect(args).toContain("--dangerously-skip-permissions");
     expect(args).toContain("--print");
     expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "stream-json"]);
+    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "a"]);
   });
 
   test("default emits permissive --dangerously-skip-permissions", () => {
@@ -236,8 +237,10 @@ describe("codex-cli permission arg mapping", () => {
   });
 
   test("permissive bypasses approvals and sandbox", () => {
-    const args = buildCodexArgs({ cwd: "/r", outputPath: "/tmp/o", prompt: "p", permission: "permissive" });
+    const args = buildCodexArgs({ cwd: "/r", model: "gpt-5.1-codex", outputPath: "/tmp/o", prompt: "p", permission: "permissive" });
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "gpt-5.1-codex"]);
+    expect(args.slice(args.indexOf("--cd"), args.indexOf("--cd") + 2)).toEqual(["--cd", "/r"]);
     expect(args).not.toContain("--sandbox");
   });
 
@@ -263,6 +266,14 @@ describe("codex-cli permission arg mapping", () => {
     expect(args).not.toContain("--ask-for-approval");
   });
 
+  test("full-access bypasses approvals and sandbox", () => {
+    const args = buildCodexArgs({ cwd: "/r", model: "gpt-5.1-codex", outputPath: "/tmp/o", prompt: "p", permission: "full-access" });
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "gpt-5.1-codex"]);
+    expect(args.slice(args.indexOf("--cd"), args.indexOf("--cd") + 2)).toEqual(["--cd", "/r"]);
+    expect(args).not.toContain("--sandbox");
+  });
+
   test("interactive throws", () => {
     expect(() => buildCodexArgs({ cwd: "/r", outputPath: "/tmp/o", prompt: "p", permission: "interactive" }))
       .toThrow(WorkflowPermissionError);
@@ -281,8 +292,10 @@ describe("grok permission arg mapping", () => {
   });
 
   test("permissive emits --always-approve and bypassPermissions", () => {
-    const args = buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", permission: "permissive" });
+    const args = buildGrokArgs({ cwd: "/r", agent: "a", model: "grok-model", prompt: "p", permission: "permissive" });
     expect(args).toContain("--always-approve");
+    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "a"]);
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "grok-model"]);
     expect(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2)).toEqual([
       "--permission-mode",
       "bypassPermissions",
@@ -340,8 +353,10 @@ describe("kimi-code permission arg mapping", () => {
   });
 
   test("permissive emits --yolo", () => {
-    const args = buildKimiArgs({ prompt: "p", skillsDir: "/s", permission: "permissive" });
+    const args = buildKimiArgs({ model: "moonshot/kimi-k2", prompt: "p", skillsDir: "/s", permission: "permissive" });
     expect(args).toContain("--yolo");
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "moonshot/kimi-k2"]);
+    expect(args.slice(args.indexOf("--skills-dir"), args.indexOf("--skills-dir") + 2)).toEqual(["--skills-dir", "/s"]);
   });
 
   test("default emits permissive --yolo", () => {

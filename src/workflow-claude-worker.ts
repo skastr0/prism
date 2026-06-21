@@ -193,6 +193,7 @@ export const buildClaudeArgs = (input: {
     permissionArgs.push("--dangerously-skip-permissions");
   }
   if (mode === "restricted" && input.restrictedTools !== undefined && input.restrictedTools.length > 0) {
+    // Claude Code 2.1.185 accepts this equals/comma form on the noninteractive --print path.
     permissionArgs.push(`--allowedTools=${input.restrictedTools.join(",")}`);
   }
 

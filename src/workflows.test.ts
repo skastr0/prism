@@ -13,6 +13,12 @@ import {
   type WorkflowTaskOutput,
 } from "./workflows.js";
 import { resolveWorkflowTaskPermission } from "./workflow-workers.js";
+import { buildAmpArgs } from "./workflow-amp-worker.js";
+import { buildClaudeArgs } from "./workflow-claude-worker.js";
+import { buildCodexArgs } from "./workflow-codex-worker.js";
+import { buildGrokArgs } from "./workflow-grok-worker.js";
+import { buildHermesArgs } from "./workflow-hermes-worker.js";
+import { buildKimiArgs } from "./workflow-kimi-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES, WorkflowPermissionError } from "./workflow-permissions.js";
 
@@ -34,6 +40,18 @@ const modelProfile = {
   targets: {
     opencode: { strategy: "any-of", models: [{ model: "crof/kimi-k2.6" }, { model: "fallback/kimi" }] },
     "claude-code": { model: "claude-opus-4-8", effort: "max" },
+    "codex-cli": { model: "gpt-5.1-codex" },
+    grok: { model: "grok-build-fast" },
+    hermes: { model: "openai/gpt-5.1-mini" },
+    "kimi-code": { model: "moonshot/kimi-k2" },
+    "amp-code": { model: "deep" },
+  },
+} as const satisfies WorkflowModelProfileRef;
+
+const opencodeOnlyModelProfile = {
+  ...modelProfile,
+  targets: {
+    opencode: modelProfile.targets.opencode,
   },
 } as const satisfies WorkflowModelProfileRef;
 
@@ -115,6 +133,69 @@ describe("workflow authoring primitives", () => {
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "crof/kimi-k2.6"]);
   });
 
+  test("resolved modelspace targets flow into non-opencode worker args", () => {
+    const taskFor = (worker: WorkflowWorkerId) =>
+      defineTask({
+        id: `build-${worker}`,
+        agent: builder,
+        prompt: "Use the selected model profile.",
+        output: PatchReport,
+        worker: { worker, model: modelProfile },
+      });
+
+    const claude = taskFor("claude-code");
+    const claudeArgs = buildClaudeArgs({
+      agent: claude.agent.name,
+      model: resolveWorkflowTaskModel(claude),
+      prompt: claude.prompt,
+      permission: "legacy",
+    });
+    expect(claudeArgs.slice(claudeArgs.indexOf("--model"), claudeArgs.indexOf("--model") + 2)).toEqual(["--model", "claude-opus-4-8"]);
+
+    const codex = taskFor("codex-cli");
+    const codexArgs = buildCodexArgs({
+      cwd: "/tmp",
+      model: resolveWorkflowTaskModel(codex),
+      outputPath: "/tmp/out",
+      prompt: codex.prompt,
+      permission: "legacy",
+    });
+    expect(codexArgs.slice(codexArgs.indexOf("--model"), codexArgs.indexOf("--model") + 2)).toEqual(["--model", "gpt-5.1-codex"]);
+
+    const grok = taskFor("grok");
+    expect(buildGrokArgs({
+      cwd: "/tmp",
+      agent: grok.agent.name,
+      model: resolveWorkflowTaskModel(grok),
+      prompt: grok.prompt,
+      permission: "legacy",
+    }).slice(0, 2)).toEqual(["--model", "grok-build-fast"]);
+
+    const hermes = taskFor("hermes");
+    const hermesArgs = buildHermesArgs({
+      model: resolveWorkflowTaskModel(hermes),
+      prompt: hermes.prompt,
+      permission: "legacy",
+    });
+    expect(hermesArgs.slice(hermesArgs.indexOf("--model"), hermesArgs.indexOf("--model") + 2)).toEqual(["--model", "openai/gpt-5.1-mini"]);
+
+    const kimi = taskFor("kimi-code");
+    expect(buildKimiArgs({
+      model: resolveWorkflowTaskModel(kimi),
+      prompt: kimi.prompt,
+      skillsDir: "/tmp/skills",
+      permission: "legacy",
+    }).slice(0, 2)).toEqual(["--model", "moonshot/kimi-k2"]);
+
+    const amp = taskFor("amp-code");
+    const ampArgs = buildAmpArgs({
+      mode: resolveWorkflowTaskModel(amp),
+      prompt: amp.prompt,
+      permission: "legacy",
+    });
+    expect(ampArgs.slice(ampArgs.indexOf("--mode"), ampArgs.indexOf("--mode") + 2)).toEqual(["--mode", "deep"]);
+  });
+
   test("uses the agent modelspace before CLI fallback model", () => {
     const build = defineTask({
       id: "build",
@@ -164,7 +245,7 @@ describe("workflow authoring primitives", () => {
       agent: builder,
       prompt: "Use the selected model profile.",
       output: PatchReport,
-      worker: { worker: "codex-cli", model: modelProfile },
+      worker: { worker: "codex-cli", model: opencodeOnlyModelProfile },
     });
 
     expect(() => resolveWorkflowTaskModel(build)).toThrow(WorkflowModelResolutionError);

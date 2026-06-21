@@ -1,9 +1,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface KimiWorkflowWorkerOptions {
@@ -11,6 +12,7 @@ export interface KimiWorkflowWorkerOptions {
   readonly bin?: string;
   readonly model?: string;
   readonly kimiHome?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
@@ -66,6 +68,61 @@ const parseKimiStreamJsonOutput = (stdout: string): string => {
   throw new KimiWorkflowWorkerError("kimi-code stream-json output did not contain an assistant message");
 };
 
+const assertKimiPermission = (mode: WorkflowPermissionMode): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+      return;
+    case "restricted":
+      throw new WorkflowPermissionError(
+        "kimi-code",
+        mode,
+        "Kimi Code has no CLI flag to restrict permissions per invocation. Choose 'legacy' or 'permissive' instead.",
+      );
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "kimi-code",
+        mode,
+        "Kimi Code interactive mode is incompatible with Prism workflow execution. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "kimi-code",
+        mode,
+        "Kimi Code has no read-only sandbox CLI flag. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-workspace-write":
+      throw new WorkflowPermissionError(
+        "kimi-code",
+        mode,
+        "Kimi Code has no workspace-write sandbox mode. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("kimi-code", mode);
+};
+
+export const buildKimiArgs = (input: {
+  readonly model?: string;
+  readonly prompt: string;
+  readonly skillsDir: string;
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertKimiPermission(mode);
+  const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--yolo"] : [];
+  return [
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    "--output-format",
+    "stream-json",
+    ...permissionArgs,
+    "--prompt",
+    input.prompt,
+    "--skills-dir",
+    input.skillsDir,
+  ];
+};
+
 export const runKimiWorkflowTask = async (
   task: AnyWorkflowTask,
   options: KimiWorkflowWorkerOptions,
@@ -78,15 +135,12 @@ export const runKimiWorkflowTask = async (
     ?? 360_000;
   const kimiHome = options.kimiHome ?? defaultKimiCodeHome();
 
-  const args: string[] = [
-    ...(options.model !== undefined ? ["--model", options.model] : []),
-    "--output-format",
-    "stream-json",
-    "--prompt",
+  const args = buildKimiArgs({
+    model: options.model,
     prompt,
-    "--skills-dir",
-    join(kimiHome, "plugins", "managed", generatedKimiPluginId(task.agent.plugin), "skills"),
-  ];
+    skillsDir: join(kimiHome, "plugins", "managed", generatedKimiPluginId(task.agent.plugin), "skills"),
+    permission: options.resolvedPermission,
+  });
 
   const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } = await runWorkflowWorkerProcess({
     command,

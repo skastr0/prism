@@ -2,16 +2,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
 
 export interface ClaudeWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
+  readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly repair?: WorkflowTaskRepairContext;
@@ -132,27 +135,83 @@ export const discoverClaudeGeneratedPlugin = (
   };
 };
 
+const assertClaudePermission = (
+  mode: WorkflowPermissionMode,
+  restrictedTools?: readonly string[],
+): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+      return;
+    case "restricted":
+      if (restrictedTools === undefined || restrictedTools.length === 0) {
+        throw new WorkflowPermissionError(
+          "claude-code",
+          mode,
+          "Claude Code restricted mode requires a tools list via --allowedTools. Provide a comma-separated list of allowed tool names or choose 'permissive' or 'legacy' instead.",
+        );
+      }
+      return;
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "claude-code",
+        mode,
+        "Claude Code interactive mode is incompatible with Prism workflow execution. Spawning without --print blocks the process indefinitely. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "claude-code",
+        mode,
+        "Claude Code exposes no built-in sandbox flag. Apply host-level process isolation outside the harness. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-workspace-write":
+      throw new WorkflowPermissionError(
+        "claude-code",
+        mode,
+        "Claude Code exposes no workspace-write sandbox mode. Apply host-level process isolation outside the harness. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("claude-code", mode);
+};
+
 export const buildClaudeArgs = (input: {
   readonly agent: string;
   readonly model?: string;
   readonly prompt: string;
   readonly resumeSessionId?: string;
   readonly generatedPlugin?: ClaudeGeneratedPluginDiscovery;
-}): ReadonlyArray<string> => [
-  "--print",
-  "--output-format",
-  "stream-json",
-  "--verbose",
-  ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : ["--agent", input.agent]),
-  ...(input.model !== undefined ? ["--model", input.model] : []),
-  ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
-  ...(input.generatedPlugin?.mcpConfig !== undefined ? [`--mcp-config=${input.generatedPlugin.mcpConfig}`] : []),
-  ...(input.generatedPlugin?.mcpConfig !== undefined ? ["--strict-mcp-config"] : []),
-  ...(input.generatedPlugin?.allowedTools !== undefined && input.generatedPlugin.allowedTools.length > 0
-    ? [`--allowedTools=${input.generatedPlugin.allowedTools.join(",")}`]
-    : []),
-  input.prompt,
-];
+  readonly permission?: WorkflowPermissionMode;
+  readonly restrictedTools?: readonly string[];
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertClaudePermission(mode, input.restrictedTools);
+
+  const permissionArgs: string[] = [];
+  if (mode === "permissive" || mode === "full-access") {
+    permissionArgs.push("--dangerously-skip-permissions");
+  }
+  if (mode === "restricted" && input.restrictedTools !== undefined && input.restrictedTools.length > 0) {
+    permissionArgs.push("--allowedTools", input.restrictedTools.join(","));
+  }
+
+  return [
+    "--print",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : ["--agent", input.agent]),
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
+    ...(input.generatedPlugin?.mcpConfig !== undefined ? [`--mcp-config=${input.generatedPlugin.mcpConfig}`] : []),
+    ...(input.generatedPlugin?.mcpConfig !== undefined ? ["--strict-mcp-config"] : []),
+    ...(input.generatedPlugin?.allowedTools !== undefined && input.generatedPlugin.allowedTools.length > 0
+      ? [`--allowedTools=${input.generatedPlugin.allowedTools.join(",")}`]
+      : []),
+    ...permissionArgs,
+    input.prompt,
+  ];
+};
 
 export const runClaudeWorkflowTask = async (
   task: AnyWorkflowTask,
@@ -173,6 +232,8 @@ export const runClaudeWorkflowTask = async (
     resumeSessionId,
     generatedPlugin,
     prompt,
+    permission: options.resolvedPermission,
+    restrictedTools: options.restrictedTools,
   });
 
   const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({

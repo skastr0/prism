@@ -77,12 +77,14 @@ import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
+import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
   requestWorkflowRunnerTermination,
   startDetachedWorkflowRun,
   updateDetachedWorkflowRun,
   workflowRunOptionsSnapshot,
 } from "./workflow-controls.js";
+import type { WorkflowPermissionMode } from "./workflows.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 
 declare const APP_VERSION: string | undefined;
@@ -238,6 +240,7 @@ workflow
   .option("--mock-output <path>", "JSON object keyed by workflow task id")
   .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
+  .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
@@ -248,6 +251,7 @@ workflow
     readonly mockOutput?: string;
     readonly worker?: string;
     readonly model?: string;
+    readonly permission?: string;
     readonly maxConcurrentTasks?: number;
     readonly store?: string;
     readonly detach?: boolean;
@@ -291,7 +295,7 @@ workflow
         store.setRunHandoffToken(runId, token);
         store.close();
         store = undefined;
-        startDetachedWorkflowRun(file, options, { runId, storePath, token });
+        startDetachedWorkflowRun(file, { ...options, permission: options.permission }, { runId, storePath, token });
         console.log(JSON.stringify({ runId, workflow: workflow.name, status: "running", detached: true }, null, 2));
         return;
       }
@@ -332,8 +336,11 @@ workflow
       const outputs = options.mockOutput
         ? JSON.parse(await readFile(expandPath(options.mockOutput), "utf8")) as Record<string, unknown>
         : null;
+      const parsedPermission = options.permission !== undefined
+        ? parseWorkflowPermissionMode(options.permission)
+        : undefined;
       const workerExecutor = outputs === null
-        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model })
+        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission })
         : null;
       const result = await runWorkflow(workflow, {
         store,
@@ -345,6 +352,7 @@ workflow
         runtimeOptions: {
           fallbackWorker: options.worker,
           fallbackModel: options.model,
+          fallbackPermission: parsedPermission,
         },
         executeTask: async (task, context) => {
           if (outputs === null) return workerExecutor!(task, context);
@@ -707,6 +715,7 @@ workflowRuns
   .option("--mock-output <path>", "JSON object keyed by workflow task id")
   .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
+  .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
@@ -714,6 +723,7 @@ workflowRuns
     readonly mockOutput?: string;
     readonly worker?: string;
     readonly model?: string;
+    readonly permission?: string;
     readonly maxConcurrentTasks?: number;
     readonly cache?: boolean;
   }) => {
@@ -2354,6 +2364,13 @@ function parseMcpPortSelection(value: string | undefined): McpPortSelection | un
   if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
 
   throw new InvalidArgumentError("--port must be 'auto' or an integer from 1 to 65535.");
+}
+
+function parseWorkflowPermissionMode(value: string): WorkflowPermissionMode {
+  if (isWorkflowPermissionMode(value)) return value;
+  throw new InvalidArgumentError(
+    `Invalid permission mode '${value}'. Expected one of: ${WORKFLOW_PERMISSION_MODES.join(", ")}`,
+  );
 }
 
 function parseMcpLifecycleMode(value: string): CompileMcpLifecycleMode {

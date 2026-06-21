@@ -1,13 +1,15 @@
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface OpenCodeWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
@@ -16,20 +18,61 @@ export class OpenCodeWorkflowWorkerError extends Error {
   override readonly name = "OpenCodeWorkflowWorkerError";
 }
 
+const assertOpenCodePermission = (mode: WorkflowPermissionMode): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+      return;
+    case "restricted":
+      throw new WorkflowPermissionError(
+        "opencode",
+        mode,
+        "OpenCode has no CLI flag to restrict permissions beyond the user's config. Restricted mode requires pre-configuring opencode.json with specific 'deny' entries, which is a config-management concern, not a runtime flag. Choose 'legacy' or 'permissive' instead.",
+      );
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "opencode",
+        mode,
+        "OpenCode interactive mode (-i/--interactive) is incompatible with Prism workflow execution. Workflow tasks run headless and cannot participate in interactive prompts. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "opencode",
+        mode,
+        "OpenCode has no --sandbox or read-only execution mode. Apply host-level process isolation (Docker, macOS sandbox-exec) outside the harness. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-workspace-write":
+      throw new WorkflowPermissionError(
+        "opencode",
+        mode,
+        "OpenCode has no workspace-write sandbox mode. Apply host-level process isolation outside the harness. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("opencode", mode);
+};
+
 export const buildOpenCodeArgs = (input: {
   readonly cwd: string;
   readonly agent: string;
   readonly model?: string;
   readonly prompt: string;
-}): ReadonlyArray<string> => [
-  "run",
-  "--dir",
-  input.cwd,
-  "--agent",
-  input.agent,
-  ...(input.model !== undefined ? ["--model", input.model] : []),
-  input.prompt,
-];
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertOpenCodePermission(mode);
+  const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--dangerously-skip-permissions"] : [];
+  return [
+    "run",
+    "--dir",
+    input.cwd,
+    "--agent",
+    input.agent,
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...permissionArgs,
+    input.prompt,
+  ];
+};
 
 export const runOpenCodeWorkflowTask = async (
   task: AnyWorkflowTask,
@@ -45,6 +88,7 @@ export const runOpenCodeWorkflowTask = async (
     agent: task.agent.name,
     model: options.model,
     prompt,
+    permission: options.resolvedPermission,
   });
 
   const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({

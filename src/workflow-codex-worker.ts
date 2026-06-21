@@ -1,16 +1,18 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface CodexWorkflowWorkerOptions {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
@@ -18,6 +20,75 @@ export interface CodexWorkflowWorkerOptions {
 export class CodexWorkflowWorkerError extends Error {
   override readonly name = "CodexWorkflowWorkerError";
 }
+
+const assertCodexPermission = (mode: WorkflowPermissionMode): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+    case "sandbox-read-only":
+    case "sandbox-workspace-write":
+      return;
+    case "restricted":
+      throw new WorkflowPermissionError(
+        "codex-cli",
+        mode,
+        "Codex CLI restricted mode requires a specific --sandbox mode. Use 'sandbox-read-only', 'sandbox-workspace-write', or 'permissive' instead.",
+      );
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "codex-cli",
+        mode,
+        "Codex CLI interactive mode is incompatible with Prism workflow execution. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("codex-cli", mode);
+};
+
+const codexPermissionArgs = (mode: WorkflowPermissionMode): ReadonlyArray<string> => {
+  switch (mode) {
+    case "legacy":
+      return ["--sandbox", "workspace-write"];
+    case "permissive":
+    case "full-access":
+      return ["--dangerously-bypass-approvals-and-sandbox"];
+    case "sandbox-read-only":
+      return ["--sandbox", "read-only"];
+    case "sandbox-workspace-write":
+      return ["--sandbox", "workspace-write"];
+    case "restricted":
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "codex-cli",
+        mode,
+        `Codex CLI permission mode '${mode}' is not mapped to argv`,
+      );
+    default:
+      return assertNeverWorkflowPermissionMode("codex-cli", mode);
+  }
+};
+
+export const buildCodexArgs = (input: {
+  readonly cwd: string;
+  readonly model?: string;
+  readonly outputPath: string;
+  readonly prompt: string;
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertCodexPermission(mode);
+  return [
+    "exec",
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    "--cd",
+    input.cwd,
+    ...codexPermissionArgs(mode),
+    "--ephemeral",
+    "--output-last-message",
+    input.outputPath,
+    input.prompt,
+  ];
+};
 
 export const runCodexWorkflowTask = async (
   task: AnyWorkflowTask,
@@ -30,18 +101,13 @@ export const runCodexWorkflowTask = async (
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS)
     ?? 360_000;
   const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const args = [
-    "exec",
-    ...(options.model !== undefined ? ["--model", options.model] : []),
-    "--cd",
-    options.cwd,
-    "--sandbox",
-    "workspace-write",
-    "--ephemeral",
-    "--output-last-message",
+  const args = buildCodexArgs({
+    cwd: options.cwd,
+    model: options.model,
     outputPath,
     prompt,
-  ];
+    permission: options.resolvedPermission,
+  });
 
   try {
     const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({

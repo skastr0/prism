@@ -1,4 +1,4 @@
-import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowWorkerId } from "./workflows.js";
+import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowPermissionMode, type WorkflowWorkerId } from "./workflows.js";
 import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
@@ -8,10 +8,14 @@ import { runKimiWorkflowTask } from "./workflow-kimi-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskExecution, WorkflowTaskExecutionContext, WorkflowTaskExecutor } from "./workflow-runner.js";
 
+export { WorkflowPermissionError } from "./workflow-permissions.js";
+
 export interface WorkflowWorkerAdapterOptions {
   readonly cwd: string;
   readonly model?: string;
   readonly profile?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
+  readonly restrictedTools?: readonly string[];
   readonly abortSignal?: AbortSignal;
   readonly context?: WorkflowTaskExecutionContext;
 }
@@ -44,6 +48,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runAmpWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
     }),
   },
@@ -52,11 +57,15 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "claude-code", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      restrictedTools: options.restrictedTools,
       abortSignal: options.abortSignal,
     }),
     continueTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "claude-code", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      restrictedTools: options.restrictedTools,
       abortSignal: options.abortSignal,
       repair: options.context?.repair,
     }),
@@ -66,6 +75,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runCodexWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "codex-cli", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
     }),
   },
@@ -74,6 +84,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runGrokWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "grok", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
     }),
   },
@@ -83,6 +94,7 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "hermes", fallbackModel: options.model }),
       profile: task.worker?.profile ?? options.profile,
+      resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
     }),
   },
@@ -91,6 +103,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runKimiWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "kimi-code", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
     }),
   },
@@ -99,6 +112,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runOpenCodeWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "opencode", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
       abortSignal: options.abortSignal,
     }),
   },
@@ -115,10 +129,17 @@ export const getWorkflowWorkerAdapter = (worker: string): WorkflowWorkerAdapter 
   return adapter;
 };
 
+export const resolveWorkflowTaskPermission = (
+  task: AnyWorkflowTask,
+  fallbackPermission?: WorkflowPermissionMode,
+): WorkflowPermissionMode =>
+  task.worker?.permission ?? fallbackPermission ?? "permissive";
+
 export const createWorkflowWorkerExecutor = (input: {
   readonly worker?: string;
   readonly cwd: string;
   readonly model?: string;
+  readonly fallbackPermission?: WorkflowPermissionMode;
 }): WorkflowTaskExecutor => {
   if (input.worker !== undefined) {
     getWorkflowWorkerAdapter(input.worker);
@@ -129,7 +150,15 @@ export const createWorkflowWorkerExecutor = (input: {
       throw new UnsupportedWorkflowWorkerError("<missing>", supportedWorkflowWorkers());
     }
     const adapter = getWorkflowWorkerAdapter(worker);
-    const options = { cwd: input.cwd, model: input.model, abortSignal: context?.abortSignal, context };
+    const resolvedPermission = resolveWorkflowTaskPermission(task, input.fallbackPermission);
+    const options = {
+      cwd: input.cwd,
+      model: input.model,
+      resolvedPermission,
+      restrictedTools: task.worker?.restrictedTools,
+      abortSignal: context?.abortSignal,
+      context,
+    };
     if (context?.repair?.mode === "native-continuation" && adapter.continueTask !== undefined) {
       return adapter.continueTask(task, options);
     }

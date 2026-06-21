@@ -8,6 +8,7 @@ export interface WorkflowDetachedRunOptions {
   readonly mockOutput?: string;
   readonly worker?: string;
   readonly model?: string;
+  readonly permission?: string;
   readonly maxConcurrentTasks?: number;
   readonly cache?: boolean;
 }
@@ -40,6 +41,7 @@ export const workflowRunOptionsSnapshot = (
 ): Record<string, unknown> => ({
   ...(options.worker !== undefined ? { worker: options.worker } : {}),
   ...(options.model !== undefined ? { model: options.model } : {}),
+  ...(options.permission !== undefined ? { permission: options.permission } : {}),
   ...(options.mockOutput !== undefined ? { mockOutput: options.mockOutput } : {}),
   ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
   ...(options.cache === false ? { cache: false } : {}),
@@ -51,6 +53,7 @@ const workflowDetachedRunOptionsFromSnapshot = (
   ...(typeof options?.mockOutput === "string" ? { mockOutput: options.mockOutput } : {}),
   ...(typeof options?.worker === "string" ? { worker: options.worker } : {}),
   ...(typeof options?.model === "string" ? { model: options.model } : {}),
+  ...(typeof options?.permission === "string" ? { permission: options.permission } : {}),
   ...(typeof options?.maxConcurrentTasks === "number" && Number.isInteger(options.maxConcurrentTasks)
     ? { maxConcurrentTasks: options.maxConcurrentTasks }
     : {}),
@@ -67,6 +70,7 @@ const mergeWorkflowRunOptions = (
     ...(next.mockOutput !== undefined ? { mockOutput: next.mockOutput } : {}),
     ...(next.worker !== undefined ? { worker: next.worker } : {}),
     ...(next.model !== undefined ? { model: next.model } : {}),
+    ...(next.permission !== undefined ? { permission: next.permission } : {}),
     ...(next.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: next.maxConcurrentTasks } : {}),
     ...(next.cache === false ? { cache: false } : {}),
   };
@@ -89,6 +93,7 @@ export const startDetachedWorkflowRun = (
     run.token,
     ...(options.worker !== undefined ? ["--worker", options.worker] : []),
     ...(options.model !== undefined ? ["--model", options.model] : []),
+    ...(options.permission !== undefined ? ["--permission", options.permission] : []),
     ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
     ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
     ...(options.cache === false ? ["--no-cache"] : []),

@@ -2,10 +2,11 @@ import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "no
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface GrokWorkflowWorkerOptions {
@@ -13,6 +14,7 @@ export interface GrokWorkflowWorkerOptions {
   readonly bin?: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
@@ -286,28 +288,72 @@ const prepareGrokWorkflowRuntime = async (task: AnyWorkflowTask): Promise<GrokWo
   };
 };
 
+const assertGrokPermission = (mode: WorkflowPermissionMode): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+      return;
+    case "restricted":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok has no CLI flag to restrict permissions per invocation. Choose 'legacy' or 'permissive' instead.",
+      );
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok interactive mode is incompatible with Prism workflow execution. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok has no read-only sandbox CLI flag. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-workspace-write":
+      throw new WorkflowPermissionError(
+        "grok",
+        mode,
+        "Grok has no workspace-write sandbox mode. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("grok", mode);
+};
+
 export const buildGrokArgs = (input: {
   readonly cwd: string;
   readonly agent: string;
   readonly model?: string;
   readonly effort?: string;
   readonly prompt: string;
-}): ReadonlyArray<string> => [
-  "--model",
-  input.model ?? "grok-build",
-  "--agent",
-  input.agent,
-  "--cwd",
-  input.cwd,
-  "--no-alt-screen",
-  "--allow",
-  "MCPTool",
-  "--output-format",
-  "plain",
-  ...(input.effort ? ["--effort", input.effort] : []),
-  "--single",
-  input.prompt,
-];
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertGrokPermission(mode);
+  const permissionArgs: string[] = mode === "permissive" || mode === "full-access"
+    ? ["--always-approve", "--permission-mode", "bypassPermissions"]
+    : [];
+  return [
+    "--model",
+    input.model ?? "grok-build",
+    "--agent",
+    input.agent,
+    "--cwd",
+    input.cwd,
+    "--no-alt-screen",
+    "--allow",
+    "MCPTool",
+    "--output-format",
+    "plain",
+    "--no-wait-for-background",
+    ...(input.effort ? ["--effort", input.effort] : []),
+    ...permissionArgs,
+    "--single",
+    input.prompt,
+  ];
+};
 
 export const runGrokWorkflowTask = async (
   task: AnyWorkflowTask,
@@ -325,6 +371,7 @@ export const runGrokWorkflowTask = async (
     model: options.model,
     effort: options.effort,
     prompt,
+    permission: options.resolvedPermission,
   });
 
   const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } = await runWorkflowWorkerProcess({

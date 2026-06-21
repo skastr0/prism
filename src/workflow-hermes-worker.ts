@@ -1,7 +1,8 @@
-import type { AnyWorkflowTask } from "./workflows.js";
+import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
+import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution } from "./workflow-runner.js";
 
 export interface HermesWorkflowWorkerOptions {
@@ -9,6 +10,7 @@ export interface HermesWorkflowWorkerOptions {
   readonly bin?: string;
   readonly model?: string;
   readonly profile?: string;
+  readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
@@ -22,6 +24,62 @@ const hermesSessionId = (stderr: string): string | undefined => {
   return match?.[1];
 };
 
+const assertHermesPermission = (mode: WorkflowPermissionMode): void => {
+  switch (mode) {
+    case "legacy":
+    case "permissive":
+    case "full-access":
+      return;
+    case "restricted":
+      throw new WorkflowPermissionError(
+        "hermes",
+        mode,
+        "Hermes has no CLI flag to restrict permissions per invocation. Permission restriction is config-scoped (approvals.mode, permissions.allow/deny in config.yaml), not a runtime override. Choose 'legacy' or 'permissive' instead.",
+      );
+    case "interactive":
+      throw new WorkflowPermissionError(
+        "hermes",
+        mode,
+        "Hermes interactive mode is incompatible with Prism workflow execution. Non-interactive chat (-q) cannot complete interactive approval prompts. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-read-only":
+      throw new WorkflowPermissionError(
+        "hermes",
+        mode,
+        "Hermes has no read-only sandbox CLI flag. Read-only isolation would require terminal.backend/docker image policy changes outside per-task argv mapping. Choose 'permissive' or 'legacy' instead.",
+      );
+    case "sandbox-workspace-write":
+      throw new WorkflowPermissionError(
+        "hermes",
+        mode,
+        "Hermes has no workspace-write sandbox mode on chat. Docker terminal backend is a persistent sandbox boundary configured in config.yaml, not a per-workflow-task spawn argument. Choose 'permissive' or 'legacy' instead.",
+      );
+  }
+  return assertNeverWorkflowPermissionMode("hermes", mode);
+};
+
+export const buildHermesArgs = (input: {
+  readonly profile?: string;
+  readonly model?: string;
+  readonly prompt: string;
+  readonly permission?: WorkflowPermissionMode;
+}): ReadonlyArray<string> => {
+  const mode = input.permission ?? "permissive";
+  assertHermesPermission(mode);
+  const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--yolo"] : [];
+  return [
+    ...(input.profile !== undefined ? ["--profile", input.profile] : []),
+    "chat",
+    "--query",
+    input.prompt,
+    "--quiet",
+    "--source",
+    "prism-workflow",
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...permissionArgs,
+  ];
+};
+
 export const runHermesWorkflowTask = async (
   task: AnyWorkflowTask,
   options: HermesWorkflowWorkerOptions,
@@ -31,16 +89,12 @@ export const runHermesWorkflowTask = async (
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_HERMES_PROCESS_TIMEOUT_MS)
     ?? 360_000;
-  const args = [
-    ...(options.profile !== undefined ? ["--profile", options.profile] : []),
-    "chat",
-    "--query",
+  const args = buildHermesArgs({
+    profile: options.profile,
+    model: options.model,
     prompt,
-    "--quiet",
-    "--source",
-    "prism-workflow",
-    ...(options.model !== undefined ? ["--model", options.model] : []),
-  ];
+    permission: options.resolvedPermission,
+  });
 
   const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
     command,

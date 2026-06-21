@@ -8,9 +8,13 @@ import {
   WorkflowModelResolutionError,
   type WorkflowAgentRef,
   type WorkflowModelProfileRef,
+  type WorkflowPermissionMode,
   type WorkflowWorkerId,
   type WorkflowTaskOutput,
 } from "./workflows.js";
+import { resolveWorkflowTaskPermission } from "./workflow-workers.js";
+import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
+import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES, WorkflowPermissionError } from "./workflow-permissions.js";
 
 const builder = {
   kind: "agent-ref",
@@ -190,6 +194,83 @@ describe("workflow authoring primitives", () => {
     // @ts-expect-error decoded output must match the Effect Schema, not prose.
     const invalid: WorkflowTaskOutput<typeof build> = { summary: "typed" };
     expect(invalid).toBeDefined();
+  });
+
+  test("workflow permission mode type includes all expected values", () => {
+    const modes: WorkflowPermissionMode[] = [
+      "legacy", "permissive", "restricted", "interactive",
+      "sandbox-read-only", "sandbox-workspace-write", "full-access",
+    ];
+    expect(modes.length).toBe(7);
+  });
+
+  test("workflow permission mode runtime guard accepts only known modes", () => {
+    expect(WORKFLOW_PERMISSION_MODES).toEqual([
+      "legacy", "permissive", "restricted", "interactive",
+      "sandbox-read-only", "sandbox-workspace-write", "full-access",
+    ]);
+    for (const mode of WORKFLOW_PERMISSION_MODES) {
+      expect(isWorkflowPermissionMode(mode)).toBe(true);
+    }
+    expect(isWorkflowPermissionMode("danger-full-access")).toBe(false);
+    expect(isWorkflowPermissionMode("")).toBe(false);
+  });
+
+  test("workflow task permission resolves task permission over runtime fallback", () => {
+    const task = defineTask({
+      id: "perm-test",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: { worker: "opencode", permission: "legacy" },
+    });
+    expect(resolveWorkflowTaskPermission(task, "permissive")).toBe("legacy");
+  });
+
+  test("workflow task permission defaults to permissive when both are undefined", () => {
+    const task = defineTask({
+      id: "perm-default",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: { worker: "opencode" },
+    });
+    expect(resolveWorkflowTaskPermission(task)).toBe("permissive");
+  });
+
+  test("workflow task permission uses runtime fallback when task has no permission", () => {
+    const task = defineTask({
+      id: "perm-pass",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: { worker: "opencode" },
+    });
+    expect(resolveWorkflowTaskPermission(task, "legacy")).toBe("legacy");
+  });
+
+  test("workflow task worker options preserve restricted tool lists", () => {
+    const task = defineTask({
+      id: "perm-restricted-tools",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: { worker: "claude-code", permission: "restricted", restrictedTools: ["Read", "Edit"] },
+    });
+    expect(task.worker?.restrictedTools).toEqual(["Read", "Edit"]);
+  });
+
+  test("unsupported resolved permission fails closed in the opencode interpreter", () => {
+    const task = defineTask({
+      id: "perm-fail",
+      agent: builder,
+      prompt: "test",
+      output: PatchReport,
+      worker: { worker: "opencode" },
+    });
+    const permission = resolveWorkflowTaskPermission(task, "sandbox-read-only");
+    expect(() => buildOpenCodeArgs({ cwd: "/tmp", agent: task.agent.name, prompt: task.prompt, permission }))
+      .toThrow(WorkflowPermissionError);
   });
 
   test("dynamic workflows expose decoded task outputs to later code", async () => {

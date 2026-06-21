@@ -64,11 +64,22 @@ export type WorkflowWorkerId =
   | "kimi-code"
   | "opencode";
 
+export type WorkflowPermissionMode =
+  | "legacy"
+  | "permissive"
+  | "restricted"
+  | "interactive"
+  | "sandbox-read-only"
+  | "sandbox-workspace-write"
+  | "full-access";
+
 export interface WorkflowTaskWorkerOptions {
   readonly worker?: WorkflowWorkerId;
   readonly model?: string | WorkflowModelProfileRef;
   readonly modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   readonly profile?: string;
+  readonly permission?: WorkflowPermissionMode;
+  readonly restrictedTools?: ReadonlyArray<string>;
 }
 
 export type WorkflowResolvedModelEntry = Readonly<{ readonly model: string }>;
@@ -311,6 +322,7 @@ export interface WorkflowRuntime {
 export interface WorkflowRuntimeOptions {
   readonly fallbackWorker?: string;
   readonly fallbackModel?: string;
+  readonly fallbackPermission?: WorkflowPermissionMode;
 }
 
 export interface DynamicWorkflowDefinition<

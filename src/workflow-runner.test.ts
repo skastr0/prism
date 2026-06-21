@@ -176,7 +176,7 @@ describe("workflow runner", () => {
       "const prompt = args.at(-1);",
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, prompt }) + '\\n');`,
       "const repaired = resumeIndex >= 0;",
-      "console.log(JSON.stringify({ result: JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }), is_error: false, session_id: 'claude-session-1', duration_ms: 10, num_turns: repaired ? 2 : 1 }));",
+      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }), is_error: false, session_id: 'claude-session-1', duration_ms: 10, num_turns: repaired ? 2 : 1 }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);
@@ -244,7 +244,7 @@ describe("workflow runner", () => {
       "const prompt = args.at(-1);",
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, prompt }) + '\\n');`,
       "const repaired = prompt.includes('Your previous response did not satisfy');",
-      "console.log(JSON.stringify({ result: JSON.stringify({ summary: repaired ? 'ok after fallback' : 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
+      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: repaired ? 'ok after fallback' : 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);

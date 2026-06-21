@@ -1258,7 +1258,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("Type '\"antigravity-cli\"' is not assignable to type 'WorkflowWorkerId | undefined'");
+    expect(stderr).toContain("unsupported workflow worker 'antigravity-cli'");
     expect(await Bun.file(callsFile).exists()).toBe(false);
   });
 

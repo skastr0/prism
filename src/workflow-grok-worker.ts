@@ -72,6 +72,11 @@ const grokHome = (): string =>
   ?? process.env.GROK_HOME
   ?? join(process.env.HOME ?? homedir(), ".grok");
 
+const grokAuthPath = (baseGrokHome: string): string =>
+  process.env.PRISM_WORKFLOW_GROK_AUTH_PATH
+  ?? process.env.GROK_AUTH_PATH
+  ?? join(baseGrokHome, "auth.json");
+
 const grokHomeIsExplicit = (): boolean =>
   process.env.PRISM_WORKFLOW_GROK_HOME !== undefined || process.env.GROK_HOME !== undefined;
 
@@ -221,6 +226,8 @@ const mergeGrokMcpConfigs = (bundles: ReadonlyArray<GrokGeneratedPluginBundle>):
 
 const prepareGrokWorkflowRuntime = async (task: AnyWorkflowTask): Promise<GrokWorkflowRuntime> => {
   const baseGrokHome = grokHome();
+  const authPath = grokAuthPath(baseGrokHome);
+  const hasAuthPath = await pathExists(authPath);
   const pluginId = generatedPluginIdForOwner(task.agent.plugin);
   const sourcePluginRoot = join(baseGrokHome, "plugins", pluginId);
   const sourceMcpConfigPath = join(sourcePluginRoot, ".mcp.json");
@@ -258,7 +265,6 @@ const prepareGrokWorkflowRuntime = async (task: AnyWorkflowTask): Promise<GrokWo
   const overlayPluginRoot = join(overlayGrokHome, "plugins", pluginId);
   await mkdir(join(overlayGrokHome, "plugins"), { recursive: true });
   await Promise.all([
-    copyIfPresent(join(baseGrokHome, "auth.json"), join(overlayGrokHome, "auth.json")),
     copyIfPresent(join(baseGrokHome, "models_cache.json"), join(overlayGrokHome, "models_cache.json")),
     copyIfPresent(join(baseGrokHome, "version.json"), join(overlayGrokHome, "version.json")),
     ...pluginBundles.map((bundle) =>
@@ -274,6 +280,7 @@ const prepareGrokWorkflowRuntime = async (task: AnyWorkflowTask): Promise<GrokWo
     env: {
       HOME: osHome,
       GROK_HOME: overlayGrokHome,
+      ...(hasAuthPath ? { GROK_AUTH_PATH: authPath } : {}),
       GROK_CURSOR_MCPS_ENABLED: "false",
       GROK_CLAUDE_MCPS_ENABLED: "false",
     },

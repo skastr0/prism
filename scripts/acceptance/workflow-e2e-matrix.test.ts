@@ -67,7 +67,6 @@ describe("workflow-e2e live config seeding", () => {
       ".config/amp/settings-haiku.json",
       ".config/amp/settings.json",
       ".config/opencode/opencode.json",
-      ".grok/auth.json",
       ".grok/models_cache.json",
       ".grok/version.json",
       ".hermes/auth.json",
@@ -88,6 +87,7 @@ describe("workflow-e2e live config seeding", () => {
 
     expect(paths).not.toContain(".codex");
     expect(paths).not.toContain(".grok");
+    expect(paths).not.toContain(".grok/auth.json");
     expect(paths).not.toContain(".hermes");
     expect(paths).not.toContain(".local/share/amp");
     expect(paths).not.toContain(".local/share/opencode");

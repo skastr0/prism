@@ -34,7 +34,9 @@ const workflowTestEnv = (overrides: Record<string, string> = {}): Record<string,
     if (value !== undefined) env[key] = value;
   }
   delete env.PRISM_WORKFLOW_GROK_HOME;
+  delete env.PRISM_WORKFLOW_GROK_AUTH_PATH;
   delete env.GROK_HOME;
+  delete env.GROK_AUTH_PATH;
   return { ...env, ...overrides };
 };
 
@@ -985,6 +987,8 @@ describe("workflow loader", () => {
     const expectedAgentRelativePath = relative(grokHome, sourceAgentPath);
     const expectedOwnerPluginRelativePath = relative(grokHome, dirname(ownerMcpConfigPath));
     const expectedStalePluginRelativePath = relative(grokHome, stalePluginRoot);
+    const expectedAuthPath = join(grokHome, "auth.json");
+    await writeText(expectedAuthPath, "{}\n");
 
     await writeFile(fakeGrok, [
       "#!/usr/bin/env node",
@@ -1005,6 +1009,8 @@ describe("workflow loader", () => {
       "    allow: process.argv.slice(process.argv.indexOf('--allow'), process.argv.indexOf('--allow') + 2),",
       "    home: process.env.HOME,",
       "    grokHome,",
+      "    grokAuthPath: process.env.GROK_AUTH_PATH,",
+      "    overlayAuthExists: existsSync(join(grokHome, 'auth.json')),",
       "    prismWorkflowGrokHome: process.env.PRISM_WORKFLOW_GROK_HOME,",
       "    config,",
       "  }) + '\\n',",
@@ -1051,6 +1057,8 @@ describe("workflow loader", () => {
       allow: string[];
       home: string;
       grokHome: string;
+      grokAuthPath: string;
+      overlayAuthExists: boolean;
       prismWorkflowGrokHome: string;
       config: string;
     };
@@ -1060,6 +1068,8 @@ describe("workflow loader", () => {
     expect(call.prismWorkflowGrokHome).toBe(grokHome);
     expect(call.home).not.toBe(home);
     expect(call.grokHome).not.toBe(grokHome);
+    expect(call.grokAuthPath).toBe(expectedAuthPath);
+    expect(call.overlayAuthExists).toBe(false);
     expect(call.agent).toBe(join(call.grokHome, expectedAgentRelativePath));
     expect(call.agentText).toContain(`${expectedMcpServerName}__`);
     expect(call.agentText).not.toContain(`${grokMcpServerNameForPlugin(sourcePluginName)}__`);

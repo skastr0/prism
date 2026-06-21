@@ -346,12 +346,6 @@ export const CONFIG_SEED_RULES: readonly ConfigSeedRule[] = [
     to: ".codex/models_cache.json",
   },
   {
-    label: "grok-auth",
-    harnesses: ["grok"],
-    from: ".grok/auth.json",
-    to: ".grok/auth.json",
-  },
-  {
     label: "grok-model-cache",
     harnesses: ["grok"],
     from: ".grok/models_cache.json",
@@ -1176,6 +1170,9 @@ const main = async (): Promise<void> => {
         hermesAuthScope,
         hermesProfile,
       });
+      if (entries.some((entry) => entry.harness === "grok")) {
+        env.PRISM_WORKFLOW_GROK_AUTH_PATH = join(liveHome, ".grok", "auth.json");
+      }
     }
     env.HOME = home;
     env.PRISM_HOME = prismHome;

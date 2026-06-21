@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-linux-arm64",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "type": "module",
   "description": "Prism standalone CLI binary for Linux arm64.",
   "license": "MIT",

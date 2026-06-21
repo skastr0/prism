@@ -18,6 +18,7 @@ import { parseMcpRuntimeHealth } from "./runtime-metadata.js";
 import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
 import { writePrismMcpServerBundle } from "../compile/mcp-runtime-path.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
+import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -248,9 +249,9 @@ const serveOptions = (
 });
 
 afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
+  const roots = tempRoots.splice(0);
+  await Promise.all(roots.map((root) => cleanupPrismMcpProcessesUnder(root).catch(() => undefined)));
+  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
 test("MCP lifecycle serializes mutations with a per-server lock", async () => {

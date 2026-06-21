@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { HARNESSES } from "../harnesses.js";
 import type { HarnessRootsEnv } from "../services/prism-env.js";
 import type { HarnessId } from "../types.js";
+import { cleanupPrismMcpProcessesUnder } from "./mcp-process-cleanup.js";
 
 export interface PrismSandbox {
   /** Absolute path of the temp parent directory. */
@@ -58,7 +59,10 @@ export async function createPrismSandbox(): Promise<PrismSandbox> {
     prismHome,
     roots,
     rootFor: (harnessId: HarnessId) => roots.resolve(harnessId),
-    cleanup: async () => rm(root, { recursive: true, force: true }),
+    cleanup: async () => {
+      await cleanupPrismMcpProcessesUnder(root).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    },
   };
 }
 

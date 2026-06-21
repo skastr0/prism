@@ -55,6 +55,7 @@ import { commitSnapshot, readSnapshot } from "../state/store.js";
 import type { DesiredRegion } from "../sync/desired.js";
 import { serializeRegionRef } from "../sync/plan.js";
 import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
+import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;
@@ -1318,9 +1319,9 @@ export default defineTool({
 
 afterEach(async () => {
   process.env.PRISM_HOME = originalPrismHome;
-  await Promise.all(
-    tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
+  const roots = tempRoots.splice(0);
+  await Promise.all(roots.map((root) => cleanupPrismMcpProcessesUnder(root).catch(() => undefined)));
+  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
 test("readManifest accepts canonical compile target keys", async () => {

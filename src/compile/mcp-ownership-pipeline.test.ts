@@ -7,6 +7,7 @@ import { exists } from "../fs.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
 import { compilePluginForTarget, planPluginForTarget } from "./pipeline.js";
 import { getMcpStatus, stopMcp } from "../mcp/lifecycle.js";
+import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
 
@@ -33,9 +34,9 @@ const writeText = async (path: string, content: string): Promise<void> => {
 };
 
 afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
+  const roots = tempRoots.splice(0);
+  await Promise.all(roots.map((root) => cleanupPrismMcpProcessesUnder(root).catch(() => undefined)));
+  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
 test("consumer-only codex plugin does not write an MCP server bundle", async () => {

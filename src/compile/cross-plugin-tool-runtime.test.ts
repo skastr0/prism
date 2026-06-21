@@ -11,6 +11,7 @@ import { stopMcp } from "../mcp/lifecycle.js";
 import { generatedOwnerToolName } from "./generated-plugin.js";
 import { getFreePort, roundTripCompiledBundle } from "./test-helpers/mcp-http-roundtrip.js";
 import { createPrismSandbox } from "../testing/prism-sandbox.js";
+import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 import { PrismHomeTest, HarnessRootsTest } from "../services/prism-env.js";
 import type { CompileError } from "./errors.js";
 
@@ -162,7 +163,9 @@ const makeTempRoot = async (): Promise<string> => {
 };
 
 afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  const roots = tempRoots.splice(0);
+  await Promise.all(roots.map((root) => cleanupPrismMcpProcessesUnder(root).catch(() => undefined)));
+  await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
 const testLayers = (sandbox: Awaited<ReturnType<typeof createPrismSandbox>>) =>

@@ -7,6 +7,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
+import { tryWorkflowJsonSchemaFromEffectSchema, type WorkflowJsonSchema } from "./workflow-output-schema.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
 export type ClaudeWorkflowWorkerOptions = {
@@ -31,6 +32,7 @@ export interface ClaudeGeneratedPluginDiscovery {
 
 interface ClaudeJsonEnvelope {
   readonly result?: unknown;
+  readonly structured_output?: unknown;
   readonly is_error?: boolean;
   readonly session_id?: string;
   readonly total_cost_usd?: number;
@@ -180,6 +182,7 @@ export const buildClaudeArgs = (input: {
   readonly prompt: string;
   readonly resumeSessionId?: string;
   readonly generatedPlugin?: ClaudeGeneratedPluginDiscovery;
+  readonly outputSchema?: WorkflowJsonSchema;
   readonly permission?: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
 }): ReadonlyArray<string> => {
@@ -209,6 +212,7 @@ export const buildClaudeArgs = (input: {
     ...(input.generatedPlugin?.allowedTools !== undefined && input.generatedPlugin.allowedTools.length > 0
       ? [`--allowedTools=${input.generatedPlugin.allowedTools.join(",")}`]
       : []),
+    ...(input.outputSchema !== undefined ? ["--json-schema", JSON.stringify(input.outputSchema)] : []),
     ...permissionArgs,
     input.prompt,
   ];
@@ -227,11 +231,13 @@ export const runClaudeWorkflowTask = async (
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const generatedPlugin = discoverClaudeGeneratedPlugin(task);
+  const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
   const args = buildClaudeArgs({
     agent: task.agent.name,
     model: options.model,
     resumeSessionId,
     generatedPlugin,
+    outputSchema,
     prompt,
     permission: options.resolvedPermission,
     restrictedTools: options.restrictedTools,
@@ -268,6 +274,38 @@ export const runClaudeWorkflowTask = async (
   if (envelope.is_error !== undefined && envelope.is_error !== false) {
     throw new ClaudeWorkflowWorkerError(`claude returned an error: ${typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result)}`);
   }
+  if (envelope.structured_output !== undefined && envelope.structured_output !== null) {
+    return {
+      output: envelope.structured_output,
+      metadata: {
+        adapter: "claude-code",
+        nativeAgent: task.agent.name,
+        model: options.model,
+        durationMs,
+        processTimeoutMs,
+        ...summarizeWorkflowWorkerStderr(stderr),
+        sessionId: envelope.session_id ?? resumeSessionId,
+        claudeDurationMs: envelope.duration_ms,
+        totalCostUsd: envelope.total_cost_usd,
+        numTurns: envelope.num_turns,
+        claudeToolCallNames: toolCallNames,
+        claudeMcpToolCallCount: toolCallNames.filter((name) => name.startsWith("mcp__")).length,
+        claudeNativeOutputSchema: outputSchema !== undefined,
+        ...(options.repair !== undefined
+          ? {
+            repairExecution: {
+              attempt: options.repair.attempt,
+              criterion: options.repair.criterion,
+              mode: resumeSessionId !== undefined ? "native-continuation" : "fresh-executor-invocation",
+              ...(resumeSessionId !== undefined
+                ? { continuation: { adapter: "claude-code", sessionId: resumeSessionId } }
+                : { fallbackReason: "missing-session-id" }),
+            },
+          }
+          : {}),
+      },
+    };
+  }
   if (typeof envelope.result !== "string") {
     throw new ClaudeWorkflowWorkerError("claude JSON envelope did not contain a string result");
   }
@@ -287,6 +325,7 @@ export const runClaudeWorkflowTask = async (
       numTurns: envelope.num_turns,
       claudeToolCallNames: toolCallNames,
       claudeMcpToolCallCount: toolCallNames.filter((name) => name.startsWith("mcp__")).length,
+      claudeNativeOutputSchema: outputSchema !== undefined,
       ...(options.repair !== undefined
         ? {
           repairExecution: {

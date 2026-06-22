@@ -370,6 +370,22 @@ describe("claude-code permission arg mapping", () => {
     expect(args).toContain("--dangerously-skip-permissions");
     expect(args).toContain("--print");
   });
+
+  test("emits json schema only when a native output schema is supplied", () => {
+    const withoutSchema = buildClaudeArgs({ agent: "a", prompt: "p" });
+    expect(withoutSchema).not.toContain("--json-schema");
+
+    const outputSchema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    const args = buildClaudeArgs({ agent: "a", prompt: "p", outputSchema });
+    const idx = args.indexOf("--json-schema");
+    expect(idx).not.toBe(-1);
+    expect(JSON.parse(args[idx + 1] ?? "")).toEqual(outputSchema);
+  });
 });
 
 describe("hermes permission arg mapping", () => {

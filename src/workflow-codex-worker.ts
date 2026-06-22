@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
@@ -6,6 +6,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
+import { tryWorkflowJsonSchemaFromEffectSchema } from "./workflow-output-schema.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRecordKeys, stableSessionIdFromRegex } from "./workflow-session.js";
 
@@ -72,6 +73,7 @@ const codexPermissionArgs = (mode: WorkflowPermissionMode): ReadonlyArray<string
 export const buildCodexArgs = (input: {
   readonly cwd: string;
   readonly model?: string;
+  readonly outputSchemaPath?: string;
   readonly outputPath: string;
   readonly prompt: string;
   readonly resumeSessionId?: string;
@@ -85,6 +87,7 @@ export const buildCodexArgs = (input: {
     "--cd",
     input.cwd,
     ...codexPermissionArgs(mode),
+    ...(input.outputSchemaPath !== undefined ? ["--output-schema", input.outputSchemaPath] : []),
     "--output-last-message",
     input.outputPath,
     ...(input.resumeSessionId !== undefined ? ["resume", input.resumeSessionId] : []),
@@ -125,6 +128,8 @@ export const runCodexWorkflowTask = async (
 ): Promise<WorkflowTaskExecution> => {
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-workflow-codex-"));
   const outputPath = join(tempRoot, "last-message.txt");
+  const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
+  const outputSchemaPath = outputSchema === undefined ? undefined : join(tempRoot, "output-schema.json");
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CODEX_BIN ?? "codex";
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS)
@@ -136,6 +141,7 @@ export const runCodexWorkflowTask = async (
   const args = buildCodexArgs({
     cwd: options.cwd,
     model: options.model,
+    outputSchemaPath,
     outputPath,
     prompt,
     resumeSessionId,
@@ -143,6 +149,9 @@ export const runCodexWorkflowTask = async (
   });
 
   try {
+    if (outputSchemaPath !== undefined) {
+      await writeFile(outputSchemaPath, `${JSON.stringify(outputSchema, null, 2)}\n`, "utf8");
+    }
     const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
       command,
       args,
@@ -162,17 +171,18 @@ export const runCodexWorkflowTask = async (
     const outputText = await readFile(outputPath, "utf8").catch((cause) => {
       throw new CodexWorkflowWorkerError(`codex did not write --output-last-message: ${cause instanceof Error ? cause.message : String(cause)}`);
     });
-	    return {
-	      output: parseWorkflowWorkerJsonOutput(outputText),
-	      metadata: {
-	        adapter: "codex-cli",
-	        model: options.model,
-	        durationMs,
-	        processTimeoutMs,
-	        sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId,
-	        ...summarizeWorkflowWorkerStderr(stderr),
-	      },
-	    };
+    return {
+      output: parseWorkflowWorkerJsonOutput(outputText),
+      metadata: {
+        adapter: "codex-cli",
+        model: options.model,
+        durationMs,
+        processTimeoutMs,
+        sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId,
+        codexNativeOutputSchema: outputSchemaPath !== undefined,
+        ...summarizeWorkflowWorkerStderr(stderr),
+      },
+    };
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

@@ -492,6 +492,22 @@ describe("codex-cli permission arg mapping", () => {
     expect(() => buildCodexArgs({ cwd: "/r", outputPath: "/tmp/o", prompt: "p", permission: "restricted" }))
       .toThrow(WorkflowPermissionError);
   });
+
+  test("emits output schema only when a native output schema path is supplied", () => {
+    const withoutSchema = buildCodexArgs({ cwd: "/r", outputPath: "/tmp/o", prompt: "p" });
+    expect(withoutSchema).not.toContain("--output-schema");
+
+    const args = buildCodexArgs({
+      cwd: "/r",
+      outputPath: "/tmp/o",
+      outputSchemaPath: "/tmp/schema.json",
+      prompt: "p",
+    });
+    expect(args.slice(args.indexOf("--output-schema"), args.indexOf("--output-schema") + 2)).toEqual([
+      "--output-schema",
+      "/tmp/schema.json",
+    ]);
+  });
 });
 
 describe("grok permission arg mapping", () => {

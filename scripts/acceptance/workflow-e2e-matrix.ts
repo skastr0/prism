@@ -10,14 +10,21 @@
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode temp --seed-live-configs
  *     Seeds non-secret config/cache files only. OAuth/session state is never copied.
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
+ *   bun scripts/acceptance/workflow-e2e-matrix.ts --cleanup-qa-only
  */
+import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import { getHarness, resolveHarnessRoot } from "../../src/harnesses.js";
+import { syncDesiredRoot } from "../../src/sync/run.js";
 import { cleanupPrismMcpProcessesUnder } from "../../src/testing/mcp-process-cleanup.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const PLUGIN_PATH = resolve(REPO_ROOT, "examples", "prism-harness-qa");
+const QA_PLUGIN_NAME = "prism-harness-qa";
+const QA_FILE_ROUTER_PLUGIN_NAME = `${QA_PLUGIN_NAME}#file-router`;
+const QA_GENERATED_PLUGIN_NAME = "prism-generated-prism-harness-qa";
 const STORE_ROOT = "/tmp";
 const WORKFLOW_HARNESSES = ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"] as const;
 const COMPILED_AGENT_HARNESSES = ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"] as const;
@@ -169,6 +176,23 @@ interface ConfigSeedRule {
   readonly exclude?: ReadonlyArray<RegExp>;
 }
 
+interface WorkflowE2EQaCleanupRootSummary {
+  readonly harness: Harness;
+  readonly root: string;
+  readonly syncOps: number;
+  readonly fallbackRemoved: readonly string[];
+  readonly fallbackPatched: readonly string[];
+  readonly failures: readonly string[];
+}
+
+interface WorkflowE2EQaCleanupSummary {
+  readonly prismHome: string;
+  readonly runtimeMcpRoot: string;
+  readonly runtimeRemoved: boolean;
+  readonly roots: readonly WorkflowE2EQaCleanupRootSummary[];
+  readonly success: boolean;
+}
+
 const args = process.argv.slice(2);
 
 const MODEL_SELECTION_WORKFLOW = "model-selection.workflow.ts";
@@ -216,6 +240,12 @@ const pathExists = async (path: string): Promise<boolean> => {
   } catch {
     return false;
   }
+};
+
+const removePathIfExists = async (path: string): Promise<boolean> => {
+  if (!(await pathExists(path))) return false;
+  await rm(path, { recursive: true, force: true });
+  return true;
 };
 
 const HERMES_PROFILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
@@ -447,6 +477,254 @@ export const removeWorkflowE2ETempRoots = async (roots: readonly string[]): Prom
   for (const root of roots) {
     await rm(root, { recursive: true, force: true });
   }
+};
+
+const JSONC_FORMAT = { insertSpaces: true, tabSize: 2, eol: "\n" } as const;
+
+const workflowE2EHarnessRoot = (harness: Harness): string => {
+  const root = resolveHarnessRoot(getHarness(harness), "global");
+  if (root === null) throw new Error(`workflow E2E cleanup cannot resolve global root for ${harness}`);
+  return resolve(root);
+};
+
+const nestedValue = (value: unknown, path: ReadonlyArray<string | number>): unknown => {
+  let current = value;
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current)) return undefined;
+      current = current[segment];
+      continue;
+    }
+    if (typeof current !== "object" || current === null || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+};
+
+const jsoncRemovePath = (content: string, path: ReadonlyArray<string | number>): string =>
+  applyEdits(content, modify(content, path, undefined, { formattingOptions: JSONC_FORMAT }));
+
+const jsoncRemoveArrayMember = (
+  content: string,
+  arrayPath: ReadonlyArray<string | number>,
+  predicate: (value: unknown) => boolean,
+): string => {
+  const parsed = parseJsonc(content, [], { allowTrailingComma: true });
+  const array = nestedValue(parsed, arrayPath);
+  if (!Array.isArray(array)) return content;
+  let next = content;
+  for (let index = array.length - 1; index >= 0; index -= 1) {
+    if (!predicate(array[index])) continue;
+    next = jsoncRemovePath(next, [...arrayPath, index]);
+  }
+  return next;
+};
+
+const patchTextFileIfChanged = async (
+  path: string,
+  patch: (content: string) => string,
+): Promise<boolean> => {
+  if (!(await pathExists(path))) return false;
+  const before = await readFile(path, "utf8");
+  const after = patch(before);
+  if (after === before) return false;
+  await writeFile(path, after);
+  return true;
+};
+
+const removePrismMarkerBlock = (content: string, regionKey: string): string => {
+  const escaped = regionKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return content.replace(
+    new RegExp(`\\n?# --- prism:${escaped} begin ---[\\s\\S]*?# --- prism:${escaped} end ---\\n?`, "g"),
+    "\n",
+  );
+};
+
+const removeYamlMapEntry = (content: string, parentKey: string, entryKey: string): string => {
+  const lines = content.split(/(?<=\n)/u);
+  const parentPattern = new RegExp(`^${parentKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*(?:#.*)?\\n?$`, "u");
+  const entryPattern = new RegExp(`^  ${entryKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*(?:#.*)?\\n?$`, "u");
+
+  const parentIndex = lines.findIndex((line) => parentPattern.test(line));
+  if (parentIndex === -1) return content;
+  const entryIndex = lines.findIndex((line, index) => index > parentIndex && entryPattern.test(line));
+  if (entryIndex === -1) return content;
+
+  let endIndex = entryIndex + 1;
+  while (endIndex < lines.length) {
+    const line = lines[endIndex] ?? "";
+    if (/^\S/u.test(line) || /^  \S/u.test(line)) break;
+    endIndex += 1;
+  }
+
+  return [...lines.slice(0, entryIndex), ...lines.slice(endIndex)].join("");
+};
+
+const workflowE2EQaFallbackPaths = (harness: Harness, root: string): readonly string[] => {
+  switch (harness) {
+    case "opencode":
+      return [
+        join(root, "plugins", QA_GENERATED_PLUGIN_NAME),
+        join(root, "agents", "qa-tester.md"),
+        join(root, "skills", "qa-helper"),
+        join(root, "skills", "qa-orbit"),
+      ];
+    case "claude-code":
+      return [join(root, "skills", QA_GENERATED_PLUGIN_NAME)];
+    case "codex-cli":
+      return [
+        join(root, "agents", "qa-tester.toml"),
+        join(root, "skills", "qa-helper"),
+        join(root, "skills", "qa-orbit"),
+        join(root, "prism-orphans", "agents", "qa-tester.toml"),
+      ];
+    case "grok":
+      return [join(root, "plugins", QA_GENERATED_PLUGIN_NAME)];
+    case "hermes":
+      return [
+        join(root, "skills", "qa-helper"),
+        join(root, "skills", "qa-orbit"),
+      ];
+    case "kimi-code":
+      return [join(root, "plugins", "managed", QA_GENERATED_PLUGIN_NAME)];
+    case "amp-code":
+      return [
+        join(root, "plugins", `${QA_GENERATED_PLUGIN_NAME}.ts`),
+        join(root, "skills", "prism-agent-qa-tester"),
+        join(root, "skills", "qa-helper"),
+        join(root, "skills", "qa-orbit"),
+      ];
+  }
+};
+
+const workflowE2EQaStaleFallbackPaths = async (harness: Harness, root: string): Promise<readonly string[]> => {
+  const stalePaths: string[] = [];
+  const stalePluginRoots =
+    harness === "opencode" ? [root]
+      : harness === "claude-code" ? [root]
+        : harness === "kimi-code" ? [join(root, "plugins")]
+          : [];
+
+  for (const staleRoot of stalePluginRoots) {
+    let entries: Awaited<ReturnType<typeof readdir>>;
+    try {
+      entries = await readdir(staleRoot, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/-stale-\d{8}$/u.test(entry.name)) continue;
+      const stalePath = join(staleRoot, entry.name, QA_GENERATED_PLUGIN_NAME);
+      if (await pathExists(stalePath)) stalePaths.push(stalePath);
+    }
+  }
+  return stalePaths;
+};
+
+const cleanupWorkflowE2EQaConfigFallbacks = async (
+  harness: Harness,
+  root: string,
+): Promise<readonly string[]> => {
+  const patched: string[] = [];
+  switch (harness) {
+    case "opencode": {
+      const path = join(root, "opencode.json");
+      if (await patchTextFileIfChanged(path, (content) => {
+        let next = jsoncRemovePath(content, ["agent", "qa-tester"]);
+        next = jsoncRemovePath(next, ["permission", "prism_harness_qa_*"]);
+        next = jsoncRemoveArrayMember(next, ["plugin"], (value) =>
+          typeof value === "string" && value.includes(`/${QA_GENERATED_PLUGIN_NAME}/`),
+        );
+        return next;
+      })) patched.push(path);
+      return patched;
+    }
+    case "codex-cli": {
+      const path = join(root, "config.toml");
+      if (await patchTextFileIfChanged(path, (content) =>
+        removePrismMarkerBlock(content, `codex.mcp.${QA_GENERATED_PLUGIN_NAME}`),
+      )) patched.push(path);
+      return patched;
+    }
+    case "hermes": {
+      const path = join(root, "config.yaml");
+      if (await patchTextFileIfChanged(path, (content) => {
+        const withoutMarker = removePrismMarkerBlock(content, `hermes.mcp.${QA_GENERATED_PLUGIN_NAME}`);
+        return removeYamlMapEntry(withoutMarker, "mcp_servers", QA_GENERATED_PLUGIN_NAME);
+      })) patched.push(path);
+      return patched;
+    }
+    case "kimi-code": {
+      const path = join(root, "plugins", "installed.json");
+      if (await patchTextFileIfChanged(path, (content) =>
+        jsoncRemoveArrayMember(content, ["plugins"], (value) =>
+          typeof value === "object" &&
+          value !== null &&
+          !Array.isArray(value) &&
+          (value as Record<string, unknown>).id === QA_GENERATED_PLUGIN_NAME,
+        ),
+      )) patched.push(path);
+      return patched;
+    }
+    case "claude-code":
+    case "grok":
+    case "amp-code":
+      return patched;
+  }
+};
+
+export const cleanupWorkflowE2EQaArtifacts = async (input: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlySet<Harness>;
+  readonly harnessRoots?: Partial<Record<Harness, string>>;
+}): Promise<WorkflowE2EQaCleanupSummary> => {
+  const prismHome = resolve(input.prismHome);
+  const runtimeMcpRoot = join(prismHome, "runtime", "mcp", QA_PLUGIN_NAME);
+  const roots: WorkflowE2EQaCleanupRootSummary[] = [];
+  const cleanupScope = new Set([QA_PLUGIN_NAME, QA_FILE_ROUTER_PLUGIN_NAME]);
+
+  for (const harness of [...input.harnesses].sort()) {
+    const root = resolve(input.harnessRoots?.[harness] ?? workflowE2EHarnessRoot(harness));
+    const syncReport = await syncDesiredRoot({
+      prismHome,
+      desired: { harness, root, files: [], regions: [] },
+      scopePlugins: cleanupScope,
+      dryRun: false,
+      overwrite: true,
+    });
+    const fallbackRemoved: string[] = [];
+    const failures = [
+      ...syncReport.failures.map((failure) => failure.message),
+      ...syncReport.blocked.map((blocked) => blocked.hint),
+    ];
+
+    for (const path of [
+      ...workflowE2EQaFallbackPaths(harness, root),
+      ...(await workflowE2EQaStaleFallbackPaths(harness, root)),
+    ]) {
+      if (await removePathIfExists(path)) fallbackRemoved.push(path);
+    }
+
+    const fallbackPatched = await cleanupWorkflowE2EQaConfigFallbacks(harness, root);
+    roots.push({
+      harness,
+      root,
+      syncOps: syncReport.ops.length,
+      fallbackRemoved,
+      fallbackPatched,
+      failures,
+    });
+  }
+
+  await cleanupPrismMcpProcessesUnder(runtimeMcpRoot);
+  const runtimeRemoved = await removePathIfExists(runtimeMcpRoot);
+  return {
+    prismHome,
+    runtimeMcpRoot,
+    runtimeRemoved,
+    roots,
+    success: roots.every((root) => root.failures.length === 0),
+  };
 };
 
 const copyLiveConfigSeed = async (
@@ -1085,10 +1363,28 @@ const main = async (): Promise<void> => {
   const validateOnly = hasFlag("--validate-only");
   const roots: string[] = [];
   const env: Record<string, string | undefined> = {};
-  const pluginRoot = await preparePluginRoot(roots);
   const entries = MATRIX.filter((entry) => selected === undefined || selected.includes(entry.harness));
   const shouldRunModelSelection = entries.some((entry) => entry.harness === "opencode");
   const liveHome = resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir());
+  const livePrismHome = resolve(process.env.PRISM_HOME ?? join(homedir(), ".prism"));
+  const qaCleanupHarnesses = new Set(entries.map((entry) => entry.harness));
+  if (shouldRunModelSelection) qaCleanupHarnesses.add("opencode");
+
+  if (hasFlag("--cleanup-qa-only")) {
+    const qaCleanup = await cleanupWorkflowE2EQaArtifacts({
+      prismHome: livePrismHome,
+      harnesses: qaCleanupHarnesses,
+    });
+    console.log(JSON.stringify({
+      schema: "prism.acceptance.workflow-e2e-qa-cleanup.v1",
+      pass: qaCleanup.success,
+      qaCleanup,
+    }, null, 2));
+    process.exitCode = qaCleanup.success ? 0 : 1;
+    return;
+  }
+
+  const pluginRoot = await preparePluginRoot(roots);
   const hermesAuthScope = entries.some((entry) => entry.harness === "hermes")
     ? resolveHermesAuthScopeForE2E(process.env.PRISM_E2E_HERMES_AUTH_SCOPE, process.env.PRISM_E2E_HERMES_PROFILE)
     : undefined;
@@ -1122,6 +1418,7 @@ const main = async (): Promise<void> => {
     env.KIMI_CODE_HOME = join(home, ".kimi-code");
   }
   const results: HarnessResult[] = [];
+  let qaCleanup: WorkflowE2EQaCleanupSummary | undefined;
 
   try {
     for (const entry of entries) {
@@ -1186,6 +1483,12 @@ const main = async (): Promise<void> => {
       modelSelection = await runModelSelectionScenario({ mode, pluginRoot, env, validateOnly });
     }
   } finally {
+    if (mode === "live") {
+      qaCleanup = await cleanupWorkflowE2EQaArtifacts({
+        prismHome: livePrismHome,
+        harnesses: qaCleanupHarnesses,
+      });
+    }
     if (!(mode === "temp" && hasFlag("--keep-temp"))) {
       await removeWorkflowE2ETempRoots(roots);
     } else {
@@ -1193,7 +1496,7 @@ const main = async (): Promise<void> => {
     }
   }
 
-  const pass = acceptancePass({ results, modelSelection, validateOnly });
+  const pass = acceptancePass({ results, modelSelection, validateOnly }) && (qaCleanup?.success ?? true);
 
   console.log(JSON.stringify({
     schema: "prism.acceptance.workflow-e2e-matrix.v1",
@@ -1204,6 +1507,7 @@ const main = async (): Promise<void> => {
     ...(hermesAuthScope !== undefined ? { hermesAuthScope } : {}),
     ...(hermesProfile !== undefined ? { hermesProfile } : {}),
     ...(configSeed ? { configSeed } : {}),
+    ...(qaCleanup ? { qaCleanup } : {}),
     ...(modelSelection ? { modelSelection } : {}),
     results,
   }, null, 2));

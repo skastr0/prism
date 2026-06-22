@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
 import {
   CONFIG_SEED_RULES,
+  cleanupWorkflowE2EQaArtifacts,
   classifySetupBlocker,
   evaluateHarnessChecks,
   evaluateInvalidModelSelectionCheck,
@@ -181,6 +182,107 @@ describe("workflow-e2e temp cleanup", () => {
       if (processIsRunning(proc.pid)) {
         process.kill(proc.pid, "SIGKILL");
       }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("removes QA hot-path artifacts even when sync state is missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-qa-cleanup-test-"));
+    const prismHome = join(root, "prism-home");
+    const opencodeRoot = join(root, "opencode");
+    const codexRoot = join(root, "codex");
+    const hermesRoot = join(root, "hermes");
+    const kimiRoot = join(root, "kimi");
+
+    try {
+      await mkdir(join(opencodeRoot, "plugins", "prism-generated-prism-harness-qa", "dist"), { recursive: true });
+      await mkdir(join(opencodeRoot, "agents"), { recursive: true });
+      await mkdir(join(opencodeRoot, "skills", "qa-helper"), { recursive: true });
+      await mkdir(join(opencodeRoot, "skills", "qa-orbit"), { recursive: true });
+      await writeFile(join(opencodeRoot, "plugins", "prism-generated-prism-harness-qa", "dist", "server.mjs"), "");
+      await writeFile(join(opencodeRoot, "agents", "qa-tester.md"), "");
+      await writeFile(join(opencodeRoot, "skills", "qa-helper", "SKILL.md"), "");
+      await writeFile(join(opencodeRoot, "skills", "qa-orbit", "SKILL.md"), "");
+      await writeFile(join(opencodeRoot, "opencode.json"), `${JSON.stringify({
+        agent: { "qa-tester": { model: "test" }, keeper: { model: "ok" } },
+        permission: { "prism_harness_qa_*": "allow", keep: "allow" },
+        plugin: [
+          "file:///tmp/plugins/prism-generated-prism-harness-qa/dist/server.mjs",
+          "file:///tmp/plugins/prism-generated-keeper/dist/server.mjs",
+        ],
+      }, null, 2)}\n`);
+
+      await mkdir(codexRoot, { recursive: true });
+      await writeFile(join(codexRoot, "config.toml"), `
+[mcp_servers."keeper"]
+url = "http://127.0.0.1:1111/mcp"
+
+# --- prism:codex.mcp.prism-generated-prism-harness-qa begin ---
+[mcp_servers."prism-generated-prism-harness-qa"]
+url = "http://127.0.0.1:2222/mcp"
+# --- prism:codex.mcp.prism-generated-prism-harness-qa end ---
+`);
+
+      await mkdir(hermesRoot, { recursive: true });
+      await writeFile(join(hermesRoot, "config.yaml"), `mcp_servers:
+  prism-generated-prism-harness-qa:
+    url: http://127.0.0.1:2222/mcp
+    tools:
+      include:
+      - prism_harness_qa_challenge_echo
+  prism-generated-keeper:
+    url: http://127.0.0.1:1111/mcp
+`);
+
+      await mkdir(join(kimiRoot, "plugins", "managed", "prism-generated-prism-harness-qa"), { recursive: true });
+      await mkdir(join(kimiRoot, "plugins"), { recursive: true });
+      await writeFile(join(kimiRoot, "plugins", "managed", "prism-generated-prism-harness-qa", "kimi.plugin.json"), "{}");
+      await writeFile(join(kimiRoot, "plugins", "installed.json"), `${JSON.stringify({
+        plugins: [
+          { id: "prism-generated-keeper", root: "/tmp/keeper" },
+          { id: "prism-generated-prism-harness-qa", root: "/tmp/qa" },
+        ],
+      }, null, 2)}\n`);
+      await mkdir(join(prismHome, "runtime", "mcp", "prism-harness-qa"), { recursive: true });
+      await writeFile(join(prismHome, "runtime", "mcp", "prism-harness-qa", "server.mjs"), "");
+
+      const cleanup = await cleanupWorkflowE2EQaArtifacts({
+        prismHome,
+        harnesses: new Set(["opencode", "codex-cli", "hermes", "kimi-code"]),
+        harnessRoots: {
+          opencode: opencodeRoot,
+          "codex-cli": codexRoot,
+          hermes: hermesRoot,
+          "kimi-code": kimiRoot,
+        },
+      });
+
+      expect(cleanup.success).toBe(true);
+      expect(await pathExists(join(opencodeRoot, "plugins", "prism-generated-prism-harness-qa"))).toBe(false);
+      expect(await pathExists(join(opencodeRoot, "agents", "qa-tester.md"))).toBe(false);
+      expect(await pathExists(join(opencodeRoot, "skills", "qa-helper"))).toBe(false);
+      expect(await pathExists(join(kimiRoot, "plugins", "managed", "prism-generated-prism-harness-qa"))).toBe(false);
+      expect(await pathExists(join(prismHome, "runtime", "mcp", "prism-harness-qa"))).toBe(false);
+
+      const opencodeConfig = await readFile(join(opencodeRoot, "opencode.json"), "utf8");
+      expect(opencodeConfig).not.toContain("qa-tester");
+      expect(opencodeConfig).not.toContain("prism_harness_qa_*");
+      expect(opencodeConfig).not.toContain("prism-generated-prism-harness-qa");
+      expect(opencodeConfig).toContain("keeper");
+
+      const codexConfig = await readFile(join(codexRoot, "config.toml"), "utf8");
+      expect(codexConfig).not.toContain("prism-generated-prism-harness-qa");
+      expect(codexConfig).toContain("keeper");
+
+      const hermesConfig = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+      expect(hermesConfig).not.toContain("prism-generated-prism-harness-qa");
+      expect(hermesConfig).not.toContain("prism_harness_qa_challenge_echo");
+      expect(hermesConfig).toContain("prism-generated-keeper");
+
+      const kimiInstalled = await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8");
+      expect(kimiInstalled).not.toContain("prism-generated-prism-harness-qa");
+      expect(kimiInstalled).toContain("prism-generated-keeper");
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });

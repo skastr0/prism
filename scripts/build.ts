@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { nativePackagesToExternalize } from "./build-native-deps.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -15,17 +16,6 @@ const targets = [
   { platform: "darwin", arch: "arm64" },
   { platform: "linux", arch: "x64" },
   { platform: "linux", arch: "arm64" },
-];
-
-const externalNativePackages = [
-  "@opentui/core-darwin-x64",
-  "@opentui/core-darwin-arm64",
-  "@opentui/core-linux-x64",
-  "@opentui/core-linux-arm64",
-  "@opentui/core-linux-x64-musl",
-  "@opentui/core-linux-arm64-musl",
-  "@opentui/core-win32-x64",
-  "@opentui/core-win32-arm64",
 ];
 
 console.log("Cleaning dist directory...");
@@ -54,7 +44,7 @@ for (const { platform, arch } of targets) {
           readFileSync(join(repoRoot, "src", "compile", "runtime", "schema-bridge.ts"), "utf8")
         ),
       },
-      external: externalNativePackages,
+      external: nativePackagesToExternalize({ target, repoRoot }),
       minify: true,
     });
 

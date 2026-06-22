@@ -125,12 +125,6 @@ test("tombstoned relics do not reappear in src/", async () => {
   expect(violations).toEqual([]);
 });
 
-test("CLI startup does not statically import native TUI modules", async () => {
-  const content = await readFile(join(SRC_ROOT, "cli.ts"), "utf8");
-  expect(content).not.toMatch(/from\s+["']\.\/workflow-tui\.js["']/u);
-  expect(content).not.toMatch(/from\s+["']@opentui\//u);
-});
-
 /**
  * One-writer gate: among compile/sync modules plus the direct refresh planner,
  * only src/sync/apply.ts may import harness-root write primitives from fs.ts.

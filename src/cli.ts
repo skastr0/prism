@@ -76,6 +76,7 @@ import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
+import { runWorkflowMonitor } from "./workflow-tui.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
@@ -222,7 +223,6 @@ workflow
     readonly failStaleAfterMs?: number;
   }) => {
     try {
-      const { runWorkflowMonitor } = await import("./workflow-tui.js");
       await runWorkflowMonitor({
         storePath: options.store ?? defaultWorkflowStorePath(process.cwd()),
         pollMs: options.pollMs,

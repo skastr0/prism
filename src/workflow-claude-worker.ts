@@ -93,6 +93,16 @@ const parseClaudeStream = (stdout: string): ClaudeStreamSummary => {
   return { envelope, toolCallNames };
 };
 
+const claudeEnvelopeOutput = (envelope: ClaudeJsonEnvelope): unknown => {
+  if (envelope.structured_output !== undefined && envelope.structured_output !== null) {
+    return envelope.structured_output;
+  }
+  if (typeof envelope.result !== "string") {
+    throw new ClaudeWorkflowWorkerError("claude JSON envelope did not contain a string result");
+  }
+  return parseWorkflowWorkerJsonOutput(envelope.result);
+};
+
 const claudeRoot = (): string =>
   process.env.PRISM_WORKFLOW_CLAUDE_ROOT ?? join(homedir(), ".claude");
 
@@ -274,44 +284,8 @@ export const runClaudeWorkflowTask = async (
   if (envelope.is_error !== undefined && envelope.is_error !== false) {
     throw new ClaudeWorkflowWorkerError(`claude returned an error: ${typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result)}`);
   }
-  if (envelope.structured_output !== undefined && envelope.structured_output !== null) {
-    return {
-      output: envelope.structured_output,
-      metadata: {
-        adapter: "claude-code",
-        nativeAgent: task.agent.name,
-        model: options.model,
-        durationMs,
-        processTimeoutMs,
-        ...summarizeWorkflowWorkerStderr(stderr),
-        sessionId: envelope.session_id ?? resumeSessionId,
-        claudeDurationMs: envelope.duration_ms,
-        totalCostUsd: envelope.total_cost_usd,
-        numTurns: envelope.num_turns,
-        claudeToolCallNames: toolCallNames,
-        claudeMcpToolCallCount: toolCallNames.filter((name) => name.startsWith("mcp__")).length,
-        claudeNativeOutputSchema: outputSchema !== undefined,
-        ...(options.repair !== undefined
-          ? {
-            repairExecution: {
-              attempt: options.repair.attempt,
-              criterion: options.repair.criterion,
-              mode: resumeSessionId !== undefined ? "native-continuation" : "fresh-executor-invocation",
-              ...(resumeSessionId !== undefined
-                ? { continuation: { adapter: "claude-code", sessionId: resumeSessionId } }
-                : { fallbackReason: "missing-session-id" }),
-            },
-          }
-          : {}),
-      },
-    };
-  }
-  if (typeof envelope.result !== "string") {
-    throw new ClaudeWorkflowWorkerError("claude JSON envelope did not contain a string result");
-  }
-
   return {
-    output: parseWorkflowWorkerJsonOutput(envelope.result),
+    output: claudeEnvelopeOutput(envelope),
     metadata: {
       adapter: "claude-code",
       nativeAgent: task.agent.name,

@@ -14,9 +14,15 @@ const extractStringAnnotation = (
   return annotation._tag === "Some" ? annotation.value : undefined;
 };
 
-const extractDescriptionOrTitle = (ast: SchemaAST.AST): string | undefined =>
-  extractStringAnnotation(ast, SchemaAST.DescriptionAnnotationId) ??
-  extractStringAnnotation(ast, SchemaAST.TitleAnnotationId);
+const defaultEffectTextAnnotations = new Set(["a string", "a number", "a boolean", "string", "number", "boolean"]);
+
+const extractDescriptionOrTitle = (ast: SchemaAST.AST): string | undefined => {
+  const description = extractStringAnnotation(ast, SchemaAST.DescriptionAnnotationId);
+  if (description !== undefined && !defaultEffectTextAnnotations.has(description)) return description;
+  const title = extractStringAnnotation(ast, SchemaAST.TitleAnnotationId);
+  if (title !== undefined && !defaultEffectTextAnnotations.has(title)) return title;
+  return undefined;
+};
 
 const unsupportedAst = (ast: SchemaAST.AST, detail?: string): never => {
   throw new WorkflowOutputSchemaError(
@@ -54,6 +60,12 @@ const astToJsonSchema = (ast: SchemaAST.AST): WorkflowJsonSchema => {
       }
       const nonUndefined = unionAst.types.filter((type) => type._tag !== "UndefinedKeyword");
       if (nonUndefined.length === 1) return astToJsonSchema(nonUndefined[0]!);
+      const nullLiteral = nonUndefined.find((type) => type._tag === "Literal" && (type as SchemaAST.Literal).literal === null);
+      const nonNull = nonUndefined.filter((type) => type !== nullLiteral);
+      if (nullLiteral !== undefined && nonNull.length === 1) {
+        const item = astToJsonSchema(nonNull[0]!);
+        return { anyOf: [item, { type: "null" }] };
+      }
       return unsupportedAst(unionAst, `union members: ${unionAst.types.map((type) => type._tag).join(" | ")}`);
     }
     case "TupleType": {

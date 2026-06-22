@@ -10,6 +10,7 @@ export interface WorkflowDetachedRunOptions {
   readonly model?: string;
   readonly permission?: string;
   readonly maxConcurrentTasks?: number;
+  readonly taskTimeoutMs?: number;
   readonly cache?: boolean;
 }
 
@@ -44,6 +45,7 @@ export const workflowRunOptionsSnapshot = (
   ...(options.permission !== undefined ? { permission: options.permission } : {}),
   ...(options.mockOutput !== undefined ? { mockOutput: options.mockOutput } : {}),
   ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
+  ...(options.taskTimeoutMs !== undefined ? { taskTimeoutMs: options.taskTimeoutMs } : {}),
   ...(options.cache === false ? { cache: false } : {}),
 });
 
@@ -56,6 +58,9 @@ const workflowDetachedRunOptionsFromSnapshot = (
   ...(typeof options?.permission === "string" ? { permission: options.permission } : {}),
   ...(typeof options?.maxConcurrentTasks === "number" && Number.isInteger(options.maxConcurrentTasks)
     ? { maxConcurrentTasks: options.maxConcurrentTasks }
+    : {}),
+  ...(typeof options?.taskTimeoutMs === "number" && Number.isInteger(options.taskTimeoutMs)
+    ? { taskTimeoutMs: options.taskTimeoutMs }
     : {}),
   ...(options?.cache === false ? { cache: false } : {}),
 });
@@ -72,6 +77,7 @@ const mergeWorkflowRunOptions = (
     ...(next.model !== undefined ? { model: next.model } : {}),
     ...(next.permission !== undefined ? { permission: next.permission } : {}),
     ...(next.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: next.maxConcurrentTasks } : {}),
+    ...(next.taskTimeoutMs !== undefined ? { taskTimeoutMs: next.taskTimeoutMs } : {}),
     ...(next.cache === false ? { cache: false } : {}),
   };
 };
@@ -96,6 +102,7 @@ export const startDetachedWorkflowRun = (
     ...(options.permission !== undefined ? ["--permission", options.permission] : []),
     ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
     ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
+    ...(options.taskTimeoutMs !== undefined ? ["--task-timeout-ms", String(options.taskTimeoutMs)] : []),
     ...(options.cache === false ? ["--no-cache"] : []),
   ];
 

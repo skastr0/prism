@@ -242,6 +242,7 @@ workflow
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
+  .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
   .addOption(new CommanderOption("--run-id <id>").hideHelp())
@@ -253,6 +254,7 @@ workflow
     readonly model?: string;
     readonly permission?: string;
     readonly maxConcurrentTasks?: number;
+    readonly taskTimeoutMs?: number;
     readonly store?: string;
     readonly detach?: boolean;
     readonly runId?: string;
@@ -340,7 +342,7 @@ workflow
         ? parseWorkflowPermissionMode(options.permission)
         : undefined;
       const workerExecutor = outputs === null
-        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission })
+        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission, taskTimeoutMs: options.taskTimeoutMs })
         : null;
       const result = await runWorkflow(workflow, {
         store,
@@ -717,6 +719,7 @@ workflowRuns
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
+  .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
@@ -725,6 +728,7 @@ workflowRuns
     readonly model?: string;
     readonly permission?: string;
     readonly maxConcurrentTasks?: number;
+    readonly taskTimeoutMs?: number;
     readonly cache?: boolean;
   }) => {
     try {

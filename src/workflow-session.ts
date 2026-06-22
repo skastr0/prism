@@ -66,6 +66,14 @@ export const workflowContinuationAdapterByWorker = {
   "kimi-code": "kimi-code",
   opencode: "opencode-cli",
 } as const satisfies Record<WorkflowContinuationWorkerId, WorkflowContinuationAdapterId>;
+export type WorkflowRepairLoopContinuationWorkerId = keyof typeof workflowContinuationAdapterByWorker;
+export type WorkflowRepairLoopContinuationCapability =
+  | "stable-session-repair-loop"
+  | "no-repair-loop-continuation";
+export type WorkflowRepairLoopContinuationCapabilityForWorker<Worker extends string> =
+  Worker extends WorkflowRepairLoopContinuationWorkerId
+    ? "stable-session-repair-loop"
+    : "no-repair-loop-continuation";
 
 export const workflowHarnessContinuationSupport = {
   "amp-code": {
@@ -158,6 +166,11 @@ export const workflowContinuationAdapterForWorker = (
   const result = Schema.decodeUnknownEither(WorkflowContinuationWorkerIdSchema)(worker);
   return Either.isRight(result) ? workflowContinuationAdapterByWorker[result.right] : undefined;
 };
+
+export const workflowWorkerSupportsRepairLoopContinuation = (
+  worker: string,
+): worker is WorkflowRepairLoopContinuationWorkerId =>
+  Object.prototype.hasOwnProperty.call(workflowContinuationAdapterByWorker, worker);
 
 export const workflowContinuationSupportForAdapter = (
   adapter: string | undefined,

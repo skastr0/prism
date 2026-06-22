@@ -7,9 +7,9 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
-export interface ClaudeWorkflowWorkerOptions {
+export type ClaudeWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
@@ -17,8 +17,7 @@ export interface ClaudeWorkflowWorkerOptions {
   readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
-}
+} & WorkflowTaskRepairLoopOption<"claude-code">;
 
 export class ClaudeWorkflowWorkerError extends Error {
   override readonly name = "ClaudeWorkflowWorkerError";

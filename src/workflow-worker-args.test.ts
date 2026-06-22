@@ -14,7 +14,26 @@ import { isKimiAuthOutput, buildKimiArgs } from "./workflow-kimi-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
-import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError } from "./workflow-workers.js";
+import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError, type WorkflowWorkerAdapterOptionsForCapability } from "./workflow-workers.js";
+import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
+
+type UnsupportedRepairOptions = WorkflowWorkerAdapterOptionsForCapability<"no-repair-loop-continuation">;
+
+const assertUnsupportedRepairContextIsUnrepresentable = (options: UnsupportedRepairOptions): void => {
+  // @ts-expect-error unsupported harness contexts cannot read repair-loop state
+  void options.context?.repair;
+};
+
+void assertUnsupportedRepairContextIsUnrepresentable;
+const invalidUnsupportedRepairOptions: UnsupportedRepairOptions = {
+  cwd: "/repo",
+  resolvedPermission: "legacy",
+  context: {
+    // @ts-expect-error unsupported harness contexts cannot receive repair-loop state
+    repair: {} as WorkflowTaskRepairContext,
+  },
+};
+void invalidUnsupportedRepairOptions;
 
 describe("workflow worker argument builders", () => {
   test("grok uses explicit single-turn mode", () => {
@@ -147,6 +166,7 @@ describe("workflow worker continuation arg mapping", () => {
   test("amp maps continuation to exact thread id", () => {
     const args = buildAmpArgs({ prompt: "p", permission: "legacy", sessionId: "s1" });
     expect(args.slice(args.indexOf("threads"), args.indexOf("threads") + 3)).toEqual(["threads", "continue", "s1"]);
+    expect(args).toContain("--stream-json");
     expect(args).not.toContain("last");
   });
 });

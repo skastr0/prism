@@ -7,12 +7,22 @@ import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
 import { runKimiWorkflowTask } from "./workflow-kimi-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
-import type { WorkflowTaskExecution, WorkflowTaskExecutionContext, WorkflowTaskExecutor } from "./workflow-runner.js";
-import { workflowContinuationAdapterForWorker } from "./workflow-session.js";
+import type {
+  WorkflowTaskExecution,
+  WorkflowTaskExecutionContext,
+  WorkflowTaskExecutionContextWithoutRepair,
+  WorkflowTaskExecutor,
+} from "./workflow-runner.js";
+import {
+  workflowContinuationAdapterForWorker,
+  workflowWorkerSupportsRepairLoopContinuation,
+  type WorkflowRepairLoopContinuationCapability,
+  type WorkflowRepairLoopContinuationCapabilityForWorker,
+} from "./workflow-session.js";
 
 export { WorkflowPermissionError } from "./workflow-permissions.js";
 
-export interface WorkflowWorkerAdapterOptions {
+export interface WorkflowWorkerAdapterOptionsBase {
   readonly cwd: string;
   readonly model?: string;
   readonly profile?: string;
@@ -20,16 +30,29 @@ export interface WorkflowWorkerAdapterOptions {
   readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly context?: WorkflowTaskExecutionContext;
 }
 
-export interface WorkflowWorkerAdapter {
-  readonly id: string;
+export type WorkflowWorkerAdapterOptionsForCapability<Capability extends WorkflowRepairLoopContinuationCapability> =
+  WorkflowWorkerAdapterOptionsBase & (
+    Capability extends "stable-session-repair-loop"
+      ? { readonly context?: WorkflowTaskExecutionContext }
+      : { readonly context?: WorkflowTaskExecutionContextWithoutRepair }
+  );
+
+export type WorkflowWorkerAdapterOptions<Worker extends WorkflowWorkerId = WorkflowWorkerId> =
+  WorkflowWorkerAdapterOptionsForCapability<WorkflowRepairLoopContinuationCapabilityForWorker<Worker>>;
+
+export interface WorkflowWorkerAdapter<Worker extends WorkflowWorkerId = WorkflowWorkerId> {
+  readonly id: Worker;
   readonly runTask: (
     task: AnyWorkflowTask,
-    options: WorkflowWorkerAdapterOptions,
+    options: WorkflowWorkerAdapterOptions<Worker>,
   ) => Promise<WorkflowTaskExecution>;
 }
+
+type WorkflowWorkerAdapterRegistry = {
+  readonly [Worker in WorkflowWorkerId]: WorkflowWorkerAdapter<Worker>;
+};
 
 export class UnsupportedWorkflowWorkerError extends Error {
   override readonly name = "UnsupportedWorkflowWorkerError";
@@ -136,18 +159,20 @@ const workflowWorkerAdapters = {
       repair: options.context?.repair,
     }),
   },
-} as const satisfies Record<WorkflowWorkerId, WorkflowWorkerAdapter>;
+} as const satisfies WorkflowWorkerAdapterRegistry;
 
 export const supportedWorkflowWorkers = (): ReadonlyArray<string> =>
   Object.keys(workflowWorkerAdapters).sort();
 
-export const getWorkflowWorkerAdapter = (worker: string): WorkflowWorkerAdapter => {
+export function getWorkflowWorkerAdapter<Worker extends WorkflowWorkerId>(worker: Worker): WorkflowWorkerAdapter<Worker>;
+export function getWorkflowWorkerAdapter(worker: string): WorkflowWorkerAdapter;
+export function getWorkflowWorkerAdapter(worker: string): WorkflowWorkerAdapter {
   const adapter = workflowWorkerAdapters[worker as keyof typeof workflowWorkerAdapters];
   if (adapter === undefined) {
     throw new UnsupportedWorkflowWorkerError(worker, supportedWorkflowWorkers());
   }
-  return adapter;
-};
+  return adapter as WorkflowWorkerAdapter;
+}
 
 export const resolveWorkflowTaskPermission = (
   task: AnyWorkflowTask,
@@ -170,30 +195,41 @@ export const createWorkflowWorkerExecutor = (input: {
     if (worker === undefined) {
       throw new UnsupportedWorkflowWorkerError("<missing>", supportedWorkflowWorkers());
     }
-    const adapter = getWorkflowWorkerAdapter(worker);
     const resolvedPermission = resolveWorkflowTaskPermission(task, input.fallbackPermission);
-    const options = {
+    const commonOptions = {
       cwd: input.cwd,
       model: input.model,
       resolvedPermission,
       restrictedTools: task.worker?.restrictedTools,
       processTimeoutMs: task.worker?.processTimeoutMs ?? input.taskTimeoutMs,
       abortSignal: context?.abortSignal,
-      context,
     };
-    if (context?.repair !== undefined && context.repair.mode !== "native-continuation") {
-      throw new WorkflowWorkerContinuationError(
-        `workflow worker '${worker}' repair requires stable sessionId (${context.repair.fallbackReason})`,
-      );
-    }
-    if (context?.repair?.mode === "native-continuation") {
+    if (context?.repair !== undefined) {
+      if (!workflowWorkerSupportsRepairLoopContinuation(worker)) {
+        throw new WorkflowWorkerContinuationError(
+          `workflow worker '${worker}' does not support repair-loop continuation`,
+        );
+      }
+      if (context.repair.mode !== "native-continuation") {
+        throw new WorkflowWorkerContinuationError(
+          `workflow worker '${worker}' repair requires stable sessionId (${context.repair.fallbackReason})`,
+        );
+      }
       const expectedAdapter = workflowContinuationAdapterForWorker(worker);
       if (expectedAdapter !== undefined && context.repair.continuation.adapter !== expectedAdapter) {
         throw new WorkflowWorkerContinuationError(
           `workflow worker '${worker}' cannot continue adapter '${context.repair.continuation.adapter}' session '${context.repair.continuation.sessionId}'`,
         );
       }
+      return getWorkflowWorkerAdapter(worker).runTask(task, {
+        ...commonOptions,
+        context,
+      });
     }
-    return adapter.runTask(task, options);
+
+    return getWorkflowWorkerAdapter(worker).runTask(task, {
+      ...commonOptions,
+      ...(context !== undefined ? { context: { abortSignal: context.abortSignal } } : {}),
+    });
   };
 };

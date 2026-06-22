@@ -6,18 +6,17 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
-export interface AmpWorkflowWorkerOptions {
+export type AmpWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
-}
+} & WorkflowTaskRepairLoopOption<"amp-code">;
 
 export class AmpWorkflowWorkerError extends Error {
   override readonly name = "AmpWorkflowWorkerError";
@@ -127,7 +126,29 @@ export const buildAmpArgs = (input: {
     ...(mode !== undefined ? ["--mode", mode] : []),
     "--execute",
     input.prompt,
+    "--stream-json",
   ];
+};
+
+const parseAmpStreamJsonResult = (stdout: string): string | undefined => {
+  for (const line of stdout.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        (parsed as { readonly type?: unknown }).type === "result" &&
+        typeof (parsed as { readonly result?: unknown }).result === "string"
+      ) {
+        return (parsed as { readonly result: string }).result;
+      }
+    } catch {
+      // Ignore non-JSON progress output.
+    }
+  }
+  return undefined;
 };
 
 export const ampSessionId = (stdout: string, stderr: string): string | undefined =>
@@ -175,8 +196,9 @@ export const runAmpWorkflowTask = async (
   if (exitCode !== 0) {
     throw new AmpWorkflowWorkerError(`amp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
   }
+  const outputText = parseAmpStreamJsonResult(stdout) ?? stdout;
   return {
-    output: parseWorkflowWorkerJsonOutput(stdout),
+    output: parseWorkflowWorkerJsonOutput(outputText),
     metadata: {
       adapter: "amp-code",
       model: options.model,

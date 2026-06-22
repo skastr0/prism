@@ -3,9 +3,9 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
-export interface HermesWorkflowWorkerOptions {
+export type HermesWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
@@ -13,8 +13,7 @@ export interface HermesWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
-}
+} & WorkflowTaskRepairLoopOption<"hermes">;
 
 export class HermesWorkflowWorkerError extends Error {
   override readonly name = "HermesWorkflowWorkerError";

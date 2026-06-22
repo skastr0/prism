@@ -6,18 +6,17 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRecordKeys, stableSessionIdFromRegex } from "./workflow-session.js";
 
-export interface CodexWorkflowWorkerOptions {
+export type CodexWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
-}
+} & WorkflowTaskRepairLoopOption<"codex-cli">;
 
 export class CodexWorkflowWorkerError extends Error {
   override readonly name = "CodexWorkflowWorkerError";

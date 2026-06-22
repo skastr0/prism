@@ -5,10 +5,10 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines } from "./workflow-session.js";
 
-export interface KimiWorkflowWorkerOptions {
+export type KimiWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
@@ -16,8 +16,7 @@ export interface KimiWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
-}
+} & WorkflowTaskRepairLoopOption<"kimi-code">;
 
 const defaultKimiCodeHome = (): string =>
   process.env.KIMI_CODE_HOME ?? join(homedir(), ".kimi-code");

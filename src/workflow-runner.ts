@@ -31,6 +31,7 @@ import {
   workflowAdapterFromMetadata,
   workflowContinuationSupportForAdapter,
   workflowStableSessionFromMetadata,
+  type WorkflowRepairLoopContinuationWorkerId,
   type WorkflowStableSession,
 } from "./workflow-session.js";
 
@@ -107,6 +108,15 @@ export interface WorkflowTaskExecutionContext {
   readonly abortSignal?: AbortSignal;
   readonly repair?: WorkflowTaskRepairContext;
 }
+
+export interface WorkflowTaskExecutionContextWithoutRepair {
+  readonly abortSignal?: AbortSignal;
+}
+
+export type WorkflowTaskRepairLoopOption<Worker extends string> =
+  Worker extends WorkflowRepairLoopContinuationWorkerId
+    ? { readonly repair?: WorkflowTaskRepairContext }
+    : { readonly repair?: never };
 
 export type WorkflowTaskExecutor = (
   task: AnyWorkflowTask,

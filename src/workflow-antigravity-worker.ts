@@ -8,7 +8,7 @@ import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
 import { runAntigravityPtyProcess } from "./workflow-antigravity-pty.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
 /**
  * Environment-variable overrides for the Antigravity workflow worker:
@@ -23,7 +23,7 @@ import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflo
  * - PRISM_WORKFLOW_ANTIGRAVITY_RETRY_BACKOFF_MS: delay between retries (default: 2000).
  */
 
-export interface AntigravityWorkflowWorkerOptions {
+export type AntigravityWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
@@ -31,12 +31,11 @@ export interface AntigravityWorkflowWorkerOptions {
   readonly printTimeout?: string;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
   /** Override the default retry budget. Mostly useful in tests. */
   readonly maxAttempts?: number;
   /** Override the default retry backoff. Mostly useful in tests. */
   readonly backoffMs?: number;
-}
+} & WorkflowTaskRepairLoopOption<"antigravity-cli">;
 
 export class AntigravityWorkflowWorkerError extends Error {
   override readonly name = "AntigravityWorkflowWorkerError";

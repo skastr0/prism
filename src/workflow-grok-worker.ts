@@ -7,10 +7,10 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
-export interface GrokWorkflowWorkerOptions {
+export type GrokWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
@@ -18,8 +18,7 @@ export interface GrokWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
-  readonly repair?: WorkflowTaskRepairContext;
-}
+} & WorkflowTaskRepairLoopOption<"grok">;
 
 export class WorkflowWorkerError extends Error {
   override readonly name = "WorkflowWorkerError";

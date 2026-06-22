@@ -46,5 +46,9 @@ describe("workflow output JSON Schema", () => {
         value: Schema.Union(Schema.String, Schema.Number),
       }),
     )).toBeUndefined();
+
+    expect(tryWorkflowJsonSchemaFromEffectSchema(
+      Schema.Literal(1n),
+    )).toBeUndefined();
   });
 });

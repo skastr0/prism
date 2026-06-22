@@ -85,7 +85,6 @@ import {
   workflowRunOptionsSnapshot,
 } from "./workflow-controls.js";
 import type { WorkflowPermissionMode } from "./workflows.js";
-import { runWorkflowMonitor } from "./workflow-tui.js";
 
 declare const APP_VERSION: string | undefined;
 
@@ -223,6 +222,7 @@ workflow
     readonly failStaleAfterMs?: number;
   }) => {
     try {
+      const { runWorkflowMonitor } = await import("./workflow-tui.js");
       await runWorkflowMonitor({
         storePath: options.store ?? defaultWorkflowStorePath(process.cwd()),
         pollMs: options.pollMs,

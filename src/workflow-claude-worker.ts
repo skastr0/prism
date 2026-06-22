@@ -282,7 +282,7 @@ export const runClaudeWorkflowTask = async (
       durationMs,
       processTimeoutMs,
       ...summarizeWorkflowWorkerStderr(stderr),
-      sessionId: envelope.session_id,
+      sessionId: envelope.session_id ?? resumeSessionId,
       claudeDurationMs: envelope.duration_ms,
       totalCostUsd: envelope.total_cost_usd,
       numTurns: envelope.num_turns,

@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { buildAmpArgs, assertAmpWorkflowMode } from "./workflow-amp-worker.js";
+import {
+  DEFAULT_ANTIGRAVITY_MODEL,
+  assertAgyPrintArgsWorkflowSafe,
+  buildAgyArgs,
+  parseAgyConversationId,
+  resolveAntigravityPermission,
+  type AgyPrintArgs,
+} from "./workflow-antigravity-worker.js";
 import { buildClaudeArgs } from "./workflow-claude-worker.js";
 import { buildGrokArgs, isGrokAuthOutput } from "./workflow-grok-worker.js";
 import { isKimiAuthOutput, buildKimiArgs } from "./workflow-kimi-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
-import { supportedWorkflowWorkers, UnsupportedWorkflowWorkerError, getWorkflowWorkerAdapter, WorkflowPermissionError } from "./workflow-workers.js";
+import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError } from "./workflow-workers.js";
 
 describe("workflow worker argument builders", () => {
   test("grok uses explicit single-turn mode", () => {
@@ -83,9 +91,168 @@ describe("workflow worker argument builders", () => {
     expect(buildAmpArgs({ mode: "deep", prompt: "return json", permission: "legacy" })).toContain("deep");
   });
 
-  test("antigravity-cli is not a supported workflow worker", () => {
-    expect(supportedWorkflowWorkers()).not.toContain("antigravity-cli");
-    expect(() => getWorkflowWorkerAdapter("antigravity-cli")).toThrow(UnsupportedWorkflowWorkerError);
+  test("antigravity-cli is a supported workflow worker", () => {
+    expect(supportedWorkflowWorkers()).toContain("antigravity-cli");
+    expect(getWorkflowWorkerAdapter("antigravity-cli").id).toBe("antigravity-cli");
+  });
+
+  test("workflow workers expose one task execution entrypoint", () => {
+    for (const worker of ["amp-code", "antigravity-cli", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "opencode"]) {
+      const adapter = getWorkflowWorkerAdapter(worker);
+      expect(typeof adapter.runTask).toBe("function");
+      expect("continueTask" in adapter).toBe(false);
+    }
+  });
+});
+
+describe("workflow worker continuation arg mapping", () => {
+  test("claude uses exact session resume only", () => {
+    const args = buildClaudeArgs({ agent: "a", prompt: "p", resumeSessionId: "s1" });
+    expect(args.slice(args.indexOf("--resume"), args.indexOf("--resume") + 2)).toEqual(["--resume", "s1"]);
+    expect(args).not.toContain("--continue");
+  });
+
+  test("opencode uses exact session id", () => {
+    const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", sessionId: "s1" });
+    expect(args.slice(args.indexOf("-s"), args.indexOf("-s") + 2)).toEqual(["-s", "s1"]);
+    expect(args).not.toContain("--continue");
+  });
+
+  test("grok uses exact session id", () => {
+    const args = buildGrokArgs({ cwd: "/r", agent: "a", prompt: "p", sessionId: "s1" });
+    expect(args.slice(args.indexOf("-r"), args.indexOf("-r") + 2)).toEqual(["-r", "s1"]);
+    expect(args).not.toContain("--continue");
+  });
+
+  test("hermes uses exact session resume", () => {
+    const args = buildHermesArgs({ prompt: "p", resumeSessionId: "s1", permission: "legacy" });
+    expect(args.slice(args.indexOf("--resume"), args.indexOf("--resume") + 2)).toEqual(["--resume", "s1"]);
+    expect(args).toContain("chat");
+    expect(args).not.toContain("--continue");
+  });
+
+  test("kimi uses exact session id", () => {
+    const args = buildKimiArgs({ prompt: "p", skillsDir: "/s", sessionId: "s1" });
+    expect(args.slice(args.indexOf("--session"), args.indexOf("--session") + 2)).toEqual(["--session", "s1"]);
+    expect(args).not.toContain("--continue");
+  });
+
+  test("codex maps continuation to exec resume", () => {
+    const args = buildCodexArgs({ cwd: "/r", outputPath: "/tmp/o", prompt: "p", resumeSessionId: "s1" });
+    expect(args.slice(args.indexOf("resume"), args.indexOf("resume") + 2)).toEqual(["resume", "s1"]);
+    expect(args).not.toContain("--ephemeral");
+    expect(args).not.toContain("--last");
+  });
+
+  test("amp maps continuation to exact thread id", () => {
+    const args = buildAmpArgs({ prompt: "p", permission: "legacy", sessionId: "s1" });
+    expect(args.slice(args.indexOf("threads"), args.indexOf("threads") + 3)).toEqual(["threads", "continue", "s1"]);
+    expect(args).not.toContain("last");
+  });
+});
+
+describe("antigravity-cli permission arg mapping", () => {
+  test("puts all options before --print so agy receives the prompt value", () => {
+    const args: AgyPrintArgs = buildAgyArgs({ cwd: "/r", model: "Gemini", prompt: "p", printTimeout: "5m", permission: "permissive" });
+    const rawArgs: readonly string[] = args;
+    expect(rawArgs).toEqual([
+      "--dangerously-skip-permissions",
+      "--sandbox",
+      "--print-timeout",
+      "5m",
+      "--add-dir",
+      "/r",
+      "--model",
+      "Gemini",
+      "--print",
+      "p",
+    ]);
+    // @ts-expect-error AgyPrintArgs permits no flags after the prompt-valued --print pair.
+    const bad: AgyPrintArgs = ["--print", "p", "--model", "Gemini"] as const;
+    void bad;
+    // @ts-expect-error AgyPrintArgs forbids global latest-conversation continuation.
+    const continueBad: AgyPrintArgs = ["--continue", "--print", "p"] as const;
+    void continueBad;
+    // @ts-expect-error AgyPrintArgs forbids the short alias for global latest-conversation continuation.
+    const shortContinueBad: AgyPrintArgs = ["-c", "--print", "p"] as const;
+    void shortContinueBad;
+  });
+
+  test("rejects forbidden global continuation flags before spawn", () => {
+    expect(() => assertAgyPrintArgsWorkflowSafe(["--continue", "--print", "p"]))
+      .toThrow("explicit --conversation id");
+    expect(() => assertAgyPrintArgsWorkflowSafe(["-c", "--print", "p"]))
+      .toThrow("explicit --conversation id");
+  });
+
+  test("allows prompt text that happens to name a forbidden flag", () => {
+    const args = buildAgyArgs({
+      cwd: "/r",
+      model: DEFAULT_ANTIGRAVITY_MODEL,
+      prompt: "--continue",
+      printTimeout: "5m",
+      permission: "permissive",
+    });
+    expect(() => assertAgyPrintArgsWorkflowSafe(args)).not.toThrow();
+  });
+
+  test("puts continuation flags before --print", () => {
+    const conversationId = parseAgyConversationId("103febcc-41a4-435b-a6ed-f6992fb1c3ff");
+    expect(conversationId).toBeDefined();
+    const args: readonly string[] = buildAgyArgs({
+      cwd: "/r",
+      conversationId,
+      logFile: "/tmp/agy.log",
+      model: DEFAULT_ANTIGRAVITY_MODEL,
+      prompt: "p",
+      printTimeout: "5m",
+      permission: "permissive",
+    });
+    expect(args.slice(0, 4)).toEqual([
+      "--log-file",
+      "/tmp/agy.log",
+      "--conversation",
+      "103febcc-41a4-435b-a6ed-f6992fb1c3ff",
+    ]);
+    expect(args.indexOf("--conversation")).toBeLessThan(args.indexOf("--print"));
+  });
+
+  test("legacy preserves the previous permissive agy flags", () => {
+    const args: readonly string[] = buildAgyArgs({ cwd: "/r", model: DEFAULT_ANTIGRAVITY_MODEL, prompt: "p", printTimeout: "5m", permission: "legacy" });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--sandbox");
+  });
+
+  test("default emits permissive agy flags", () => {
+    const args: readonly string[] = buildAgyArgs({ cwd: "/r", model: DEFAULT_ANTIGRAVITY_MODEL, prompt: "p", printTimeout: "5m" });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--sandbox");
+  });
+
+  test("restricted throws", () => {
+    expect(() => resolveAntigravityPermission("restricted"))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("interactive throws", () => {
+    expect(() => resolveAntigravityPermission("interactive"))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("sandbox-read-only throws", () => {
+    expect(() => resolveAntigravityPermission("sandbox-read-only"))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("sandbox-workspace-write throws", () => {
+    expect(() => resolveAntigravityPermission("sandbox-workspace-write"))
+      .toThrow(WorkflowPermissionError);
+  });
+
+  test("full-access emits previous permissive agy flags", () => {
+    const args: readonly string[] = buildAgyArgs({ cwd: "/r", model: DEFAULT_ANTIGRAVITY_MODEL, prompt: "p", printTimeout: "5m", permission: "full-access" });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--sandbox");
   });
 });
 
@@ -188,10 +355,8 @@ describe("claude-code permission arg mapping", () => {
 describe("hermes permission arg mapping", () => {
   test("legacy emits no --yolo", () => {
     const args = buildHermesArgs({ prompt: "p", permission: "legacy" });
-    expect(args.slice(0, 2)).toEqual(["--oneshot", "p"]);
+    expect(args.slice(0, 3)).toEqual(["chat", "--query", "p"]);
     expect(args).not.toContain("--yolo");
-    expect(args).not.toContain("chat");
-    expect(args).not.toContain("--query");
   });
 
   test("permissive emits --yolo", () => {
@@ -229,9 +394,9 @@ describe("hermes permission arg mapping", () => {
     expect(args).toContain("--yolo");
   });
 
-  test("profile precedes oneshot for Hermes profile selection", () => {
+  test("profile precedes chat query for Hermes profile selection", () => {
     const args = buildHermesArgs({ prompt: "p", profile: "lyra03", permission: "legacy" });
-    expect(args.slice(0, 4)).toEqual(["--profile", "lyra03", "--oneshot", "p"]);
+    expect(args.slice(0, 5)).toEqual(["--profile", "lyra03", "chat", "--query", "p"]);
   });
 });
 

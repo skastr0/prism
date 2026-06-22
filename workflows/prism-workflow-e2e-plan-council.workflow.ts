@@ -22,7 +22,7 @@ const PLAN_BRIEF = `Review the Prism workflow E2E implementation plan and curren
 
 Context:
 - We are adding deterministic generated-tool E2E coverage for opencode, claude-code, codex-cli, grok, hermes, kimi-code, and amp-code.
-- Antigravity remains quarantined: type/typecheck rejection only, no live run.
+- Antigravity has live prompted-contract workflow dispatch plus native `--conversation` repair continuation; generated-tool E2E remains separate from this plan until lowered-agent binding is proven.
 - The generated test tool must be pure: input challenge -> { challenge, proof: "prism-tool-proof:<challenge>", source: "prism-generated-tool" }.
 - There will be two lanes: repeatable temp roots/homes for regression learning, and a live manual lane against the operator's real harness configs.
 - Live successful runs submit Forge Tower dispatches to project "prism", orbit "forge".

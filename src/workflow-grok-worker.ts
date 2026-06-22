@@ -7,7 +7,8 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
 export interface GrokWorkflowWorkerOptions {
   readonly cwd: string;
@@ -17,6 +18,7 @@ export interface GrokWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 export class WorkflowWorkerError extends Error {
@@ -335,6 +337,7 @@ export const buildGrokArgs = (input: {
   readonly model?: string;
   readonly effort?: string;
   readonly prompt: string;
+  readonly sessionId?: string;
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
@@ -349,6 +352,7 @@ export const buildGrokArgs = (input: {
     input.agent,
     "--cwd",
     input.cwd,
+    ...(input.sessionId !== undefined ? ["-r", input.sessionId] : []),
     "--no-alt-screen",
     "--allow",
     "MCPTool",
@@ -362,11 +366,21 @@ export const buildGrokArgs = (input: {
   ];
 };
 
+export const grokSessionId = (stdout: string, stderr: string): string | undefined =>
+  stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["sessionId", "sessionID", "session_id"])
+    ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
+      /\bsessionId["':=\s]+([A-Za-z0-9._:-]+)/u,
+      /\bsession[_\s-]*id["':=\s]+([A-Za-z0-9._:-]+)/iu,
+    ]);
+
 export const runGrokWorkflowTask = async (
   task: AnyWorkflowTask,
   options: GrokWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
-  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const command = options.bin ?? process.env.PRISM_WORKFLOW_GROK_BIN ?? "grok";
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS)
@@ -378,6 +392,7 @@ export const runGrokWorkflowTask = async (
     model: options.model,
     effort: options.effort,
     prompt,
+    sessionId,
     permission: options.resolvedPermission,
   });
 
@@ -415,6 +430,7 @@ export const runGrokWorkflowTask = async (
       grokMcpServerCount: runtime.mcpServerCount,
       durationMs,
       processTimeoutMs,
+      sessionId: grokSessionId(stdout, stderr) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

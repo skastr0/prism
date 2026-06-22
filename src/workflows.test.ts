@@ -9,11 +9,13 @@ import {
   type WorkflowAgentRef,
   type WorkflowModelProfileRef,
   type WorkflowPermissionMode,
+  type WorkflowTaskWorkerOptions,
   type WorkflowWorkerId,
   type WorkflowTaskOutput,
 } from "./workflows.js";
 import { resolveWorkflowTaskPermission } from "./workflow-workers.js";
 import { buildAmpArgs } from "./workflow-amp-worker.js";
+import { buildAgyArgs } from "./workflow-antigravity-worker.js";
 import { buildClaudeArgs } from "./workflow-claude-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
 import { buildGrokArgs } from "./workflow-grok-worker.js";
@@ -45,6 +47,7 @@ const modelProfile = {
     hermes: { model: "openai/gpt-5.1-mini" },
     "kimi-code": { model: "moonshot/kimi-k2" },
     "amp-code": { model: "deep" },
+    "antigravity-cli": { model: "Gemini 3.5 Flash (Low)" },
   },
 } as const satisfies WorkflowModelProfileRef;
 
@@ -70,12 +73,18 @@ const PatchReport = Schema.Struct({
 });
 
 describe("workflow authoring primitives", () => {
-  test("workflow worker id excludes quarantined antigravity", () => {
+  test("workflow worker id includes antigravity", () => {
     const worker = "antigravity-cli";
-    // @ts-expect-error Antigravity is quarantined from live workflow dispatch.
     const liveWorker: WorkflowWorkerId = worker;
-    void liveWorker;
-    expect(worker).toBe("antigravity-cli");
+    expect(liveWorker).toBe("antigravity-cli");
+  });
+
+  test("antigravity worker options reject unsupported permissions at type level", () => {
+    const ok: WorkflowTaskWorkerOptions = { worker: "antigravity-cli", permission: "full-access" };
+    expect(ok.permission).toBe("full-access");
+    // @ts-expect-error Antigravity cannot enforce restricted permissions per invocation.
+    const bad: WorkflowTaskWorkerOptions = { worker: "antigravity-cli", permission: "restricted" };
+    void bad;
   });
 
   test("preserve literal task and agent refs", () => {
@@ -194,6 +203,19 @@ describe("workflow authoring primitives", () => {
       permission: "legacy",
     });
     expect(ampArgs.slice(ampArgs.indexOf("--mode"), ampArgs.indexOf("--mode") + 2)).toEqual(["--mode", "deep"]);
+
+    const antigravity = taskFor("antigravity-cli");
+    const antigravityModel = resolveWorkflowTaskModel(antigravity);
+    expect(antigravityModel).toBe("Gemini 3.5 Flash (Low)");
+    const agyArgs: readonly string[] = buildAgyArgs({
+      cwd: "/tmp",
+      model: antigravityModel!,
+      prompt: antigravity.prompt,
+      printTimeout: "5m",
+      permission: "legacy",
+    });
+    const agyModelArgs = agyArgs.slice(agyArgs.indexOf("--model"), agyArgs.indexOf("--model") + 2) as readonly string[];
+    expect(agyModelArgs).toEqual(["--model", "Gemini 3.5 Flash (Low)"]);
   });
 
   test("uses the agent modelspace before CLI fallback model", () => {

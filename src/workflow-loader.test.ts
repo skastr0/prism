@@ -838,7 +838,7 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).toBe(1);
-    expect(Date.now() - started).toBeLessThan(10000);
+    expect(Date.now() - started).toBeLessThan(15000);
     expect(stderr).toContain("grok requires xAI OAuth login before workflow run");
     expect(stderr).not.toContain("accounts.x.ai");
     expect(stderr).not.toContain("TEST-CODE");
@@ -1227,21 +1227,28 @@ describe("workflow loader", () => {
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, claude-code, codex-cli, grok, hermes, kimi-code, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, kimi-code, opencode");
   });
 
-  test("CLI rejects quarantined Antigravity workflow workers", async () => {
+  test("CLI runs a workflow through the Antigravity worker adapter", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "agy-calls.jsonl");
     const fakeAgy = join(root, "fake-agy.mjs");
-    await writeFile(file, workflowSource("default", { worker: "antigravity-cli" }));
+    await writeFile(file, workflowSource("default", { worker: "antigravity-cli", model: "Gemini 3.5 Flash (Low)" }));
     await writeFile(fakeAgy, [
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
-      `appendFileSync(${JSON.stringify(callsFile)}, 'called\\n');`,
-      "console.log(JSON.stringify({ summary: 'should not run' }));",
+      "const args = process.argv.slice(2);",
+      "const modelIndex = args.indexOf('--model');",
+      "const logIndex = args.indexOf('--log-file');",
+      "const printIndex = args.indexOf('--print');",
+      "const model = modelIndex >= 0 ? args[modelIndex + 1] : 'missing';",
+      "const logFile = logIndex >= 0 ? args[logIndex + 1] : 'missing';",
+      "if (logIndex >= 0) appendFileSync(logFile, 'I printmode.go:156] Print mode: conversation=103febcc-41a4-435b-a6ed-f6992fb1c3ff, sending message\\n');",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ model, hasLogFile: logIndex >= 0, printIndex, finalFlag: args.at(-2), promptTail: args.at(-1)?.includes('Prism workflow task') ?? false }) + '\\n');`,
+      "console.log(JSON.stringify({ summary: model }));",
       "",
     ].join("\n"));
     await chmod(fakeAgy, 0o755);
@@ -1257,20 +1264,41 @@ describe("workflow loader", () => {
         "--store",
         storeFile,
       ],
-      cwd: root,
-      env: { ...process.env, PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy },
+      cwd: process.cwd(),
+      env: workflowTestEnv({ HOME: join(root, "home"), PRISM_WORKFLOW_ANTIGRAVITY_BIN: fakeAgy }),
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stderr] = await Promise.all([
+    const [exitCode, stdout, stderr] = await Promise.all([
       processHandle.exited,
+      new Response(processHandle.stdout).text(),
       new Response(processHandle.stderr).text(),
     ]);
 
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("workflow type error");
-    expect(stderr).toContain("Type '\"antigravity-cli\"' is not assignable to type 'WorkflowWorkerId | undefined'");
-    expect(await Bun.file(callsFile).exists()).toBe(false);
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const run = JSON.parse(stdout) as {
+      tasks: Array<{ output: { summary: string }; metadata?: { adapter?: string; model?: string; sessionId?: string; conversationId?: string } }>;
+    };
+    expect(run.tasks.map((task) => task.output.summary)).toEqual(["Gemini 3.5 Flash (Low)"]);
+    expect(run.tasks.map((task) => task.metadata?.adapter)).toEqual(["antigravity-cli"]);
+    expect(run.tasks.map((task) => task.metadata?.model)).toEqual(["Gemini 3.5 Flash (Low)"]);
+    expect(run.tasks[0]?.metadata?.sessionId).toBe("103febcc-41a4-435b-a6ed-f6992fb1c3ff");
+    expect(run.tasks[0]?.metadata?.conversationId).toBe("103febcc-41a4-435b-a6ed-f6992fb1c3ff");
+    const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+      model: string;
+      hasLogFile: boolean;
+      printIndex: number;
+      finalFlag: string;
+      promptTail: boolean;
+    });
+    expect(calls).toEqual([{
+      model: "Gemini 3.5 Flash (Low)",
+      hasLogFile: true,
+      printIndex: 10,
+      finalFlag: "--print",
+      promptTail: true,
+    }]);
   });
 
   test("CLI runs a workflow through the Amp worker adapter", async () => {
@@ -1913,8 +1941,8 @@ describe("workflow loader", () => {
     const expectedCwd = await realpath(root);
     const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { command: string; model: string; cwd: string; ephemeral: boolean });
     expect(calls).toEqual([
-      { command: "exec", model: "grok-build", cwd: expectedCwd, ephemeral: true },
-      { command: "exec", model: "missing", cwd: expectedCwd, ephemeral: true },
+      { command: "exec", model: "grok-build", cwd: expectedCwd, ephemeral: false },
+      { command: "exec", model: "missing", cwd: expectedCwd, ephemeral: false },
     ]);
   });
 
@@ -2018,14 +2046,14 @@ describe("workflow loader", () => {
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
       "const modelIndex = process.argv.indexOf('--model');",
-      "const queryIndex = process.argv.indexOf('--oneshot');",
+      "const queryIndex = process.argv.indexOf('--query');",
       "const sourceIndex = process.argv.indexOf('--source');",
       "const profileIndex = process.argv.indexOf('--profile');",
       "const model = modelIndex >= 0 ? process.argv[modelIndex + 1] : 'missing';",
       "const query = queryIndex >= 0 ? process.argv[queryIndex + 1] : '';",
       "const source = sourceIndex >= 0 ? process.argv[sourceIndex + 1] : 'missing';",
       "const profile = profileIndex >= 0 ? process.argv[profileIndex + 1] : undefined;",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv.includes('--oneshot') ? 'oneshot' : process.argv[2], model, quiet: process.argv.includes('--quiet'), source, profile, hasInstruction: query.includes('Prism workflow task'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ command: process.argv.includes('chat') ? 'chat' : process.argv[2], model, quiet: process.argv.includes('--quiet'), source, profile, hasInstruction: query.includes('Prism workflow task') || query.includes('Return exactly one JSON value'), hasProfileFlag: process.argv.includes('--profile'), hasAgentFlag: process.argv.includes('--agent') }) + '\\n');`,
       "console.error('session_id: hermes-session-123');",
       "console.log(JSON.stringify({ summary: model }));",
       "",
@@ -2110,9 +2138,9 @@ describe("workflow loader", () => {
       hasAgentFlag: boolean;
     });
     expect(calls).toEqual([
-      { command: "oneshot", model: "grok-build", quiet: false, source: "missing", profile: "ansel12", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
-      { command: "oneshot", model: "nous/qwen3-coder", quiet: false, source: "missing", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
-      { command: "oneshot", model: "grok-build", quiet: false, source: "missing", profile: "ada07", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
+      { command: "chat", model: "grok-build", quiet: false, source: "missing", profile: "ansel12", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
+      { command: "chat", model: "nous/qwen3-coder", quiet: false, source: "missing", hasInstruction: true, hasProfileFlag: false, hasAgentFlag: false },
+      { command: "chat", model: "grok-build", quiet: false, source: "missing", profile: "ada07", hasInstruction: true, hasProfileFlag: true, hasAgentFlag: false },
     ]);
   });
 

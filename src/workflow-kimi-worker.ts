@@ -5,7 +5,8 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import { stableSessionIdFromJsonLines } from "./workflow-session.js";
 
 export interface KimiWorkflowWorkerOptions {
   readonly cwd: string;
@@ -15,6 +16,7 @@ export interface KimiWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 const defaultKimiCodeHome = (): string =>
@@ -68,6 +70,9 @@ const parseKimiStreamJsonOutput = (stdout: string): string => {
   throw new KimiWorkflowWorkerError("kimi-code stream-json output did not contain an assistant message");
 };
 
+export const kimiSessionIdFromStream = (stdout: string): string | undefined =>
+  stableSessionIdFromJsonLines(stdout, ["session_id", "sessionId", "sessionID"]);
+
 const assertKimiPermission = (mode: WorkflowPermissionMode): void => {
   switch (mode) {
     case "legacy":
@@ -106,6 +111,7 @@ export const buildKimiArgs = (input: {
   readonly model?: string;
   readonly prompt: string;
   readonly skillsDir: string;
+  readonly sessionId?: string;
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
@@ -115,6 +121,7 @@ export const buildKimiArgs = (input: {
   // compatible invocation rather than an invalid flag pair.
   return [
     ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...(input.sessionId !== undefined ? ["--session", input.sessionId] : []),
     "--output-format",
     "stream-json",
     "--prompt",
@@ -130,7 +137,10 @@ export const runKimiWorkflowTask = async (
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_KIMI_BIN ?? "kimi";
   const roleSkill = generatedRoleSkillName(task.agent.name);
-  const prompt = `You are assigned the ${roleSkill} Prism role. ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `You are assigned the ${roleSkill} Prism role. ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_KIMI_PROCESS_TIMEOUT_MS)
     ?? 360_000;
@@ -140,6 +150,7 @@ export const runKimiWorkflowTask = async (
     model: options.model,
     prompt,
     skillsDir: join(kimiHome, "plugins", "managed", generatedKimiPluginId(task.agent.plugin), "skills"),
+    sessionId,
     permission: options.resolvedPermission,
   });
 
@@ -182,6 +193,7 @@ export const runKimiWorkflowTask = async (
       model: options.model,
       durationMs,
       processTimeoutMs,
+      sessionId: kimiSessionIdFromStream(stdout) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

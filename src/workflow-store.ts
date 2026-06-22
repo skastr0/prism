@@ -5,6 +5,7 @@ import { ensureDir } from "./fs.js";
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
 import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowJudgeVerdict, type WorkflowRuntimeOptions } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { normalizeWorkflowSessionMetadata, workflowStableSessionFromMetadata } from "./workflow-session.js";
 
 export interface WorkflowTaskIdentity {
   readonly workflow: string;
@@ -407,7 +408,8 @@ const numberMetadata = (metadata: Record<string, unknown> | undefined, key: stri
 };
 
 const externalSessionPointer = (metadata: Record<string, unknown> | undefined): string | null =>
-  stringMetadata(metadata, "externalSessionPointer")
+  workflowStableSessionFromMetadata(metadata)?.sessionId
+    ?? stringMetadata(metadata, "externalSessionPointer")
     ?? stringMetadata(metadata, "sessionId")
     ?? stringMetadata(metadata, "sessionID")
     ?? stringMetadata(metadata, "session_id");
@@ -1766,6 +1768,7 @@ export class WorkflowStore {
     readonly metadata?: Record<string, unknown>;
     readonly outputSource?: WorkflowTaskOutputSource;
   }): void {
+    const metadata = normalizeWorkflowSessionMetadata(input.metadata);
     this.db.query(`
       insert into workflow_task_records (
         workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
@@ -1780,6 +1783,8 @@ export class WorkflowStore {
         metadata_json = excluded.metadata_json,
         output_source = excluded.output_source,
         updated_at = excluded.updated_at
+      where workflow_task_records.output_source = 'mock-output'
+        and excluded.output_source is null
     `).run(
       input.identity.workflow,
       input.identity.taskId,
@@ -1789,7 +1794,7 @@ export class WorkflowStore {
       input.agent.plugin,
       input.agent.name,
       JSON.stringify(input.output),
-      input.metadata === undefined ? null : JSON.stringify(input.metadata),
+      metadata === undefined ? null : JSON.stringify(metadata),
       input.outputSource ?? null,
     );
   }

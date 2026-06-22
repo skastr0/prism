@@ -50,7 +50,7 @@ Hard contract:
 - Default behavior for workflow execution should choose each supported harness' most permissive viable noninteractive mode.
 - An explicit legacy/default mode must preserve current worker behavior when the workflow author asks for it.
 - Unsupported precise modes must fail closed before spawning the harness, with an actionable error.
-- Antigravity remains excluded; do not add it to WorkflowWorkerId.
+- Antigravity is live; include it in WorkflowWorkerId, permission mapping checks, and explicit-conversation repair continuation.
 - Do not touch unrelated dirty files unless the task escalates first.
 
 Existing unrelated dirty files to avoid:
@@ -357,7 +357,7 @@ const localFinalFusion = (
       "Default unresolved workflow execution to the most permissive viable noninteractive mode.",
       "Provide an explicit legacy/default mode that preserves current worker behavior.",
       "Fail closed before spawn for unsupported precise modes such as sandbox/read-only/workspace-write when a harness cannot honestly enforce them.",
-      "Keep Antigravity excluded from WorkflowWorkerId.",
+      "Keep Antigravity included in WorkflowWorkerId with explicit permission mapping and `--conversation` repair continuation.",
     ],
     testsRequired: [
       "worker arg tests for permissive and legacy/default mappings per supported harness",

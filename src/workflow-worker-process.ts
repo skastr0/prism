@@ -42,6 +42,7 @@ export const runWorkflowWorkerProcess = async (
     cmd: [options.command, ...options.args],
     cwd: options.cwd,
     env: options.env === undefined ? undefined : { ...process.env, ...options.env },
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });

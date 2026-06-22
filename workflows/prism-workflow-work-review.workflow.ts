@@ -52,7 +52,7 @@ Evidence discipline:
 
 Plan context:
 - Prism workflow E2E work is validating deterministic generated tools across live configs and repeatable temporary homes.
-- Antigravity stays quarantined: type/typecheck rejection only.
+- Antigravity is a live prompted-contract workflow worker; protect agy argv order, default Medium model, timeout evidence, and `--conversation` repair continuation.
 - Generated MCP proof must come from a pure tool call, not env, shell echo, file reads, or fallback JSON.
 - Reviews should protect worker invocation shape, modelspace resolution, generated MCP loading, finish criteria, and run evidence quality.
 - This review workflow deliberately uses the Prism harness QA smoke modelspace profile for all reviewer workers to keep live routes known and comparable.

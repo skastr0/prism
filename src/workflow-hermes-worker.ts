@@ -3,7 +3,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
 
 export interface HermesWorkflowWorkerOptions {
   readonly cwd: string;
@@ -13,6 +13,7 @@ export interface HermesWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 export class HermesWorkflowWorkerError extends Error {
@@ -62,6 +63,7 @@ export const buildHermesArgs = (input: {
   readonly profile?: string;
   readonly model?: string;
   readonly prompt: string;
+  readonly resumeSessionId?: string;
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
@@ -69,7 +71,9 @@ export const buildHermesArgs = (input: {
   const permissionArgs: string[] = mode === "permissive" || mode === "full-access" ? ["--yolo"] : [];
   return [
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
-    "--oneshot",
+    "chat",
+    ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : []),
+    "--query",
     input.prompt,
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...permissionArgs,
@@ -81,7 +85,10 @@ export const runHermesWorkflowTask = async (
   options: HermesWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_HERMES_BIN ?? "hermes";
-  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const resumeSessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_HERMES_PROCESS_TIMEOUT_MS)
     ?? 360_000;
@@ -89,6 +96,7 @@ export const runHermesWorkflowTask = async (
     profile: options.profile,
     model: options.model,
     prompt,
+    resumeSessionId,
     permission: options.resolvedPermission,
   });
 
@@ -124,7 +132,7 @@ export const runHermesWorkflowTask = async (
       model: options.model,
       durationMs,
       processTimeoutMs,
-      sessionId: hermesSessionId(stderr),
+      sessionId: hermesSessionId(stderr) ?? resumeSessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

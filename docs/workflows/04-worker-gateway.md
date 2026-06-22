@@ -105,18 +105,26 @@ allowed under an exclusive lock.
 - Fork/session semantics: not claimed yet. Treat as `fork: "none"` until an
   immutable provider-copy or safe continue mode is live-verified.
 
-### Antigravity CLI — class A `surface verified, dispatch unverified`
+### Antigravity CLI — class B `live dispatch verified, generated-agent binding pending`
 
 - Prism has an antigravity lowerer (agents land in the generated plugin).
-- Headless surface confirmed: `agy --print/-p <prompt> --model <m>
-  --dangerously-skip-permissions --sandbox --print-timeout <d>`; sessions via
-  `--conversation <id>` resume.
-- Local `agy 1.0.8` currently exposes models including `Gemini 3.5 Flash (Low)`
-  and accepts the headless flags, but a bounded one-task JSON smoke timed out
-  waiting for a response. The Prism adapter's own process timeout correctly
-  aborts and reports this condition, so AGY is safe to experiment with but not
-  yet promoted to a reliable live worker lane.
-- Open (WS3 verification task): how a lowered agent is addressed headlessly —
+- Headless surface confirmed: `agy --log-file <file>
+  [--conversation <id>] --dangerously-skip-permissions --sandbox
+  --print-timeout <d> --add-dir <dir> --model <m> --print <prompt>`.
+  `--print` is prompt-valued, so all options must appear before it.
+- Local `agy 1.0.10` currently exposes models including `Gemini 3.5 Flash (Medium)`
+  and completed a bounded one-task Prism workflow JSON smoke through the live
+  adapter using prompted-contract identity. The workflow adapter defaults to
+  `Gemini 3.5 Flash (Medium)` when the task/CLI does not provide a model.
+- Native repair continuation is live-verified: the first `agy --print` run logs
+  `Created conversation <uuid>` / `Print mode: conversation=<uuid>`, Prism
+  records that UUID as `sessionId`, and repair runs resume with
+  `--conversation <uuid>`. `--continue` / `-c` resumes mutable global "most
+  recent conversation" state, so Prism bans those flags from workflow argv:
+  `AgyPrintArgs` cannot represent them, and the spawn path rejects them if a
+  cast bypasses the type. Workflow repair must use the captured UUID or fall
+  back before spawn.
+- Open: how a lowered agent is addressed headlessly —
   plugin agent naming vs projection fallback (read the generated agent
   markdown, inject as system context the way codex does). Capability matrix
   filled only from live runs, per the rule above.
@@ -164,6 +172,9 @@ Three lanes, one source of truth:
    `JSON.parse` → `Schema.decodeUnknown`. Decode failure feeds the formatted
    parse error back to the same session for a bounded number of
    **decode retries that do not consume task retries** (smithers' rule, kept).
+   The current native-continuation implementation covers Claude sessions and
+   Antigravity conversations; other prompted workers still fall back to fresh
+   invocations until their explicit session-resume handles are verified.
 
 So: it is *both* prompt and SDK injection, per capability — but the type the
 workflow sees comes from exactly one place, and nothing the provider says is
@@ -171,10 +182,10 @@ trusted until the runtime's own decode passes.
 
 V1 deliberately stops at basic extraction and decode: native schema where the
 adapter proves it, otherwise a compact prompt clause plus JSON extraction and
-`Schema.decodeUnknown`. Smithers-style multi-round repair, balanced extraction
-heuristics beyond obvious fences/braces, and in-conversation schema correction
-are deferred until real Prism Workflow runs prove the need. Invalid output fails
-the AgentRun attempt; completed resources are never stored unless they decode.
+`Schema.decodeUnknown`. Smithers-style balanced extraction heuristics beyond
+obvious fences/braces are deferred until real Prism Workflow runs prove the
+need. Invalid output fails the AgentRun attempt; completed resources are never
+stored unless they decode.
 
 ## Error taxonomy (typed, retry-classified)
 

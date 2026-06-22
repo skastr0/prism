@@ -3,7 +3,8 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
 export interface OpenCodeWorkflowWorkerOptions {
   readonly cwd: string;
@@ -12,6 +13,7 @@ export interface OpenCodeWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 export class OpenCodeWorkflowWorkerError extends Error {
@@ -57,6 +59,7 @@ export const buildOpenCodeArgs = (input: {
   readonly agent: string;
   readonly model?: string;
   readonly prompt: string;
+  readonly sessionId?: string;
   readonly permission?: WorkflowPermissionMode;
 }): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
@@ -68,18 +71,29 @@ export const buildOpenCodeArgs = (input: {
     input.cwd,
     "--agent",
     input.agent,
+    ...(input.sessionId !== undefined ? ["-s", input.sessionId] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...permissionArgs,
     input.prompt,
   ];
 };
 
+export const openCodeSessionId = (stdout: string, stderr: string): string | undefined =>
+  stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["sessionID", "sessionId", "session_id"])
+    ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
+      /\bsessionID["':=\s]+([A-Za-z0-9._:-]+)/u,
+      /\bsession[_\s-]*id["':=\s]+([A-Za-z0-9._:-]+)/iu,
+    ]);
+
 export const runOpenCodeWorkflowTask = async (
   task: AnyWorkflowTask,
   options: OpenCodeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_OPENCODE_BIN ?? "opencode";
-  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_OPENCODE_PROCESS_TIMEOUT_MS)
     ?? 180_000;
@@ -88,6 +102,7 @@ export const runOpenCodeWorkflowTask = async (
     agent: task.agent.name,
     model: options.model,
     prompt,
+    sessionId,
     permission: options.resolvedPermission,
   });
 
@@ -115,6 +130,7 @@ export const runOpenCodeWorkflowTask = async (
       model: options.model,
       durationMs,
       processTimeoutMs,
+      sessionId: openCodeSessionId(stdout, stderr) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

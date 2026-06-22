@@ -231,7 +231,87 @@ describe("workflow runner", () => {
     }
   });
 
-  test("falls back to a fresh Claude repair when continuation metadata is missing", async () => {
+  test("continues Antigravity repairs in the native conversation when a conversation id is available", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-runner-"));
+    const fakeAgy = join(root, "fake-agy.mjs");
+    const callsFile = join(root, "agy-calls.jsonl");
+    const conversationId = "103febcc-41a4-435b-a6ed-f6992fb1c3ff";
+    const oldBin = process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN;
+    await writeFile(fakeAgy, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const conversationIndex = args.indexOf('--conversation');",
+      "const logIndex = args.indexOf('--log-file');",
+      "const printIndex = args.indexOf('--print');",
+      "const conversation = conversationIndex >= 0 ? args[conversationIndex + 1] : undefined;",
+      "const prompt = printIndex >= 0 ? args[printIndex + 1] : args.at(-1);",
+      `if (logIndex >= 0) appendFileSync(args[logIndex + 1], 'I printmode.go:156] Print mode: conversation=${conversationId}, sending message\\n');`,
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ conversation, hasContinue: args.includes('--continue'), finalFlag: args.at(-2), prompt }) + '\\n');`,
+      "const repaired = conversation !== undefined;",
+      "console.log(JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeAgy, 0o755);
+    process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN = fakeAgy;
+
+    try {
+      const task = defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build the slice.",
+        output: PatchReport,
+        worker: { worker: "antigravity-cli" },
+        finish: {
+          maxRepairs: 1,
+          criteria: [{
+            name: "summary-prefix",
+            check: ({ output }) => output.summary.startsWith("ok")
+              ? Effect.void
+              : Effect.fail(new Error("summary must start with ok")),
+          }],
+        },
+      });
+      const workflow = defineWorkflow({ name: "runner-antigravity-native-repair", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "antigravity-cli", cwd: root }),
+      });
+
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+        conversation?: string;
+        hasContinue: boolean;
+        finalFlag: string;
+        prompt: string;
+      });
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({ hasContinue: false, finalFlag: "--print" });
+      expect(calls[0]?.conversation).toBeUndefined();
+      expect(calls[0]?.prompt).toContain("Build the slice.");
+      expect(calls[1]).toMatchObject({ conversation: conversationId, hasContinue: false, finalFlag: "--print" });
+      expect(calls[1]?.prompt).not.toContain("Build the slice.");
+      expect(calls[1]?.prompt).toContain("summary must start with ok");
+      expect(result.tasks[0]?.metadata).toMatchObject({
+        adapter: "antigravity-cli",
+        sessionId: conversationId,
+        conversationId,
+        continuationStrategy: "explicit-conversation-id",
+        repairExecution: {
+          mode: "native-continuation",
+          continuation: { adapter: "antigravity-cli", sessionId: conversationId },
+        },
+        finish: {
+          repairs: 1,
+          repairMode: "native-continuation",
+        },
+      });
+    } finally {
+      if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN;
+      else process.env.PRISM_WORKFLOW_ANTIGRAVITY_BIN = oldBin;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails named harness repairs when continuation metadata is missing", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-runner-"));
     const fakeClaude = join(root, "fake-claude-fallback.mjs");
     const callsFile = join(root, "claude-fallback-calls.jsonl");
@@ -243,8 +323,7 @@ describe("workflow runner", () => {
       "const resumeIndex = args.indexOf('--resume');",
       "const prompt = args.at(-1);",
       `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, prompt }) + '\\n');`,
-      "const repaired = prompt.includes('Your previous response did not satisfy');",
-      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: repaired ? 'ok after fallback' : 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
+	      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);
@@ -267,26 +346,14 @@ describe("workflow runner", () => {
           }],
         },
       });
-      const workflow = defineWorkflow({ name: "runner-claude-fallback-repair", tasks: [task] as const });
-      const result = await runWorkflow(workflow, {
-        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
-      });
+	      const workflow = defineWorkflow({ name: "runner-claude-missing-session-repair", tasks: [task] as const });
+	      await expect(runWorkflow(workflow, {
+	        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
+	      })).rejects.toThrow("repair requires stable sessionId");
 
-      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; prompt: string });
-      expect(calls).toHaveLength(2);
-      expect(calls[1]?.resume).toBeUndefined();
-      expect(calls[1]?.prompt).toContain("Build the slice.");
-      expect(calls[1]?.prompt).toContain("summary must start with ok");
-      expect(result.tasks[0]?.metadata).toMatchObject({
-        repairExecution: {
-          mode: "fresh-executor-invocation",
-          fallbackReason: "missing-session-id",
-        },
-        finish: {
-          repairs: 1,
-          repairMode: "fresh-executor-invocation",
-        },
-      });
+	      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; prompt: string });
+	      expect(calls).toHaveLength(1);
+	      expect(calls[0]?.resume).toBeUndefined();
     } finally {
       if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_BIN;
       else process.env.PRISM_WORKFLOW_CLAUDE_BIN = oldBin;

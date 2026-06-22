@@ -57,6 +57,7 @@ export type WorkflowFinishCriterionError = Error;
 
 export type WorkflowWorkerId =
   | "amp-code"
+  | "antigravity-cli"
   | "claude-code"
   | "codex-cli"
   | "grok"
@@ -73,14 +74,25 @@ export type WorkflowPermissionMode =
   | "sandbox-workspace-write"
   | "full-access";
 
-export interface WorkflowTaskWorkerOptions {
-  readonly worker?: WorkflowWorkerId;
+export type AntigravityWorkflowPermissionMode = Extract<WorkflowPermissionMode, "legacy" | "permissive" | "full-access">;
+
+type WorkflowTaskWorkerOptionsBase = {
   readonly model?: string | WorkflowModelProfileRef;
   readonly modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   readonly profile?: string;
-  readonly permission?: WorkflowPermissionMode;
   readonly restrictedTools?: ReadonlyArray<string>;
-}
+  readonly processTimeoutMs?: number;
+};
+
+export type WorkflowTaskWorkerOptions =
+  | (WorkflowTaskWorkerOptionsBase & {
+    readonly worker?: Exclude<WorkflowWorkerId, "antigravity-cli">;
+    readonly permission?: WorkflowPermissionMode;
+  })
+  | (WorkflowTaskWorkerOptionsBase & {
+    readonly worker: "antigravity-cli";
+    readonly permission?: AntigravityWorkflowPermissionMode;
+  });
 
 export type WorkflowResolvedModelEntry = Readonly<{ readonly model: string }>;
 

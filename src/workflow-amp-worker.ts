@@ -6,7 +6,8 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskRepairContext } from "./workflow-runner.js";
+import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
 export interface AmpWorkflowWorkerOptions {
   readonly cwd: string;
@@ -15,6 +16,7 @@ export interface AmpWorkflowWorkerOptions {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly repair?: WorkflowTaskRepairContext;
 }
 
 export class AmpWorkflowWorkerError extends Error {
@@ -99,6 +101,7 @@ const prepareAmpPermissionSettings = async (
 export const buildAmpArgs = (input: {
   readonly mode?: string;
   readonly prompt: string;
+  readonly sessionId?: string;
   readonly permission?: WorkflowPermissionMode;
   /**
    * Required for permissive/full-access. runAmpWorkflowTask supplies a temp
@@ -116,6 +119,7 @@ export const buildAmpArgs = (input: {
   }
   return [
     ...(input.settingsFile !== undefined ? ["--settings-file", input.settingsFile] : []),
+    ...(input.sessionId !== undefined ? ["threads", "continue", input.sessionId] : []),
     "--no-ide",
     "--no-notifications",
     "--no-color",
@@ -126,12 +130,22 @@ export const buildAmpArgs = (input: {
   ];
 };
 
+export const ampSessionId = (stdout: string, stderr: string): string | undefined =>
+  stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["session_id", "sessionId", "sessionID", "threadId", "thread_id"])
+    ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
+      /\bsession[_\s-]*id["':=\s]+([A-Za-z0-9._:-]+)/iu,
+      /\bthread[_\s-]*id["':=\s]+([A-Za-z0-9._:-]+)/iu,
+    ]);
+
 export const runAmpWorkflowTask = async (
   task: AnyWorkflowTask,
   options: AmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
   const command = options.bin ?? process.env.PRISM_WORKFLOW_AMP_BIN ?? "amp";
-  const prompt = `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
+  const sessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
+  const prompt = options.repair !== undefined
+    ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
+    : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_AMP_PROCESS_TIMEOUT_MS)
     ?? 360_000;
@@ -140,6 +154,7 @@ export const runAmpWorkflowTask = async (
   const args = buildAmpArgs({
     mode: options.model,
     prompt,
+    sessionId,
     permission: options.resolvedPermission,
     settingsFile: permissionSettings.settingsFile,
   });
@@ -167,6 +182,7 @@ export const runAmpWorkflowTask = async (
       model: options.model,
       durationMs,
       processTimeoutMs,
+      sessionId: ampSessionId(stdout, stderr) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

@@ -574,6 +574,36 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("real completed task cache records are immutable", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow({ worker: "claude-code" });
+    const task = workflow.tasks[0]!;
+    const identity = workflowTaskIdentity(workflow.name, task);
+
+    store.recordCompleted({
+      identity,
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
+      output: { summary: "first" },
+      metadata: { ...contractMetadata, adapter: "claude-code", sessionId: "session-1" },
+    });
+    store.recordCompleted({
+      identity,
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
+      output: { summary: "second" },
+      metadata: { ...contractMetadata, adapter: "claude-code", sessionId: "session-2" },
+    });
+
+    expect(store.getCompleted(identity)).toMatchObject({
+      output: { summary: "first" },
+      metadata: expect.objectContaining({
+        adapter: "claude-code",
+        sessionId: "session-1",
+      }),
+    });
+    store.close();
+  });
+
   test("records and reuses judge executions separately from primary task output cache", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

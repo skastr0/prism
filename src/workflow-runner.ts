@@ -26,6 +26,13 @@ import {
   type WorkflowTaskIdentity,
 } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
+import {
+  normalizeWorkflowSessionMetadata,
+  workflowAdapterFromMetadata,
+  workflowContinuationSupportForAdapter,
+  workflowStableSessionFromMetadata,
+  type WorkflowStableSession,
+} from "./workflow-session.js";
 
 export interface WorkflowTaskExecution {
   readonly output: unknown;
@@ -59,18 +66,42 @@ export {
 
 export type WorkflowTaskRepairMode = "native-continuation" | "fresh-executor-invocation" | "none";
 
-export interface WorkflowTaskRepairContext {
+export type WorkflowTaskRepairFallbackReason =
+  | "adapter-does-not-support-continuation"
+  | "executor-does-not-advertise-continuation"
+  | "missing-session-id";
+
+interface WorkflowTaskRepairContextBase {
   readonly attempt: number;
   readonly criterion: string;
   readonly repairPrompt: string;
-  readonly mode: Exclude<WorkflowTaskRepairMode, "none">;
   readonly previousMetadata?: Record<string, unknown>;
-  readonly fallbackReason?: "adapter-does-not-support-continuation" | "executor-does-not-advertise-continuation" | "missing-session-id";
-  readonly continuation?: {
-    readonly adapter: string;
-    readonly sessionId: string;
-  };
 }
+
+export type WorkflowTaskRepairContext = WorkflowTaskRepairContextBase & (
+  | {
+    readonly mode: "native-continuation";
+    readonly continuation: WorkflowStableSession;
+    readonly fallbackReason?: never;
+  }
+  | {
+    readonly mode: "fresh-executor-invocation";
+    readonly fallbackReason: WorkflowTaskRepairFallbackReason;
+    readonly continuation?: never;
+  }
+);
+
+type WorkflowTaskRepairPlan =
+  | {
+    readonly mode: "native-continuation";
+    readonly continuation: WorkflowStableSession;
+    readonly fallbackReason?: never;
+  }
+  | {
+    readonly mode: "fresh-executor-invocation";
+    readonly fallbackReason: WorkflowTaskRepairFallbackReason;
+    readonly continuation?: never;
+  };
 
 export interface WorkflowTaskExecutionContext {
   readonly abortSignal?: AbortSignal;
@@ -107,28 +138,24 @@ const hasNonContractMetadata = (metadata: Record<string, unknown> | undefined): 
   return Object.keys(metadata).some((key) => !(key in workflowContractMetadata));
 };
 
-const stringMetadata = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
-  const value = metadata?.[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-};
-
 const repairExecutionPlan = (
   metadata: Record<string, unknown> | undefined,
-): Pick<WorkflowTaskRepairContext, "mode" | "fallbackReason" | "continuation"> => {
-  const adapter = stringMetadata(metadata, "adapter");
-  if (adapter === "claude-code") {
-    const sessionId = stringMetadata(metadata, "sessionId")
-      ?? stringMetadata(metadata, "sessionID")
-      ?? stringMetadata(metadata, "session_id")
-      ?? stringMetadata(metadata, "externalSessionPointer");
-    if (sessionId !== undefined) {
-      return { mode: "native-continuation", continuation: { adapter, sessionId } };
-    }
+): WorkflowTaskRepairPlan => {
+  const session = workflowStableSessionFromMetadata(metadata);
+  if (session !== undefined) {
+    return { mode: "native-continuation", continuation: session };
+  }
+  const adapter = workflowAdapterFromMetadata(metadata);
+  const support = workflowContinuationSupportForAdapter(adapter);
+  if (support?.stableSessionIds === true) {
     return { mode: "fresh-executor-invocation", fallbackReason: "missing-session-id" };
+  }
+  if (adapter !== undefined) {
+    return { mode: "fresh-executor-invocation", fallbackReason: "adapter-does-not-support-continuation" };
   }
   return {
     mode: "fresh-executor-invocation",
-    fallbackReason: adapter === undefined ? "executor-does-not-advertise-continuation" : "adapter-does-not-support-continuation",
+    fallbackReason: "executor-does-not-advertise-continuation",
   };
 };
 
@@ -142,16 +169,42 @@ const metadataWithRepairExecution = (
   repair: WorkflowTaskRepairContext | undefined,
 ): Record<string, unknown> | undefined => {
   if (repair === undefined) return metadata;
-  const base = metadata ?? {};
-  if (objectMetadata(base.repairExecution) !== undefined) return base;
+  const normalized = normalizeWorkflowSessionMetadata(metadata);
+  const base: Record<string, unknown> = normalized ?? {};
+  const session = workflowStableSessionFromMetadata(base);
+  if (repair.mode === "native-continuation") {
+    if (
+      session !== undefined &&
+      (session.adapter !== repair.continuation.adapter || session.sessionId !== repair.continuation.sessionId)
+    ) {
+      throw new Error(
+        `workflow repair continuation returned sessionId '${session.sessionId}' for adapter '${session.adapter}', expected '${repair.continuation.sessionId}' for '${repair.continuation.adapter}'`,
+      );
+    }
+    const pinned: Record<string, unknown> = {
+      ...base,
+      adapter: repair.continuation.adapter,
+      sessionId: repair.continuation.sessionId,
+    };
+    if (objectMetadata(pinned["repairExecution"]) !== undefined) return pinned;
+    return {
+      ...pinned,
+      repairExecution: {
+        attempt: repair.attempt,
+        criterion: repair.criterion,
+        mode: repair.mode,
+        continuation: repair.continuation,
+      },
+    };
+  }
+  if (objectMetadata(base["repairExecution"]) !== undefined) return base;
   return {
     ...base,
     repairExecution: {
       attempt: repair.attempt,
       criterion: repair.criterion,
       mode: repair.mode,
-      ...(repair.fallbackReason !== undefined ? { fallbackReason: repair.fallbackReason } : {}),
-      ...(repair.continuation !== undefined ? { continuation: repair.continuation } : {}),
+      fallbackReason: repair.fallbackReason,
     },
   };
 };
@@ -267,7 +320,11 @@ const executeOrReuseTask = async (input: {
   if (input.cached !== undefined && input.cached !== null) {
     return {
       rawOutput: input.cached.output,
-      metadata: { ...workflowContractMetadata, ...(input.cached.metadata ?? {}), cachedFrom: "workflow_task_records" },
+      metadata: normalizeWorkflowSessionMetadata({
+        ...workflowContractMetadata,
+        ...(input.cached.metadata ?? {}),
+        cachedFrom: "workflow_task_records",
+      }),
     };
   }
   const executed = await input.executeTask(input.task, input.context);
@@ -279,7 +336,10 @@ const executeOrReuseTask = async (input: {
   }
   return {
     rawOutput: executed.output,
-    metadata: metadataWithRepairExecution({ ...workflowContractMetadata, ...(executed.metadata ?? {}) }, input.context?.repair),
+    metadata: metadataWithRepairExecution(
+      normalizeWorkflowSessionMetadata({ ...workflowContractMetadata, ...(executed.metadata ?? {}) }),
+      input.context?.repair,
+    ),
   };
 };
 
@@ -617,18 +677,28 @@ const executeWorkflowTask = async (input: {
       fallbackReason?: WorkflowTaskRepairContext["fallbackReason"];
       continuation?: WorkflowTaskRepairContext["continuation"];
     }> = [];
-    const beginRepair = (criterion: string, repairPrompt: string): void => {
-      assertRunStillRunning(store, runId);
-      const plan = repairExecutionPlan(metadata);
-      pendingRepair = {
-        attempt: repairs,
-        criterion,
-        repairPrompt,
-        previousMetadata: metadata,
-        mode: plan.mode,
-        ...(plan.fallbackReason !== undefined ? { fallbackReason: plan.fallbackReason } : {}),
-        ...(plan.continuation !== undefined ? { continuation: plan.continuation } : {}),
-      };
+	    const beginRepair = (criterion: string, repairPrompt: string): void => {
+	      assertRunStillRunning(store, runId);
+	      const plan = repairExecutionPlan(metadata);
+	      if (plan.mode === "native-continuation") {
+	        pendingRepair = {
+	          attempt: repairs,
+	          criterion,
+	          repairPrompt,
+	          previousMetadata: metadata,
+	          mode: "native-continuation",
+	          continuation: plan.continuation,
+	        };
+	      } else {
+	        pendingRepair = {
+	          attempt: repairs,
+	          criterion,
+	          repairPrompt,
+	          previousMetadata: metadata,
+	          mode: "fresh-executor-invocation",
+	          fallbackReason: plan.fallbackReason,
+	        };
+	      }
       repairAttempts.push({
         attempt: repairs,
         criterion,

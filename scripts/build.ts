@@ -1,17 +1,14 @@
 #!/usr/bin/env bun
 
-import { readFileSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { nativePackagesToExternalize } from "./build-native-deps.js";
+import { compile, targetLabel, version, type Target } from "./compile.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
-const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-const version = packageJson.version;
 const distDir = join(repoRoot, "dist");
 const binaryName = "prism";
 
-const targets = [
+const targets: readonly Target[] = [
   { platform: "darwin", arch: "x64" },
   { platform: "darwin", arch: "arm64" },
   { platform: "linux", arch: "x64" },
@@ -24,45 +21,31 @@ await mkdir(distDir, { recursive: true });
 
 console.log(`\nBuilding ${binaryName} v${version}...\n`);
 
-for (const { platform, arch } of targets) {
-  const target = `${platform}-${arch}`;
-  const outfile = join(distDir, `${binaryName}-${target}`);
+const failedTargets: string[] = [];
 
-  console.log(`Building ${target}...`);
+for (const target of targets) {
+  const label = targetLabel(target);
+  const outfile = join(distDir, `${binaryName}-${label}`);
 
+  console.log(`Building ${label}...`);
   try {
-    const buildResult = await Bun.build({
-      target: "bun",
-      compile: {
-        target: `bun-${platform}-${arch}`,
-        outfile,
-      },
-      entrypoints: [join(repoRoot, "src", "cli.ts")],
-      define: {
-        APP_VERSION: `'${version}'`,
-        SCHEMA_BRIDGE_SOURCE: JSON.stringify(
-          readFileSync(join(repoRoot, "src", "compile", "runtime", "schema-bridge.ts"), "utf8")
-        ),
-      },
-      external: nativePackagesToExternalize({ target, repoRoot }),
-      minify: true,
-    });
-
-    if (!buildResult.success) {
-      console.error(`  ✗ Failed to build ${target}`);
-      for (const log of buildResult.logs) {
-        console.error(log);
-      }
-      process.exit(1);
-    }
-
-    await Bun.$`chmod +x ${outfile}`;
+    await compile(target, outfile);
     console.log(`  ✓ ${outfile}`);
   } catch (error) {
-    console.error(`  ✗ Error building ${target}`);
+    failedTargets.push(label);
+    console.error(`  ✗ Error building ${label}`);
     console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-    process.exit(1);
   }
+}
+
+if (failedTargets.length > 0) {
+  console.error(`
+Build failed for: ${failedTargets.join(", ")}
+
+If OpenTUI native packages are missing for cross-target builds, run:
+  bun install --cpu='*' --os='*'
+`);
+  process.exit(1);
 }
 
 console.log(`

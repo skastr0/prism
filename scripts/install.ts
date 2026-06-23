@@ -1,18 +1,19 @@
 #!/usr/bin/env bun
 
-import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync } from "fs";
+import { existsSync, mkdirSync, rmSync } from "fs";
 import { homedir, platform, arch } from "os";
-import { isAbsolute, join, resolve } from "path";
+import { join } from "path";
+import { compile, repoRoot, targetLabel, type Target } from "./compile.js";
 
 const INSTALL_DIR = process.env.INSTALL_DIR || join(homedir(), ".local", "bin");
 const DEV_BINARY_NAME = process.env.PRISM_DEV_BIN || "prism-dev";
 const PRODUCTION_BINARY_NAME = "prism";
 
-function detectPlatform(): string {
+function detectTarget(): Target {
   const os = platform();
   const cpu = arch();
 
-  let platformStr: string;
+  let platformStr: Target["platform"];
   switch (os) {
     case "darwin":
       platformStr = "darwin";
@@ -25,7 +26,7 @@ function detectPlatform(): string {
       process.exit(1);
   }
 
-  let archStr: string;
+  let archStr: Target["arch"];
   switch (cpu) {
     case "x64":
       archStr = "x64";
@@ -38,47 +39,19 @@ function detectPlatform(): string {
       process.exit(1);
   }
 
-  return `${platformStr}-${archStr}`;
+  return { platform: platformStr, arch: archStr };
 }
 
-const repoRoot = resolve(import.meta.dir, "..");
-
-const resolveSymlinkTarget = (linkPath: string): string | undefined => {
-  try {
-    const target = readlinkSync(linkPath);
-    return isAbsolute(target) ? resolve(target) : resolve(linkPath, "..", target);
-  } catch {
-    return undefined;
-  }
-};
-
-const isLegacyDevPrismInstall = (linkPath: string, distBinaryPath: string): boolean => {
-  const target = resolveSymlinkTarget(linkPath);
-  return target === distBinaryPath;
-};
-
 async function install() {
-  const platformArch = detectPlatform();
-  console.log(`Detected platform: ${platformArch}`);
-
-  const binaryPath = resolve(repoRoot, "dist", `prism-${platformArch}`);
-
-  if (!existsSync(binaryPath)) {
-    console.error(`Binary not found: ${binaryPath}`);
-    console.error("Run 'bun run build:cli' first to create the binaries.");
-    process.exit(1);
-  }
+  const target = detectTarget();
+  const label = targetLabel(target);
+  console.log(`Building ${DEV_BINARY_NAME} for ${label}...`);
 
   mkdirSync(INSTALL_DIR, { recursive: true });
+  mkdirSync(join(repoRoot, "dist"), { recursive: true });
 
   const productionPath = join(INSTALL_DIR, PRODUCTION_BINARY_NAME);
-  if (existsSync(productionPath) && isLegacyDevPrismInstall(productionPath, binaryPath)) {
-    rmSync(productionPath);
-    console.log(
-      `Removed legacy dev symlink at ${productionPath}.`,
-    );
-    console.log("Use mise-managed prism for production and prism-dev for local builds.");
-  } else if (existsSync(productionPath)) {
+  if (existsSync(productionPath)) {
     console.log(`Leaving production binary untouched: ${productionPath}`);
   }
 
@@ -88,18 +61,15 @@ async function install() {
     rmSync(destPath);
   }
 
-  // Sign the dist binary on macOS so the dev symlink stays executable.
-  if (platform() === "darwin") {
-    await Bun.$`codesign --sign - --force ${binaryPath}`;
-    console.log("Dev binary signed (ad-hoc)");
-  }
-
-  console.log(`Linking ${destPath} -> ${binaryPath}...`);
+  // Keep the dev binary under the repo so Prism's runtime dependency resolver
+  // can find the source checkout's node_modules without an npm wrapper.
+  const binaryPath = join(repoRoot, "dist", `prism-${label}`);
+  await compile(target, binaryPath);
   await Bun.$`ln -s ${binaryPath} ${destPath}`;
 
   console.log(`\n✓ Installed ${DEV_BINARY_NAME} to ${destPath}`);
   console.log(`  Production prism stays on mise/rig: prism`);
-  console.log(`  Rebuild with 'bun run build:cli' — ${DEV_BINARY_NAME} picks up dist/ automatically.`);
+  console.log(`  Re-run 'bun run install:local' to rebuild ${DEV_BINARY_NAME}.`);
 
   const pathDirs = (process.env.PATH || "").split(":");
   if (!pathDirs.includes(INSTALL_DIR)) {

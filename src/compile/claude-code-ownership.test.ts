@@ -37,7 +37,10 @@ test("claude-code lowerer owner-qualifies foreign tool bindings without copying 
     body: "# Consumer\n",
     color: undefined,
     model: {},
-    targetOverride: {},
+    // Generated agents now omit `tools:` (Claude treats it as an exclusive allowlist that strips
+    // built-ins). An explicit author tools override re-emits the merged allowlist — the surface
+    // where the owner-qualified foreign binding name remains observable.
+    targetOverride: { "claude-code": { tools: ["Read"] } },
     skills: [],
     allowedSkills: [],
     allowedTools: [],

@@ -1504,7 +1504,7 @@ describe("workflow loader", () => {
     expect(stderr).toContain(unexpectedToolName);
   });
 
-  test("CLI fails closed when Claude calls MCP tools for a generated agent with no declared MCP allow-list", async () => {
+  test("CLI allows MCP calls for a generated agent with no declared MCP allow-list (per-agent MCP scoping degrades to inherit-all on Claude)", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
@@ -1554,9 +1554,11 @@ describe("workflow loader", () => {
       new Response(processHandle.stderr).text(),
     ]);
 
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("called MCP tools outside generated agent allow-list");
-    expect(stderr).toContain(unexpectedToolName);
+    // Per-agent MCP scoping degraded to inherit-all on Claude: its `tools:` frontmatter is an
+    // exclusive allowlist that would strip built-ins, so generated agents omit it. With no
+    // declared allow-list the worker no longer rejects MCP calls; the run completes.
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("called MCP tools outside generated agent allow-list");
   });
 
   test("CLI fails Claude runs when the JSON envelope reports an error", async () => {

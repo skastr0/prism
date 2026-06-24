@@ -119,7 +119,10 @@ const unexpectedClaudeMcpToolCalls = (
 ): readonly string[] => {
   if (!enforceGeneratedPluginAllowList) return [];
   const mcpToolCallNames = [...new Set(toolCallNames.filter((name) => name.startsWith("mcp__")))].sort();
-  if (allowedTools === undefined || allowedTools.length === 0) return mcpToolCallNames;
+  // No declared MCP allow-list means the generated agent omits a `tools:` frontmatter and so
+  // inherits its plugin's MCP tools (scoped by --mcp-config + --strict-mcp-config); there is
+  // nothing to reject. Per-agent MCP scoping is enforced only when an explicit allow-list exists.
+  if (allowedTools === undefined || allowedTools.length === 0) return [];
   const allowed = new Set(allowedTools);
   return mcpToolCallNames.filter((name) => !allowed.has(name));
 };

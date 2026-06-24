@@ -7255,7 +7255,10 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   const claudeAgent = await readFile(join(pluginRootPath, "agents", "builder.md"), "utf8");
   expect(claudeAgent).toContain('description: "Builder agent for canonical compile integration tests"');
   expect(claudeAgent).toContain('model: "sonnet"');
-  expect(claudeAgent).toContain("protocol_core_external_submit");
+  // Generated agents omit `tools:` (Claude's exclusive allowlist would strip built-ins); the
+  // canonical tool bindings lower into the wired MCP server (asserted on .mcp.json below) and the
+  // agent inherits them, rather than being pinned in an exclusive frontmatter allowlist.
+  expect(claudeAgent).not.toContain("tools:");
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
   expect(mcpConfig).toContain('"prism-generated-canonical-compile-fixture"');
@@ -8899,10 +8902,10 @@ test("compilePluginForTarget lowers Claude plugin-bundle surfaces when no canoni
   expect(claudeAgent).toContain('model: "sonnet"');
   expect(claudeAgent).toContain("temperature: 0.1");
   expect(claudeAgent).toContain("top_p: 0.7");
-  expect(claudeAgent).toContain("tools:");
-  expect(claudeAgent).toContain('- "Read"');
-  expect(claudeAgent).toContain('- "Grep"');
-  expect(claudeAgent).toContain('- "Bash"');
+  // Generated agents (no explicit author tools override) omit `tools:` so the Claude subagent
+  // inherits all built-ins + wired MCP. Claude's `tools:` is an exclusive allowlist that would
+  // otherwise strip Read/Write/Bash. See composeAgentFrontmatter in lowerers/claude-code.ts.
+  expect(claudeAgent).not.toContain("tools:");
   expect(claudeAgent).toContain("skills:");
   expect(claudeAgent).toContain('- "testing"');
   expect(claudeAgent).toContain("## Trait Instructions");

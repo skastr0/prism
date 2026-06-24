@@ -160,12 +160,24 @@ const composeAgentFrontmatter = (
       );
     }
   }
-  const tools = uniqueSorted([
+  // Claude Code treats a subagent's `tools:` frontmatter as an EXCLUSIVE allowlist
+  // (docs: code.claude.com/docs/en/sub-agents — "exclusively allow"). Emitting a generated list
+  // of only the agent's declared MCP/native tools therefore silently strips the built-in
+  // Read/Write/Edit/Bash/Glob/Grep set, leaving the agent unable to do file or shell work —
+  // unlike every other harness, where Prism's declared tools sit on top of the built-ins. Claude
+  // has no "defaults + these" syntax without hardcoding the (version-drifting) built-in list, so
+  // for generated agents we omit `tools:` entirely: the subagent inherits all built-ins plus the
+  // MCP tools wired by `--mcp-config`/`--strict-mcp-config`. Per-agent fine-grained tool scoping
+  // degrades to inherit-all on Claude. An explicit author `tools:`/`allowed-tools:` override still
+  // emits an allowlist (opt-in; the author then owns including built-ins) and keeps the agent's
+  // MCP/native bindings so they remain callable.
+  const explicitTools = uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
-    ...agent.allowedTools,
-    ...generatedTools,
   ]);
+  const tools = explicitTools.length > 0
+    ? uniqueSorted([...explicitTools, ...agent.allowedTools, ...generatedTools])
+    : [];
 
   return {
     name: agent.name,

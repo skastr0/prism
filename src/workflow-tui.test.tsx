@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { act } from "react";
 import { testRender } from "@opentui/react/test-utils";
 import { Schema } from "effect";
 import { runWorkflow } from "./workflow-runner.js";
@@ -52,6 +53,11 @@ test("workflow monitor renders persisted run task data and refreshes", async () 
     { width: 120, height: 48 },
   );
   try {
+    // Flush the mount-effect's async scheduleRefresh (SQLite read -> setState) inside act.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
     const frame = await setup.waitForFrame((candidate) =>
       candidate.includes("monitor-smoke")
       && candidate.includes("Build")
@@ -62,9 +68,19 @@ test("workflow monitor renders persisted run task data and refreshes", async () 
     );
     expect(frame).toContain("workflow file");
 
-    setup.mockInput.pressKey("r");
-    await setup.waitForFrame((candidate) => candidate.includes("monitor-smoke"));
+    act(() => {
+      setup.mockInput.pressKey("r");
+    });
+    // Flush the key-handler's async scheduleRefresh inside act.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await act(async () => {
+      await setup.waitForFrame((candidate) => candidate.includes("monitor-smoke"));
+    });
   } finally {
-    setup.renderer.destroy();
+    act(() => {
+      setup.renderer.destroy();
+    });
   }
 });

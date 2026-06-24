@@ -100,10 +100,12 @@ const assertPlatformNativeDependencies = async (): Promise<void> => {
   for (const [binaryTarget, packageDir] of Object.entries(platformPackageByTarget) as Array<[SupportedTarget, string]>) {
     const packageJson = JSON.parse(await readFile(join(repoRoot, packageDir, "package.json"), "utf8")) as {
       readonly dependencies?: Record<string, string>;
+      readonly optionalDependencies?: Record<string, string>;
     };
     for (const dependency of openTuiNativePackagesByTarget[binaryTarget]) {
-      if (packageJson.dependencies?.[dependency] !== "0.4.1") {
-        throw new Error(`${packageDir} must depend on ${dependency}@0.4.1 for OpenTUI native loading`);
+      const version = packageJson.dependencies?.[dependency] ?? packageJson.optionalDependencies?.[dependency];
+      if (version !== "0.4.1") {
+        throw new Error(`${packageDir} must include ${dependency}@0.4.1 for OpenTUI native loading`);
       }
     }
   }

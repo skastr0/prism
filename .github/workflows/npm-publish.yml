@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --cpu='*' --os='*'
       - run: bun run verify
       - run: bun run build:npm-cli
       - run: bun run pack:npm-cli:dry-run

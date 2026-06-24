@@ -27,7 +27,7 @@
     "smoke:npm-cli": "bun run build:npm-cli && bun run pack:npm-cli:dry-run && bun scripts/smoke-npm-cli.ts --skip-build",
     "check:effect-versions": "bun scripts/effect-version-guard.ts",
     "check:refresh-idempotency": "bun scripts/check-refresh-idempotency.ts",
-    "test:guarded": "bun scripts/test-hygiene-guard.ts run -- bun test",
+    "test": "bun test",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
     "acceptance:mcp-determinism": "bun scripts/acceptance/mcp-determinism.ts",

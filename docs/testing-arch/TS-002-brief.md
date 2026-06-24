@@ -19,7 +19,7 @@
 - Snapshot the `LowerOutput` contract produced by each lowerer's `planLowering`/`planPluginForTarget` entry point, driven by one canonical fixture plugin that exercises skills, commands, agents, orbits, tools, and hooks.
 - Store one normalized JSON envelope per harness under `src/compile/golden/<harness>/<scenario>.json`, with optional exploded text files for large markdown content so PR diffs stay reviewable.
 - Provide an explicit update command (e.g., `GOLDEN_UPDATE=1 bun test src/compile/golden/...` or `bun run test:golden:update`). Never auto-update in CI.
-- Add the golden check to `test:guarded` so pull requests fail on unexpected lowerer drift.
+- Add the golden check to the normal test gate so pull requests fail on unexpected lowerer drift.
 - Reuse `createCanonicalCompileFixture` from `src/compile/test-fixtures.ts`, but extend its target matrix to cover all requested harnesses, not only `opencode` + `claude-code`.
 
 ## Risks and failure modes

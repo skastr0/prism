@@ -4,7 +4,6 @@ import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
-import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
 export type OpenCodeWorkflowWorkerOptions = {
   readonly cwd: string;
@@ -70,6 +69,10 @@ export const buildOpenCodeArgs = (input: {
     input.cwd,
     "--agent",
     input.agent,
+    // `--format json` emits a newline-delimited event stream that carries the session id on
+    // every event: the only race-free source for the repair-loop continuation id.
+    "--format",
+    "json",
     ...(input.sessionId !== undefined ? ["-s", input.sessionId] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...permissionArgs,
@@ -77,12 +80,49 @@ export const buildOpenCodeArgs = (input: {
   ];
 };
 
-export const openCodeSessionId = (stdout: string, stderr: string): string | undefined =>
-  stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["sessionID", "sessionId", "session_id"])
-    ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
-      /\bsessionID["':=\s]+([A-Za-z0-9._:-]+)/u,
-      /\bsession[_\s-]*id["':=\s]+([A-Za-z0-9._:-]+)/iu,
-    ]);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+interface OpenCodeStreamResult {
+  readonly sessionId?: string;
+  readonly text: string;
+}
+
+/**
+ * `opencode run --format json` prints newline-delimited JSON events. Every event carries a
+ * top-level `sessionID`; the assistant's contract output arrives as `{type:"text", part:{text}}`
+ * events. The session id therefore comes from the run's OWN output: deterministic and
+ * race-free, with no `session list` lookup or title heuristic.
+ *
+ * Fallback: if stdout contains no recognizable events (no object with a string `type`), treat
+ * the whole stdout as the assistant text. That covers a downgraded/plain run and leaves no
+ * session id, which the runner reads as "no continuation" rather than resuming the wrong session.
+ */
+const parseOpenCodeJsonStream = (stdout: string): OpenCodeStreamResult => {
+  let sessionId: string | undefined;
+  const textParts: string[] = [];
+  let sawEvent = false;
+  for (const line of stdout.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed) as unknown;
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || typeof event.type !== "string") continue;
+    sawEvent = true;
+    if (sessionId === undefined && typeof event.sessionID === "string" && event.sessionID.length > 0) {
+      sessionId = event.sessionID;
+    }
+    if (event.type === "text" && isRecord(event.part) && typeof event.part.text === "string") {
+      textParts.push(event.part.text);
+    }
+  }
+  if (!sawEvent) return { text: stdout };
+  return sessionId !== undefined ? { sessionId, text: textParts.join("") } : { text: textParts.join("") };
+};
 
 export const runOpenCodeWorkflowTask = async (
   task: AnyWorkflowTask,
@@ -121,15 +161,17 @@ export const runOpenCodeWorkflowTask = async (
   if (exitCode !== 0) {
     throw new OpenCodeWorkflowWorkerError(`opencode exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
   }
+
+  const stream = parseOpenCodeJsonStream(stdout);
   return {
-    output: parseWorkflowWorkerJsonOutput(stdout),
+    output: parseWorkflowWorkerJsonOutput(stream.text),
     metadata: {
       adapter: "opencode-cli",
       nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
       processTimeoutMs,
-      sessionId: openCodeSessionId(stdout, stderr) ?? sessionId,
+      sessionId: sessionId ?? stream.sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

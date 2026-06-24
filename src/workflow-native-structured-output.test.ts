@@ -9,7 +9,7 @@ import type { WorkflowAgentRef } from "./workflows.js";
 
 const builder = {
   kind: "agent-ref",
-  plugin: "forge",
+  plugin: "native-output-fixture",
   name: "builder",
   description: "Build specialist",
   sourceHash: "a".repeat(64),
@@ -42,7 +42,6 @@ const unsupportedTask = {
 describe("workflow native structured output", () => {
   test("claude-code passes a JSON schema and consumes native structured output", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-native-"));
-    const oldRoot = process.env.PRISM_WORKFLOW_CLAUDE_ROOT;
     try {
       const fakeClaude = join(root, "fake-claude.mjs");
       const callsFile = join(root, "claude-calls.jsonl");
@@ -56,7 +55,6 @@ describe("workflow native structured output", () => {
         "",
       ].join("\n"));
       await chmod(fakeClaude, 0o755);
-      process.env.PRISM_WORKFLOW_CLAUDE_ROOT = root;
 
       const result = await runClaudeWorkflowTask(task, {
         cwd: root,
@@ -80,15 +78,12 @@ describe("workflow native structured output", () => {
         claudeNativeOutputSchema: true,
       });
     } finally {
-      if (oldRoot === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_ROOT;
-      else process.env.PRISM_WORKFLOW_CLAUDE_ROOT = oldRoot;
       await rm(root, { recursive: true, force: true });
     }
   });
 
   test("claude-code falls back to result JSON when native structured output is absent", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-native-"));
-    const oldRoot = process.env.PRISM_WORKFLOW_CLAUDE_ROOT;
     try {
       const fakeClaude = join(root, "fake-claude-fallback.mjs");
       const callsFile = join(root, "claude-fallback-calls.jsonl");
@@ -102,7 +97,6 @@ describe("workflow native structured output", () => {
         "",
       ].join("\n"));
       await chmod(fakeClaude, 0o755);
-      process.env.PRISM_WORKFLOW_CLAUDE_ROOT = root;
 
       const result = await runClaudeWorkflowTask(task, {
         cwd: root,
@@ -123,15 +117,12 @@ describe("workflow native structured output", () => {
         claudeNativeOutputSchema: true,
       });
     } finally {
-      if (oldRoot === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_ROOT;
-      else process.env.PRISM_WORKFLOW_CLAUDE_ROOT = oldRoot;
       await rm(root, { recursive: true, force: true });
     }
   });
 
   test("claude-code omits native schema flags when schema conversion is unsupported", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-native-"));
-    const oldRoot = process.env.PRISM_WORKFLOW_CLAUDE_ROOT;
     try {
       const fakeClaude = join(root, "fake-claude-unsupported.mjs");
       const callsFile = join(root, "claude-unsupported-calls.jsonl");
@@ -145,7 +136,6 @@ describe("workflow native structured output", () => {
         "",
       ].join("\n"));
       await chmod(fakeClaude, 0o755);
-      process.env.PRISM_WORKFLOW_CLAUDE_ROOT = root;
 
       const result = await runClaudeWorkflowTask(unsupportedTask, {
         cwd: root,
@@ -165,8 +155,6 @@ describe("workflow native structured output", () => {
         claudeNativeOutputSchema: false,
       });
     } finally {
-      if (oldRoot === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_ROOT;
-      else process.env.PRISM_WORKFLOW_CLAUDE_ROOT = oldRoot;
       await rm(root, { recursive: true, force: true });
     }
   });

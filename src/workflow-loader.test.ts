@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test as bunTest } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import type { ComposedAgent } from "./compile/compose.js";
-import { grokMcpServerNameForPlugin, planLowering } from "./compile/lowerers/grok.js";
+import { planLowering } from "./compile/lowerers/grok.js";
 import type { DesiredFile } from "./sync/desired.js";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
@@ -33,10 +33,7 @@ const workflowTestEnv = (overrides: Record<string, string> = {}): Record<string,
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
   }
-  delete env.PRISM_WORKFLOW_GROK_HOME;
-  delete env.PRISM_WORKFLOW_GROK_AUTH_PATH;
   delete env.GROK_HOME;
-  delete env.GROK_AUTH_PATH;
   return { ...env, ...overrides };
 };
 
@@ -890,7 +887,7 @@ describe("workflow loader", () => {
     expect(stderr).not.toContain("You are not authenticated");
   });
 
-  test("CLI runs generated Grok agents through an isolated native MCP config", async () => {
+  test("CLI runs generated Grok agents against the persistent home so repairs can resume", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
@@ -898,200 +895,8 @@ describe("workflow loader", () => {
     const grokHome = join(home, ".grok");
     const sourcePluginName = "forge.demo";
     const ownerPluginName = "tool.owner";
-    const expectedMcpServerName = grokMcpServerNameForPlugin(ownerPluginName);
-    const staleMcpServerName = "p_deadbeef";
-    const stalePluginRoot = join(grokHome, "plugins", "prism-generated-stale");
-    const callsFile = join(root, "grok-isolated-calls.txt");
+    const callsFile = join(root, "grok-calls.txt");
     const fakeGrok = join(root, "fake-grok.mjs");
-    const consumerAgent: ComposedAgent = {
-      name: "builder",
-      description: "Build specialist",
-      body: "# Builder\n\nUse the generated Grok plugin bundle.",
-      color: undefined,
-      model: {},
-      targetOverride: {},
-      skills: [],
-      allowedSkills: [],
-      allowedTools: [],
-      toolBindings: [
-        {
-          kind: "permission",
-          logicalName: "challenge_echo",
-          toolPluginName: ownerPluginName,
-          toolName: "challenge_echo",
-          toolSourcePath: join(root, "tools", "challenge_echo.tool.ts"),
-        },
-      ],
-    };
-    const ownerAgent: ComposedAgent = {
-      ...consumerAgent,
-      name: "owner",
-      description: "Owner agent for generated MCP config",
-      toolBindings: [
-        {
-          kind: "permission",
-          logicalName: "challenge_echo",
-          toolPluginName: ownerPluginName,
-          toolName: "challenge_echo",
-          toolSourcePath: join(root, "owner-tools", "challenge_echo.tool.ts"),
-        },
-      ],
-    };
-
-    await writeFile(file, workflowSource("default", { worker: "grok", plugin: sourcePluginName }));
-    const { files: ownerGeneratedFiles } = await planLowering({
-      agents: [ownerAgent],
-      orbits: [],
-      skills: [],
-      hooks: [],
-      registry: undefined,
-      target: {
-        scope: "global",
-        root: grokHome,
-        sourcePluginName: ownerPluginName,
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: join(root, ownerPluginName),
-        mcpRuntimePort: 49152,
-        mcpExposureProfile: `prism-generated-${ownerPluginName}:grok`,
-      },
-    });
-    const { files: generatedFiles } = await planLowering({
-      agents: [consumerAgent],
-      orbits: [],
-      skills: [],
-      hooks: [],
-      registry: undefined,
-      target: {
-        scope: "global",
-        root: grokHome,
-        sourcePluginName,
-        sourcePluginVersion: "0.1.0",
-        sourcePluginPath: join(root, sourcePluginName),
-        mcpRuntimePort: 49152,
-        mcpExposureProfile: `prism-generated-${sourcePluginName}:grok`,
-      },
-    });
-    await writeDesiredFiles([...ownerGeneratedFiles, ...generatedFiles]);
-    await writeText(join(stalePluginRoot, ".mcp.json"), `${JSON.stringify({
-      mcpServers: {
-        [staleMcpServerName]: {
-          type: "http",
-          url: "http://127.0.0.1:59999/mcp",
-        },
-      },
-    }, null, 2)}\n`);
-    const sourceAgentPath = generatedFiles.find((operation) => operation.targetPath.endsWith(join("agents", "builder.md")))?.targetPath;
-    if (!sourceAgentPath) throw new Error("expected generated Grok builder agent");
-    const ownerMcpConfigPath = ownerGeneratedFiles.find((operation) => operation.targetPath.endsWith(".mcp.json"))?.targetPath;
-    if (!ownerMcpConfigPath) throw new Error("expected generated Grok owner MCP config");
-    const expectedAgentRelativePath = relative(grokHome, sourceAgentPath);
-    const expectedOwnerPluginRelativePath = relative(grokHome, dirname(ownerMcpConfigPath));
-    const expectedStalePluginRelativePath = relative(grokHome, stalePluginRoot);
-    const expectedAuthPath = join(grokHome, "auth.json");
-    await writeText(expectedAuthPath, "{}\n");
-
-    await writeFile(fakeGrok, [
-      "#!/usr/bin/env node",
-      "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
-      "import { join } from 'node:path';",
-      "const arg = (name) => { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : undefined; };",
-      "const grokHome = process.env.GROK_HOME ?? '';",
-      "const agent = arg('--agent');",
-      "const config = readFileSync(`${grokHome}/config.toml`, 'utf8');",
-      "const agentText = readFileSync(agent, 'utf8');",
-      "appendFileSync(",
-      `  ${JSON.stringify(callsFile)},`,
-      "  JSON.stringify({",
-      "    agent,",
-      "    agentText,",
-      `    ownerPluginExists: existsSync(join(grokHome, ${JSON.stringify(expectedOwnerPluginRelativePath)})),`,
-      `    stalePluginExists: existsSync(join(grokHome, ${JSON.stringify(expectedStalePluginRelativePath)})),`,
-      "    allow: process.argv.slice(process.argv.indexOf('--allow'), process.argv.indexOf('--allow') + 2),",
-      "    home: process.env.HOME,",
-      "    grokHome,",
-      "    grokAuthPath: process.env.GROK_AUTH_PATH,",
-      "    overlayAuthExists: existsSync(join(grokHome, 'auth.json')),",
-      "    prismWorkflowGrokHome: process.env.PRISM_WORKFLOW_GROK_HOME,",
-      "    config,",
-      "  }) + '\\n',",
-      ");",
-      "console.log(JSON.stringify({ summary: 'from isolated grok' }));",
-      "",
-    ].join("\n"));
-    await chmod(fakeGrok, 0o755);
-
-    const processHandle = Bun.spawn({
-      cmd: [
-        process.execPath,
-        "run",
-        join(process.cwd(), "src", "cli.ts"),
-        "workflow",
-        "run",
-        file,
-        "--store",
-        storeFile,
-      ],
-      cwd: process.cwd(),
-      env: workflowTestEnv({
-        HOME: home,
-        PRISM_WORKFLOW_GROK_BIN: fakeGrok,
-        PRISM_WORKFLOW_GROK_HOME: grokHome,
-      }),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      processHandle.exited,
-      new Response(processHandle.stdout).text(),
-      new Response(processHandle.stderr).text(),
-    ]);
-    expect(stderr).toBe("");
-    expect(exitCode).toBe(0);
-
-    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: { grokHomeIsolated?: boolean; grokMcpServerCount?: number } }> };
-    const call = JSON.parse(await Bun.file(callsFile).text()) as {
-      agent: string;
-      agentText: string;
-      ownerPluginExists: boolean;
-      stalePluginExists: boolean;
-      allow: string[];
-      home: string;
-      grokHome: string;
-      grokAuthPath: string;
-      overlayAuthExists: boolean;
-      prismWorkflowGrokHome: string;
-      config: string;
-    };
-    expect(result.tasks[0]?.output.summary).toBe("from isolated grok");
-    expect(result.tasks[0]?.metadata?.grokHomeIsolated).toBe(true);
-    expect(result.tasks[0]?.metadata?.grokMcpServerCount).toBe(1);
-    expect(call.prismWorkflowGrokHome).toBe(grokHome);
-    expect(call.home).not.toBe(home);
-    expect(call.grokHome).not.toBe(grokHome);
-    expect(call.grokAuthPath).toBe(expectedAuthPath);
-    expect(call.overlayAuthExists).toBe(false);
-    expect(call.agent).toBe(join(call.grokHome, expectedAgentRelativePath));
-    expect(call.agentText).toContain(`${expectedMcpServerName}__`);
-    expect(call.agentText).not.toContain(`${grokMcpServerNameForPlugin(sourcePluginName)}__`);
-    expect(call.ownerPluginExists).toBe(true);
-    expect(call.stalePluginExists).toBe(false);
-    expect(call.allow).toEqual(["--allow", "MCPTool"]);
-    expect(call.config).toContain("[compat.cursor]");
-    expect(call.config).toContain("[compat.claude]");
-    expect(call.config).toContain(`[mcp_servers.${expectedMcpServerName}]`);
-    expect(call.config).not.toContain(`[mcp_servers.${staleMcpServerName}]`);
-    expect(call.config).toContain('url = "http://127.0.0.1:49152/mcp"');
-    expect(call.config).toContain('X-Prism-Mcp-Exposure = "prism-generated-tool.owner:grok"');
-  });
-
-  test("CLI fails closed when generated Grok owner MCP bundles are missing", async () => {
-    const root = await createTempRoot();
-    const file = join(root, "workflow.ts");
-    const storeFile = join(root, "workflows.sqlite");
-    const grokHome = join(root, "home", ".grok");
-    const sourcePluginName = "forge.demo";
-    const ownerPluginName = "tool.owner";
-    const expectedMcpServerName = grokMcpServerNameForPlugin(ownerPluginName);
     const consumerAgent: ComposedAgent = {
       name: "builder",
       description: "Build specialist",
@@ -1131,6 +936,31 @@ describe("workflow loader", () => {
       },
     });
     await writeDesiredFiles(generatedFiles);
+    const sourceAgentPath = generatedFiles.find((operation) => operation.targetPath.endsWith(join("agents", "builder.md")))?.targetPath;
+    if (!sourceAgentPath) throw new Error("expected generated Grok builder agent");
+
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      "const arg = (name) => { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : undefined; };",
+      "const agent = arg('--agent');",
+      "appendFileSync(",
+      `  ${JSON.stringify(callsFile)},`,
+      "  JSON.stringify({",
+      "    agent,",
+      "    agentExists: existsSync(agent),",
+      "    home: process.env.HOME,",
+      "    grokHome: process.env.GROK_HOME,",
+      "    grokAuthPath: process.env.GROK_AUTH_PATH ?? null,",
+      "    cursorMcps: process.env.GROK_CURSOR_MCPS_ENABLED,",
+      "    claudeMcps: process.env.GROK_CLAUDE_MCPS_ENABLED,",
+      "    allow: process.argv.slice(process.argv.indexOf('--allow'), process.argv.indexOf('--allow') + 2),",
+      "  }) + '\\n',",
+      ");",
+      "console.log(JSON.stringify({ summary: 'from grok' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
 
     const processHandle = Bun.spawn({
       cmd: [
@@ -1145,57 +975,47 @@ describe("workflow loader", () => {
       ],
       cwd: process.cwd(),
       env: workflowTestEnv({
-        HOME: join(root, "home"),
-        PRISM_WORKFLOW_GROK_BIN: join(root, "fake-grok-never-called"),
-        PRISM_WORKFLOW_GROK_HOME: grokHome,
+        HOME: home,
+        PRISM_WORKFLOW_GROK_BIN: fakeGrok,
       }),
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [exitCode, stderr] = await Promise.all([
+    const [exitCode, stdout, stderr] = await Promise.all([
       processHandle.exited,
+      new Response(processHandle.stdout).text(),
       new Response(processHandle.stderr).text(),
     ]);
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
 
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("generated Grok agent references MCP server aliases without installed generated bundles");
-    expect(stderr).toContain(expectedMcpServerName);
-  });
-
-  test("CLI fails closed when an explicit Grok home lacks the generated agent bundle", async () => {
-    const root = await createTempRoot();
-    const file = join(root, "workflow.ts");
-    const storeFile = join(root, "workflows.sqlite");
-
-    await writeFile(file, workflowSource("default", { worker: "grok" }));
-    const processHandle = Bun.spawn({
-      cmd: [
-        process.execPath,
-        "run",
-        join(process.cwd(), "src", "cli.ts"),
-        "workflow",
-        "run",
-        file,
-        "--store",
-        storeFile,
-      ],
-      cwd: process.cwd(),
-      env: workflowTestEnv({
-        HOME: join(root, "home"),
-        PRISM_WORKFLOW_GROK_BIN: join(root, "fake-grok-never-called"),
-        PRISM_WORKFLOW_GROK_HOME: join(root, "empty-grok-home"),
-      }),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [exitCode, stderr] = await Promise.all([
-      processHandle.exited,
-      new Response(processHandle.stderr).text(),
-    ]);
-
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("generated Grok plugin 'prism-generated-forge'");
-    expect(stderr).toContain("is missing plugin root");
+    const result = JSON.parse(stdout) as { tasks: Array<{ output: { summary: string }; metadata?: Record<string, unknown> }> };
+    const call = JSON.parse(await Bun.file(callsFile).text()) as {
+      agent: string;
+      agentExists: boolean;
+      home: string;
+      grokHome: string;
+      grokAuthPath: string | null;
+      cursorMcps: string;
+      claudeMcps: string;
+      allow: string[];
+    };
+    expect(result.tasks[0]?.output.summary).toBe("from grok");
+    // grok runs against the configured persistent home (not a throwaway overlay), so the
+    // session written here survives for a `grok -r <sessionId>` repair on the next attempt.
+    expect(call.grokHome).toBe(grokHome);
+    expect(call.home).toBe(home);
+    expect(call.agent).toBe(sourceAgentPath);
+    expect(call.agentExists).toBe(true);
+    // No GROK_AUTH_PATH indirection: auth is read/refreshed in place from the real home.
+    expect(call.grokAuthPath).toBeNull();
+    // Cursor/Claude MCP auto-import stays suppressed without fabricating a home.
+    expect(call.cursorMcps).toBe("false");
+    expect(call.claudeMcps).toBe("false");
+    expect(call.allow).toEqual(["--allow", "MCPTool"]);
+    // Overlay-only metadata is gone.
+    expect(result.tasks[0]?.metadata?.grokHomeIsolated).toBeUndefined();
+    expect(result.tasks[0]?.metadata?.grokMcpServerCount).toBeUndefined();
   });
 
   test("CLI rejects unsupported workflow workers from the adapter registry", async () => {
@@ -1522,7 +1342,7 @@ describe("workflow loader", () => {
           "sonnet",
         ],
         cwd: root,
-        env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+        env: { ...process.env, HOME: root, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -1612,7 +1432,7 @@ describe("workflow loader", () => {
         "sonnet",
       ],
       cwd: root,
-      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+      env: { ...process.env, HOME: root, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1670,7 +1490,7 @@ describe("workflow loader", () => {
         "sonnet",
       ],
       cwd: root,
-      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+      env: { ...process.env, HOME: root, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1725,7 +1545,7 @@ describe("workflow loader", () => {
         "sonnet",
       ],
       cwd: root,
-      env: { ...process.env, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude, PRISM_WORKFLOW_CLAUDE_ROOT: claudeRoot },
+      env: { ...process.env, HOME: root, PRISM_WORKFLOW_CLAUDE_BIN: fakeClaude },
       stdout: "pipe",
       stderr: "pipe",
     });

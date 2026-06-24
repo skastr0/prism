@@ -103,8 +103,9 @@ const claudeEnvelopeOutput = (envelope: ClaudeJsonEnvelope): unknown => {
   return parseWorkflowWorkerJsonOutput(envelope.result);
 };
 
-const claudeRoot = (): string =>
-  process.env.PRISM_WORKFLOW_CLAUDE_ROOT ?? join(homedir(), ".claude");
+// Hardcode Claude's config root to ~/.claude (where `prism sync` installs the generated
+// plugin/skill). Tests redirect by spawning with HOME set. (homedir() honors $HOME.)
+const claudeRoot = (): string => join(homedir(), ".claude");
 
 const CLAUDE_MCP_TOOL_PATTERN = /\bmcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+\b/gu;
 

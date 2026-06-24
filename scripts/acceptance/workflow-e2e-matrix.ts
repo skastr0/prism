@@ -1410,7 +1410,9 @@ const main = async (): Promise<void> => {
         hermesProfile,
       });
       if (entries.some((entry) => entry.harness === "grok")) {
-        env.PRISM_WORKFLOW_GROK_AUTH_PATH = join(liveHome, ".grok", "auth.json");
+        // Grok keeps auth, installed plugins, and the resumable session store under one
+        // home; run it against the live ~/.grok directly instead of seeding copies.
+        env.GROK_HOME = join(liveHome, ".grok");
       }
     }
     env.HOME = home;

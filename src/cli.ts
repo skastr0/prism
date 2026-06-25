@@ -28,15 +28,15 @@ import {
   renderPrismError,
 } from "./errors.js";
 import { EXIT_CODES, exitWith, type ExitCode } from "./exit.js";
-import { exists, expandPath } from "./fs.js";
+import { ensureDir, exists, expandPath } from "./fs.js";
 import { HARNESS_SCOPES } from "./types.js";
 import type {
   HarnessId,
   HarnessScope,
   PluginManifest,
 } from "./types.js";
-import { basename, join, resolve } from "node:path";
-import { readFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   compilePluginForTarget,
   formatOperations,
@@ -76,6 +76,14 @@ import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
+import {
+  buildWorkflowCatalog,
+  pickDefaultAgentRef,
+  renderCatalogHuman,
+  renderRefsStatus,
+  scaffoldWorkflowSource,
+  workflowRefsStatus,
+} from "./workflow-catalog.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
@@ -198,6 +206,13 @@ const parsePositiveInteger = (value: string): number =>
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Await full delivery to stdout before the action resolves, so large output
+// (e.g. `workflow catalog --json`) is not truncated at the pipe buffer on exit.
+const writeStdout = (text: string): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    process.stdout.write(text, (error) => (error ? reject(error) : resolve()));
+  });
+
 workflow
   .command("validate <file>")
   .description("Load a workflow module and print its typed task summary")
@@ -207,6 +222,72 @@ workflow
       console.log(JSON.stringify(summary, null, 2));
     } catch (error) {
       printCliError(error, "Workflow validation failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
+  .command("catalog")
+  .description("List orbits, agents, and model profiles compiled for this project (workflow authoring discovery)")
+  .option("--json", "Emit machine-readable JSON")
+  .option("--orbit <name>", "Filter to one orbit/namespace")
+  .action(async (options: { readonly json?: boolean; readonly orbit?: string }) => {
+    try {
+      const result = await buildWorkflowCatalog();
+      const output = options.json === true
+        ? JSON.stringify({ surfaceDir: result.surfaceDir, present: result.present, ...(result.catalog ?? {}) }, null, 2)
+        : renderCatalogHuman(result, options.orbit);
+      await writeStdout(`${output}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow catalog failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
+  .command("refs")
+  .description("Show the generated workflow refs surface for this project and its freshness")
+  .option("--json", "Emit machine-readable JSON")
+  .action(async (options: { readonly json?: boolean }) => {
+    try {
+      const status = workflowRefsStatus();
+      await writeStdout(`${options.json === true ? JSON.stringify(status, null, 2) : renderRefsStatus(status)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow refs failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+workflow
+  .command("scaffold <name>")
+  .description("Write a validating starter workflow that uses a real discovered agent ref")
+  .option("--print", "Print to stdout instead of writing a file")
+  .option("--out <path>", "Output path (default: workflows/<name>.workflow.ts)")
+  .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
+    try {
+      const result = await buildWorkflowCatalog();
+      if (result.catalog === null) {
+        printCliError(
+          new Error(`no compiled surface at ${result.surfaceDir} — run \`prism refresh <plugin-path>\` first`),
+          "Workflow scaffold failed",
+        );
+        exitWith(EXIT_CODES.domainFailure);
+        return;
+      }
+      const agentRef = pickDefaultAgentRef(result.catalog);
+      const source = scaffoldWorkflowSource(name, agentRef);
+      if (options.print === true) {
+        await writeStdout(source);
+        return;
+      }
+      const outPath = options.out ?? join("workflows", `${name}.workflow.ts`);
+      await ensureDir(dirname(outPath));
+      await writeFile(outPath, source, "utf8");
+      await writeStdout(
+        `Wrote ${outPath} (agent: ${agentRef}).\nNext: git add ${outPath} && prism workflow validate ${outPath}\n`,
+      );
+    } catch (error) {
+      printCliError(error, "Workflow scaffold failed");
       exitWith(EXIT_CODES.domainFailure);
     }
   });

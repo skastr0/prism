@@ -60,6 +60,7 @@ import {
   type McpPortSelection,
 } from "./mcp/lifecycle.js";
 import { resolvePrismHome } from "./prism-home.js";
+import { discoverPluginPaths } from "./plugin-inventory.js";
 import {
   formatPackageOperations,
   packagePluginForTarget,
@@ -85,6 +86,7 @@ import {
   workflowRefsStatus,
 } from "./workflow-catalog.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
+import { runPluginsTui } from "./plugins-tui/index.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
@@ -311,6 +313,25 @@ workflow
       });
     } catch (error) {
       printCliError(error, "Workflow monitor failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+// Plugins TUI — plugin manager + install inspector for a folder of plugins
+program
+  .command("plugins [dir]")
+  .description("Open the plugin manager / install-inspector TUI for a folder of plugins")
+  .option("-p, --project <path>", "Project path for project-scoped install state")
+  .option("--poll-ms <ms>", "MCP status poll interval", parsePositiveInteger, 2000)
+  .action(async (dir: string | undefined, options: { readonly project?: string; readonly pollMs: number }) => {
+    try {
+      await runPluginsTui({
+        dir: dir ?? process.cwd(),
+        ...(options.project ? { projectPath: options.project } : {}),
+        pollMs: options.pollMs,
+      });
+    } catch (error) {
+      printCliError(error, "Plugins TUI failed");
       exitWith(EXIT_CODES.domainFailure);
     }
   });
@@ -1843,24 +1864,6 @@ async function runRefreshDirectoryCommand(
       ? "\n✅ All plugin plans completed successfully!"
       : "\n✅ All plugin refreshes completed successfully!",
   );
-}
-
-async function discoverPluginPaths(expandedDir: string): Promise<string[]> {
-  const { readdir } = await import("node:fs/promises");
-  const entries = await readdir(expandedDir, { withFileTypes: true });
-  const pluginPaths: string[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-
-    const potentialPluginPath = join(expandedDir, entry.name);
-    const manifestPath = join(potentialPluginPath, "plugin.json");
-    if (await exists(manifestPath)) {
-      pluginPaths.push(potentialPluginPath);
-    }
-  }
-
-  return pluginPaths;
 }
 
 function printRefreshDirectoryDiscovery(

@@ -41,7 +41,7 @@ import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
 import type { LowerOutput } from "./lowerers/shared.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "../sync/desired.js";
 import type { SyncOp } from "../sync/plan.js";
-import type { SyncOpFailure } from "../sync/apply.js";
+import type { SyncOpFailure, SyncOpListener } from "../sync/apply.js";
 import { blockedTargetErrors, syncDesiredRoot } from "../sync/run.js";
 import {
   InvalidTargetScopeError,
@@ -165,6 +165,8 @@ export interface CompileOptions {
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
   readonly packageMode?: boolean;
   readonly emitWorkflowRefs?: boolean;
+  /** Optional per-op progress listener (fires only on real apply, not dry-run). */
+  readonly onOp?: SyncOpListener;
 }
 
 export type CompileMcpLifecycleMode = "none" | "verify" | "serve";
@@ -215,6 +217,7 @@ export const syncWorkflowRefsForProject = async (options: {
   readonly prismHome: string;
   readonly projectPath?: string;
   readonly dryRun?: boolean;
+  readonly onOp?: SyncOpListener;
 }): Promise<Awaited<ReturnType<typeof syncDesiredRoot>>> => {
   const projectKey = compileProjectKey(options.projectPath);
   const { manifest } = await readCompileManifest(options.prismHome, projectKey);
@@ -227,6 +230,7 @@ export const syncWorkflowRefsForProject = async (options: {
     }),
     scopePlugins: new Set([WORKFLOW_REFS_HARNESS]),
     dryRun: options.dryRun ?? false,
+    ...(options.onOp ? { onOp: options.onOp } : {}),
   });
 };
 
@@ -1364,6 +1368,7 @@ export const compilePluginForTarget = (
         },
         scopePlugins: new Set([registry.pluginName]),
         dryRun: options.dryRun || options.packageMode === true,
+        ...(options.onOp ? { onOp: options.onOp } : {}),
       }),
     );
     const blocked = blockedTargetErrors(report);
@@ -1399,6 +1404,7 @@ export const compilePluginForTarget = (
           syncWorkflowRefsForProject({
             prismHome: context.prismHome,
             ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+            ...(options.onOp ? { onOp: options.onOp } : {}),
           }),
         );
       }

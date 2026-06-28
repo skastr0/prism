@@ -25,6 +25,20 @@ export interface SyncOpFailure {
   readonly message: string;
 }
 
+export type SyncOpOutcome = "applied" | "skipped" | "blocked" | "failed";
+
+/**
+ * Per-op progress listener. Fires once per op as the real apply processes it
+ * (never during dry-run — dry-run returns before the apply loop). Lets a caller
+ * such as the plugins TUI stream live per-file progress. Pure side-channel: it
+ * cannot influence the apply, and a throwing listener must never abort the batch.
+ */
+export type SyncOpListener = (
+  op: SyncOp,
+  outcome: SyncOpOutcome,
+  error?: string,
+) => void;
+
 export interface SyncReport {
   readonly harness: string;
   readonly root: string;
@@ -108,6 +122,7 @@ export const applySync = async (options: {
   readonly plan: SyncPlan;
   readonly dryRun?: boolean;
   readonly runId?: string;
+  readonly onOp?: SyncOpListener;
 }): Promise<SyncReport> => {
   const { plan } = options;
   const blocked = plan.ops.filter(
@@ -128,13 +143,35 @@ export const applySync = async (options: {
   const backups: string[] = [];
   const context = { prismHome: options.prismHome, runId, root: plan.root };
 
+  // A throwing listener must never abort the batch — swallow its errors.
+  const notify = (op: SyncOp, outcome: SyncOpOutcome, error?: string): void => {
+    if (!options.onOp) return;
+    try {
+      options.onOp(op, outcome, error);
+    } catch {
+      /* listener errors are not the writer's concern */
+    }
+  };
+
+  // skip/skip-regions write nothing; blocked is a refused placement — neither
+  // is an "applied" write, so the live log must not render them as success.
+  const outcomeFor = (op: SyncOp): SyncOpOutcome =>
+    op.kind === "skip" || op.kind === "skip-regions"
+      ? "skipped"
+      : op.kind === "blocked"
+        ? "blocked"
+        : "applied";
+
   const succeededPaths = new Set<string>();
   for (const op of [...plan.ops].sort((a, b) => a.targetPath.localeCompare(b.targetPath))) {
     try {
       await executeOp(op, context, backups);
       succeededPaths.add(op.targetPath);
+      notify(op, outcomeFor(op), op.kind === "blocked" ? op.hint : undefined);
     } catch (error) {
-      failures.push({ op, message: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ op, message });
+      notify(op, "failed", message);
     }
   }
 

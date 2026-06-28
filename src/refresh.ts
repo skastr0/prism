@@ -23,7 +23,7 @@ import type {
 import { expandPath, readFile } from "./fs.js";
 import { normalizeGeneratedPluginName } from "./compile/generated-plugin.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./sync/desired.js";
-import type { SyncOpFailure, SyncReport } from "./sync/apply.js";
+import type { SyncOpFailure, SyncOpListener, SyncReport } from "./sync/apply.js";
 import { blockedTargetErrors, syncDesiredRoot } from "./sync/run.js";
 import type { BlockedTargetError } from "./errors.js";
 
@@ -39,6 +39,8 @@ export interface RefreshOptions {
   readonly dryRun: boolean;
   /** Optional harness-root resolver; when provided, global roots come from here instead of HOME. */
   readonly roots?: HarnessRootsEnv;
+  /** Optional per-op progress listener (fires only on real apply, not dry-run). */
+  readonly onOp?: SyncOpListener;
 }
 
 export interface RefreshWarning {
@@ -831,6 +833,7 @@ export const refreshPlugin = async (options: RefreshOptions): Promise<RefreshRes
         scopePlugins: new Set([planned.scopePlugin]),
         dryRun: options.dryRun,
         overwrite: options.overwrite,
+        ...(options.onOp ? { onOp: options.onOp } : {}),
       }),
     );
   }

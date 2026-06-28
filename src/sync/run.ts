@@ -2,7 +2,7 @@ import { BlockedTargetError } from "../errors.js";
 import { readSnapshot } from "../state/store.js";
 import { withSnapshotLock } from "../state/lock.js";
 import type { DesiredRoot } from "./desired.js";
-import { applySync, type SyncReport } from "./apply.js";
+import { applySync, type SyncOpListener, type SyncReport } from "./apply.js";
 import { planSync } from "./plan.js";
 
 export const syncDesiredRoot = (options: {
@@ -11,6 +11,7 @@ export const syncDesiredRoot = (options: {
   readonly scopePlugins?: ReadonlySet<string>;
   readonly dryRun: boolean;
   readonly overwrite?: boolean;
+  readonly onOp?: SyncOpListener;
 }): Promise<SyncReport> => {
   const plan = async () => {
     const snapshot = await readSnapshot({
@@ -33,7 +34,11 @@ export const syncDesiredRoot = (options: {
   }
 
   return withSnapshotLock(options.prismHome, async () =>
-    applySync({ prismHome: options.prismHome, plan: await plan() }),
+    applySync({
+      prismHome: options.prismHome,
+      plan: await plan(),
+      ...(options.onOp ? { onOp: options.onOp } : {}),
+    }),
   );
 };
 

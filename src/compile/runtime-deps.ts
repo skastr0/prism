@@ -265,6 +265,9 @@ export const mcpSdkMcpBundleImportPath = (): string =>
 export const mcpSdkWebStandardHttpBundleImportPath = (): string =>
   resolveBundleImportPath("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 
+export const mcpSdkStdioBundleImportPath = (): string =>
+  resolveBundleImportPath("@modelcontextprotocol/sdk/server/stdio.js");
+
 export const opencodePluginBundleImportPath = (): string =>
   resolveBundleImportPath("@opencode-ai/plugin");
 

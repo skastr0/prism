@@ -10,6 +10,14 @@ const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const effectImportPath = join(
+  process.cwd(),
+  "node_modules",
+  "effect",
+  "dist",
+  "esm",
+  "index.js",
+).replace(/\\/g, "/");
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-package-"));
@@ -98,6 +106,41 @@ export default defineHook({
   return pluginRoot;
 };
 
+const createCursorToolPlugin = async (root: string): Promise<string> => {
+  const pluginRoot = join(root, "cursor-tool-plugin");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      {
+        name: "cursor-tool-plugin",
+        version: "0.1.0",
+        targets: {
+          tools: ["cursor"],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  await writeText(
+    join(pluginRoot, "tools", "echo.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo a message",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+  return pluginRoot;
+};
+
 test("packagePluginForTarget writes package payload and activation manifest", async () => {
   const root = await createTempRoot();
   const pluginRoot = await createCodexPromptPlugin(root);
@@ -119,6 +162,28 @@ test("packagePluginForTarget writes package payload and activation manifest", as
   expect(activation).toContain("UserPromptSubmit");
   expect(activation).toContain("config.toml");
 
+});
+
+test("packagePluginForTarget includes MCP HTTP and stdio bundle entries", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = await createCursorToolPlugin(root);
+
+  const result = await packagePluginForTarget({
+    pluginPath: pluginRoot,
+    target: "cursor",
+  });
+
+  const mcpRoot = join(
+    result.packageRoot,
+    "payload",
+    "mcp",
+    "prism_generated_cursor_tool_plugin",
+  );
+  expect(await pathExists(join(mcpRoot, "server.mjs"))).toBe(true);
+  expect(await pathExists(join(mcpRoot, "entry-stdio.mjs"))).toBe(true);
+  const stdio = await readFile(join(mcpRoot, "entry-stdio.mjs"), "utf8");
+  expect(stdio).toContain("PRISM_MCP_ENABLED_TOOLS");
+  expect(stdio).not.toContain("Bun.serve");
 });
 
 test("packaged Codex prompt hook emits additional context JSON", async () => {

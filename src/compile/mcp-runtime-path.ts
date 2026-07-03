@@ -25,10 +25,17 @@ export const prismMcpServerDir = (prismHome: string, pluginName: string): string
 export const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
   join(prismMcpServerDir(prismHome, pluginName), "server.mjs");
 
+/** `<PRISM_HOME>/runtime/mcp/<plugin>/entry-stdio.mjs` — optional stdio entrypoint. */
+export const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
+  join(prismMcpServerDir(prismHome, pluginName), "entry-stdio.mjs");
+
 export interface PrismMcpServerBundleWrite {
   readonly path: string;
   readonly sha256: string;
   readonly written: boolean;
+  readonly stdioPath?: string;
+  readonly stdioSha256?: string;
+  readonly stdioWritten?: boolean;
 }
 
 /**
@@ -42,15 +49,37 @@ export const writePrismMcpServerBundle = async (
   prismHome: string,
   pluginName: string,
   content: string,
+  stdioContent?: string,
 ): Promise<PrismMcpServerBundleWrite> => {
   const path = prismMcpServerPath(prismHome, pluginName);
   const sha256 = sha256Hex(content);
+  let written = true;
   if (await exists(path)) {
     const current = await readFile(path);
     if (current === content) {
-      return { path, sha256, written: false };
+      written = false;
+    } else {
+      await writeFile(path, content);
     }
+  } else {
+    await writeFile(path, content);
   }
-  await writeFile(path, content);
-  return { path, sha256, written: true };
+
+  if (stdioContent === undefined) return { path, sha256, written };
+
+  const stdioPath = prismMcpServerStdioPath(prismHome, pluginName);
+  const stdioSha256 = sha256Hex(stdioContent);
+  let stdioWritten = true;
+  if (await exists(stdioPath)) {
+    const current = await readFile(stdioPath);
+    if (current === stdioContent) {
+      stdioWritten = false;
+    } else {
+      await writeFile(stdioPath, stdioContent);
+    }
+  } else {
+    await writeFile(stdioPath, stdioContent);
+  }
+
+  return { path, sha256, written, stdioPath, stdioSha256, stdioWritten };
 };

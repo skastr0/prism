@@ -5,9 +5,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { compilePluginForTarget } from "./pipeline.js";
-import { generateMcpServerBundle, mcpServerArtifactRelativePath } from "./mcp-bundle.js";
+import {
+  generateMcpServerBundle,
+  mcpServerArtifactRelativePath,
+  mcpServerStdioArtifactRelativePath,
+} from "./mcp-bundle.js";
 import { Contract } from "./sources.js";
 import { resolvePrismHome } from "../prism-home.js";
 import {
@@ -303,6 +308,7 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
   });
 
   expect(bundle.relativePath).toBe(mcpServerArtifactRelativePath("forge"));
+  expect(bundle.stdioRelativePath).toBe(mcpServerStdioArtifactRelativePath("forge"));
   expect(bundle.toolNames).toEqual([
     "forge_submit_review_review_details",
     "orbit_core_create_glyph",
@@ -316,6 +322,9 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
   expect(bundle.content).toContain("PRISM_MCP_REPO_ROOT");
   expect(bundle.content).toContain("PRISM_MCP_TOOL_TIMEOUT_MS");
   expect(bundle.content).not.toContain("unreferenced");
+  expect(bundle.stdioContent).toContain("StdioServerTransport");
+  expect(bundle.stdioContent).toContain("PRISM_MCP_ENABLED_TOOLS");
+  expect(bundle.stdioContent).not.toContain("Bun.serve");
 
 });
 
@@ -567,6 +576,60 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
     await client.close().catch(() => undefined);
     child.kill("SIGTERM");
     await waitForChildClose(child);
+  }
+});
+
+test("MCP bundle stdio entrypoint works with the official SDK client and env exposure", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  if (!builder) throw new Error("builder agent was not composed");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    sourcePluginRoot: pluginRoot,
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder.toolBindings,
+  });
+  const stdioPath = join(projectRoot, bundle.stdioRelativePath);
+  await writeText(stdioPath, bundle.stdioContent);
+
+  const transport = new StdioClientTransport({
+    command: "node",
+    args: [stdioPath],
+    env: {
+      ...process.env,
+      PRISM_MCP_ENABLED_TOOLS: "orbit_core_create_glyph",
+    },
+  });
+  const client = new Client({ name: "prism-stdio-sdk-test", version: "0.1.0" });
+
+  try {
+    await client.connect(transport);
+    const listed = await client.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["orbit_core_create_glyph"]);
+
+    const called = await client.callTool({
+      name: "orbit_core_create_glyph",
+      arguments: {
+        orbit: "forge",
+        id: "STDIO-1",
+        title: "stdio smoke",
+      },
+    });
+    expect(called.structuredContent).toEqual({ created: true, orbit: "forge", id: "STDIO-1" });
+  } finally {
+    await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
   }
 });
 

@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import {
   effectBundleImportPath,
   mcpSdkMcpBundleImportPath,
+  mcpSdkStdioBundleImportPath,
   mcpSdkWebStandardHttpBundleImportPath,
   opencodePluginBundleImportPath,
   typescriptBundleImportPath,
@@ -84,6 +85,10 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     "\n",
   );
   await writeText(
+    join(root, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "stdio.js"),
+    "\n",
+  );
+  await writeText(
     join(root, "node_modules", "@opencode-ai", "plugin", "package.json"),
     `{"name":"@opencode-ai/plugin","type":"module","main":"dist/index.js"}\n`,
   );
@@ -119,6 +124,9 @@ test("runtime dependency entrypoints resolve from the installed package root bef
         "server",
         "webStandardStreamableHttp.js",
       ).replace(/\\/g, "/"),
+    );
+    expect(mcpSdkStdioBundleImportPath()).toBe(
+      join(resolvedRoot, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "stdio.js").replace(/\\/g, "/"),
     );
     expect(opencodePluginBundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "@opencode-ai", "plugin", "dist", "index.js").replace(/\\/g, "/"),

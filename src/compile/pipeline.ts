@@ -88,6 +88,7 @@ import {
 import {
   generateMcpServerBundle,
   mcpServerArtifactRelativePath,
+  mcpServerStdioArtifactRelativePath,
   mcpToolNamesForBindings,
   type McpServerExposureProfile,
 } from "./mcp-bundle.js";
@@ -1032,6 +1033,7 @@ interface PreparedMcpServer {
   readonly serverSha256: string;
   /** Package mode only: bundle bytes emitted as a plan operation instead. */
   readonly packagedBundleContent?: string;
+  readonly packagedStdioBundleContent?: string;
 }
 
 const prepareUnionMcpServer = (options: {
@@ -1077,6 +1079,7 @@ const prepareUnionMcpServer = (options: {
         ),
         serverSha256: sha256Hex(bundle.content),
         packagedBundleContent: bundle.content,
+        packagedStdioBundleContent: bundle.stdioContent,
       };
     }
 
@@ -1092,6 +1095,7 @@ const prepareUnionMcpServer = (options: {
         options.context.prismHome,
         options.registry.pluginName,
         bundle.content,
+        bundle.stdioContent,
       ),
     );
     return { serverPath: write.path, serverSha256: write.sha256 };
@@ -1152,6 +1156,7 @@ const planTargetLowering = (options: {
     // Package mode ships the bundle inside the package payload as a desired
     // file (live compiles write the canonical PRISM_HOME bundle instead).
     if (options.mcpServer?.packagedBundleContent !== undefined) {
+      const serverName = generatedMcpServerName(options.registry.pluginName);
       return {
         files: [
           {
@@ -1159,6 +1164,16 @@ const planTargetLowering = (options: {
             content: options.mcpServer.packagedBundleContent,
             plugin: options.registry.pluginName,
           },
+          ...(options.mcpServer.packagedStdioBundleContent !== undefined
+            ? [{
+                targetPath: joinPath(
+                  options.outputRoot,
+                  ...mcpServerStdioArtifactRelativePath(serverName).split("/"),
+                ),
+                content: options.mcpServer.packagedStdioBundleContent,
+                plugin: options.registry.pluginName,
+              }]
+            : []),
           ...lowered.files,
         ],
         regions: lowered.regions,

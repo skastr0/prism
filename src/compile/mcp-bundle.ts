@@ -1257,31 +1257,6 @@ const sseDisabledForRequest = (url: URL): boolean =>
 // resets Bun's per-socket idle timer the same as any other traffic.
 const SSE_KEEPALIVE_FRAME = ":\\n\\n";
 
-// Singleton + stale-socket recovery for UDS mode:
-// On startup, probe the socket path to detect a live daemon or recover from stale sockets.
-// If another daemon is running, exit 0 immediately.
-// If the socket is stale or absent, proceed with binding.
-const ensureSingletonBinding = async (): Promise<void> => {
-  if (!udsPath) {
-    // TCP mode: no singleton enforcement needed
-    return;
-  }
-
-  try {
-    const bindability = await ensureSocketBindability(udsPath);
-    if (bindability === "live") {
-      // Another daemon owns this socket; exit cleanly
-      console.error(\`[prism-mcp] Another daemon is already serving on \${udsPath}; exiting\`);
-      process.exit(0);
-    }
-    // "stale-recovered" or "available": safe to proceed with binding
-    console.error(\`[prism-mcp] Socket bindability: \${bindability}\`);
-  } catch (error) {
-    console.error(\`[prism-mcp] Singleton check failed: \${error instanceof Error ? error.message : String(error)}\`);
-    // Non-fatal: proceed with binding and let it fail naturally if needed
-  }
-};
-
 // Standalone GET SSE streams (server push / notifications) are tracked here
 // so shutdown can end them explicitly instead of leaving them to abrupt
 // socket teardown.
@@ -1380,9 +1355,6 @@ const withSseKeepalive = (response: Response): Response => {
 // See raceAgainstShutdown for why this is required rather than relying on
 // WebStandardStreamableHTTPServerTransport#close().
 const inFlightShutdownWaiters = new Set<() => void>();
-
-// Run singleton check before spawning the server
-await ensureSingletonBinding();
 
 const bestEffortJsonRpcId = (parsedBody: unknown): unknown => {
   if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody) && "id" in parsedBody) {
@@ -1533,7 +1505,7 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
   return withSseKeepalive(attachResponseHeaders(await session.transport.handleRequest(request), request));
 };
 
-const server = Bun.serve({
+const serveOptions = {
   ...(udsPath ? { unix: udsPath } : { hostname: httpHost, port: httpPort }),
   // MCP connections sit idle between tool calls. Bun's default idleTimeout is
   // 10s, which silently closes the socket; clients that reuse the closed
@@ -1574,7 +1546,30 @@ const server = Bun.serve({
       decrementActiveConnections();
     }
   },
-});
+};
+
+// Singleton + stale-socket recovery for UDS mode: probe, recover from a
+// stale socket, and call Bun.serve() all inside the same held file lock, so
+// no other process can bind between "the path looked free" and "we bound
+// it" (the prior two-step check-then-bind here left exactly that window
+// open, and a Bun.serve() called with zero try/catch crashed uncaught on
+// EADDRINUSE when a racing process won it). TCP mode needs none of this:
+// there is no shared path for two processes to race on.
+const bindMcpServer = async () => {
+  if (!udsPath) {
+    return Bun.serve(serveOptions);
+  }
+
+  const outcome = await bindUnixSocketSingleton(udsPath, () => Bun.serve(serveOptions));
+  if (outcome.kind === "already-served") {
+    // Another daemon owns this socket; exit cleanly rather than crash.
+    console.error(\`[prism-mcp] Another daemon is already serving on \${udsPath}; exiting\`);
+    process.exit(0);
+  }
+  return outcome.server;
+};
+
+const server = await bindMcpServer();
 
 // Register daemon in the UDS registry if plugin name and bundle hash are available
 const registerInRegistry = async (): Promise<void> => {
@@ -1639,18 +1634,25 @@ const stopServer = async (): Promise<void> => {
   await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
 
-  // Unregister daemon from the UDS registry if in use
+  // Unregister daemon from the UDS registry and clean up the UDS socket
+  // file, but only if this process is still the one the registry considers
+  // live for this plugin. A predecessor's drain can outlive a fast-
+  // respawning successor that has already bound the same socket path and
+  // re-registered under the same plugin key; re-reading the registry here
+  // and gating on our own pid stops a slow predecessor from deleting a
+  // live successor's socket and registration out from under it. A missing
+  // record is treated the same as "not ours" -- nothing is touched.
   if (registryPluginName) {
     try {
-      await unregisterDaemon(registryPluginName);
+      await cleanupDaemonIfOwner(registryPluginName, process.pid, udsPath);
     } catch (error) {
-      // Registry cleanup failure is not fatal; log and continue
-      console.error(\`Failed to unregister daemon from UDS registry: \${error instanceof Error ? error.message : String(error)}\`);
+      // Cleanup failure is not fatal; log and continue
+      console.error(\`Failed to clean up daemon registration: \${error instanceof Error ? error.message : String(error)}\`);
     }
-  }
-
-  // Clean up UDS socket file if in use.
-  if (udsPath) {
+  } else if (udsPath) {
+    // No registry plugin identity configured for this run: there is no
+    // record to check ownership against, so fall back to the prior
+    // unconditional cleanup of our own socket file.
     try {
       await import("node:fs/promises").then((fs) => fs.unlink(udsPath));
     } catch {
@@ -1981,8 +1983,8 @@ const renderMcpServerEntry = (options: {
     `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
     `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
-    `import { registerDaemon, unregisterDaemon } from ${JSON.stringify(udsRegistryBundleImportPath())};`,
-    `import { ensureSocketBindability } from ${JSON.stringify(udsSingletonBundleImportPath())};`,
+    `import { registerDaemon, cleanupDaemonIfOwner } from ${JSON.stringify(udsRegistryBundleImportPath())};`,
+    `import { bindUnixSocketSingleton } from ${JSON.stringify(udsSingletonBundleImportPath())};`,
     imports,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),

@@ -63,6 +63,25 @@ const pathExists = async (path: string): Promise<boolean> => {
   }
 };
 
+/**
+ * Polls the health endpoint over a Unix domain socket until it responds,
+ * used instead of `waitForUdsSocket` when the socket *file* may already
+ * exist before the server we're waiting on has bound it (e.g. a
+ * pre-created stale socket file being recovered and rebound).
+ */
+const waitForUdsHealthy = async (socketPath: string): Promise<void> => {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      const response = await fetch("http://localhost/healthz", { unix: socketPath } as RequestInit);
+      if (response.status === 200) return;
+    } catch {
+      // Not bound yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`UDS server did not become healthy at ${socketPath}`);
+};
+
 const createSdlcMcpFixture = async (): Promise<{
   pluginRoot: string;
   projectRoot: string;
@@ -1703,6 +1722,127 @@ test("MCP bundle Streamable HTTP TCP behavior unchanged when UDS_PATH not set", 
   }
 });
 
+// Regression: bind() used to run as a bare `Bun.serve(...)` call outside any
+// held lock, with no try/catch. A second process landing on an
+// already-bound socket path crashed with an uncaught EADDRINUSE instead of
+// exiting cleanly. bindUnixSocketSingleton now wraps the bind attempt and
+// reports "already-served" so the generated server logs a marker and exits
+// 0 instead of crashing.
+test("MCP bundle UDS: second process on an already-bound socket exits 0 with a clean marker instead of crashing", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-uds-race-test-"));
+  const socketPath = join(tempRoot, "mcp.sock");
+
+  const spawnOnSocket = () =>
+    spawn("bun", [serverPath], {
+      cwd: projectRoot,
+      env: { ...process.env, PRISM_MCP_UDS_PATH: socketPath },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+  const first = spawnOnSocket();
+
+  try {
+    await waitForUdsSocket(socketPath);
+
+    const second = spawnOnSocket();
+    let secondStderr = "";
+    second.stderr.on("data", (chunk) => {
+      secondStderr += chunk.toString();
+    });
+
+    const secondExit = await waitForChildClose(second, 10_000);
+
+    // Clean exit, not an uncaught-exception crash.
+    expect(secondExit.code).toBe(0);
+    expect(secondStderr).toContain("Another daemon is already serving on");
+
+    // The first process's socket must be completely untouched and still live.
+    expect(await pathExists(socketPath)).toBe(true);
+    const health = await fetch("http://localhost/healthz", { unix: socketPath } as RequestInit);
+    expect(health.status).toBe(200);
+  } finally {
+    first.kill("SIGTERM");
+    await waitForChildClose(first).catch(() => undefined);
+    await rm(tempRoot, { recursive: true }).catch(() => undefined);
+  }
+});
+
+// Regression: a socket file left behind by a crashed predecessor (stale --
+// no live listener) used to sit outside the singleton lock's bind step.
+// bindUnixSocketSingleton now unlinks a stale socket and binds inside the
+// same held lock in one step.
+test("MCP bundle UDS: a stale socket file is recovered and bound successfully", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-uds-stale-test-"));
+  const socketPath = join(tempRoot, "mcp.sock");
+
+  // Simulate a crashed predecessor: a socket file with nothing listening.
+  await writeFile(socketPath, "");
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: { ...process.env, PRISM_MCP_UDS_PATH: socketPath },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  try {
+    // The socket file already exists (pre-created as "stale"), so poll the
+    // health endpoint directly rather than merely the file's existence.
+    await waitForUdsHealthy(socketPath);
+
+    const health = await fetch("http://localhost/healthz", { unix: socketPath } as RequestInit);
+    expect(health.status).toBe(200);
+  } finally {
+    child.kill("SIGTERM");
+    await waitForChildClose(child).catch(() => undefined);
+    await rm(tempRoot, { recursive: true }).catch(() => undefined);
+  }
+});
 
 test("MCP bundle idle-reap: generated template includes idle-reap code", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();

@@ -217,6 +217,8 @@ export const runAntigravityPtyProcess = async (
   let timedOut = false;
   let aborted = false;
   let killed = false;
+  let stdout = "";
+  let stderr = "";
 
   const killGroup = async (): Promise<void> => {
     if (killed || child.pid === undefined) return;
@@ -228,9 +230,17 @@ export const runAntigravityPtyProcess = async (
     }
   };
 
+  const recordKillGroupFailure = (error: unknown): void => {
+    stderr += `\nfailed to terminate Antigravity PTY process group: ${error instanceof Error ? error.message : String(error)}`;
+  };
+
+  const requestKillGroup = (): void => {
+    killGroup().catch(recordKillGroupFailure);
+  };
+
   const onAbort = (): void => {
     aborted = true;
-    void killGroup();
+    requestKillGroup();
   };
 
   if (options.abortSignal?.aborted === true) {
@@ -243,11 +253,8 @@ export const runAntigravityPtyProcess = async (
     ? undefined
     : setTimeout(() => {
       timedOut = true;
-      void killGroup();
+      requestKillGroup();
     }, options.processTimeoutMs);
-
-  let stdout = "";
-  let stderr = "";
 
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");

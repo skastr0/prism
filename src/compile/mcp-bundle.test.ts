@@ -634,6 +634,173 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
   }
 });
 
+test("MCP bundle Streamable HTTP sends periodic SSE keepalive frames on the standalone GET stream", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const port = await getFreePort();
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_HTTP_PORT: String(port),
+      // Well under the real 20s default and light-years under Bun's 255s
+      // idleTimeout, so the test observes several frames quickly.
+      PRISM_MCP_SSE_KEEPALIVE_MS: "80",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForHttpServer(port);
+    const init = await httpRpc({
+      port,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "sse-client", version: "0.1.0" } },
+    });
+    const sessionId = init.response.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+
+    const streamResponse = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "GET",
+      headers: {
+        accept: "text/event-stream",
+        "mcp-session-id": sessionId!,
+        "mcp-protocol-version": "2025-11-25",
+      },
+    });
+    expect(streamResponse.status).toBe(200);
+    expect(streamResponse.headers.get("content-type")).toContain("text/event-stream");
+
+    const reader = streamResponse.body!.getReader();
+    const decoder = new TextDecoder();
+    let collected = "";
+    const frameCount = (): number => (collected.match(/:\n\n/g) ?? []).length;
+
+    const deadline = Date.now() + 2_000;
+    while (frameCount() < 3 && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      collected += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel().catch(() => undefined);
+
+    // At an 80ms interval, holding the stream open for up to 2s should
+    // easily observe several keepalive comment frames -- proof the
+    // standalone GET stream is not sitting fully idle between them.
+    expect(frameCount()).toBeGreaterThanOrEqual(3);
+  } finally {
+    child.kill();
+    await waitForChildClose(child).catch(() => undefined);
+  }
+}, 15_000);
+
+test("MCP bundle Streamable HTTP sends a terminal JSON-RPC error for an in-flight tool call when shutdown outlives the drain window", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const port = await getFreePort();
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_HTTP_PORT: String(port),
+      // Short drain + flush window so the test doesn't wait out the real
+      // 10s production default while still exercising the same code path.
+      PRISM_MCP_SHUTDOWN_DRAIN_MS: "150",
+      PRISM_MCP_SHUTDOWN_FLUSH_MS: "100",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForHttpServer(port);
+    const init = await httpRpc({
+      port,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "shutdown-client", version: "0.1.0" } },
+    });
+    const sessionId = init.response.headers.get("mcp-session-id");
+    expect(sessionId).toBeTruthy();
+
+    // A tool call slower than the shutdown drain + flush window: without the
+    // fix this would hang until the client's own timeout, since the SDK
+    // transport's session close silently drops the pending JSON-mode
+    // response promise.
+    const slowCall = httpRpc({
+      port,
+      sessionId: sessionId!,
+      method: "tools/call",
+      params: {
+        name: "orbit_core_create_glyph",
+        arguments: { orbit: "forge", id: "AP-shutdown", title: "HTTP MCP", delayMs: 5_000 },
+      },
+    });
+
+    // Let the request actually reach the tool handler (become in-flight)
+    // before triggering shutdown.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    child.kill("SIGTERM");
+
+    const start = Date.now();
+    const result = await slowCall;
+    const elapsedMs = Date.now() - start;
+
+    // Must fail fast -- well under the tool's 5s delay -- with an explicit
+    // terminal JSON-RPC error rather than hanging until socket teardown.
+    expect(elapsedMs).toBeLessThan(3_000);
+    expect(result.response.status).toBe(503);
+    expect(result.body).toMatchObject({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32000, message: "Prism MCP server is shutting down" },
+    });
+
+    await waitForChildClose(child).catch(() => undefined);
+  } finally {
+    child.kill();
+    await waitForChildClose(child).catch(() => undefined);
+  }
+}, 15_000);
+
 test("MCP bundle Streamable HTTP works with the official SDK client", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const port = await getFreePort();

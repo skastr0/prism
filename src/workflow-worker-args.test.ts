@@ -47,7 +47,7 @@ describe("workflow worker argument builders", () => {
 
     expect(args).toContain("--single");
     expect(args.slice(args.indexOf("--allow"), args.indexOf("--allow") + 2)).toEqual(["--allow", "MCPTool"]);
-    expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "plain"]);
+    expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "json"]);
     expect(args).toContain("--no-wait-for-background");
     expect(args).not.toContain("--prompt-file");
     expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);

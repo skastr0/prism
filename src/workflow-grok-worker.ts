@@ -8,7 +8,7 @@ import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
-import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
+import { stableSessionIdFromRecordKeys } from "./workflow-session.js";
 
 export type GrokWorkflowWorkerOptions = {
   readonly cwd: string;
@@ -104,6 +104,9 @@ const assertGrokPermission = (mode: WorkflowPermissionMode): void => {
   return assertNeverWorkflowPermissionMode("grok", mode);
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export const buildGrokArgs = (input: {
   readonly cwd: string;
   readonly agent: string;
@@ -130,7 +133,7 @@ export const buildGrokArgs = (input: {
     "--allow",
     "MCPTool",
     "--output-format",
-    "plain",
+    "json",
     "--no-wait-for-background",
     ...(input.effort ? ["--effort", input.effort] : []),
     ...permissionArgs,
@@ -139,12 +142,68 @@ export const buildGrokArgs = (input: {
   ];
 };
 
-export const grokSessionId = (stdout: string, stderr: string): string | undefined =>
-  stableSessionIdFromJsonLines(`${stdout}\n${stderr}`, ["sessionId", "sessionID", "session_id"])
-    ?? stableSessionIdFromRegex(`${stdout}\n${stderr}`, [
-      /\bsessionId["':=\s]+([A-Za-z0-9._:-]+)/u,
-      /\bsession[_\s-]*id["':=\s]+([A-Za-z0-9._:-]+)/iu,
-    ]);
+interface GrokJsonRunOutput {
+  readonly sessionId?: string;
+  readonly text: string;
+}
+
+const parseJsonCandidate = (candidate: string): unknown | undefined => {
+  try {
+    return JSON.parse(candidate) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const parseGrokJsonEnvelope = (stdout: string): unknown => {
+  const trimmed = stdout.trim();
+  const parsed = parseJsonCandidate(trimmed);
+  if (parsed !== undefined) return parsed;
+
+  for (const line of trimmed.split(/\r?\n/u).reverse()) {
+    const candidate = line.trim();
+    if (candidate.length === 0 || (!candidate.startsWith("{") && !candidate.startsWith("["))) continue;
+    const lineParsed = parseJsonCandidate(candidate);
+    if (lineParsed !== undefined) return lineParsed;
+  }
+
+  throw new WorkflowWorkerError("grok JSON output did not contain a parseable JSON envelope");
+};
+
+const stringField = (
+  record: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+};
+
+const grokAssistantText = (envelope: unknown): string => {
+  if (typeof envelope === "string") return envelope;
+  if (isRecord(envelope)) {
+    const direct = stringField(envelope, ["text", "result", "output", "content", "message", "response"]);
+    if (direct !== undefined) return direct;
+
+    for (const key of ["result", "output", "content", "message", "response"] as const) {
+      const nested: unknown = envelope[key];
+      if (nested !== undefined && nested !== null && nested !== envelope) {
+        return grokAssistantText(nested);
+      }
+    }
+  }
+  return JSON.stringify(envelope);
+};
+
+export const parseGrokJsonRunOutput = (stdout: string): GrokJsonRunOutput => {
+  const envelope = parseGrokJsonEnvelope(stdout);
+  const sessionId = stableSessionIdFromRecordKeys(envelope, ["sessionId", "sessionID", "session_id"]);
+  return sessionId !== undefined
+    ? { sessionId, text: grokAssistantText(envelope) }
+    : { text: grokAssistantText(envelope) };
+};
 
 export const runGrokWorkflowTask = async (
   task: AnyWorkflowTask,
@@ -193,15 +252,16 @@ export const runGrokWorkflowTask = async (
   if (exitCode !== 0) {
     throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
   }
+  const runOutput = parseGrokJsonRunOutput(stdout);
   return {
-    output: parseWorkflowWorkerJsonOutput(stdout),
+    output: parseWorkflowWorkerJsonOutput(runOutput.text),
     metadata: {
       adapter: "grok-cli",
       nativeAgent: task.agent.name,
       model: options.model ?? "grok-build",
       durationMs,
       processTimeoutMs,
-      sessionId: grokSessionId(stdout, stderr) ?? sessionId,
+      sessionId: sessionId ?? runOutput.sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },
   };

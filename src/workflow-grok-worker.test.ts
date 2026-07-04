@@ -151,4 +151,66 @@ describe("grok worker structured session id", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test("repairs malformed assistant JSON in the same Grok session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-grok-parse-repair-"));
+    const fakeGrok = join(root, "fake-grok.mjs");
+    const callsFile = join(root, "grok-calls.jsonl");
+    const oldBin = process.env.PRISM_WORKFLOW_GROK_BIN;
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const resumeIndex = args.indexOf('-r');",
+      "const outputFormatIndex = args.indexOf('--output-format');",
+      "const resume = resumeIndex >= 0 ? args[resumeIndex + 1] : undefined;",
+      "const prompt = args.at(-1);",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume, outputFormat: args[outputFormatIndex + 1], prompt }) + '\\n');`,
+      "const repaired = resume !== undefined;",
+      "const text = repaired ? JSON.stringify({ summary: 'ok after parse repair' }) : 'not json';",
+      "console.log(JSON.stringify({ text, sessionId: repaired ? 'grok-session-ignored' : 'grok-session-1', stopReason: 'complete' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    process.env.PRISM_WORKFLOW_GROK_BIN = fakeGrok;
+
+    try {
+      const repairTask = defineTask({
+        id: "build",
+        agent,
+        prompt: "Build the slice.",
+        output: Schema.Struct({ summary: Schema.String }),
+        worker: { worker: "grok" },
+        finish: { maxRepairs: 1 },
+      });
+      const workflow = defineWorkflow({ name: "runner-grok-native-parse-repair", tasks: [repairTask] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "grok", cwd: root }),
+      });
+
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as {
+        resume?: string;
+        outputFormat: string;
+        prompt: string;
+      });
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toMatchObject({ outputFormat: "json" });
+      expect(calls[0]?.resume).toBeUndefined();
+      expect(calls[1]).toMatchObject({ resume: "grok-session-1", outputFormat: "json" });
+      expect(calls[1]?.prompt).toContain("workflow worker output did not contain JSON");
+      expect(result.tasks[0]?.output).toEqual({ summary: "ok after parse repair" });
+      expect(result.tasks[0]?.metadata).toMatchObject({
+        adapter: "grok-cli",
+        sessionId: "grok-session-1",
+        repairExecution: {
+          mode: "native-continuation",
+          continuation: { adapter: "grok-cli", sessionId: "grok-session-1" },
+        },
+      });
+    } finally {
+      if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_GROK_BIN;
+      else process.env.PRISM_WORKFLOW_GROK_BIN = oldBin;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

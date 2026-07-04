@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
-import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
+import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
@@ -253,17 +253,27 @@ export const runGrokWorkflowTask = async (
     throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
   }
   const runOutput = parseGrokJsonRunOutput(stdout);
+  const metadata = {
+    adapter: "grok-cli",
+    nativeAgent: task.agent.name,
+    model: options.model ?? "grok-build",
+    durationMs,
+    processTimeoutMs,
+    sessionId: sessionId ?? runOutput.sessionId,
+    ...summarizeWorkflowWorkerStderr(stderr),
+  };
+  let output: unknown;
+  try {
+    output = parseWorkflowWorkerJsonOutput(runOutput.text);
+  } catch (error) {
+    if (error instanceof WorkflowOutputParseError) {
+      throw new WorkflowOutputParseError(error.message, error.rawText, metadata);
+    }
+    throw error;
+  }
   return {
-    output: parseWorkflowWorkerJsonOutput(runOutput.text),
-    metadata: {
-      adapter: "grok-cli",
-      nativeAgent: task.agent.name,
-      model: options.model ?? "grok-build",
-      durationMs,
-      processTimeoutMs,
-      sessionId: sessionId ?? runOutput.sessionId,
-      ...summarizeWorkflowWorkerStderr(stderr),
-    },
+    output,
+    metadata,
   };
 };
 

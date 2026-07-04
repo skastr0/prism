@@ -6,10 +6,15 @@ export const WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE = "workflow-worker-json-ins
 export class WorkflowOutputParseError extends Error {
   override readonly name = "WorkflowOutputParseError";
   readonly rawText?: string;
-  constructor(message: string, rawText?: string) {
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, rawText?: string, metadata?: Record<string, unknown>) {
     super(message);
     if (rawText !== undefined) {
       this.rawText = rawText;
+    }
+    if (metadata !== undefined) {
+      this.metadata = metadata;
     }
   }
 }

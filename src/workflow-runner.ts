@@ -762,6 +762,9 @@ const executeWorkflowTask = async (input: {
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
       } catch (error) {
         if (error instanceof WorkflowOutputParseError && repairs < decodeRepairs) {
+          if (error.metadata !== undefined) {
+            metadata = normalizeWorkflowSessionMetadata({ ...workflowContractMetadata, ...error.metadata });
+          }
           recordEvent(store, runId, task.id, "task.decode.failed", {
             attempt: repairs,
             error: error.message,

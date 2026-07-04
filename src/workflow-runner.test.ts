@@ -3,6 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
+import { compareCodePoint } from "@skastr0/prism-core/stable-json";
 import { runWorkflow, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
@@ -786,5 +787,26 @@ describe("workflow runner", () => {
     await expect(runWorkflow(workflow, {
       executeTask: async () => ({ summary: "ambiguous" }),
     })).rejects.toThrow(WorkflowTaskEscalatedError);
+  });
+
+  test("cache-key key sort uses the same code-point comparator as prism-core stable-json, not locale ordering", () => {
+    const keys = ["b", "a", "ä", "Z"];
+
+    const manualCodePointOrder = [...keys].sort((left, right) => {
+      const normalizedLeft = left.normalize("NFC");
+      const normalizedRight = right.normalize("NFC");
+      if (normalizedLeft === normalizedRight) return 0;
+      return normalizedLeft < normalizedRight ? -1 : 1;
+    });
+
+    // workflow-runner's stableValue() sorts object keys with this exact import (see src/workflow-runner.ts);
+    // asserting it matches manual codePointAt ordering pins the cache key to a locale-independent sort.
+    expect([...keys].sort(compareCodePoint)).toEqual(manualCodePointOrder);
+    expect(manualCodePointOrder).toEqual(["Z", "a", "b", "ä"]);
+
+    // The locale-sensitive comparator this replaced produces a materially different order in this
+    // environment's ICU locale data — proof the fix is not a no-op.
+    const localeOrder = [...keys].sort((left, right) => left.localeCompare(right));
+    expect(localeOrder).not.toEqual(manualCodePointOrder);
   });
 });

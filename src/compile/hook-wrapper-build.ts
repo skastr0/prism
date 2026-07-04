@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolveBunExecutable } from "../bun-runtime.js";
 
 export const buildHookWrapperWithBun = (
   entry: string,
@@ -7,7 +8,7 @@ export const buildHookWrapperWithBun = (
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const child = spawn(
-      "bun",
+      resolveBunExecutable(),
       [
         "build",
         entry,

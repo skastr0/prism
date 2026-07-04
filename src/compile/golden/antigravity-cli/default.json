@@ -21,7 +21,7 @@
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/hooks/session-start.mjs"
     },
     {
-      "content": "{\n  \"mcpServers\": {\n    \"p_f2d58281\": {\n      \"serverUrl\": \"<MCP_URL>\",\n      \"headers\": {\n        \"X-Prism-Mcp-Exposure\": \"prism-generated-canonical-compile-fixture:antigravity-cli\"\n      }\n    }\n  }\n}\n",
+      "content": "{\n  \"mcpServers\": {\n    \"p_f2d58281\": {\n      \"serverUrl\": \"<MCP_URL>?prism_sse=off\",\n      \"headers\": {\n        \"X-Prism-Mcp-Exposure\": \"prism-generated-canonical-compile-fixture:antigravity-cli\"\n      }\n    }\n  }\n}\n",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/mcp_config.json"
     },
     {

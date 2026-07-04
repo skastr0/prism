@@ -340,7 +340,7 @@ const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown
   const mcpServers: Record<string, unknown> = {};
   if (ownedBindings.length > 0) {
     mcpServers[serverName] = {
-      serverUrl: renderMcpHttpUrl(runtime),
+      serverUrl: renderMcpHttpUrl(runtime, { disableSse: true }),
       headers: {
         [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
       },

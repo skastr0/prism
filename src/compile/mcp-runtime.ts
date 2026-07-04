@@ -192,13 +192,21 @@ export const resolveMcpRuntime = (
   };
 };
 
-export const renderMcpHttpUrl = (runtime: ResolvedMcpRuntime): string => {
+export interface McpHttpUrlOptions {
+  readonly disableSse?: boolean;
+}
+
+export const renderMcpHttpUrl = (
+  runtime: ResolvedMcpRuntime,
+  options: McpHttpUrlOptions = {},
+): string => {
   if (runtime.port === undefined) {
     throw new Error(
       `Streamable HTTP MCP transport for target '${runtime.targetId}' requires a resolved port before URL rendering.`,
     );
   }
-  return `http://${runtime.host}:${runtime.port}/mcp`;
+  const query = options.disableSse === true ? "?prism_sse=off" : "";
+  return `http://${runtime.host}:${runtime.port}/mcp${query}`;
 };
 
 const ownerRuntimeMetadataPath = (prismHome: string, pluginName: string): string =>

@@ -991,6 +991,7 @@ const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
 const httpHealthPath = process.env.PRISM_MCP_HTTP_HEALTH_PATH ?? "/healthz";
 const serverStartedAt = Date.now();
 const serverSha256 = process.env.PRISM_MCP_SERVER_SHA256;
+const sseDisabledSearchParam = "prism_sse";
 
 interface HttpSessionState {
   server: McpServer;
@@ -1173,6 +1174,9 @@ const readJsonBody = async (request: Request): Promise<unknown> => {
   return JSON.parse(text);
 };
 
+const sseDisabledForRequest = (url: URL): boolean =>
+  url.searchParams.get(sseDisabledSearchParam) === "off";
+
 // Prism only routes a new HTTP session here. The SDK transport still owns
 // initialize semantics and the protocol method dispatch after routing.
 const isSdkSessionBootstrapRequest = (value: unknown): boolean =>
@@ -1292,6 +1296,9 @@ const server = Bun.serve({
     if (authorization.denied) return authorization.denied;
 
     if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
+    if (request.method === "GET" && sseDisabledForRequest(url)) {
+      return jsonResponse({ error: "SSE stream disabled for this MCP client" }, { status: 405 }, request);
+    }
     if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
     return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
   },

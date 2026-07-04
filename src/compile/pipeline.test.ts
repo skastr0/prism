@@ -3056,7 +3056,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   const antigravityWireServerName = generatedMcpWireServerName("antigravity_plugin.demo");
   const antigravityMcpToolName = `mcp_${antigravityWireServerName}_antigravity_plugin_demo_submit_work`;
   const antigravityMcp = mcpConfig.mcpServers?.[antigravityWireServerName];
-  expect(antigravityMcp?.serverUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+  expect(antigravityMcp?.serverUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\?prism_sse=off$/);
   expect(antigravityMcp?.headers).toEqual({
     "X-Prism-Mcp-Exposure": "prism-generated-antigravity_plugin.demo:antigravity-cli",
   });
@@ -3289,7 +3289,7 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
     mcpServers?: Record<string, { serverUrl?: string; headers?: Record<string, string> }>;
   };
   expect(antigravityMcpConfig.mcpServers?.[wireServerName]?.serverUrl)
-    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\?prism_sse=off$/);
   expect(antigravityMcpConfig.mcpServers?.[wireServerName]?.headers)
     .toEqual({ "X-Prism-Mcp-Exposure": "prism-generated-tool-only-demo:antigravity-cli" });
   expect(await pathExists(join(antigravityRoot, "mcp"))).toBe(false);

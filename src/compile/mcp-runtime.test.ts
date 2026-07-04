@@ -94,6 +94,7 @@ test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
 
   expect(runtime.targetId).toBe("factory-droid");
   expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:38466/mcp");
+  expect(renderMcpHttpUrl(runtime, { disableSse: true })).toBe("http://127.0.0.1:38466/mcp?prism_sse=off");
   expect(getMcpHttpTargetSupport("factory-droid").config).toBe("supported");
 });
 

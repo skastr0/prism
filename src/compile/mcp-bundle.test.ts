@@ -452,6 +452,62 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     expect(secondSession).toBeTruthy();
     expect(secondSession).not.toBe(firstSession);
 
+    const noSseInit = await fetch(`http://127.0.0.1:${port}/mcp?prism_sse=off`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "client-no-sse", version: "0.1.0" },
+        },
+      }),
+    });
+    const noSseSession = noSseInit.headers.get("mcp-session-id");
+    expect(noSseInit.status).toBe(200);
+    expect(noSseSession).toBeTruthy();
+
+    const noSseGet = await fetch(`http://127.0.0.1:${port}/mcp?prism_sse=off`, {
+      method: "GET",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": noSseSession!,
+        "mcp-protocol-version": "2025-11-25",
+      },
+    });
+    expect(noSseGet.status).toBe(405);
+    expect(await noSseGet.json()).toEqual({
+      error: "SSE stream disabled for this MCP client",
+    });
+
+    const noSseList = await fetch(`http://127.0.0.1:${port}/mcp?prism_sse=off`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-session-id": noSseSession!,
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+      }),
+    });
+    const noSseListBody = await noSseList.json();
+    expect(noSseList.status).toBe(200);
+    expect(noSseListBody.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "forge_submit_review_review_details",
+      "orbit_core_create_glyph",
+    ]);
+
     const missingSession = await httpRpc({ port, method: "tools/list" });
     expect(missingSession.response.status).toBe(400);
 
@@ -509,6 +565,11 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       method: "tools/list",
     });
     expect(secondAfterExit.response.status).toBe(404);
+    const noSseExit = await httpDeleteSession({
+      port,
+      sessionId: noSseSession!,
+    });
+    expect([200, 202]).toContain(noSseExit.status);
     expect(child.killed).toBe(false);
   } finally {
     child.kill();

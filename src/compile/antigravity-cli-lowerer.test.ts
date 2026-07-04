@@ -363,7 +363,7 @@ export default defineTool({
     mcpServers?: Record<string, unknown>;
   };
   expect(parsed.mcpServers?.[generatedMcpWireServerName("antigravity-http-fixture")]).toEqual({
-    serverUrl: "http://127.0.0.1:38466/mcp",
+    serverUrl: "http://127.0.0.1:38466/mcp?prism_sse=off",
     headers: {},
   });
 

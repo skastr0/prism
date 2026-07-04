@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { workflowBunRuntime, type WorkflowBunSpawnedProcess, type WorkflowBunSpawnOptions } from "./workflow-bun-runtime.js";
 import { WorkflowBunRuntimeUnavailableError } from "./workflow-errors.js";
 
 const require = createRequire(import.meta.url);
@@ -18,36 +19,16 @@ export interface WorkflowDatabase {
   transaction<T extends (...args: never[]) => unknown>(fn: T): T;
 }
 
-export interface WorkflowSpawnOptions {
-  readonly cmd: ReadonlyArray<string>;
+export interface WorkflowSpawnOptions extends WorkflowBunSpawnOptions {
   readonly cwd: string;
-  readonly env?: Record<string, string | undefined>;
-  readonly stdin: "ignore";
-  readonly stdout: "ignore" | "pipe";
-  readonly stderr: "ignore" | "pipe";
 }
 
-export interface WorkflowSpawnedProcess {
+export interface WorkflowSpawnedProcess extends WorkflowBunSpawnedProcess {
   readonly pid: number;
   readonly stdout: ReadableStream<Uint8Array>;
   readonly stderr: ReadableStream<Uint8Array>;
-  readonly exited: Promise<number | null>;
-  kill(signal?: NodeJS.Signals | number): void;
   unref(): void;
 }
-
-interface BunRuntime {
-  which(name: string): string | null;
-  spawn(options: WorkflowSpawnOptions): WorkflowSpawnedProcess;
-}
-
-const bunRuntime = (capability: string): BunRuntime => {
-  const bun = (globalThis as typeof globalThis & { readonly Bun?: Partial<BunRuntime> }).Bun;
-  if (bun?.spawn === undefined || bun.which === undefined) {
-    throw new WorkflowBunRuntimeUnavailableError(capability);
-  }
-  return bun as BunRuntime;
-};
 
 const loadBunSqlite = (): { readonly Database: new (path: string) => WorkflowDatabase } => {
   try {
@@ -63,7 +44,7 @@ export const openWorkflowDatabase = (path: string): WorkflowDatabase => {
 };
 
 export const spawnWorkflowProcess = (options: WorkflowSpawnOptions): WorkflowSpawnedProcess =>
-  bunRuntime("process spawning").spawn({
+  workflowBunRuntime("process spawning").spawn({
     cmd: [...options.cmd],
     cwd: options.cwd,
     env: options.env,
@@ -73,6 +54,6 @@ export const spawnWorkflowProcess = (options: WorkflowSpawnOptions): WorkflowSpa
   }) as WorkflowSpawnedProcess;
 
 export const findWorkflowExecutable = (name: string): string | undefined => {
-  const found = bunRuntime("executable discovery").which(name);
+  const found = workflowBunRuntime("executable discovery").which(name);
   return found ?? undefined;
 };

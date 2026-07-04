@@ -126,12 +126,15 @@ test("tombstoned relics do not reappear in src/", async () => {
 });
 
 const WORKFLOW_RUNTIME_BUN_ALLOWLIST: ReadonlySet<string> = new Set([
+  "workflow-bun-runtime.ts",
   "workflow-runtime.ts",
 ]);
 
 const WORKFLOW_RUNTIME_BUN_PATTERNS = [
   { name: "bun: import", pattern: /from\s+["']bun:[^"']+["']/u },
+  { name: "bun: require", pattern: /require\(\s*["']bun:[^"']+["']\s*\)/u },
   { name: "Bun global", pattern: /\bBun\./u },
+  { name: "globalThis.Bun", pattern: /\bglobalThis\.Bun\b/u },
   { name: "Bun typeof guard", pattern: /\btypeof\s+Bun\b/u },
 ] as const;
 

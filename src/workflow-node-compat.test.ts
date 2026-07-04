@@ -88,6 +88,28 @@ try {
     expect(result.stderr).toBe("");
   });
 
+  test("public verified harness detection fails closed outside Bun before broken-harness classification", async () => {
+    const result = await runNodeBundle(`
+import { detectWorkflowHarness, WorkflowBunRuntimeUnavailableError } from ${JSON.stringify(join(repoRoot, "src/index.ts"))};
+
+try {
+  await detectWorkflowHarness("opencode", {
+    resolveExecutable: (command) => "/bin/" + command,
+    verify: true,
+  });
+  throw new Error("expected Bun runtime error");
+} catch (error) {
+  if (!(error instanceof WorkflowBunRuntimeUnavailableError)) throw error;
+  if (!error.message.includes("harness probe execution")) throw error;
+  console.log(error.name);
+}
+`);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("WorkflowBunRuntimeUnavailableError");
+    expect(result.stderr).toBe("");
+  });
+
   test("internal workflow runtime helpers fail closed outside Bun", async () => {
     const result = await runNodeBundle(`
 import { findWorkflowExecutable } from ${JSON.stringify(join(repoRoot, "src/workflow-runtime.ts"))};

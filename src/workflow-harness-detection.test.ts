@@ -5,6 +5,7 @@ import {
   WORKFLOW_HARNESS_IDS,
   workflowHarnessIdsForHarnesses,
 } from "./workflow-harness-detection.js";
+import { WorkflowBunRuntimeUnavailableError, WorkflowUnsupportedHarnessError } from "./workflow-errors.js";
 import { supportedWorkflowWorkers } from "./workflow-workers.js";
 
 describe("workflow harness detection", () => {
@@ -102,6 +103,20 @@ describe("workflow harness detection", () => {
     expect(failed?.reason.code).toBe("probe-failed");
     expect(timedOut?.status).toBe("broken");
     expect(timedOut?.reason.code).toBe("probe-timed-out");
+  });
+
+  test("does not classify SDK runtime absence as a broken harness", async () => {
+    await expect(detectWorkflowHarness("opencode", {
+      resolveExecutable: (command) => `/bin/${command}`,
+      verify: true,
+      runProbe: async () => {
+        throw new WorkflowBunRuntimeUnavailableError("harness probe execution");
+      },
+    })).rejects.toThrow(WorkflowBunRuntimeUnavailableError);
+  });
+
+  test("rejects unsupported runtime harness ids explicitly", async () => {
+    await expect(detectWorkflowHarness("cursor" as never)).rejects.toThrow(WorkflowUnsupportedHarnessError);
   });
 
   test("filters general harness ids down to workflow harness ids", () => {

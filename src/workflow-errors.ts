@@ -38,8 +38,19 @@ export class WorkflowBunRuntimeUnavailableError extends Error {
   }
 }
 
+export class WorkflowUnsupportedHarnessError extends Error {
+  override readonly name = "WorkflowUnsupportedHarnessError";
+
+  constructor(harness: string, validHarnesses: ReadonlyArray<string>) {
+    super(
+      `Unsupported Prism workflow harness '${harness}'. Expected one of: ${validHarnesses.join(", ")}.`,
+    );
+  }
+}
+
 export type WorkflowRuntimeError =
   | WorkflowBunRuntimeUnavailableError
+  | WorkflowUnsupportedHarnessError
   | WorkflowTaskDecodeError
   | WorkflowTaskEscalatedError
   | WorkflowRunStoppedError

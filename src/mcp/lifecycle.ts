@@ -42,6 +42,7 @@ import { resolveBunExecutable } from "../bun-runtime.js";
 import {
   registerSupervisorMcpDaemon,
   unregisterSupervisorMcpDaemon,
+  unregisterSupervisorMcpDaemonsForServer,
 } from "./supervisor.js";
 
 export type McpLifecycleHarness = HarnessId;
@@ -413,9 +414,14 @@ const pidCommand = async (pid: number): Promise<string | undefined> => {
   }
 };
 
-const commandLooksLikeGeneratedServer = (command: string, serverPath: string): boolean =>
-  /(?:^|\s)(?:\S*[/\\])?bun(?:\.exe)?(?:\s|$)/iu.test(command) &&
-  command.trimEnd().endsWith(serverPath);
+const commandLooksLikeGeneratedServer = (command: string, serverPath: string): boolean => {
+  const trimmed = command.trimEnd();
+  if (!trimmed.endsWith(serverPath)) return false;
+  return (
+    /(?:^|\s)(?:\S*[/\\])?bun(?:\.exe)?(?:\s|$)/iu.test(command) ||
+    /(?:^|\s)__mcp-server(?:\s|$)/u.test(command)
+  );
+};
 
 const pidCommandReason = async (
   descriptor: McpRuntimeDescriptor,
@@ -629,6 +635,19 @@ const daemonEnv = (prepared: McpPreparedServer): NodeJS.ProcessEnv => ({
   ...daemonIdentityEnv(prepared),
 });
 
+const isCurrentProcessBun = (): boolean =>
+  /(?:^|[/\\])bun(?:\.exe)?$/iu.test(process.execPath);
+
+const serverProcessCommand = (
+  serverPath: string,
+): { readonly command: string; readonly args: readonly string[] } => {
+  const bunExecutable = resolveBunExecutable();
+  if (bunExecutable !== "bun" || isCurrentProcessBun()) {
+    return { command: bunExecutable, args: [serverPath] };
+  }
+  return { command: process.execPath, args: ["__mcp-server", serverPath] };
+};
+
 const waitForHealth = async (
   prepared: McpPreparedServer,
   pid: number | undefined,
@@ -664,7 +683,8 @@ const spawnServerProcess = (
   prepared: McpPreparedServer,
   options: { readonly foreground: boolean },
 ): ChildProcess => {
-  const child = spawn(resolveBunExecutable(), [prepared.descriptor.serverPath], {
+  const command = serverProcessCommand(prepared.descriptor.serverPath);
+  const child = spawn(command.command, [...command.args], {
     cwd: prepared.descriptor.prismHome,
     env: daemonEnv(prepared),
     detached: !options.foreground,
@@ -687,6 +707,7 @@ const waitForChildExit = (
 
 const spawnDaemon = (prepared: McpPreparedServer): number => {
   const child = spawnServerProcess(prepared, { foreground: false });
+  child.once("exit", () => unregisterSupervisorMcpDaemon(child.pid));
   registerSupervisorMcpDaemon({
     pid: child.pid!,
     prismHome: prepared.descriptor.prismHome,
@@ -694,6 +715,14 @@ const spawnDaemon = (prepared: McpPreparedServer): number => {
     serverPath: prepared.descriptor.serverPath,
   });
   return child.pid!;
+};
+
+const unregisterSupervisorMcpDaemonsForDescriptor = (descriptor: McpRuntimeDescriptor): void => {
+  unregisterSupervisorMcpDaemonsForServer({
+    prismHome: descriptor.prismHome,
+    serverName: descriptor.serverName,
+    serverPath: descriptor.serverPath,
+  });
 };
 
 const launchdEnvironment = (prepared: McpPreparedServer): Record<string, string> => ({
@@ -1140,7 +1169,7 @@ const stopPreparedServerProcess = async (options: {
   readonly pid?: number;
   readonly healthPid?: number;
   readonly useLaunchAgent: boolean;
-  readonly serverName: string;
+  readonly descriptor: McpRuntimeDescriptor;
 }): Promise<void> => {
   const pids = [...new Set([options.healthPid, options.pid].filter((pid): pid is number => pid !== undefined))];
   if (pids.length > 0) {
@@ -1150,11 +1179,16 @@ const stopPreparedServerProcess = async (options: {
       }
     } finally {
       for (const pid of pids) unregisterSupervisorMcpDaemon(pid);
+      unregisterSupervisorMcpDaemonsForDescriptor(options.descriptor);
     }
     return;
   }
   if (options.useLaunchAgent) {
-    await stopLaunchAgent(launchAgentLabelForServer(options.serverName));
+    try {
+      await stopLaunchAgent(launchAgentLabelForServer(options.descriptor.serverName));
+    } finally {
+      unregisterSupervisorMcpDaemonsForDescriptor(options.descriptor);
+    }
   }
 };
 
@@ -1189,7 +1223,7 @@ const startPreparedServer = async (
     await stopPreparedServerProcess({
       pid,
       useLaunchAgent,
-      serverName: prepared.descriptor.serverName,
+      descriptor: prepared.descriptor,
     }).catch(() => undefined);
     throw error;
   }
@@ -1209,7 +1243,7 @@ const persistPreparedServerMetadata = async (
         pid: started.pid,
         healthPid: started.supervisorPid,
         useLaunchAgent: started.useLaunchAgent,
-        serverName: prepared.descriptor.serverName,
+        descriptor: prepared.descriptor,
       });
     } catch (cleanupError) {
       throw new Error(
@@ -1295,12 +1329,14 @@ const stopMcpResolved = async (
   const status = await statusWithResolvedContext(options, context);
   const metadata = status.metadata;
   if (!metadata?.pid) {
+    unregisterSupervisorMcpDaemonsForDescriptor(status.descriptor);
     return { state: "already-stopped", descriptor: status.descriptor, metadata };
   }
   if (status.state === "stale-pid") {
     const next = stoppedMetadata(metadata);
     await writeMcpRuntimeMetadata(status.descriptor.runtimePath, next);
     unregisterSupervisorMcpDaemon(metadata.pid);
+    unregisterSupervisorMcpDaemonsForDescriptor(status.descriptor);
     return { state: "already-stopped", descriptor: status.descriptor, metadata: next };
   }
   if (hasUnsafePidReason(status.staleReasons)) {
@@ -1319,6 +1355,7 @@ const stopMcpResolved = async (
     }
   } finally {
     unregisterSupervisorMcpDaemon(metadata.pid);
+    unregisterSupervisorMcpDaemonsForDescriptor(status.descriptor);
   }
   const next = stoppedMetadata(metadata);
   await writeMcpRuntimeMetadata(status.descriptor.runtimePath, next);

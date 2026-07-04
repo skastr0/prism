@@ -36,6 +36,7 @@ import type {
   PluginManifest,
 } from "./types.js";
 import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import {
   compilePluginForTarget,
@@ -110,6 +111,13 @@ program
   .name("prism")
   .description("Unified plugin distribution for AI coding harnesses")
   .version(prismVersion);
+
+program
+  .command("__mcp-server <bundle-path>", { hidden: true })
+  .description("Internal Prism MCP server launcher")
+  .action(async (bundlePath: string) => {
+    await import(pathToFileURL(resolve(bundlePath)).href);
+  });
 
 class CliUsageError extends Error {
   override readonly name = "CliUsageError";

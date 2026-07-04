@@ -27,6 +27,11 @@ import { countPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 const execFileAsync = promisify(execFile);
 const fixtures: MinimalMcpPluginFixture[] = [];
 
+const envWithoutMcpSupervisionOverride = (): NodeJS.ProcessEnv => {
+  const { PRISM_MCP_SUPERVISE_DAEMONS: _supervise, ...env } = process.env;
+  return env;
+};
+
 const createFixture = async (): Promise<MinimalMcpPluginFixture> => {
   const fixture = await createMinimalMcpPluginFixture();
   fixtures.push(fixture);
@@ -239,9 +244,8 @@ console.log(JSON.stringify({ pid: result.metadata?.pid }));
   const { stdout } = await execFileAsync(resolveBunExecutable(), ["--eval", script], {
     cwd: process.cwd(),
     env: {
-      ...process.env,
+      ...envWithoutMcpSupervisionOverride(),
       PRISM_MCP_DISABLE_LAUNCHD: "1",
-      PRISM_MCP_SUPERVISE_DAEMONS: "1",
     },
     timeout: 20_000,
     maxBuffer: 10_000_000,

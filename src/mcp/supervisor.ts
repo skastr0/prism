@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { EXIT_CODES, exitWith } from "../exit.js";
@@ -9,6 +10,8 @@ export interface SupervisorMcpDaemon {
   readonly serverName: string;
   readonly serverPath: string;
 }
+
+type SupervisorMcpDaemonIdentity = Omit<SupervisorMcpDaemon, "pid">;
 
 const supervisedMcpDaemons = new Map<number, SupervisorMcpDaemon>();
 let installedReaper = false;
@@ -36,9 +39,42 @@ const processIsRunning = (pid: number): boolean => {
   }
 };
 
+const pidCommandSync = (pid: number): string | undefined => {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+};
+
+const commandLooksLikeSupervisedMcpDaemon = (command: string | undefined, serverPath: string): boolean => {
+  if (!command) return false;
+  const trimmed = command.trimEnd();
+  if (!trimmed.endsWith(serverPath)) return false;
+  return (
+    /(?:^|\s)(?:\S*[/\\])?bun(?:\.exe)?(?:\s|$)/iu.test(command) ||
+    /(?:^|\s)__mcp-server(?:\s|$)/u.test(command)
+  );
+};
+
+const sameSupervisedMcpServer = (
+  left: SupervisorMcpDaemonIdentity,
+  right: SupervisorMcpDaemonIdentity,
+): boolean =>
+  normalizePath(left.prismHome) === normalizePath(right.prismHome) &&
+  left.serverName === right.serverName &&
+  normalizePath(left.serverPath) === normalizePath(right.serverPath);
+
 const reapSupervisedMcpDaemonsSync = (): void => {
-  for (const [pid] of supervisedMcpDaemons) {
+  for (const [pid, daemon] of supervisedMcpDaemons) {
     if (!processIsRunning(pid)) {
+      supervisedMcpDaemons.delete(pid);
+      continue;
+    }
+    if (!commandLooksLikeSupervisedMcpDaemon(pidCommandSync(pid), daemon.serverPath)) {
       supervisedMcpDaemons.delete(pid);
       continue;
     }
@@ -74,6 +110,14 @@ export const registerSupervisorMcpDaemon = (daemon: SupervisorMcpDaemon): void =
 export const unregisterSupervisorMcpDaemon = (pid: number | undefined): void => {
   if (pid === undefined) return;
   supervisedMcpDaemons.delete(pid);
+};
+
+export const unregisterSupervisorMcpDaemonsForServer = (
+  identity: SupervisorMcpDaemonIdentity,
+): void => {
+  for (const [pid, daemon] of supervisedMcpDaemons) {
+    if (sameSupervisedMcpServer(daemon, identity)) supervisedMcpDaemons.delete(pid);
+  }
 };
 
 export const writeSupervisorTextFile = async (

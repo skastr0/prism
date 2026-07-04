@@ -26,7 +26,6 @@ import {
   mcpSdkWebStandardHttpBundleImportPath,
   zodV4BundleImportPath,
 } from "./runtime-deps.js";
-import { resolveBunExecutable } from "../bun-runtime.js";
 import {
   generatedToolNameForBinding,
   normalizeGeneratedPluginName,
@@ -900,9 +899,7 @@ const MCP_SDK_SERVER_FACTORY_RUNTIME = `const tools = {
 __PRISM_TOOL_ENTRIES__
 };
 
-if (process.env.PRISM_MCP_VALIDATE === "1") {
-  process.exit(0);
-}
+const prismMcpValidateOnly = process.env.PRISM_MCP_VALIDATE === "1";
 
 const exposureProfiles: Record<string, readonly string[]> = __PRISM_EXPOSURE_PROFILES__;
 const exposureHeaderName = "x-prism-mcp-exposure";
@@ -1454,6 +1451,9 @@ const replaceTemplateTokens = (
 const joinGeneratedSections = (sections: ReadonlyArray<string>): string =>
   `${sections.filter((section) => section.trim().length > 0).join("\n\n")}\n`;
 
+const guardMcpTransportRuntimeForValidation = (runtime: string): string =>
+  `if (!prismMcpValidateOnly) {\n${runtime}\n}`;
+
 const renderSchemaBridgeRuntime = (schemaBridgeName: string): string =>
   replaceTemplateTokens(SCHEMA_BRIDGE_RUNTIME, {
     __PRISM_SCHEMA_BRIDGE_NAME__: JSON.stringify(schemaBridgeName),
@@ -1510,9 +1510,11 @@ const renderMcpHttpTransportRuntime = (options: {
       __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
       __PRISM_EXPOSURE_PROFILES__: options.exposureProfiles,
     }),
-    replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
-      __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
-    }),
+    guardMcpTransportRuntimeForValidation(
+      replaceTemplateTokens(MCP_SDK_HTTP_RUNTIME, {
+        __PRISM_SERVER_NAME__: JSON.stringify(options.serverName),
+      }),
+    ),
   ]);
 
 const renderMcpStdioTransportRuntime = (options: {
@@ -1528,7 +1530,7 @@ const renderMcpStdioTransportRuntime = (options: {
       __PRISM_SERVER_VERSION__: JSON.stringify(options.version),
       __PRISM_EXPOSURE_PROFILES__: options.exposureProfiles,
     }),
-    MCP_SDK_STDIO_RUNTIME,
+    guardMcpTransportRuntimeForValidation(MCP_SDK_STDIO_RUNTIME),
   ]);
 
 const renderAmpToolRegistrationRuntime = (
@@ -1732,20 +1734,21 @@ const validationErrorDetail = (error: unknown): string => {
 };
 
 const validateBuiltMcpServerBundle = async (builtPath: string): Promise<void> => {
+  const previousValidate = process.env.PRISM_MCP_VALIDATE;
+  process.env.PRISM_MCP_VALIDATE = "1";
   try {
-    await execFileAsync(resolveBunExecutable(), [builtPath], {
-      env: {
-        ...process.env,
-        PRISM_MCP_VALIDATE: "1",
-      },
-      timeout: 5_000,
-      maxBuffer: 1024 * 1024,
-    });
+    await import(`${pathToFileURL(builtPath).href}?prism-validate=${Date.now()}`);
   } catch (error) {
     throw new Error(
-      `failed to validate MCP server bundle with bun: ${validationErrorDetail(error)}`,
+      `failed to validate MCP server bundle: ${validationErrorDetail(error)}`,
       { cause: error },
     );
+  } finally {
+    if (previousValidate === undefined) {
+      delete process.env.PRISM_MCP_VALIDATE;
+    } else {
+      process.env.PRISM_MCP_VALIDATE = previousValidate;
+    }
   }
 };
 

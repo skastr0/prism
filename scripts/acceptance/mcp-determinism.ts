@@ -1,8 +1,8 @@
 /**
  * Acceptance gate: mcp-determinism (overhaul WS3 regression net).
  *
- * Compiles the same MCP-bearing plugin (session-watch: stdio MCP server +
- * hook wrappers, no daemons) against sandboxed harness roots AND sandboxed
+ * Compiles the same MCP-bearing plugin (prism-harness-qa: HTTP + stdio MCP
+ * bundles + hook wrappers, sandboxed daemon lifecycle) against sandboxed harness roots AND sandboxed
  * PRISM_HOMEs, then asserts three sub-gates over every emitted bundle
  * (the canonical union bundle at <PRISM_HOME>/runtime/mcp/<plugin>/server.mjs
  * plus the hook wrappers under the harness root):
@@ -24,14 +24,16 @@
  * Usage: bun scripts/acceptance/mcp-determinism.ts
  */
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { constants } from "node:fs";
+import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { compile as compilePrismBinary, type Target } from "../compile.js";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const CLI_PATH = join(REPO_ROOT, "src", "cli.ts");
-const PLUGIN_CORPUS = resolve(homedir(), "Projects", "prism-plugins");
-const FIXTURE_PLUGIN = "session-watch";
+const PLUGIN_CORPUS = join(REPO_ROOT, "examples");
+const FIXTURE_PLUGIN = "prism-harness-qa";
 const HARNESS = "codex-cli";
 
 interface SubGate {
@@ -58,6 +60,38 @@ const run = async (
     proc.exited,
   ]);
   return { exitCode, stdout, stderr };
+};
+
+const currentBinaryTarget = (): Target => {
+  if ((process.platform !== "darwin" && process.platform !== "linux") ||
+    (process.arch !== "x64" && process.arch !== "arm64")) {
+    throw new Error(`unsupported binary acceptance target ${process.platform}-${process.arch}`);
+  }
+  return { platform: process.platform, arch: process.arch };
+};
+
+const executableOnPath = async (name: string): Promise<string | undefined> => {
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (dir.length === 0) continue;
+    const candidate = join(dir, name);
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching PATH.
+    }
+  }
+  return undefined;
+};
+
+const createNoBunPath = async (binDir: string): Promise<string> => {
+  await mkdir(binDir, { recursive: true });
+  const nodePath = await executableOnPath("node");
+  if (!nodePath) {
+    throw new Error("mcp-determinism binary gate requires node on PATH for stdio bundle validation");
+  }
+  await symlink(nodePath, join(binDir, "node"));
+  return [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
 };
 
 const listFilesRecursively = async (root: string, current = root): Promise<string[]> => {
@@ -150,15 +184,19 @@ const main = async (): Promise<void> => {
   const cwdB = join(work, "nested", "deeper", "cwd-b");
   const rootA = join(work, "root-a");
   const rootB = join(work, "root-b");
+  const binaryRoot = join(work, "root-binary");
   const homeA = join(work, "home-a");
   const homeB = join(work, "home-b");
+  const binaryHome = join(work, "home-binary");
+  const binaryPackageRoot = join(work, "binary-package");
+  const binaryPath = join(binaryPackageRoot, "bin", "prism");
+  const noBunBin = join(work, "no-bun-bin");
 
   const gates: SubGate[] = [];
   const compileFailures: string[] = [];
 
-  const compileArgs = (rootDir: string): string[] => [
-    "bun",
-    CLI_PATH,
+  const compileArgs = (command: readonly string[], rootDir: string): string[] => [
+    ...command,
     "refresh",
     "--plugin",
     pluginDir,
@@ -168,41 +206,91 @@ const main = async (): Promise<void> => {
     "--compile-root",
     rootDir,
     "--mcp-lifecycle",
-    "none",
+    "serve",
   ];
+
+  const stopMcp = async (
+    label: string,
+    options: {
+      readonly command: readonly string[];
+      readonly cwd: string;
+      readonly home: string;
+      readonly env?: Record<string, string | undefined>;
+    },
+  ): Promise<void> => {
+    const result = await run([
+      ...options.command,
+      "mcp",
+      "stop",
+      pluginDir,
+      "--harness",
+      HARNESS,
+      "--scope",
+      "global",
+    ], {
+      cwd: options.cwd,
+      env: { PRISM_HOME: options.home, ...options.env },
+    });
+    if (result.exitCode !== 0) {
+      const detail = result.stderr.trim() || result.stdout.trim();
+      compileFailures.push(`${label} stop: exit ${result.exitCode}; output: ${detail.slice(0, 2_000)}`);
+    }
+  };
 
   const compile = async (
     label: string,
-    options: { readonly cwd: string; readonly home: string; readonly root: string; readonly cold: boolean },
+    options: {
+      readonly command: readonly string[];
+      readonly cwd: string;
+      readonly home: string;
+      readonly root: string;
+      readonly cold: boolean;
+      readonly env?: Record<string, string | undefined>;
+    },
   ): Promise<void> => {
     // Cold runs clear the plugin-local build cache (dist/.prism-cache) so a
     // cached bundle from the previous cwd cannot mask cross-cwd drift.
     if (options.cold) await rm(join(pluginDir, "dist"), { recursive: true, force: true });
-    const result = await run(compileArgs(options.root), {
+    const result = await run(compileArgs(options.command, options.root), {
       cwd: options.cwd,
-      env: { PRISM_HOME: options.home },
+      env: { PRISM_HOME: options.home, ...options.env },
     });
     if (result.exitCode !== 0) {
-      compileFailures.push(`${label}: exit ${result.exitCode}; stderr: ${result.stderr.trim().slice(0, 400)}`);
+      const detail = result.stderr.trim() || result.stdout.trim();
+      compileFailures.push(`${label}: exit ${result.exitCode}; output: ${detail.slice(0, 2_000)}`);
+      return;
     }
+    await stopMcp(`${label}`, options);
   };
 
   try {
     // Plugin copy: compile writes dist/.prism-cache + prism.lock into the
     // plugin dir, so never run against the corpus checkout directly. The
     // plugin's hook/tool sources use bare `effect` / `prism` imports that
-    // resolve via the corpus root's node_modules — symlink it next to the copy.
+    // resolve through node_modules — symlink the repo install next to the copy.
     await cp(join(PLUGIN_CORPUS, FIXTURE_PLUGIN), pluginDir, { recursive: true });
     await rm(join(pluginDir, "dist"), { recursive: true, force: true });
-    await symlink(join(PLUGIN_CORPUS, "node_modules"), join(work, "node_modules"), "dir");
+    await symlink(join(REPO_ROOT, "node_modules"), join(work, "node_modules"), "dir");
     await mkdir(cwdA, { recursive: true });
     await mkdir(cwdB, { recursive: true });
     await mkdir(rootA, { recursive: true });
     await mkdir(rootB, { recursive: true });
+    await mkdir(binaryRoot, { recursive: true });
+    await mkdir(dirname(binaryPath), { recursive: true });
+    await writeFile(join(binaryPackageRoot, "package.json"), `{"name":"prism-binary-acceptance","type":"module"}\n`);
+    await symlink(join(REPO_ROOT, "node_modules"), join(binaryPackageRoot, "node_modules"), "dir");
+    const noBunPath = await createNoBunPath(noBunBin);
+    await compilePrismBinary(currentBinaryTarget(), binaryPath);
 
     // Run 1: cold compile from cwd A. Bundles live under PRISM_HOME/runtime/mcp,
     // hook wrappers under the harness root — hash both with stable labels.
-    await compile("run-1 (cold, cwd-a)", { cwd: cwdA, home: homeA, root: rootA, cold: true });
+    await compile("run-1 (cold, cwd-a)", {
+      command: ["bun", CLI_PATH],
+      cwd: cwdA,
+      home: homeA,
+      root: rootA,
+      cold: true,
+    });
     const hashesRun1 = await hashBundles([
       { label: "root", root: rootA },
       { label: "home", root: join(homeA, "runtime", "mcp") },
@@ -221,7 +309,13 @@ const main = async (): Promise<void> => {
     }
 
     // Gate C — warm re-run with identical cwd + home + root (cache kept warm).
-    await compile("warm re-run (cwd-a)", { cwd: cwdA, home: homeA, root: rootA, cold: false });
+    await compile("warm re-run (cwd-a)", {
+      command: ["bun", CLI_PATH],
+      cwd: cwdA,
+      home: homeA,
+      root: rootA,
+      cold: false,
+    });
     const hashesWarm = await hashBundles([
       { label: "root", root: rootA },
       { label: "home", root: join(homeA, "runtime", "mcp") },
@@ -240,7 +334,13 @@ const main = async (): Promise<void> => {
     });
 
     // Run 2: cold compile from cwd B (different depth), fresh home + root.
-    await compile("run-2 (cold, cwd-b)", { cwd: cwdB, home: homeB, root: rootB, cold: true });
+    await compile("run-2 (cold, cwd-b)", {
+      command: ["bun", CLI_PATH],
+      cwd: cwdB,
+      home: homeB,
+      root: rootB,
+      cold: true,
+    });
     const hashesRun2 = await hashBundles([
       { label: "root", root: rootB },
       { label: "home", root: join(homeB, "runtime", "mcp") },
@@ -255,15 +355,46 @@ const main = async (): Promise<void> => {
       detail:
         compileFailures.length > 0
           ? `compile failed: ${compileFailures.join(" | ")}`
-          : crossCwd.detail,
+        : crossCwd.detail,
+    });
+
+    // Run 3: compiled Prism binary with a PATH that has node but no bun. The
+    // npm wrapper passes PRISM_RUNTIME_DEPS_PACKAGE_ROOT; simulate that package
+    // shape here while keeping bundle hashes comparable to the source CLI run.
+    await compile("run-3 (compiled binary, no bun on PATH)", {
+      command: [binaryPath],
+      cwd: cwdA,
+      home: binaryHome,
+      root: binaryRoot,
+      cold: true,
+      env: {
+        PATH: noBunPath,
+        PRISM_RUNTIME_DEPS_PACKAGE_ROOT: binaryPackageRoot,
+      },
+    });
+    const hashesBinary = await hashBundles([
+      { label: "root", root: binaryRoot },
+      { label: "home", root: join(binaryHome, "runtime", "mcp") },
+    ]);
+    const binaryParity = compareHashMaps(hashesRun1, hashesBinary);
+    gates.push({
+      gate: "mcp-determinism:dev-vs-binary",
+      pass: binaryParity.equal && hashesRun1.size > 0 && compileFailures.length === 0,
+      expected: "PASS",
+      detail:
+        compileFailures.length > 0
+          ? `compile failed: ${compileFailures.join(" | ")}`
+          : binaryParity.detail,
     });
 
     // Gate B — relocatability grep over every emitted bundle + config from both runs.
     const relocatability = await scanRelocatability([
       { label: "root-a", root: rootA },
       { label: "root-b", root: rootB },
+      { label: "root-binary", root: binaryRoot },
       { label: "home-a", root: join(homeA, "runtime", "mcp") },
       { label: "home-b", root: join(homeB, "runtime", "mcp") },
+      { label: "home-binary", root: join(binaryHome, "runtime", "mcp") },
     ]);
     gates.push({
       gate: "mcp-determinism:relocatability",
@@ -296,7 +427,7 @@ const main = async (): Promise<void> => {
     details: {
       plugin: FIXTURE_PLUGIN,
       harness: HARNESS,
-      transport: "stdio",
+      transport: "http+stdio",
       ...(compileFailures.length > 0 ? { compileFailures } : {}),
       ...(regressions.length > 0
         ? { regressions: regressions.map((gate) => gate.gate) }

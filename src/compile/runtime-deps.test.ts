@@ -40,6 +40,22 @@ const withRuntimeDepsRoot = async <A>(root: string, run: () => Promise<A>): Prom
   }
 };
 
+const captureConsoleWarnings = async <A>(
+  run: () => Promise<A>,
+): Promise<{ readonly result: A; readonly warnings: readonly string[] }> => {
+  const previousWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+
+  try {
+    return { result: await run(), warnings };
+  } finally {
+    console.warn = previousWarn;
+  }
+};
+
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   delete process.env.PRISM_RUNTIME_DEPS_PACKAGE_ROOT;
@@ -158,6 +174,22 @@ test("runtime dependency resolution rejects package exports that escape the pack
   );
 
   await withRuntimeDepsRoot(root, async () => {
-    expect(effectBundleImportPath()).not.toBe(outside.replace(/\\/g, "/"));
+    const { result } = await captureConsoleWarnings(async () => effectBundleImportPath());
+    expect(result).not.toBe(outside.replace(/\\/g, "/"));
+  });
+});
+
+test("runtime dependency source fallback warns with specifier and runtime/source paths", async () => {
+  const root = await createTempRoot();
+  await writeText(join(root, "package.json"), `{"name":"prism-runtime","type":"module"}\n`);
+
+  await withRuntimeDepsRoot(root, async () => {
+    const { result, warnings } = await captureConsoleWarnings(async () => effectBundleImportPath());
+    const runtimePath = join(root, "node_modules", "effect").replace(/\\/g, "/");
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("runtime dependency effect");
+    expect(warnings[0]).toContain(runtimePath);
+    expect(warnings[0]).toContain(result);
   });
 });

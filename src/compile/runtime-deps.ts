@@ -11,11 +11,19 @@ interface PackageSpecifierParts {
   readonly subpath: string;
 }
 
+interface RuntimePackageResolution {
+  readonly path?: string;
+  readonly attemptedPackagePaths: readonly string[];
+  readonly checkedRuntimeRoots: readonly string[];
+}
+
 interface PackageJson {
   readonly main?: string;
   readonly module?: string;
   readonly exports?: unknown;
 }
+
+const warnedRuntimeDependencyFallbacks = new Set<string>();
 
 const packageRootFromExecutable = (): string | undefined => {
   if (typeof process.execPath !== "string" || process.execPath.length === 0) {
@@ -233,25 +241,59 @@ const resolveFromPackageRoot = (root: string, specifier: string): string | undef
   }
 };
 
-const resolveRuntimePackageImportPath = (specifier: string): string | undefined => {
+const resolveRuntimePackageImportPath = (specifier: string): RuntimePackageResolution => {
+  const { packageName } = parsePackageSpecifier(specifier);
+  const attemptedPackagePaths: string[] = [];
+  const checkedRuntimeRoots: string[] = [];
+
   for (const root of runtimePackageRoots()) {
+    if (!existsSync(join(root, "package.json"))) {
+      continue;
+    }
+
+    checkedRuntimeRoots.push(root);
+    attemptedPackagePaths.push(...packageRootsForResolution(root, packageName));
+
     const resolved = resolveFromPackageRoot(root, specifier);
     if (resolved) {
-      return resolved;
+      return { path: resolved, attemptedPackagePaths, checkedRuntimeRoots };
     }
   }
 
-  return undefined;
+  return { attemptedPackagePaths, checkedRuntimeRoots };
+};
+
+const warnRuntimeDependencyFallback = (
+  specifier: string,
+  runtimeResolution: RuntimePackageResolution,
+  fallbackPath: string,
+): void => {
+  if (runtimeResolution.checkedRuntimeRoots.length === 0) return;
+
+  const runtimePaths = runtimeResolution.attemptedPackagePaths.length > 0
+    ? runtimeResolution.attemptedPackagePaths.map(normalizeImportPath).join(", ")
+    : runtimeResolution.checkedRuntimeRoots.map(normalizeImportPath).join(", ");
+  const normalizedFallback = normalizeImportPath(fallbackPath);
+  const warningKey = `${specifier}\0${runtimePaths}\0${normalizedFallback}`;
+  if (warnedRuntimeDependencyFallbacks.has(warningKey)) return;
+  warnedRuntimeDependencyFallbacks.add(warningKey);
+
+  console.warn(
+    `warning: runtime dependency ${specifier} resolved via source fallback ${normalizedFallback} ` +
+      `after runtime package lookup failed from ${runtimePaths}`,
+  );
 };
 
 const resolveBundleImportPath = (specifier: string): string => {
-  const runtimePackagePath = resolveRuntimePackageImportPath(specifier);
-  if (runtimePackagePath) {
-    return runtimePackagePath;
+  const runtimePackage = resolveRuntimePackageImportPath(specifier);
+  if (runtimePackage.path) {
+    return runtimePackage.path;
   }
 
   try {
-    return normalizeImportPath(fileURLToPath(import.meta.resolve(specifier)));
+    const fallbackPath = normalizeImportPath(fileURLToPath(import.meta.resolve(specifier)));
+    warnRuntimeDependencyFallback(specifier, runtimePackage, fallbackPath);
+    return fallbackPath;
   } catch (error) {
     throw new Error(`Unable to resolve runtime dependency ${specifier}`, { cause: error });
   }

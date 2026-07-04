@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve as resolvePath } from "node:path";
 import type * as TypeScript from "typescript";
 import { expandPath } from "./fs.js";
@@ -153,8 +154,7 @@ const extractRefsManifestHash = async (refsPath: string): Promise<string | undef
   if (!existsSync(refsPath)) return undefined;
   try {
     // Read only the first 512 bytes — the header comment is always near the top.
-    const file = Bun.file(refsPath);
-    const slice = await file.slice(0, 512).text();
+    const slice = (await readFile(refsPath, "utf8")).slice(0, 512);
     const match = MANIFEST_HASH_RE.exec(slice);
     return match?.[1];
   } catch {
@@ -174,7 +174,7 @@ const readCurrentManifestHash = async (
   const manifestPath = compileManifestPath(prismHome, projectKey);
   if (!existsSync(manifestPath)) return undefined;
   try {
-    const raw = await Bun.file(manifestPath).json() as { readonly manifestHash?: string };
+    const raw = JSON.parse(await readFile(manifestPath, "utf8")) as { readonly manifestHash?: string };
     return typeof raw.manifestHash === "string" ? raw.manifestHash : undefined;
   } catch {
     return undefined;

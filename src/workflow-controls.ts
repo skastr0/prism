@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expandPath } from "./fs.js";
 import { loadWorkflowFile } from "./workflow-loader.js";
+import { spawnWorkflowProcess } from "./workflow-runtime.js";
 import { WorkflowStore, type WorkflowRunRecord } from "./workflow-store.js";
 import { getWorkflowWorkerAdapter } from "./workflow-workers.js";
 
@@ -106,7 +107,7 @@ export const startDetachedWorkflowRun = (
     ...(options.cache === false ? ["--no-cache"] : []),
   ];
 
-  const child = Bun.spawn({
+  const child = spawnWorkflowProcess({
     cmd: [...currentCliCommand(), ...args],
     cwd: process.cwd(),
     env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1", PRISM_WORKFLOW_DETACHED_RUN_ID: run.runId },

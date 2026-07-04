@@ -1,3 +1,5 @@
+import { spawnWorkflowProcess } from "./workflow-runtime.js";
+
 export interface WorkflowWorkerProcessOptions {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -38,7 +40,7 @@ export const runWorkflowWorkerProcess = async (
   options: WorkflowWorkerProcessOptions,
 ): Promise<WorkflowWorkerProcessResult> => {
   const started = Date.now();
-  const child = Bun.spawn({
+  const child = spawnWorkflowProcess({
     cmd: [options.command, ...options.args],
     cwd: options.cwd,
     env: options.env === undefined ? undefined : { ...process.env, ...options.env },

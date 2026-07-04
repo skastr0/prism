@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
 import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowJudgeVerdict, type WorkflowRuntimeOptions } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { openWorkflowDatabase, type WorkflowDatabase } from "./workflow-runtime.js";
 import { normalizeWorkflowSessionMetadata, workflowStableSessionFromMetadata } from "./workflow-session.js";
 
 export interface WorkflowTaskIdentity {
@@ -604,7 +604,7 @@ export const workflowRunTaskSnapshotForTask = (input: {
   };
 };
 
-const addColumnIfMissing = (db: Database, statement: string): void => {
+const addColumnIfMissing = (db: WorkflowDatabase, statement: string): void => {
   try {
     db.exec(statement);
   } catch (error) {
@@ -615,7 +615,7 @@ const addColumnIfMissing = (db: Database, statement: string): void => {
   }
 };
 
-const enableConcurrentWorkflowAccess = (db: Database): void => {
+const enableConcurrentWorkflowAccess = (db: WorkflowDatabase): void => {
   db.exec("pragma busy_timeout = 5000;");
   try {
     db.exec("pragma journal_mode = WAL;");
@@ -628,11 +628,11 @@ const enableConcurrentWorkflowAccess = (db: Database): void => {
 };
 
 export class WorkflowStore {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: WorkflowDatabase) {}
 
   static async open(path: string): Promise<WorkflowStore> {
     await ensureDir(dirname(path));
-    const db = new Database(path);
+    const db = openWorkflowDatabase(path);
     enableConcurrentWorkflowAccess(db);
     db.exec(`
       create table if not exists workflow_task_records (

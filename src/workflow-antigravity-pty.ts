@@ -5,6 +5,7 @@ import { rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { findWorkflowExecutable } from "./workflow-runtime.js";
 import type { WorkflowWorkerProcessOptions, WorkflowWorkerProcessResult } from "./workflow-worker-process.js";
 
 /**
@@ -172,10 +173,8 @@ const killProcessGroup = (pid: number, signal: NodeJS.Signals): void => {
 const resolvePython3 = (): string | undefined => {
   const fromEnv = process.env.PRISM_WORKFLOW_ANTIGRAVITY_PTY_PYTHON;
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
-  if (typeof Bun !== "undefined" && "which" in Bun) {
-    const found = Bun.which("python3");
-    if (found !== null) return found;
-  }
+  const found = findWorkflowExecutable("python3");
+  if (found !== undefined) return found;
   return process.env.PATH?.split(path.delimiter)
     .map((dir) => path.join(dir, "python3"))
     .find((candidate) => existsSync(candidate));

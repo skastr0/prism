@@ -125,6 +125,35 @@ test("tombstoned relics do not reappear in src/", async () => {
   expect(violations).toEqual([]);
 });
 
+const WORKFLOW_RUNTIME_BUN_ALLOWLIST: ReadonlySet<string> = new Set([
+  "workflow-runtime.ts",
+]);
+
+const WORKFLOW_RUNTIME_BUN_PATTERNS = [
+  { name: "bun: import", pattern: /from\s+["']bun:[^"']+["']/u },
+  { name: "Bun global", pattern: /\bBun\./u },
+  { name: "Bun typeof guard", pattern: /\btypeof\s+Bun\b/u },
+] as const;
+
+test("workflow engine Bun-only APIs stay behind the runtime seam", async () => {
+  const violations: string[] = [];
+
+  for (const relativePath of await listSourceFiles()) {
+    if (!relativePath.startsWith("workflow-")) continue;
+    if (relativePath.includes(".test.")) continue;
+    if (WORKFLOW_RUNTIME_BUN_ALLOWLIST.has(relativePath)) continue;
+
+    const content = await readFile(join(SRC_ROOT, relativePath), "utf8");
+    for (const gate of WORKFLOW_RUNTIME_BUN_PATTERNS) {
+      if (gate.pattern.test(content)) {
+        violations.push(`${relativePath}: ${gate.name}`);
+      }
+    }
+  }
+
+  expect(violations).toEqual([]);
+});
+
 /**
  * One-writer gate: among compile/sync modules plus the direct refresh planner,
  * only src/sync/apply.ts may import harness-root write primitives from fs.ts.

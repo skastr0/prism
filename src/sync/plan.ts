@@ -262,6 +262,7 @@ const planSharedFileRegions = async (options: {
   readonly desired: ReadonlyArray<DesiredRegion>;
   readonly orphanedRefs: ReadonlyArray<string>;
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
+  readonly hasKnownRegions: boolean;
   readonly resetBeforePatch?: boolean;
 }): Promise<{
   readonly ops: ReadonlyArray<SyncOp>;
@@ -289,7 +290,16 @@ const planSharedFileRegions = async (options: {
     }
   }
 
-  let content = original;
+  const resetUnmanagedFile = fileExists
+    && !options.hasKnownRegions
+    && options.orphanedRefs.length === 0
+    && options.desired.some((region) =>
+      region.kind === "marker"
+      && region.resetUnmanagedFileIfContains !== undefined
+      && original.includes(region.resetUnmanagedFileIfContains)
+    );
+
+  let content = resetUnmanagedFile ? "" : original;
   const changedRegions: string[] = [];
   const skippedRegions: string[] = [];
   const materializedRegionRefs: string[] = [];
@@ -329,7 +339,7 @@ const planSharedFileRegions = async (options: {
     content = outcome.content;
   }
 
-  if (content === original) {
+  if (!resetUnmanagedFile && content === original) {
     return {
       ops: skippedRegions.length > 0
         ? [{ kind: "skip-regions", targetPath: options.targetPath, regionKeys: skippedRegions }]
@@ -387,6 +397,7 @@ const planSharedRegions = async (options: {
   readonly desiredRegions: ReadonlyArray<DesiredRegion>;
   readonly snapshotRegions: ReadonlyMap<string, SnapshotEntry>;
   readonly protectedRegionKeys: ReadonlySet<string>;
+  readonly protectedRegionPaths: ReadonlySet<string>;
   readonly resetBeforePatchPaths: ReadonlySet<string>;
 }): Promise<{
   readonly ops: ReadonlyArray<SyncOp>;
@@ -403,11 +414,14 @@ const planSharedRegions = async (options: {
   const materializedRegionKeys = new Set<string>();
 
   for (const targetPath of [...sharedFiles].sort()) {
+    const hasKnownRegions = options.protectedRegionPaths.has(targetPath)
+      || [...options.snapshotRegions.values()].some((entry) => entry.targetPath === targetPath);
     const sharedPlan = await planSharedFileRegions({
       targetPath,
       desired: regionsByFile.get(targetPath) ?? [],
       orphanedRefs: orphanedByFile.get(targetPath) ?? [],
       snapshotByRegion: options.snapshotRegions,
+      hasKnownRegions,
       resetBeforePatch: options.resetBeforePatchPaths.has(targetPath),
     });
     ops.push(...sharedPlan.ops);
@@ -440,6 +454,7 @@ export const planSync = async (options: {
 
   const carriedEntries: SnapshotEntry[] = [];
   const carriedRegionKeys = new Set<string>();
+  const carriedRegionPaths = new Set<string>();
   const snapshotOwned = new Map<string, SnapshotEntry>();
   const snapshotRegions = new Map<string, SnapshotEntry>();
   for (const entry of options.snapshot.entries) {
@@ -451,6 +466,7 @@ export const planSync = async (options: {
     } else {
       carriedEntries.push(entry);
       carriedRegionKeys.add(`${entry.targetPath} ${entry.regionKey ?? ""}`);
+      carriedRegionPaths.add(entry.targetPath);
     }
   }
 
@@ -494,6 +510,7 @@ export const planSync = async (options: {
     desiredRegions: options.desired.regions,
     snapshotRegions,
     protectedRegionKeys: carriedRegionKeys,
+    protectedRegionPaths: carriedRegionPaths,
     resetBeforePatchPaths,
   });
   ops.push(...sharedRegionPlan.ops);

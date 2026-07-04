@@ -57,6 +57,16 @@ export type DesiredRegion =
         readonly key: string;
         readonly value: string | number | boolean;
       };
+      /**
+       * Migration escape hatch for Prism-generated shared files that used to
+       * be emitted as whole files before the lowerer moved to regions. When a
+       * manifest is missing and the existing unmanaged file contains this
+       * lowerer-owned signature, the sync planner starts from an empty shared
+       * file and backs up the old bytes instead of preserving stale generated
+       * prose as user content. Use only with a signature unique to Prism's old
+       * generated output for this region family.
+       */
+      readonly resetUnmanagedFileIfContains?: string;
       readonly plugin: string;
     }
   | {

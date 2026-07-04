@@ -1,0 +1,416 @@
+/**
+ * Aggregating MCP shim.
+ *
+ * A single stdio MCP server, spawned once by the harness, that fronts N
+ * Prism-generated plugin daemons over Unix domain sockets. It replaces the
+ * "one spawned process per plugin" shape with "one spawned process,
+ * multiplexed over UDS to N already-running daemons":
+ *
+ *   harness <--stdio(JSON-RPC)--> shim <--HTTP-over-UDS--> daemon[plugin A]
+ *                                      \-HTTP-over-UDS--> daemon[plugin B]
+ *
+ * Harness side (this module's `runShim`/`createShimServer`): a bare
+ * JSON-RPC MCP server over stdin/stdout using the SDK's low-level `Server`
+ * + `StdioServerTransport`. Stdio is a single duplex pipe with exactly one
+ * peer, so there is no SSE and no HTTP session concept to manage here —
+ * that machinery only exists on the daemon side.
+ *
+ * Daemon side (`DaemonConnection`): a minimal hand-rolled HTTP-over-UDS
+ * JSON-RPC client, deliberately not the SDK's `Client` +
+ * `StreamableHTTPClientTransport`. The SDK client runs every response
+ * through `safeParse(resultSchema, ...)`, which is a plain (non-passthrough)
+ * Zod object and silently drops any field the schema does not declare. This
+ * shim's job is to forward a daemon's tool-call result byte-for-byte (name
+ * mapping aside), so the daemon's raw JSON-RPC `result`/`error` is read and
+ * handed back untouched instead of being round-tripped through schema
+ * validation on the way in.
+ *
+ * A daemon that is absent from the UDS registry, or present but unreachable
+ * within `daemonTimeoutMs`, is never fatal to the shim: its tools are
+ * omitted from the merged `tools/list`, and a `tools/call` naming it
+ * returns a typed `McpError` (SDK `ErrorCode.ConnectionClosed`). Every other
+ * configured plugin keeps serving normally — each plugin's request runs
+ * against its own timeout and failure is caught per-plugin.
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ErrorCode,
+  LATEST_PROTOCOL_VERSION,
+  McpError,
+  type CallToolResult,
+  type Tool,
+} from "@modelcontextprotocol/sdk/types.js";
+import { getDaemon as getDaemonDefault, type RegistryResult, type RegistryEntry } from "./uds-registry.js";
+
+// ---------------------------------------------------------------------------
+// Naming: the per-plugin namespace segment used to flatten N plugins' tools
+// into the one flat name-space a single MCP `tools/list` response can hold.
+// ---------------------------------------------------------------------------
+
+/**
+ * FNV-1a, 8 hex chars. Deliberately bit-for-bit identical to
+ * `stableHash8` in the root package's `src/compile/stable-hash.ts`, which
+ * backs `generatedMcpWireServerName` (`p_<hash8>`) — the segment every
+ * harness lowerer (Claude Code, Codex CLI, Antigravity, Factory Droid,
+ * Kimi Code, Cursor, Grok) already bakes into compiled permission strings
+ * and tool FQNs (e.g. Claude Code's `mcp__p_<hash8>__<tool>`).
+ *
+ * `packages/prism-core` cannot import that root-package module (its
+ * `tsconfig.json` `rootDir` is `./src`; a real `import` of anything under
+ * the workspace root `src/` fails to compile), so the tiny pure function is
+ * duplicated here rather than re-derived with a different algorithm. Using
+ * the *same* namespace segment the harness side already computes means a
+ * later wave that points a harness's MCP config at this shim only has to
+ * add an outer wrapper layer around `p_<hash8>__<tool>` (the shim's own
+ * server key in that harness's config), not rename every already-compiled
+ * permission string from scratch.
+ */
+const stableHash8 = (input: string): string => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index++) {
+    hash ^= input.codePointAt(index)!;
+    hash = Math.trunc(Math.imul(hash, 0x01000193));
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+};
+
+/** `p_<hash8>` — see `stableHash8` above for why this exact shape. */
+export const pluginWireNamespace = (pluginName: string): string => `p_${stableHash8(pluginName)}`;
+
+const NAMESPACE_SEPARATOR = "__";
+/** Fixed width of `p_<hash8>`: literal `p_` (2) + 8 hex chars. */
+const NAMESPACE_LENGTH = 2 + 8;
+
+/** Harness-visible tool name: `<pluginWireNamespace>__<originalToolName>`. */
+export const namespacedToolName = (pluginName: string, toolName: string): string =>
+  `${pluginWireNamespace(pluginName)}${NAMESPACE_SEPARATOR}${toolName}`;
+
+/**
+ * Inverse of `namespacedToolName`. The namespace segment has a fixed
+ * width, so this splits on position rather than searching for the `__`
+ * separator — a tool name is free-form and may itself legally contain
+ * `__`, but the namespace segment never does.
+ */
+export const splitNamespacedToolName = (
+  fqName: string,
+): { readonly namespace: string; readonly toolName: string } | undefined => {
+  if (fqName.length <= NAMESPACE_LENGTH + NAMESPACE_SEPARATOR.length) return undefined;
+  const namespace = fqName.slice(0, NAMESPACE_LENGTH);
+  const separator = fqName.slice(NAMESPACE_LENGTH, NAMESPACE_LENGTH + NAMESPACE_SEPARATOR.length);
+  if (separator !== NAMESPACE_SEPARATOR) return undefined;
+  const toolName = fqName.slice(NAMESPACE_LENGTH + NAMESPACE_SEPARATOR.length);
+  if (toolName.length === 0) return undefined;
+  return { namespace, toolName };
+};
+
+// ---------------------------------------------------------------------------
+// Daemon-facing HTTP-over-UDS client
+// ---------------------------------------------------------------------------
+
+export class ShimDaemonError extends Error {
+  readonly kind = "shim-daemon-error" as const;
+
+  constructor(
+    readonly pluginName: string,
+    message: string,
+    readonly cause?: unknown,
+  ) {
+    super(`[${pluginName}] ${message}`);
+    this.name = "ShimDaemonError";
+  }
+}
+
+interface DaemonRpcEnvelope {
+  readonly result?: unknown;
+  readonly error?: { readonly code: number; readonly message: string; readonly data?: unknown };
+}
+
+/** Bun's `fetch` accepts an extra `unix` option beyond the standard `RequestInit` shape. */
+type UdsRequestInit = RequestInit & { readonly unix: string };
+
+/**
+ * One JSON-RPC-over-UDS connection to a single plugin daemon, matching the
+ * contract `src/compile/mcp-bundle.ts`'s `MCP_SDK_HTTP_RUNTIME` template
+ * implements: POST to `/mcp` with `mcp-protocol-version`, `initialize`
+ * first to obtain `mcp-session-id`, then that header on every subsequent
+ * call. Initializes once and reuses the session; a failed request drops
+ * the cached session so the next call starts a fresh handshake (the
+ * daemon may have restarted).
+ */
+class DaemonConnection {
+  private sessionId: string | undefined;
+  private requestId = 0;
+
+  constructor(
+    private readonly pluginName: string,
+    private readonly socketPath: string,
+    private readonly timeoutMs: number,
+  ) {}
+
+  async listTools(): Promise<ReadonlyArray<Tool>> {
+    await this.ensureInitialized();
+    const envelope = await this.rpc("tools/list");
+    if (envelope.error) {
+      throw new ShimDaemonError(this.pluginName, `daemon tools/list failed: ${envelope.error.message}`);
+    }
+    const tools = (envelope.result as { readonly tools?: ReadonlyArray<Tool> } | undefined)?.tools;
+    return tools ?? [];
+  }
+
+  /** Returns the daemon's raw JSON-RPC `result` for `tools/call`, untouched. */
+  async callTool(toolName: string, args: Record<string, unknown>): Promise<unknown> {
+    await this.ensureInitialized();
+    const envelope = await this.rpc("tools/call", { name: toolName, arguments: args });
+    if (envelope.error) {
+      throw new ShimDaemonError(this.pluginName, `daemon tools/call '${toolName}' failed: ${envelope.error.message}`);
+    }
+    return envelope.result;
+  }
+
+  private async ensureInitialized(): Promise<void> {
+    if (this.sessionId) return;
+    const response = await this.request("initialize", {
+      protocolVersion: LATEST_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "prism-mcp-shim", version: "0.1.0" },
+    });
+    const sessionId = response.headers.get("mcp-session-id");
+    if (!sessionId) {
+      throw new ShimDaemonError(this.pluginName, "daemon initialize did not return mcp-session-id");
+    }
+    const text = await response.text();
+    const body = text.length > 0 ? (JSON.parse(text) as DaemonRpcEnvelope) : {};
+    if (body.error) {
+      throw new ShimDaemonError(this.pluginName, `daemon initialize failed: ${body.error.message}`);
+    }
+    this.sessionId = sessionId;
+  }
+
+  private async rpc(method: string, params?: unknown): Promise<DaemonRpcEnvelope> {
+    const response = await this.request(method, params);
+    const text = await response.text();
+    return text.length > 0 ? (JSON.parse(text) as DaemonRpcEnvelope) : {};
+  }
+
+  /**
+   * Fires one JSON-RPC request at the daemon's UDS socket. Any failure —
+   * connection refused, socket file gone, timeout, malformed response — is
+   * wrapped as `ShimDaemonError` and drops the cached session, so a dead
+   * daemon never leaves this connection wedged on a session id that will
+   * never work again.
+   */
+  private async request(method: string, params?: unknown): Promise<Response> {
+    const id = (this.requestId += 1);
+    const headers: Record<string, string> = {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+      "mcp-protocol-version": LATEST_PROTOCOL_VERSION,
+    };
+    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const init: UdsRequestInit = {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+        signal: controller.signal,
+        unix: this.socketPath,
+      };
+      const response = await fetch("http://localhost/mcp", init);
+      if (!response.ok) {
+        this.sessionId = undefined;
+        throw new ShimDaemonError(this.pluginName, `daemon '${method}' returned HTTP ${response.status}`);
+      }
+      return response;
+    } catch (error) {
+      this.sessionId = undefined;
+      if (error instanceof ShimDaemonError) throw error;
+      throw new ShimDaemonError(this.pluginName, `daemon '${method}' unreachable: ${errorMessage(error)}`, error);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+// ---------------------------------------------------------------------------
+// Aggregator: resolves each configured plugin's live socket via the UDS
+// registry, fans requests out per-plugin, and never lets one plugin's
+// failure affect another's.
+// ---------------------------------------------------------------------------
+
+export type GetDaemonFn = (plugin: string) => Promise<RegistryResult<RegistryEntry>>;
+
+export interface ShimAggregatorOptions {
+  readonly plugins: ReadonlyArray<string>;
+  readonly daemonTimeoutMs?: number;
+  readonly getDaemon?: GetDaemonFn;
+}
+
+export const DEFAULT_SHIM_DAEMON_TIMEOUT_MS = 30_000;
+
+interface NamedTool {
+  readonly plugin: string;
+  readonly tool: Tool;
+}
+
+export class ShimAggregator {
+  private readonly plugins: ReadonlyArray<string>;
+  private readonly daemonTimeoutMs: number;
+  private readonly getDaemon: GetDaemonFn;
+  private readonly connections = new Map<string, { readonly sock: string; readonly connection: DaemonConnection }>();
+
+  constructor(options: ShimAggregatorOptions) {
+    this.plugins = options.plugins;
+    this.daemonTimeoutMs = options.daemonTimeoutMs ?? DEFAULT_SHIM_DAEMON_TIMEOUT_MS;
+    this.getDaemon = options.getDaemon ?? getDaemonDefault;
+  }
+
+  /**
+   * Resolves (or reuses) the connection for `plugin`. Returns `undefined`
+   * if the plugin has no live registry entry — that is "unavailable", not
+   * an error: the caller omits its tools / reports a typed error, but the
+   * aggregator itself never throws for a merely-absent plugin.
+   */
+  private async resolveConnection(plugin: string): Promise<DaemonConnection | undefined> {
+    const registered = await this.getDaemon(plugin);
+    if (registered.kind === "absent") {
+      this.connections.delete(plugin);
+      return undefined;
+    }
+
+    const cached = this.connections.get(plugin);
+    if (cached && cached.sock === registered.value.sock) {
+      return cached.connection;
+    }
+
+    const connection = new DaemonConnection(plugin, registered.value.sock, this.daemonTimeoutMs);
+    this.connections.set(plugin, { sock: registered.value.sock, connection });
+    return connection;
+  }
+
+  /**
+   * Merged, namespaced `tools/list` across every configured plugin.
+   * Per-plugin fetches run in parallel (one slow/dead plugin never blocks
+   * another), but results are reassembled in the fixed configured-plugin
+   * order afterward, so the merged list is deterministic regardless of
+   * which daemon happened to answer first.
+   */
+  async listTools(): Promise<ReadonlyArray<Tool>> {
+    const perPlugin = await Promise.all(
+      this.plugins.map(async (plugin): Promise<ReadonlyArray<NamedTool>> => {
+        try {
+          const connection = await this.resolveConnection(plugin);
+          if (!connection) return [];
+          const tools = await connection.listTools();
+          return tools.map((tool) => ({ plugin, tool }));
+        } catch {
+          // Unavailable for this pass; omitted, never fatal to the merge.
+          return [];
+        }
+      }),
+    );
+
+    const merged: Tool[] = [];
+    for (const named of perPlugin) {
+      for (const { plugin, tool } of named) {
+        merged.push({ ...tool, name: namespacedToolName(plugin, tool.name) });
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * Dispatches a namespaced tool name to its owning plugin's daemon and
+   * returns the daemon's raw `CallToolResult` untouched. Throws
+   * `ShimDaemonError` (typed) when the name cannot be resolved to a
+   * configured plugin, or when that plugin's daemon is absent/unreachable
+   * within the timeout — either way, this never crashes the shim and
+   * never touches any other plugin's connection.
+   */
+  async callTool(fqName: string, args: Record<string, unknown>): Promise<unknown> {
+    const split = splitNamespacedToolName(fqName);
+    if (!split) {
+      throw new ShimDaemonError("shim", `tool name '${fqName}' is not a namespaced shim tool`);
+    }
+    const plugin = this.plugins.find((candidate) => pluginWireNamespace(candidate) === split.namespace);
+    if (!plugin) {
+      throw new ShimDaemonError("shim", `tool name '${fqName}' does not match any configured plugin`);
+    }
+    const connection = await this.resolveConnection(plugin);
+    if (!connection) {
+      throw new ShimDaemonError(plugin, `plugin has no live daemon registered`);
+    }
+    return connection.callTool(split.toolName, args);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Harness-facing stdio MCP server
+// ---------------------------------------------------------------------------
+
+const SERVER_NAME = "prism-mcp-shim";
+const SERVER_VERSION = "0.1.0";
+
+export const createShimServer = (aggregator: ShimAggregator): Server => {
+  const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: {} } });
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: await aggregator.listTools(),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    const { name, arguments: args } = request.params;
+    try {
+      const result = await aggregator.callTool(name, args ?? {});
+      return result as CallToolResult;
+    } catch (error) {
+      if (error instanceof ShimDaemonError) {
+        throw new McpError(ErrorCode.ConnectionClosed, error.message);
+      }
+      throw new McpError(ErrorCode.InternalError, errorMessage(error));
+    }
+  });
+
+  return server;
+};
+
+// ---------------------------------------------------------------------------
+// Process entrypoint
+// ---------------------------------------------------------------------------
+
+export interface RunShimOptions {
+  readonly plugins: ReadonlyArray<string>;
+  readonly daemonTimeoutMs?: number;
+  readonly getDaemon?: GetDaemonFn;
+}
+
+/**
+ * Wires the aggregator to a stdio transport and runs until stdin closes or
+ * the process receives SIGINT/SIGTERM. Never throws for daemon-level
+ * failures — those surface per-request as typed MCP errors instead.
+ */
+export const runShim = async (options: RunShimOptions): Promise<void> => {
+  const aggregator = new ShimAggregator(options);
+  const server = createShimServer(aggregator);
+  const transport = new StdioServerTransport();
+
+  const shutdown = async (): Promise<void> => {
+    try {
+      await server.close();
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
+
+  await server.connect(transport);
+};

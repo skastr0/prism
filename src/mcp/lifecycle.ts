@@ -11,6 +11,7 @@ import { McpBundleMissingError, McpPortConflictError } from "../errors.js";
 import type { HarnessId, HarnessScope } from "../types.js";
 import { loadPlugin } from "../compile/load.js";
 import type { PluginRegistry } from "../compile/registry.js";
+import { mcpServerRuntimeSourceSha256 } from "../compile/mcp-bundle.js";
 import {
   assertMcpHttpTargetSupported,
   generatedMcpServerName,
@@ -560,7 +561,9 @@ const hasStaleBuildReason = (reasons: ReadonlyArray<McpRuntimeStaleReason>): boo
   reasons.includes("missing-server-file") ||
   reasons.includes("server-file-sha256-mismatch") ||
   reasons.includes("health-server-sha256-mismatch") ||
-  reasons.includes("missing-health-server-sha256");
+  reasons.includes("missing-health-server-sha256") ||
+  reasons.includes("health-server-source-sha256-mismatch") ||
+  reasons.includes("missing-health-server-source-sha256");
 
 const metadataForPreparedServer = (
   prepared: McpPreparedServer,
@@ -574,6 +577,7 @@ const metadataForPreparedServer = (
   port: prepared.port,
   pid,
   serverSha256: prepared.serverSha256,
+  ...(health.serverSourceSha256 ? { serverSourceSha256: health.serverSourceSha256 } : {}),
   startedAt: health.startedAt,
   healthUrl: prepared.healthUrl,
   mcpUrl: prepared.mcpUrl,
@@ -593,6 +597,9 @@ const metadataWithAdoptedHealth = (options: {
   ...(options.expectedServerSha256 ?? options.health.serverSha256 ?? options.metadata.serverSha256
     ? { serverSha256: options.expectedServerSha256 ?? options.health.serverSha256 ?? options.metadata.serverSha256 }
     : {}),
+  ...(options.health.serverSourceSha256 ?? options.metadata.serverSourceSha256
+    ? { serverSourceSha256: options.health.serverSourceSha256 ?? options.metadata.serverSourceSha256 }
+    : {}),
   startedAt: options.health.startedAt,
   ...(options.metadata.healthUrl ? { healthUrl: options.metadata.healthUrl } : {}),
   ...(options.metadata.mcpUrl ? { mcpUrl: options.metadata.mcpUrl } : {}),
@@ -610,6 +617,7 @@ const stoppedMetadata = (metadata: McpRuntimeMetadata): McpRuntimeMetadata => ({
   ...(metadata.host ? { host: metadata.host } : {}),
   ...(metadata.port ? { port: metadata.port } : {}),
   ...(metadata.serverSha256 ? { serverSha256: metadata.serverSha256 } : {}),
+  ...(metadata.serverSourceSha256 ? { serverSourceSha256: metadata.serverSourceSha256 } : {}),
   ...(metadata.healthUrl ? { healthUrl: metadata.healthUrl } : {}),
   ...(metadata.mcpUrl ? { mcpUrl: metadata.mcpUrl } : {}),
 });
@@ -778,6 +786,7 @@ const tryAdoptHealthyGeneratedListener = async (options: {
   readonly descriptor: McpRuntimeDescriptor;
   readonly metadata: McpRuntimeMetadata;
   readonly expectedServerSha256?: string;
+  readonly expectedServerSourceSha256?: string;
   readonly healthUrl?: string;
 }): Promise<McpStatusResult | undefined> => {
   const { descriptor, metadata } = options;
@@ -796,6 +805,7 @@ const tryAdoptHealthyGeneratedListener = async (options: {
     detectMcpRuntimeStaleReasons(adopted, {
       requireLivePid: true,
       expectedServerSha256: options.expectedServerSha256,
+      expectedServerSourceSha256: options.expectedServerSourceSha256,
       health,
     }),
   );
@@ -821,6 +831,9 @@ const classifyStatus = async (options: {
 
   const currentHash = await currentServerHash(descriptor);
   const expectedServerSha256 = options.expectedServerSha256 ?? metadata.serverSha256 ?? currentHash;
+  // A property of the running prism installation, not of this specific
+  // plugin's bundle — always current, no per-call override.
+  const expectedServerSourceSha256 = mcpServerRuntimeSourceSha256();
   const healthTarget = trustedHealthUrl(metadata);
 
   if (!metadata.pid) {
@@ -848,6 +861,7 @@ const classifyStatus = async (options: {
         descriptor,
         metadata,
         expectedServerSha256,
+        expectedServerSourceSha256,
         healthUrl: healthTarget.url,
       });
       if (adopted) return adopted;
@@ -895,6 +909,7 @@ const classifyStatus = async (options: {
       descriptor,
       metadata,
       expectedServerSha256,
+      expectedServerSourceSha256,
       healthUrl: healthTarget.url,
     });
     if (adopted) return adopted;
@@ -942,6 +957,7 @@ const classifyStatus = async (options: {
     ...detectMcpRuntimeStaleReasons(metadata, {
       requireLivePid: true,
       expectedServerSha256,
+      expectedServerSourceSha256,
       health,
     }),
     ...localStaleReasons,

@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { BundleBuildError } from "../errors.js";
+import { computeContentHash } from "../content-hash.js";
 import type { Contract } from "./sources.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import {
@@ -787,6 +788,10 @@ const configuredToolTimeoutMs = Number(process.env.PRISM_MCP_TOOL_TIMEOUT_MS ?? 
 const prismToolTimeoutMs = Number.isFinite(configuredToolTimeoutMs) && configuredToolTimeoutMs > 0
   ? configuredToolTimeoutMs
   : __PRISM_TOOL_TIMEOUT_MS__;
+// Fingerprint of the runtime templates this bundle was generated from (never
+// per-harness identity, never env-supplied): baked in at build time so a
+// bundle's provenance is checkable without trusting daemon-supplied state.
+const PRISM_MCP_SERVER_SOURCE_SHA = "__PRISM_SERVER_SOURCE_SHA256__";
 
 const abortError = (name: string, reason?: unknown): Error => {
   if (reason instanceof Error) return reason;
@@ -1138,6 +1143,7 @@ const healthPayload = (enabledToolNames?: ReadonlySet<string>) => ({
   pid: process.pid,
   toolCount: registeredToolCount(enabledToolNames),
   ...(serverSha256 ? { serverSha256 } : {}),
+  serverSourceSha256: PRISM_MCP_SERVER_SOURCE_SHA,
 });
 
 const readLimitedRequestBody = async (request: Request): Promise<string> => {
@@ -1334,6 +1340,60 @@ const server = createPrismMcpServer(enabledToolNamesFromEnv());
 const transport = new StdioServerTransport();
 
 await server.connect(transport);`;
+
+/**
+ * Runtime template sources that govern generated MCP server behavior
+ * independent of any specific plugin's tool bindings (transport handling,
+ * the tool-call factory, the schema bridge, the health payload shape). A
+ * build whose templates differ here produces bytes a running daemon must
+ * not keep serving — even when the plugin's own bindings never changed and
+ * nobody has recompiled that specific plugin yet. A per-plugin bundle
+ * content hash cannot see this class of drift, because nothing about a
+ * specific plugin's bundle changes until someone recompiles it; this
+ * fingerprint is what lets an already-running daemon (or an on-disk bundle
+ * nobody has restarted yet) be checked against the generator that produced
+ * it, not just against itself.
+ */
+const MCP_SERVER_RUNTIME_SOURCE_SECTIONS: readonly string[] = [
+  SCHEMA_ANNOTATION_HELPERS,
+  TOOL_SURFACE_RUNTIME_TYPES,
+  SCHEMA_BRIDGE_RUNTIME,
+  MCP_TOOL_FACTORY_RUNTIME,
+  MCP_SDK_SERVER_FACTORY_RUNTIME,
+  MCP_SDK_HTTP_RUNTIME,
+  MCP_SDK_STDIO_RUNTIME,
+];
+
+/**
+ * Stable fingerprint of the MCP server runtime templates baked into this
+ * build of prism. Embedded into the Streamable HTTP bundle as the literal
+ * `PRISM_MCP_SERVER_SOURCE_SHA` constant (see `MCP_TOOL_FACTORY_RUNTIME`)
+ * and mirrored into the live `/healthz` payload as `serverSourceSha256` —
+ * the long-running HTTP daemon is the transport that can drift from source
+ * independently of any specific plugin's bindings, since nothing forces it
+ * to restart when the shared runtime templates change. A stdio server is
+ * re-spawned fresh per client session directly off whatever bytes are on
+ * disk right now, so there is no persistent process for this fingerprint to
+ * describe; the bundler tree-shakes the otherwise-unreferenced constant out
+ * of the stdio bundle.
+ */
+export const mcpServerRuntimeSourceSha256 = (): string =>
+  computeContentHash(MCP_SERVER_RUNTIME_SOURCE_SECTIONS.join(" "));
+
+// Bun's bundler rewrites top-level `const` to `var` when merging scopes
+// across bundled modules, so the declaration keyword in a *built* bundle is
+// not guaranteed to match the literal template text — match either.
+const MCP_SERVER_SOURCE_SHA_PATTERN = /(?:const|var|let)\s+PRISM_MCP_SERVER_SOURCE_SHA\s*=\s*"([0-9a-f]{64})"/u;
+
+/**
+ * Reads the embedded runtime-source fingerprint back out of a generated MCP
+ * server bundle's raw text without executing it — safe to call on an
+ * arbitrary (possibly stale or broken) bundle already sitting on disk.
+ * Returns undefined for a bundle that never embedded one (a stdio bundle, or
+ * one built before this fingerprint existed at all).
+ */
+export const readMcpServerSourceSha256FromBundle = (bundleContent: string): string | undefined =>
+  MCP_SERVER_SOURCE_SHA_PATTERN.exec(bundleContent)?.[1];
 
 const AMP_TOOL_FACTORY_RUNTIME = `const runtimeContext = (): ToolRuntimeContext => ({
   sessionID: "amp-plugin",
@@ -1592,6 +1652,7 @@ const renderMcpServerEntry = (options: {
       // The default is a compile-time constant (never per-harness identity):
       // harnesses override at runtime via PRISM_MCP_TOOL_TIMEOUT_MS.
       __PRISM_TOOL_TIMEOUT_MS__: String(DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS),
+      __PRISM_SERVER_SOURCE_SHA256__: mcpServerRuntimeSourceSha256(),
     }),
     runtime,
   ]);
@@ -1630,6 +1691,7 @@ const renderMcpStdioServerEntry = (options: {
       // The default is a compile-time constant (never per-harness identity):
       // harnesses override at runtime via PRISM_MCP_TOOL_TIMEOUT_MS.
       __PRISM_TOOL_TIMEOUT_MS__: String(DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS),
+      __PRISM_SERVER_SOURCE_SHA256__: mcpServerRuntimeSourceSha256(),
     }),
     runtime,
   ]);

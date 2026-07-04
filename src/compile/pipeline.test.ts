@@ -10,7 +10,12 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generatedMcpWireServerName } from "./mcp-runtime.js";
-import { generateMcpServerBundle, mcpToolNamesForBindings } from "./mcp-bundle.js";
+import {
+  generateMcpServerBundle,
+  mcpServerRuntimeSourceSha256,
+  mcpToolNamesForBindings,
+  readMcpServerSourceSha256FromBundle,
+} from "./mcp-bundle.js";
 import { generatedSyntheticToolName } from "./generated-plugin.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
 import {
@@ -5237,6 +5242,59 @@ test("compilePluginForTarget can start Hermes HTTP MCP before config write", asy
         join(testPrismHome(), "runtime", "mcp", "hermes-http-serve-demo", "runtime.json"),
       ),
     ).toBe(true);
+  } finally {
+    await stopMcp({
+      pluginPath: pluginRoot,
+      harness: "hermes",
+      scope: "global",
+      prismHome: testPrismHome(),
+    }).catch(() => undefined);
+  }
+});
+
+test("compilePluginForTarget regenerates a Hermes HTTP bundle whose runtime-source fingerprint predates current prism (PQ-170)", async () => {
+  // Regression coverage for PQ-170: simulate the incident precondition — a
+  // canonical bundle already sitting at the path a previous prism build
+  // wrote, carrying a runtime-source fingerprint that predates whatever this
+  // build's templates now produce — before compile/refresh has ever run for
+  // this plugin against this build. The compile-triggered "ensure/start"
+  // path (prepareUnionMcpServer, always run before daemon lifecycle) must
+  // regenerate the bundle so its embedded fingerprint matches current
+  // source, not silently keep serving the stale one.
+  const pluginName = "hermes-http-source-stale-demo";
+  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
+    pluginName,
+    omitPort: true,
+  });
+
+  const staleSourceSha = "a".repeat(64);
+  const canonicalServerPath = prismMcpServerPath(testPrismHome(), pluginName);
+  await writeText(
+    canonicalServerPath,
+    `#!/usr/bin/env bun\n// stale prism build\nvar PRISM_MCP_SERVER_SOURCE_SHA = "${staleSourceSha}";\n`,
+  );
+  expect(
+    readMcpServerSourceSha256FromBundle(await readFile(canonicalServerPath, "utf8")),
+  ).toBe(staleSourceSha);
+
+  try {
+    const result = await Effect.runPromise(
+      compilePluginForTarget({
+        prismHome: testPrismHome(),
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        root: hermesRoot,
+        dryRun: false,
+        mcpLifecycle: "serve",
+      }),
+    );
+
+    expect(result.outputRoot).toBe(hermesRoot);
+    const regenerated = await readFile(canonicalServerPath, "utf8");
+    const regeneratedSourceSha = readMcpServerSourceSha256FromBundle(regenerated);
+    expect(regeneratedSourceSha).toBe(mcpServerRuntimeSourceSha256());
+    expect(regeneratedSourceSha).not.toBe(staleSourceSha);
   } finally {
     await stopMcp({
       pluginPath: pluginRoot,

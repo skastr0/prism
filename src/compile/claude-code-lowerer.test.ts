@@ -419,6 +419,99 @@ export default defineTool({
   expect(bundle).toBeUndefined();
 });
 
+test("claude-code lowerer emits one aggregated stdio-shim MCP entry when opted in", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".claude");
+  const pluginRoot = join(root, "claude-shim-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "claude-shim-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["claude-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo over the shim",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const { files: operations } = await planLowering({
+    agents: [
+      {
+        name: "reviewer",
+        description: "Reviews through the Claude stdio shim",
+        body: "# Reviewer",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [
+          {
+            kind: "permission",
+            logicalName: "echo",
+            toolPluginName: "claude-shim-fixture",
+            toolName: "echo",
+            toolSourcePath: toolPath,
+          },
+        ],
+      },
+    ],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      mcpTransport: "stdio-shim",
+      mcpExposureProfile: "prism-generated-claude-shim-fixture:claude-code",
+      sourcePluginName: "claude-shim-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  const mcpConfig = findContentOperation(operations, ".mcp.json");
+  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
+  };
+  // ONE aggregated entry replaces the N per-owner http entries.
+  expect(Object.keys(parsed.mcpServers ?? {})).toEqual(["prism-mcp-shim"]);
+  expect(parsed.mcpServers?.["prism-mcp-shim"]).toEqual({
+    command: "prism",
+    args: ["mcp", "shim"],
+    env: {
+      PRISM_SHIM_PLUGINS: "claude-shim-fixture",
+      PRISM_SHIM_EXPOSURE: "prism-generated-claude-shim-fixture:claude-code",
+    },
+  });
+  expect(mcpConfig?.content).not.toContain('"type": "http"');
+});
+
 test("claude-code lowerer fails closed when hook matcher has no Claude target mapping", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");

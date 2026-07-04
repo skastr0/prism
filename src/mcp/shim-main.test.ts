@@ -200,3 +200,39 @@ test("shim aggregates tools/list, dispatches tools/call, and isolates a dead plu
     await transport.close().catch(() => undefined);
   }
 });
+
+test("prism mcp shim CLI subcommand wires the same aggregating shim", async () => {
+  const homeRoot = await mkdtemp(join(tmpdir(), "prism-shim-cli-home-"));
+  tempRoots.push(homeRoot);
+
+  const daemon = await spawnFixtureDaemon({ pluginName: "shim-cli-fixture", outputField: "echoed", home: homeRoot });
+
+  const cliPath = join(process.cwd(), "src", "cli.ts");
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["run", cliPath, "mcp", "shim"],
+    env: {
+      ...(process.env as Record<string, string>),
+      HOME: homeRoot,
+      PRISM_SHIM_PLUGINS: daemon.pluginName,
+      PRISM_SHIM_DAEMON_TIMEOUT_MS: "2000",
+    },
+  });
+  const client = new Client({ name: "prism-shim-cli-test-client", version: "0.1.0" });
+
+  try {
+    await client.connect(transport);
+
+    const namespace = pluginWireNamespace(daemon.pluginName);
+    const fqName = `${namespace}__${daemon.toolName}`;
+
+    const listed = await client.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toEqual([fqName]);
+
+    const called = await client.callTool({ name: fqName, arguments: { message: "via-cli" } });
+    expect(called.structuredContent).toEqual({ echoed: "via-cli" });
+  } finally {
+    await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
+  }
+});

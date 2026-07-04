@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { PluginRegistry } from "./registry.js";
 import {
   DEFAULT_MCP_CONNECT_TIMEOUT_MS,
@@ -7,7 +7,9 @@ import {
 import {
   generatedMcpWireServerName,
   getMcpHttpTargetSupport,
+  mcpHarnessTransportEnvVar,
   renderMcpHttpUrl,
+  resolveMcpHarnessTransportMode,
   resolveMcpRuntime,
 } from "./mcp-runtime.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
@@ -96,6 +98,37 @@ test("MCP runtime supports Factory Droid Streamable HTTP config", () => {
   expect(renderMcpHttpUrl(runtime)).toBe("http://127.0.0.1:38466/mcp");
   expect(renderMcpHttpUrl(runtime, { disableSse: true })).toBe("http://127.0.0.1:38466/mcp?prism_sse=off");
   expect(getMcpHttpTargetSupport("factory-droid").config).toBe("supported");
+});
+
+const transportEnvVar = mcpHarnessTransportEnvVar("claude-code");
+
+afterEach(() => {
+  delete process.env[transportEnvVar];
+});
+
+test("MCP harness transport mode defaults to http when unset", () => {
+  expect(resolveMcpHarnessTransportMode("claude-code")).toBe("http");
+  expect(resolveMcpHarnessTransportMode("claude-code", undefined)).toBe("http");
+});
+
+test("MCP harness transport mode honors the configured default", () => {
+  expect(resolveMcpHarnessTransportMode("claude-code", "stdio-shim")).toBe("stdio-shim");
+});
+
+test("MCP harness transport mode env var name is per-harness, dash to underscore", () => {
+  expect(mcpHarnessTransportEnvVar("claude-code")).toBe("PRISM_MCP_TRANSPORT_CLAUDE_CODE");
+  expect(mcpHarnessTransportEnvVar("codex-cli")).toBe("PRISM_MCP_TRANSPORT_CODEX_CLI");
+});
+
+test("MCP harness transport env override wins over the configured default (canary escape hatch)", () => {
+  process.env[transportEnvVar] = "stdio-shim";
+  expect(resolveMcpHarnessTransportMode("claude-code", "http")).toBe("stdio-shim");
+});
+
+test("MCP harness transport env override is ignored when not a recognized mode", () => {
+  process.env[transportEnvVar] = "carrier-pigeon";
+  expect(resolveMcpHarnessTransportMode("claude-code", "stdio-shim")).toBe("stdio-shim");
+  expect(resolveMcpHarnessTransportMode("claude-code")).toBe("http");
 });
 
 test("MCP runtime supports Kimi Code Streamable HTTP config", () => {

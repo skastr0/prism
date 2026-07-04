@@ -883,3 +883,109 @@ test("codex-cli consumer plugin references owner MCP servers without a self daem
     findRegion(lowered.regions, `codex.mcp.${selfWireServerName}`),
   ).toBeUndefined();
 });
+
+test("codex-cli lowerer emits aggregated stdio-shim MCP config when mcpTransport is set", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-stdio-shim-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "codex-stdio-shim-fixture",
+        version: "0.1.0",
+        targets: {
+          tools: ["codex-cli"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo via stdio shim",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) {
+    return { message: input.message };
+  },
+});
+`,
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const tool = registry.tools.get("echo");
+  if (!tool) throw new Error("expected echo tool");
+
+  const lowered = await planLowering({
+    agents: [
+      {
+        name: "reviewer",
+        description: "Reviews through Codex via stdio shim",
+        body: "# Reviewer",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [
+          {
+            kind: "permission",
+            logicalName: "echo",
+            toolPluginName: "codex-stdio-shim-fixture",
+            toolName: "echo",
+            toolSourcePath: toolPath,
+          },
+        ],
+      },
+    ],
+    orbits: [],
+    tools: [tool],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "codex-stdio-shim-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+      mcpTransport: "stdio-shim",
+    },
+  });
+
+  const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
+  const wireServerName = generatedMcpWireServerName("codex-stdio-shim-fixture");
+  const readableServerName = generatedMcpServerName("codex-stdio-shim-fixture");
+  // When using stdio-shim, agent toml should not contain the config
+  expect(agentToml?.content).not.toContain(`["mcp_servers"."${wireServerName}"]`);
+  expect(agentToml?.content).not.toContain('command = "prism"');
+  expect(agentToml?.content).not.toContain('args = ["mcp", "shim"]');
+  expect(agentToml?.content).toContain(
+    `# MCP tools requested from ${readableServerName} (wire ${wireServerName}): codex_stdio_shim_fixture_echo`,
+  );
+
+  // stdio-shim config should be in config.toml region with command/args/env
+  const mcpRegion = markerContent(
+    findRegion(lowered.regions, "codex.mcp.prism-mcp-shim"),
+  );
+  expect(mcpRegion).toContain('["mcp_servers"."prism-mcp-shim"]');
+  expect(mcpRegion).toContain('command = "prism"');
+  expect(mcpRegion).toContain('args = ["mcp", "shim"]');
+  expect(mcpRegion).toContain('enabled_tools = ["codex_stdio_shim_fixture_echo"]');
+  expect(mcpRegion).toContain('PRISM_SHIM_PLUGINS = "codex-stdio-shim-fixture"');
+  expect(mcpRegion).toContain(
+    'PRISM_SHIM_EXPOSURE = "prism-generated-codex-stdio-shim-fixture:codex-cli"',
+  );
+  // Should NOT contain http url
+  expect(mcpRegion).not.toContain('url = "http');
+});

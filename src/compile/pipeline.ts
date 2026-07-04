@@ -79,7 +79,9 @@ import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
   mcpExposureProfileForTarget,
+  resolveMcpHarnessTransportMode,
   resolveMcpRuntime,
+  type McpHarnessTransportMode,
 } from "./mcp-runtime.js";
 import {
   prismMcpServerPath,
@@ -110,6 +112,7 @@ interface LowererModule {
       readonly root: string;
       readonly mcpExposureProfile?: string;
       readonly mcpRuntimePort?: number;
+      readonly mcpTransport?: McpHarnessTransportMode;
       readonly prismHome?: string;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
@@ -164,6 +167,8 @@ export interface CompileOptions {
   readonly prismHome: string;
   readonly dryRun: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
+  /** Per-harness MCP transport rollout flag; defaults to `"http"`. See `resolveMcpHarnessTransportMode`. */
+  readonly mcpTransport?: McpHarnessTransportMode;
   readonly packageMode?: boolean;
   readonly emitWorkflowRefs?: boolean;
   /** Optional per-op progress listener (fires only on real apply, not dry-run). */
@@ -1114,6 +1119,7 @@ const planTargetLowering = (options: {
   readonly prismHome: string;
   readonly mcpServer?: PreparedMcpServer;
   readonly mcpRuntimePort?: number;
+  readonly mcpTransport: McpHarnessTransportMode;
 }): Effect.Effect<LowerOutput, CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
@@ -1146,6 +1152,7 @@ const planTargetLowering = (options: {
             }
           : {}),
         ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
+        mcpTransport: options.mcpTransport,
         prismHome: options.prismHome,
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
@@ -1232,6 +1239,7 @@ const prepareLoweringInputs = (
   readonly artifacts: TargetArtifacts;
   readonly mcpServer?: PreparedMcpServer;
   readonly mcpRuntimePort?: number;
+  readonly mcpTransport: McpHarnessTransportMode;
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
@@ -1274,6 +1282,7 @@ const prepareLoweringInputs = (
       agents: composedForLowering,
       artifacts,
     });
+    const mcpTransport = resolveMcpHarnessTransportMode(context.targetId, options.mcpTransport);
     return {
       context,
       registry,
@@ -1282,6 +1291,7 @@ const prepareLoweringInputs = (
       orbits,
       composedForLowering,
       artifacts,
+      mcpTransport,
       ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     };
@@ -1301,6 +1311,7 @@ export const planPluginForTarget = (
       artifacts,
       mcpServer,
       mcpRuntimePort,
+      mcpTransport,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1313,6 +1324,7 @@ export const planPluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
+      mcpTransport,
       ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
@@ -1347,6 +1359,7 @@ export const compilePluginForTarget = (
       artifacts,
       mcpServer,
       mcpRuntimePort,
+      mcpTransport,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1359,6 +1372,7 @@ export const compilePluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
+      mcpTransport,
       ...(mcpServer ? { mcpServer } : {}),
       ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });

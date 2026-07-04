@@ -233,4 +233,144 @@ describe("ShimAggregator", () => {
     );
     await expect(aggregator.callTool("not-namespaced", {})).rejects.toBeInstanceOf(ShimDaemonError);
   });
+
+  it("filters tools/list by enabledTools if set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    fakeDaemons.push(
+      await startFakeDaemon(sock, {
+        tools: [
+          { name: "alpha", inputSchema: { type: "object" } },
+          { name: "beta", inputSchema: { type: "object" } },
+          { name: "gamma", inputSchema: { type: "object" } },
+        ],
+        callResult: (name) => ({ content: [{ type: "text", text: `a:${name}` }] }),
+      }),
+    );
+
+    const alphaFq = namespacedToolName("plugin-a", "alpha");
+    const betaFq = namespacedToolName("plugin-a", "beta");
+    // gamma is not in enabledTools, so it should be filtered out
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      enabledTools: new Set([alphaFq, betaFq]),
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+
+    const tools = await aggregator.listTools();
+    expect(tools.map((t) => t.name)).toEqual([alphaFq, betaFq]);
+  });
+
+  it("rejects tools/call for a tool not in enabledTools", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    fakeDaemons.push(
+      await startFakeDaemon(sock, {
+        tools: [
+          { name: "alpha", inputSchema: { type: "object" } },
+          { name: "beta", inputSchema: { type: "object" } },
+        ],
+        callResult: (name) => ({ content: [{ type: "text", text: `a:${name}` }] }),
+      }),
+    );
+
+    const alphaFq = namespacedToolName("plugin-a", "alpha");
+    const betaFq = namespacedToolName("plugin-a", "beta");
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      enabledTools: new Set([alphaFq]), // only alpha is enabled
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+
+    // alpha should work
+    const result = await aggregator.callTool(alphaFq, {});
+    expect(result).toBeDefined();
+
+    // beta should be rejected with ShimDaemonError
+    await expect(aggregator.callTool(betaFq, {})).rejects.toBeInstanceOf(ShimDaemonError);
+  });
+
+  it("returns all tools when enabledTools is not set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    fakeDaemons.push(
+      await startFakeDaemon(sock, {
+        tools: [
+          { name: "alpha", inputSchema: { type: "object" } },
+          { name: "beta", inputSchema: { type: "object" } },
+        ],
+        callResult: (name) => ({ content: [{ type: "text", text: `a:${name}` }] }),
+      }),
+    );
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      // enabledTools not set -- all tools should be exposed
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+
+    const tools = await aggregator.listTools();
+    expect(tools.map((t) => t.name)).toEqual([
+      namespacedToolName("plugin-a", "alpha"),
+      namespacedToolName("plugin-a", "beta"),
+    ]);
+  });
+
+  it("passes exposureProfile as x-prism-mcp-exposure header to daemon", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    let capturedExposureHeader: string | null = null;
+
+    const server = Bun.serve({
+      unix: sock,
+      fetch: async (req) => {
+        const exposureHeader = req.headers.get("x-prism-mcp-exposure");
+        if (req.headers.get("mcp-protocol-version")) {
+          capturedExposureHeader = exposureHeader;
+        }
+
+        const body = (await req.json()) as { id: number; method: string; params?: unknown };
+        const respond = (result: unknown, headers: Record<string, string> = {}) =>
+          new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
+            headers: { "content-type": "application/json", ...headers },
+          });
+
+        if (body.method === "initialize") {
+          return respond(
+            { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "fake", version: "0.0.0" } },
+            { "mcp-session-id": "fake-session" },
+          );
+        }
+        if (body.method === "tools/list") {
+          return respond({ tools: [{ name: "alpha", inputSchema: { type: "object" } }] });
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "nope" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    fakeDaemons.push({ sock, stop: () => server.stop(true) });
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      exposureProfile: "prism-generated-test:grok",
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+
+    await aggregator.listTools();
+
+    expect(capturedExposureHeader).toBe("prism-generated-test:grok");
+  });
 });

@@ -155,6 +155,7 @@ class DaemonConnection {
     private readonly pluginName: string,
     private readonly socketPath: string,
     private readonly timeoutMs: number,
+    private readonly exposureProfile?: string,
   ) {}
 
   async listTools(): Promise<ReadonlyArray<Tool>> {
@@ -217,6 +218,7 @@ class DaemonConnection {
       "mcp-protocol-version": LATEST_PROTOCOL_VERSION,
     };
     if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
+    if (this.exposureProfile) headers["x-prism-mcp-exposure"] = this.exposureProfile;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -267,6 +269,10 @@ export interface ShimAggregatorOptions {
    * real compiled bundle on disk.
    */
   readonly resolveOrSpawn?: ResolveOrSpawnFn;
+  /** Optional set of tool names to enable; if present, only these tools are exposed. */
+  readonly enabledTools?: ReadonlySet<string>;
+  /** Optional exposure profile to pass to daemon as X-Prism-Mcp-Exposure header. */
+  readonly exposureProfile?: string;
 }
 
 export const DEFAULT_SHIM_DAEMON_TIMEOUT_MS = 30_000;
@@ -282,6 +288,8 @@ export class ShimAggregator {
   private readonly getDaemon: GetDaemonFn;
   private readonly spawnTimeoutMs: number;
   private readonly resolveOrSpawn: ResolveOrSpawnFn;
+  private readonly enabledTools: ReadonlySet<string> | undefined;
+  private readonly exposureProfile: string | undefined;
   private readonly connections = new Map<string, { readonly sock: string; readonly connection: DaemonConnection }>();
 
   constructor(options: ShimAggregatorOptions) {
@@ -289,6 +297,8 @@ export class ShimAggregator {
     this.daemonTimeoutMs = options.daemonTimeoutMs ?? DEFAULT_SHIM_DAEMON_TIMEOUT_MS;
     this.getDaemon = options.getDaemon ?? getDaemonDefault;
     this.spawnTimeoutMs = options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS;
+    this.enabledTools = options.enabledTools;
+    this.exposureProfile = options.exposureProfile;
     this.resolveOrSpawn =
       options.resolveOrSpawn ??
       ((plugin: string) =>
@@ -323,7 +333,12 @@ export class ShimAggregator {
       return cached.connection;
     }
 
-    const connection = new DaemonConnection(plugin, entry.sock, this.daemonTimeoutMs);
+    const connection = new DaemonConnection(
+      plugin,
+      entry.sock,
+      this.daemonTimeoutMs,
+      this.exposureProfile,
+    );
     this.connections.set(plugin, { sock: entry.sock, connection });
     return connection;
   }
@@ -334,6 +349,10 @@ export class ShimAggregator {
    * another), but results are reassembled in the fixed configured-plugin
    * order afterward, so the merged list is deterministic regardless of
    * which daemon happened to answer first.
+   *
+   * Tools are filtered by `enabledTools` if set: only tools in that set are
+   * returned. This is the shim-side filtering applied before any daemon
+   * response is merged.
    */
   async listTools(): Promise<ReadonlyArray<Tool>> {
     const perPlugin = await Promise.all(
@@ -353,7 +372,12 @@ export class ShimAggregator {
     const merged: Tool[] = [];
     for (const named of perPlugin) {
       for (const { plugin, tool } of named) {
-        merged.push({ ...tool, name: namespacedToolName(plugin, tool.name) });
+        const fqName = namespacedToolName(plugin, tool.name);
+        // Filter by enabledTools if set
+        if (this.enabledTools !== undefined && !this.enabledTools.has(fqName)) {
+          continue;
+        }
+        merged.push({ ...tool, name: fqName });
       }
     }
     return merged;
@@ -363,11 +387,17 @@ export class ShimAggregator {
    * Dispatches a namespaced tool name to its owning plugin's daemon and
    * returns the daemon's raw `CallToolResult` untouched. Throws
    * `ShimDaemonError` (typed) when the name cannot be resolved to a
-   * configured plugin, or when that plugin's daemon is absent/unreachable
-   * within the timeout — either way, this never crashes the shim and
-   * never touches any other plugin's connection.
+   * configured plugin, when that plugin's daemon is absent/unreachable
+   * within the timeout, or when the tool is not in the enabled set —
+   * either way, this never crashes the shim and never touches any other
+   * plugin's connection.
    */
   async callTool(fqName: string, args: Record<string, unknown>): Promise<unknown> {
+    // Filter by enabledTools if set
+    if (this.enabledTools !== undefined && !this.enabledTools.has(fqName)) {
+      throw new ShimDaemonError("shim", `tool name '${fqName}' is not enabled`);
+    }
+
     const split = splitNamespacedToolName(fqName);
     if (!split) {
       throw new ShimDaemonError("shim", `tool name '${fqName}' is not a namespaced shim tool`);
@@ -423,6 +453,10 @@ export interface RunShimOptions {
   readonly daemonTimeoutMs?: number;
   readonly spawnTimeoutMs?: number;
   readonly getDaemon?: GetDaemonFn;
+  /** Optional set of tool names to enable; if present, only these tools are exposed. */
+  readonly enabledTools?: ReadonlySet<string>;
+  /** Optional exposure profile to pass to daemon as X-Prism-Mcp-Exposure header. */
+  readonly exposureProfile?: string;
 }
 
 /**

@@ -38,15 +38,7 @@ const SRC_DIR = join(REPO_ROOT, "src");
  * one back here for a *new* drift is the wrong fix — derive from
  * `lowerer-capabilities.ts` instead.
  */
-const allowedExactCopies: ReadonlyArray<{ readonly file: string; readonly reason: string }> = [
-  {
-    file: "workflow-harness-detection.ts",
-    reason:
-      "WORKFLOW_HARNESS_IDS already type-checks against WorkflowWorkerId via `satisfies`, and is being " +
-      "re-derived from the capability registry as part of the wdx009-validate branch's harness-detection " +
-      "work (unmerged as of PQ-163) — leaving it to that integration rather than editing overlapping surfaces here.",
-  },
-];
+const allowedExactCopies: ReadonlyArray<{ readonly file: string; readonly reason: string }> = [];
 
 export interface HarnessEnumerationViolation {
   readonly file: string;

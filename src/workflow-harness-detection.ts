@@ -1,20 +1,19 @@
+import { workflowWorkerHarnessIds, type WorkflowWorkerHarnessId } from "./lowerer-capabilities.js";
 import type { HarnessId } from "./types.js";
 import { workflowBunRuntime } from "./workflow-bun-runtime.js";
 import { WorkflowBunRuntimeUnavailableError, WorkflowUnsupportedHarnessError } from "./workflow-errors.js";
-import type { WorkflowWorkerId } from "./workflows.js";
 
-export const WORKFLOW_HARNESS_IDS = [
-  "amp-code",
-  "antigravity-cli",
-  "claude-code",
-  "codex-cli",
-  "grok",
-  "hermes",
-  "kimi-code",
-  "opencode",
-] as const satisfies ReadonlyArray<WorkflowWorkerId>;
+/**
+ * Workflow-worker harness ids, derived from the capability registry's
+ * `workflowWorker` bit (`lowerer-capabilities.ts`) — the single source of
+ * truth for this set (PQ-163). Never hand-list these ids here; add a harness
+ * by flipping its `workflowWorker` capability in the registry, which also
+ * forces `WORKFLOW_HARNESS_DETECTION_SPECS` below to gain the matching entry
+ * at compile time.
+ */
+export const WORKFLOW_HARNESS_IDS: ReadonlyArray<WorkflowWorkerHarnessId> = workflowWorkerHarnessIds();
 
-export type WorkflowHarnessId = (typeof WORKFLOW_HARNESS_IDS)[number];
+export type WorkflowHarnessId = WorkflowWorkerHarnessId;
 
 export type WorkflowHarnessDetectionStatus = "available" | "missing" | "broken";
 

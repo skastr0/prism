@@ -813,15 +813,23 @@ describe("workflow loader", () => {
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout) as {
       output: { reviewerStatus: string; fusion: { reviewerStatus: string; verdict: string } };
-      tasks: Array<{ id: string; cached: boolean; output: unknown }>;
+      tasks: Array<{ id: string; cached: boolean; status: string; error?: string; output: unknown }>;
     };
     expect(result.output).toEqual({
       reviewerStatus: "failed",
       fusion: { reviewerStatus: "failed", verdict: "needs-work" },
     });
-    expect(result.tasks.map((task) => task.id)).toEqual(["fusion"]);
-    expect(result.tasks[0]?.output).toEqual({ reviewerStatus: "failed", verdict: "needs-work" });
-    expect(result.tasks[0]?.cached).toBe(false);
+    // PQ-166 decided semantic: an isolated task failure is recorded as a
+    // WorkflowRunTaskResult and stays visible in run results — the failed
+    // reviewer is surfaced alongside fusion, not dropped.
+    expect(result.tasks.map((task) => task.id)).toEqual(["reviewer", "fusion"]);
+    const [reviewerTask, fusionTask] = result.tasks;
+    expect(reviewerTask?.status).toBe("failed");
+    expect(typeof reviewerTask?.error).toBe("string");
+    expect(reviewerTask?.error?.length).toBeGreaterThan(0);
+    expect(fusionTask?.status).toBe("completed");
+    expect(fusionTask?.output).toEqual({ reviewerStatus: "failed", verdict: "needs-work" });
+    expect(fusionTask?.cached).toBe(false);
   });
 
   test("CLI dynamic workflows pass completed reviewer output into fusion", async () => {

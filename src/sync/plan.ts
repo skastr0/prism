@@ -197,44 +197,19 @@ const removeOrphanedRegion = (
 };
 
 const legacyCodexRulesMarker = "<!-- prism:rules source=";
-const legacyCodexRulesMarkerLine = /^<!-- prism:rules source=(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s>]+) -->$/;
-const markdownHeadingLine = /^#{1,6}\s+\S/;
 
-const isLegacyCodexRulesWholeFile = (content: string): boolean => {
-  const lines = content
-    .replace(/^\uFEFF/, "")
-    .trim()
-    .split(/\r?\n/);
-  let index = 0;
-  let sawChunk = false;
+const normalizeLegacyGeneratedContent = (content: string): string =>
+  content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").trimEnd();
 
-  while (index < lines.length) {
-    while (index < lines.length && lines[index]!.trim() === "") index += 1;
-    if (index >= lines.length) break;
-
-    if (!legacyCodexRulesMarkerLine.test(lines[index]!.trimEnd())) return false;
-    sawChunk = true;
-    index += 1;
-
-    while (index < lines.length && lines[index]!.trim() === "") index += 1;
-    if (index >= lines.length || !markdownHeadingLine.test(lines[index]!.trimStart())) {
-      return false;
-    }
-
-    index += 1;
-    while (index < lines.length && !legacyCodexRulesMarkerLine.test(lines[index]!.trimEnd())) {
-      index += 1;
-    }
-  }
-
-  return sawChunk;
-};
-
-const canResetUnmanagedFile = (content: string, signature: string): boolean => {
+const canResetUnmanagedFile = (
+  content: string,
+  signature: string,
+  desiredContent: string,
+): boolean => {
   if (!content.includes(signature)) return false;
   if (signature !== legacyCodexRulesMarker) return true;
 
-  return isLegacyCodexRulesWholeFile(content);
+  return normalizeLegacyGeneratedContent(content) === normalizeLegacyGeneratedContent(desiredContent);
 };
 
 const planOwnedFile = async (options: {
@@ -337,7 +312,7 @@ const planSharedFileRegions = async (options: {
     && options.desired.some((region) =>
       region.kind === "marker"
       && region.resetUnmanagedFileIfContains !== undefined
-      && canResetUnmanagedFile(original, region.resetUnmanagedFileIfContains)
+      && canResetUnmanagedFile(original, region.resetUnmanagedFileIfContains, region.content)
     );
 
   let content = resetUnmanagedFile ? "" : original;

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { LOWERER_CAPABILITIES } from "./lowerer-capabilities.js";
 import {
   pickDefaultAgentRef,
   projectCatalog,
@@ -64,6 +65,80 @@ describe("projectCatalog", () => {
 
   test("lists the supported workers", () => {
     expect(catalog.workers).toEqual([...WORKFLOW_WORKERS]);
+  });
+});
+
+describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", () => {
+  // Golden set: locks in the exact harnesses expected to be workflow workers
+  // today. If this fails, either a harness's `workflowWorker` bit in
+  // lowerer-capabilities.ts changed, or WORKFLOW_WORKERS drifted from it —
+  // update this list deliberately, don't just make it pass.
+  test("matches the golden harness set (PQ-163 regression: antigravity-cli was missing)", () => {
+    expect(([...WORKFLOW_WORKERS] as string[]).sort()).toEqual(
+      [
+        "amp-code",
+        "antigravity-cli",
+        "claude-code",
+        "codex-cli",
+        "grok",
+        "hermes",
+        "kimi-code",
+        "opencode",
+      ].sort(),
+    );
+  });
+
+  test("excludes every harness flagged workflowWorker: false", () => {
+    const unflagged = Object.values(LOWERER_CAPABILITIES)
+      .filter((profile) => !profile.workflowWorker)
+      .map((profile): string => profile.harness);
+    expect(unflagged.sort()).toEqual(["cursor", "factory-droid", "openclaw", "pi"].sort());
+    for (const harness of unflagged) {
+      expect(WORKFLOW_WORKERS as readonly string[]).not.toContain(harness);
+    }
+  });
+
+  test("contains exactly the harnesses flagged workflowWorker: true", () => {
+    const flagged = Object.values(LOWERER_CAPABILITIES)
+      .filter((profile) => profile.workflowWorker)
+      .map((profile): string => profile.harness);
+    expect(([...WORKFLOW_WORKERS] as string[]).sort()).toEqual(flagged.sort());
+  });
+});
+
+describe("workflowWorker capability-bit coverage assertion (fixture)", () => {
+  // The production assertion (workflow-catalog.ts) lives entirely at the type
+  // level, so it can't be exercised with a runtime `expect`. This fixture
+  // reproduces the same generic mechanism in miniature to prove it actually
+  // rejects drift, without adding a 13th real harness (a non-goal here).
+  const fixtureCapabilities = {
+    alpha: { workflowWorker: true },
+    beta: { workflowWorker: true },
+    gamma: { workflowWorker: true },
+    delta: { workflowWorker: false },
+  } as const;
+  type FixtureHarnessId = keyof typeof fixtureCapabilities;
+  type FixtureWorkflowWorkerHarnessId = {
+    [K in FixtureHarnessId]: (typeof fixtureCapabilities)[K]["workflowWorker"] extends true ? K : never;
+  }[FixtureHarnessId];
+  // Mirrors WorkflowWorkerId: "gamma" has no worker module even though the
+  // capability table above flags it workflowWorker: true.
+  type FixtureWorkerModuleId = "alpha" | "beta";
+
+  test("a capability-flagged harness without a matching worker module fails the coverage assertion at typecheck time", () => {
+    // @ts-expect-error "gamma" is flagged workflowWorker:true above but is absent from FixtureWorkerModuleId — this is the exact shape of the tsc error a real new harness would hit against WorkflowWorkerId.
+    const coverage: Exclude<FixtureWorkflowWorkerHarnessId, FixtureWorkerModuleId> extends never ? true : never = true;
+    void coverage;
+  });
+
+  test("workflowWorker: false is never demanded as a worker module", () => {
+    const flagged: FixtureWorkflowWorkerHarnessId[] = (
+      Object.entries(fixtureCapabilities) as ReadonlyArray<readonly [FixtureHarnessId, { workflowWorker: boolean }]>
+    )
+      .filter(([, profile]) => profile.workflowWorker)
+      .map(([harness]) => harness as FixtureWorkflowWorkerHarnessId);
+    expect(flagged).not.toContain("delta");
+    expect((flagged as string[]).sort()).toEqual(["alpha", "beta", "gamma"].sort());
   });
 });
 

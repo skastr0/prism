@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { doctorExitCode, runDoctor } from "./doctor.js";
 import { EXIT_CODES } from "./exit.js";
-import { computeContentHash } from "./content-hash.js";
+import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
@@ -211,6 +211,67 @@ test("doctor reports snapshot drift region integrity and namespace strays", asyn
   expect(codes).toContain("snapshot.owned-drift");
   expect(codes).toContain("region.marker-count");
   expect(codes).toContain("namespace.unowned-prism-path");
+});
+
+test("doctor does not flag a grok .mcp.json port change as drift, but still flags a real content change (PQ-167)", async () => {
+  const prismHome = join(root, "prism-home");
+  const harnessRoot = join(process.env.HOME!, ".grok");
+  const mcpPath = join(harnessRoot, "plugins", "prism-generated-demo", ".mcp.json");
+
+  const renderMcpConfig = (port: number, extraServers?: Record<string, unknown>): string =>
+    JSON.stringify({
+      mcpServers: {
+        p_f3119df0: {
+          type: "http",
+          url: `http://127.0.0.1:${port}/mcp`,
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-demo:grok" },
+        },
+        ...extraServers,
+      },
+    }, null, 2) + "\n";
+
+  // The snapshot was recorded against one port; the daemon has since rebound
+  // to a different one and the on-disk file reflects only that.
+  await writeText(mcpPath, renderMcpConfig(61742));
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "grok",
+      root: harnessRoot,
+      entries: [
+        {
+          targetPath: mcpPath,
+          contentHash: computeMcpHttpConfigContentHash(renderMcpConfig(50953)),
+          mode: "owned",
+          plugin: "demo",
+        },
+      ],
+    },
+  });
+
+  const portOnlyReport = await runDoctor({
+    harnesses: ["grok"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(portOnlyReport.findings.map((finding) => finding.code)).not.toContain("snapshot.owned-drift");
+
+  // A genuine content change (a new server entry) must still be caught.
+  await writeText(
+    mcpPath,
+    renderMcpConfig(61742, {
+      p_other: { type: "http", url: "http://127.0.0.1:9999/mcp" },
+    }),
+  );
+  const realDriftReport = await runDoctor({
+    harnesses: ["grok"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(realDriftReport.findings.map((finding) => finding.code)).toContain("snapshot.owned-drift");
 });
 
 test("doctor --fix drops snapshots for dead roots", async () => {

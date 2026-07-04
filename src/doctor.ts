@@ -8,7 +8,7 @@ import type { HarnessId, HarnessScope } from "./types.js";
 import { HarnessRoots, type HarnessRootsEnv } from "./services/prism-env.js";
 import { refreshPlugin, type RefreshResult } from "./refresh.js";
 import { EXIT_CODES, type ExitCode } from "./exit.js";
-import { computeContentHash } from "./content-hash.js";
+import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import {
   decodeSnapshotManifest,
   type SnapshotEntry,
@@ -225,7 +225,11 @@ const validateOwnedSnapshotEntry = async (
     })];
   }
 
-  if (computeContentHash(content) === entry.contentHash) return [];
+  // Grok's owned .mcp.json bundles a dynamic host:port the owner daemon can
+  // rebind on every restart; normalize it out of the comparison so a port
+  // change alone is never reported as drift (PQ-167).
+  const ownedHash = manifest.harness === "grok" ? computeMcpHttpConfigContentHash : computeContentHash;
+  if (ownedHash(content) === entry.contentHash) return [];
   return [finding({
     severity: "warning",
     family: "snapshot.disk-drift",

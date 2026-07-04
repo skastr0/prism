@@ -1,6 +1,7 @@
-import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, writeFile, readFile, unlink, readdir, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 
 /**
  * Error type for registry operation violations.
@@ -38,125 +39,142 @@ export type RegistryData = Record<string, RegistryEntry>;
 export type RegistryResult<T> = { kind: "ok"; value: T } | { kind: "absent" };
 
 /**
- * Registry file path: ~/.prism/runtime/mcp/registry.json
+ * Storage layout
+ * --------------
+ * Each plugin owns its own registry file:
+ *
+ *   ~/.prism/runtime/mcp/<plugin>/<hash>.registry.json
+ *
+ * where `<hash>` is a short content-addressed digest of the plugin name.
+ * There is deliberately no single shared registry.json spanning every
+ * plugin: registering plugin A never touches any file plugin B reads or
+ * writes, so concurrent registrations across different plugins cannot race
+ * on the same path and cannot drop each other's entries. Within one
+ * plugin's file, writes are still atomic (write-temp + rename), so the
+ * per-plugin file itself is never observed half-written.
  */
-function getRegistryPath(): string {
-  const home = homedir();
-  return join(home, ".prism", "runtime", "mcp", "registry.json");
+
+/** `~/.prism/runtime/mcp` — the root of all registry state. */
+function registryRootDir(): string {
+  return join(homedir(), ".prism", "runtime", "mcp");
 }
 
 /**
- * Ensure the registry directory exists.
+ * Filesystem-safe representation of a plugin name for use as a directory
+ * segment. Plugin names may contain characters (e.g. `/` in a scoped name
+ * like `@scope/plugin`) that would otherwise create unintended nested
+ * directories; the original, unsanitized name is preserved inside the
+ * stored record itself (see `StoredRecord`) so readers never need to
+ * reverse this transform.
  */
-async function ensureRegistryDir(): Promise<void> {
-  const path = getRegistryPath();
-  const dir = dirname(path);
+function sanitizePluginSegment(plugin: string): string {
+  const sanitized = plugin.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return sanitized.length > 0 ? sanitized : "_";
+}
+
+function pluginDir(plugin: string): string {
+  return join(registryRootDir(), sanitizePluginSegment(plugin));
+}
+
+/**
+ * Deterministic, content-addressed file name for a plugin's registration
+ * record: every reader and writer for a given plugin name resolves to
+ * exactly this one path, so there is never ambiguity about which file is
+ * "the" current record for that plugin.
+ */
+function pluginRegistryFilePath(plugin: string): string {
+  const hash = createHash("sha256").update(plugin).digest("hex").slice(0, 16);
+  return join(pluginDir(plugin), `${hash}.registry.json`);
+}
+
+/** On-disk shape: the entry fields plus the original (unsanitized) plugin name. */
+interface StoredRecord extends RegistryEntry {
+  readonly plugin: string;
+}
+
+function isValidStoredRecord(value: unknown): value is StoredRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.plugin === "string" &&
+    typeof record.pid === "number" &&
+    typeof record.sock === "string" &&
+    typeof record.bundleHash === "string" &&
+    typeof record.startedAt === "number" &&
+    typeof record.lastUsed === "number"
+  );
+}
+
+async function ensurePluginDir(plugin: string): Promise<void> {
   try {
-    await mkdir(dir, { recursive: true });
+    await mkdir(pluginDir(plugin), { recursive: true });
   } catch {
     // Directory may already exist; proceed.
   }
 }
 
 /**
- * Atomically write the registry data to disk.
- *
- * Uses write-to-temp + rename strategy to ensure atomicity even under
- * concurrent writers. Callers must serialize writes via a lock if multiple
- * writers are possible in the same process.
+ * Atomically write a single plugin's registration record via write-temp +
+ * rename. Because each plugin owns a distinct file, this never reads or
+ * merges another plugin's (or another write's) data — there is no
+ * read-modify-write of shared state to race on.
  *
  * Throws UDSRegistryError on I/O failure (unrecoverable).
  */
-export async function writeRegistry(data: RegistryData): Promise<void> {
+async function writePluginEntry(plugin: string, entry: RegistryEntry): Promise<void> {
   try {
-    await ensureRegistryDir();
+    await ensurePluginDir(plugin);
   } catch (error) {
     throw new UDSRegistryError(
-      `Failed to ensure registry directory: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to ensure registry directory for plugin ${plugin}: ${error instanceof Error ? error.message : String(error)}`,
       error,
     );
   }
 
-  const registryPath = getRegistryPath();
+  const finalPath = pluginRegistryFilePath(plugin);
   const randomSuffix = Math.random().toString(36).substring(2, 10);
-  const tempPath = `${registryPath}.tmp.${process.pid}.${Date.now()}.${randomSuffix}`;
+  const tempPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${randomSuffix}`;
+
+  const stored: StoredRecord = { ...entry, plugin };
 
   try {
-    // Write to temporary file
-    const json = JSON.stringify(data, null, 2);
-    await writeFile(tempPath, json, "utf8");
-
-    // Atomic rename (on POSIX, rename is atomic)
-    // Re-import to get the current version
-    const { rename } = await import("node:fs/promises");
-    await rename(tempPath, registryPath);
+    await writeFile(tempPath, JSON.stringify(stored, null, 2), "utf8");
+    await rename(tempPath, finalPath);
   } catch (error) {
-    // Clean up temp file if it exists
     try {
       await unlink(tempPath);
     } catch {
       // Ignore cleanup failures
     }
     throw new UDSRegistryError(
-      `Failed to write registry: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to write registry entry for plugin ${plugin}: ${error instanceof Error ? error.message : String(error)}`,
       error,
     );
   }
 }
 
 /**
- * Read the registry data from disk.
- *
- * Returns `{ kind: "ok", value: data }` on success.
- * Returns `{ kind: "absent" }` if:
- * - The file does not exist
- * - The file is corrupted or contains invalid JSON
- * - The file is incomplete (partial write)
- *
- * Never throws; all errors are handled gracefully.
+ * Read a single plugin's registration record. Returns undefined if the file
+ * does not exist, is corrupted, or is missing required fields — never
+ * throws.
  */
-export async function readRegistry(): Promise<RegistryResult<RegistryData>> {
-  const registryPath = getRegistryPath();
-
+async function readPluginEntry(plugin: string): Promise<RegistryEntry | undefined> {
   try {
-    const json = await readFile(registryPath, "utf8");
-
-    // Validate the JSON structure
+    const json = await readFile(pluginRegistryFilePath(plugin), "utf8");
     const parsed: unknown = JSON.parse(json);
-
-    // Ensure it's a record of entries
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { kind: "absent" };
-    }
-
-    // Validate each entry has the required shape
-    const data = parsed as Record<string, unknown>;
-    for (const [plugin, entry] of Object.entries(data)) {
-      if (
-        !entry ||
-        typeof entry !== "object" ||
-        !("pid" in entry) ||
-        !("sock" in entry) ||
-        !("bundleHash" in entry) ||
-        !("startedAt" in entry) ||
-        !("lastUsed" in entry)
-      ) {
-        // Invalid entry; treat the entire registry as corrupted
-        return { kind: "absent" };
-      }
-    }
-
-    return { kind: "ok", value: data as RegistryData };
+    if (!isValidStoredRecord(parsed)) return undefined;
+    const { plugin: _plugin, ...entry } = parsed;
+    return entry;
   } catch {
-    // File does not exist, is corrupted, or cannot be read; return absent.
-    return { kind: "absent" };
+    return undefined;
   }
 }
 
 /**
  * Register a new daemon instance or update an existing one.
  *
- * Atomically adds/updates the entry for the given plugin and persists to disk.
+ * Atomically writes the entry to this plugin's own registry file. Never
+ * reads or rewrites any other plugin's file.
  *
  * Throws UDSRegistryError on I/O failure (unrecoverable).
  */
@@ -164,29 +182,27 @@ export async function registerDaemon(
   plugin: string,
   entry: RegistryEntry,
 ): Promise<void> {
-  const result = await readRegistry();
-  const data = result.kind === "ok" ? result.value : {};
-
-  data[plugin] = entry;
-
-  await writeRegistry(data);
+  await writePluginEntry(plugin, entry);
 }
 
 /**
  * Unregister a daemon instance by plugin name.
  *
- * Atomically removes the entry and persists to disk.
- * Does nothing (no error) if the entry does not exist.
+ * Removes this plugin's registry file. Does nothing (no error) if the
+ * entry does not exist.
  *
- * Throws UDSRegistryError on I/O failure (unrecoverable).
+ * Throws UDSRegistryError on I/O failure (unrecoverable), file-not-found excepted.
  */
 export async function unregisterDaemon(plugin: string): Promise<void> {
-  const result = await readRegistry();
-  const data = result.kind === "ok" ? result.value : {};
-
-  delete data[plugin];
-
-  await writeRegistry(data);
+  try {
+    await unlink(pluginRegistryFilePath(plugin));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new UDSRegistryError(
+      `Failed to unregister plugin ${plugin}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
+    );
+  }
 }
 
 /**
@@ -199,30 +215,55 @@ export async function unregisterDaemon(plugin: string): Promise<void> {
  * Never throws.
  */
 export async function getDaemon(plugin: string): Promise<RegistryResult<RegistryEntry>> {
-  const result = await readRegistry();
-
-  if (result.kind === "absent") {
-    return { kind: "absent" };
-  }
-
-  const entry = result.value[plugin];
-  if (!entry) {
-    return { kind: "absent" };
-  }
-
-  return { kind: "ok", value: entry };
+  const entry = await readPluginEntry(plugin);
+  return entry ? { kind: "ok", value: entry } : { kind: "absent" };
 }
 
 /**
- * Get all registered daemon entries.
+ * Get all registered daemon entries across every plugin.
  *
  * Returns `{ kind: "ok", value: data }` on success (may be empty).
- * Returns `{ kind: "absent" }` if the registry is corrupted.
+ * Returns `{ kind: "absent" }` if the registry root directory does not
+ * exist yet (nothing has ever registered).
  *
- * Never throws.
+ * Never throws; unreadable or corrupted per-plugin files are skipped
+ * individually rather than failing the whole scan.
  */
 export async function getAllDaemons(): Promise<RegistryResult<RegistryData>> {
-  return readRegistry();
+  const root = registryRootDir();
+  let pluginDirs: string[];
+  try {
+    pluginDirs = await readdir(root);
+  } catch {
+    return { kind: "absent" };
+  }
+
+  const data: RegistryData = {};
+
+  for (const dirName of pluginDirs) {
+    let files: string[];
+    try {
+      files = await readdir(join(root, dirName));
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      if (!file.endsWith(".registry.json")) continue;
+      try {
+        const json = await readFile(join(root, dirName, file), "utf8");
+        const parsed: unknown = JSON.parse(json);
+        if (!isValidStoredRecord(parsed)) continue;
+        const { plugin, ...entry } = parsed;
+        data[plugin] = entry;
+      } catch {
+        // Skip unreadable/corrupted per-plugin files; they do not affect
+        // any other plugin's data.
+      }
+    }
+  }
+
+  return { kind: "ok", value: data };
 }
 
 /**
@@ -234,17 +275,66 @@ export async function getAllDaemons(): Promise<RegistryResult<RegistryData>> {
  * Throws UDSRegistryError on I/O failure (unrecoverable).
  */
 export async function touchDaemon(plugin: string): Promise<RegistryResult<void>> {
-  const result = await readRegistry();
-  const data = result.kind === "ok" ? result.value : {};
-
-  const entry = data[plugin];
+  const entry = await readPluginEntry(plugin);
   if (!entry) {
     return { kind: "absent" };
   }
 
-  data[plugin] = { ...entry, lastUsed: Date.now() };
-
-  await writeRegistry(data);
+  await writePluginEntry(plugin, { ...entry, lastUsed: Date.now() });
 
   return { kind: "ok", value: undefined };
+}
+
+/**
+ * Outcome of `cleanupDaemonIfOwner`.
+ *
+ * - "cleaned": the record belonged to the given pid; it was unregistered
+ *   and the socket file (if provided) was unlinked.
+ * - "not-owner": a record exists but names a *different* pid — a successor
+ *   that has already re-registered under the same plugin key. Nothing was
+ *   touched.
+ * - "absent": no record exists for this plugin. Treated as "not ours":
+ *   nothing was touched.
+ */
+export type OwnershipCleanupResult = "cleaned" | "not-owner" | "absent";
+
+/**
+ * Ownership-gated teardown for a daemon's registration and socket file.
+ *
+ * Re-reads the current registry record for `plugin` and only acts — unlink
+ * `socketPath` and remove the registry entry — when that record's pid
+ * matches `pid`, i.e. when the caller is still the process the registry
+ * currently considers live for that plugin.
+ *
+ * This exists to protect a fast-respawning successor: if a predecessor is
+ * slow to drain and only calls this after a successor has already bound
+ * the same socket path and re-registered under the same plugin key, the
+ * registry record now names the successor's pid — a missing record or one
+ * naming a different pid means "not mine to clean up", so the successor's
+ * live socket file and registration are left completely untouched.
+ */
+export async function cleanupDaemonIfOwner(
+  plugin: string,
+  pid: number,
+  socketPath: string | undefined,
+): Promise<OwnershipCleanupResult> {
+  const result = await getDaemon(plugin);
+
+  if (result.kind === "absent") {
+    return "absent";
+  }
+  if (result.value.pid !== pid) {
+    return "not-owner";
+  }
+
+  if (socketPath) {
+    try {
+      await unlink(socketPath);
+    } catch {
+      // Socket may already be gone; non-fatal.
+    }
+  }
+
+  await unregisterDaemon(plugin);
+  return "cleaned";
 }

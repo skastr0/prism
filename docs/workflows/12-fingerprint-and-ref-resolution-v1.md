@@ -71,10 +71,10 @@ type ScopeResolutionError =
 
 1. Resolution happens **once, before the first dispatch** of a workflow run, and
    the resolved absolute `ledgerPath` is fixed for the entire run.
-2. A single-repo scope **may** default to
-   `<workspace>/.prism/workflows/workflow-ledger.sqlite`. This default is the
-   only implicit behavior allowed, and only when no explicit mapping exists and
-   the scope is launched from exactly one repo root.
+2. A single-repo scope defaults to
+   `~/.prism/workflows/<project-key>/workflow-ledger.sqlite`. This default is
+   the only implicit behavior allowed, and only when no explicit mapping exists
+   and the scope resolves to exactly one repo identity.
 3. A multi-repo scope **must** be mapped explicitly (config or workflow input)
    to one absolute `ledgerPath` before dispatch. There is no auto-discovery of a
    shared path across repos.

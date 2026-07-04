@@ -40,8 +40,8 @@ creates a new immutable revision under the same stable key.
 The ledger location follows the scope, not the current working directory. A
 multi-repo scope must resolve to one SQLite database path before the first run;
 otherwise the same `scope_key` launched from two repo roots would create two
-independent histories. V1 may default to `<workspace>/.prism/workflows/` for
-single-repo scopes, but the `scope_key -> ledger_path` resolver is an explicit
+independent histories. V1 defaults to `~/.prism/workflows/<project-key>/` for
+single-repo scopes, and the `scope_key -> ledger_path` resolver is an explicit
 runtime service.
 
 ## Semantic fingerprint v1

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ensureDir } from "./fs.js";
+import { deriveProjectKey } from "./project-key.js";
 import type { WorkflowJudgeVerdict } from "./workflows.js";
 import type { WorkflowJudgeIdentity, WorkflowRunTaskSnapshot, WorkflowTaskIdentity } from "./workflow-identity.js";
 export { workflowRunTaskSnapshotForTask, workflowTaskIdentity, type WorkflowJudgeIdentity, type WorkflowRunTaskSnapshot, type WorkflowTaskIdentity } from "./workflow-identity.js";
@@ -303,8 +304,11 @@ interface RunTaskSnapshotRow {
   readonly created_at: string;
 }
 
-export const defaultWorkflowStorePath = (projectPath: string): string =>
-  join(projectPath, ".prism", "workflows", "workflows.sqlite");
+export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process.cwd()): string =>
+  join(prismHome, "workflows", deriveProjectKey(cwd).key);
+
+export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
+  join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
 const sqliteDateTime = (date: Date): string =>
   date.toISOString().slice(0, 19).replace("T", " ");

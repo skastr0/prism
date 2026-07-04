@@ -50,7 +50,8 @@ heartbeats, stop/status state, and concurrency locks in v1.
 
 ## Storage layout: SQLite ledger first
 
-The primary v1 store is SQLite under `.prism`. There is no JSONL replay mode.
+The primary v1 store is SQLite under Prism home, project-keyed by repository or
+cwd identity. There is no JSONL replay mode.
 Provider transcripts may be stored as rows or content-addressed artifacts, but
 SQLite is the only runtime source of truth.
 
@@ -58,16 +59,17 @@ The filesystem tree is a convenience/artifact cache. If it disagrees with the
 SQLite ledger, the ledger wins. Crash recovery, lock cleanup, status, wait, and
 stop never depend on a filesystem lease being present.
 
-Implementation checkpoint (2026-06-13): the dogfood runtime currently stores
-workflow runs, task rows, events, and cache records in
-`.prism/workflows/workflows.sqlite` by default. That store proves the local
-runtime loop, cache replay, detached inspection, stop/cancel, and finish repair.
-It is not yet the final AgentRun-resource ledger sketched below; current task
-records should be treated as durable evidence for the dogfood wedge, not as the
-full resource model with refs, lineage, attempts, and cross-scope locks.
+Implementation checkpoint (2026-07-04): the dogfood runtime stores workflow
+runs, task rows, events, and cache records in
+`~/.prism/workflows/<project-key>/workflows.sqlite` by default. That store proves
+the local runtime loop, cache replay, detached inspection, stop/cancel, and
+finish repair. It is not yet the final AgentRun-resource ledger sketched below;
+current task records should be treated as durable evidence for the dogfood
+wedge, not as the full resource model with refs, lineage, attempts, and
+cross-scope locks.
 
 ```
-<project>/.prism/workflows/
+~/.prism/workflows/<project-key>/
   workflow-ledger.sqlite   # AgentRun/resources/runs/events index
   runs/<workflowRunId>/
     input.json             # decoded defineWorkflow input

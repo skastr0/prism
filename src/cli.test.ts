@@ -10,11 +10,13 @@ import { generateMcpServerBundle } from "./compile/mcp-bundle.js";
 import { writePrismMcpServerBundle } from "./compile/mcp-runtime-path.js";
 import { bindingFromToolSource } from "./compile/tool-bindings.js";
 import { cleanupPrismMcpProcessesUnder } from "./testing/mcp-process-cleanup.js";
+import { deriveProjectKey } from "./project-key.js";
 
 const tempRoots: string[] = [];
+const repoRoot = process.cwd();
 
 const effectImportPath = join(
-  process.cwd(),
+  repoRoot,
   "node_modules",
   "effect",
   "dist",
@@ -22,7 +24,7 @@ const effectImportPath = join(
   "index.js",
 ).replace(/\\/g, "/");
 
-const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+const prismImportPath = join(repoRoot, "src", "index.ts").replace(/\\/g, "/");
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-cli-"));
@@ -48,11 +50,12 @@ const mergeEnv = (overrides: Record<string, string>): Record<string, string> =>
 
 const runCli = async (
   args: string[],
-  envOverrides: Record<string, string>
+  envOverrides: Record<string, string>,
+  options: { readonly cwd?: string } = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
   const processHandle = Bun.spawn({
-    cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
-    cwd: process.cwd(),
+    cmd: [process.execPath, "run", join(repoRoot, "src", "cli.ts"), ...args],
+    cwd: options.cwd ?? repoRoot,
     env: mergeEnv(envOverrides),
     stdout: "pipe",
     stderr: "pipe",
@@ -279,6 +282,60 @@ test("workflow runs update help exposes cache control", async () => {
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("--no-cache");
 });
+
+test("workflow default store lives under PRISM_HOME, not the current project", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const workflowPath = join(root, "default-store.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+export const workflow = defineWorkflow({
+  name: "default-store-smoke",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    cacheKey: "default-store-build",
+  })] as const,
+});
+`);
+  await writeFile(mockOutputPath, JSON.stringify({ build: { summary: "ok" } }));
+
+  const run = await runCli([
+    "workflow", "run", workflowPath,
+    "--mock-output", mockOutputPath,
+  ], { PRISM_HOME: prismHome }, { cwd: root });
+
+  expect(run.exitCode).toBe(0);
+  const runData = JSON.parse(run.stdout) as { runId: string };
+  const projectKey = deriveProjectKey(root).key;
+  const expectedStore = join(prismHome, "workflows", projectKey, "workflows.sqlite");
+  expect(await pathExists(expectedStore)).toBe(true);
+  expect(await pathExists(join(root, ".prism", "workflows", "workflows.sqlite"))).toBe(false);
+
+  const list = await runCli(["workflow", "runs", "list"], { PRISM_HOME: prismHome }, { cwd: root });
+  expect(list.exitCode).toBe(0);
+  const listed = JSON.parse(list.stdout) as { runs: Array<{ runId: string; workflow: string }> };
+  expect(listed.runs).toContainEqual(expect.objectContaining({
+    runId: runData.runId,
+    workflow: "default-store-smoke",
+  }));
+}, 30_000);
 
 test("workflow runs show returns the run record and rejects missing runs", async () => {
   const root = await createTempRoot();

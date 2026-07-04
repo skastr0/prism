@@ -3,6 +3,7 @@ import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
 import { exitWith } from "./exit.js";
 import { expandPath } from "./fs.js";
+import { resolvePrismHome } from "./prism-home.js";
 import {
   defaultWorkflowStorePath,
   WorkflowStore,
@@ -475,7 +476,7 @@ export const runWorkflowMonitor = async (options: WorkflowMonitorOptions = {}): 
   const renderer = await createCliRenderer({
     exitOnCtrlC: true,
   });
-  const storePath = expandPath(options.storePath ?? defaultWorkflowStorePath(process.cwd()));
+  const storePath = expandPath(options.storePath ?? defaultWorkflowStorePath(resolvePrismHome(), process.cwd()));
   createRoot(renderer).render(
     <WorkflowMonitorApp
       storePath={storePath}

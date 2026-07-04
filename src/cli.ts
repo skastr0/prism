@@ -224,6 +224,9 @@ const writeStdout = (text: string): Promise<void> =>
     process.stdout.write(text, (error) => (error ? reject(error) : resolve()));
   });
 
+const defaultWorkflowStorePathForCwd = (): string =>
+  defaultWorkflowStorePath(resolvePrismHome(), process.cwd());
+
 workflow
   .command("typecheck <file>")
   .description("Typecheck a workflow module with Prism's generated tsconfig and shipped declarations")
@@ -329,7 +332,7 @@ workflow
   }) => {
     try {
       await runWorkflowMonitor({
-        storePath: options.store ?? defaultWorkflowStorePath(process.cwd()),
+        storePath: options.store ?? defaultWorkflowStorePathForCwd(),
         pollMs: options.pollMs,
         ...(options.failStaleAfterMs !== undefined ? { failStaleAfterMs: options.failStaleAfterMs } : {}),
       });
@@ -402,7 +405,7 @@ workflow
       const workflow = await loadWorkflowFile(file, {
         skipTypecheck: isDetachSpawnParent || isDetachedChild,
       });
-      const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
+      const storePath = expandPath(options.store ?? defaultWorkflowStorePathForCwd());
       if (options.detach === true) {
         if (options.runId !== undefined || options.runToken !== undefined) {
           throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
@@ -577,7 +580,7 @@ workflowCache
   }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       const entries = store.listCompletedCache({
         workflow: options.workflow,
         taskId: options.taskId,
@@ -614,7 +617,7 @@ workflowCache
   }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       const entries = store.listCompletedCache({
         workflow: options.workflow,
         taskId: options.taskId,
@@ -643,7 +646,7 @@ workflowRuns
   .action(async (options: { readonly store?: string; readonly limit?: number; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -664,7 +667,7 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -694,7 +697,7 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string; readonly json?: boolean; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -740,7 +743,7 @@ workflowRuns
   ) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       if (options.follow === true) {
         const started = Date.now();
         let afterSequence = options.afterSequence ?? 0;
@@ -803,7 +806,7 @@ workflowRuns
   ) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       const started = Date.now();
       while (true) {
         if (options.failStaleAfterMs !== undefined) {
@@ -856,7 +859,7 @@ workflowRuns
     readonly cache?: boolean;
   }) => {
     try {
-      const storePath = expandPath(options.store ?? defaultWorkflowStorePath(process.cwd()));
+      const storePath = expandPath(options.store ?? defaultWorkflowStorePathForCwd());
       const result = await updateDetachedWorkflowRun({ runId, file, storePath, options });
       console.log(JSON.stringify(result, null, 2));
     } catch (error) {
@@ -872,7 +875,7 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePath(process.cwd())));
+      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
       const stoppedRun = store.stopRunningRun(runId);
       if (stoppedRun !== null) {
         requestWorkflowRunnerTermination(store, stoppedRun, "stop-requested");

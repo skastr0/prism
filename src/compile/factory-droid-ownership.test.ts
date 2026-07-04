@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/factory-droid.js";
+import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -29,7 +30,7 @@ test("factory-droid lowerer owner-qualifies foreign tool bindings without copyin
   const root = await createTempRoot();
   const outputRoot = join(root, ".factory");
   const ownerPluginName = "ot";
-  const ownerPluginId = `prism-generated-${ownerPluginName}`;
+  const ownerServerName = generatedMcpWireServerName(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -68,7 +69,7 @@ test("factory-droid lowerer owner-qualifies foreign tool bindings without copyin
   });
 
   const droid = findContentOperation(operations, join("droids", "consumer.md"));
-  expect(droid?.content).toContain(`mcp__${ownerPluginId}__ot_echo`);
+  expect(droid?.content).toContain(`mcp__${ownerServerName}__ot_echo`);
   expect(droid?.content).not.toContain("mcp__prism-generated-consumer-plugin__ot_echo");
 
   const mcpConfig = findContentOperation(operations, "mcp.json");

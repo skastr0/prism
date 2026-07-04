@@ -6,6 +6,7 @@ import {
 import { type PluginRegistry, collectPluginRegistries } from "./registry.js";
 import { normalizeBundleSegment } from "./lowerers/shared.js";
 import { prismMcpRuntimeDir } from "./mcp-runtime-path.js";
+import { stableHash8 } from "./stable-hash.js";
 import { readMcpRuntimeMetadata } from "../mcp/runtime-metadata.js";
 import { join } from "node:path";
 
@@ -69,6 +70,9 @@ const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
 
 export const generatedMcpServerName = (pluginName: string): string =>
   `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
+
+export const generatedMcpWireServerName = (pluginName: string): string =>
+  `p_${stableHash8(pluginName)}`;
 
 export const mcpExposureProfileForTarget = (
   serverName: string,

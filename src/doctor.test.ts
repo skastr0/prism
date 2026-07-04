@@ -8,6 +8,7 @@ import { computeContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
+import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
 
 let root: string;
 let originalHome: string | undefined;
@@ -308,20 +309,29 @@ test("doctor validates generated harness config references", async () => {
   const prismHome = join(root, "prism-home");
   const bundlePath = prismMcpServerPath(prismHome, "filter");
   await writeText(bundlePath, "known_tool\n");
+  const demoWireServerName = generatedMcpWireServerName("demo");
+  const filterWireServerName = generatedMcpWireServerName("filter");
+  const legacyWireServerName = generatedMcpWireServerName("legacy");
   await writeText(
     join(process.env.HOME!, ".codex", "config.toml"),
     [
-      '["mcp_servers"."prism-generated-demo"]',
+      `["mcp_servers"."${demoWireServerName}"]`,
       'url = "http://127.0.0.1:38463/mcp"',
       'enabled_tools = "not-an-array"',
+      `["mcp_servers"."${demoWireServerName}"."headers"]`,
+      '"X-Prism-Mcp-Exposure" = "prism-generated-demo:codex-cli"',
       "",
-      '["mcp_servers"."prism-generated-filter"]',
+      `["mcp_servers"."${filterWireServerName}"]`,
       'url = "http://127.0.0.1:38464/mcp"',
       'enabled_tools = ["missing_tool"]',
+      `["mcp_servers"."${filterWireServerName}"."headers"]`,
+      '"X-Prism-Mcp-Exposure" = "prism-generated-filter:codex-cli"',
       "",
-      '["mcp_servers"."prism-generated-legacy"]',
+      `["mcp_servers"."${legacyWireServerName}"]`,
       'command = "bun"',
       'args = ["/missing/prism/server.mjs"]',
+      `["mcp_servers"."${legacyWireServerName}"."headers"]`,
+      '"X-Prism-Mcp-Exposure" = "prism-generated-legacy:codex-cli"',
       "",
     ].join("\n"),
   );
@@ -333,14 +343,20 @@ test("doctor validates generated harness config references", async () => {
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
     `${JSON.stringify({
       mcpServers: {
-        "prism-generated-demo": {
+        [demoWireServerName]: {
           type: "http",
           url: "http://127.0.0.1:38465/mcp",
           headers: {
             "X-Prism-Mcp-Exposure": "prism-generated-demo:claude-code",
           },
         },
-        "prism-generated-legacy": { command: "bun", args: ["/missing/server.mjs"] },
+        [legacyWireServerName]: {
+          command: "bun",
+          args: ["/missing/server.mjs"],
+          headers: {
+            "X-Prism-Mcp-Exposure": "prism-generated-legacy:claude-code",
+          },
+        },
       },
     }, null, 2)}\n`,
   );

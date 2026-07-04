@@ -16,6 +16,7 @@ import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
 import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError, type WorkflowWorkerAdapterOptionsForCapability } from "./workflow-workers.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
+import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
 
 type UnsupportedRepairOptions = WorkflowWorkerAdapterOptionsForCapability<"no-repair-loop-continuation">;
 
@@ -80,6 +81,7 @@ describe("workflow worker argument builders", () => {
   });
 
   test("claude loads generated plugin MCP config explicitly", () => {
+    const allowedToolName = `mcp__${generatedMcpWireServerName("prism-harness-qa")}__prism_harness_qa_challenge_echo`;
     const args = buildClaudeArgs({
       agent: "qa-tester",
       model: "sonnet",
@@ -87,7 +89,7 @@ describe("workflow worker argument builders", () => {
       generatedPlugin: {
         pluginDir: "/home/test/.claude/skills/prism-generated-prism-harness-qa",
         mcpConfig: "/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json",
-        allowedTools: ["mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo"],
+        allowedTools: [allowedToolName],
       },
     });
 
@@ -100,7 +102,7 @@ describe("workflow worker argument builders", () => {
     expect(args).toContain("--verbose");
     expect(args).toContain("--mcp-config=/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json");
     expect(args).toContain("--strict-mcp-config");
-    expect(args).toContain("--allowedTools=mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo");
+    expect(args).toContain(`--allowedTools=${allowedToolName}`);
   });
 
   test("amp accepts only deep and rush workflow modes", () => {

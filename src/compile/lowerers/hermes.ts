@@ -5,7 +5,7 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { mcpToolNamesForBindings } from "../mcp-bundle.js";
 import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
 import {
-  generatedMcpServerName,
+  generatedMcpWireServerName,
   MCP_EXPOSURE_HEADER,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -118,7 +118,7 @@ const renderHermesMcpServerYaml = (options: {
 const planMcpServer = (
   input: LowerInput,
 ): { serverName: string; toolNames: ReadonlyArray<string> } => {
-  const serverName = generatedMcpServerName(input.target.sourcePluginName);
+  const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
   const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
   resolveMcpRuntime(input.registry, TARGET_ID, {
     requirePort: bindings.length > 0,

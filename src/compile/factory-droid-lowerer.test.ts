@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/factory-droid.js";
+import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -243,8 +244,9 @@ export default defineTool({
   expect(droid?.content).toContain('- "Glob"');
   expect(droid?.content).toContain('- "Grep"');
   expect(droid?.content).toContain('- "Read"');
+  const wireServerName = generatedMcpWireServerName("factory-plugin-fixture");
   expect(droid?.content).toContain(
-    '- "mcp__prism-generated-factory-plugin-fixture__factory_plugin_fixture_echo"',
+    `- "mcp__${wireServerName}__factory_plugin_fixture_echo"`,
   );
   expect(droid?.content).not.toContain("skills:");
 
@@ -269,7 +271,7 @@ export default defineTool({
   expect(hookConfig?.content).not.toContain('"hooks": {');
   expect(hookConfig?.content).toContain('"matcher": "Execute"');
   expect(hookConfig?.content).toContain(
-    '"matcher": "mcp__prism-generated-factory-plugin-fixture__factory_plugin_fixture_echo"',
+    `"matcher": "mcp__${wireServerName}__factory_plugin_fixture_echo"`,
   );
   expect(hookConfig?.content).toContain('node \\"${DROID_PLUGIN_ROOT}/hooks/audit-shell.mjs\\"');
 

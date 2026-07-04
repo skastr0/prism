@@ -7,7 +7,10 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
+  MCP_EXPOSURE_HEADER,
   generatedMcpServerName,
+  generatedMcpWireServerName,
+  mcpExposureProfileForTarget,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
@@ -147,6 +150,7 @@ const composeModelConfig = (agent: ComposedAgent): Record<string, unknown> => {
 
 const renderCodexMcpServerToml = (options: {
   readonly name: string;
+  readonly exposureProfile: string;
   readonly runtime: ResolvedMcpRuntime;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => {
@@ -157,14 +161,17 @@ const renderCodexMcpServerToml = (options: {
     "required = false",
     'default_tools_approval_mode = "approve"',
     `enabled_tools = ${tomlArray(options.enabledTools)}`,
+    tomlDottedTable(["mcp_servers", options.name, "headers"]),
+    `${quote(MCP_EXPOSURE_HEADER)} = ${quote(options.exposureProfile)}`,
   ];
 };
 
 const renderCodexOwnerMcpServerRef = (options: {
   readonly name: string;
+  readonly readableName: string;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => [
-  `# MCP tools requested from ${options.name}: ${options.enabledTools.join(", ")}`,
+  `# MCP tools requested from ${options.readableName} (wire ${options.name}): ${options.enabledTools.join(", ")}`,
 ];
 
 const renderAgentToml = (
@@ -205,7 +212,8 @@ const renderAgentToml = (
       "",
       "# prism diagnostic: Codex agent role files cannot carry partial mcp_servers tables.",
       ...renderCodexOwnerMcpServerRef({
-        name: generatedMcpServerName(ownerPlugin),
+        name: generatedMcpWireServerName(ownerPlugin),
+        readableName: generatedMcpServerName(ownerPlugin),
         enabledTools,
       }),
     );
@@ -406,7 +414,7 @@ const planMcpServer = (
   });
   if (ownedBindings.length === 0) return { globalToolNames: [] };
 
-  const mcpServerName = generatedMcpServerName(input.target.sourcePluginName);
+  const mcpServerName = generatedMcpWireServerName(input.target.sourcePluginName);
   return {
     mcpServerName,
     mcpRuntime: runtime,
@@ -517,6 +525,10 @@ const planConfigRegions = (
       commentPrefix: "#",
       content: renderCodexMcpServerToml({
         name: mcp.mcpServerName,
+        exposureProfile: mcpExposureProfileForTarget(
+          generatedMcpServerName(plugin),
+          TARGET_ID,
+        ),
         runtime: mcp.mcpRuntime,
         enabledTools: mcp.globalToolNames,
       }).join("\n"),

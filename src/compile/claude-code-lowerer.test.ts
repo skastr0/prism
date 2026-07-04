@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/claude-code.js";
+import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -247,7 +248,8 @@ export default defineTool({
   expect(agent?.content).toContain('effort: "high"');
   expect(agent?.content).toContain("temperature: 0.1");
   expect(agent?.content).toContain("top_p: 0.7");
-  expect(agent?.content).toContain('- "mcp__prism-generated-claude-plugin-fixture__claude_plugin_fixture_echo"');
+  const wireServerName = generatedMcpWireServerName("claude-plugin-fixture");
+  expect(agent?.content).toContain(`- "mcp__${wireServerName}__claude_plugin_fixture_echo"`);
   expect(agent?.content).not.toContain('- "claude_plugin_fixture_echo"');
   expect(agent?.content).toContain('- "Bash"');
   expect(agent?.content).toContain('- "Grep"');
@@ -264,11 +266,11 @@ export default defineTool({
   expect(command?.content).toContain("Say hello from Claude plugin bundle.");
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  expect(mcpConfig?.content).toContain('"prism-generated-claude-plugin-fixture"');
+  expect(mcpConfig?.content).toContain(`"${wireServerName}"`);
   const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
     mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
   };
-  const httpEntry = mcpParsed.mcpServers?.["prism-generated-claude-plugin-fixture"];
+  const httpEntry = mcpParsed.mcpServers?.[wireServerName];
   expect(httpEntry).toEqual({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
@@ -289,7 +291,7 @@ export default defineTool({
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "Bash"');
   expect(hookConfig?.content).toContain(
-    '"matcher": "mcp__prism-generated-claude-plugin-fixture__claude_plugin_fixture_echo"',
+    `"matcher": "mcp__${wireServerName}__claude_plugin_fixture_echo"`,
   );
   expect(hookConfig?.content).toContain('node \\"${CLAUDE_PLUGIN_ROOT}/hooks/audit-shell.mjs\\"');
 
@@ -398,7 +400,7 @@ export default defineTool({
   const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
     mcpServers?: Record<string, unknown>;
   };
-  expect(parsed.mcpServers?.["prism-generated-claude-http-fixture"]).toEqual({
+  expect(parsed.mcpServers?.[generatedMcpWireServerName("claude-http-fixture")]).toEqual({
     type: "http",
     url: "http://127.0.0.1:38465/mcp",
     headers: {

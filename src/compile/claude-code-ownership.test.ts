@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/claude-code.js";
+import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -29,7 +30,7 @@ test("claude-code lowerer owner-qualifies foreign tool bindings without copying 
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");
   const ownerPluginName = "ot";
-  const ownerPluginId = `prism-generated-${ownerPluginName}`;
+  const ownerServerName = generatedMcpWireServerName(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -71,7 +72,7 @@ test("claude-code lowerer owner-qualifies foreign tool bindings without copying 
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  expect(agent?.content).toContain(`mcp__${ownerPluginId}__ot_echo`);
+  expect(agent?.content).toContain(`mcp__${ownerServerName}__ot_echo`);
   expect(agent?.content).not.toContain("mcp__prism-generated-consumer-plugin__ot_echo");
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");

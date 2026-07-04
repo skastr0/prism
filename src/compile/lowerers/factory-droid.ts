@@ -12,6 +12,8 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   MCP_EXPOSURE_HEADER,
+  generatedMcpServerName,
+  generatedMcpWireServerName,
   mcpExposureProfileForTarget,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -27,7 +29,6 @@ import {
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
-import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredFile } from "../../sync/desired.js";
 import {
@@ -153,10 +154,10 @@ const composeFactoryTools = (
     target.sourcePluginName,
     agent,
   )) {
-    const ownerPluginId = generatedPluginIdForOwner(ownerPlugin);
+    const ownerServerName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
       generatedTools.push(
-        factoryMcpToolNameForBinding(ownerPlugin, ownerPluginId, binding),
+        factoryMcpToolNameForBinding(ownerPlugin, ownerServerName, binding),
       );
     }
   }
@@ -242,7 +243,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return factoryMcpToolNameForBinding(owner, generatedPluginIdForOwner(owner), binding);
+      return factoryMcpToolNameForBinding(owner, generatedMcpWireServerName(owner), binding);
     },
   );
 
@@ -337,12 +338,13 @@ const planMcpServer = async (
         : undefined;
     if (!runtime) continue;
 
-    const pluginId = generatedPluginIdForOwner(ownerPluginName);
-    mcpServers[pluginId] = {
+    const serverName = generatedMcpWireServerName(ownerPluginName);
+    const exposureServerName = generatedMcpServerName(ownerPluginName);
+    mcpServers[serverName] = {
       type: "http",
       url: renderMcpHttpUrl(runtime),
       headers: {
-        [MCP_EXPOSURE_HEADER]: mcpExposureProfileForTarget(pluginId, TARGET_ID),
+        [MCP_EXPOSURE_HEADER]: mcpExposureProfileForTarget(exposureServerName, TARGET_ID),
       },
     };
   }

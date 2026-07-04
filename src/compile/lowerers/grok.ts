@@ -13,6 +13,7 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   MCP_EXPOSURE_HEADER,
+  generatedMcpWireServerName,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
@@ -49,17 +50,8 @@ import {
 const TARGET_ID = "grok" as const;
 const GROK_MCP_NAME_SEPARATOR = "__";
 
-const stableHash8 = (input: string): string => {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index++) {
-    hash ^= input.codePointAt(index)!;
-    hash = Math.trunc(Math.imul(hash, 0x01000193));
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-};
-
 export const grokMcpServerNameForPlugin = (sourcePluginName: string): string =>
-  `p_${stableHash8(sourcePluginName)}`;
+  generatedMcpWireServerName(sourcePluginName);
 
 export interface GrokLowerTarget {
   readonly scope: HarnessScope;

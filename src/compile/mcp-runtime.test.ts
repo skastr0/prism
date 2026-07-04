@@ -5,6 +5,7 @@ import {
   DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
 } from "./mcp-policy.js";
 import {
+  generatedMcpWireServerName,
   getMcpHttpTargetSupport,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -40,6 +41,12 @@ test("MCP runtime defaults to Streamable HTTP per target", () => {
     connectTimeoutMs: DEFAULT_MCP_CONNECT_TIMEOUT_MS,
     toolTimeoutMs: DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS,
   });
+});
+
+test("MCP runtime derives compact generated wire server names", () => {
+  const name = generatedMcpWireServerName("typefully-cli");
+  expect(name).toBe("p_66111b68");
+  expect(name).toMatch(/^p_[0-9a-f]{8}$/);
 });
 
 test("MCP runtime validates supported Streamable HTTP target config", () => {

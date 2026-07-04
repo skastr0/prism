@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/kimi-code.js";
+import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -30,7 +31,7 @@ test("kimi-code lowerer owner-qualifies foreign tool bindings without copying ow
   const outputRoot = join(root, ".kimi-code");
   const ownerPluginName = "ot";
   const ownerPluginId = `prism-generated-${ownerPluginName}`;
-  const ownerServerName = ownerPluginId;
+  const ownerServerName = generatedMcpWireServerName(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -73,7 +74,7 @@ test("kimi-code lowerer owner-qualifies foreign tool bindings without copying ow
     join("skills", "prism-agent-consumer", "SKILL.md"),
   );
   expect(roleSkill?.content).toContain(
-    `mcp__plugin-${ownerPluginId}_${ownerPluginId}__ot_echo`,
+    `mcp__plugin-${ownerPluginId}_${ownerServerName}__ot_echo`,
   );
   expect(roleSkill?.content).not.toContain("prism-generated-consumer-plugin");
 

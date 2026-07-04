@@ -1,18 +1,11 @@
 import { relative } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
+import { stableHash8 } from "./stable-hash.js";
 
-// Grok validates the whole `server__tool` string at 64 chars. Prism's
-// generated Grok server names are `p_` + 8 hex chars, leaving 52 for `tool`.
+// Some MCP clients validate the whole qualified `server + tool` name at 64
+// chars. Prism's generated wire server keys are `p_` + 8 hex chars, leaving
+// 52 chars for the tool segment under the strictest `server__tool` shape.
 export const GENERATED_EXTERNAL_TOOL_NAME_MAX_LENGTH = 52;
-
-const stableHash8 = (input: string): string => {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index++) {
-    hash ^= input.codePointAt(index)!;
-    hash = Math.trunc(Math.imul(hash, 0x01000193));
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-};
 
 export const normalizeGeneratedPluginName = (pluginName: string): string => {
   const normalized = pluginName

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ComposedAgent } from "./compile/compose.js";
 import { planLowering } from "./compile/lowerers/grok.js";
+import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
 import type { DesiredFile } from "./sync/desired.js";
 import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
@@ -1290,7 +1291,7 @@ describe("workflow loader", () => {
     const fakeClaude = join(root, "fake-claude.mjs");
     const claudeRoot = join(root, ".claude");
     const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
-    const generatedToolName = "mcp__prism-generated-forge__prism_forge_build";
+    const generatedToolName = `mcp__${generatedMcpWireServerName("forge")}__prism_forge_build`;
     await writeFile(file, workerModelWorkflowSource("claude-code"));
     await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
     await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [
@@ -1403,7 +1404,7 @@ describe("workflow loader", () => {
       "---",
       "name: builder",
       "tools:",
-      "  - \"mcp__prism-generated-forge__forge_echo\"",
+      `  - "mcp__${generatedMcpWireServerName("forge")}__forge_echo"`,
       "---",
       "",
     ].join("\n"));
@@ -1453,8 +1454,9 @@ describe("workflow loader", () => {
     const fakeClaude = join(root, "fake-claude-unexpected-mcp.mjs");
     const claudeRoot = join(root, ".claude");
     const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
-    const allowedToolName = "mcp__prism-generated-forge__prism_forge_build";
-    const unexpectedToolName = "mcp__prism-generated-forge__prism_forge_delete";
+    const forgeWireServerName = generatedMcpWireServerName("forge");
+    const allowedToolName = `mcp__${forgeWireServerName}__prism_forge_build`;
+    const unexpectedToolName = `mcp__${forgeWireServerName}__prism_forge_delete`;
     await writeFile(file, workerModelWorkflowSource("claude-code"));
     await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
     await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [
@@ -1511,7 +1513,7 @@ describe("workflow loader", () => {
     const fakeClaude = join(root, "fake-claude-empty-allow-list.mjs");
     const claudeRoot = join(root, ".claude");
     const generatedPluginRoot = join(claudeRoot, "skills", "prism-generated-forge");
-    const unexpectedToolName = "mcp__prism-generated-forge__prism_forge_build";
+    const unexpectedToolName = `mcp__${generatedMcpWireServerName("forge")}__prism_forge_build`;
     await writeFile(file, workerModelWorkflowSource("claude-code"));
     await mkdir(join(generatedPluginRoot, "agents"), { recursive: true });
     await writeFile(join(generatedPluginRoot, "agents", "builder.md"), [

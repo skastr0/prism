@@ -10,7 +10,7 @@ import {
   mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
 import {
-  generatedMcpServerName,
+  generatedMcpWireServerName,
   MCP_EXPOSURE_HEADER,
   renderMcpHttpUrl,
   resolveMcpRuntime,
@@ -218,7 +218,7 @@ const renderKimiAgentRoleSkill = (
     target.sourcePluginName,
     agent,
   )) {
-    const serverName = generatedMcpServerName(ownerPlugin);
+    const serverName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
       generatedTools.push(kimiMcpToolName(serverName, ownerPlugin, binding));
     }
@@ -447,7 +447,7 @@ const planMcpServer = async (input: LowerInput): Promise<ReadonlyMap<string, Rec
 
   const servers = new Map<string, Record<string, unknown>>();
   if (ownedBindings.length > 0) {
-    const serverName = generatedMcpServerName(input.target.sourcePluginName);
+    const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
     const toolNames = uniqueSorted(
       mcpToolNamesForBindings(input.target.sourcePluginName, ownedBindings),
     );
@@ -530,7 +530,7 @@ const planHooks = async (
   );
   const canonicalToolNames = collectBindingNameMap(bindings, (binding) => {
     const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-    const serverName = generatedMcpServerName(owner);
+    const serverName = generatedMcpWireServerName(owner);
     return kimiMcpToolName(serverName, owner, binding);
   });
 

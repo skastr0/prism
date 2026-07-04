@@ -23,6 +23,7 @@ import {
 } from "./manifest.js";
 import { compilePluginForTarget } from "./compile/pipeline.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
+import { MCP_EXPOSURE_HEADER } from "./compile/mcp-runtime.js";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
 
@@ -605,14 +606,52 @@ const generatedConfigPathExists = async (
   path: string,
 ): Promise<boolean> => exists(expandPath(path));
 
+const GENERATED_MCP_SERVER_PREFIX = "prism-generated-";
+
+const pluginNameFromReadableMcpServerName = (
+  serverName: string,
+): string | undefined => {
+  if (!serverName.startsWith(GENERATED_MCP_SERVER_PREFIX)) return undefined;
+  const pluginName = serverName.slice(GENERATED_MCP_SERVER_PREFIX.length);
+  return pluginName.length > 0 ? pluginName : undefined;
+};
+
+const exposureProfileFromMcpServer = (
+  server: Record<string, unknown>,
+): string | undefined => {
+  const headers = server.headers;
+  if (!headers || typeof headers !== "object") return undefined;
+  const profile = (headers as Record<string, unknown>)[MCP_EXPOSURE_HEADER];
+  return typeof profile === "string" ? profile : undefined;
+};
+
+const pluginNameFromExposureProfile = (
+  exposureProfile: string | undefined,
+): string | undefined => {
+  if (!exposureProfile) return undefined;
+  const [serverName] = exposureProfile.split(":");
+  return serverName ? pluginNameFromReadableMcpServerName(serverName) : undefined;
+};
+
+const pluginNameForMcpServerConfig = (
+  serverName: string,
+  server: Record<string, unknown>,
+): string | undefined =>
+  pluginNameFromReadableMcpServerName(serverName) ??
+    pluginNameFromExposureProfile(exposureProfileFromMcpServer(server));
+
+const isPrismGeneratedMcpServerConfig = (
+  serverName: string,
+  server: Record<string, unknown>,
+): boolean => pluginNameForMcpServerConfig(serverName, server) !== undefined;
+
 const canonicalMcpBundlePathForServer = (
   prismHome: string,
   serverName: string,
+  server: Record<string, unknown>,
 ): string | undefined => {
-  const prefix = "prism-generated-";
-  if (!serverName.startsWith(prefix)) return undefined;
-  const pluginName = serverName.slice(prefix.length);
-  return pluginName.length > 0 ? prismMcpServerPath(prismHome, pluginName) : undefined;
+  const pluginName = pluginNameForMcpServerConfig(serverName, server);
+  return pluginName ? prismMcpServerPath(prismHome, pluginName) : undefined;
 };
 
 const enabledToolFindings = async (options: {
@@ -661,9 +700,11 @@ const validateCodexConfigReferences = async (
   const mcpServers = parsed.mcp_servers;
   if (mcpServers && typeof mcpServers === "object") {
     for (const [name, raw] of Object.entries(mcpServers as Record<string, unknown>)) {
-      if (!name.startsWith("prism-generated-") || !raw || typeof raw !== "object") continue;
       const server = raw as Record<string, unknown>;
-      const bundle = canonicalMcpBundlePathForServer(prismHome, name);
+      if (!raw || typeof raw !== "object" || !isPrismGeneratedMcpServerConfig(name, server)) {
+        continue;
+      }
+      const bundle = canonicalMcpBundlePathForServer(prismHome, name, server);
       const args = Array.isArray(server.args) ? server.args : [];
       const stdioBundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
       if (typeof server.command === "string" || stdioBundle) {
@@ -882,7 +923,7 @@ const validateClaudeGeneratedPlugin = async (
         readonly mcpServers?: Record<string, Record<string, unknown>>;
       };
       for (const [name, server] of Object.entries(parsed.mcpServers ?? {})) {
-        const bundle = canonicalMcpBundlePathForServer(prismHome, name);
+        const bundle = canonicalMcpBundlePathForServer(prismHome, name, server);
         const args = Array.isArray(server.args) ? server.args : [];
         const stdioBundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
         if (typeof server.command === "string" || stdioBundle) {

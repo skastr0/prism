@@ -32,11 +32,26 @@ http://127.0.0.1:<managed-port>/mcp
 The daemon serves multiple Streamable HTTP sessions from one Bun process. Prism
 records runtime metadata beside the bundle.
 
+The daemon/server identity stays readable:
+
+```text
+prism-generated-<plugin>
+```
+
+Harness config keys use the compact wire identity:
+
+```text
+p_<8-hex-hash>
+```
+
+Keeping those separate avoids client-side qualified tool-name limits without
+making runtime metadata, exposure profiles, and lifecycle diagnostics opaque.
+
 ## Config Contract
 
 Generated configs use HTTP-native fields:
 
-- Codex CLI: `url`, `enabled_tools`
+- Codex CLI: `url`, `enabled_tools`, and `headers`
 - Claude Code: `.mcp.json` with `type: "http"`, `url`, and `headers`
 - Hermes: `config.yaml -> mcp_servers.<name>.url`, `headers`, and `tools.include`
 - Antigravity CLI: `mcp_config.json -> serverUrl` and `headers`

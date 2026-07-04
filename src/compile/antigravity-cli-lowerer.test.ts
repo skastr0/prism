@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/antigravity-cli.js";
+import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -361,7 +362,7 @@ export default defineTool({
   const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
     mcpServers?: Record<string, unknown>;
   };
-  expect(parsed.mcpServers?.["prism-generated-antigravity-http-fixture"]).toEqual({
+  expect(parsed.mcpServers?.[generatedMcpWireServerName("antigravity-http-fixture")]).toEqual({
     serverUrl: "http://127.0.0.1:38466/mcp",
     headers: {},
   });

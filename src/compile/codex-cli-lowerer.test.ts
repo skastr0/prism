@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/codex-cli.js";
+import { generatedMcpServerName, generatedMcpWireServerName } from "./mcp-runtime.js";
 import { applySync } from "../sync/apply.js";
 import { planSync } from "../sync/plan.js";
 import { readSnapshot } from "../state/store.js";
@@ -246,7 +247,9 @@ export default defineTool({
   expect(agentToml?.content).not.toContain('\neffort = "high"');
   expect(agentToml?.content).not.toContain("temperature");
   expect(agentToml?.content).toContain("Codex has no direct equivalent for harness-native per-role tool allowlists");
-  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-mcp-fixture"]');
+  const wireServerName = generatedMcpWireServerName("codex-mcp-fixture");
+  const readableServerName = generatedMcpServerName("codex-mcp-fixture");
+  expect(agentToml?.content).not.toContain(`["mcp_servers"."${wireServerName}"]`);
   expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
@@ -254,7 +257,7 @@ export default defineTool({
   expect(agentToml?.content).not.toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).not.toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
   expect(agentToml?.content).toContain(
-    "# MCP tools requested from prism-generated-codex-mcp-fixture: codex_mcp_fixture_echo",
+    `# MCP tools requested from ${readableServerName} (wire ${wireServerName}): codex_mcp_fixture_echo`,
   );
 
   const skill = findFile(lowered.files, join("skills", "testing", "SKILL.md"));
@@ -276,7 +279,7 @@ export default defineTool({
   }
 
   // No global canonical tools here, so no mcp region — agent-level tables only.
-  expect(findRegion(lowered.regions, "codex.mcp.prism-generated-codex-mcp-fixture")).toBeUndefined();
+  expect(findRegion(lowered.regions, `codex.mcp.${wireServerName}`)).toBeUndefined();
 
   const hooksRegion = markerContent(findRegion(lowered.regions, "codex.hooks.codex-mcp-fixture"));
   expect(hooksRegion).toContain('[["hooks"."PreToolUse"]]');
@@ -494,7 +497,9 @@ export default defineTool({
   });
 
   const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
-  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  const wireServerName = generatedMcpWireServerName("codex-http-fixture");
+  const readableServerName = generatedMcpServerName("codex-http-fixture");
+  expect(agentToml?.content).not.toContain(`["mcp_servers"."${wireServerName}"]`);
   expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(agentToml?.content).not.toContain('command = "bun"');
   expect(agentToml?.content).not.toContain("args = ");
@@ -502,20 +507,24 @@ export default defineTool({
   expect(agentToml?.content).not.toContain("codex-static-token");
   expect(agentToml?.content).not.toContain('enabled_tools = ["codex_http_fixture_echo"]');
   expect(agentToml?.content).toContain(
-    "# MCP tools requested from prism-generated-codex-http-fixture: codex_http_fixture_echo",
+    `# MCP tools requested from ${readableServerName} (wire ${wireServerName}): codex_http_fixture_echo`,
   );
   expect(agentToml?.mode).toBeUndefined();
 
   const mcpRegion = markerContent(
-    findRegion(lowered.regions, "codex.mcp.prism-generated-codex-http-fixture"),
+    findRegion(lowered.regions, `codex.mcp.${wireServerName}`),
   );
-  expect(mcpRegion).toContain('["mcp_servers"."prism-generated-codex-http-fixture"]');
+  expect(mcpRegion).toContain(`["mcp_servers"."${wireServerName}"]`);
   expect(mcpRegion).toContain('url = "http://127.0.0.1:38464/mcp"');
   expect(mcpRegion).not.toContain('command = "bun"');
   expect(mcpRegion).not.toContain("args = ");
   expect(mcpRegion).not.toContain("http_headers");
   expect(mcpRegion).not.toContain("codex-static-token");
   expect(mcpRegion).toContain('enabled_tools = ["codex_http_fixture_echo"]');
+  expect(mcpRegion).toContain(`["mcp_servers"."${wireServerName}"."headers"]`);
+  expect(mcpRegion).toContain(
+    '"X-Prism-Mcp-Exposure" = "prism-generated-codex-http-fixture:codex-cli"',
+  );
 
   // No hooks: no hooks region and no features region.
   expect(findRegion(lowered.regions, "codex.hooks.codex-http-fixture")).toBeUndefined();
@@ -741,20 +750,25 @@ test("codex-cli consumer plugin references owner MCP servers without a self daem
   });
 
   const agentToml = findFile(lowered.files, join("agents", "orchestrator.toml"));
-  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-tower"]');
-  expect(agentToml?.content).not.toContain('["mcp_servers"."prism-generated-booth"]');
+  const towerWireServerName = generatedMcpWireServerName("tower");
+  const boothWireServerName = generatedMcpWireServerName("booth");
+  const selfWireServerName = generatedMcpWireServerName("orbit-consumer-fixture");
+  const towerReadableServerName = generatedMcpServerName("tower");
+  const boothReadableServerName = generatedMcpServerName("booth");
+  expect(agentToml?.content).not.toContain(`["mcp_servers"."${towerWireServerName}"]`);
+  expect(agentToml?.content).not.toContain(`["mcp_servers"."${boothWireServerName}"]`);
   expect(agentToml?.content).not.toContain('enabled_tools = ["tower_claim_glyph"]');
   expect(agentToml?.content).not.toContain('enabled_tools = ["booth_register_draft"]');
   expect(agentToml?.content).toContain(
-    "# MCP tools requested from prism-generated-tower: tower_claim_glyph",
+    `# MCP tools requested from ${towerReadableServerName} (wire ${towerWireServerName}): tower_claim_glyph`,
   );
   expect(agentToml?.content).toContain(
-    "# MCP tools requested from prism-generated-booth: booth_register_draft",
+    `# MCP tools requested from ${boothReadableServerName} (wire ${boothWireServerName}): booth_register_draft`,
   );
   expect(agentToml?.content).not.toContain("prism-generated-orbit-consumer-fixture");
   expect(agentToml?.content).not.toContain("url = ");
 
   expect(
-    findRegion(lowered.regions, "codex.mcp.prism-generated-orbit-consumer-fixture"),
+    findRegion(lowered.regions, `codex.mcp.${selfWireServerName}`),
   ).toBeUndefined();
 });

@@ -3,7 +3,7 @@
 import { join } from "node:path";
 import {
   MCP_EXPOSURE_HEADER,
-  generatedMcpServerName,
+  generatedMcpWireServerName,
   renderMcpHttpUrl,
   resolveMcpRuntime,
   type ResolvedMcpRuntime,
@@ -65,7 +65,7 @@ const planMcpServer = (
   readonly serverName: string;
   readonly entry?: CursorMcpServerEntry;
 } => {
-  const serverName = generatedMcpServerName(input.target.sourcePluginName);
+  const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,

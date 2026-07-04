@@ -13,6 +13,7 @@ import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
   MCP_EXPOSURE_HEADER,
+  generatedMcpWireServerName,
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
@@ -104,7 +105,7 @@ const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: Antigr
     target.sourcePluginName,
     agent,
   )) {
-    const ownerServerName = pluginIdForPlugin(ownerPlugin);
+    const ownerServerName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
       generatedTools.push(
         antigravityMcpToolNameForBinding(ownerPlugin, ownerServerName, binding),
@@ -287,7 +288,7 @@ const planHooks = async (
     ),
     (binding) => {
       const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-      return antigravityMcpToolNameForBinding(owner, pluginIdForPlugin(owner), binding);
+      return antigravityMcpToolNameForBinding(owner, generatedMcpWireServerName(owner), binding);
     },
   );
   const config: Record<string, Record<string, unknown>> = {};
@@ -335,10 +336,10 @@ const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown
     resolvedPort: input.target.mcpRuntimePort,
   });
 
-  const pluginId = pluginIdForPlugin(input.target.sourcePluginName);
+  const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
   const mcpServers: Record<string, unknown> = {};
   if (ownedBindings.length > 0) {
-    mcpServers[pluginId] = {
+    mcpServers[serverName] = {
       serverUrl: renderMcpHttpUrl(runtime),
       headers: {
         [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,

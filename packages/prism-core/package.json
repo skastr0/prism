@@ -1,15 +1,58 @@
 {
   "name": "@skastr0/prism-core",
-  "version": "0.1.2",
-  "private": true,
+  "version": "0.2.2",
   "type": "module",
-  "description": "Source-only workspace core contracts and codecs shared by Prism runtimes and workflow tooling.",
+  "description": "Core Prism contracts, refs, stable JSON, and manifest codecs for Prism runtimes and workflow tooling.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skastr0/prism.git",
+    "directory": "packages/prism-core"
+  },
+  "homepage": "https://github.com/skastr0/prism#readme",
+  "bugs": {
+    "url": "https://github.com/skastr0/prism/issues"
+  },
+  "keywords": [
+    "prism",
+    "ai-coding",
+    "agents",
+    "workflows",
+    "manifest"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
   "exports": {
-    "./compile-manifest": "./src/compile-manifest.ts",
-    "./refs": "./src/refs.ts",
-    "./snapshot": "./src/snapshot.ts",
-    "./stable-json": "./src/stable-json.ts"
+    "./compile-manifest": {
+      "types": "./dist/compile-manifest.d.ts",
+      "import": "./dist/compile-manifest.js"
+    },
+    "./refs": {
+      "types": "./dist/refs.d.ts",
+      "import": "./dist/refs.js"
+    },
+    "./snapshot": {
+      "types": "./dist/snapshot.d.ts",
+      "import": "./dist/snapshot.js"
+    },
+    "./stable-json": {
+      "types": "./dist/stable-json.d.ts",
+      "import": "./dist/stable-json.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "bun run build"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "effect": "^3.21.1"

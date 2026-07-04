@@ -50,6 +50,8 @@ export interface WorkflowTypecheckResult {
   readonly tsconfigPath: string;
 }
 
+type WorkflowDiagnosticScope = "entry" | "program";
+
 interface TsconfigJson {
   readonly compilerOptions?: Record<string, unknown>;
   readonly include?: string[];
@@ -193,15 +195,25 @@ const IMPLICIT_ANY_CODE = 7006;
 
 export const typecheckWorkflowFile = (
   filePath: string,
-  options: { readonly prismHome?: string } = {},
+  options: {
+    readonly prismHome?: string;
+    readonly diagnosticScope?: WorkflowDiagnosticScope;
+    readonly strictEnvironment?: boolean;
+  } = {},
 ): void => {
   const prismHome = options.prismHome ?? resolvePrismHome();
   const environment = resolveWorkflowTypeEnvironment(prismHome);
   if (environment === null) {
+    const message =
+      `workflow type environment unavailable (no generated refs or ` +
+      `shipped declarations for this project). Run \`prism compile\` to enable typechecking.`;
+    if (options.strictEnvironment === true) {
+      throw new WorkflowTypecheckError(filePath, [
+        { file: filePath, line: null, character: null, message },
+      ]);
+    }
     process.stderr.write(
-      `warning: workflow type environment unavailable (no generated refs or ` +
-        `shipped declarations for this project); skipping typecheck and ` +
-        `proceeding with the run. Run \`prism compile\` to enable typechecking.\n`,
+      `warning: ${message.replace("). Run", "); skipping typecheck and proceeding with the run. Run")}\n`,
     );
     return;
   }
@@ -212,10 +224,12 @@ export const typecheckWorkflowFile = (
   const allDiagnostics = ts.getPreEmitDiagnostics(program);
 
   const normalizedFilePath = filePath.replace(/\\/g, "/");
-  const fileDiagnostics = allDiagnostics.filter((d) => {
-    if (!d.file) return false;
-    return d.file.fileName.replace(/\\/g, "/") === normalizedFilePath;
-  });
+  const fileDiagnostics = options.diagnosticScope === "program"
+    ? allDiagnostics
+    : allDiagnostics.filter((d) => {
+      if (!d.file) return false;
+      return d.file.fileName.replace(/\\/g, "/") === normalizedFilePath;
+    });
 
   if (fileDiagnostics.length === 0) return;
 
@@ -224,6 +238,7 @@ export const typecheckWorkflowFile = (
   );
 
   const realErrors = fileDiagnostics.filter((d) => {
+    if (options.strictEnvironment === true) return true;
     if (ENVIRONMENT_DIAGNOSTIC_CODES.has(d.code)) return false;
     if (d.code === IMPLICIT_ANY_CODE && hasEnvironmentDiagnostic) return false;
     return true;
@@ -268,7 +283,11 @@ export const runWorkflowTypecheck = async (
     refsDir: workflowRefsDirectory(prismHome),
     workflowDir: dirname(resolved),
   });
-  typecheckWorkflowFile(resolved, { prismHome });
+  typecheckWorkflowFile(resolved, {
+    prismHome,
+    diagnosticScope: "program",
+    strictEnvironment: true,
+  });
   await checkWorkflowRefsFreshness({ prismHome });
   return { filePath: resolved, tsconfigPath: generated.path };
 };

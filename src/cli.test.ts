@@ -189,6 +189,90 @@ export const workflow = defineWorkflow({
   expect(result.stderr).toContain("Type 'number' is not assignable to type 'string'");
 }, 30_000);
 
+test("workflow typecheck rejects diagnostics from imported workflow helpers", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "with-helper.workflow.ts");
+  const helperPath = join(root, "helper.ts");
+
+  await writeFile(helperPath, `
+export const helperSummary: string = 42;
+`);
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+import { helperSummary } from "./helper.ts";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const satisfies WorkflowAgentRef;
+
+export const workflow = defineWorkflow({
+  name: "helper-diagnostic",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: helperSummary,
+    output: Schema.Struct({ summary: Schema.String }),
+  })] as const,
+});
+`);
+
+  const result = await runCli(["workflow", "typecheck", workflowPath], { PRISM_HOME: join(root, "prism-home") });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("Workflow typecheck failed");
+  expect(result.stderr).toContain("helper.ts");
+  expect(result.stderr).toContain("Type 'number' is not assignable to type 'string'");
+}, 30_000);
+
+test("workflow typecheck rejects missing generated refs imports", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "missing-refs.workflow.ts");
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+import { agents } from "prism/refs";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const satisfies WorkflowAgentRef;
+
+void agents;
+
+export const workflow = defineWorkflow({
+  name: "missing-refs",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+  })] as const,
+});
+`);
+
+  const result = await runCli(["workflow", "typecheck", workflowPath], { PRISM_HOME: join(root, "prism-home") });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("Workflow typecheck failed");
+  expect(result.stderr).toContain("Cannot find module 'prism/refs'");
+}, 30_000);
+
 test("workflow runs update help exposes cache control", async () => {
   const result = await runCli(["workflow", "runs", "update", "--help"], {});
 

@@ -31,6 +31,7 @@
     "check:effect-versions": "bun scripts/effect-version-guard.ts",
     "check:harness-enumeration": "bun scripts/harness-enumeration-guard.ts",
     "check:refresh-idempotency": "bun scripts/check-refresh-idempotency.ts",
+    "check:commits": "commitlint",
     "test": "bun test",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
@@ -58,6 +59,8 @@
     "uuid": "13.0.1"
   },
   "devDependencies": {
+    "@commitlint/cli": "^19.6.1",
+    "@commitlint/config-conventional": "^19.6.0",
     "@types/bun": "^1.2.14",
     "@types/react": "^19.2.7",
     "fast-check": "^4.8.0"

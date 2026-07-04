@@ -1,0 +1,87 @@
+name: Release
+
+# Release train: on every push to main, derive the next semver from the
+# conventional commits since the last tag, bump all workspace packages in one
+# `chore(release): vX.Y.Z` commit, tag it, and push. The tag push is what fires
+# npm-publish.yml (which stays gated behind the `release` environment approval).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Never react to our own release commit — this is the loop breaker. A PAT
+    # push (below) does re-trigger workflows, so this guard is load-bearing.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # A PAT (not the default GITHUB_TOKEN): pushes authored by GITHUB_TOKEN
+          # cannot trigger other workflows, so the tag would never reach
+          # npm-publish.yml. See docs/release-train.md for the required secret.
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      # Gate: never cut a tag the pre-publish gate would reject.
+      - name: Install
+        run: bun install --frozen-lockfile --cpu='*' --os='*'
+      - name: Verify
+        run: bun run verify
+      - name: Smoke prism-core package
+        run: bun run smoke:core
+      - name: Smoke npm CLI packages
+        run: bun run smoke:npm-cli
+
+      - name: Install svu
+        run: go install github.com/caarlos0/svu/v3@v3.4.1
+
+      - name: Derive release version
+        id: derive
+        run: |
+          set -euo pipefail
+          current="$(svu current)"
+          # --v0: while on 0.x, a breaking change bumps the minor (0.Y.0) rather
+          # than auto-cutting v1.0.0 from a stray `feat!` during stabilization.
+          next="$(svu next --v0)"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "next=${next}" >> "$GITHUB_OUTPUT"
+          if [ "${current}" = "${next}" ]; then
+            # Only docs/chore/test/refactor since the last tag — nothing to release.
+            echo "releasable=false" >> "$GITHUB_OUTPUT"
+            echo "No releasable commits since ${current}; skipping release."
+          else
+            echo "releasable=true" >> "$GITHUB_OUTPUT"
+            echo "Releasable change: ${current} -> ${next}"
+          fi
+
+      - name: Cut release commit and tag
+        if: ${{ steps.derive.outputs.releasable == 'true' }}
+        env:
+          NEXT: ${{ steps.derive.outputs.next }}
+        run: |
+          set -euo pipefail
+          version="${NEXT#v}"
+          bun scripts/apply-release-version.ts "${version}"
+          # Keep the lockfile's workspace version fields in step with the bump.
+          bun install --lockfile-only
+          git config user.name "prism-release-bot"
+          git config user.email "release@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): ${NEXT}"
+          git tag -a "${NEXT}" -m "${NEXT}"
+          git push origin HEAD:main
+          git push origin "${NEXT}"

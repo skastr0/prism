@@ -14,6 +14,7 @@ const HARNESSES = [
   "opencode",
   "claude-code",
   "codex-cli",
+  "hermes",
   "antigravity-cli",
   "grok",
   "factory-droid",
@@ -174,6 +175,53 @@ test(
     );
 
     const goldenPath = join(import.meta.dir, "codex-cli", "stdio-shim.json");
+
+    if (UPDATE_MODE) {
+      await mkdir(dirname(goldenPath), { recursive: true });
+      await writeFile(goldenPath, formatGolden(normalized));
+      return;
+    }
+
+    const golden = JSON.parse(await readFile(goldenPath, "utf8"));
+    expect(normalized).toEqual(golden);
+  },
+  { timeout: 120_000 },
+);
+
+// Separate from the flag-off loop above: hermes with the stdio-shim
+// rollout flag on. The N per-owner http entries collapse into one
+// aggregated config.yaml entry with command/args/env — see
+// `src/compile/lowerers/hermes.ts`. The flag-off goldens above must
+// stay byte-identical; this is the new fixture proving the flag-on shape.
+test(
+  "golden snapshot for hermes lowerer in stdio-shim mode",
+  async () => {
+    const root = harnessRoots["hermes"]!;
+    const planned = await Effect.runPromise(
+      planPluginForTarget({
+        pluginPath: pluginRoot,
+        target: "hermes",
+        scope: "global",
+        root,
+        prismHome,
+        dryRun: true,
+        mcpTransport: "stdio-shim",
+      }),
+    );
+
+    const normalized = normalizeLowerOutput(
+      { files: planned.files, regions: planned.regions },
+      {
+        harnessId: "hermes",
+        root,
+        prismHome,
+        pluginRoot,
+        projectRoot,
+        tempRoot,
+      },
+    );
+
+    const goldenPath = join(import.meta.dir, "hermes", "stdio-shim.json");
 
     if (UPDATE_MODE) {
       await mkdir(dirname(goldenPath), { recursive: true });

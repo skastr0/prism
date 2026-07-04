@@ -3,9 +3,11 @@ import type { HarnessId } from "./types.js";
 export type GeneratedCanonicalToolSupport = "executable" | "unsupported";
 export type SkillPermissionSupport = "supported" | "unsupported";
 export type CompileSurfaceSupport = "supported" | "unsupported";
+export type AgentModelBindingSupport = "consumed" | "ignored";
 
 export interface CompileTargetCapabilities {
   readonly agents: CompileSurfaceSupport;
+  readonly agentModelBindings: AgentModelBindingSupport;
   readonly generatedCanonicalTools: GeneratedCanonicalToolSupport;
   readonly hooks: CompileSurfaceSupport;
   readonly skillPermissions: SkillPermissionSupport;
@@ -60,6 +62,7 @@ const unsupported = (summary = "Prism does not manage this surface."): LowererSu
 
 const compileUnsupported: CompileTargetCapabilities = {
   agents: "unsupported",
+  agentModelBindings: "ignored",
   generatedCanonicalTools: "unsupported",
   hooks: "unsupported",
   skillPermissions: "unsupported",
@@ -69,6 +72,7 @@ const compileSupported = (
   overrides: Partial<CompileTargetCapabilities> = {},
 ): CompileTargetCapabilities => ({
   agents: "supported",
+  agentModelBindings: "consumed",
   generatedCanonicalTools: "executable",
   hooks: "supported",
   skillPermissions: "supported",
@@ -198,6 +202,7 @@ export const LOWERER_CAPABILITIES = {
     family: "claw-harness",
     compile: compileSupported({
       agents: "unsupported",
+      agentModelBindings: "ignored",
       hooks: "unsupported",
       skillPermissions: "unsupported",
     }),
@@ -276,7 +281,7 @@ export const LOWERER_CAPABILITIES = {
   "antigravity-cli": {
     harness: "antigravity-cli",
     family: "coding-harness",
-    compile: compileSupported(),
+    compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
         kind: "native-plugin-bundle",
@@ -324,7 +329,7 @@ export const LOWERER_CAPABILITIES = {
   "kimi-code": {
     harness: "kimi-code",
     family: "coding-harness",
-    compile: compileSupported(),
+    compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
         kind: "native-plugin-bundle",
@@ -382,7 +387,7 @@ export const LOWERER_CAPABILITIES = {
   "amp-code": {
     harness: "amp-code",
     family: "coding-harness",
-    compile: compileSupported(),
+    compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
         kind: "native-plugin-api",
@@ -432,6 +437,7 @@ export const LOWERER_CAPABILITIES = {
     family: "coding-harness",
     compile: compileSupported({
       agents: "unsupported",
+      agentModelBindings: "ignored",
       hooks: "unsupported",
       skillPermissions: "unsupported",
     }),

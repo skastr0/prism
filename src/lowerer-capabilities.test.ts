@@ -60,16 +60,39 @@ test("compile target capabilities are derived from lowerer capability profiles",
 
   expect(getCompileTargetCapabilities("gemini-cli")).toEqual({
     agents: "unsupported",
+    agentModelBindings: "ignored",
     generatedCanonicalTools: "unsupported",
     hooks: "unsupported",
     skillPermissions: "unsupported",
   });
   expect(getCompileTargetCapabilities("toString")).toEqual({
     agents: "unsupported",
+    agentModelBindings: "ignored",
     generatedCanonicalTools: "unsupported",
     hooks: "unsupported",
     skillPermissions: "unsupported",
   });
+});
+
+test("agent model-binding demand follows lowerer surfaces", () => {
+  const consumingHarnesses = Object.entries(LOWERER_CAPABILITIES)
+    .filter(([, profile]) => profile.compile.agentModelBindings === "consumed")
+    .map(([harnessId]) => harnessId);
+
+  expect(sorted(consumingHarnesses)).toEqual(
+    sorted([
+      "claude-code",
+      "codex-cli",
+      "factory-droid",
+      "grok",
+      "opencode",
+      "pi",
+    ]),
+  );
+
+  expect(LOWERER_CAPABILITIES["amp-code"].compile.agentModelBindings).toBe("ignored");
+  expect(LOWERER_CAPABILITIES["antigravity-cli"].compile.agentModelBindings).toBe("ignored");
+  expect(LOWERER_CAPABILITIES["kimi-code"].compile.agentModelBindings).toBe("ignored");
 });
 
 test("capability profiles distinguish product-native plugin surfaces from MCP and direct files", () => {
@@ -101,6 +124,7 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   });
   expect(LOWERER_CAPABILITIES["kimi-code"].compile).toEqual({
     agents: "supported",
+    agentModelBindings: "ignored",
     generatedCanonicalTools: "executable",
     hooks: "supported",
     skillPermissions: "supported",
@@ -115,6 +139,7 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   });
   expect(LOWERER_CAPABILITIES.pi.compile).toEqual({
     agents: "supported",
+    agentModelBindings: "consumed",
     generatedCanonicalTools: "executable",
     hooks: "supported",
     skillPermissions: "supported",
@@ -147,6 +172,7 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   expect(LOWERER_CAPABILITIES.openclaw.surfaces.skills.kind).toBe("direct-file");
   expect(LOWERER_CAPABILITIES.cursor.compile).toEqual({
     agents: "unsupported",
+    agentModelBindings: "ignored",
     generatedCanonicalTools: "executable",
     hooks: "unsupported",
     skillPermissions: "unsupported",

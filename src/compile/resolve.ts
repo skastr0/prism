@@ -9,6 +9,7 @@ import {
   ClaudeCodeModelTarget,
   Contract,
   Identity,
+  type ModelProfile,
   Orbit,
   OpenCodeModelTargetBlock,
   Personality,
@@ -36,6 +37,7 @@ import {
 } from "./protocol-tools.js";
 import type { PluginRegistry } from "./registry.js";
 import { resolveManifestTargets } from "../manifest.js";
+import { getCompileTargetCapabilities } from "./target-capabilities.js";
 import { parseNamedRef, parseSpaceItemRef, resolveRefToRegistry } from "./refs.js";
 
 export interface ResolvedContractBinding {
@@ -97,7 +99,7 @@ const TEMPLATE_PARAMETER_PATTERN = /\$\{([^}]+)\}/g;
 const decodeResolvedTargetBlock = <A>(
   sourcePath: string,
   target: string,
-  schema: Schema.Schema<A, any, never>,
+  schema: Schema.Schema<A, A, never>,
   value: unknown,
 ): A | SourceParseError => {
   const result = Schema.decodeUnknownEither(schema)(value);
@@ -778,12 +780,16 @@ const validateConcreteSkillName = (
   );
 };
 
-const resolveModelProfile = (
+interface ResolvedModelProfileReference {
+  readonly sourcePath: string;
+  readonly profile: ModelProfile;
+}
+
+const resolveModelProfileReference = (
   agent: Agent,
   modelProfileRef: string,
   registry: PluginRegistry,
-  target: string,
-): Effect.Effect<Record<string, unknown>, CompileError> =>
+): Effect.Effect<ResolvedModelProfileReference, CompileError> =>
   Effect.gen(function* () {
     const parsed = parseSpaceItemRef(modelProfileRef, "/");
     if (!parsed) {
@@ -817,6 +823,25 @@ const resolveModelProfile = (
       );
     }
 
+    return { sourcePath: modelspace.sourcePath, profile };
+  });
+
+const targetConsumesAgentModelBindings = (target: string): boolean =>
+  getCompileTargetCapabilities(target).agentModelBindings === "consumed";
+
+const resolveModelProfile = (
+  agent: Agent,
+  modelProfileRef: string,
+  registry: PluginRegistry,
+  target: string,
+): Effect.Effect<Record<string, unknown>, CompileError> =>
+  Effect.gen(function* () {
+    const { sourcePath, profile } = yield* resolveModelProfileReference(
+      agent,
+      modelProfileRef,
+      registry,
+    );
+
     const targetBlock = profile.targets[target];
     if (!targetBlock) {
       return yield* Effect.fail(
@@ -832,7 +857,7 @@ const resolveModelProfile = (
     const decoded = resolveModelTargetBlock(
       agent,
       registry,
-      modelspace.sourcePath,
+      sourcePath,
       target,
       targetBlock,
     );
@@ -863,7 +888,7 @@ const orbitParameterMap = (
 ): ReadonlyMap<string, OrbitParameter> =>
   new Map(orbit.parameters.map((parameter) => [parameter.name, parameter]));
 
-const hasBinding = (bindings: BindingMap, name: string): boolean =>
+const bindingKeyExists = (bindings: BindingMap, name: string): boolean =>
   Object.prototype.hasOwnProperty.call(bindings, name);
 
 const collectTemplateParameters = (value: string): ReadonlyArray<string> => {
@@ -1121,7 +1146,7 @@ const instantiateTemplateString = (
   let error: OrbitValidationError | undefined;
   const next = value.replace(TEMPLATE_PARAMETER_PATTERN, (_, rawName: string) => {
     const name = rawName.trim();
-    if (!hasBinding(bindings, name)) {
+    if (!bindingKeyExists(bindings, name)) {
       error = orbitError(
         orbit,
         field,
@@ -1626,9 +1651,15 @@ const resolveAgentModel = (
   registry: PluginRegistry,
   target: string,
 ): Effect.Effect<Record<string, unknown> | undefined, CompileError> =>
-  agent.model
-    ? resolveModelProfile(agent, agent.model, registry, target)
-    : Effect.succeed(undefined);
+  Effect.gen(function* () {
+    if (!agent.model) return undefined;
+    if (targetConsumesAgentModelBindings(target)) {
+      return yield* resolveModelProfile(agent, agent.model, registry, target);
+    }
+
+    yield* resolveModelProfileReference(agent, agent.model, registry);
+    return undefined;
+  });
 
 const resolveAgentSkillSurface = (
   agent: Agent,
@@ -1813,7 +1844,7 @@ const validateOrbitInstantiationBindings = (
   const missingRequired = orbit.parameters
     .filter((parameter) => parameterIsRequired(parameter))
     .map((parameter) => parameter.name)
-    .filter((name) => !hasBinding(bindings, name));
+    .filter((name) => !bindingKeyExists(bindings, name));
   if (missingRequired.length > 0) {
     return orbitError(
       orbit,
@@ -2100,7 +2131,7 @@ const validatePhaseOrbitBinding = (
     const missingRequired = referencedOrbit.parameters
       .filter((parameter) => parameterIsRequired(parameter))
       .map((parameter) => parameter.name)
-      .filter((bindingName) => !hasBinding(providedBindings, bindingName));
+      .filter((bindingName) => !bindingKeyExists(providedBindings, bindingName));
     if (missingRequired.length > 0) {
       return yield* Effect.fail(
         orbitError(

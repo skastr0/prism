@@ -1685,6 +1685,86 @@ export default defineAgent({
   ]);
 });
 
+test("amp agents do not demand modelspace target cells because the surface is model-free", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "amp-model-free-plugin");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-model-free-plugin",
+        version: "0.1.0",
+        targets: {
+          agents: ["amp-code"],
+          modelspaces: ["opencode"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  await writeText(
+    join(pluginRoot, "modelspaces", "models.modelspace.ts"),
+    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineModelspace({
+  name: "models",
+  profiles: {
+    default: {
+      targets: {
+        opencode: { model: "openai/gpt-5" },
+      },
+    },
+  },
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "identities", "worker.identity.md"),
+    `---
+description: Worker identity
+---
+
+# Worker
+
+You work through Amp role-skill guidance.
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "agents", "worker.agent.ts"),
+    `import { defineAgent, modelProfileRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineAgent({
+  name: "worker",
+  description: "Worker",
+  identity: "worker",
+  model: modelProfileRef("models", "default"),
+});
+`,
+  );
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  expect(result.composed).toHaveLength(1);
+  expect(result.composed[0]!.name).toBe("worker");
+  expect(result.composed[0]!.model).toBeUndefined();
+});
+
 test("canonical TS-authored agents resolve shared toolspace and modelspace bindings", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
 

@@ -218,6 +218,59 @@ test("resolveAgent fails with MissingTargetResolutionError for model profile mis
   expect(error.target).toBe("opencode");
 });
 
+test("resolveAgent ignores model profile target cells for model-free agent surfaces", async () => {
+  const registry = makeRegistry();
+  addToRegistry(registry, {
+    identities: [makeIdentity()],
+    modelspaces: [
+      makeModelspace({
+        name: "models",
+        profiles: { default: { targets: { opencode: { model: "openai/gpt-5" } } } },
+      }),
+    ],
+    agents: [makeAgent({ model: "models/default" })],
+  });
+
+  const resolved = await runResolve(
+    resolveAgent(registry.agents.get("builder")!, registry, "amp-code"),
+  );
+
+  expect(resolved.resolvedModel).toBeUndefined();
+});
+
+test("resolveAgent still validates missing modelspace refs for model-free agent surfaces", async () => {
+  const registry = makeRegistry();
+  addToRegistry(registry, {
+    identities: [makeIdentity()],
+    agents: [makeAgent({ model: "missing/default" })],
+  });
+
+  const error = assertErrorTag(
+    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "amp-code")),
+    "UnknownReferenceError",
+  );
+
+  expect(error.field).toBe("model");
+  expect(error.referenceName).toBe("missing/default");
+});
+
+test("resolveAgent still validates missing model profiles for model-free agent surfaces", async () => {
+  const registry = makeRegistry();
+  addToRegistry(registry, {
+    identities: [makeIdentity()],
+    modelspaces: [makeModelspace({ name: "models", profiles: {} })],
+    agents: [makeAgent({ model: "models/missing" })],
+  });
+
+  const error = assertErrorTag(
+    await failResolve(resolveAgent(registry.agents.get("builder")!, registry, "amp-code")),
+    "UnknownReferenceError",
+  );
+
+  expect(error.field).toBe("model");
+  expect(error.referenceName).toBe("models/missing");
+});
+
 test("resolveAgent fails with MissingTargetResolutionError for skillspace skill missing target", async () => {
   const registry = makeRegistry();
   addToRegistry(registry, {

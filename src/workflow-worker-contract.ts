@@ -46,6 +46,69 @@ const parseJsonCandidate = (candidate: string, rawText: string): unknown => {
   }
 };
 
+interface JsonSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+interface JsonSpanScan {
+  readonly spans: ReadonlyArray<JsonSpan>;
+  readonly sawOpenBracket: boolean;
+}
+
+/**
+ * Scans `text` once, string/escape aware, and records every span that opens a
+ * `{`/`[` at bracket depth 0 and closes back to depth 0 later (a "complete"
+ * top-level JSON-shaped value). Braces inside JSON strings (e.g. a receipt
+ * field containing literal `{`/`}` text) do not affect depth. Non-JSON
+ * brace-bearing content that happens to be balanced (a printed diff, a
+ * `Schema.Struct({ ... })` snippet) also produces a span here; it is filtered
+ * out later because it fails `JSON.parse`, not because this scan understands
+ * JSON grammar.
+ */
+const findTopLevelJsonSpans = (text: string): JsonSpanScan => {
+  const spans: JsonSpan[] = [];
+  let depth = 0;
+  let spanStart = -1;
+  let inString = false;
+  let escaped = false;
+  let sawOpenBracket = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      sawOpenBracket = true;
+      if (depth === 0) spanStart = index;
+      depth += 1;
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      if (depth === 0) continue; // stray close with no matching open; ignore
+      depth -= 1;
+      if (depth === 0 && spanStart >= 0) {
+        spans.push({ start: spanStart, end: index });
+        spanStart = -1;
+      }
+    }
+  }
+
+  return { spans, sawOpenBracket };
+};
+
 export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
@@ -57,17 +120,30 @@ export const parseWorkflowWorkerJsonOutput = (text: string): unknown => {
     const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/u);
     if (fenced?.[1]) return parseJsonCandidate(fenced[1], trimmed);
 
-    const firstObject = trimmed.indexOf("{");
-    const firstArray = trimmed.indexOf("[");
-    const starts = [firstObject, firstArray].filter((index) => index >= 0);
-    if (starts.length === 0) {
+    const { spans, sawOpenBracket } = findTopLevelJsonSpans(trimmed);
+    if (!sawOpenBracket) {
       throw new WorkflowOutputParseError("workflow worker output did not contain JSON", trimmed);
     }
-    const start = Math.min(...starts);
-    const end = Math.max(trimmed.lastIndexOf("}"), trimmed.lastIndexOf("]"));
-    if (end < start) {
+    if (spans.length === 0) {
       throw new WorkflowOutputParseError("workflow worker output contained incomplete JSON", trimmed);
     }
-    return parseJsonCandidate(trimmed.slice(start, end + 1), trimmed);
+
+    // Try the LAST complete top-level value first: workers append their JSON
+    // receipt after any prose/diff/tool output, so the last balanced span is
+    // the receipt far more often than the first.
+    let lastError: unknown;
+    for (let index = spans.length - 1; index >= 0; index -= 1) {
+      const span = spans[index]!;
+      const candidate = trimmed.slice(span.start, span.end + 1);
+      try {
+        return JSON.parse(candidate) as unknown;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw new WorkflowOutputParseError(
+      `workflow worker output contained invalid JSON: ${jsonParseErrorMessage(lastError)}`,
+      trimmed,
+    );
   }
 };

@@ -9,8 +9,9 @@
  *
  * The gate lints only NEW commit ranges (PR base..head, or push before..sha) in
  * .github/workflows/ci.yml, so frozen pre-gate history is never re-litigated.
- * Two pre-gate commits carry no conventional type and are documented, frozen
- * exceptions; see docs/release-train.md.
+ * The newest pre-gate non-conventional commit is f25a9d3; every commit after it
+ * is conventional, and CI never lints pre-tip history, so older commits are
+ * permanent, documented exceptions; see docs/release-train.md.
  */
 export default {
   extends: ["@commitlint/config-conventional"],

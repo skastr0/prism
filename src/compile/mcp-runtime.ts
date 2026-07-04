@@ -16,6 +16,43 @@ const DEFAULT_HTTP_HOST = "127.0.0.1";
 export type McpRuntimeTransport = "streamable-http";
 export const MCP_EXPOSURE_HEADER = "X-Prism-Mcp-Exposure" as const;
 
+/**
+ * Per-harness rollout flag for *how a harness invokes* a plugin's generated
+ * MCP server — not to be confused with `McpRuntimeTransport` above, which is
+ * the wire protocol the daemon itself speaks (always Streamable HTTP today).
+ * `"http"` (default) is today's one-http-entry-per-owner-plugin `.mcp.json`
+ * shape. `"stdio-shim"` points the harness at the aggregating stdio shim
+ * (`prism mcp shim`) instead, which fans out to the same daemons over UDS.
+ */
+export type McpHarnessTransportMode = "http" | "stdio-shim";
+export const DEFAULT_MCP_HARNESS_TRANSPORT: McpHarnessTransportMode = "http";
+
+/**
+ * Canary override env var name for a given harness, e.g. `claude-code` ->
+ * `PRISM_MCP_TRANSPORT_CLAUDE_CODE`. Lets an operator flip one harness to
+ * `stdio-shim` without touching plugin.json or CLI flags.
+ */
+export const mcpHarnessTransportEnvVar = (targetId: HarnessId): string =>
+  `PRISM_MCP_TRANSPORT_${targetId.replace(/-/g, "_").toUpperCase()}`;
+
+const parseMcpHarnessTransportMode = (raw: string | undefined): McpHarnessTransportMode | undefined =>
+  raw === "http" || raw === "stdio-shim" ? raw : undefined;
+
+/**
+ * Resolves the per-harness MCP transport rollout flag. Precedence: the
+ * `PRISM_MCP_TRANSPORT_<HARNESS>` env var (canary escape hatch, read fresh
+ * on every call) wins over the compiled/configured default, which itself
+ * defaults to `"http"` — the flag-off behavior every existing lowerer and
+ * golden fixture already assumes.
+ */
+export const resolveMcpHarnessTransportMode = (
+  targetId: HarnessId,
+  configured?: McpHarnessTransportMode,
+): McpHarnessTransportMode =>
+  parseMcpHarnessTransportMode(process.env[mcpHarnessTransportEnvVar(targetId)]) ??
+  configured ??
+  DEFAULT_MCP_HARNESS_TRANSPORT;
+
 export type McpHttpSupportState = "supported" | "unsupported";
 
 export interface McpHttpTargetSupport {

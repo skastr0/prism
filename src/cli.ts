@@ -45,6 +45,7 @@ import {
   type CompileResult,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
+import type { McpHarnessTransportMode } from "./compile/mcp-runtime.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import { topologicallySortedPlugins } from "./plugin-order.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
@@ -155,6 +156,11 @@ program
     parseMcpLifecycleMode,
     "serve"
   )
+  .option(
+    "--mcp-transport <mode>",
+    "MCP transport rollout flag for how a harness invokes the generated server (http|stdio-shim); default http",
+    parseMcpTransportMode,
+  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       await runRefreshCommand("refresh", pluginPath, options);
@@ -190,6 +196,11 @@ program
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
     "serve"
+  )
+  .option(
+    "--mcp-transport <mode>",
+    "MCP transport rollout flag for how a harness invokes the generated server (http|stdio-shim); default http",
+    parseMcpTransportMode,
   )
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -1149,6 +1160,27 @@ mcpCommand
     }
 });
 
+mcpCommand
+  .command("shim")
+  .description(
+    "Run the aggregating stdio MCP shim (the process a harness lowerer's " +
+      "generated stdio-shim config spawns directly; entirely env-driven, no flags)",
+  )
+  .addHelpText(
+    "after",
+    `
+Env vars read (all optional except PRISM_SHIM_PLUGINS):
+  PRISM_SHIM_PLUGINS             comma-separated plugin names to aggregate
+  PRISM_SHIM_DAEMON_TIMEOUT_MS   per-request daemon timeout
+  PRISM_SHIM_SPAWN_TIMEOUT_MS    resolve-or-spawn timeout for a cold daemon
+  PRISM_SHIM_ENABLED_TOOLS       comma-separated allowlist of wire tool names
+  PRISM_SHIM_EXPOSURE            X-Prism-Mcp-Exposure value forwarded to daemons
+`,
+  )
+  .action(async () => {
+    await import("./mcp/shim-main.js");
+  });
+
 program
   .command("doctor [plugin-path]")
   .description("Diagnose Prism refresh state and harness config health")
@@ -1360,6 +1392,7 @@ type RefreshCommandOptions = {
   clean?: boolean;
   compileRoot?: string;
   mcpLifecycle?: CompileMcpLifecycleMode;
+  mcpTransport?: McpHarnessTransportMode;
 };
 
 type NormalizedRefreshOptions = {
@@ -1377,6 +1410,7 @@ type NormalizedRefreshOptions = {
   clean: boolean;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
+  mcpTransport?: McpHarnessTransportMode;
 };
 
 type RefreshCommandContext = LoadedPlugin & {
@@ -1420,6 +1454,7 @@ type DirectoryRefreshOptions = {
   projectPath?: string;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
+  mcpTransport?: McpHarnessTransportMode;
   validate?: boolean;
   dryRun: boolean;
   overwrite: boolean;
@@ -1482,6 +1517,7 @@ async function runRefreshSingleCommand(
     projectPath: context.options.project,
     compileRoot: context.options.compileRoot,
     mcpLifecycle: context.options.mcpLifecycle,
+    mcpTransport: context.options.mcpTransport,
     clean: context.options.clean,
     dryRun: context.options.dryRun,
     quiet: context.options.json,
@@ -1848,6 +1884,7 @@ async function runRefreshDirectoryCommand(
     projectPath: options.project,
     compileRoot: options.compileRoot,
     mcpLifecycle: options.mcpLifecycle,
+    mcpTransport: options.mcpTransport,
     validate: options.validate,
     dryRun: options.dryRun,
     overwrite: options.overwrite,
@@ -2010,6 +2047,7 @@ async function refreshDiscoveredPlugin(
     projectPath: options.projectPath,
     compileRoot: options.compileRoot,
     mcpLifecycle: options.mcpLifecycle,
+    mcpTransport: options.mcpTransport,
     clean: options.clean,
     dryRun: options.dryRun,
     quiet: options.json,
@@ -2375,6 +2413,7 @@ async function runCompilePhaseForPlugin(options: {
   projectPath?: string;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
+  mcpTransport?: McpHarnessTransportMode;
   clean?: boolean;
   dryRun: boolean;
   indent?: string;
@@ -2408,6 +2447,7 @@ async function runCompilePhaseForPlugin(options: {
         prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
         mcpLifecycle: options.mcpLifecycle,
+        ...(options.mcpTransport ? { mcpTransport: options.mcpTransport } : {}),
         ...(options.emitWorkflowRefs !== undefined
           ? { emitWorkflowRefs: options.emitWorkflowRefs }
           : {}),
@@ -2494,6 +2534,11 @@ function parseWorkflowPermissionMode(value: string): WorkflowPermissionMode {
 function parseMcpLifecycleMode(value: string): CompileMcpLifecycleMode {
   if (value === "none" || value === "verify" || value === "serve") return value;
   throw new InvalidArgumentError("--mcp-lifecycle must be one of: none, verify, serve.");
+}
+
+function parseMcpTransportMode(value: string): McpHarnessTransportMode {
+  if (value === "http" || value === "stdio-shim") return value;
+  throw new InvalidArgumentError("--mcp-transport must be one of: http, stdio-shim.");
 }
 
 function assertProjectPathForProjectScope(

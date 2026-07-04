@@ -91,3 +91,50 @@ for (const harness of HARNESSES) {
     { timeout: 120_000 },
   );
 }
+
+// Separate from the flag-off loop above: claude-code with the stdio-shim
+// rollout flag on. The N per-owner http entries collapse into one
+// aggregated `.mcp.json` entry — see `src/compile/lowerers/claude-code.ts`.
+// The flag-off goldens above must stay byte-identical; this is the new
+// fixture proving the flag-on shape.
+test(
+  "golden snapshot for claude-code lowerer in stdio-shim mode",
+  async () => {
+    const root = harnessRoots["claude-code"]!;
+    const planned = await Effect.runPromise(
+      planPluginForTarget({
+        pluginPath: pluginRoot,
+        target: "claude-code",
+        scope: "global",
+        root,
+        prismHome,
+        dryRun: true,
+        mcpTransport: "stdio-shim",
+      }),
+    );
+
+    const normalized = normalizeLowerOutput(
+      { files: planned.files, regions: planned.regions },
+      {
+        harnessId: "claude-code",
+        root,
+        prismHome,
+        pluginRoot,
+        projectRoot,
+        tempRoot,
+      },
+    );
+
+    const goldenPath = join(import.meta.dir, "claude-code", "stdio-shim.json");
+
+    if (UPDATE_MODE) {
+      await mkdir(dirname(goldenPath), { recursive: true });
+      await writeFile(goldenPath, formatGolden(normalized));
+      return;
+    }
+
+    const golden = JSON.parse(await readFile(goldenPath, "utf8"));
+    expect(normalized).toEqual(golden);
+  },
+  { timeout: 120_000 },
+);

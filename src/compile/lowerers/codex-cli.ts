@@ -484,14 +484,21 @@ const planOrbitWrites = (
   }
 };
 
-const planRulesWrite = async (
+const codexRulesRegionKey = (plugin: string): string =>
+  `codex.rules.${normalizeBundleSegment(plugin)}`;
+
+const planRulesRegion = async (
   input: LowerInput,
-  files: DesiredFile[],
+  regions: DesiredRegion[],
 ): Promise<void> => {
   const rules = await renderRules(input);
   if (rules) {
-    pushDesiredFile(files, {
+    regions.push({
+      kind: "marker",
       targetPath: join(input.target.root, "AGENTS.md"),
+      regionKey: codexRulesRegionKey(input.target.sourcePluginName),
+      commentPrefix: "<!--",
+      commentSuffix: " -->",
       content: rules,
       plugin: input.target.sourcePluginName,
     });
@@ -567,9 +574,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   planAgentWrites(input, files);
   await planManagedSkillWrites(input, files);
   planOrbitWrites(input, files);
-  await planRulesWrite(input, files);
   const hooks = await planHooks(input, files);
   const regions = planConfigRegions(input, mcp, hooks);
+  await planRulesRegion(input, regions);
 
   return { files, regions };
 };

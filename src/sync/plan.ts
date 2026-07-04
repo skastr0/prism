@@ -262,11 +262,12 @@ const planSharedFileRegions = async (options: {
   readonly desired: ReadonlyArray<DesiredRegion>;
   readonly orphanedRefs: ReadonlyArray<string>;
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
+  readonly resetBeforePatch?: boolean;
 }): Promise<{
   readonly ops: ReadonlyArray<SyncOp>;
   readonly materializedRegionRefs: ReadonlyArray<string>;
 }> => {
-  const fileExists = await exists(options.targetPath);
+  const fileExists = !options.resetBeforePatch && await exists(options.targetPath);
   let original = "";
   if (fileExists) {
     try {
@@ -386,6 +387,7 @@ const planSharedRegions = async (options: {
   readonly desiredRegions: ReadonlyArray<DesiredRegion>;
   readonly snapshotRegions: ReadonlyMap<string, SnapshotEntry>;
   readonly protectedRegionKeys: ReadonlySet<string>;
+  readonly resetBeforePatchPaths: ReadonlySet<string>;
 }): Promise<{
   readonly ops: ReadonlyArray<SyncOp>;
   readonly materializedRegionKeys: ReadonlySet<string>;
@@ -406,6 +408,7 @@ const planSharedRegions = async (options: {
       desired: regionsByFile.get(targetPath) ?? [],
       orphanedRefs: orphanedByFile.get(targetPath) ?? [],
       snapshotByRegion: options.snapshotRegions,
+      resetBeforePatch: options.resetBeforePatchPaths.has(targetPath),
     });
     ops.push(...sharedPlan.ops);
     for (const ref of sharedPlan.materializedRegionRefs) {
@@ -468,12 +471,22 @@ export const planSync = async (options: {
     });
   }
 
+  const desiredRegionPaths = new Set(options.desired.regions.map((region) => region.targetPath));
+  const resetBeforePatchPaths = new Set<string>();
+
   // Orphaned owned files: in snapshot, no longer desired.
   for (const [targetPath, entry] of snapshotOwned) {
     if (desiredPaths.has(targetPath)) continue;
     if (!(await exists(targetPath))) continue; // silently drop the entry
     const diskHash = computeContentHash(await readFile(targetPath));
-    ops.push({ kind: "prune", targetPath, reason: "orphaned", backup: diskHash !== entry.contentHash });
+    const replacedBySharedRegions = desiredRegionPaths.has(targetPath);
+    if (replacedBySharedRegions) resetBeforePatchPaths.add(targetPath);
+    ops.push({
+      kind: "prune",
+      targetPath,
+      reason: "orphaned",
+      backup: replacedBySharedRegions || diskHash !== entry.contentHash,
+    });
   }
 
   // Shared-file regions, coalesced one write per file.
@@ -481,6 +494,7 @@ export const planSync = async (options: {
     desiredRegions: options.desired.regions,
     snapshotRegions,
     protectedRegionKeys: carriedRegionKeys,
+    resetBeforePatchPaths,
   });
   ops.push(...sharedRegionPlan.ops);
   for (const region of options.desired.regions) {

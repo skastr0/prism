@@ -52,6 +52,45 @@ const markerContent = (region: DesiredRegion | undefined): string => {
   return region.content;
 };
 
+const planRulesRegions = async (options: {
+  readonly root: string;
+  readonly outputRoot: string;
+  readonly pluginName: string;
+  readonly ruleBody: string;
+}): Promise<ReadonlyArray<DesiredRegion>> => {
+  const pluginRoot = join(options.root, options.pluginName);
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: options.pluginName,
+        version: "0.1.0",
+        targets: { rules: ["codex-cli"] },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(join(pluginRoot, "rules", "global", "context.md"), options.ruleBody);
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const lowered = await planLowering({
+    agents: [],
+    orbits: [],
+    tools: [],
+    skills: [],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: options.outputRoot,
+      sourcePluginName: options.pluginName,
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+  return lowered.regions;
+};
+
 const runGeneratedHookWrapper = (
   wrapperPath: string,
   payload: unknown,
@@ -263,9 +302,15 @@ export default defineTool({
   const skill = findFile(lowered.files, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
 
-  const rules = findFile(lowered.files, "AGENTS.md");
-  expect(rules?.content).toContain('<!-- prism:rules source="global/context.md" -->');
-  expect(rules?.content).toContain("Use project rules.");
+  expect(findFile(lowered.files, "AGENTS.md")).toBeUndefined();
+  const rulesRegion = findRegion(lowered.regions, "codex.rules.codex-mcp-fixture");
+  expect(rulesRegion?.kind).toBe("marker");
+  if (rulesRegion?.kind !== "marker") throw new Error("expected rules marker region");
+  expect(rulesRegion.targetPath).toBe(join(outputRoot, "AGENTS.md"));
+  expect(rulesRegion.commentPrefix).toBe("<!--");
+  expect(rulesRegion.commentSuffix).toBe(" -->");
+  expect(rulesRegion.content).toContain('<!-- prism:rules source="global/context.md" -->');
+  expect(rulesRegion.content).toContain("Use project rules.");
 
   // The MCP server bundle is written once to PRISM_HOME by the pipeline —
   // the lowerer plans no bundle write inside the harness root.
@@ -273,7 +318,7 @@ export default defineTool({
 
   // config.toml is never a whole-file write: only regions.
   expect(findFile(lowered.files, "config.toml")).toBeUndefined();
-  for (const region of lowered.regions) {
+  for (const region of lowered.regions.filter((region) => region.targetPath.endsWith("config.toml"))) {
     expect(region.targetPath).toBe(join(outputRoot, "config.toml"));
     expect(region.kind).toBe("marker");
   }
@@ -335,6 +380,72 @@ export default defineTool({
   expect(afterResult.exitCode).toBe(0);
   expect(afterResult.stdout).toBe("");
   expect(afterResult.stderr).toBe("");
+});
+
+test("codex-cli rules patch AGENTS.md marker regions without touching user prose", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const prismHome = join(root, "prism-home");
+  const agentsPath = join(outputRoot, "AGENTS.md");
+
+  const staleAlphaFence = [
+    "<!-- --- prism:codex.rules.alpha-rules begin --- -->",
+    "# Stale alpha rules",
+    "<!-- --- prism:codex.rules.alpha-rules end --- -->",
+  ].join("\n");
+  await writeText(
+    agentsPath,
+    `User heading stays byte-for-byte.\n\n${staleAlphaFence}\n\nUser footer stays byte-for-byte.\n`,
+  );
+
+  const regions = [
+    ...(await planRulesRegions({
+      root,
+      outputRoot,
+      pluginName: "alpha-rules",
+      ruleBody: "# Alpha rules\n\nUse alpha guidance.\n",
+    })),
+    ...(await planRulesRegions({
+      root,
+      outputRoot,
+      pluginName: "beta-rules",
+      ruleBody: "# Beta rules\n\nUse beta guidance.\n",
+    })),
+  ];
+
+  const firstPlan = await planSync({
+    desired: { harness: "codex-cli", root: outputRoot, files: [], regions },
+    snapshot: emptySnapshotManifest({ harness: "codex-cli", root: outputRoot }),
+  });
+  const first = await applySync({ prismHome, plan: firstPlan });
+  expect(first.blocked).toEqual([]);
+  expect(first.ops).toEqual([
+    expect.objectContaining({
+      kind: "patch-regions",
+      targetPath: agentsPath,
+      changedRegions: ["codex.rules.alpha-rules", "codex.rules.beta-rules"],
+    }),
+  ]);
+
+  const agents = await readFile(agentsPath, "utf8");
+  expect(agents).toStartWith("User heading stays byte-for-byte.\n\n");
+  expect(agents).toContain("\n\nUser footer stays byte-for-byte.\n");
+  expect(agents).not.toContain("# Stale alpha rules");
+  expect(agents).toContain("<!-- --- prism:codex.rules.alpha-rules begin --- -->");
+  expect(agents).toContain("# Alpha rules");
+  expect(agents).toContain("<!-- --- prism:codex.rules.beta-rules begin --- -->");
+  expect(agents).toContain("# Beta rules");
+
+  const snapshot = await readSnapshot({ prismHome, harness: "codex-cli", root: outputRoot });
+  const warmPlan = await planSync({
+    desired: { harness: "codex-cli", root: outputRoot, files: [], regions },
+    snapshot: snapshot.manifest,
+  });
+  const warm = await applySync({ prismHome, plan: warmPlan });
+  expect(warm.blocked).toEqual([]);
+  expect(warm.failures).toEqual([]);
+  expect(warm.ops.every((op) => op.kind === "skip-regions")).toBe(true);
+  expect(await readFile(agentsPath, "utf8")).toBe(agents);
 });
 
 test("codex-cli config regions preserve user config.toml bytes outside fences", async () => {

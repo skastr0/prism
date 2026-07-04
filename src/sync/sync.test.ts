@@ -132,6 +132,44 @@ describe("sync engine — owned files", () => {
     expect(await readFile(prunedDrifted.backups[0]!)).toBe("user touched\n");
   });
 
+  test("owned files replaced by shared regions are backed up and recreated from regions only", async () => {
+    const agentsPath = join(root, "AGENTS.md");
+    await refresh(desiredWith({
+      files: [{
+        targetPath: agentsPath,
+        content: "# Old Prism-owned Codex rules\n",
+        plugin: "rules-demo",
+      }],
+    }));
+
+    const migrated = await refresh(desiredWith({
+      regions: [{
+        kind: "marker",
+        targetPath: agentsPath,
+        regionKey: "codex.rules.rules-demo",
+        commentPrefix: "<!--",
+        commentSuffix: " -->",
+        content: "# New Codex rules\n",
+        plugin: "rules-demo",
+      }],
+    }));
+
+    expect(migrated.blocked).toEqual([]);
+    expect(migrated.ops).toEqual([
+      expect.objectContaining({ kind: "prune", targetPath: agentsPath, backup: true }),
+      expect.objectContaining({ kind: "patch-regions", targetPath: agentsPath, create: true }),
+    ]);
+    expect(migrated.backups).toHaveLength(1);
+    expect(await readFile(migrated.backups[0]!)).toBe("# Old Prism-owned Codex rules\n");
+    const agents = await readFile(agentsPath);
+    expect(agents).not.toContain("Old Prism-owned Codex rules");
+    expect(agents).toBe(
+      "<!-- --- prism:codex.rules.rules-demo begin --- -->\n" +
+        "# New Codex rules\n" +
+        "<!-- --- prism:codex.rules.rules-demo end --- -->\n",
+    );
+  });
+
   test("crash convergence: deleting the manifest re-converges without errors", async () => {
     await refresh(desired("v1\n"));
     await rm(snapshotPath(home, root));

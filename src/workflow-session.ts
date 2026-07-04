@@ -167,11 +167,6 @@ export const workflowContinuationAdapterForWorker = (
   return Either.isRight(result) ? workflowContinuationAdapterByWorker[result.right] : undefined;
 };
 
-export const workflowWorkerSupportsRepairLoopContinuation = (
-  worker: string,
-): worker is WorkflowRepairLoopContinuationWorkerId =>
-  Object.prototype.hasOwnProperty.call(workflowContinuationAdapterByWorker, worker);
-
 export const workflowContinuationSupportForAdapter = (
   adapter: string | undefined,
 ): WorkflowHarnessContinuationSupport | undefined => {

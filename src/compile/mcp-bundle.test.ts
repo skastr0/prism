@@ -1702,3 +1702,36 @@ test("MCP bundle Streamable HTTP TCP behavior unchanged when UDS_PATH not set", 
     await waitForChildClose(child).catch(() => undefined);
   }
 });
+
+
+test("MCP bundle idle-reap: generated template includes idle-reap code", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  // Verify idle-reap code is in the template
+  expect(bundle.content).toContain("PRISM_MCP_IDLE_TTL_MS");
+  expect(bundle.content).toContain("activeConnections");
+  expect(bundle.content).toContain("idleTimer");
+  expect(bundle.content).toContain("totalActiveConnections");
+  expect(bundle.content).toContain("resetIdleTimer");
+  expect(bundle.content).toContain("incrementActiveConnections");
+  expect(bundle.content).toContain("decrementActiveConnections");
+  expect(bundle.content).toContain("unref");
+});

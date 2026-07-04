@@ -1041,9 +1041,59 @@ const shutdownFlushGraceMs = Number.isFinite(configuredShutdownFlushMs) && confi
   : 300;
 const sessions = new Map<string, HttpSessionState>();
 let pendingSessionBootstraps = 0;
+// Idle-reap: track active connections (requests + SSE streams) to trigger shutdown
+// when no activity for PRISM_MCP_IDLE_TTL_MS with zero connections
+let activeConnections = 0;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+const configuredIdleTtlMs = Number(process.env.PRISM_MCP_IDLE_TTL_MS ?? "900000");
+const idleTtlMs = Number.isFinite(configuredIdleTtlMs) && configuredIdleTtlMs > 0
+  ? configuredIdleTtlMs
+  : 900000; // 15 minutes default
 
 const activeOrPendingSessionCount = (): number =>
   sessions.size + pendingSessionBootstraps;
+
+// Schedule idle-reap timer: fires after idleTtlMs of inactivity with zero active connections.
+// Resets on any activity (connection start/end). Counts both HTTP requests (activeConnections)
+// and long-lived SSE streams (activeSseStreamEnders.size).
+// Timer.unref() ensures it does not keep the process alive.
+const totalActiveConnections = (): number =>
+  activeConnections + activeSseStreamEnders.size;
+
+const resetIdleTimer = (): void => {
+  if (idleTimer !== undefined) clearTimeout(idleTimer);
+
+  idleTimer = setTimeout(() => {
+    const activeCount = totalActiveConnections();
+    console.error(\`[prism-mcp] idle-reap timer fired: activeConnections=\${activeConnections}, sseStreams=\${activeSseStreamEnders.size}, total=\${activeCount}\`);
+    // Only reap if no active connections or SSE streams
+    if (activeCount === 0) {
+      console.error(\`[prism-mcp] idle-reap: triggering shutdown after \${idleTtlMs}ms of inactivity\`);
+      void stopServer();
+    } else {
+      // If still active, reschedule
+      console.error(\`[prism-mcp] idle-reap: rescheduling timer, still have \${activeCount} active connections\`);
+      resetIdleTimer();
+    }
+  }, idleTtlMs);
+
+  // Timer must not keep process alive: unref so the process exits naturally if
+  // idle timer fires but no other work is pending
+  if (typeof idleTimer.unref === "function") {
+    idleTimer.unref();
+  }
+};
+
+const incrementActiveConnections = (): void => {
+  activeConnections += 1;
+  resetIdleTimer();
+};
+
+const decrementActiveConnections = (): void => {
+  activeConnections = Math.max(0, activeConnections - 1);
+  resetIdleTimer();
+};
 
 const responseHeaders = (extra?: HeadersInit, request?: Request): Headers => {
   const headers = new Headers(extra);
@@ -1468,25 +1518,32 @@ const server = Bun.serve({
   // frames well inside this window; see PRISM_MCP_SSE_KEEPALIVE_MS.
   idleTimeout: 255,
   fetch: async (request) => {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
-    if (url.pathname === httpHealthPath) {
+    // Track active connections for idle-reap: increment on request start,
+    // decrement when response is sent (including SSE streams which remain active).
+    incrementActiveConnections();
+    try {
+      const url = new URL(request.url);
+      if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
+      if (url.pathname === httpHealthPath) {
+        const authorization = authorize(request);
+        if (authorization.denied) return authorization.denied;
+        if (request.method === "GET") return jsonResponse(healthPayload(authorization.enabledToolNames), {}, request);
+        return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
+      }
+      if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 }, request);
+
       const authorization = authorize(request);
       if (authorization.denied) return authorization.denied;
-      if (request.method === "GET") return jsonResponse(healthPayload(authorization.enabledToolNames), {}, request);
+
+      if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
+      if (request.method === "GET" && sseDisabledForRequest(url)) {
+        return jsonResponse({ error: "SSE stream disabled for this MCP client" }, { status: 405 }, request);
+      }
+      if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
       return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
+    } finally {
+      decrementActiveConnections();
     }
-    if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 }, request);
-
-    const authorization = authorize(request);
-    if (authorization.denied) return authorization.denied;
-
-    if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
-    if (request.method === "GET" && sseDisabledForRequest(url)) {
-      return jsonResponse({ error: "SSE stream disabled for this MCP client" }, { status: 405 }, request);
-    }
-    if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
-    return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
   },
 });
 
@@ -1513,7 +1570,14 @@ const registerInRegistry = async (): Promise<void> => {
 
 void registerInRegistry();
 
+// Initialize idle-reap timer at startup: it will fire after idleTtlMs of
+// inactivity with zero active connections, triggering graceful shutdown.
+resetIdleTimer();
+
 const stopServer = async (): Promise<void> => {
+  // Cancel idle-reap timer to avoid double-firing during shutdown
+  if (idleTimer !== undefined) clearTimeout(idleTimer);
+
   // Graceful drain: stop accepting new connections, let in-flight tool calls
   // finish within a bounded window, then close sessions and force-close anything
   // still open (e.g. idle SSE streams). Avoids dropping live tool calls on

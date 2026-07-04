@@ -94,14 +94,11 @@ to push `main` (branch-protection bypass) so the `chore(release):` commit lands.
 
 `ci.yml` lints only the *new* commit range (PR `base..head`, or push
 `before..sha`) with commitlint + `@commitlint/config-conventional`, so frozen
-history is never re-litigated. Two pre-gate commits carry no conventional type
-and are permanent, documented exceptions:
-
-- `Fix model demand for model-free agent surfaces`
-- `Document embeddable SDK contract`
-
-They predate the gate and are unreachable by any future PR range; every commit
-after them is conventional.
+history is never re-litigated — CI never lints pre-tip history. Older commits
+carry no conventional type; the newest pre-gate non-conventional commit is
+`f25a9d3` (`Fix model demand for model-free agent surfaces`), and every commit
+after it is conventional. Pre-gate commits are unreachable by any future PR
+range, so they are permanent, documented exceptions the gate never re-litigates.
 
 ## The one-line flip to auto-approve
 

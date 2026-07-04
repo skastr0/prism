@@ -127,11 +127,10 @@ record "call-site schema matched/mismatched the agent-declared contract" without
 making it a hard dependency. This avoids a migration cliff if early workflows
 start depending on conventional output shapes.
 
-Phase 2 (WS5): `AgentSource` gains optional declared output contracts:
+Phase 2 (WS5): `AgentSource` gains optional declared output contracts.
+Pseudocode shape:
 
 ```typescript
-import { schemaRef, type AgentSource } from "prism";
-
 export default {
   name: "explorer",
   ...

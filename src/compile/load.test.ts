@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { Cause, Effect, Option, Schema } from "effect";
 import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
+import type { PluginRegistry } from "./registry.js";
 import type { Agent } from "./sources.js";
 
 const tempRoots: string[] = [];
@@ -214,6 +215,73 @@ const agentSnapshot = (agent: Agent) => ({
   targets: agent.targets,
 });
 
+const sourceFamilySnapshot = (registry: PluginRegistry) => {
+  const tool = registry.tools.get("submit_review");
+  const hook = registry.hooks.get("session-start");
+  const trait = registry.traits.get("reviewable");
+  const toolspace = registry.toolspaces.get("workspace");
+  const modelspace = registry.modelspaces.get("models");
+  const skillspace = registry.skillspaces.get("global");
+  const orbit = registry.orbits.get("delivery");
+  return {
+    trait: trait === undefined
+      ? undefined
+      : {
+        name: trait.name,
+        description: trait.description,
+        instructions: trait.instructions,
+        tools: trait.tools,
+        access: trait.access,
+        inject: trait.inject,
+        require: trait.require,
+      },
+    tool: tool === undefined
+      ? undefined
+      : {
+        name: tool.name,
+        description: tool.description,
+        inputIsSchema: Schema.isSchema(tool.input),
+        outputIsSchema: Schema.isSchema(tool.output),
+      },
+    toolspace: toolspace === undefined
+      ? undefined
+      : {
+        name: toolspace.name,
+        description: toolspace.description,
+        tools: toolspace.tools,
+        groups: toolspace.groups,
+      },
+    modelspace: modelspace === undefined
+      ? undefined
+      : {
+        name: modelspace.name,
+        description: modelspace.description,
+        profiles: modelspace.profiles,
+      },
+    skillspace: skillspace === undefined
+      ? undefined
+      : {
+        name: skillspace.name,
+        description: skillspace.description,
+        skills: skillspace.skills,
+      },
+    orbit: orbit === undefined
+      ? undefined
+      : {
+        name: orbit.name,
+        description: orbit.description,
+        phases: orbit.phases,
+        tool_permissions: orbit.tool_permissions,
+      },
+    hook: hook === undefined
+      ? undefined
+      : {
+        name: hook.name,
+        event: hook.event,
+      },
+  };
+};
+
 test("loadPlugin loads default-exported noun source objects across source families", async () => {
   const pluginRoot = await createTempRoot();
   await writeSharedNounSources(pluginRoot);
@@ -403,4 +471,126 @@ export default {
   expect(agentSnapshot(helperRegistry.agents.get("builder")!)).toEqual(
     agentSnapshot(nounRegistry.agents.get("builder")!),
   );
+});
+
+test("helper-based and noun-first non-agent source families produce equivalent normalized objects", async () => {
+  const helperRoot = await createTempRoot();
+  const nounRoot = await createTempRoot();
+  await writeManifest(helperRoot);
+  await writeSharedNounSources(nounRoot);
+
+  await writeText(
+    join(helperRoot, "traits", "reviewable.trait.ts"),
+    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+
+export default defineTrait({
+  name: "reviewable",
+  description: "Can review work.",
+  instructions: ["Review the implementation."],
+  tools: { submit_review: { ref: "submit_review" } },
+});
+`,
+  );
+  await writeText(
+    join(helperRoot, "tools", "submit_review.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "submit_review",
+  description: "Submit review findings.",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle() {
+    return { acknowledged: true };
+  },
+});
+`,
+  );
+  await writeText(
+    join(helperRoot, "toolspaces", "workspace.toolspace.ts"),
+    `import { defineToolspace, toolRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineToolspace({
+  name: "workspace",
+  description: "Workspace tool bindings.",
+  tools: {
+    run_shell: {
+      description: "Run a shell command.",
+      targets: { opencode: { name: "bash" } },
+    },
+  },
+  groups: {
+    repo: {
+      description: "Repository tools.",
+      tools: [toolRef("workspace", "run_shell")],
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(helperRoot, "modelspaces", "models.modelspace.ts"),
+    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineModelspace({
+  name: "models",
+  description: "Model bindings.",
+  profiles: {
+    default: {
+      description: "Default model.",
+      targets: { opencode: { model: "openai/gpt-5" } },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(helperRoot, "skillspaces", "global.skillspace.ts"),
+    `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
+
+export default defineSkillspace({
+  name: "global",
+  description: "Global skills.",
+  skills: {
+    testing: {
+      description: "Testing skill.",
+      targets: { opencode: { name: "testing" } },
+    },
+  },
+});
+`,
+  );
+  await writeText(
+    join(helperRoot, "orbits", "delivery.orbit.ts"),
+    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+
+export default defineOrbit({
+  name: "delivery",
+  description: "Delivery orbit.",
+  phases: [{
+    name: "Build",
+    agents: [agentRef("builder")],
+    requires: [{ all: [traitRef("reviewable")] }],
+  }],
+});
+`,
+  );
+  await writeText(
+    join(helperRoot, "hooks", "session-start.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-start",
+  event: hookEvent.sessionStart,
+  handle: () => Effect.succeed({ decision: "continue" }),
+});
+`,
+  );
+
+  const helperRegistry = await Effect.runPromise(loadPlugin(helperRoot));
+  const nounRegistry = await Effect.runPromise(loadPlugin(nounRoot));
+
+  expect(sourceFamilySnapshot(helperRegistry)).toEqual(sourceFamilySnapshot(nounRegistry));
 });

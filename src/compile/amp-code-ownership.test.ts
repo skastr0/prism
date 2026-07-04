@@ -60,15 +60,15 @@ test("consumer-only Amp plugins do not bundle foreign owner tools", async () => 
   await writeText(
     join(depRoot, "tools", "claim_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "claim_glyph",
   description: "Claim a glyph",
   input: Schema.Struct({ glyphId: Schema.String }),
   output: Schema.Struct({ claimed: Schema.Boolean }),
   async handle() { return { claimed: true }; },
-});
+} satisfies ToolSource;
 `,
   );
 
@@ -91,25 +91,25 @@ export default defineTool({
   );
   await writeText(
     join(consumerRoot, "traits", "tower-capable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "tower-capable",
   description: "Can use tower tools",
   tools: { claim_glyph: { ref: "tower-tools:claim_glyph" } },
-});
+} satisfies TraitSource;
 `,
   );
   await writeText(
     join(consumerRoot, "agents", "orchestrator.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+    `import type { AgentSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "orchestrator",
   description: "Consumes tower tools",
   identity: "orchestrator",
-  traits: [bindTrait("tower-capable")],
-});
+  traits: ["tower-capable"],
+} satisfies AgentSource;
 `,
   );
 
@@ -166,15 +166,15 @@ test("owner Amp plugins still register owned canonical tools", async () => {
   await writeText(
     join(ownerRoot, "tools", "claim_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "claim_glyph",
   description: "Claim a glyph",
   input: Schema.Struct({ glyphId: Schema.String }),
   output: Schema.Struct({ claimed: Schema.Boolean }),
   async handle() { return { claimed: true }; },
-});
+} satisfies ToolSource;
 `,
   );
 
@@ -236,15 +236,15 @@ test("consumer Amp plugins with commands only emit a slim command plugin", async
   await writeText(
     join(depRoot, "tools", "claim_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "claim_glyph",
   description: "Claim a glyph",
   input: Schema.Struct({ glyphId: Schema.String }),
   output: Schema.Struct({ claimed: Schema.Boolean }),
   async handle() { return { claimed: true }; },
-});
+} satisfies ToolSource;
 `,
   );
 
@@ -270,25 +270,25 @@ export default defineTool({
   );
   await writeText(
     join(consumerRoot, "traits", "tower-capable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "tower-capable",
   description: "Can use tower tools",
   tools: { claim_glyph: { ref: "tower-tools:claim_glyph" } },
-});
+} satisfies TraitSource;
 `,
   );
   await writeText(
     join(consumerRoot, "agents", "orchestrator.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+    `import type { AgentSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "orchestrator",
   description: "Consumes tower tools",
   identity: "orchestrator",
-  traits: [bindTrait("tower-capable")],
-});
+  traits: ["tower-capable"],
+} satisfies AgentSource;
 `,
   );
   await writeText(

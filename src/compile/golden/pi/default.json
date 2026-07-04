@@ -5,7 +5,7 @@
       "path": "<HARNESS_ROOT>/packages/prism-generated-canonical-compile-fixture/extensions/prism-extension.js"
     },
     {
-      "content": "<BUNDLE_HASH:3963a0b9af0811cfb0fd1a109feb077731f6d354eceb6ce380673fbc5137df32>",
+      "content": "<BUNDLE_HASH:2f939c4b09615bfc8be0ca78c7406a3fcf0cb5755eb85e28ab8494bb146d7727>",
       "mode": 493,
       "path": "<HARNESS_ROOT>/packages/prism-generated-canonical-compile-fixture/hooks/session-start.mjs"
     },

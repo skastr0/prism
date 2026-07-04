@@ -126,7 +126,14 @@ export default {
 No slots filled means permission only.
 
 ```ts
-"submittable";
+import type { AgentSource } from "prism";
+
+export default {
+  name: "builder",
+  description: "Builds scoped changes",
+  identity: "builder",
+  traits: ["submittable"],
+} satisfies AgentSource;
 ```
 
 The agent receives the base `orbit-core:submit_work` harness tool.
@@ -136,18 +143,26 @@ The agent receives the base `orbit-core:submit_work` harness tool.
 The agent fills a tool-owned slot with an imported runtime schema artifact.
 
 ```ts
+import type { AgentSource } from "prism";
 import { BuilderSubmitWorkReport } from "../schemas/tool-schemas.ts";
 
-{
-  trait: "submittable",
-  tools: {
-    submit_work: {
-      slots: {
-        builder_report: BuilderSubmitWorkReport,
+export default {
+  name: "builder",
+  description: "Builds scoped changes",
+  identity: "builder",
+  traits: [
+    {
+      trait: "submittable",
+      tools: {
+        submit_work: {
+          slots: {
+            builder_report: BuilderSubmitWorkReport,
+          },
+        },
       },
     },
-  },
-};
+  ],
+} satisfies AgentSource;
 ```
 
 The compiler creates one synthetic wrapper for this filled-slot contract. The

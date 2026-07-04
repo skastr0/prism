@@ -5580,9 +5580,9 @@ Use only the skills that fit the work.
   );
   await writeText(
     join(pluginRoot, "traits", "marketing-enabled.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef, type TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "marketing-enabled",
   description: "Can use marketing skills",
   access: {
@@ -5591,14 +5591,14 @@ export default defineTrait({
       skillspaceRef("external-skills", "marketing"),
     ],
   },
-});
+} satisfies TraitSource;
 `,
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
+    `import type { SkillspaceSource } from "prism";
 
-export default defineSkillspace({
+export default {
   name: "external-skills",
   description: "Harness-native skills this plugin does not own",
   skills: {
@@ -5613,7 +5613,7 @@ export default defineSkillspace({
       },
     },
   },
-});
+} satisfies SkillspaceSource;
 `,
   );
   await writeText(
@@ -5630,15 +5630,15 @@ Lock down interfaces before implementation.
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "prism";
+    `import { skillRef, type AgentSource } from "prism";
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker with skill permissions",
   identity: "worker",
   traits: ["marketing-enabled"],
   skills: [skillRef("contracts")],
-});
+} satisfies AgentSource;
 `,
   );
 
@@ -5709,9 +5709,9 @@ export default defineAgent({
 
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
+    `import type { SkillspaceSource } from "prism";
 
-export default defineSkillspace({
+export default {
   name: "external-skills",
   description: "Harness-native skills this plugin does not own",
   skills: {
@@ -5726,7 +5726,7 @@ export default defineSkillspace({
       },
     },
   },
-});
+} satisfies SkillspaceSource;
 `,
   );
 
@@ -5777,22 +5777,22 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "needs-testing.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef, type TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "needs-testing",
   description: "Requires testing skill permission",
   require: {
     skills: [skillspaceRef("core-skills", "testing")],
   },
-});
+} satisfies TraitSource;
 `,
   );
   await writeText(
     join(pluginRoot, "skillspaces", "core-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
+    `import type { SkillspaceSource } from "prism";
 
-export default defineSkillspace({
+export default {
   name: "core-skills",
   skills: {
     testing: {
@@ -5801,7 +5801,7 @@ export default defineSkillspace({
       },
     },
   },
-});
+} satisfies SkillspaceSource;
 `,
   );
   await writeText(
@@ -5816,15 +5816,15 @@ description: Testing guidance
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "prism";
+    `import { skillRef, type AgentSource } from "prism";
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker with concrete skill dependency",
   identity: "worker",
   traits: ["needs-testing"],
   skills: [skillRef("testing")],
-});
+} satisfies AgentSource;
 `,
   );
 

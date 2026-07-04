@@ -72,22 +72,22 @@ description: Worker identity
 
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+    `import type { AgentSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker agent for native plugin load tests",
   identity: "worker",
-  traits: [bindTrait("actionable")],
-});
+  traits: ["actionable"],
+} satisfies AgentSource;
 `,
   );
 
   await writeText(
     join(pluginRoot, "traits", "actionable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "actionable",
   description: "Can perform actions",
   instructions: "Use the greet tool when appropriate.",
@@ -97,16 +97,16 @@ export default defineTrait({
   require: {
     tools: ["greet"],
   },
-});
+} satisfies TraitSource;
 `,
   );
 
   await writeText(
     join(pluginRoot, "tools", "greet.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "greet",
   description: "Greet someone",
   input: Schema.Struct({ name: Schema.String }),
@@ -114,7 +114,7 @@ export default defineTool({
   async handle(input) {
     return { message: "Hello, " + input.name };
   },
-});
+} satisfies ToolSource;
 `,
   );
 
@@ -131,16 +131,16 @@ Say hello to the user.
 
   await writeText(
     join(pluginRoot, "hooks", "on-start.hook.ts"),
-    `import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { hookEvent, type HookSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "on-start",
   description: "Run on session start",
   event: hookEvent.sessionStart,
   async handle() {
     return { decision: "continue" };
   },
-});
+} satisfies HookSource;
 `,
   );
 

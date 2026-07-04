@@ -25,12 +25,17 @@
  * handed back untouched instead of being round-tripped through schema
  * validation on the way in.
  *
- * A daemon that is absent from the UDS registry, or present but unreachable
- * within `daemonTimeoutMs`, is never fatal to the shim: its tools are
- * omitted from the merged `tools/list`, and a `tools/call` naming it
- * returns a typed `McpError` (SDK `ErrorCode.ConnectionClosed`). Every other
- * configured plugin keeps serving normally — each plugin's request runs
- * against its own timeout and failure is caught per-plugin.
+ * A plugin absent from the UDS registry, whose recorded daemon is dead, or
+ * whose recorded bundle hash no longer matches the compiled bundle on disk,
+ * is resolved via `daemon-resolver.ts`'s `resolveOrSpawnDaemon`: it spawns a
+ * fresh daemon and waits (bounded by a spawn timeout) for it to register
+ * and answer live. If that also fails, or a live daemon is unreachable
+ * within `daemonTimeoutMs`, the failure is never fatal to the shim: the
+ * plugin's tools are omitted from the merged `tools/list`, and a
+ * `tools/call` naming it returns a typed `McpError` (SDK
+ * `ErrorCode.ConnectionClosed`). Every other configured plugin keeps
+ * serving normally — each plugin's request runs against its own timeout and
+ * failure is caught per-plugin.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -45,6 +50,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getDaemon as getDaemonDefault, type RegistryResult, type RegistryEntry } from "./uds-registry.js";
+import { resolveOrSpawnDaemon, DaemonResolveError, DEFAULT_SPAWN_TIMEOUT_MS } from "./daemon-resolver.js";
 
 // ---------------------------------------------------------------------------
 // Naming: the per-plugin namespace segment used to flatten N plugins' tools
@@ -247,11 +253,20 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 // ---------------------------------------------------------------------------
 
 export type GetDaemonFn = (plugin: string) => Promise<RegistryResult<RegistryEntry>>;
+export type ResolveOrSpawnFn = (plugin: string) => Promise<RegistryEntry>;
 
 export interface ShimAggregatorOptions {
   readonly plugins: ReadonlyArray<string>;
   readonly daemonTimeoutMs?: number;
+  readonly spawnTimeoutMs?: number;
   readonly getDaemon?: GetDaemonFn;
+  /**
+   * Full override of daemon resolution, bypassing `getDaemon` entirely.
+   * Tests that only want to exercise merge/dispatch/isolation (not
+   * resolve-or-spawn itself) inject a stub here instead of standing up a
+   * real compiled bundle on disk.
+   */
+  readonly resolveOrSpawn?: ResolveOrSpawnFn;
 }
 
 export const DEFAULT_SHIM_DAEMON_TIMEOUT_MS = 30_000;
@@ -265,34 +280,51 @@ export class ShimAggregator {
   private readonly plugins: ReadonlyArray<string>;
   private readonly daemonTimeoutMs: number;
   private readonly getDaemon: GetDaemonFn;
+  private readonly spawnTimeoutMs: number;
+  private readonly resolveOrSpawn: ResolveOrSpawnFn;
   private readonly connections = new Map<string, { readonly sock: string; readonly connection: DaemonConnection }>();
 
   constructor(options: ShimAggregatorOptions) {
     this.plugins = options.plugins;
     this.daemonTimeoutMs = options.daemonTimeoutMs ?? DEFAULT_SHIM_DAEMON_TIMEOUT_MS;
     this.getDaemon = options.getDaemon ?? getDaemonDefault;
+    this.spawnTimeoutMs = options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS;
+    this.resolveOrSpawn =
+      options.resolveOrSpawn ??
+      ((plugin: string) =>
+        resolveOrSpawnDaemon({ plugin, getDaemon: this.getDaemon, spawnTimeoutMs: this.spawnTimeoutMs }));
   }
 
   /**
-   * Resolves (or reuses) the connection for `plugin`. Returns `undefined`
-   * if the plugin has no live registry entry — that is "unavailable", not
-   * an error: the caller omits its tools / reports a typed error, but the
-   * aggregator itself never throws for a merely-absent plugin.
+   * Resolves (or reuses) the connection for `plugin`: registry record
+   * present and live and fresh -> reuse; absent, dead, or stale (bundle
+   * hash no longer matches the on-disk bundle) -> `resolveOrSpawn` spawns a
+   * fresh daemon and waits for it to come up (see `daemon-resolver.ts`).
+   *
+   * Returns `undefined` if resolution ultimately fails (no bundle to spawn,
+   * or the daemon never became live within the timeout) — that is
+   * "unavailable", not fatal: the caller omits its tools / reports a typed
+   * error, but the aggregator itself never throws for one bad plugin.
    */
   private async resolveConnection(plugin: string): Promise<DaemonConnection | undefined> {
-    const registered = await this.getDaemon(plugin);
-    if (registered.kind === "absent") {
+    let entry: RegistryEntry;
+    try {
+      entry = await this.resolveOrSpawn(plugin);
+    } catch (error) {
       this.connections.delete(plugin);
+      const detail =
+        error instanceof DaemonResolveError || error instanceof Error ? error.message : String(error);
+      console.error(`[prism-mcp-shim] ${plugin}: ${detail}`);
       return undefined;
     }
 
     const cached = this.connections.get(plugin);
-    if (cached && cached.sock === registered.value.sock) {
+    if (cached && cached.sock === entry.sock) {
       return cached.connection;
     }
 
-    const connection = new DaemonConnection(plugin, registered.value.sock, this.daemonTimeoutMs);
-    this.connections.set(plugin, { sock: registered.value.sock, connection });
+    const connection = new DaemonConnection(plugin, entry.sock, this.daemonTimeoutMs);
+    this.connections.set(plugin, { sock: entry.sock, connection });
     return connection;
   }
 
@@ -389,6 +421,7 @@ export const createShimServer = (aggregator: ShimAggregator): Server => {
 export interface RunShimOptions {
   readonly plugins: ReadonlyArray<string>;
   readonly daemonTimeoutMs?: number;
+  readonly spawnTimeoutMs?: number;
   readonly getDaemon?: GetDaemonFn;
 }
 

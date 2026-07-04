@@ -2,8 +2,9 @@
 /**
  * Bin entry for the aggregating MCP shim (see `@skastr0/prism-core/mcp/shim`
  * for the actual protocol/aggregation logic). This is the process a harness
- * spawns directly over stdio; it reads its plugin set and daemon-request
- * timeout from the environment and hands off to `runShim`.
+ * spawns directly over stdio; it reads its plugin set, daemon-request
+ * timeout, and resolve-or-spawn timeout from the environment and hands off
+ * to `runShim`.
  *
  * Not yet wired into any harness lowerer or CLI subcommand — this file is
  * the process entrypoint a later wave points harness MCP configs at.
@@ -31,4 +32,5 @@ if (plugins.length === 0) {
 await runShim({
   plugins,
   daemonTimeoutMs: parseTimeoutMs(process.env.PRISM_SHIM_DAEMON_TIMEOUT_MS),
+  spawnTimeoutMs: parseTimeoutMs(process.env.PRISM_SHIM_SPAWN_TIMEOUT_MS),
 });

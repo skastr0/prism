@@ -9,6 +9,7 @@ import {
   ShimAggregator,
   ShimDaemonError,
   type GetDaemonFn,
+  type ResolveOrSpawnFn,
 } from "./shim";
 import type { RegistryEntry, RegistryResult } from "./uds-registry";
 
@@ -111,6 +112,22 @@ const makeRegistry = (entries: Record<string, string>): GetDaemonFn => {
   return getDaemon;
 };
 
+/**
+ * These tests exercise the aggregator's own merge/dispatch/isolation logic
+ * (see the file-level comment above), not resolve-or-spawn -- that lives in
+ * `daemon-resolver.test.ts`. Wiring `getDaemon` straight through as
+ * `resolveOrSpawn`, with no spawn/hash/probe step, reproduces the aggregator's
+ * pre-resolve-or-spawn behavior exactly: registered -> use it as-is, absent
+ * -> reject.
+ */
+const legacyResolveOrSpawn = (getDaemon: GetDaemonFn): ResolveOrSpawnFn => async (plugin: string) => {
+  const registered = await getDaemon(plugin);
+  if (registered.kind === "absent") {
+    throw new Error(`no registry entry for plugin '${plugin}'`);
+  }
+  return registered.value;
+};
+
 describe("ShimAggregator", () => {
   it("merges tools/list across plugins in configured order and namespaces each name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
@@ -133,7 +150,7 @@ describe("ShimAggregator", () => {
 
     const aggregator = new ShimAggregator({
       plugins: ["plugin-a", "plugin-b"],
-      getDaemon: makeRegistry({ "plugin-a": sockA, "plugin-b": sockB }),
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sockA, "plugin-b": sockB })),
     });
 
     const tools = await aggregator.listTools();
@@ -159,7 +176,7 @@ describe("ShimAggregator", () => {
 
     const aggregator = new ShimAggregator({
       plugins: ["plugin-a"],
-      getDaemon: makeRegistry({ "plugin-a": sock }),
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
     });
 
     const result = (await aggregator.callTool(namespacedToolName("plugin-a", "alpha"), { x: 1 })) as {
@@ -171,7 +188,7 @@ describe("ShimAggregator", () => {
   it("omits an absent plugin from tools/list without failing the merge", async () => {
     const aggregator = new ShimAggregator({
       plugins: ["plugin-missing"],
-      getDaemon: makeRegistry({}),
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({})),
     });
     expect(await aggregator.listTools()).toEqual([]);
   });
@@ -192,7 +209,7 @@ describe("ShimAggregator", () => {
     const aggregator = new ShimAggregator({
       plugins: ["plugin-dead", "plugin-alive"],
       daemonTimeoutMs: 500,
-      getDaemon: makeRegistry({ "plugin-dead": sockDead, "plugin-alive": sockAlive }),
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-dead": sockDead, "plugin-alive": sockAlive })),
     });
 
     const tools = await aggregator.listTools();
@@ -208,7 +225,7 @@ describe("ShimAggregator", () => {
     const aggregator = new ShimAggregator({
       plugins: ["plugin-missing"],
       daemonTimeoutMs: 500,
-      getDaemon: makeRegistry({}),
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({})),
     });
 
     await expect(aggregator.callTool(namespacedToolName("plugin-missing", "anything"), {})).rejects.toBeInstanceOf(

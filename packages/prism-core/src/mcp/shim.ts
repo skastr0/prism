@@ -20,10 +20,10 @@
  * `StreamableHTTPClientTransport`. The SDK client runs every response
  * through `safeParse(resultSchema, ...)`, which is a plain (non-passthrough)
  * Zod object and silently drops any field the schema does not declare. This
- * shim's job is to forward a daemon's tool-call result byte-for-byte (name
- * mapping aside), so the daemon's raw JSON-RPC `result`/`error` is read and
- * handed back untouched instead of being round-tripped through schema
- * validation on the way in.
+ * shim's job is to forward a daemon's tool-call result value-preserving —
+ * stripping no field (name mapping aside) — so the daemon's raw JSON-RPC
+ * `result`/`error` is read and handed back untouched instead of being
+ * round-tripped through schema validation on the way in.
  *
  * A plugin absent from the UDS registry, whose recorded daemon is dead, or
  * whose recorded bundle hash no longer matches the compiled bundle on disk,
@@ -150,6 +150,15 @@ type UdsRequestInit = RequestInit & { readonly unix: string };
 class DaemonConnection {
   private sessionId: string | undefined;
   private requestId = 0;
+  /**
+   * In-flight handshake, memoized so concurrent first-callers share one
+   * `initialize` round-trip instead of each racing their own. Cleared
+   * (success or failure) once the handshake settles, so a later call that
+   * finds `sessionId` unset — because the handshake failed, or because a
+   * broken response later dropped the session — starts a fresh one rather
+   * than piling onto a promise that has already resolved or rejected.
+   */
+  private initializing: Promise<void> | undefined;
 
   constructor(
     private readonly pluginName: string,
@@ -178,8 +187,22 @@ class DaemonConnection {
     return envelope.result;
   }
 
+  /**
+   * Single-flight: if a handshake is already in progress, every concurrent
+   * caller awaits that same promise instead of firing its own `initialize`
+   * request against the daemon.
+   */
   private async ensureInitialized(): Promise<void> {
     if (this.sessionId) return;
+    if (!this.initializing) {
+      this.initializing = this.handshake().finally(() => {
+        this.initializing = undefined;
+      });
+    }
+    return this.initializing;
+  }
+
+  private async handshake(): Promise<void> {
     const response = await this.request("initialize", {
       protocolVersion: LATEST_PROTOCOL_VERSION,
       capabilities: {},
@@ -189,8 +212,7 @@ class DaemonConnection {
     if (!sessionId) {
       throw new ShimDaemonError(this.pluginName, "daemon initialize did not return mcp-session-id");
     }
-    const text = await response.text();
-    const body = text.length > 0 ? (JSON.parse(text) as DaemonRpcEnvelope) : {};
+    const body = await this.parseBody(response);
     if (body.error) {
       throw new ShimDaemonError(this.pluginName, `daemon initialize failed: ${body.error.message}`);
     }
@@ -199,8 +221,31 @@ class DaemonConnection {
 
   private async rpc(method: string, params?: unknown): Promise<DaemonRpcEnvelope> {
     const response = await this.request(method, params);
+    return this.parseBody(response);
+  }
+
+  /**
+   * Parses a daemon response body as the JSON-RPC envelope. A daemon that
+   * answers HTTP 200 with a truncated or otherwise non-JSON body is just as
+   * wedged as one that never answered: the malformed body is wrapped as a
+   * `ShimDaemonError` (never a raw `SyntaxError` escaping uncaught and
+   * mis-classified as `InternalError` by the caller) and the cached session
+   * is dropped, so the next call re-handshakes instead of replaying against
+   * a connection the daemon has already shown is broken.
+   */
+  private async parseBody(response: Response): Promise<DaemonRpcEnvelope> {
     const text = await response.text();
-    return text.length > 0 ? (JSON.parse(text) as DaemonRpcEnvelope) : {};
+    if (text.length === 0) return {};
+    try {
+      return JSON.parse(text) as DaemonRpcEnvelope;
+    } catch (error) {
+      this.sessionId = undefined;
+      throw new ShimDaemonError(
+        this.pluginName,
+        `daemon returned a malformed response body: ${errorMessage(error)}`,
+        error,
+      );
+    }
   }
 
   /**

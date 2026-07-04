@@ -374,3 +374,166 @@ describe("ShimAggregator", () => {
     expect(capturedExposureHeader).toBe("prism-generated-test:grok");
   });
 });
+
+// ---------------------------------------------------------------------------
+// DaemonConnection resilience: a daemon that answers HTTP 200 with a
+// malformed/truncated body, and concurrent first-callers racing the
+// handshake.
+// ---------------------------------------------------------------------------
+
+interface JsonRpcRequest {
+  readonly id: number;
+  readonly method: string;
+  readonly params?: unknown;
+}
+
+const jsonResponse = (body: unknown, headers: Record<string, string> = {}): Response =>
+  new Response(JSON.stringify(body), { headers: { "content-type": "application/json", ...headers } });
+
+const initializeResult = (id: number): unknown => ({
+  jsonrpc: "2.0",
+  id,
+  result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: "fake", version: "0.0.0" } },
+});
+
+describe("DaemonConnection resilience", () => {
+  it("wraps a malformed-but-200 daemon response as ShimDaemonError and re-initializes on the next call", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    let initializeCount = 0;
+    let toolCallCount = 0;
+    const server = Bun.serve({
+      unix: sock,
+      fetch: async (req) => {
+        const body = (await req.json()) as JsonRpcRequest;
+        if (body.method === "initialize") {
+          initializeCount += 1;
+          return jsonResponse(initializeResult(body.id), { "mcp-session-id": "fake-session" });
+        }
+        if (body.method === "tools/call") {
+          toolCallCount += 1;
+          if (toolCallCount === 1) {
+            // HTTP 200 with a truncated, non-JSON body -- the daemon-side
+            // failure mode this regression test targets.
+            return new Response("{not valid json", { headers: { "content-type": "application/json" } });
+          }
+          return jsonResponse({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: "ok" }] } });
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "nope" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    fakeDaemons.push({ sock, stop: () => server.stop(true) });
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+    const fqName = namespacedToolName("plugin-a", "alpha");
+
+    // The malformed tools/call response surfaces as a typed ShimDaemonError,
+    // never a raw SyntaxError.
+    await expect(aggregator.callTool(fqName, {})).rejects.toBeInstanceOf(ShimDaemonError);
+    expect(initializeCount).toBe(1);
+
+    // The wedged session was cleared, so the following call re-handshakes
+    // with the daemon (a fresh `initialize`) instead of replaying against a
+    // connection already shown to be broken.
+    const result = (await aggregator.callTool(fqName, {})) as { content: ReadonlyArray<{ text: string }> };
+    expect(result.content[0]?.text).toBe("ok");
+    expect(initializeCount).toBe(2);
+  });
+
+  it("wraps a malformed-but-200 initialize response as ShimDaemonError without wedging the session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    let initializeCount = 0;
+    const server = Bun.serve({
+      unix: sock,
+      fetch: async (req) => {
+        const body = (await req.json()) as JsonRpcRequest;
+        if (body.method === "initialize") {
+          initializeCount += 1;
+          if (initializeCount === 1) {
+            // HTTP 200, valid session header, but a truncated JSON body.
+            return new Response("{not valid json", {
+              headers: { "content-type": "application/json", "mcp-session-id": "fake-session" },
+            });
+          }
+          return jsonResponse(initializeResult(body.id), { "mcp-session-id": "fake-session" });
+        }
+        if (body.method === "tools/call") {
+          return jsonResponse({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: "ok" }] } });
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "nope" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    fakeDaemons.push({ sock, stop: () => server.stop(true) });
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+    const fqName = namespacedToolName("plugin-a", "alpha");
+
+    await expect(aggregator.callTool(fqName, {})).rejects.toBeInstanceOf(ShimDaemonError);
+    expect(initializeCount).toBe(1);
+
+    const result = (await aggregator.callTool(fqName, {})) as { content: ReadonlyArray<{ text: string }> };
+    expect(result.content[0]?.text).toBe("ok");
+    expect(initializeCount).toBe(2);
+  });
+
+  it("single-flights ensureInitialized: 10 concurrent first-calls share one handshake", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-agg-test-"));
+    tempDirs.push(dir);
+    const sock = join(dir, "a.sock");
+
+    let initializeCount = 0;
+    const server = Bun.serve({
+      unix: sock,
+      fetch: async (req) => {
+        const body = (await req.json()) as JsonRpcRequest;
+        if (body.method === "initialize") {
+          initializeCount += 1;
+          // Widen the concurrency window: a non-single-flighted
+          // implementation reliably fires more than one `initialize` here.
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return jsonResponse(initializeResult(body.id), { "mcp-session-id": "fake-session" });
+        }
+        if (body.method === "tools/call") {
+          return jsonResponse({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: "ok" }] } });
+        }
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32601, message: "nope" } }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    fakeDaemons.push({ sock, stop: () => server.stop(true) });
+
+    const aggregator = new ShimAggregator({
+      plugins: ["plugin-a"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
+    });
+    const fqName = namespacedToolName("plugin-a", "alpha");
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => aggregator.callTool(fqName, {}) as Promise<{ content: ReadonlyArray<{ text: string }> }>),
+    );
+
+    expect(initializeCount).toBe(1);
+    for (const result of results) {
+      expect(result.content[0]?.text).toBe("ok");
+    }
+  });
+});

@@ -395,11 +395,20 @@ const failedTaskResult = (
 /**
  * The failure surfaced by {@link WorkflowRuntime.runTask} for a task that crashed, timed out,
  * or exhausted repair. Authors may isolate it per-arm (e.g. `Effect.either`); its `message`
- * mirrors the underlying task error so author-side `error.message` reads unchanged. When it
- * instead reaches the top of a dynamic program unhandled, the run recognises it and still
- * completes with partial results — a single task's failure never aborts the whole run. A
- * genuine failure of the author's own program (an explicit `Effect.fail`, a defect) is *not*
- * a WorkflowTaskFailure and still fails the run.
+ * mirrors the underlying task error so author-side `error.message` reads unchanged.
+ *
+ * Two distinct outcomes follow depending on whether the author isolates it:
+ * - **Isolated** (author catches it, e.g. `Effect.either`, and the program still succeeds):
+ *   the run status is `"completed"` with the partial results already recorded — a single
+ *   task's failure never aborts the whole run.
+ * - **Unhandled** (the author lets it bubble to the top of the dynamic program): the
+ *   program itself produced no output, so the run status is `"failed"` — never
+ *   `"completed"`, which would read a terminal hard-fail as success to orchestrators. An
+ *   escalation (`WorkflowTaskEscalatedError`) keeps its own distinct `"escalated"` status
+ *   in both cases.
+ *
+ * A genuine failure of the author's own program (an explicit `Effect.fail`, a defect) is
+ * *not* a WorkflowTaskFailure and always fails the run.
  */
 class WorkflowTaskFailure extends Error {
   override readonly name = "WorkflowTaskFailure";
@@ -1128,10 +1137,13 @@ const runDynamicWorkflow = async (input: {
   }
   await Promise.allSettled(inFlightTasks);
   if (error instanceof WorkflowTaskFailure) {
-    // An unhandled task failure reached the top of the author's program. Fault isolation:
-    // the run still completes with the partial results already recorded — one task failing
-    // never flips the whole run to an abort. An escalation keeps its distinct run status.
-    finishRun(error.taskError instanceof WorkflowTaskEscalatedError ? "escalated" : "completed");
+    // An unhandled task failure reached the top of the author's program: the author never
+    // isolated it (e.g. via `Effect.either`), so the program itself produced no output. That
+    // is a run failure, not a completion — a terminal/fusion hard-fail must not read as
+    // success to orchestrators. An escalation keeps its own distinct 'escalated' status;
+    // isolated task failures that the program *did* recover from stay 'completed' via the
+    // Exit.isSuccess branch above, unaffected by this branch.
+    finishRun(error.taskError instanceof WorkflowTaskEscalatedError ? "escalated" : "failed");
     return { output: undefined, tasks: collectTasks() };
   }
   // A genuine failure of the author's own program (an explicit Effect.fail, a defect):

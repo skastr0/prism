@@ -1525,6 +1525,79 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("unhandled dynamic task failure marks the run failed with no output", async () => {
+    // PQ-166 run-status fix: an isolated task failure the program recovers from (e.g. via
+    // `Effect.either`) still marks the run 'completed' — see "isolates a crashed fan-out task"
+    // in workflow-runner.test.ts. This pins the other half: when the author never isolates the
+    // failure and it bubbles unhandled to the top of the dynamic program, the program itself
+    // produced no output, so the run must be 'failed' — never read as a success by orchestrators.
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      finish: { maxRepairs: 0 },
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-unhandled-task-failure-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const patch = yield* wf.runTask(build);
+        return { summary: patch.summary };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        throw new Error("codex exited with 1: crashed mid-run");
+      },
+    });
+
+    expect(result.output).toBeUndefined();
+    expect(result.tasks.map((task) => task.status)).toEqual(["failed"]);
+    expect(store.getRun(result.runId!)?.status).toBe("failed");
+    store.close();
+  });
+
+  test("unhandled dynamic task escalation still marks the run escalated", async () => {
+    // PQ-166 run-status fix: 'escalated' is preserved unchanged even though the sibling
+    // non-escalated case (above) now maps to 'failed' instead of 'completed'.
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      finish: {
+        criteria: [{
+          kind: "judge",
+          name: "human-required",
+          evaluate: () => Effect.succeed({ verdict: "escalate" as const, feedback: "Needs human decision." }),
+        }],
+      },
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-unhandled-escalation-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const patch = yield* wf.runTask(build);
+        return { summary: patch.summary };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "ambiguous" }),
+    });
+
+    expect(result.output).toBeUndefined();
+    expect(result.tasks.map((task) => task.status)).toEqual(["escalated"]);
+    expect(store.getRun(result.runId!)?.status).toBe("escalated");
+    store.close();
+  });
+
   test("dynamic fan-out isolates a failed task and completes the run with sibling records", async () => {
     // PQ-166 fault isolation: an unhandled task failure no longer fails the whole run. The
     // sibling still completes and is recorded, and the run finishes `completed` with partial

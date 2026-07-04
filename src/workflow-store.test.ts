@@ -531,6 +531,41 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("runner cancels queued dynamic fan-out siblings and rejects raw when stopped mid-run", async () => {
+    // PQ-166 regression: the dynamic path recovers WorkflowRunStoppedError via Cause.squash
+    // (not runPromise's FiberFailure wrapper) and eagerly cancels queued siblings. Assert both
+    // the raw rejection type and that a queued sibling never reaches the executor, so a refactor
+    // that silently reintroduces the FiberFailure wrap or drops eager cancellation stays caught.
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const runId = store.createRun("stop-dynamic-fanout-smoke");
+    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: Output });
+    const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
+    const workflow = defineWorkflow({
+      name: "stop-dynamic-fanout-smoke",
+      run: (wf) => Effect.gen(function* () {
+        return yield* Effect.all([a, b, c].map((task) => wf.runTask(task)), { concurrency: "unbounded" });
+      }),
+    });
+    const seen: string[] = [];
+
+    await expect(runWorkflow(workflow, {
+      store,
+      runId,
+      maxConcurrentTasks: 1,
+      executeTask: async (task) => {
+        seen.push(task.id);
+        if (task.id === "a") store.stopRun(runId);
+        return { summary: task.id };
+      },
+    })).rejects.toThrow(WorkflowRunStoppedError);
+
+    expect(seen).toEqual(["a"]);
+    expect(store.getRun(runId)).toMatchObject({ status: "failed" });
+    expect(store.listRunTasks(runId).map((task) => task.taskId)).toEqual(["a"]);
+    store.close();
+  });
+
   test("stores and reads completed task output by identity", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
@@ -1490,11 +1525,87 @@ describe("workflow store", () => {
     store.close();
   });
 
-  test("dynamic fan-out failures wait for sibling task records before run failure", async () => {
+  test("unhandled dynamic task failure marks the run failed with no output", async () => {
+    // PQ-166 run-status fix: an isolated task failure the program recovers from (e.g. via
+    // `Effect.either`) still marks the run 'completed' — see "isolates a crashed fan-out task"
+    // in workflow-runner.test.ts. This pins the other half: when the author never isolates the
+    // failure and it bubbles unhandled to the top of the dynamic program, the program itself
+    // produced no output, so the run must be 'failed' — never read as a success by orchestrators.
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      finish: { maxRepairs: 0 },
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-unhandled-task-failure-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const patch = yield* wf.runTask(build);
+        return { summary: patch.summary };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => {
+        throw new Error("codex exited with 1: crashed mid-run");
+      },
+    });
+
+    expect(result.output).toBeUndefined();
+    expect(result.tasks.map((task) => task.status)).toEqual(["failed"]);
+    expect(store.getRun(result.runId!)?.status).toBe("failed");
+    store.close();
+  });
+
+  test("unhandled dynamic task escalation still marks the run escalated", async () => {
+    // PQ-166 run-status fix: 'escalated' is preserved unchanged even though the sibling
+    // non-escalated case (above) now maps to 'failed' instead of 'completed'.
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      finish: {
+        criteria: [{
+          kind: "judge",
+          name: "human-required",
+          evaluate: () => Effect.succeed({ verdict: "escalate" as const, feedback: "Needs human decision." }),
+        }],
+      },
+    });
+    const workflow = defineWorkflow({
+      name: "dynamic-unhandled-escalation-smoke",
+      run: (wf) => Effect.gen(function* () {
+        const patch = yield* wf.runTask(build);
+        return { summary: patch.summary };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      store,
+      executeTask: async () => ({ summary: "ambiguous" }),
+    });
+
+    expect(result.output).toBeUndefined();
+    expect(result.tasks.map((task) => task.status)).toEqual(["escalated"]);
+    expect(store.getRun(result.runId!)?.status).toBe("escalated");
+    store.close();
+  });
+
+  test("dynamic fan-out isolates a failed task and completes the run with sibling records", async () => {
+    // PQ-166 fault isolation: an unhandled task failure no longer fails the whole run. The
+    // sibling still completes and is recorded, and the run finishes `completed` with partial
+    // results rather than aborting to `failed`.
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const workflow = defineWorkflow({
-      name: "dynamic-fanout-failure-smoke",
+      name: "dynamic-fanout-isolation-smoke",
       run: (wf) => Effect.gen(function* () {
         const fail = defineTask({
           id: "fail",
@@ -1511,14 +1622,14 @@ describe("workflow store", () => {
           cacheKey: "dynamic-slow-cache",
         });
         yield* Effect.all([
-          wf.runTask(fail),
-          wf.runTask(slow),
+          Effect.either(wf.runTask(fail)),
+          Effect.either(wf.runTask(slow)),
         ], { concurrency: "unbounded" });
       }),
     });
     const completions: string[] = [];
 
-    await expect(runWorkflow(workflow, {
+    const result = await runWorkflow(workflow, {
       store,
       executeTask: async (task) => {
         if (task.id === "fail") {
@@ -1529,20 +1640,24 @@ describe("workflow store", () => {
         completions.push(task.id);
         return { summary: "slow" };
       },
-    })).rejects.toThrow("fast failure");
+    });
 
-    const runId = store.listRuns()[0]!.runId;
+    const runId = result.runId!;
     expect(completions).toEqual(["fail", "slow"]);
-    expect(store.listRuns()[0]?.status).toBe("failed");
+    expect(store.listRuns()[0]?.status).toBe("completed");
+    expect(result.tasks.map((task) => ({ id: task.id, status: task.status }))).toEqual([
+      { id: "fail", status: "failed" },
+      { id: "slow", status: "completed" },
+    ]);
     expect(store.listRunTasks(runId).map((task) => ({ taskId: task.taskId, status: task.status }))).toEqual([
       { taskId: "fail", status: "failed" },
       { taskId: "slow", status: "completed" },
     ]);
     const events = store.listRunEvents(runId).map((event) => ({ taskId: event.taskId, type: event.type }));
-    expect(events.at(-1)).toEqual({ taskId: null, type: "run.failed" });
+    expect(events.at(-1)).toEqual({ taskId: null, type: "run.completed" });
     expect(events.some((event) => event.taskId === "slow" && event.type === "task.completed")).toBe(true);
     expect(events.findLastIndex((event) => event.type === "task.completed"))
-      .toBeLessThan(events.findLastIndex((event) => event.type === "run.failed"));
+      .toBeLessThan(events.findLastIndex((event) => event.type === "run.completed"));
     store.close();
   });
 

@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Effect, Either, Fiber, Schema } from "effect";
 import { compareCodePoint } from "@skastr0/prism-core/stable-json";
+import { WorkflowStore } from "./workflow-store.js";
 import { runWorkflow, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
@@ -137,8 +138,8 @@ console.log(JSON.stringify(result));
       runId: null,
       workflow: "runner-smoke",
       tasks: [
-        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false, metadata: contractMetadata },
-        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" }, cached: false, metadata: contractMetadata },
+        { id: "build", agent: { plugin: "forge", name: "builder" }, output: { summary: "built" }, cached: false, status: "completed", metadata: contractMetadata },
+        { id: "review", agent: { plugin: "forge", name: "simplicity-reviewer" }, output: { verdict: "pass" }, cached: false, status: "completed", metadata: contractMetadata },
       ],
     });
     expect(result.tasks.map((task) => task.metadata)).toEqual([contractMetadata, contractMetadata]);
@@ -384,7 +385,10 @@ console.log(JSON.stringify(result));
     }
   });
 
-  test("fails named harness repairs when continuation metadata is missing", async () => {
+  test("re-prompts a named harness via a fresh invocation when continuation metadata is missing", async () => {
+    // PQ-166 fix (2): a missing session id must fall back to a fresh executor invocation
+    // carrying the original prompt + repair instruction, never a `repair requires stable
+    // sessionId` abort.
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-runner-"));
     const fakeClaude = join(root, "fake-claude-fallback.mjs");
     const callsFile = join(root, "claude-fallback-calls.jsonl");
@@ -394,9 +398,13 @@ console.log(JSON.stringify(result));
       "import { appendFileSync } from 'node:fs';",
       "const args = process.argv.slice(2);",
       "const resumeIndex = args.indexOf('--resume');",
+      "const agentIndex = args.indexOf('--agent');",
       "const prompt = args.at(-1);",
-      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, prompt }) + '\\n');`,
-	      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, agent: agentIndex >= 0 ? args[agentIndex + 1] : undefined, prompt }) + '\\n');`,
+      // Never emits session_id, so repair cannot resume; the fresh re-prompt is detectable
+      // because the runner appends the repair instruction onto the original prompt.
+      "const repaired = prompt.includes('did not satisfy the task finish requirements');",
+      "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }), is_error: false, duration_ms: 10, num_turns: 1 }));",
       "",
     ].join("\n"));
     await chmod(fakeClaude, 0o755);
@@ -419,14 +427,30 @@ console.log(JSON.stringify(result));
           }],
         },
       });
-	      const workflow = defineWorkflow({ name: "runner-claude-missing-session-repair", tasks: [task] as const });
-	      await expect(runWorkflow(workflow, {
-	        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
-	      })).rejects.toThrow("repair requires stable sessionId");
+      const workflow = defineWorkflow({ name: "runner-claude-missing-session-repair", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "claude-code", cwd: root }),
+      });
 
-	      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; prompt: string });
-	      expect(calls).toHaveLength(1);
-	      expect(calls[0]?.resume).toBeUndefined();
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; agent?: string; prompt: string });
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.resume).toBeUndefined();
+      // The repair is a fresh invocation: no --resume, but a full re-prompt carrying the
+      // original task prompt and the repair instruction.
+      expect(calls[1]?.resume).toBeUndefined();
+      expect(calls[1]?.agent).toBe("builder");
+      expect(calls[1]?.prompt).toContain("Build the slice.");
+      expect(calls[1]?.prompt).toContain("summary must start with ok");
+      expect(result.tasks[0]?.status).toBe("completed");
+      expect(result.tasks[0]?.output).toEqual({ summary: "ok after repair" });
+      expect(result.tasks[0]?.metadata?.finish).toMatchObject({
+        repairs: 1,
+        repairMode: "fresh-executor-invocation",
+      });
+      expect(result.tasks[0]?.metadata?.repairExecution).toMatchObject({
+        mode: "fresh-executor-invocation",
+        fallbackReason: "missing-session-id",
+      });
     } finally {
       if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_BIN;
       else process.env.PRISM_WORKFLOW_CLAUDE_BIN = oldBin;
@@ -641,7 +665,9 @@ console.log(JSON.stringify(result));
     expect(result.tasks.map((task) => task.id)).toEqual(["task-0", "task-1", "task-2", "task-3", "task-4"]);
   });
 
-  test("cancels queued dynamic fan-out when the first limited task fails decode", async () => {
+  test("keeps queued fan-out siblings running when one limited task fails decode", async () => {
+    // PQ-166 fault isolation: a decode failure no longer cancels queued siblings. Every
+    // task runs to completion; the failed one is recorded, and the run does not abort.
     const tasks = Array.from({ length: 5 }, (_, index) => defineTask({
       id: `task-${index}`,
       agent: builder,
@@ -650,26 +676,29 @@ console.log(JSON.stringify(result));
       finish: { maxRepairs: 0 },
     }));
     const workflow = defineWorkflow({
-      name: "bounded-fanout-failure-smoke",
+      name: "bounded-fanout-isolation-smoke",
       run: (wf) => Effect.gen(function* () {
         return yield* Effect.all(
-          tasks.map((task) => wf.runTask(task)),
+          tasks.map((task) => Effect.either(wf.runTask(task))),
           { concurrency: "unbounded" },
         );
       }),
     });
     const calls: string[] = [];
 
-    await expect(runWorkflow(workflow, {
+    const result = await runWorkflow(workflow, {
       maxConcurrentTasks: 1,
       executeTask: async (task) => {
         calls.push(task.id);
-        await delay(20);
+        await delay(5);
         return { wrong: task.id };
       },
-    })).rejects.toThrow("workflow task task-0 returned output that failed schema decode");
+    });
 
-    expect(calls).toEqual(["task-0"]);
+    expect(calls).toEqual(["task-0", "task-1", "task-2", "task-3", "task-4"]);
+    expect(result.tasks.map((task) => task.id)).toEqual(["task-0", "task-1", "task-2", "task-3", "task-4"]);
+    expect(result.tasks.map((task) => task.status)).toEqual(["failed", "failed", "failed", "failed", "failed"]);
+    expect(result.tasks.every((task) => (task.error?.length ?? 0) > 0)).toBe(true);
   });
 
   test("repairs malformed schema output before yielding to downstream workflow code", async () => {
@@ -859,6 +888,216 @@ console.log(JSON.stringify(result));
     await expect(runWorkflow(workflow, {
       executeTask: async () => ({ summary: "ambiguous" }),
     })).rejects.toThrow(WorkflowTaskEscalatedError);
+  });
+
+  test("isolates a crashed fan-out task so siblings and downstream fusion complete with partial results", async () => {
+    // PQ-166 fault isolation: a hard worker error (the codex exit-1 / opencode session-loss
+    // class) is recorded as a failed task; siblings and the downstream fusion still run, and
+    // the run completes rather than flipping to a whole-run abort.
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-fault-iso-"));
+    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+    try {
+      const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
+      const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
+      const fusion = defineTask({ id: "fusion", agent: reviewer, prompt: "Fuse the leaves.", output: ReviewReport });
+      const workflow = defineWorkflow({
+        name: "fault-isolation-crash-fanout",
+        run: (wf) => Effect.gen(function* () {
+          const outcomes = yield* Effect.all(
+            [a, b, c].map((task) => Effect.either(wf.runTask(task))),
+            { concurrency: "unbounded" },
+          );
+          const verdict = yield* wf.runTask(fusion);
+          return { leaves: outcomes.map((outcome) => Either.isRight(outcome) ? "ok" : "failed"), verdict };
+        }),
+      });
+
+      const result = await runWorkflow(workflow, {
+        store,
+        executeTask: async (task) => {
+          if (task.id === "b") throw new Error("codex exited with 1: model/account mismatch");
+          if (task.id === "fusion") return { verdict: "needs-work" };
+          return { summary: task.id };
+        },
+      });
+
+      expect(result.output).toMatchObject({ leaves: ["ok", "failed", "ok"], verdict: { verdict: "needs-work" } });
+
+      const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
+      expect(result.tasks.filter((task) => task.status === "failed").map((task) => task.id)).toEqual(["b"]);
+      expect(byId.get("b")?.error).toContain("model/account mismatch");
+      expect(["a", "c", "fusion"].map((id) => byId.get(id)?.status)).toEqual(["completed", "completed", "completed"]);
+
+      expect(result.runId).not.toBeNull();
+      expect(store.getRun(result.runId!)?.status).toBe("completed");
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("isolates a task that exhausts decode repair while siblings and fusion complete", async () => {
+    // The guaranteed-failing worker feeds fusion: it exhausts its objective decode-repair
+    // budget, is recorded failed with a non-empty error, and the fusion verdict is still
+    // produced from the surviving siblings.
+    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
+    const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
+    const fusion = defineTask({ id: "fusion", agent: reviewer, prompt: "Fuse the leaves.", output: ReviewReport });
+    const workflow = defineWorkflow({
+      name: "fault-isolation-repair-exhaustion-fanout",
+      run: (wf) => Effect.gen(function* () {
+        const outcomes = yield* Effect.all(
+          [a, b, c].map((task) => Effect.either(wf.runTask(task))),
+          { concurrency: "unbounded" },
+        );
+        const verdict = yield* wf.runTask(fusion);
+        return { leaves: outcomes.map((outcome) => Either.isRight(outcome) ? "ok" : "failed"), verdict };
+      }),
+    });
+    let bCalls = 0;
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        if (task.id === "b") {
+          bCalls += 1;
+          return { wrong: "shape" };
+        }
+        if (task.id === "fusion") return { verdict: "pass" };
+        return { summary: task.id };
+      },
+    });
+
+    // Attempt 0 + the two default decode repairs, all malformed.
+    expect(bCalls).toBe(3);
+    expect(result.output).toMatchObject({ leaves: ["ok", "failed", "ok"], verdict: { verdict: "pass" } });
+    const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
+    expect(byId.get("b")?.status).toBe("failed");
+    expect(byId.get("b")?.error).toContain("failed schema decode");
+    expect(["a", "c", "fusion"].map((id) => byId.get(id)?.status)).toEqual(["completed", "completed", "completed"]);
+  });
+
+  test("awaits forked task fibers so a failed fork does not orphan its result or the run", async () => {
+    // Effect.fork fan-out: both forked fibers are joined and their results recorded — the
+    // failing fork is isolated, not orphaned, and the run completes.
+    const a = defineTask({ id: "a", agent: builder, prompt: "Run a.", output: PatchReport });
+    const b = defineTask({ id: "b", agent: reviewer, prompt: "Run b.", output: ReviewReport });
+    const workflow = defineWorkflow({
+      name: "forked-fanout-isolation",
+      run: (wf) => Effect.gen(function* () {
+        const fiberA = yield* Effect.fork(wf.runTask(a));
+        const fiberB = yield* Effect.fork(Effect.either(wf.runTask(b)));
+        const outA = yield* Fiber.join(fiberA);
+        const outB = yield* Fiber.join(fiberB);
+        return { a: outA.summary, b: Either.isRight(outB) ? "ok" : "failed" };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        if (task.id === "b") throw new Error("forked worker crash");
+        return { summary: "forked-a" };
+      },
+    });
+
+    expect(result.output).toEqual({ a: "forked-a", b: "failed" });
+    const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
+    expect(byId.get("a")?.status).toBe("completed");
+    expect(byId.get("b")?.status).toBe("failed");
+    expect(byId.get("b")?.error).toContain("forked worker crash");
+  });
+
+  test("repairs malformed JSON on a task with no finish block using the default decode budget", async () => {
+    // PQ-166 fix (3): objective decode repair is independent of the finish block, so a task
+    // that declares no finish still self-heals a malformed attempt-0 on a repair attempt.
+    const build = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: PatchReport,
+    });
+    const workflow = defineWorkflow({ name: "no-finish-decode-repair", tasks: [build] as const });
+    const prompts: string[] = [];
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        prompts.push(task.prompt);
+        if (prompts.length === 1) {
+          return { output: parseWorkflowWorkerJsonOutput('{"summary":"bad\\q"}') };
+        }
+        return { summary: "repaired" };
+      },
+    });
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Your previous response was not valid JSON");
+    expect(result.tasks[0]?.status).toBe("completed");
+    expect(result.tasks[0]?.output).toEqual({ summary: "repaired" });
+    expect(result.tasks[0]?.metadata?.finish).toMatchObject({ repairs: 1, criteria: [] });
+  });
+
+  test("re-prompts a continuation-less worker via a fresh invocation carrying the original prompt", async () => {
+    // PQ-166 fix (2): grok/hermes/kimi-class workers that never surface a resumable session
+    // must fall back to a fresh invocation carrying the original prompt + repair instruction,
+    // not die with `repair requires stable sessionId`.
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-runner-grok-"));
+    const fakeGrok = join(root, "fake-grok.mjs");
+    const callsFile = join(root, "grok-calls.jsonl");
+    const oldBin = process.env.PRISM_WORKFLOW_GROK_BIN;
+    await writeFile(fakeGrok, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const resumeIndex = args.indexOf('-r');",
+      "const prompt = args.at(-1);",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ resume: resumeIndex >= 0 ? args[resumeIndex + 1] : undefined, prompt }) + '\\n');`,
+      // No sessionId in the envelope: continuation is impossible, so the repair must be fresh.
+      "const repaired = prompt.includes('did not satisfy the task finish requirements');",
+      "console.log(JSON.stringify({ text: JSON.stringify({ summary: repaired ? 'ok fixed' : 'bad' }), stopReason: 'complete' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeGrok, 0o755);
+    process.env.PRISM_WORKFLOW_GROK_BIN = fakeGrok;
+
+    try {
+      const task = defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build the slice.",
+        output: PatchReport,
+        worker: { worker: "grok" },
+        finish: {
+          maxRepairs: 1,
+          criteria: [{
+            name: "summary-prefix",
+            check: ({ output }) => output.summary.startsWith("ok")
+              ? Effect.void
+              : Effect.fail(new Error("summary must start with ok")),
+          }],
+        },
+      });
+      const workflow = defineWorkflow({ name: "runner-grok-fresh-repair", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "grok", cwd: root }),
+      });
+
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) => JSON.parse(line) as { resume?: string; prompt: string });
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.resume).toBeUndefined();
+      expect(calls[1]?.resume).toBeUndefined();
+      expect(calls[1]?.prompt).toContain("Build the slice.");
+      expect(calls[1]?.prompt).toContain("summary must start with ok");
+      expect(result.tasks[0]?.status).toBe("completed");
+      expect(result.tasks[0]?.output).toEqual({ summary: "ok fixed" });
+      expect(result.tasks[0]?.metadata?.finish).toMatchObject({ repairMode: "fresh-executor-invocation" });
+      expect(result.tasks[0]?.metadata?.repairExecution).toMatchObject({
+        mode: "fresh-executor-invocation",
+        fallbackReason: "missing-session-id",
+      });
+    } finally {
+      if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_GROK_BIN;
+      else process.env.PRISM_WORKFLOW_GROK_BIN = oldBin;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("cache-key key sort uses the same code-point comparator as prism-core stable-json, not locale ordering", () => {

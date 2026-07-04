@@ -55,6 +55,3 @@ export type WorkflowRuntimeError =
   | WorkflowTaskEscalatedError
   | WorkflowRunStoppedError
   | Error;
-
-export const toWorkflowRuntimeError = (error: unknown): WorkflowRuntimeError =>
-  error instanceof Error ? error : new Error(String(error));

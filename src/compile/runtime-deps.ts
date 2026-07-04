@@ -316,3 +316,23 @@ export const opencodePluginBundleImportPath = (): string =>
 export const typescriptBundleImportPath = (): string => resolveBundleImportPath("typescript");
 
 export const zodV4BundleImportPath = (): string => resolveBundleImportPath("zod/v4");
+
+export const udsRegistryBundleImportPath = (): string => {
+  // The registry is an internal MCP module in prism-core
+  // Resolve it from the source tree using import.meta.resolve
+  try {
+    return normalizeImportPath(fileURLToPath(import.meta.resolve("../../packages/prism-core/src/mcp/uds-registry.js")));
+  } catch (error) {
+    throw new Error("Unable to resolve uds-registry module", { cause: error });
+  }
+};
+
+export const udsSingletonBundleImportPath = (): string => {
+  // The singleton module is an internal MCP module in prism-core
+  // Resolve it from the source tree using import.meta.resolve
+  try {
+    return normalizeImportPath(fileURLToPath(import.meta.resolve("../../packages/prism-core/src/mcp/uds-singleton.js")));
+  } catch (error) {
+    throw new Error("Unable to resolve uds-singleton module", { cause: error });
+  }
+};

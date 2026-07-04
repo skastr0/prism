@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
+import { access } from "node:fs/promises";
 
 export interface HttpRpcOptions {
   readonly port: number;
@@ -192,4 +193,17 @@ export const assertSchemaNoConst = (schemas: unknown[]): void => {
       `Emitted JSON Schema contains 'const' literals. Prism must emit 'enum' for MCP compatibility.`,
     );
   }
+};
+
+export const waitForUdsSocket = async (socketPath: string): Promise<void> => {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      await access(socketPath);
+      return;
+    } catch {
+      // Socket file does not exist yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`UDS socket did not appear at ${socketPath}`);
 };

@@ -26,6 +26,8 @@ import {
   mcpSdkStdioBundleImportPath,
   mcpSdkWebStandardHttpBundleImportPath,
   zodV4BundleImportPath,
+  udsRegistryBundleImportPath,
+  udsSingletonBundleImportPath,
 } from "./runtime-deps.js";
 import {
   generatedToolNameForBinding,
@@ -981,15 +983,18 @@ const createPrismMcpServer = (enabledToolNames?: ReadonlySet<string>): McpServer
 };`;
 
 const MCP_SDK_HTTP_RUNTIME = `// Runtime identity is never baked into bundle bytes: the daemon supervisor
-// passes host/port via environment when it spawns this server.
+// passes host/port via environment when it spawns this server, or unix socket path for UDS.
+const udsPath = process.env.PRISM_MCP_UDS_PATH;
+const registryPluginName = process.env.PRISM_MCP_REGISTRY_PLUGIN_NAME;
+const registryBundleHash = process.env.PRISM_MCP_REGISTRY_BUNDLE_HASH;
 const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? "127.0.0.1";
 const isLoopbackBindHost = (value: string): boolean =>
   value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
-if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
+if (!udsPath && !isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
   throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
 }
-const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? "0");
-if (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535) {
+const httpPort = !udsPath ? Number(process.env.PRISM_MCP_HTTP_PORT ?? "0") : 0;
+if (!udsPath && (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535)) {
   throw new Error("Prism MCP Streamable HTTP server requires env PRISM_MCP_HTTP_PORT (1-65535)");
 }
 const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
@@ -1037,9 +1042,59 @@ const shutdownFlushGraceMs = Number.isFinite(configuredShutdownFlushMs) && confi
   : 300;
 const sessions = new Map<string, HttpSessionState>();
 let pendingSessionBootstraps = 0;
+// Idle-reap: track active connections (requests + SSE streams) to trigger shutdown
+// when no activity for PRISM_MCP_IDLE_TTL_MS with zero connections
+let activeConnections = 0;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+const configuredIdleTtlMs = Number(process.env.PRISM_MCP_IDLE_TTL_MS ?? "900000");
+const idleTtlMs = Number.isFinite(configuredIdleTtlMs) && configuredIdleTtlMs > 0
+  ? configuredIdleTtlMs
+  : 900000; // 15 minutes default
 
 const activeOrPendingSessionCount = (): number =>
   sessions.size + pendingSessionBootstraps;
+
+// Schedule idle-reap timer: fires after idleTtlMs of inactivity with zero active connections.
+// Resets on any activity (connection start/end). Counts both HTTP requests (activeConnections)
+// and long-lived SSE streams (activeSseStreamEnders.size).
+// Timer.unref() ensures it does not keep the process alive.
+const totalActiveConnections = (): number =>
+  activeConnections + activeSseStreamEnders.size;
+
+const resetIdleTimer = (): void => {
+  if (idleTimer !== undefined) clearTimeout(idleTimer);
+
+  idleTimer = setTimeout(() => {
+    const activeCount = totalActiveConnections();
+    console.error(\`[prism-mcp] idle-reap timer fired: activeConnections=\${activeConnections}, sseStreams=\${activeSseStreamEnders.size}, total=\${activeCount}\`);
+    // Only reap if no active connections or SSE streams
+    if (activeCount === 0) {
+      console.error(\`[prism-mcp] idle-reap: triggering shutdown after \${idleTtlMs}ms of inactivity\`);
+      void stopServer();
+    } else {
+      // If still active, reschedule
+      console.error(\`[prism-mcp] idle-reap: rescheduling timer, still have \${activeCount} active connections\`);
+      resetIdleTimer();
+    }
+  }, idleTtlMs);
+
+  // Timer must not keep process alive: unref so the process exits naturally if
+  // idle timer fires but no other work is pending
+  if (typeof idleTimer.unref === "function") {
+    idleTimer.unref();
+  }
+};
+
+const incrementActiveConnections = (): void => {
+  activeConnections += 1;
+  resetIdleTimer();
+};
+
+const decrementActiveConnections = (): void => {
+  activeConnections = Math.max(0, activeConnections - 1);
+  resetIdleTimer();
+};
 
 const responseHeaders = (extra?: HeadersInit, request?: Request): Headers => {
   const headers = new Headers(extra);
@@ -1450,9 +1505,8 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
   return withSseKeepalive(attachResponseHeaders(await session.transport.handleRequest(request), request));
 };
 
-const server = Bun.serve({
-  hostname: httpHost,
-  port: httpPort,
+const serveOptions = {
+  ...(udsPath ? { unix: udsPath } : { hostname: httpHost, port: httpPort }),
   // MCP connections sit idle between tool calls. Bun's default idleTimeout is
   // 10s, which silently closes the socket; clients that reuse the closed
   // connection (observed with Grok) then hang until their own multi-minute
@@ -1465,29 +1519,89 @@ const server = Bun.serve({
   // frames well inside this window; see PRISM_MCP_SSE_KEEPALIVE_MS.
   idleTimeout: 255,
   fetch: async (request) => {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
-    if (url.pathname === httpHealthPath) {
+    // Track active connections for idle-reap: increment on request start,
+    // decrement when response is sent (including SSE streams which remain active).
+    incrementActiveConnections();
+    try {
+      const url = new URL(request.url);
+      if (request.method === "OPTIONS") return emptyResponse(204, {}, request);
+      if (url.pathname === httpHealthPath) {
+        const authorization = authorize(request);
+        if (authorization.denied) return authorization.denied;
+        if (request.method === "GET") return jsonResponse(healthPayload(authorization.enabledToolNames), {}, request);
+        return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
+      }
+      if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 }, request);
+
       const authorization = authorize(request);
       if (authorization.denied) return authorization.denied;
-      if (request.method === "GET") return jsonResponse(healthPayload(authorization.enabledToolNames), {}, request);
+
+      if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
+      if (request.method === "GET" && sseDisabledForRequest(url)) {
+        return jsonResponse({ error: "SSE stream disabled for this MCP client" }, { status: 405 }, request);
+      }
+      if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
       return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
+    } finally {
+      decrementActiveConnections();
     }
-    if (url.pathname !== httpPath) return jsonResponse({ error: "not found" }, { status: 404 }, request);
-
-    const authorization = authorize(request);
-    if (authorization.denied) return authorization.denied;
-
-    if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
-    if (request.method === "GET" && sseDisabledForRequest(url)) {
-      return jsonResponse({ error: "SSE stream disabled for this MCP client" }, { status: 405 }, request);
-    }
-    if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
-    return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
   },
-});
+};
+
+// Singleton + stale-socket recovery for UDS mode: probe, recover from a
+// stale socket, and call Bun.serve() all inside the same held file lock, so
+// no other process can bind between "the path looked free" and "we bound
+// it" (the prior two-step check-then-bind here left exactly that window
+// open, and a Bun.serve() called with zero try/catch crashed uncaught on
+// EADDRINUSE when a racing process won it). TCP mode needs none of this:
+// there is no shared path for two processes to race on.
+const bindMcpServer = async () => {
+  if (!udsPath) {
+    return Bun.serve(serveOptions);
+  }
+
+  const outcome = await bindUnixSocketSingleton(udsPath, () => Bun.serve(serveOptions));
+  if (outcome.kind === "already-served") {
+    // Another daemon owns this socket; exit cleanly rather than crash.
+    console.error(\`[prism-mcp] Another daemon is already serving on \${udsPath}; exiting\`);
+    process.exit(0);
+  }
+  return outcome.server;
+};
+
+const server = await bindMcpServer();
+
+// Register daemon in the UDS registry if plugin name and bundle hash are available
+const registerInRegistry = async (): Promise<void> => {
+  if (!registryPluginName || !registryBundleHash || !udsPath) {
+    // Registry only works with UDS mode and requires plugin/bundle identifiers
+    return;
+  }
+
+  try {
+    await registerDaemon(registryPluginName, {
+      pid: process.pid,
+      sock: udsPath,
+      bundleHash: registryBundleHash,
+      startedAt: Date.now(),
+      lastUsed: Date.now(),
+    });
+  } catch (error) {
+    // Registry write failure is not fatal; log and continue
+    console.error(\`Failed to register daemon in UDS registry: \${error instanceof Error ? error.message : String(error)}\`);
+  }
+};
+
+void registerInRegistry();
+
+// Initialize idle-reap timer at startup: it will fire after idleTtlMs of
+// inactivity with zero active connections, triggering graceful shutdown.
+resetIdleTimer();
 
 const stopServer = async (): Promise<void> => {
+  // Cancel idle-reap timer to avoid double-firing during shutdown
+  if (idleTimer !== undefined) clearTimeout(idleTimer);
+
   // Graceful drain: stop accepting new connections, let in-flight tool calls
   // finish within a bounded window, then close sessions and force-close anything
   // still open (e.g. idle SSE streams). Avoids dropping live tool calls on
@@ -1519,6 +1633,33 @@ const stopServer = async (): Promise<void> => {
 
   await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
+
+  // Unregister daemon from the UDS registry and clean up the UDS socket
+  // file, but only if this process is still the one the registry considers
+  // live for this plugin. A predecessor's drain can outlive a fast-
+  // respawning successor that has already bound the same socket path and
+  // re-registered under the same plugin key; re-reading the registry here
+  // and gating on our own pid stops a slow predecessor from deleting a
+  // live successor's socket and registration out from under it. A missing
+  // record is treated the same as "not ours" -- nothing is touched.
+  if (registryPluginName) {
+    try {
+      await cleanupDaemonIfOwner(registryPluginName, process.pid, udsPath);
+    } catch (error) {
+      // Cleanup failure is not fatal; log and continue
+      console.error(\`Failed to clean up daemon registration: \${error instanceof Error ? error.message : String(error)}\`);
+    }
+  } else if (udsPath) {
+    // No registry plugin identity configured for this run: there is no
+    // record to check ownership against, so fall back to the prior
+    // unconditional cleanup of our own socket file.
+    try {
+      await import("node:fs/promises").then((fs) => fs.unlink(udsPath));
+    } catch {
+      // Socket may have already been removed or not exist yet; ignore.
+    }
+  }
+
   process.exit(0);
 };
 
@@ -1842,6 +1983,8 @@ const renderMcpServerEntry = (options: {
     `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
     `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
+    `import { registerDaemon, cleanupDaemonIfOwner } from ${JSON.stringify(udsRegistryBundleImportPath())};`,
+    `import { bindUnixSocketSingleton } from ${JSON.stringify(udsSingletonBundleImportPath())};`,
     imports,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),

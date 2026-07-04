@@ -196,22 +196,6 @@ const removeOrphanedRegion = (
   }
 };
 
-const legacyCodexRulesMarker = "<!-- prism:rules source=";
-
-const normalizeLegacyGeneratedContent = (content: string): string =>
-  content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").trimEnd();
-
-const canResetUnmanagedFile = (
-  content: string,
-  signature: string,
-  desiredContent: string,
-): boolean => {
-  if (!content.includes(signature)) return false;
-  if (signature !== legacyCodexRulesMarker) return true;
-
-  return normalizeLegacyGeneratedContent(content) === normalizeLegacyGeneratedContent(desiredContent);
-};
-
 const planOwnedFile = async (options: {
   readonly desired: DesiredFile;
   readonly snapshotEntry: SnapshotEntry | undefined;
@@ -278,13 +262,11 @@ const planSharedFileRegions = async (options: {
   readonly desired: ReadonlyArray<DesiredRegion>;
   readonly orphanedRefs: ReadonlyArray<string>;
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
-  readonly hasKnownRegions: boolean;
-  readonly resetBeforePatch?: boolean;
 }): Promise<{
   readonly ops: ReadonlyArray<SyncOp>;
   readonly materializedRegionRefs: ReadonlyArray<string>;
 }> => {
-  const fileExists = !options.resetBeforePatch && await exists(options.targetPath);
+  const fileExists = await exists(options.targetPath);
   let original = "";
   if (fileExists) {
     try {
@@ -306,16 +288,7 @@ const planSharedFileRegions = async (options: {
     }
   }
 
-  const resetUnmanagedFile = fileExists
-    && !options.hasKnownRegions
-    && options.orphanedRefs.length === 0
-    && options.desired.some((region) =>
-      region.kind === "marker"
-      && region.resetUnmanagedFileIfContains !== undefined
-      && canResetUnmanagedFile(original, region.resetUnmanagedFileIfContains, region.content)
-    );
-
-  let content = resetUnmanagedFile ? "" : original;
+  let content = original;
   const changedRegions: string[] = [];
   const skippedRegions: string[] = [];
   const materializedRegionRefs: string[] = [];
@@ -355,7 +328,7 @@ const planSharedFileRegions = async (options: {
     content = outcome.content;
   }
 
-  if (!resetUnmanagedFile && content === original) {
+  if (content === original) {
     return {
       ops: skippedRegions.length > 0
         ? [{ kind: "skip-regions", targetPath: options.targetPath, regionKeys: skippedRegions }]
@@ -413,8 +386,6 @@ const planSharedRegions = async (options: {
   readonly desiredRegions: ReadonlyArray<DesiredRegion>;
   readonly snapshotRegions: ReadonlyMap<string, SnapshotEntry>;
   readonly protectedRegionKeys: ReadonlySet<string>;
-  readonly protectedRegionPaths: ReadonlySet<string>;
-  readonly resetBeforePatchPaths: ReadonlySet<string>;
 }): Promise<{
   readonly ops: ReadonlyArray<SyncOp>;
   readonly materializedRegionKeys: ReadonlySet<string>;
@@ -430,15 +401,11 @@ const planSharedRegions = async (options: {
   const materializedRegionKeys = new Set<string>();
 
   for (const targetPath of [...sharedFiles].sort()) {
-    const hasKnownRegions = options.protectedRegionPaths.has(targetPath)
-      || [...options.snapshotRegions.values()].some((entry) => entry.targetPath === targetPath);
     const sharedPlan = await planSharedFileRegions({
       targetPath,
       desired: regionsByFile.get(targetPath) ?? [],
       orphanedRefs: orphanedByFile.get(targetPath) ?? [],
       snapshotByRegion: options.snapshotRegions,
-      hasKnownRegions,
-      resetBeforePatch: options.resetBeforePatchPaths.has(targetPath),
     });
     ops.push(...sharedPlan.ops);
     for (const ref of sharedPlan.materializedRegionRefs) {
@@ -470,7 +437,6 @@ export const planSync = async (options: {
 
   const carriedEntries: SnapshotEntry[] = [];
   const carriedRegionKeys = new Set<string>();
-  const carriedRegionPaths = new Set<string>();
   const snapshotOwned = new Map<string, SnapshotEntry>();
   const snapshotRegions = new Map<string, SnapshotEntry>();
   for (const entry of options.snapshot.entries) {
@@ -482,7 +448,6 @@ export const planSync = async (options: {
     } else {
       carriedEntries.push(entry);
       carriedRegionKeys.add(`${entry.targetPath} ${entry.regionKey ?? ""}`);
-      carriedRegionPaths.add(entry.targetPath);
     }
   }
 
@@ -503,21 +468,16 @@ export const planSync = async (options: {
     });
   }
 
-  const desiredRegionPaths = new Set(options.desired.regions.map((region) => region.targetPath));
-  const resetBeforePatchPaths = new Set<string>();
-
   // Orphaned owned files: in snapshot, no longer desired.
   for (const [targetPath, entry] of snapshotOwned) {
     if (desiredPaths.has(targetPath)) continue;
     if (!(await exists(targetPath))) continue; // silently drop the entry
     const diskHash = computeContentHash(await readFile(targetPath));
-    const replacedBySharedRegions = desiredRegionPaths.has(targetPath);
-    if (replacedBySharedRegions) resetBeforePatchPaths.add(targetPath);
     ops.push({
       kind: "prune",
       targetPath,
       reason: "orphaned",
-      backup: replacedBySharedRegions || diskHash !== entry.contentHash,
+      backup: diskHash !== entry.contentHash,
     });
   }
 
@@ -526,8 +486,6 @@ export const planSync = async (options: {
     desiredRegions: options.desired.regions,
     snapshotRegions,
     protectedRegionKeys: carriedRegionKeys,
-    protectedRegionPaths: carriedRegionPaths,
-    resetBeforePatchPaths,
   });
   ops.push(...sharedRegionPlan.ops);
   for (const region of options.desired.regions) {

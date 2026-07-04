@@ -500,7 +500,6 @@ const planRulesRegion = async (
       commentPrefix: "<!--",
       commentSuffix: " -->",
       content: rules,
-      resetUnmanagedFileIfContains: "<!-- prism:rules source=",
       plugin: input.target.sourcePluginName,
     });
   }

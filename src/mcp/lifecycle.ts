@@ -39,6 +39,10 @@ import {
 } from "./launchd.js";
 import { getFreePort, isPortAvailable } from "./ports.js";
 import { resolveBunExecutable } from "../bun-runtime.js";
+import {
+  registerSupervisorMcpDaemon,
+  unregisterSupervisorMcpDaemon,
+} from "./supervisor.js";
 
 export type McpLifecycleHarness = HarnessId;
 export type McpPortSelection = "auto" | number;
@@ -120,6 +124,13 @@ export interface McpStopResult {
 type McpLifecycleResolvedContext = {
   readonly registry: PluginRegistry;
   readonly descriptor: McpRuntimeDescriptor;
+};
+
+type McpStartedPreparedServer = {
+  readonly pid?: number;
+  readonly useLaunchAgent: boolean;
+  readonly supervisorPid?: number;
+  readonly health: McpRuntimeHealth;
 };
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
@@ -676,6 +687,12 @@ const waitForChildExit = (
 
 const spawnDaemon = (prepared: McpPreparedServer): number => {
   const child = spawnServerProcess(prepared, { foreground: false });
+  registerSupervisorMcpDaemon({
+    pid: child.pid!,
+    prismHome: prepared.descriptor.prismHome,
+    serverName: prepared.descriptor.serverName,
+    serverPath: prepared.descriptor.serverPath,
+  });
   return child.pid!;
 };
 
@@ -1121,11 +1138,19 @@ const runForegroundPreparedServer = async (
 
 const stopPreparedServerProcess = async (options: {
   readonly pid?: number;
+  readonly healthPid?: number;
   readonly useLaunchAgent: boolean;
   readonly serverName: string;
 }): Promise<void> => {
-  if (options.pid !== undefined) {
-    await terminatePid(options.pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
+  const pids = [...new Set([options.healthPid, options.pid].filter((pid): pid is number => pid !== undefined))];
+  if (pids.length > 0) {
+    try {
+      for (const pid of pids) {
+        if (pidIsRunning(pid)) await terminatePid(pid, "SIGTERM", DEFAULT_STOP_TIMEOUT_MS);
+      }
+    } finally {
+      for (const pid of pids) unregisterSupervisorMcpDaemon(pid);
+    }
     return;
   }
   if (options.useLaunchAgent) {
@@ -1136,11 +1161,7 @@ const stopPreparedServerProcess = async (options: {
 const startPreparedServer = async (
   prepared: McpPreparedServer,
   options: McpServeOptions,
-): Promise<{
-  readonly pid?: number;
-  readonly useLaunchAgent: boolean;
-  readonly health: McpRuntimeHealth;
-}> => {
+): Promise<McpStartedPreparedServer> => {
   let pid: number | undefined;
   const useLaunchAgent = shouldUseLaunchAgent(options);
   if (useLaunchAgent) await startLaunchAgent(prepared);
@@ -1154,7 +1175,16 @@ const startPreparedServer = async (
       undefined,
       options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
     );
-    return { pid, useLaunchAgent, health };
+    const supervisorPid = useLaunchAgent ? undefined : health.pid;
+    if (supervisorPid !== undefined && supervisorPid !== pid) {
+      registerSupervisorMcpDaemon({
+        pid: supervisorPid,
+        prismHome: prepared.descriptor.prismHome,
+        serverName: prepared.descriptor.serverName,
+        serverPath: prepared.descriptor.serverPath,
+      });
+    }
+    return { pid, useLaunchAgent, supervisorPid, health };
   } catch (error) {
     await stopPreparedServerProcess({
       pid,
@@ -1167,11 +1197,7 @@ const startPreparedServer = async (
 
 const persistPreparedServerMetadata = async (
   prepared: McpPreparedServer,
-  started: {
-    readonly pid?: number;
-    readonly useLaunchAgent: boolean;
-    readonly health: McpRuntimeHealth;
-  },
+  started: McpStartedPreparedServer,
 ): Promise<McpRuntimeMetadata> => {
   const metadata = metadataForPreparedServer(prepared, started.health.pid, started.health);
   try {
@@ -1181,6 +1207,7 @@ const persistPreparedServerMetadata = async (
     try {
       await stopPreparedServerProcess({
         pid: started.pid,
+        healthPid: started.supervisorPid,
         useLaunchAgent: started.useLaunchAgent,
         serverName: prepared.descriptor.serverName,
       });
@@ -1273,6 +1300,7 @@ const stopMcpResolved = async (
   if (status.state === "stale-pid") {
     const next = stoppedMetadata(metadata);
     await writeMcpRuntimeMetadata(status.descriptor.runtimePath, next);
+    unregisterSupervisorMcpDaemon(metadata.pid);
     return { state: "already-stopped", descriptor: status.descriptor, metadata: next };
   }
   if (hasUnsafePidReason(status.staleReasons)) {
@@ -1285,8 +1313,12 @@ const stopMcpResolved = async (
   if (launchAgentEligible(options.prismHome)) {
     await stopLaunchAgent(launchAgentLabelForServer(status.descriptor.serverName)).catch(() => undefined);
   }
-  if (pidIsRunning(metadata.pid)) {
-    await terminatePid(metadata.pid, "SIGTERM", options.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+  try {
+    if (pidIsRunning(metadata.pid)) {
+      await terminatePid(metadata.pid, "SIGTERM", options.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+    }
+  } finally {
+    unregisterSupervisorMcpDaemon(metadata.pid);
   }
   const next = stoppedMetadata(metadata);
   await writeMcpRuntimeMetadata(status.descriptor.runtimePath, next);

@@ -24,7 +24,7 @@ const waitForPidExit = async (pid: number, timeoutMs: number): Promise<boolean> 
   return !processIsRunning(pid);
 };
 
-const mcpServerPidsUnder = async (root: string): Promise<number[]> => {
+export const listPrismMcpProcessPidsUnder = async (root: string): Promise<number[]> => {
   const normalizedRoot = resolve(root);
   const { stdout } = await execFileAsync("ps", ["-axo", "pid=,command="], {
     maxBuffer: 20_000_000,
@@ -44,11 +44,14 @@ const mcpServerPidsUnder = async (root: string): Promise<number[]> => {
     });
 };
 
+export const countPrismMcpProcessesUnder = async (root: string): Promise<number> =>
+  (await listPrismMcpProcessPidsUnder(root)).length;
+
 export const cleanupPrismMcpProcessesUnder = async (
   root: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<void> => {
-  const pids = await mcpServerPidsUnder(root);
+  const pids = await listPrismMcpProcessPidsUnder(root);
   for (const pid of pids) {
     try {
       process.kill(pid, "SIGTERM");

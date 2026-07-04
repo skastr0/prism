@@ -4,6 +4,7 @@ import { createServer, type Server as NetServer } from "node:net";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   formatMcpStatus,
@@ -21,6 +22,7 @@ import {
 } from "./runtime-metadata.js";
 import { resolveBunExecutable } from "../bun-runtime.js";
 import { createMinimalMcpPluginFixture, type MinimalMcpPluginFixture } from "../testing/mcp-fixture.js";
+import { countPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const execFileAsync = promisify(execFile);
 const fixtures: MinimalMcpPluginFixture[] = [];
@@ -224,6 +226,32 @@ test("MCP lifecycle serve → status → stop leaves no orphan process", async (
   expect(afterStatus.state).toBe("stopped");
   await waitForServerProcessCount(fixture.serverPath, 0);
 });
+
+test("MCP lifecycle reaps temp-home daemon when the spawning parent exits", async () => {
+  const fixture = await createFixture();
+  const lifecycleModule = pathToFileURL(join(process.cwd(), "src", "mcp", "lifecycle.ts")).href;
+  const script = `
+const { serveMcp } = await import(${JSON.stringify(lifecycleModule)});
+const result = await serveMcp(${JSON.stringify(fixture.serveOptions({ startupTimeoutMs: 5_000 }))});
+console.log(JSON.stringify({ pid: result.metadata?.pid }));
+`;
+
+  const { stdout } = await execFileAsync(resolveBunExecutable(), ["--eval", script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PRISM_MCP_DISABLE_LAUNCHD: "1",
+      PRISM_MCP_SUPERVISE_DAEMONS: "1",
+    },
+    timeout: 20_000,
+    maxBuffer: 10_000_000,
+  });
+  const report = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { readonly pid?: number };
+  expect(report.pid).toBeGreaterThan(0);
+  await waitForPidExit(report.pid!, 5_000);
+  await waitForServerProcessCount(fixture.serverPath, 0);
+  expect(await countPrismMcpProcessesUnder(fixture.sandbox.root)).toBe(0);
+}, 30_000);
 
 test("MCP lifecycle restart stops the old pid and starts a new pid", async () => {
   const fixture = await createFixture();

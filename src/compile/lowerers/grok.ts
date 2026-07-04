@@ -17,6 +17,7 @@ import {
   renderMcpHttpUrl,
   resolveMcpRuntime,
 } from "../mcp-runtime.js";
+import { stableHash8 } from "../stable-hash.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -49,6 +50,16 @@ import {
 
 const TARGET_ID = "grok" as const;
 const GROK_MCP_NAME_SEPARATOR = "__";
+
+// Grok drops (silently, with no error) any MCP tool whose fully-qualified
+// name exceeds 64 chars or fails ^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$. The
+// server-prefix + separator + tool-segment composition is bounded at <=64
+// today by construction elsewhere (wire server keys are `p_` + 8 hex, and
+// GENERATED_EXTERNAL_TOOL_NAME_MAX_LENGTH reserves exactly enough room for
+// that), but that bound is an accident of two unrelated constants agreeing.
+// Enforce it explicitly here so a future change to either constant fails
+// safe (truncate + hash) instead of failing silent (Grok drops the tool).
+export const GROK_MAX_TOOL_NAME_LENGTH = 64;
 
 export const grokMcpServerNameForPlugin = (sourcePluginName: string): string =>
   generatedMcpWireServerName(sourcePluginName);
@@ -141,6 +152,7 @@ const composeGrokTools = (
   agent: ComposedAgent,
   target: GrokLowerTarget,
   override: Record<string, unknown> | undefined,
+  namer: GrokToolNamer,
 ): string[] => {
   const generatedTools: string[] = [];
   for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
@@ -148,9 +160,7 @@ const composeGrokTools = (
     agent,
   )) {
     for (const binding of bindings) {
-      generatedTools.push(
-        grokMcpToolNameForBinding(ownerPlugin, binding),
-      );
+      generatedTools.push(namer.name(ownerPlugin, binding));
     }
   }
   return uniqueSorted([
@@ -186,7 +196,11 @@ const composeGrokEffort = (
     stringValue(model.variant),
   );
 
-const composeAgentFrontmatter = (agent: ComposedAgent, target: GrokLowerTarget): Record<string, unknown> => {
+const composeAgentFrontmatter = (
+  agent: ComposedAgent,
+  target: GrokLowerTarget,
+  namer: GrokToolNamer,
+): Record<string, unknown> => {
   const override = grokOverrideForAgent(agent);
   const model = agent.model ?? {};
 
@@ -201,7 +215,7 @@ const composeAgentFrontmatter = (agent: ComposedAgent, target: GrokLowerTarget):
     reasoning_effort: stringValue(override?.reasoning_effort),
     temperature: firstDefined(numberValue(override?.temperature), numberValue(model.temperature)),
     top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
-    tools: composeGrokTools(agent, target, override),
+    tools: composeGrokTools(agent, target, override, namer),
     disallowedTools: composeGrokDisallowedTools(override),
     skills: uniqueSorted(agent.allowedSkills),
   };
@@ -210,30 +224,79 @@ const composeAgentFrontmatter = (agent: ComposedAgent, target: GrokLowerTarget):
 const renderAgentMarkdown = (
   agent: ComposedAgent,
   target: GrokLowerTarget,
+  namer: GrokToolNamer,
 ): string => {
-  return `${serializeFrontmatter(composeAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
+  return `${serializeFrontmatter(composeAgentFrontmatter(agent, target, namer))}\n\n${agent.body}\n`;
 };
 
 const grokNativeHookEvent = prePostSessionNativeHookEvent;
 
-const grokMcpToolNameForBinding = (
+const grokQualifiedMcpToolName = (
   sourcePluginName: string,
   binding: ResolvedContractBinding,
 ): string =>
   `${grokMcpServerNameForPlugin(sourcePluginName)}${GROK_MCP_NAME_SEPARATOR}${mcpToolNameForBinding(sourcePluginName, binding)}`;
+
+/**
+ * Deterministic overflow policy for a Grok-qualified tool name: names that
+ * already fit stay byte-identical (regeneration must not rename a compliant
+ * tool); names over the limit are truncated and given a stable hash suffix
+ * so the result is unique, regex-safe, and reproducible across compiles.
+ */
+export const capGrokToolName = (name: string): string => {
+  if (name.length <= GROK_MAX_TOOL_NAME_LENGTH) return name;
+  const suffix = stableHash8(name);
+  const prefixLength = GROK_MAX_TOOL_NAME_LENGTH - suffix.length - 1;
+  const prefix = name.slice(0, prefixLength).replace(/_+$/g, "");
+  return `${prefix}_${suffix}`;
+};
+
+interface GrokToolNamer {
+  readonly name: (ownerPlugin: string, binding: ResolvedContractBinding) => string;
+}
+
+/**
+ * Applies capGrokToolName across every tool name this compile emits for a
+ * single Grok bundle, and guards against the one collision the cap itself
+ * can introduce: two distinct qualified names truncating to the same
+ * capped name on the same wire server.
+ */
+const createGrokToolNamer = (): GrokToolNamer => {
+  const seenByServer = new Map<string, Map<string, string>>();
+  return {
+    name: (ownerPlugin, binding) => {
+      const qualified = grokQualifiedMcpToolName(ownerPlugin, binding);
+      const capped = capGrokToolName(qualified);
+      if (capped !== qualified) {
+        const server = grokMcpServerNameForPlugin(ownerPlugin);
+        const seen = seenByServer.get(server) ?? new Map<string, string>();
+        const existing = seen.get(capped);
+        if (existing !== undefined && existing !== qualified) {
+          throw new Error(
+            `Grok MCP tool name collision on server '${server}': '${existing}' and '${qualified}' both truncate to '${capped}'`,
+          );
+        }
+        seen.set(capped, qualified);
+        seenByServer.set(server, seen);
+      }
+      return capped;
+    },
+  };
+};
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
   registry: PluginRegistry | undefined,
   target: GrokLowerTarget,
   bindings: ReadonlyArray<ResolvedContractBinding>,
+  namer: GrokToolNamer,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectBindingNameMap(
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return grokMcpToolNameForBinding(owner, binding);
+      return namer.name(owner, binding);
     },
   );
 
@@ -326,6 +389,7 @@ const planMcpServer = async (
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
+  const namer = createGrokToolNamer();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
 
@@ -340,7 +404,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     input,
     state,
     pushWrite,
-    renderAgentMarkdown: (agent) => renderAgentMarkdown(agent, input.target),
+    renderAgentMarkdown: (agent) => renderAgentMarkdown(agent, input.target, namer),
   });
   await planGeneratedPluginSkillWrites({ input, state, pushWrite });
   await planStandardGeneratedPluginOrbitSkillWrites({
@@ -352,7 +416,8 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   await planGeneratedPluginHookWrites({
     input,
     state,
-    renderHooksJson,
+    renderHooksJson: (hooks, registry, target, bindings) =>
+      renderHooksJson(hooks, registry, target, bindings, namer),
     bundleHookWrapper,
     resolveTarget,
   });

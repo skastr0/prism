@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
-import { grokMcpServerNameForPlugin, planLowering } from "./lowerers/grok.js";
+import {
+  capGrokToolName,
+  grokMcpServerNameForPlugin,
+  planLowering,
+} from "./lowerers/grok.js";
 import { mcpToolNameForBinding } from "./mcp-bundle.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
@@ -24,6 +28,20 @@ const effectImportPath = join(
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 const GROK_MAX_TOOL_NAME_LENGTH = 64;
+// Grok's own tool-name validation: https://... (PQ-168) — first char letter
+// or underscore, remaining 0-63 chars alnum/underscore/hyphen.
+const GROK_TOOL_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/u;
+
+const permissionBinding = (
+  toolPluginName: string,
+  toolName: string,
+): ResolvedContractBinding => ({
+  kind: "permission",
+  logicalName: toolName,
+  toolPluginName,
+  toolName,
+  toolSourcePath: join(toolPluginName, "tools", `${toolName}.tool.ts`),
+});
 
 const createTempRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), "prism-grok-lowerer-"));
@@ -594,4 +612,152 @@ export default defineHook({
       },
     }),
   ).rejects.toThrow("has no 'grok' target binding");
+});
+
+test("grok lowerer reproduces the reported typefully-cli overflow and keeps it compliant (PQ-168)", async () => {
+  const root = await createTempRoot();
+  const binding = permissionBinding("typefully-cli", "linkedin_organizations_resolve");
+
+  const { files: operations } = await planLowering({
+    agents: [
+      {
+        name: "typefully-consumer",
+        description: "Consumes a foreign typefully-cli tool",
+        body: "# Typefully consumer\n",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: [binding],
+      },
+    ],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "project",
+      root: join(root, ".grok"),
+      sourcePluginName: "scribe",
+      sourcePluginVersion: "0.1.0",
+    },
+  });
+
+  const agent = findContentOperation(operations, join("agents", "typefully-consumer.md"));
+  const server = grokMcpServerNameForPlugin("typefully-cli");
+  const expectedName = `${server}__${mcpToolNameForBinding("typefully-cli", binding)}`;
+
+  // The reported drop was caused by a server prefix that spelled out the
+  // full plugin id ("prism-generated-typefully-cli", 29 chars) instead of
+  // the compact wire key ("p_<8 hex>", 10 chars). Assert the compact form
+  // is what's actually emitted, and that it fits well under the limit with
+  // no truncation needed.
+  expect(server).toMatch(/^p_[0-9a-f]{8}$/u);
+  expect(expectedName).toBe(`${server}__typefully_cli_linkedin_organizations_resolve`);
+  expect(expectedName.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(expectedName).toMatch(GROK_TOOL_NAME_REGEX);
+  expect(agent?.content).toContain(`- "${expectedName}"`);
+});
+
+test("grok lowerer caps every generated tool name at 64 chars across a corpus of owner/tool name lengths", async () => {
+  const root = await createTempRoot();
+
+  // A representative corpus: the reported real-world case, short names,
+  // and adversarially long plugin/tool name combinations that push the raw
+  // qualified name (server + separator + tool segment) well past 64 chars
+  // before any capping.
+  const corpus: ReadonlyArray<{ readonly plugin: string; readonly tool: string }> = [
+    { plugin: "typefully-cli", tool: "linkedin_organizations_resolve" },
+    { plugin: "a", tool: "b" },
+    { plugin: "scribe", tool: "voice_profile" },
+    { plugin: "prism-generated-forge", tool: "submit_review_requirements_trace_review_details" },
+    { plugin: "x".repeat(40), tool: "y".repeat(80) },
+    { plugin: "another-very-long-plugin-name-indeed", tool: "z".repeat(120) },
+  ];
+
+  const bindings = corpus.map(({ plugin, tool }) => permissionBinding(plugin, tool));
+
+  const { files: operations } = await planLowering({
+    agents: [
+      {
+        name: "corpus-consumer",
+        description: "Consumes every binding in the corpus",
+        body: "# Corpus consumer\n",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: [],
+        toolBindings: bindings,
+      },
+    ],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "project",
+      root: join(root, ".grok"),
+      sourcePluginName: "corpus-fixture",
+      sourcePluginVersion: "0.1.0",
+    },
+  });
+
+  const agent = findContentOperation(operations, join("agents", "corpus-consumer.md"));
+  const toolsBlockMatch = agent?.content.match(/\ntools:\n((?:  - .*\n)+)/u);
+  if (!toolsBlockMatch) throw new Error("expected a non-empty tools: block");
+  const emittedNames = [...toolsBlockMatch[1]!.matchAll(/- "([^"]+)"/gu)].map((match) => match[1]!);
+
+  expect(emittedNames.length).toBe(corpus.length);
+  for (const name of emittedNames) {
+    expect(name.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
+    expect(name).toMatch(GROK_TOOL_NAME_REGEX);
+  }
+
+  // Names that already fit must be emitted byte-identical to today's
+  // uncapped composition — regeneration must not rename a compliant tool.
+  for (const { plugin, tool } of corpus) {
+    const uncapped = `${grokMcpServerNameForPlugin(plugin)}__${mcpToolNameForBinding(
+      plugin,
+      permissionBinding(plugin, tool),
+    )}`;
+    if (uncapped.length <= GROK_MAX_TOOL_NAME_LENGTH) {
+      expect(emittedNames).toContain(uncapped);
+    }
+  }
+});
+
+test("capGrokToolName keeps compliant names untouched and truncates overflow deterministically", () => {
+  const compliant = "p_deadbeef__typefully_cli_linkedin_organizations_resolve";
+  expect(compliant.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(capGrokToolName(compliant)).toBe(compliant);
+
+  const exactlyAtLimit = `p_deadbeef__${"a".repeat(GROK_MAX_TOOL_NAME_LENGTH - "p_deadbeef__".length)}`;
+  expect(exactlyAtLimit.length).toBe(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(capGrokToolName(exactlyAtLimit)).toBe(exactlyAtLimit);
+
+  const oneOverLimit = `${exactlyAtLimit}a`;
+  const cappedOneOver = capGrokToolName(oneOverLimit);
+  expect(cappedOneOver.length).toBe(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(cappedOneOver).toMatch(GROK_TOOL_NAME_REGEX);
+  expect(cappedOneOver).not.toBe(oneOverLimit);
+  expect(cappedOneOver.startsWith(oneOverLimit.slice(0, 10))).toBe(true);
+
+  const veryLong = `p_deadbeef__${"tool_segment_".repeat(20)}`;
+  const cappedVeryLong = capGrokToolName(veryLong);
+  expect(cappedVeryLong.length).toBe(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(cappedVeryLong).toMatch(GROK_TOOL_NAME_REGEX);
+
+  // Deterministic: same input always caps to the same output.
+  expect(capGrokToolName(veryLong)).toBe(cappedVeryLong);
+
+  // A truncation boundary that lands mid-run-of-underscores must not leave
+  // a doubled or dangling underscore where the hash suffix is joined on.
+  const prefixLength = GROK_MAX_TOOL_NAME_LENGTH - 8 - 1;
+  const trailingUnderscoreAtBoundary = `${"a".repeat(prefixLength - 5)}_____${"b".repeat(50)}`;
+  const cappedTrailingUnderscore = capGrokToolName(trailingUnderscoreAtBoundary);
+  expect(cappedTrailingUnderscore.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
+  expect(cappedTrailingUnderscore).toMatch(GROK_TOOL_NAME_REGEX);
+  expect(cappedTrailingUnderscore).not.toMatch(/__/u);
 });

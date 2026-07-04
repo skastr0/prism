@@ -111,6 +111,84 @@ test("workflow monitor help exposes store and polling options", async () => {
   expect(result.stdout).toContain("--fail-stale-after-ms");
 });
 
+test("workflow typecheck accepts a workflow against shipped Prism declarations", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const workflowPath = join(root, "typed.workflow.ts");
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const satisfies WorkflowAgentRef;
+
+export const workflow = defineWorkflow({
+  name: "typed-smoke",
+  tasks: [defineTask({
+    id: "build",
+    phase: "implement",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+  })] as const,
+});
+`);
+
+  const result = await runCli(["workflow", "typecheck", workflowPath], { PRISM_HOME: prismHome });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.stdout).toContain("Workflow typecheck passed");
+  expect(result.stdout).toContain("tsconfig.workflow.json");
+  expect(await pathExists(join(prismHome, "state", "tsconfig.workflow.json"))).toBe(true);
+}, 30_000);
+
+test("workflow typecheck rejects deliberate phase field type skew", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "bad-phase.workflow.ts");
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow, type WorkflowAgentRef } from "prism";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const satisfies WorkflowAgentRef;
+
+export const workflow = defineWorkflow({
+  name: "bad-phase",
+  tasks: [defineTask({
+    id: "build",
+    phase: 42,
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+  })] as const,
+});
+`);
+
+  const result = await runCli(["workflow", "typecheck", workflowPath], { PRISM_HOME: join(root, "prism-home") });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("Workflow typecheck failed");
+  expect(result.stderr).toContain("Type 'number' is not assignable to type 'string'");
+}, 30_000);
+
 test("workflow runs update help exposes cache control", async () => {
   const result = await runCli(["workflow", "runs", "update", "--help"], {});
 

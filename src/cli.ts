@@ -75,6 +75,7 @@ import type { SyncReport } from "./sync/apply.js";
 import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
+import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import {
@@ -213,6 +214,19 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const writeStdout = (text: string): Promise<void> =>
   new Promise<void>((resolve, reject) => {
     process.stdout.write(text, (error) => (error ? reject(error) : resolve()));
+  });
+
+workflow
+  .command("typecheck <file>")
+  .description("Typecheck a workflow module with Prism's generated tsconfig and shipped declarations")
+  .action(async (file: string) => {
+    try {
+      const result = await runWorkflowTypecheck(file);
+      await writeStdout(`Workflow typecheck passed: ${result.filePath}\nTsconfig: ${result.tsconfigPath}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow typecheck failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
   });
 
 workflow

@@ -11,7 +11,9 @@ import { compilePluginForTarget } from "./pipeline.js";
 import {
   generateMcpServerBundle,
   mcpServerArtifactRelativePath,
+  mcpServerRuntimeSourceSha256,
   mcpServerStdioArtifactRelativePath,
+  readMcpServerSourceSha256FromBundle,
 } from "./mcp-bundle.js";
 import { Contract } from "./sources.js";
 import { resolvePrismHome } from "../prism-home.js";
@@ -326,6 +328,61 @@ test("MCP bundle exposes only resolved orbit-core canonical and Forge slot wrapp
   expect(bundle.stdioContent).toContain("PRISM_MCP_ENABLED_TOOLS");
   expect(bundle.stdioContent).not.toContain("Bun.serve");
 
+});
+
+test("MCP bundle embeds a readable runtime-source fingerprint (PQ-170)", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "source-sha-fixture");
+  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
+  await writeText(
+    toolPath,
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: "echo",
+  description: "Echo for the runtime-source fingerprint fixture.",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ echoed: Schema.String }),
+  async handle(input) {
+    return { echoed: input.message };
+  },
+});
+`,
+  );
+
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "source-sha-fixture",
+    serverName: "prism-mcp-source-sha-fixture",
+    bindings: [
+      {
+        kind: "permission",
+        logicalName: "echo",
+        toolPluginName: "source-sha-fixture",
+        toolName: "echo",
+        toolSourcePath: toolPath,
+      },
+    ],
+  });
+
+  const expected = mcpServerRuntimeSourceSha256();
+  expect(expected).toMatch(/^[0-9a-f]{64}$/);
+  // Deterministic and stable across calls within the same running build.
+  expect(mcpServerRuntimeSourceSha256()).toBe(expected);
+
+  // The long-running Streamable HTTP daemon is the transport that can drift
+  // from source independently of any specific plugin's bindings — its
+  // bundle carries the fingerprint, both as a literal and via /healthz.
+  expect(bundle.content).toContain(expected);
+  expect(readMcpServerSourceSha256FromBundle(bundle.content)).toBe(expected);
+
+  // A stdio server is re-spawned fresh per client session directly off
+  // whatever bytes are on disk right now, so there is no persistent process
+  // for the fingerprint to describe; it reads back undefined there, and for
+  // any bundle that predates this fingerprint entirely — absence is a
+  // distinct, detectable signal, not a false match.
+  expect(readMcpServerSourceSha256FromBundle(bundle.stdioContent)).toBeUndefined();
+  expect(readMcpServerSourceSha256FromBundle("console.log('legacy bundle');")).toBeUndefined();
 });
 
 test("MCP bundle Streamable HTTP serves multiple sessions from one process", async () => {

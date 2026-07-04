@@ -17,6 +17,7 @@ export interface McpRuntimeMetadata {
   readonly port?: number;
   readonly pid?: number;
   readonly serverSha256?: string;
+  readonly serverSourceSha256?: string;
   readonly startedAt?: string;
   readonly healthUrl?: string;
   readonly mcpUrl?: string;
@@ -31,6 +32,7 @@ export interface McpRuntimeHealth {
   readonly pid: number;
   readonly toolCount: number;
   readonly serverSha256?: string;
+  readonly serverSourceSha256?: string;
 }
 
 export type McpRuntimeStaleReason =
@@ -52,13 +54,26 @@ export type McpRuntimeStaleReason =
   | "missing-server-file"
   | "server-file-sha256-mismatch"
   | "missing-server-sha256"
-  | "server-sha256-mismatch";
+  | "server-sha256-mismatch"
+  | "missing-health-server-source-sha256"
+  | "health-server-source-sha256-mismatch";
 
 export interface McpRuntimeStalenessOptions {
   readonly requireLivePid?: boolean;
   readonly requireHealth?: boolean;
   readonly health?: McpRuntimeHealth;
   readonly expectedServerSha256?: string;
+  /**
+   * Fingerprint of the MCP server runtime templates the caller's current
+   * prism build would generate right now (see
+   * `mcpServerRuntimeSourceSha256` in `compile/mcp-bundle.ts`). Unlike
+   * `expectedServerSha256` — which is per-plugin and only meaningful once a
+   * bundle has actually been rebuilt — this is a property of the running
+   * prism installation, so it stays comparable against an already-running
+   * daemon's self-reported health even when nobody has recompiled that
+   * plugin since the daemon started.
+   */
+  readonly expectedServerSourceSha256?: string;
   readonly pidExists?: (pid: number) => boolean;
 }
 
@@ -70,6 +85,7 @@ const METADATA_KEYS = new Set<keyof McpRuntimeMetadata>([
   "port",
   "pid",
   "serverSha256",
+  "serverSourceSha256",
   "startedAt",
   "healthUrl",
   "mcpUrl",
@@ -204,6 +220,7 @@ export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
   const port = optionalPositiveInteger(record, "port");
   const pid = optionalPositiveInteger(record, "pid");
   const serverSha256 = optionalSha256(record, "serverSha256");
+  const serverSourceSha256 = optionalSha256(record, "serverSourceSha256");
   const startedAt = optionalStartedAt(record);
   const healthUrl = optionalUrl(record, "healthUrl");
   const mcpUrl = optionalUrl(record, "mcpUrl");
@@ -216,6 +233,7 @@ export const parseMcpRuntimeMetadata = (value: unknown): McpRuntimeMetadata => {
     ...(port !== undefined ? { port } : {}),
     ...(pid !== undefined ? { pid } : {}),
     ...(serverSha256 !== undefined ? { serverSha256 } : {}),
+    ...(serverSourceSha256 !== undefined ? { serverSourceSha256 } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(healthUrl !== undefined ? { healthUrl } : {}),
     ...(mcpUrl !== undefined ? { mcpUrl } : {}),
@@ -272,6 +290,9 @@ export const parseMcpRuntimeHealth = (value: unknown): McpRuntimeHealth => {
     toolCount: requiredNonNegativeNumber(record, "toolCount"),
     ...(optionalSha256(record, "serverSha256") !== undefined
       ? { serverSha256: optionalSha256(record, "serverSha256") }
+      : {}),
+    ...(optionalSha256(record, "serverSourceSha256") !== undefined
+      ? { serverSourceSha256: optionalSha256(record, "serverSourceSha256") }
       : {}),
   };
 };
@@ -336,6 +357,19 @@ export const detectMcpRuntimeStaleReasons = (
           reasons.push("missing-health-server-sha256");
         } else if (options.health.serverSha256 !== expectedHealthSha256.toLowerCase()) {
           reasons.push("health-server-sha256-mismatch");
+        }
+      }
+      // Independent of the per-plugin bundle content hash above: this
+      // fingerprints the shared runtime templates the caller's current
+      // prism build would generate, so a daemon whose bundle predates a
+      // runtime-template change is caught even when nobody has recompiled
+      // its specific plugin since it started.
+      if (options.expectedServerSourceSha256 !== undefined) {
+        const expectedSourceSha256 = options.expectedServerSourceSha256.toLowerCase();
+        if (options.health.serverSourceSha256 === undefined) {
+          reasons.push("missing-health-server-source-sha256");
+        } else if (options.health.serverSourceSha256 !== expectedSourceSha256) {
+          reasons.push("health-server-source-sha256-mismatch");
         }
       }
     }

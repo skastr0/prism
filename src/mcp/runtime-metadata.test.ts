@@ -173,6 +173,73 @@ test("MCP runtime metadata binds HTTP freshness to health data", () => {
   ]);
 });
 
+test("MCP runtime metadata detects runtime-source fingerprint drift independent of the bundle content hash (PQ-170)", () => {
+  const metadata = parseMcpRuntimeMetadata({
+    schema: MCP_RUNTIME_METADATA_SCHEMA,
+    serverName: "prism-generated-tower",
+    transport: "streamable-http",
+    pid: 12345,
+    serverSha256: "d".repeat(64),
+    startedAt: "2026-05-17T00:00:00.000Z",
+  });
+  const healthyBase = {
+    schema: "prism.mcp-health.v1" as const,
+    serverName: "prism-generated-tower",
+    transport: "streamable-http" as const,
+    startedAt: "2026-05-17T00:00:00.000Z",
+    uptimeMs: 250,
+    pid: 12345,
+    toolCount: 4,
+    serverSha256: "d".repeat(64),
+  };
+
+  // Not passing expectedServerSourceSha256 stays fully backward compatible —
+  // a caller unaware of this dimension gets no new reasons.
+  expect(
+    detectMcpRuntimeStaleReasons(metadata, {
+      requireLivePid: true,
+      expectedServerSha256: "d".repeat(64),
+      pidExists: () => true,
+      health: parseMcpRuntimeHealth(healthyBase),
+    }),
+  ).toEqual([]);
+
+  // Bundle content hash matches (same plugin, same bindings) — but the
+  // daemon's own runtime templates predate the current source fingerprint.
+  // This is exactly the incident class: nothing about the plugin's bundle
+  // changed, yet the daemon is running code the generator has moved past.
+  expect(
+    detectMcpRuntimeStaleReasons(metadata, {
+      requireLivePid: true,
+      expectedServerSha256: "d".repeat(64),
+      expectedServerSourceSha256: "f".repeat(64),
+      pidExists: () => true,
+      health: parseMcpRuntimeHealth(healthyBase),
+    }),
+  ).toEqual(["missing-health-server-source-sha256"]);
+
+  expect(
+    detectMcpRuntimeStaleReasons(metadata, {
+      requireLivePid: true,
+      expectedServerSha256: "d".repeat(64),
+      expectedServerSourceSha256: "f".repeat(64),
+      pidExists: () => true,
+      health: parseMcpRuntimeHealth({ ...healthyBase, serverSourceSha256: "1".repeat(64) }),
+    }),
+  ).toEqual(["health-server-source-sha256-mismatch"]);
+
+  // A daemon whose reported fingerprint matches current source is clean.
+  expect(
+    detectMcpRuntimeStaleReasons(metadata, {
+      requireLivePid: true,
+      expectedServerSha256: "d".repeat(64),
+      expectedServerSourceSha256: "f".repeat(64),
+      pidExists: () => true,
+      health: parseMcpRuntimeHealth({ ...healthyBase, serverSourceSha256: "f".repeat(64) }),
+    }),
+  ).toEqual([]);
+});
+
 test("MCP runtime metadata computes stable file sha256", async () => {
   const root = await mkdtemp(join(tmpdir(), "prism-runtime-hash-test-"));
   const path = join(root, "server.mjs");

@@ -280,6 +280,103 @@ describe("sync engine — shared-file regions", () => {
     expect(final).toContain("trailing comment");
   });
 
+  test("marker region preserves dollar replacement tokens on insert and update", async () => {
+    const literalContent = [
+      "literal ampersand = $&",
+      "literal quote = $'",
+      "literal prefix = $`",
+      "literal dollar = $$",
+      "literal capture = $1",
+      "",
+    ].join("\n");
+    const updatedContent = [
+      "updated ampersand = $&",
+      "updated quote = $'",
+      "updated prefix = $`",
+      "updated dollar = $$",
+      "updated capture = $1",
+      "",
+    ].join("\n");
+    const desired = (content: string) => desiredWith({
+      regions: [{
+        kind: "marker" as const,
+        targetPath: configPath(),
+        regionKey: "codex-cli:dollar-tokens",
+        commentPrefix: "#",
+        content,
+        plugin: "dollar-token-test",
+      }],
+    });
+    const expected = (content: string) => [
+      userContent.trimEnd(),
+      "",
+      "# --- prism:codex-cli:dollar-tokens begin ---",
+      content.trimEnd(),
+      "# --- prism:codex-cli:dollar-tokens end ---",
+      "",
+    ].join("\n");
+
+    await nodeWriteFile(configPath(), userContent);
+    const inserted = await refresh(desired(literalContent));
+    expect(kinds(inserted)).toEqual(["patch-regions"]);
+    expect(await readFile(configPath())).toBe(expected(literalContent));
+
+    const updated = await refresh(desired(updatedContent));
+    expect(kinds(updated)).toEqual(["patch-regions"]);
+    expect(await readFile(configPath())).toBe(expected(updatedContent));
+
+    const second = await refresh(desired(updatedContent));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    expect(second.converged).toBe(true);
+    expect(await readFile(configPath())).toBe(expected(updatedContent));
+  });
+
+  test("marker region converges shorthand-like dollar sigil content", async () => {
+    const shorthandLikeContent = [
+      "# Agent Shorthand",
+      "",
+      "The `$` sigil marks code or literal blocks.",
+      "The `$`-prefixed form is part of the grammar, not decoration.",
+      "A literal `$` line must stay literal across refreshes.",
+      "A quoted `$` token must not expand into the preceding fence body.",
+      "Examples include `$&`, `$'`, `$$`, and `$1` as text.",
+      "Backtick token: $`",
+      "",
+    ].join("\n");
+    const desired = (content: string) => desiredWith({
+      regions: [{
+        kind: "marker" as const,
+        targetPath: configPath(),
+        regionKey: "codex-cli:agent-shorthand",
+        commentPrefix: "#",
+        content,
+        plugin: "agent-shorthand-test",
+      }],
+    });
+    const expected = (content: string) => [
+      userContent.trimEnd(),
+      "",
+      "# --- prism:codex-cli:agent-shorthand begin ---",
+      content.trimEnd(),
+      "# --- prism:codex-cli:agent-shorthand end ---",
+      "",
+    ].join("\n");
+
+    await nodeWriteFile(configPath(), userContent);
+    const seeded = await refresh(desired("placeholder\n"));
+    expect(kinds(seeded)).toEqual(["patch-regions"]);
+    expect(await readFile(configPath())).toBe(expected("placeholder\n"));
+
+    const updated = await refresh(desired(shorthandLikeContent));
+    expect(kinds(updated)).toEqual(["patch-regions"]);
+    expect(await readFile(configPath())).toBe(expected(shorthandLikeContent));
+
+    const second = await refresh(desired(shorthandLikeContent));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    expect(second.converged).toBe(true);
+    expect(await readFile(configPath())).toBe(expected(shorthandLikeContent));
+  });
+
   test("json-key region preserves comments and foreign keys in JSONC", async () => {
     const mcpJson = join(root, "mcp.json");
     await nodeWriteFile(mcpJson, [

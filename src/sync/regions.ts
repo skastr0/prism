@@ -109,7 +109,7 @@ export const applyMarkerRegion = (
   }
 
   if (fence.test(fileContent)) {
-    const next = fileContent.replace(fence, rendered);
+    const next = fileContent.replace(fence, () => rendered);
     return { content: next, changed: next !== fileContent };
   }
 

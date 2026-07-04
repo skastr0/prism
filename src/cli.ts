@@ -75,7 +75,7 @@ import {
 import type { SyncReport } from "./sync/apply.js";
 import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
-import { loadWorkflowFile, validateWorkflowFile } from "./workflow-loader.js";
+import { loadWorkflowFile, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
@@ -242,11 +242,16 @@ workflow
 
 workflow
   .command("validate <file>")
-  .description("Load a workflow module and print its typed task summary")
-  .action(async (file: string) => {
+  .description("Load a workflow module, resolve each task's (worker, model), and print its typed task summary")
+  .option("--table", "Print a human-readable worker->model resolution table instead of JSON")
+  .action(async (file: string, options: { readonly table?: boolean }) => {
     try {
       const summary = await validateWorkflowFile(file);
-      console.log(JSON.stringify(summary, null, 2));
+      if (options.table === true) {
+        await writeStdout(`${renderWorkflowModelResolutionTable(summary.modelResolution)}\n`);
+      } else {
+        console.log(JSON.stringify(summary, null, 2));
+      }
     } catch (error) {
       printCliError(error, "Workflow validation failed");
       exitWith(EXIT_CODES.domainFailure);

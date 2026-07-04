@@ -3,6 +3,7 @@ import {
   detectWorkflowHarness,
   detectWorkflowHarnesses,
   WORKFLOW_HARNESS_IDS,
+  workflowHarnessDefaultModel,
   workflowHarnessIdsForHarnesses,
 } from "./workflow-harness-detection.js";
 import { WorkflowBunRuntimeUnavailableError, WorkflowUnsupportedHarnessError } from "./workflow-errors.js";
@@ -124,5 +125,29 @@ describe("workflow harness detection", () => {
       "opencode",
       "codex-cli",
     ]);
+  });
+
+  test("every workflow harness carries a cheap-fast registry default model", () => {
+    for (const harness of WORKFLOW_HARNESS_IDS) {
+      const model = workflowHarnessDefaultModel(harness);
+      expect(typeof model).toBe("string");
+      expect(model?.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("returns undefined for a harness id outside the registry", () => {
+    expect(workflowHarnessDefaultModel("not-a-real-harness")).toBeUndefined();
+  });
+
+  test("every workflow harness resolves as available under mocked detection, matching its registry default", async () => {
+    const detections = await detectWorkflowHarnesses({
+      resolveExecutable: (command) => `/usr/local/bin/${command}`,
+    });
+
+    expect(detections).toHaveLength(WORKFLOW_HARNESS_IDS.length);
+    for (const detection of detections) {
+      expect(detection.available).toBe(true);
+      expect(workflowHarnessDefaultModel(detection.harness)).toBeDefined();
+    }
   });
 });

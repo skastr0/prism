@@ -8,11 +8,11 @@ Prism currently has three different package shapes that matter for an SDK decisi
 
 - The workspace root is private, named `@skastr0/prism-workspace`, and already exposes raw TypeScript source subpaths for `.`, `./cli`, and `./packager` (`package.json:2`, `package.json:6`, `package.json:12`).
 - The published `@skastr0/prism` package is a CLI wrapper: it declares a `prism` binary and publishes only `bin`, `README.md`, and `LICENSE` (`packages/npm/prism/package.json:2`, `packages/npm/prism/package.json:26`, `packages/npm/prism/package.json:29`).
-- `@skastr0/prism-core` is already a separate published library of core contracts/codecs with explicit compiled ESM plus declaration exports (`packages/prism-core/package.json:2`, `packages/prism-core/package.json:27`, `packages/prism-core/package.json:45`; `packages/prism-core/README.md:3`, `packages/prism-core/README.md:5`).
+- `@skastr0/prism-core` is a separate publishable workspace package of core contracts/codecs with explicit compiled ESM plus declaration exports (`packages/prism-core/package.json:2`, `packages/prism-core/package.json:27`, `packages/prism-core/package.json:45`; `packages/prism-core/README.md:3`, `packages/prism-core/README.md:5`). It is not considered released until the protected npm publish workflow uploads it and registry verification succeeds.
 
 The root package is not a suitable embeddable SDK as-is because its dependency graph includes CLI and TUI packages: Commander, OpenTUI, and React are root dependencies today (`package.json:44`, `package.json:45`, `package.json:48`, `package.json:52`).
 
-The source already contains a public-looking workflow surface. `src/index.ts` is headed as a public authoring API and re-exports workflow definitions, runner, store, worker contract, and worker metadata (`src/index.ts:1`, `src/index.ts:16`, `src/index.ts:17`, `src/index.ts:18`, `src/index.ts:19`, `src/index.ts:20`, `src/index.ts:21`). The workflow DSL exports `WorkflowWorkerId`, `defineTask`, and `defineWorkflow` (`src/workflows.ts:58`, `src/workflows.ts:423`, `src/workflows.ts:432`). The runner exports `runWorkflow` (`src/workflow-runner.ts:1045`). The worker registry source exports adapter lookup, supported-worker discovery, permission resolution, and an executor factory (`src/workflow-workers.ts:164`, `src/workflow-workers.ts:167`, `src/workflow-workers.ts:177`, `src/workflow-workers.ts:183`).
+The source already contains a public-looking workflow surface. `src/index.ts` is headed as a public authoring API and re-exports workflow definitions, runner, runtime errors, harness detection, worker contract, and worker metadata (`src/index.ts:1`, `src/index.ts:16`, `src/index.ts:17`, `src/index.ts:18`, `src/index.ts:19`, `src/index.ts:20`). The workflow DSL exports `WorkflowWorkerId`, `defineTask`, and `defineWorkflow` (`src/workflows.ts:58`, `src/workflows.ts:423`, `src/workflows.ts:432`). The runner exports `runWorkflow` (`src/workflow-runner.ts:1045`). The store and direct worker registry are CLI/runtime internals for v0 and are not root SDK exports after the runtime-boundary correction (`src/workflow-sdk-graph.test.ts:73`, `src/workflow-node-compat.test.ts:51`).
 
 The direct worker implementations exist for the eight current workflow workers: Amp, Antigravity, Claude, Codex, Grok, Hermes, Kimi, and OpenCode (`src/workflow-amp-worker.ts:161`, `src/workflow-antigravity-worker.ts:396`, `src/workflow-claude-worker.ts:235`, `src/workflow-codex-worker.ts:125`, `src/workflow-grok-worker.ts:149`, `src/workflow-hermes-worker.ts:82`, `src/workflow-kimi-worker.ts:133`, `src/workflow-opencode-worker.ts:127`).
 
@@ -42,7 +42,7 @@ For v0, publish the SDK at the same version number as the corresponding Prism re
 
 ## Runtime Support
 
-The v0 SDK is Bun-runtime-only. The workflow runtime imports `bun:sqlite`, uses `Bun.spawn`, and uses `Bun.which` (`src/workflow-runtime.ts:1`, `src/workflow-runtime.ts:23`, `src/workflow-runtime.ts:26`, `src/workflow-runtime.ts:36`). Claiming Node parity before replacing those runtime calls with an adapter layer would overstate the current implementation. `@skastr0/prism-core` can remain Node-compatible independently because its package declares Node engines and has no Prism CLI dependency (`packages/prism-core/package.json:54`, `packages/prism-core/README.md:12`).
+The v0 SDK root is Node-importable, but not every operation is Node-executable. In-memory authoring types and `runWorkflow` can be imported by Node consumers that provide their own executor. Bun-backed operations such as executable discovery, process spawning, and persistent workflow storage fail closed with `WorkflowBunRuntimeUnavailableError` when called outside Bun (`src/workflow-node-compat.test.ts:51`, `src/workflow-node-compat.test.ts:72`, `src/workflow-node-compat.test.ts:91`). Claiming full Node execution parity before replacing those runtime calls with an adapter layer would overstate the current implementation. `@skastr0/prism-core` remains Node-compatible independently because its package declares Node engines and has no Prism CLI dependency (`packages/prism-core/package.json:54`, `packages/prism-core/README.md:12`).
 
 ## v0 Export Surface
 
@@ -52,14 +52,13 @@ Workflow authoring and execution:
 
 - `defineTask`, `defineWorkflow`, workflow definition/task/agent/model/finish-criterion types, workflow shape guards, and task output decoding from the workflow DSL (`src/workflows.ts:8`, `src/workflows.ts:54`, `src/workflows.ts:240`, `src/workflows.ts:297`, `src/workflows.ts:324`, `src/workflows.ts:396`, `src/workflows.ts:423`, `src/workflows.ts:432`, `src/workflows.ts:463`).
 - `runWorkflow`, `WorkflowTaskExecutor`, workflow task execution/result types, and workflow runtime errors from the runner/error surface (`src/workflow-runner.ts:39`, `src/workflow-runner.ts:55`, `src/workflow-runner.ts:122`, `src/workflow-runner.ts:62`, `src/workflow-runner.ts:1045`).
-- The store contract and Bun-backed store implementation needed for persisted runs, cache, events, monitors, and detached-run coordination (`src/workflow-store.ts:10`, `src/workflow-store.ts:141`, `src/workflow-store.ts:249`, `src/workflow-store.ts:260`, `src/workflow-store.ts:367`, `src/workflow-store.ts:630`).
+- `WorkflowBunRuntimeUnavailableError` and SDK-visible harness detection helpers for startup checks (`src/workflow-errors.ts:30`, `src/workflow-harness-detection.ts:223`).
 
-Direct single-task harness worker dispatch:
+Deferred from the v0 root surface:
 
 - `WorkflowWorkerId` and permission-mode types (`src/workflows.ts:58`, `src/workflows.ts:68`).
-- `WorkflowWorkerAdapter`, `WorkflowWorkerAdapterOptions`, `supportedWorkflowWorkers`, `getWorkflowWorkerAdapter`, `resolveWorkflowTaskPermission`, and `createWorkflowWorkerExecutor` (`src/workflow-workers.ts:25`, `src/workflow-workers.ts:42`, `src/workflow-workers.ts:45`, `src/workflow-workers.ts:164`, `src/workflow-workers.ts:167`, `src/workflow-workers.ts:177`, `src/workflow-workers.ts:183`).
-- The eight direct worker functions, exposed under stable names: `runAmpWorkflowTask`, `runAntigravityWorkflowTask`, `runClaudeWorkflowTask`, `runCodexWorkflowTask`, `runGrokWorkflowTask`, `runHermesWorkflowTask`, `runKimiWorkflowTask`, and `runOpenCodeWorkflowTask` (`src/workflow-amp-worker.ts:161`, `src/workflow-antigravity-worker.ts:396`, `src/workflow-claude-worker.ts:235`, `src/workflow-codex-worker.ts:125`, `src/workflow-grok-worker.ts:149`, `src/workflow-hermes-worker.ts:82`, `src/workflow-kimi-worker.ts:133`, `src/workflow-opencode-worker.ts:127`).
-- Minimal executable discovery as a Bun-only helper, currently backed by `Bun.which` (`src/workflow-runtime.ts:36`).
+- The store contract and Bun-backed store implementation for persisted runs, cache, events, monitors, and detached-run coordination remain out of the root SDK export until a dedicated persisted-runtime entrypoint is designed (`src/workflow-store.ts:10`, `src/workflow-store.ts:630`; `src/workflow-sdk-graph.test.ts:78`).
+- Direct single-task harness worker dispatch remains internal until the SDK package owns a stable worker-adapter entrypoint. The CLI can still import those modules directly (`src/workflow-workers.ts:164`, `src/workflow-workers.ts:183`; `src/workflow-amp-worker.ts:161`, `src/workflow-grok-worker.ts:149`).
 
 ### Out
 
@@ -101,6 +100,14 @@ This SDK contract is distinct from the related board items named in the originat
 
 The PQ identifiers above are board-routing labels from the request, not package names or source identifiers.
 
+## Downstream Execution Contract
+
+- SDK-002 (`@skastr0/prism-core`) owns the lower-level package artifact. Acceptance: `bun run build:core`, `npm pack --dry-run --workspace packages/prism-core`, packed-tarball install/import smoke for every exported subpath, CI `verify` builds core before root typecheck, and the protected publish workflow includes `packages/prism-core`.
+- SDK-003 owns runtime portability seams. Acceptance: public SDK import graph excludes `workflow-store`, `workflow-runtime`, loader/toolchain modules, `typescript`, and `bun:*`; Node-bundled public imports succeed; Bun-only calls throw `WorkflowBunRuntimeUnavailableError`.
+- SDK-004 owns workflow-loader/SDK execution graph separation. Acceptance: in-memory SDK usage runs from outside a Prism project without loader/project-key/tsconfig imports, while CLI file-loading remains covered separately.
+- SDK-005 owns harness detection. Acceptance: startup-safe detection resolves executables without spawning, optional verification probes have explicit timeout/broken statuses, unsupported harness ids throw a named error, and Bun-runtime absence is not misclassified as a broken harness.
+- SDK-006 owns the SDK package/release artifact. It must not move to done until SDK-001 is approved and SDK-002..005 review findings are closed. Its release gate is a clean install of the packed SDK package in a throwaway project, Node import smoke for the public root, Bun execution smoke for Bun-only helpers, `npm pack --dry-run --json` contents review, and registry verification after protected publish.
+
 ## Downstream Gate
 
-No downstream SDK implementation package work should move forward until an operator records approval for this ADR on the work item. This document intentionally makes no package.json or implementation changes.
+No SDK release/package-close work should move to done until an operator records approval for this ADR on the work item. Implementation commits may exist while the ADR is under review, but SDK-006 remains gated on that approval plus closed review findings for SDK-002..005.

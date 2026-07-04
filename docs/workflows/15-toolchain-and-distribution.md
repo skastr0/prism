@@ -16,13 +16,17 @@ must execute.
 
 Today this works **only inside the source monorepo**:
 
-- Every plugin DSL file and every workflow imports the bare specifier `"prism"`,
-  which is a dev-only `file:../prism` workspace alias (`prism-plugins/package.json`).
-  The published package is `@skastr0/prism` (scoped, ships only `bin/prism.js`, no
-  `exports`, no types). So `from "prism"` resolves to **nothing** off-repo.
+- Every plugin DSL file and every workflow imports the bare specifier `"prism"`.
+  In June this was only a dev `file:../prism` workspace alias
+  (`prism-plugins/package.json`) and `from "prism"` resolved to **nothing**
+  off-repo. Current package-boundary work splits the CLI, SDK, and core packages;
+  this document remains the CLI workflow-loader/typecheck doctrine, while
+  `docs/sdk-contract.md` owns the embeddable library contract.
 - Workflows go further and import `"../../src/workflows.ts"` — a relative path into
   the repo `src/` tree.
-- No `.d.ts` is emitted or published anywhere; `prism-core` is `private:true`.
+- The workflow-loader type surface is not yet a standalone workflow authoring
+  package. `@skastr0/prism-core` is a separate publishable package for lower-level
+  contracts/codecs, but it is not the workflow authoring SDK by itself.
 - Generated refs are written **into the project tree**
   (`<projectPath>/.prism/generated/workflows/*.ts`).
 - The global compile manifest (`~/.prism/state/compile-manifest.json`) has **no
@@ -105,15 +109,17 @@ generated types** are always machine-global. That is the clean line.
 
 ## 6. The shipped type surface
 
-There is no published library and no published types package. Instead:
+For CLI-authored workflow files, the binary remains the owner of the typecheck
+environment. Instead:
 
 - A **`.d.ts` emit build step** (none exists today) produces `prism.d.ts` from
   `src/index.ts` + `src/workflows.ts`, with `prism-core`'s contract types folded in.
 - That `.d.ts` ships **inside the platform binary package**
   (`@skastr0/prism-<platform>`), beside the `effect` and `typescript` that already
   ship there (`prism-<platform>/package.json` `dependencies`).
-- `prism` is **not** intended as a project dependency. (A user may depend on the CLI
-  if they want, but nothing requires it.)
+- CLI workflow authoring does not require a project-local `npm install`. The
+  embeddable SDK package, when approved and built, is a separate library surface
+  described in `docs/sdk-contract.md`.
 
 So the editor and `tsc` resolve `prism`/`effect`/`prism/refs` purely through the
 Prism-generated `tsconfig.json` (§5), with zero `npm install` and zero skew.

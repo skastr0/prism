@@ -22,6 +22,7 @@ import {
   httpRpc,
   waitForChildClose,
   waitForHttpServer,
+  waitForUdsSocket,
 } from "./test-helpers/mcp-http-roundtrip.js";
 
 const tempRoots: string[] = [];
@@ -1548,4 +1549,156 @@ export const Details = Schema.Struct({
   });
 
   expect(bundle.toolNames).toEqual(["host_submit"]);
+});
+
+test("MCP bundle generator includes UDS support in template", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  // Verify UDS support is in the template
+  expect(bundle.content).toContain("Bun.serve");
+  expect(bundle.content).toContain("udsPath");
+  expect(bundle.content).toContain("PRISM_MCP_UDS_PATH");
+  expect(bundle.content).toContain("unix:");
+  expect(bundle.content).toContain("unlink(udsPath)");
+});
+
+test("MCP bundle Streamable HTTP with UDS path: socket file created", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  // Create a temp socket path
+  const tempRoot = await mkdtemp(join(tmpdir(), "prism-uds-test-"));
+  const socketPath = join(tempRoot, "mcp.sock");
+
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_UDS_PATH: socketPath,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForUdsSocket(socketPath);
+
+    // Verify socket file exists
+    const socketExists = await (async () => {
+      try {
+        await access(socketPath);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    expect(socketExists).toBe(true);
+  } finally {
+    child.kill("SIGTERM");
+    await waitForChildClose(child).catch(() => undefined);
+
+    // Verify socket is cleaned up after shutdown
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const socketStillExists = await (async () => {
+      try {
+        await access(socketPath);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    expect(socketStillExists).toBe(false);
+
+    // Clean up temp dir
+    await rm(tempRoot, { recursive: true }).catch(() => undefined);
+  }
+});
+
+test("MCP bundle Streamable HTTP TCP behavior unchanged when UDS_PATH not set", async () => {
+  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
+  const compile = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+
+  const port = await getFreePort();
+  const builder = compile.composed.find((agent) => agent.name === "builder");
+  const bundle = await generateMcpServerBundle({
+    sourcePluginName: "forge",
+    serverName: "prism-mcp-forge",
+    bundleId: "forge",
+    bindings: builder?.toolBindings ?? [],
+  });
+
+  const serverPath = join(projectRoot, bundle.relativePath);
+  await writeText(serverPath, bundle.content);
+
+  // Don't set PRISM_MCP_UDS_PATH -- TCP behavior should work unchanged
+  const child = spawn("bun", [serverPath], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PRISM_MCP_HTTP_PORT: String(port),
+      // Explicitly NOT setting PRISM_MCP_UDS_PATH
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  try {
+    await waitForHttpServer(port);
+
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      method: "GET",
+    });
+    expect(health.status).toBe(200);
+    const healthBody = await health.json();
+    expect(healthBody.transport).toBe("streamable-http");
+    expect(healthBody.serverName).toBe("prism-mcp-forge");
+  } finally {
+    child.kill("SIGTERM");
+    await waitForChildClose(child).catch(() => undefined);
+  }
 });

@@ -981,15 +981,16 @@ const createPrismMcpServer = (enabledToolNames?: ReadonlySet<string>): McpServer
 };`;
 
 const MCP_SDK_HTTP_RUNTIME = `// Runtime identity is never baked into bundle bytes: the daemon supervisor
-// passes host/port via environment when it spawns this server.
+// passes host/port via environment when it spawns this server, or unix socket path for UDS.
+const udsPath = process.env.PRISM_MCP_UDS_PATH;
 const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? "127.0.0.1";
 const isLoopbackBindHost = (value: string): boolean =>
   value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
-if (!isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
+if (!udsPath && !isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
   throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
 }
-const httpPort = Number(process.env.PRISM_MCP_HTTP_PORT ?? "0");
-if (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535) {
+const httpPort = !udsPath ? Number(process.env.PRISM_MCP_HTTP_PORT ?? "0") : 0;
+if (!udsPath && (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535)) {
   throw new Error("Prism MCP Streamable HTTP server requires env PRISM_MCP_HTTP_PORT (1-65535)");
 }
 const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
@@ -1451,8 +1452,7 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
 };
 
 const server = Bun.serve({
-  hostname: httpHost,
-  port: httpPort,
+  ...(udsPath ? { unix: udsPath } : { hostname: httpHost, port: httpPort }),
   // MCP connections sit idle between tool calls. Bun's default idleTimeout is
   // 10s, which silently closes the socket; clients that reuse the closed
   // connection (observed with Grok) then hang until their own multi-minute
@@ -1519,6 +1519,16 @@ const stopServer = async (): Promise<void> => {
 
   await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
+
+  // Clean up UDS socket file if in use.
+  if (udsPath) {
+    try {
+      await import("node:fs/promises").then((fs) => fs.unlink(udsPath));
+    } catch {
+      // Socket may have already been removed or not exist yet; ignore.
+    }
+  }
+
   process.exit(0);
 };
 

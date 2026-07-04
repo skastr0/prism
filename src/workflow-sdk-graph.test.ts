@@ -76,10 +76,14 @@ describe("workflow SDK graph", () => {
     const localFiles = [...graph.localFiles].map(toRelative).sort();
 
     expect(localFiles).not.toContain("src/workflow-loader.ts");
+    expect(localFiles).not.toContain("src/workflow-runtime.ts");
+    expect(localFiles).not.toContain("src/workflow-store.ts");
     expect(localFiles).not.toContain("src/workflow-tsconfig.ts");
     expect(localFiles).not.toContain("src/prism-home.ts");
     expect(localFiles).not.toContain("src/project-key.ts");
     expect(localFiles.filter((file) => file.startsWith("src/compile/"))).toEqual([]);
-    expect([...graph.externalSpecifiers].sort()).not.toContain("typescript");
+    const externalSpecifiers = [...graph.externalSpecifiers].sort();
+    expect(externalSpecifiers).not.toContain("typescript");
+    expect(externalSpecifiers.filter((specifier) => specifier.startsWith("bun:"))).toEqual([]);
   });
 });

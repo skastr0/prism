@@ -1,4 +1,5 @@
 import type { HarnessId } from "./types.js";
+import { WorkflowBunRuntimeUnavailableError } from "./workflow-errors.js";
 import type { WorkflowWorkerId } from "./workflows.js";
 
 export const WORKFLOW_HARNESS_IDS = [
@@ -146,14 +147,14 @@ export const workflowHarnessIdsForHarnesses = (
   harnesses.filter((harness): harness is WorkflowHarnessId => isWorkflowHarnessId(harness));
 
 const defaultResolveExecutable = (command: string): string | undefined =>
-  Bun.which(command) ?? undefined;
+  bunRuntime("harness executable discovery").which(command) ?? undefined;
 
 const defaultRunProbe = async (
   command: string,
   args: ReadonlyArray<string>,
   options: WorkflowHarnessProbeRunOptions,
 ): Promise<WorkflowHarnessProbeRunResult> => {
-  const child = Bun.spawn({
+  const child = bunRuntime("harness probe execution").spawn({
     cmd: [command, ...args],
     stdin: "ignore",
     stdout: "ignore",
@@ -177,6 +178,28 @@ const defaultRunProbe = async (
   } finally {
     clearTimeout(timeout);
   }
+};
+
+interface HarnessDetectionBunRuntime {
+  which(name: string): string | null;
+  spawn(options: {
+    readonly cmd: ReadonlyArray<string>;
+    readonly stdin: "ignore";
+    readonly stdout: "ignore";
+    readonly stderr: "pipe";
+  }): {
+    readonly stderr: ReadableStream<Uint8Array>;
+    readonly exited: Promise<number | null>;
+    kill(signal?: NodeJS.Signals | number): void;
+  };
+}
+
+const bunRuntime = (capability: string): HarnessDetectionBunRuntime => {
+  const bun = (globalThis as typeof globalThis & { readonly Bun?: Partial<HarnessDetectionBunRuntime> }).Bun;
+  if (bun?.spawn === undefined || bun.which === undefined) {
+    throw new WorkflowBunRuntimeUnavailableError(capability);
+  }
+  return bun as HarnessDetectionBunRuntime;
 };
 
 const detection = (input: {

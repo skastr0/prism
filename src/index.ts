@@ -17,7 +17,6 @@ export * from "./workflow-errors.js";
 export * from "./workflow-harness-detection.js";
 export * from "./workflows.js";
 export * from "./workflow-runner.js";
-export * from "./workflow-store.js";
 export * from "./workflow-worker-contract.js";
 export * from "./workflow-worker-metadata.js";
 

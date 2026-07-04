@@ -23,9 +23,9 @@ import {
   workflowRunTaskSnapshotForTask,
   workflowTaskIdentity,
   type WorkflowJudgeIdentity,
-  type WorkflowStore,
   type WorkflowTaskIdentity,
-} from "./workflow-store.js";
+} from "./workflow-identity.js";
+import type { WorkflowStore } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
 import {
   normalizeWorkflowSessionMetadata,

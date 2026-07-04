@@ -27,7 +27,19 @@ export class WorkflowTaskEscalatedError extends Error {
   }
 }
 
+export class WorkflowBunRuntimeUnavailableError extends Error {
+  override readonly name = "WorkflowBunRuntimeUnavailableError";
+
+  constructor(capability: string, cause?: unknown) {
+    super(
+      `Prism workflow ${capability} requires the Bun runtime in SDK v0. Run this code under Bun, or provide an injected adapter where the API supports one.`,
+      cause === undefined ? undefined : { cause },
+    );
+  }
+}
+
 export type WorkflowRuntimeError =
+  | WorkflowBunRuntimeUnavailableError
   | WorkflowTaskDecodeError
   | WorkflowTaskEscalatedError
   | WorkflowRunStoppedError

@@ -20,7 +20,7 @@
  */
 
 import { stat } from "node:fs/promises";
-import { computeContentHash } from "../content-hash.js";
+import { computeContentHash, computeMcpHttpConfigContentHash } from "../content-hash.js";
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
@@ -178,6 +178,15 @@ const regionContentHash = (region: DesiredRegion): string =>
     region.kind === "marker" ? renderMarkerRegion(region) : JSON.stringify(region.value),
   );
 
+/**
+ * Content hash for an owned file. Grok's owned .mcp.json bundles a dynamic
+ * host:port the owner daemon can rebind on every restart; normalize it out of
+ * the hash so a port change alone never reads as drift (PQ-167). Every other
+ * harness (and every other grok owned file) hashes unchanged.
+ */
+const ownedFileContentHash = (harness: string, content: string): string =>
+  harness === "grok" ? computeMcpHttpConfigContentHash(content) : computeContentHash(content);
+
 const removeOrphanedRegion = (
   content: string,
   parsed: NonNullable<ReturnType<typeof parseRegionRef>>,
@@ -197,11 +206,14 @@ const removeOrphanedRegion = (
 };
 
 const planOwnedFile = async (options: {
+  readonly harness: string;
   readonly desired: DesiredFile;
   readonly snapshotEntry: SnapshotEntry | undefined;
   readonly degradedOwnership: boolean;
 }): Promise<SyncOp[]> => {
-  const { desired, snapshotEntry, degradedOwnership } = options;
+  const { harness, desired, snapshotEntry, degradedOwnership } = options;
+  // Exact-byte comparison: whether a rewrite is needed at all must never be
+  // fooled by normalization — a genuinely new port always has to land on disk.
   const desiredHash = computeContentHash(desired.content);
 
   if (!(await exists(desired.targetPath))) {
@@ -233,7 +245,18 @@ const planOwnedFile = async (options: {
   }
 
   if (snapshotEntry) {
-    const drifted = snapshotEntry.contentHash !== diskHash;
+    // Whether this repair is backed up as "drifted" (suspicious/external) vs
+    // plain "source-changed" (Prism's own routine update) compares against
+    // the snapshot in the same normalized domain the entry was stored in, so
+    // a port-only difference (e.g. a crash between a write and its snapshot
+    // commit) is never mistaken for external tampering (PQ-167). A snapshot
+    // entry written before this normalization existed still holds a raw
+    // (unnormalized) hash, so accept either domain — otherwise a port-only
+    // change on a legacy grok snapshot spuriously reads as external drift and
+    // takes a needless backup.
+    const drifted =
+      diskHash !== snapshotEntry.contentHash &&
+      ownedFileContentHash(harness, diskContent) !== snapshotEntry.contentHash;
     return [{
       kind: "repair",
       targetPath: desired.targetPath,
@@ -456,13 +479,17 @@ export const planSync = async (options: {
   for (const desired of options.desired.files) {
     desiredPaths.add(desired.targetPath);
     ops.push(...(await planOwnedFile({
+      harness: options.desired.harness,
       desired,
       snapshotEntry: snapshotOwned.get(desired.targetPath),
       degradedOwnership,
     })));
     nextEntries.push({
       targetPath: desired.targetPath,
-      contentHash: computeContentHash(desired.content),
+      // Normalized so a later standalone drift check (doctor.ts) and the
+      // repair-reason classification above compare in the same domain a
+      // dynamic port/url never counts as drift in (PQ-167).
+      contentHash: ownedFileContentHash(options.desired.harness, desired.content),
       mode: "owned",
       plugin: desired.plugin,
     });
@@ -472,7 +499,7 @@ export const planSync = async (options: {
   for (const [targetPath, entry] of snapshotOwned) {
     if (desiredPaths.has(targetPath)) continue;
     if (!(await exists(targetPath))) continue; // silently drop the entry
-    const diskHash = computeContentHash(await readFile(targetPath));
+    const diskHash = ownedFileContentHash(options.desired.harness, await readFile(targetPath));
     ops.push({
       kind: "prune",
       targetPath,

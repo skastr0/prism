@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile as nodeWriteFile, mkdir } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exists, readFile } from "../fs.js";
-import { readSnapshot, snapshotPath } from "../state/store.js";
+import { computeContentHash } from "../content-hash.js";
+import { commitSnapshot, readSnapshot, snapshotPath } from "../state/store.js";
 import type { DesiredRoot } from "./desired.js";
 import { planSync } from "./plan.js";
 import { applySync } from "./apply.js";
@@ -157,6 +158,65 @@ describe("sync engine — owned files", () => {
     expect(await readFile(other)).toBe("ok\n");
     const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
     expect(snapshot.manifest.entries.map((entry) => entry.targetPath)).toEqual([other]);
+  });
+});
+
+describe("sync engine — grok MCP port normalization (PQ-167)", () => {
+  const mcpPath = () => join(root, "plugins", "demo", ".mcp.json");
+  const renderMcpConfig = (port: number, extraServers?: Record<string, unknown>): string =>
+    JSON.stringify({
+      mcpServers: {
+        p_demo: {
+          type: "http",
+          url: `http://127.0.0.1:${port}/mcp`,
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-demo:grok" },
+        },
+        ...extraServers,
+      },
+    }, null, 2) + "\n";
+  const grokDesired = (content: string): DesiredRoot =>
+    desiredWith({ harness: "grok", files: [{ targetPath: mcpPath(), content, plugin: "demo" }] });
+
+  test("a legacy raw-hash snapshot classifies a routine port bump as source-changed (no backup), and still catches real drift", async () => {
+    // Disk holds exactly what a pre-PQ-167 Prism last wrote and snapshotted
+    // with a plain (unnormalized) content hash — the file has not drifted at
+    // all since then.
+    const original = renderMcpConfig(50953);
+    await mkdir(join(root, "plugins", "demo"), { recursive: true });
+    await nodeWriteFile(mcpPath(), original);
+    await commitSnapshot({
+      prismHome: home,
+      manifest: {
+        version: 1,
+        harness: "grok",
+        root,
+        entries: [{ targetPath: mcpPath(), contentHash: computeContentHash(original), mode: "owned", plugin: "demo" }],
+      },
+    });
+
+    // The owner daemon has since rebound to a new port; Prism regenerates
+    // desired content reflecting it. This is Prism's own routine update, not
+    // external tampering, so it must repair without a backup.
+    const portBumped = await refresh(grokDesired(renderMcpConfig(61742)));
+    const repair = portBumped.ops.find((op) => op.kind === "repair");
+    expect(repair).toMatchObject({ reason: "source-changed", backup: false });
+    expect(portBumped.backups).toEqual([]);
+    expect(await readFile(mcpPath())).toBe(renderMcpConfig(61742));
+
+    // The new snapshot entry is normalized going forward: a further pure
+    // port bump against it must also read as source-changed.
+    const portBumpedAgain = await refresh(grokDesired(renderMcpConfig(9001)));
+    expect(portBumpedAgain.ops.find((op) => op.kind === "repair")).toMatchObject({
+      reason: "source-changed",
+      backup: false,
+    });
+
+    // Genuine external tampering (a hand-edited server entry) against that
+    // same normalized snapshot must still be caught as drift.
+    await nodeWriteFile(mcpPath(), renderMcpConfig(9001, { p_other: { type: "http", url: "http://127.0.0.1:1/mcp" } }));
+    const tampered = await refresh(grokDesired(renderMcpConfig(2222)));
+    expect(tampered.ops.find((op) => op.kind === "repair")).toMatchObject({ reason: "drifted", backup: true });
+    expect(tampered.backups).toHaveLength(1);
   });
 });
 

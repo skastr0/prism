@@ -887,6 +887,16 @@ const generatedPluginPathFromOpenCodeEntry = (entry: string): string | undefined
   return entry.includes("prism-generated-") ? expandPath(entry) : undefined;
 };
 
+const OPEN_CODE_BUNDLE_SUFFIX = join("dist", "server.mjs");
+
+// opencode.json entries may already target the bundle file directly (the
+// bundling consolidation writes `file:///.../dist/server.mjs`), or, for
+// legacy directory-form entries, target the plugin root. Only append the
+// bundle-relative path in the latter case, or callers double it into
+// `.../dist/server.mjs/dist/server.mjs`.
+const openCodeBundlePathFor = (pluginPath: string): string =>
+  pluginPath.endsWith(OPEN_CODE_BUNDLE_SUFFIX) ? pluginPath : join(pluginPath, "dist", "server.mjs");
+
 const validateOpenCodeConfigReferences = async (path: string): Promise<DoctorFinding[]> => {
   if (!(await exists(path))) return [];
   let parsed: Record<string, unknown>;
@@ -912,7 +922,7 @@ const validateOpenCodeConfigReferences = async (path: string): Promise<DoctorFin
       }));
       continue;
     }
-    const serverPath = join(pluginPath, "dist", "server.mjs");
+    const serverPath = openCodeBundlePathFor(pluginPath);
     if (!(await exists(serverPath))) {
       findings.push(finding({
         severity: "error",

@@ -520,6 +520,76 @@ test("doctor validates generated harness config references", async () => {
   expect(codes).toContain("config.claude-hook-command-missing");
 });
 
+test("doctor accepts an OpenCode plugin entry that already targets the bundle file (PQ-167)", async () => {
+  const prismHome = join(root, "prism-home");
+  const bundlePath = join(root, "plugins", "prism-generated-quasar", "dist", "server.mjs");
+  await writeText(bundlePath, "export {};\n");
+  await writeText(
+    join(process.env.HOME!, ".config", "opencode", "opencode.json"),
+    `${JSON.stringify({ plugin: [`file://${bundlePath}`] }, null, 2)}\n`,
+  );
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const codes = report.findings.map((finding) => finding.code);
+  expect(codes).not.toContain("config.opencode-plugin-missing");
+  expect(codes).not.toContain("config.opencode-plugin-bundle-missing");
+});
+
+test("doctor reports a single correct path when a file-form OpenCode bundle is actually missing (PQ-167)", async () => {
+  const prismHome = join(root, "prism-home");
+  const bundlePath = join(root, "plugins", "prism-generated-quasar", "dist", "server.mjs");
+  // Note: bundlePath is intentionally never written to disk.
+  await writeText(
+    join(process.env.HOME!, ".config", "opencode", "opencode.json"),
+    `${JSON.stringify({ plugin: [`file://${bundlePath}`] }, null, 2)}\n`,
+  );
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const findings = report.findings.filter((finding) => finding.code.startsWith("config.opencode-plugin"));
+  expect(findings).toHaveLength(1);
+  const message = findings[0]?.message ?? "";
+  // Must reference the bundle path exactly once, never doubled into
+  // ".../dist/server.mjs/dist/server.mjs".
+  expect(message.split(bundlePath)).toHaveLength(2);
+  expect(message).not.toContain("dist/server.mjs/dist/server.mjs");
+});
+
+test("doctor still resolves legacy directory-form OpenCode plugin entries (PQ-167)", async () => {
+  const prismHome = join(root, "prism-home");
+  const pluginRoot = join(root, "plugins", "prism-generated-quasar");
+  await mkdir(pluginRoot, { recursive: true });
+  // Directory exists, but its dist/server.mjs bundle does not.
+  await writeText(
+    join(process.env.HOME!, ".config", "opencode", "opencode.json"),
+    `${JSON.stringify({ plugin: [`file://${pluginRoot}`] }, null, 2)}\n`,
+  );
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const findings = report.findings.filter((finding) => finding.code.startsWith("config.opencode-plugin"));
+  expect(findings).toHaveLength(1);
+  expect(findings[0]?.code).toBe("config.opencode-plugin-bundle-missing");
+  const expectedServerPath = join(pluginRoot, "dist", "server.mjs");
+  expect(findings[0]?.message).toContain(expectedServerPath);
+});
+
 test("doctor warns when Codex hooks.json contains Prism-managed hooks", async () => {
   const prismHome = join(root, "prism-home");
   await writeText(

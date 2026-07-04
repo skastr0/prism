@@ -12,6 +12,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { workflowWorkerHarnessIds, type WorkflowWorkerHarnessId } from "./lowerer-capabilities.js";
 import {
   deriveProjectKey,
   projectCompileManifestPath,
@@ -19,17 +20,23 @@ import {
   projectGeneratedRefsDir,
 } from "./project-key.js";
 import { resolvePrismHome } from "./prism-home.js";
+import type { WorkflowWorkerId } from "./workflows.js";
 
-/** The harness workers a workflow task may target. */
-export const WORKFLOW_WORKERS = [
-  "claude-code",
-  "codex-cli",
-  "grok",
-  "opencode",
-  "hermes",
-  "kimi-code",
-  "amp-code",
-] as const;
+// Assert the capability registry's `workflowWorker` bit (lowerer-capabilities.ts)
+// covers exactly the harnesses with a workflow worker module (WorkflowWorkerId,
+// workflows.ts / workflow-workers.ts) — in both directions. A harness flagged
+// here without a worker module, or a worker module for a harness not flagged
+// here, fails typecheck instead of silently drifting apart (PQ-163).
+const workflowWorkerCapabilityCoverageIsExhaustive:
+  Exclude<WorkflowWorkerHarnessId, WorkflowWorkerId> extends never
+    ? Exclude<WorkflowWorkerId, WorkflowWorkerHarnessId> extends never
+      ? true
+      : never
+    : never = true;
+void workflowWorkerCapabilityCoverageIsExhaustive;
+
+/** The harness workers a workflow task may target — derived from the `workflowWorker` capability bit in lowerer-capabilities.ts. That table is the single source; do not hand-list harness ids here. */
+export const WORKFLOW_WORKERS: readonly WorkflowWorkerId[] = workflowWorkerHarnessIds();
 
 interface RawModelTarget {
   readonly model?: string;

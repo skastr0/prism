@@ -50,6 +50,14 @@ export interface LowererSurfaceCapability {
 export interface LowererCapabilityProfile {
   readonly harness: HarnessId;
   readonly family: HarnessFamily;
+  /**
+   * Whether Prism Workflows can dispatch a task to this harness (a worker
+   * module exists under `src/workflow-*-worker.ts` and the harness is a
+   * member of `WorkflowWorkerId`, workflows.ts). This is the single source
+   * for `WORKFLOW_WORKERS` (workflow-catalog.ts) — do not hand-list harness
+   * ids elsewhere.
+   */
+  readonly workflowWorker: boolean;
   readonly compile: CompileTargetCapabilities;
   readonly surfaces: Record<LowererSurfaceId, LowererSurfaceCapability>;
   readonly notes?: readonly string[];
@@ -83,6 +91,7 @@ export const LOWERER_CAPABILITIES = {
   "claude-code": {
     harness: "claude-code",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -131,6 +140,7 @@ export const LOWERER_CAPABILITIES = {
   opencode: {
     harness: "opencode",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -179,6 +189,7 @@ export const LOWERER_CAPABILITIES = {
   openclaw: {
     harness: "openclaw",
     family: "claw-harness",
+    workflowWorker: false,
     compile: compileUnsupported,
     surfaces: {
       pluginBundle: unsupported("Prism does not manage OpenClaw plugin bundles yet."),
@@ -200,6 +211,7 @@ export const LOWERER_CAPABILITIES = {
   hermes: {
     harness: "hermes",
     family: "claw-harness",
+    workflowWorker: true,
     compile: compileSupported({
       agents: "unsupported",
       agentModelBindings: "ignored",
@@ -233,6 +245,7 @@ export const LOWERER_CAPABILITIES = {
   "codex-cli": {
     harness: "codex-cli",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: unsupported("Codex CLI currently uses file and config surfaces, not plugin bundles."),
@@ -281,6 +294,7 @@ export const LOWERER_CAPABILITIES = {
   "antigravity-cli": {
     harness: "antigravity-cli",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
@@ -329,6 +343,7 @@ export const LOWERER_CAPABILITIES = {
   "kimi-code": {
     harness: "kimi-code",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
@@ -387,6 +402,7 @@ export const LOWERER_CAPABILITIES = {
   "amp-code": {
     harness: "amp-code",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported({ agentModelBindings: "ignored" }),
     surfaces: {
       pluginBundle: {
@@ -435,6 +451,7 @@ export const LOWERER_CAPABILITIES = {
   cursor: {
     harness: "cursor",
     family: "coding-harness",
+    workflowWorker: false,
     compile: compileSupported({
       agents: "unsupported",
       agentModelBindings: "ignored",
@@ -486,6 +503,7 @@ export const LOWERER_CAPABILITIES = {
   "factory-droid": {
     harness: "factory-droid",
     family: "coding-harness",
+    workflowWorker: false,
     compile: compileSupported({ skillPermissions: "unsupported" }),
     surfaces: {
       pluginBundle: {
@@ -538,6 +556,7 @@ export const LOWERER_CAPABILITIES = {
   pi: {
     harness: "pi",
     family: "coding-harness",
+    workflowWorker: false,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -590,6 +609,7 @@ export const LOWERER_CAPABILITIES = {
   grok: {
     harness: "grok",
     family: "coding-harness",
+    workflowWorker: true,
     compile: compileSupported(),
     surfaces: {
       pluginBundle: {
@@ -643,3 +663,24 @@ export const getCompileTargetCapabilities = (
   Object.hasOwn(LOWERER_CAPABILITIES, harness)
     ? LOWERER_CAPABILITIES[harness as HarnessId].compile
     : compileUnsupported;
+
+/**
+ * Harness ids flagged `workflowWorker: true` above — computed at the type
+ * level from the literal `as const` table, so it narrows exactly (no wider
+ * than `HarnessId`, no manual re-listing). Consumers (workflow-catalog.ts)
+ * assert this set against their own worker-module registry so a harness
+ * flagged here without a matching worker module is a tsc error.
+ */
+export type WorkflowWorkerHarnessId = {
+  [K in HarnessId]: (typeof LOWERER_CAPABILITIES)[K]["workflowWorker"] extends true ? K : never;
+}[HarnessId];
+
+const isWorkflowWorkerEntry = (
+  entry: readonly [HarnessId, LowererCapabilityProfile],
+): entry is readonly [WorkflowWorkerHarnessId, LowererCapabilityProfile] => entry[1].workflowWorker;
+
+/** Harness ids that can be dispatched as Prism Workflows workers, derived from the `workflowWorker` bit. */
+export const workflowWorkerHarnessIds = (): readonly WorkflowWorkerHarnessId[] =>
+  (Object.entries(LOWERER_CAPABILITIES) as ReadonlyArray<readonly [HarnessId, LowererCapabilityProfile]>)
+    .filter(isWorkflowWorkerEntry)
+    .map(([harness]) => harness);

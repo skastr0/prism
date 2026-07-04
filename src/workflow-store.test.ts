@@ -531,6 +531,41 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("runner cancels queued dynamic fan-out siblings and rejects raw when stopped mid-run", async () => {
+    // PQ-166 regression: the dynamic path recovers WorkflowRunStoppedError via Cause.squash
+    // (not runPromise's FiberFailure wrapper) and eagerly cancels queued siblings. Assert both
+    // the raw rejection type and that a queued sibling never reaches the executor, so a refactor
+    // that silently reintroduces the FiberFailure wrap or drops eager cancellation stays caught.
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const runId = store.createRun("stop-dynamic-fanout-smoke");
+    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: Output });
+    const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
+    const workflow = defineWorkflow({
+      name: "stop-dynamic-fanout-smoke",
+      run: (wf) => Effect.gen(function* () {
+        return yield* Effect.all([a, b, c].map((task) => wf.runTask(task)), { concurrency: "unbounded" });
+      }),
+    });
+    const seen: string[] = [];
+
+    await expect(runWorkflow(workflow, {
+      store,
+      runId,
+      maxConcurrentTasks: 1,
+      executeTask: async (task) => {
+        seen.push(task.id);
+        if (task.id === "a") store.stopRun(runId);
+        return { summary: task.id };
+      },
+    })).rejects.toThrow(WorkflowRunStoppedError);
+
+    expect(seen).toEqual(["a"]);
+    expect(store.getRun(runId)).toMatchObject({ status: "failed" });
+    expect(store.listRunTasks(runId).map((task) => task.taskId)).toEqual(["a"]);
+    store.close();
+  });
+
   test("stores and reads completed task output by identity", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

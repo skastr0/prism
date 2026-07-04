@@ -1,8 +1,8 @@
-import { defineTrait, skillspaceRef } from "prism";
+import { skillspaceRef, type TraitSource } from "prism";
 
 const globalSkill = (name: string) => skillspaceRef("agent-core", "global-skills", name);
 
-export default defineTrait({
+export default {
   name: "forge-practitioner",
   description: "Can use Forge method skills for software delivery work",
   access: {
@@ -17,4 +17,4 @@ export default defineTrait({
       globalSkill("backpressure"),
     ],
   },
-});
+} satisfies TraitSource;

@@ -1,6 +1,6 @@
-import { defineTrait, toolGroupRef } from "prism";
+import { toolGroupRef, type TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "reviewable",
   description: "Can submit review findings",
   access: {
@@ -14,4 +14,4 @@ export default defineTrait({
   require: {
     tools: ["submit_review"],
   },
-});
+} satisfies TraitSource;

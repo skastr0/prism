@@ -1,17 +1,17 @@
-import { bindTrait, defineAgent, modelProfileRef, toolRef } from "prism";
+import { modelProfileRef, toolRef, type AgentSource } from "prism";
 
-export default defineAgent({
+export default {
   name: "builder",
   description: "Builder agent using orthogonal trait conformance",
   identity: "builder",
   model: modelProfileRef("agent-core", "default-models", "builder"),
   traits: [
-    bindTrait("agent-core:forge-practitioner"),
-    bindTrait("agent-core:core-engineering"),
-    bindTrait("agent-core:functional-thinking"),
-    bindTrait("submittable"),
-    bindTrait("committable"),
-    bindTrait("self-assessing"),
+    "agent-core:forge-practitioner",
+    "agent-core:core-engineering",
+    "agent-core:functional-thinking",
+    "submittable",
+    "committable",
+    "self-assessing",
   ],
   access: {
     tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
@@ -25,4 +25,4 @@ export default defineAgent({
       top_p: 0.7,
     },
   },
-});
+} satisfies AgentSource;

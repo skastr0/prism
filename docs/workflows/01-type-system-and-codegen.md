@@ -130,13 +130,15 @@ start depending on conventional output shapes.
 Phase 2 (WS5): `AgentSource` gains optional declared output contracts:
 
 ```typescript
-export default defineAgent({
+import { schemaRef, type AgentSource } from "prism";
+
+export default {
   name: "explorer",
   ...
   contracts: {
     output: schemaRef("forge", "exploration"),   // Effect Schema, compiled + hashed
   },
-});
+} satisfies AgentSource;
 ```
 
 Then `wf.agentRun("explore", agents.explorer, ...)` **infers** its result type from the

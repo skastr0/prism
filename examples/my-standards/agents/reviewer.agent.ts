@@ -1,6 +1,6 @@
-import { defineAgent } from "prism";
+import type { AgentSource } from "prism";
 
-export default defineAgent({
+export default {
   name: "reviewer",
   description: "Code reviewer that focuses on best practices",
   identity: "reviewer",
@@ -22,4 +22,4 @@ export default defineAgent({
       tools: ["Read", "Grep", "Glob"],
     },
   },
-});
+} satisfies AgentSource;

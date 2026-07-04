@@ -1,6 +1,6 @@
-import { defineHook, hookEvent } from "prism";
+import { hookEvent, type HookSource } from "prism";
 
-export default defineHook({
+export default {
   name: "session-start",
   description: "Record that a Prism-generated Kimi plugin session has started.",
   event: hookEvent.sessionStart,
@@ -10,4 +10,4 @@ export default defineHook({
       systemMessage: "Prism harness QA plugin session started.",
     };
   },
-});
+} satisfies HookSource;

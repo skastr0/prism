@@ -1,6 +1,6 @@
-import { defineOrbit, orbitRef } from "prism";
+import { orbitRef, type OrbitSource } from "prism";
 
-export default defineOrbit({
+export default {
   name: "release-experiment",
   description: "Evaluate whether async approvals should become the canonical release path",
   produces: "A go/no-go decision for async release approvals",
@@ -28,4 +28,4 @@ export default defineOrbit({
   ],
   evolution: "If the hypothesis fails, tighten the queueing model before proposing another async path.",
   body: "This concrete orbit shows how a reusable experiment template stays source-only until another orbit binds it with a specific hypothesis and application context.",
-});
+} satisfies OrbitSource;

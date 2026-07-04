@@ -1,6 +1,6 @@
-import { defineTrait, skillRef, toolRef } from "prism";
+import { skillRef, type TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "qa-capable",
   description: "Grants an agent the deterministic challenge tool and QA helper skill visibility needed for harness QA tasks.",
   tools: {
@@ -14,4 +14,4 @@ export default defineTrait({
   require: {
     tools: ["challenge_echo"],
   },
-});
+} satisfies TraitSource;

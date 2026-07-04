@@ -82,10 +82,10 @@ modelspaces, plugin manifests, and other compile-time declarations.
 A tool may declare optional slots. The tool owns the slot names and semantics.
 
 ```ts
-import { defineTool, schemaSlot } from "prism";
+import { schemaSlot, type ToolSource } from "prism";
 import { OrbitDispatchReceipt, WorkSubmissionBase } from "../schemas/tool-schemas.ts";
 
-export default defineTool({
+export default {
   name: "submit_work",
   description: "Persist completed orbit work to the canonical dispatch store.",
   input: WorkSubmissionBase,
@@ -99,7 +99,7 @@ export default defineTool({
     // Shared persistence logic. Filled slots only change validation and the
     // documented agent-facing shape, not this implementation.
   },
-});
+} satisfies ToolSource;
 ```
 
 If the tool does not declare `builder_report`, no trait or agent can fill it.
@@ -109,16 +109,16 @@ If the tool does not declare `builder_report`, no trait or agent can fill it.
 A trait gives an agent permission to a tool. It does not define slots.
 
 ```ts
-import { defineTrait } from "prism";
+import type { TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "submittable",
   tools: {
     submit_work: {
       ref: "orbit-core:submit_work",
     },
   },
-});
+} satisfies TraitSource;
 ```
 
 ### Generic Agent Binding
@@ -126,7 +126,7 @@ export default defineTrait({
 No slots filled means permission only.
 
 ```ts
-bindTrait("submittable");
+"submittable";
 ```
 
 The agent receives the base `orbit-core:submit_work` harness tool.
@@ -138,7 +138,8 @@ The agent fills a tool-owned slot with an imported runtime schema artifact.
 ```ts
 import { BuilderSubmitWorkReport } from "../schemas/tool-schemas.ts";
 
-bindTrait("submittable", {
+{
+  trait: "submittable",
   tools: {
     submit_work: {
       slots: {
@@ -146,7 +147,7 @@ bindTrait("submittable", {
       },
     },
   },
-});
+};
 ```
 
 The compiler creates one synthetic wrapper for this filled-slot contract. The

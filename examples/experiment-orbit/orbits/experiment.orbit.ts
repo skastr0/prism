@@ -1,6 +1,6 @@
-import { defineOrbit } from "prism";
+import type { OrbitSource } from "prism";
 
-export default defineOrbit({
+export default {
   name: "experiment",
   description: "Reusable experiment orbit for ${H} in ${App}",
   produces: "A clear decision on whether ${H} should change the canonical path in ${App}",
@@ -45,4 +45,4 @@ export default defineOrbit({
   ],
   evolution: "Record what ${App} learned from testing ${H} and update the next experiment accordingly.",
   body: "Use this template when a product or business needs the same experiment shape with different concrete hypotheses and application contexts.",
-});
+} satisfies OrbitSource;

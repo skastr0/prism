@@ -1,8 +1,8 @@
-import { defineTrait, skillspaceRef } from "prism";
+import { skillspaceRef, type TraitSource } from "prism";
 
 const globalSkill = (name: string) => skillspaceRef("agent-core", "global-skills", name);
 
-export default defineTrait({
+export default {
   name: "writing-and-publishing",
   description: "Can use writing, voice, and social publishing skills",
   access: {
@@ -15,4 +15,4 @@ export default defineTrait({
       globalSkill("typefully-cli"),
     ],
   },
-});
+} satisfies TraitSource;

@@ -1,6 +1,6 @@
-import { defineModelspace } from "prism";
+import type { ModelspaceSource } from "prism";
 
-export default defineModelspace({
+export default {
   name: "default-models",
   description: "Shared logical model profiles",
   profiles: {
@@ -33,4 +33,4 @@ export default defineModelspace({
       },
     },
   },
-});
+} satisfies ModelspaceSource;

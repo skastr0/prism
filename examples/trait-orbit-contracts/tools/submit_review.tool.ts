@@ -1,7 +1,7 @@
 import { Schema } from "effect";
-import { defineTool, schemaSlot } from "prism";
+import { schemaSlot, type ToolSource } from "prism";
 
-export default defineTool({
+export default {
   name: "submit_review",
   description: "Submit review findings",
   input: Schema.Struct({
@@ -16,4 +16,4 @@ export default defineTool({
     }),
   },
   handle: async (input, context) => ({ acknowledged: true }),
-});
+} satisfies ToolSource;

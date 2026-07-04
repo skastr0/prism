@@ -226,14 +226,6 @@ Helpers exported from `prism` include:
 
 ```ts
 import {
-  bindTrait,
-  defineAgent,
-  defineOrbit,
-  defineTool,
-  defineToolspace,
-  defineModelspace,
-  defineSkillspace,
-  defineTrait,
   agentRef,
   orbitRef,
   traitRef,
@@ -243,22 +235,29 @@ import {
   skillRef,
   skillspaceRef,
   schemaSlot,
+  type AgentSource,
+  type ModelspaceSource,
+  type OrbitSource,
+  type SkillspaceSource,
+  type ToolSource,
+  type ToolspaceSource,
+  type TraitSource,
 } from "prism";
 ```
 
 Example:
 
 ```ts
-export default defineAgent({
+export default {
   name: "builder",
   identity: "builder",
   model: modelProfileRef("agent-core", "default-models", "builder"),
-  traits: [bindTrait("submittable"), bindTrait("self-assessing")],
+  traits: ["submittable", "self-assessing"],
   access: {
     toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
     tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
   },
-});
+} satisfies AgentSource;
 ```
 
 Dep-alias rebinding remains the cross-plugin indirection mechanism. Bare refs resolve locally; prefixed refs resolve through `plugin.json -> deps`.
@@ -267,7 +266,7 @@ Dep-alias rebinding remains the cross-plugin indirection mechanism. Bare refs re
 
 Traits are **internal compile-time source artifacts**. They do not lower into target harness artifacts, they are not installable skill-like outputs, and they are not a standalone `plugin.json` target family.
 
-Agents declare capability conformance with `traits: []`, and the canonical current shape is to use `bindTrait(...)` when the agent must provide slot/config values.
+Agents declare capability conformance with `traits: []`. The canonical current shape is a plain trait ref for simple conformance, or an object binding when the agent must provide tool slot/config values.
 
 Each trait may:
 
@@ -328,7 +327,9 @@ Orbit files can be either:
 Template binding is explicit at the phase site via `orbit_binding`:
 
 ```ts
-export default defineOrbit({
+import type { OrbitSource } from "prism";
+
+export default {
   name: "experiment",
   description: "Reusable experiment orbit for ${H}",
   parameters: [
@@ -344,11 +345,13 @@ export default defineOrbit({
       },
     },
   ],
-});
+} satisfies OrbitSource;
 ```
 
 ```ts
-export default defineOrbit({
+import { orbitRef, type OrbitSource } from "prism";
+
+export default {
   name: "release-experiment",
   description: "Concrete release experiment",
   phases: [
@@ -363,7 +366,7 @@ export default defineOrbit({
       },
     },
   ],
-});
+} satisfies OrbitSource;
 ```
 
 Compile-time rules:
@@ -389,7 +392,9 @@ Each phase may declare:
 Example:
 
 ```ts
-export default defineOrbit({
+import { agentRef, traitRef, type OrbitSource } from "prism";
+
+export default {
   name: "delivery-contract",
   description: "Compile-time orchestration contract",
   phases: [
@@ -404,7 +409,7 @@ export default defineOrbit({
       requires: [{ all: [traitRef("submittable")], min: 2 }],
     },
   ],
-});
+} satisfies OrbitSource;
 ```
 
 Validation rules:
@@ -421,7 +426,9 @@ Orbit files may assign canonical tool permissions to agents assigned in that orb
 Use `bind` when the orbit wants a generated wrapper to pre-fill canonical-tool input fields:
 
 ```ts
-export default defineOrbit({
+import { agentRef, type OrbitSource } from "prism";
+
+export default {
   name: "delivery-contract",
   description: "Compile-time orchestration contract",
   phases: [{ name: "Implement change", agents: [agentRef("builder")] }],
@@ -437,7 +444,7 @@ export default defineOrbit({
       ],
     },
   ],
-});
+} satisfies OrbitSource;
 ```
 
 The generated wrapper omits bound fields from the agent-facing input schema and injects them when it calls the canonical tool handle. Bound values must be JSON-serializable. Protocol-specific names such as board ids, queue names, rooms, or channels belong in plugin-owned tools and bindings, not in the compiler.
@@ -450,9 +457,9 @@ Canonical tools are first-class source artifacts in `tools/`. Each canonical too
 
 ```ts
 import { Schema } from "effect";
-import { defineTool } from "prism";
+import type { ToolSource } from "prism";
 
-export default defineTool({
+export default {
   name: "submit_review",
   description: "Submit review findings for a glyph.",
   input: Schema.Struct({ summary: Schema.String }),
@@ -460,16 +467,16 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true };
   },
-});
+} satisfies ToolSource;
 ```
 
 Traits attach canonical tools by `ref` and can refine description or input/output schemas via slots. The canonical handle is always reused; traits cannot override business logic:
 
 ```ts
 import { Schema } from "effect";
-import { bindTrait, defineAgent, defineTool, defineTrait, schemaSlot } from "prism";
+import { schemaSlot, type AgentSource, type ToolSource, type TraitSource } from "prism";
 
-export default defineTool({
+export const submitReviewTool = {
   name: "submit_review",
   description: "Submit review findings.",
   input: Schema.Struct({ summary: Schema.String }),
@@ -480,30 +487,35 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true };
   },
-});
+} satisfies ToolSource;
 
-export const reviewable = defineTrait({
+export const reviewable = {
   name: "reviewable",
   tools: {
     submit_review: { ref: "submit_review" },
   },
-});
+} satisfies TraitSource;
 
-defineAgent({
+export default {
   name: "security-reviewer",
   description: "Security reviewer variant",
   identity: "reviewer",
   traits: [
-    bindTrait("reviewable", {
-      slots: {
-        verdict: Schema.Struct({
-          summary: Schema.String,
-          severity: Schema.Literal("low", "medium", "high"),
-        }),
+    {
+      trait: "reviewable",
+      tools: {
+        submit_review: {
+          slots: {
+            verdict: Schema.Struct({
+              summary: Schema.String,
+              severity: Schema.Literal("low", "medium", "high"),
+            }),
+          },
+        },
       },
-    }),
+    },
   ],
-});
+} satisfies AgentSource;
 ```
 
 During compile, prism resolves canonical tool refs, merges trait attachments with the canonical base, validates the bound slot values, checks that the resulting tool schemas stay inside the schema-bridge-compatible subset, materializes ordinary resolved synthetic tool modules for lowering, and emits generated contract files internally where a lowerer needs them.

@@ -9,9 +9,10 @@ toolchain into **one** model — they are the same problem twice.
 ## 1. The problem
 
 A user or agent authors a TypeScript file — an `*.agent.ts`, an `*.orbit.ts`, or a
-`*.workflow.ts` — that imports the Prism DSL (`define*`, `defineWorkflow`), Effect,
-and generated refs. To run or typecheck it, those imports must resolve, the file
-must transpile, and (for workflows) it must execute.
+`*.workflow.ts` — that imports Prism source object types, workflow builders
+(`defineWorkflow`, `defineTask`), Effect, and generated refs. To run or typecheck
+it, those imports must resolve, the file must transpile, and (for workflows) it
+must execute.
 
 Today this works **only inside the source monorepo**:
 
@@ -52,7 +53,7 @@ any repo, no bare `node_modules` packages. Three specifiers, resolved two ways:
 
 | specifier | what it is | runtime resolution (binary) | edit/typecheck resolution (generated tsconfig `paths`) |
 |---|---|---|---|
-| `prism` | the DSL (`define*`, `defineWorkflow`, `defineTask`, ref/builder types) | rewritten to the embedded authoring-runtime `.mjs` (identity stubs) — `load.ts` mechanism, extended to the workflow loader | → the shipped `prism.d.ts` (in the platform package) |
+| `prism` | source object types, `defineWorkflow`, `defineTask`, ref/builder types | rewritten to the embedded authoring-runtime `.mjs` (identity stubs) — `load.ts` mechanism, extended to the workflow loader | → the shipped `prism.d.ts` (in the platform package) |
 | `prism/refs` | the generated project refs (`agents`, `models`, `skills`, `traits`, `orbits`, `tools`) | resolved to `~/.prism/state/projects/<key>/generated/` | → that same generated `.ts`/`.d.ts` |
 | `effect` | Effect + Schema | rewritten to the binary's embedded Effect (`globalThis.__prism_effect`) | → the `effect` that already ships in the platform package |
 

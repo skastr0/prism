@@ -1,6 +1,6 @@
-import { defineToolspace, toolRef } from "prism";
+import { toolRef, type ToolspaceSource } from "prism";
 
-export default defineToolspace({
+export default {
   name: "workspace-tools",
   description: "Logical tool vocabulary shared across examples",
   tools: {
@@ -35,4 +35,4 @@ export default defineToolspace({
       ],
     },
   },
-});
+} satisfies ToolspaceSource;

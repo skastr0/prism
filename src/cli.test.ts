@@ -723,9 +723,13 @@ test("init --with-agent scaffolds TypeScript agent sources, not source markdown 
   expect(result.exitCode).toBe(0);
 
   const pluginRoot = join(root, "typed-agent");
-  expect(await pathExists(join(pluginRoot, "agents", "reviewer.agent.ts"))).toBe(true);
+  const agentPath = join(pluginRoot, "agents", "reviewer.agent.ts");
+  expect(await pathExists(agentPath)).toBe(true);
   expect(await pathExists(join(pluginRoot, "identities", "reviewer.identity.md"))).toBe(true);
   expect(await pathExists(join(pluginRoot, "agents", "reviewer.md"))).toBe(false);
+  const agentSource = await readFile(agentPath, "utf8");
+  expect(agentSource).toContain("satisfies AgentSource");
+  expect(agentSource).not.toContain("defineAgent");
 });
 
 test("validate rejects source markdown agents", async () => {

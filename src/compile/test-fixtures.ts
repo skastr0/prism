@@ -140,9 +140,9 @@ const writeWorkspaceToolspace = async (
 ): Promise<void> => {
   await writeText(
     join(coreRoot, "toolspaces", "workspace-tools.toolspace.ts"),
-    `import { defineToolspace, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { toolRef, type ToolspaceSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineToolspace({
+export default {
   name: "workspace-tools",
   description: "Logical tool vocabulary shared across compile fixtures",
   tools: {
@@ -174,7 +174,7 @@ ${renderToolTargets(targetHarnesses, "run_shell")}
       ],
     },
   },
-});
+} satisfies ToolspaceSource;
 `
   );
 };
@@ -227,9 +227,9 @@ const writeDefaultModelspace = async (
 ): Promise<void> => {
   await writeText(
     join(coreRoot, "modelspaces", "default-models.modelspace.ts"),
-    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
+    `import type { ModelspaceSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineModelspace({
+export default {
   name: "default-models",
   description: "Shared logical model profiles",
   profiles: {
@@ -246,7 +246,7 @@ ${renderReviewerModelTargets(targetHarnesses)}
       },
     },
   },
-});
+} satisfies ModelspaceSource;
 `
   );
 };
@@ -262,9 +262,9 @@ const writeCoreSkillspace = async (
 ): Promise<void> => {
   await writeText(
     join(coreRoot, "skillspaces", "core-skills.skillspace.ts"),
-    `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
+    `import type { SkillspaceSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineSkillspace({
+export default {
   name: "core-skills",
   description: "Harness-native core skill names",
   skills: {
@@ -274,7 +274,7 @@ ${renderSkillTargets(targetHarnesses)}
       },
     },
   },
-});
+} satisfies SkillspaceSource;
 `
   );
 };
@@ -334,8 +334,8 @@ interface LocalAcknowledgingToolSpec {
 
 const localToolImport = (reviewSlot: boolean): string =>
   reviewSlot
-    ? `import { defineTool, schemaSlot } from ${JSON.stringify(prismImportPath)};`
-    : `import { defineTool } from ${JSON.stringify(prismImportPath)};`;
+    ? `import { schemaSlot, type ToolSource } from ${JSON.stringify(prismImportPath)};`
+    : `import type { ToolSource } from ${JSON.stringify(prismImportPath)};`;
 
 const localToolSlotsBlock = (spec: LocalAcknowledgingToolSpec): string =>
   spec.reviewSlot
@@ -350,7 +350,7 @@ const localToolSlotsBlock = (spec: LocalAcknowledgingToolSpec): string =>
 const localAcknowledgingToolSource = (spec: LocalAcknowledgingToolSpec): string => `import { Schema } from ${JSON.stringify(effectImportPath)};
 ${localToolImport(spec.reviewSlot ?? false)}
 
-export default defineTool({
+export default {
   name: ${JSON.stringify(spec.name)},
   description: ${JSON.stringify(spec.description)},
   input: Schema.Struct({
@@ -362,7 +362,7 @@ export default defineTool({
 ${localToolSlotsBlock(spec)}  async handle(input, context) {
     return { acknowledged: true };
   },
-});
+} satisfies ToolSource;
 `;
 
 const writeLocalTool = async (
@@ -407,9 +407,9 @@ const writeProtocolTools = async ({ protocolRoot }: CanonicalFixturePaths): Prom
   await writeText(
     join(protocolRoot, "tools", "external-submit.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "external-submit",
   description: "Submit completed work through an external protocol plugin",
   input: Schema.Struct({
@@ -421,16 +421,16 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true };
   },
-});
+} satisfies ToolSource;
 `
   );
 
   await writeText(
     join(protocolRoot, "tools", "create_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
+import type { ToolSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "create_glyph",
   description: "Create a protocol-owned glyph",
   input: Schema.Struct({
@@ -446,7 +446,7 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true, board: input.board, id: input.id };
   },
-});
+} satisfies ToolSource;
 `
   );
 };
@@ -462,9 +462,9 @@ const writeSubmissionTraits = async ({
 }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "submittable",
   description: "Can submit completed work",
   instructions: "Submit completed work through the typed submission surface before handing off."${withCanonicalToolBindings ? `,
@@ -476,15 +476,15 @@ export default defineTrait({
   require: {
     tools: ["submit_work"],
   }` : ""},
-});
+} satisfies TraitSource;
 `
   );
 
   await writeText(
     join(pluginRoot, "traits", "committable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
+    `import type { TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "committable",
   description: "Can create implementation commits",
   instructions: "Commit owned implementation changes only after the submitted work is complete."${withCanonicalToolBindings ? `,
@@ -496,7 +496,7 @@ export default defineTrait({
   require: {
     tools: ["commit_work"],
   }` : ""},
-});
+} satisfies TraitSource;
 `
   );
 };
@@ -507,9 +507,9 @@ const writeReviewTraits = async ({
 }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "traits", "reviewable.trait.ts"),
-    `import { defineTrait, toolGroupRef } from ${JSON.stringify(prismImportPath)};
+    `import { toolGroupRef, type TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "reviewable",
   description: "Can submit review findings",
   access: {
@@ -523,22 +523,22 @@ export default defineTrait({
   require: {
     tools: ["submit_review"],
   }` : ""},
-});
+} satisfies TraitSource;
 `
   );
 
   await writeText(
     join(pluginRoot, "traits", "self-assessing.trait.ts"),
-    `import { defineTrait, toolGroupRef } from ${JSON.stringify(prismImportPath)};
+    `import { toolGroupRef, type TraitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "self-assessing",
   description: "Runs validation before handing work off",
   instructions: "Run the relevant validation before final response or handoff.",
   access: {
     toolGroups: [toolGroupRef("agent-core", "workspace-tools", "repo_inspection")],
   },
-});
+} satisfies TraitSource;
 `
   );
 };
@@ -571,17 +571,17 @@ const writeFixtureTraits = async (paths: CanonicalFixturePaths): Promise<void> =
 const writeBuilderAgent = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { modelProfileRef, skillspaceRef, toolRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "builder",
   description: "Builder agent for canonical compile integration tests",
   identity: "builder",
   model: modelProfileRef("agent-core", "default-models", "builder"),
   traits: [
-    bindTrait("submittable"),
-    bindTrait("committable"),
-    bindTrait("self-assessing"),
+    "submittable",
+    "committable",
+    "self-assessing",
   ],
   access: {
     tools: [toolRef("agent-core", "workspace-tools", "run_shell")],
@@ -596,7 +596,7 @@ export default defineAgent({
       top_p: 0.7,
     },
   },
-});
+} satisfies AgentSource;
 `
   );
 };
@@ -614,7 +614,7 @@ const writeReviewerAgent = async (
   const reviewerSlotName = options.undeclaredSlot ? "unknown_verdict" : "verdict";
   const reviewerTraitsHead = options.mixedTraitRefsBeforeSlotBinding
     ? `"submittable",`
-    : `bindTrait("submittable"),`;
+    : `{ trait: "submittable" },`;
   const reviewerSchemaImport =
     withCanonicalToolBindings && !options.inlineSlotSchema
       ? `import { ReviewFindingsSlot } from "../schemas/review-slots.ts";`
@@ -622,18 +622,19 @@ const writeReviewerAgent = async (
 
   await writeText(
     join(pluginRoot, "agents", "reviewer.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(prismImportPath)};
+    `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
 ${options.inlineSlotSchema ? `import { Schema } from ${JSON.stringify(effectImportPath)};` : ""}
 ${reviewerSchemaImport}
 
-export default defineAgent({
+export default {
   name: "reviewer",
   description: "Reviewer agent for canonical compile integration tests",
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
   traits: [
     ${reviewerTraitsHead}
-    ${withCanonicalToolBindings ? `bindTrait("reviewable", {
+    ${withCanonicalToolBindings ? `{
+      trait: "reviewable",
       tools: {
         submit_review: {
           slots: {
@@ -641,8 +642,8 @@ export default defineAgent({
           },
         },
       },
-    })` : `bindTrait("reviewable")`},
-    bindTrait("self-assessing"),
+    }` : `"reviewable"`},
+    "self-assessing",
   ],
   skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
@@ -653,7 +654,7 @@ export default defineAgent({
       top_p: 0.5,
     },
   },
-});
+} satisfies AgentSource;
 `
   );
 };
@@ -664,17 +665,18 @@ const writeSecurityReviewerAgent = async ({
 }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "agents", "security-reviewer.agent.ts"),
-    `import { bindTrait, defineAgent, modelProfileRef, skillspaceRef } from ${JSON.stringify(prismImportPath)};
+    `import { modelProfileRef, skillspaceRef, type AgentSource } from ${JSON.stringify(prismImportPath)};
 ${withCanonicalToolBindings ? `import { SecurityReviewSlot } from "../schemas/review-slots.ts";` : ""}
 
-export default defineAgent({
+export default {
   name: "security-reviewer",
   description: "Security reviewer variant using the same reviewable trait",
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
   traits: [
-    bindTrait("submittable"),
-    ${withCanonicalToolBindings ? `bindTrait("reviewable", {
+    "submittable",
+    ${withCanonicalToolBindings ? `{
+      trait: "reviewable",
       tools: {
         submit_review: {
           slots: {
@@ -682,8 +684,8 @@ export default defineAgent({
           },
         },
       },
-    })` : `bindTrait("reviewable")`},
-    bindTrait("self-assessing"),
+    }` : `"reviewable"`},
+    "self-assessing",
   ],
   skills: [skillspaceRef("agent-core", "core-skills", "testing")],
   targets: {
@@ -694,7 +696,7 @@ export default defineAgent({
       top_p: 0.4,
     },
   },
-});
+} satisfies AgentSource;
 `
   );
 };
@@ -740,9 +742,9 @@ const deliveryOrbitSource = (
 ): string => {
   const reviewAgents = deliveryReviewAgentRefs(options);
 
-  return `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+  return `import { agentRef, traitRef, type OrbitSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery-contract",
   description: "Validate that work moves through the right trait-conforming agents",
   phases: [
@@ -788,7 +790,7 @@ export default defineOrbit({
     },
   ]${deliveryOrbitOrchestratorBlock(paths, options)},
   body: "Use this orbit when you want the compile-time graph to prove that each phase has the right agents assigned.",
-});
+} satisfies OrbitSource;
 `;
 };
 
@@ -823,17 +825,16 @@ export const createCanonicalCompileFixture = async (
 const writeGoldenHook = async ({ pluginRoot }: CanonicalFixturePaths): Promise<void> => {
   await writeText(
     join(pluginRoot, "hooks", "session-start.hook.ts"),
-    `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { hookEvent, type HookSource } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-start",
   description: "Run once at the start of each session",
   event: hookEvent.sessionStart,
   async handle(payload) {
     return { decision: "continue" };
   },
-});
+} satisfies HookSource;
 `,
   );
 };

@@ -1,6 +1,6 @@
-import { defineTrait } from "prism";
+import type { TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "committable",
   description: "Can create implementation commits",
   tools: {
@@ -11,4 +11,4 @@ export default defineTrait({
   require: {
     tools: ["commit_work"],
   },
-});
+} satisfies TraitSource;

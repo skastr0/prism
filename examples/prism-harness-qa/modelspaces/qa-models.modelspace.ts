@@ -1,6 +1,6 @@
-import { defineModelspace } from "prism";
+import type { ModelspaceSource } from "prism";
 
-export default defineModelspace({
+export default {
   name: "qa-models",
   description: "Harness smoke-test model profiles for Prism workflow E2E checks.",
   profiles: {
@@ -41,4 +41,4 @@ export default defineModelspace({
       },
     },
   },
-});
+} satisfies ModelspaceSource;

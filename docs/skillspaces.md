@@ -29,9 +29,9 @@ The compiler currently lowers agents for OpenCode, Claude Code, Codex CLI, Antig
 ## Authoring Pattern
 
 ```ts
-import { defineTrait, skillspaceRef } from "prism";
+import { skillspaceRef, type TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "core-engineering",
   description: "Can use core engineering method skills",
   access: {
@@ -40,7 +40,7 @@ export default defineTrait({
       skillspaceRef("agent-core", "global-skills", "testing"),
     ],
   },
-});
+} satisfies TraitSource;
 ```
 
 The target lowerer decides what this means. OpenCode emits `permission.skill` with `*` denied and the resolved skill names allowed. Claude Code and Grok emit resolved skill names into generated agent frontmatter. Factory Droid bundles targeted skills in generated plugins and direct `skillRef(...)` dependencies still render in the generated droid body, but Factory does not currently expose a documented per-droid skill permission frontmatter field, so permission-only skill visibility fails closed for that target.

@@ -1,7 +1,7 @@
 import { Schema } from "effect";
-import { defineTool } from "prism";
+import type { ToolSource } from "prism";
 
-export default defineTool({
+export default {
   name: "challenge_echo",
   description: "Returns deterministic proof that this generated Prism tool executed.",
   input: Schema.Struct({
@@ -19,4 +19,4 @@ export default defineTool({
       source: "prism-generated-tool" as const,
     };
   },
-});
+} satisfies ToolSource;

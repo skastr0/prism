@@ -1,22 +1,27 @@
-import { bindTrait, defineAgent, modelProfileRef } from "prism";
+import { modelProfileRef, type AgentSource } from "prism";
 import { SecurityReviewSlot } from "../schemas/review-slots.ts";
 
-export default defineAgent({
+export default {
   name: "security-reviewer",
   description: "Security reviewer variant using the same reviewable trait",
   identity: "reviewer",
   model: modelProfileRef("agent-core", "default-models", "reviewer"),
   traits: [
-    bindTrait("agent-core:forge-practitioner"),
-    bindTrait("agent-core:core-engineering"),
-    bindTrait("agent-core:functional-thinking"),
-    bindTrait("submittable"),
-    bindTrait("reviewable", {
-      slots: {
-        verdict: SecurityReviewSlot,
+    "agent-core:forge-practitioner",
+    "agent-core:core-engineering",
+    "agent-core:functional-thinking",
+    "submittable",
+    {
+      trait: "reviewable",
+      tools: {
+        submit_review: {
+          slots: {
+            verdict: SecurityReviewSlot,
+          },
+        },
       },
-    }),
-    bindTrait("self-assessing"),
+    },
+    "self-assessing",
   ],
   targets: {
     opencode: {
@@ -26,4 +31,4 @@ export default defineAgent({
       top_p: 0.4,
     },
   },
-});
+} satisfies AgentSource;

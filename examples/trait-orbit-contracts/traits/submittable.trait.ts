@@ -1,6 +1,6 @@
-import { defineTrait } from "prism";
+import type { TraitSource } from "prism";
 
-export default defineTrait({
+export default {
   name: "submittable",
   description: "Adds the submit_work tool interface.",
   tools: {
@@ -11,4 +11,4 @@ export default defineTrait({
   require: {
     tools: ["submit_work"],
   },
-});
+} satisfies TraitSource;

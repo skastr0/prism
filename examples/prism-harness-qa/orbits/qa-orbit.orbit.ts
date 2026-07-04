@@ -1,6 +1,6 @@
-import { agentRef, defineOrbit } from "prism";
+import { agentRef, type OrbitSource } from "prism";
 
-export default defineOrbit({
+export default {
   name: "qa-orbit",
   description: "Compile-time contract ensuring the QA tester agent is available for harness validation.",
   phases: [
@@ -13,4 +13,4 @@ export default defineOrbit({
       },
     },
   ],
-});
+} satisfies OrbitSource;

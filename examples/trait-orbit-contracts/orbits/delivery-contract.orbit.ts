@@ -1,6 +1,6 @@
-import { agentRef, defineOrbit, traitRef } from "prism";
+import { agentRef, traitRef, type OrbitSource } from "prism";
 
-export default defineOrbit({
+export default {
   name: "delivery-contract",
   description: "Compile-time orchestration contract over assigned trait-conforming agents",
   phases: [
@@ -33,4 +33,4 @@ export default defineOrbit({
     },
   ],
   body: "Use this example when you want orbit phases to prove, at compile time, that the assigned agents expose the required capabilities.",
-});
+} satisfies OrbitSource;

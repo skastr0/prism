@@ -1,4 +1,4 @@
-import { defineSkillspace } from "prism";
+import type { SkillspaceSource } from "prism";
 
 const shared = (name: string, description?: string) => ({
   ...(description ? { description } : {}),
@@ -30,7 +30,7 @@ const codexOnly = (name: string, description?: string) => ({
   },
 });
 
-export default defineSkillspace({
+export default {
   name: "global-skills",
   description: "Installed global skill names across OpenCode, Claude Code, and Codex.",
   skills: {
@@ -118,4 +118,4 @@ export default defineSkillspace({
     "web-research": shared("web-research"),
     "scribe": shared("scribe"),
   },
-});
+} satisfies SkillspaceSource;

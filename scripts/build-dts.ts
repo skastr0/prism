@@ -25,11 +25,11 @@ export const buildDts = async (): Promise<string> => {
   await mkdir(tmpOut, { recursive: true });
 
   // Write a focused tsconfig that emits declarations only from the authoring
-  // surface. We use `files` to anchor the type graph at the two public entry
-  // points; internal modules (workers, runner internals, compile/, services/,
-  // mcp/, sync/, state/) that happen to be reachable will emit too, but the
-  // index.d.ts is the entry for paths resolution — consumers only import what
-  // index.d.ts exports.
+  // surface. We use `files` to anchor the type graph at the public entry
+  // points. The root index intentionally excludes the CLI workflow file loader
+  // and generated-tsconfig machinery, so in-memory workflow SDK consumers can
+  // import definition and runner helpers without pulling compile/, prism-home,
+  // project-key, or TypeScript into their graph.
   const focusedTsconfig = {
     compilerOptions: {
       target: "ESNext",

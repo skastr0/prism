@@ -184,3 +184,29 @@ The same fixes make harness-programming itself publish-clean:
 - Whether `run` auto-refreshes stale refs or only warns.
 - The cached-agent-composition layer and its world-ref staleness surface (see
   `prism-workflows-future-ideas`) build *on* this toolchain, not within it.
+
+## 12. Appendix: in-memory SDK execution graph
+
+The in-memory workflow execution surface is intentionally smaller than the CLI
+file-loader surface. SDK-style consumers that already hold a workflow definition
+use these public `prism` exports:
+
+- `defineTask`, `defineWorkflow`, workflow ref/types, and workflow shape guards
+  from `src/workflows.ts`
+- `runWorkflow` and runner result/error types from `src/workflow-runner.ts`
+- shared runtime errors from `src/workflow-errors.ts`
+
+The CLI loader remains the only owner of file execution concerns:
+
+- `src/workflow-loader.ts` owns TypeScript typechecking, import rewriting,
+  Prism-home lookup, project-keyed generated refs, and freshness checks.
+- `src/workflow-tsconfig.ts` owns generated workflow tsconfig paths.
+- worker adapters and the worker registry are imported directly by CLI/runtime
+  modules; SDK callers provide an `executeTask` function instead.
+- `src/cli.ts` and `src/workflow-controls.ts` import `loadWorkflowFile`
+  directly; there is no copied loader.
+
+Boundary invariant: importing the public workflow execution helpers must not
+load `compile/*`, `prism-home`, `project-key`, `workflow-loader`,
+`workflow-tsconfig`, or `typescript`. The file-loader path may use all of those
+because it is the CLI/runtime bridge for `.workflow.ts` files.

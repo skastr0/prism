@@ -36,6 +36,78 @@ const contractMetadata = {
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("workflow runner", () => {
+  test("public API runs an in-memory workflow from outside a Prism project directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-sdk-"));
+    const script = join(root, "run-in-memory.mjs");
+    const prismSpecifier = new URL("./index.ts", import.meta.url).href;
+    const effectSpecifier = import.meta.resolve("effect");
+
+    await writeFile(script, `
+import { Schema } from ${JSON.stringify(effectSpecifier)};
+import { defineTask, defineWorkflow, runWorkflow } from ${JSON.stringify(prismSpecifier)};
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "sdk-test",
+  name: "worker",
+  description: "Stub worker",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["codex-cli"],
+};
+
+const task = defineTask({
+  id: "summarize",
+  agent,
+  prompt: "Summarize the input.",
+  output: Schema.Struct({ summary: Schema.String }),
+});
+
+const workflow = defineWorkflow({ name: "in-memory-sdk-smoke", tasks: [task] });
+const result = await runWorkflow(workflow, {
+  executeTask: async () => ({ summary: "ran outside project" }),
+});
+
+console.log(JSON.stringify(result));
+`);
+
+    try {
+      const proc = Bun.spawn({
+        cmd: ["bun", script],
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          PRISM_HOME: join(root, "prism-home"),
+        },
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout) as unknown;
+      expect(result).toMatchObject({
+        runId: null,
+        workflow: "in-memory-sdk-smoke",
+        tasks: [
+          {
+            id: "summarize",
+            agent: { plugin: "sdk-test", name: "worker" },
+            output: { summary: "ran outside project" },
+            cached: false,
+          },
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("executes tasks sequentially and decodes outputs", async () => {
     const build = defineTask({
       id: "build",

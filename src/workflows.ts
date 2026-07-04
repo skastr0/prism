@@ -51,6 +51,22 @@ export interface WorkflowAgentRef {
   readonly installs: ReadonlyArray<string>;
 }
 
+export interface WorkflowTaskSummary {
+  readonly id: string;
+  readonly agent: {
+    readonly plugin: string;
+    readonly name: string;
+  };
+  readonly cacheKey?: string;
+}
+
+export interface WorkflowValidationSummary {
+  readonly path: string;
+  readonly name: string;
+  readonly tasks: ReadonlyArray<WorkflowTaskSummary>;
+  readonly dynamic: boolean;
+}
+
 export type WorkflowOutputSchema = Schema.Schema.AnyNoContext;
 
 export type WorkflowFinishCriterionError = Error;
@@ -321,6 +337,31 @@ export type AnyWorkflowTask = WorkflowTask<string, WorkflowAgentRef, WorkflowOut
 
 export type WorkflowTaskOutput<Task extends AnyWorkflowTask> = Schema.Schema.Type<Task["output"]>;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isStringArray = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+export const isWorkflowAgentRef = (value: unknown): value is WorkflowAgentRef =>
+  isRecord(value) &&
+  value.kind === "agent-ref" &&
+  typeof value.plugin === "string" &&
+  typeof value.name === "string" &&
+  typeof value.description === "string" &&
+  typeof value.sourceHash === "string" &&
+  typeof value.manifestHash === "string" &&
+  isStringArray(value.installs);
+
+export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
+  isRecord(value) &&
+  value.kind === "workflow-task" &&
+  typeof value.id === "string" &&
+  isWorkflowAgentRef(value.agent) &&
+  typeof value.prompt === "string" &&
+  Schema.isSchema(value.output) &&
+  (value.cacheKey === undefined || typeof value.cacheKey === "string");
+
 export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyArray<AnyWorkflowTask>> {
   readonly kind: "workflow";
   readonly name: Name;
@@ -351,6 +392,33 @@ export interface DynamicWorkflowDefinition<
 export type AnyWorkflowDefinition =
   | WorkflowDefinition<string, ReadonlyArray<AnyWorkflowTask>>
   | DynamicWorkflowDefinition<string>;
+
+export const isWorkflowDefinition = (
+  value: unknown,
+): value is AnyWorkflowDefinition =>
+  isRecord(value) &&
+  value.kind === "workflow" &&
+  typeof value.name === "string" &&
+  Array.isArray(value.tasks) &&
+  value.tasks.every(isWorkflowTask) &&
+  (value.run === undefined || typeof value.run === "function");
+
+export const workflowSummary = (
+  path: string,
+  workflow: AnyWorkflowDefinition,
+): WorkflowValidationSummary => ({
+  path,
+  name: workflow.name,
+  dynamic: "run" in workflow,
+  tasks: workflow.tasks.map((task) => ({
+    id: task.id,
+    agent: {
+      plugin: task.agent.plugin,
+      name: task.agent.name,
+    },
+    ...(task.cacheKey ? { cacheKey: task.cacheKey } : {}),
+  })),
+});
 
 export const defineTask = <
   const Id extends string,

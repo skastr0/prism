@@ -97,6 +97,7 @@
       "name": "@skastr0/prism-core",
       "version": "0.2.2",
       "dependencies": {
+        "@modelcontextprotocol/sdk": "1.29.0",
         "effect": "^3.21.1",
       },
     },

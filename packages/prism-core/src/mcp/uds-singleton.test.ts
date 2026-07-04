@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -7,6 +7,8 @@ import {
   probeSocketLiveness,
   probeAndRecoverWithLock,
   ensureSocketBindability,
+  acquireLock,
+  bindUnixSocketSingleton,
   UDSSingletonError,
 } from "./uds-singleton";
 
@@ -292,6 +294,154 @@ describe("UDS Singleton & Stale Socket Recovery", () => {
       if (bound && bound.status === "fulfilled" && "server" in bound.value) {
         await (bound.value as any).server.stop();
       }
+    });
+  });
+
+  describe("regression: acquireLock exclusivity (was: rename() silently replaces, all racers 'win')", () => {
+    it("exactly one of 20 concurrent acquire attempts wins the lock", async () => {
+      const lockPath = join(testDir, "race.lock");
+      const pid = process.pid;
+
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => acquireLock(lockPath, 300, pid)),
+      );
+
+      const winners = results.filter((won) => won === true);
+      expect(winners.length).toBe(1);
+
+      // The lock file records a single, valid holder -- not silently
+      // clobbered by a second "winner".
+      const content = await readFile(lockPath, "utf8");
+      const holder = JSON.parse(content);
+      expect(holder.pid).toBe(pid);
+      expect(typeof holder.startedAt).toBe("number");
+    });
+
+    it("reclaims a lock left by a dead pid and lets a new caller win", async () => {
+      const lockPath = join(testDir, "dead-holder.lock");
+
+      // A pid that is essentially guaranteed not to be alive.
+      const deadPid = 999999;
+      await writeFile(lockPath, JSON.stringify({ pid: deadPid, startedAt: Date.now() }), "utf8");
+
+      const acquired = await acquireLock(lockPath, 1000, process.pid);
+      expect(acquired).toBe(true);
+
+      const content = await readFile(lockPath, "utf8");
+      const holder = JSON.parse(content);
+      expect(holder.pid).toBe(process.pid);
+    });
+
+    it("does not reclaim a lock held by a live pid", async () => {
+      const lockPath = join(testDir, "live-holder.lock");
+      await writeFile(lockPath, JSON.stringify({ pid: process.pid, startedAt: Date.now() }), "utf8");
+
+      // Our own pid is alive, so this must NOT be able to steal the lock.
+      const acquired = await acquireLock(lockPath, 100, process.pid + 1);
+      expect(acquired).toBe(false);
+
+      // The original holder's record must be untouched.
+      const content = await readFile(lockPath, "utf8");
+      const holder = JSON.parse(content);
+      expect(holder.pid).toBe(process.pid);
+    });
+  });
+
+  describe("regression: bindUnixSocketSingleton (was: Bun.serve() outside the lock, uncaught EADDRINUSE crash)", () => {
+    it("pre-bound path: second process gets 'already-served' and never calls bind()", async () => {
+      const socketPath = join(testDir, "prebound.sock");
+      const server = await spawnTestServer(socketPath);
+
+      try {
+        let bindCalled = false;
+        const outcome = await bindUnixSocketSingleton(socketPath, () => {
+          bindCalled = true;
+          throw new Error("bind() must not be invoked when already served");
+        });
+
+        expect(outcome.kind).toBe("already-served");
+        expect(bindCalled).toBe(false);
+      } finally {
+        await server.stop();
+      }
+    });
+
+    it("stale socket file: recovers (unlinks) and binds successfully", async () => {
+      const socketPath = join(testDir, "stale-then-bind.sock");
+      await writeFile(socketPath, "");
+      expect(existsSync(socketPath)).toBe(true);
+
+      const outcome = await bindUnixSocketSingleton(socketPath, () =>
+        Bun.serve({ unix: socketPath, fetch: () => new Response("ok") }),
+      );
+
+      expect(outcome.kind).toBe("bound");
+      expect(existsSync(socketPath)).toBe(true);
+
+      // Verify it is genuinely live.
+      const liveness = await probeSocketLiveness(socketPath);
+      expect(liveness).toBe("live");
+
+      if (outcome.kind === "bound") {
+        outcome.server.stop(true);
+      }
+    });
+
+    it("bind() throwing EADDRINUSE against a live owner reports 'already-served' instead of throwing", async () => {
+      const socketPath = join(testDir, "race-eaddrinuse-live.sock");
+      const server = await spawnTestServer(socketPath);
+
+      try {
+        // A bind() callback that always races into EADDRINUSE, simulating a
+        // process that binds outside the lock's visibility.
+        const eaddrinuse = () => {
+          const error = new Error("EADDRINUSE") as NodeJS.ErrnoException;
+          error.code = "EADDRINUSE";
+          throw error;
+        };
+
+        const outcome = await bindUnixSocketSingleton(socketPath, eaddrinuse);
+        expect(outcome.kind).toBe("already-served");
+      } finally {
+        await server.stop();
+      }
+    });
+
+    it("bind() throwing EADDRINUSE against a stale socket retries once and succeeds", async () => {
+      const socketPath = join(testDir, "race-eaddrinuse-stale.sock");
+
+      let attempt = 0;
+      const flakyBind = () => {
+        attempt += 1;
+        if (attempt === 1) {
+          // Simulate a racer that bound and crashed/unbound between our
+          // probe and our own bind() call, leaving a stale socket file.
+          require("node:fs").writeFileSync(socketPath, "");
+          const error = new Error("EADDRINUSE") as NodeJS.ErrnoException;
+          error.code = "EADDRINUSE";
+          throw error;
+        }
+        return Bun.serve({ unix: socketPath, fetch: () => new Response("ok") });
+      };
+
+      const outcome = await bindUnixSocketSingleton(socketPath, flakyBind);
+
+      expect(attempt).toBe(2);
+      expect(outcome.kind).toBe("bound");
+
+      if (outcome.kind === "bound") {
+        outcome.server.stop(true);
+      }
+    });
+
+    it("propagates a non-EADDRINUSE bind() error instead of masking it", async () => {
+      const socketPath = join(testDir, "other-error.sock");
+
+      await expect(
+        bindUnixSocketSingleton(socketPath, () => {
+          throw new Error("disk full");
+        }),
+      ).rejects.toThrow("disk full");
     });
   });
 });

@@ -57,6 +57,19 @@ test("doctor exit code is success for a clean report", async () => {
   expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
 });
 
+test("doctor includes shared workflow harness detection data without creating findings", async () => {
+  const report = await runDoctor({
+    harnesses: ["opencode", "cursor"],
+    scope: "global",
+    prismHome: join(root, "prism-home"),
+    fix: false,
+  });
+
+  expect(report.findings).toEqual([]);
+  expect(report.workflowHarnesses?.map((item) => item.harness)).toEqual(["opencode"]);
+  expect(report.workflowHarnesses?.[0]?.schema).toBe("prism.workflow-harness-detection.v1");
+});
+
 test("doctor --fix returns environment failure when convergence remains blocked", async () => {
   const pluginRoot = join(root, "blocked-plugin");
   await writeText(

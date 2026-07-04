@@ -26,6 +26,11 @@ import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { MCP_EXPOSURE_HEADER } from "./compile/mcp-runtime.js";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
+import {
+  detectWorkflowHarnesses,
+  workflowHarnessIdsForHarnesses,
+  type WorkflowHarnessDetection,
+} from "./workflow-harness-detection.js";
 
 export type DoctorSeverity = "error" | "warning" | "info";
 
@@ -58,6 +63,7 @@ export interface DoctorReport {
   readonly pluginPath?: string;
   readonly fix: boolean;
   readonly fixFailed?: boolean;
+  readonly workflowHarnesses?: ReadonlyArray<WorkflowHarnessDetection>;
   readonly findings: ReadonlyArray<DoctorFinding>;
   readonly refresh?: RefreshResult;
 }
@@ -1398,6 +1404,9 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
   const findings: DoctorFinding[] = [];
   let refresh: RefreshResult | undefined;
   let fixFailed = false;
+  const workflowHarnesses = await detectWorkflowHarnesses({
+    harnesses: workflowHarnessIdsForHarnesses(options.harnesses),
+  });
 
   if (options.fix) {
     findings.push(...(await runSnapshotGcFix(options.prismHome)));
@@ -1452,6 +1461,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
     ...(options.pluginPath ? { pluginPath: options.pluginPath } : {}),
     fix: options.fix,
     ...(options.fix && fixFailed ? { fixFailed } : {}),
+    ...(workflowHarnesses.length > 0 ? { workflowHarnesses } : {}),
     findings,
     ...(refresh ? { refresh } : {}),
   };

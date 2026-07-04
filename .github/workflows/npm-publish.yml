@@ -30,6 +30,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile --cpu='*' --os='*'
       - run: bun run verify
+      - run: bun run smoke:core
       - run: bun run build:npm-cli
       - run: bun run pack:npm-cli:dry-run
       - run: bun scripts/smoke-npm-cli.ts --skip-build
@@ -38,6 +39,7 @@ jobs:
           set -euo pipefail
 
           for package_dir in \
+            packages/prism-core \
             packages/npm/prism-darwin-arm64 \
             packages/npm/prism-darwin-x64 \
             packages/npm/prism-linux-arm64 \

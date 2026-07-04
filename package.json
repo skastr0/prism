@@ -23,7 +23,7 @@
     "install:dev": "bun scripts/install.ts",
     "install:local": "bun run install:dev",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run typecheck && bun run build",
+    "verify": "bun run build:core && bun run typecheck && bun run build",
     "pack:npm-cli:dry-run": "npm pack --dry-run --workspace packages/npm/prism-darwin-arm64 --workspace packages/npm/prism-darwin-x64 --workspace packages/npm/prism-linux-arm64 --workspace packages/npm/prism-linux-x64 --workspace packages/npm/prism",
     "pack:core:dry-run": "npm pack --dry-run --workspace packages/prism-core",
     "smoke:core": "bun run build:core && bun run pack:core:dry-run && bun scripts/smoke-prism-core-package.ts",

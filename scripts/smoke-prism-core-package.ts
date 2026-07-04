@@ -1,12 +1,52 @@
 #!/usr/bin/env bun
 
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const packageDir = join(repoRoot, "packages", "prism-core");
+
+const run = async (
+  label: string,
+  command: readonly string[],
+  options?: { readonly cwd?: string; readonly capture?: boolean },
+): Promise<string> => {
+  console.log(`\n${label}`);
+  const proc = Bun.spawn(command, {
+    cwd: options?.cwd ?? repoRoot,
+    stdout: options?.capture ? "pipe" : "inherit",
+    stderr: "pipe",
+  });
+  const stdout = options?.capture ? await new Response(proc.stdout).text() : "";
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+
+  if (stderr.length > 0) {
+    process.stderr.write(stderr);
+  }
+
+  if (exitCode !== 0) {
+    throw new Error(`${label} failed with exit code ${exitCode}`);
+  }
+
+  return stdout;
+};
+
+const packPackage = async (tarballDir: string): Promise<string> => {
+  const stdout = await run(
+    "Packing prism-core",
+    ["npm", "pack", "--json", "--pack-destination", tarballDir],
+    { cwd: packageDir, capture: true },
+  );
+  const parsed = JSON.parse(stdout) as Array<{ readonly filename: string }>;
+  const filename = parsed[0]?.filename;
+  if (!filename) {
+    throw new Error("npm pack did not return a prism-core tarball");
+  }
+  return join(tarballDir, filename);
+};
 
 const requiredDistFiles = [
   "compile-manifest.js",
@@ -29,11 +69,20 @@ for (const file of requiredDistFiles) {
 const tempRoot = await mkdtemp(join(tmpdir(), "prism-core-smoke-"));
 
 try {
-  const scopeDir = join(tempRoot, "node_modules", "@skastr0");
-  await mkdir(scopeDir, { recursive: true });
-  await symlink(packageDir, join(scopeDir, "prism-core"), "dir");
+  const tarballDir = join(tempRoot, "tarballs");
+  const appRoot = join(tempRoot, "app");
+  await mkdir(tarballDir, { recursive: true });
+  await mkdir(appRoot, { recursive: true });
+  await writeFile(join(appRoot, "package.json"), `{"private":true,"type":"module"}\n`);
 
-  const consumerPath = join(tempRoot, "consumer.mjs");
+  const tarball = await packPackage(tarballDir);
+  await run(
+    "Installing packed prism-core into clean project",
+    ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
+    { cwd: appRoot },
+  );
+
+  const consumerPath = join(appRoot, "consumer.mjs");
   await writeFile(
     consumerPath,
     `
@@ -57,21 +106,13 @@ if (stableJsonStringify({ b: 1, a: 2 }) !== '{"a":2,"b":1}') throw new Error("st
 if (stableJsonHash({ a: 1 }).length !== 64) throw new Error("stable JSON hash did not hash");
 
 const resolved = await import.meta.resolve("@skastr0/prism-core/compile-manifest");
-if (!resolved.endsWith("/packages/prism-core/dist/compile-manifest.js")) {
-  throw new Error(\`compile-manifest resolved outside dist: \${resolved}\`);
+if (!resolved.endsWith("/node_modules/@skastr0/prism-core/dist/compile-manifest.js")) {
+  throw new Error(\`compile-manifest resolved outside the packed install: \${resolved}\`);
 }
 `,
   );
 
-  const proc = Bun.spawn(["node", consumerPath], {
-    cwd: tempRoot,
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    throw new Error(`prism-core package smoke failed with exit code ${exitCode}`);
-  }
+  await run("Importing prism-core public subpaths from packed install", ["node", consumerPath], { cwd: appRoot });
 
   console.log("prism-core package exports smoke passed");
 } finally {

@@ -260,6 +260,51 @@ describe("sync engine — owned files", () => {
     );
   });
 
+  test("unmanaged AGENTS files starting with legacy marker and user prose are preserved", async () => {
+    const agentsPath = join(root, "AGENTS.md");
+    const original = [
+      "<!-- prism:rules source=\"global/context.md\" -->",
+      "This is a hand-written note that happens to start with the old marker.",
+      "It must not be mistaken for retired whole-file Codex output.",
+      "",
+      "User footer.",
+      "",
+    ].join("\n");
+    await nodeWriteFile(agentsPath, original);
+
+    const migrated = await refresh(desiredWith({
+      regions: [{
+        kind: "marker",
+        targetPath: agentsPath,
+        regionKey: "codex.rules.rules-demo",
+        commentPrefix: "<!--",
+        commentSuffix: " -->",
+        content: "# New Codex rules\n",
+        resetUnmanagedFileIfContains: "<!-- prism:rules source=",
+        plugin: "rules-demo",
+      }],
+    }));
+
+    expect(migrated.blocked).toEqual([]);
+    expect(migrated.ops).toEqual([
+      expect.objectContaining({
+        kind: "patch-regions",
+        targetPath: agentsPath,
+        backup: true,
+        create: false,
+      }),
+    ]);
+    expect(migrated.backups).toHaveLength(1);
+    expect(await readFile(migrated.backups[0]!)).toBe(original);
+    expect(await readFile(agentsPath)).toBe(
+      original +
+        "\n" +
+        "<!-- --- prism:codex.rules.rules-demo begin --- -->\n" +
+        "# New Codex rules\n" +
+        "<!-- --- prism:codex.rules.rules-demo end --- -->\n",
+    );
+  });
+
   test("crash convergence: deleting the manifest re-converges without errors", async () => {
     await refresh(desired("v1\n"));
     await rm(snapshotPath(home, root));

@@ -326,3 +326,13 @@ export const udsRegistryBundleImportPath = (): string => {
     throw new Error("Unable to resolve uds-registry module", { cause: error });
   }
 };
+
+export const udsSingletonBundleImportPath = (): string => {
+  // The singleton module is an internal MCP module in prism-core
+  // Resolve it from the source tree using import.meta.resolve
+  try {
+    return normalizeImportPath(fileURLToPath(import.meta.resolve("../../packages/prism-core/src/mcp/uds-singleton.js")));
+  } catch (error) {
+    throw new Error("Unable to resolve uds-singleton module", { cause: error });
+  }
+};

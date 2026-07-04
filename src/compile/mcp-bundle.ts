@@ -27,6 +27,7 @@ import {
   mcpSdkWebStandardHttpBundleImportPath,
   zodV4BundleImportPath,
   udsRegistryBundleImportPath,
+  udsSingletonBundleImportPath,
 } from "./runtime-deps.js";
 import {
   generatedToolNameForBinding,
@@ -1256,6 +1257,31 @@ const sseDisabledForRequest = (url: URL): boolean =>
 // resets Bun's per-socket idle timer the same as any other traffic.
 const SSE_KEEPALIVE_FRAME = ":\\n\\n";
 
+// Singleton + stale-socket recovery for UDS mode:
+// On startup, probe the socket path to detect a live daemon or recover from stale sockets.
+// If another daemon is running, exit 0 immediately.
+// If the socket is stale or absent, proceed with binding.
+const ensureSingletonBinding = async (): Promise<void> => {
+  if (!udsPath) {
+    // TCP mode: no singleton enforcement needed
+    return;
+  }
+
+  try {
+    const bindability = await ensureSocketBindability(udsPath);
+    if (bindability === "live") {
+      // Another daemon owns this socket; exit cleanly
+      console.error(\`[prism-mcp] Another daemon is already serving on \${udsPath}; exiting\`);
+      process.exit(0);
+    }
+    // "stale-recovered" or "available": safe to proceed with binding
+    console.error(\`[prism-mcp] Socket bindability: \${bindability}\`);
+  } catch (error) {
+    console.error(\`[prism-mcp] Singleton check failed: \${error instanceof Error ? error.message : String(error)}\`);
+    // Non-fatal: proceed with binding and let it fail naturally if needed
+  }
+};
+
 // Standalone GET SSE streams (server push / notifications) are tracked here
 // so shutdown can end them explicitly instead of leaving them to abrupt
 // socket teardown.
@@ -1354,6 +1380,9 @@ const withSseKeepalive = (response: Response): Response => {
 // See raceAgainstShutdown for why this is required rather than relying on
 // WebStandardStreamableHTTPServerTransport#close().
 const inFlightShutdownWaiters = new Set<() => void>();
+
+// Run singleton check before spawning the server
+await ensureSingletonBinding();
 
 const bestEffortJsonRpcId = (parsedBody: unknown): unknown => {
   if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody) && "id" in parsedBody) {
@@ -1953,6 +1982,7 @@ const renderMcpServerEntry = (options: {
     `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     `import { registerDaemon, unregisterDaemon } from ${JSON.stringify(udsRegistryBundleImportPath())};`,
+    `import { ensureSocketBindability } from ${JSON.stringify(udsSingletonBundleImportPath())};`,
     imports,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),

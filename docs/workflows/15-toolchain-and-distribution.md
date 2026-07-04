@@ -57,7 +57,7 @@ any repo, no bare `node_modules` packages. Three specifiers, resolved two ways:
 
 | specifier | what it is | runtime resolution (binary) | edit/typecheck resolution (generated tsconfig `paths`) |
 |---|---|---|---|
-| `prism` | source object types, `defineWorkflow`, `defineTask`, ref/builder types | rewritten to the embedded authoring-runtime `.mjs` (identity stubs) — `load.ts` mechanism, extended to the workflow loader | → the shipped `prism.d.ts` (in the platform package) |
+| `prism` | source object types, `defineWorkflow`, `defineTask`, ref/builder types | rewritten to the embedded authoring-runtime `.mjs` (identity stubs) — `load.ts` mechanism, extended to the workflow loader | → the shipped `types/index.d.ts` (in the platform package) |
 | `prism/refs` | the generated project refs (`agents`, `models`, `skills`, `traits`, `orbits`, `tools`) | resolved to `~/.prism/state/projects/<key>/generated/` | → that same generated `.ts`/`.d.ts` |
 | `effect` | Effect + Schema | rewritten to the binary's embedded Effect (`globalThis.__prism_effect`) | → the `effect` that already ships in the platform package |
 
@@ -110,11 +110,17 @@ generated types** are always machine-global. That is the clean line.
 ## 6. The shipped type surface
 
 For CLI-authored workflow files, the binary remains the owner of the typecheck
-environment. Instead:
+environment. The current packaging path already ships the authoring declaration
+surface:
 
-- A **`.d.ts` emit build step** (none exists today) produces `prism.d.ts` from
-  `src/index.ts` + `src/workflows.ts`, with `prism-core`'s contract types folded in.
-- That `.d.ts` ships **inside the platform binary package**
+- `scripts/build-dts.ts` emits declaration files from the public authoring entry
+  points into `dist/dts-tmp/`, rooted at `index.d.ts`, covering `src/index.ts`,
+  `src/workflow-errors.ts`, and `src/workflows.ts`.
+- `scripts/build-npm-cli-packages.ts` runs that emit after `build:cli`, then copies
+  the emitted directory into every platform binary package as `types/`. The
+  generated tsconfig can therefore point `prism` at
+  `@skastr0/prism-<platform>/types/index.d.ts`.
+- Those declarations ship **inside the platform binary package**
   (`@skastr0/prism-<platform>`), beside the `effect` and `typescript` that already
   ship there (`prism-<platform>/package.json` `dependencies`).
 - CLI workflow authoring does not require a project-local `npm install`. The
@@ -131,7 +137,7 @@ Prism-generated `tsconfig.json` (§5), with zero `npm install` and zero skew.
 1. **resolve** — load via the unified specifier-rewrite (§3).
 2. **typecheck (transparent pre-step)** — build an in-process `ts.createProgram`
    from the embedded `typescript` + the generated tsconfig (§5) + the shipped
-   `prism.d.ts` + effect `.d.ts`. Fail fast with diagnostics on type error. This is
+   `types/index.d.ts` + effect `.d.ts`. Fail fast with diagnostics on type error. This is
    *not* a separate goal — it is a necessary part of running. (A standalone
    `prism workflow typecheck -` that checks a piped TS string → JSON diagnostics is a
    **secondary** agent affordance, designed later.)

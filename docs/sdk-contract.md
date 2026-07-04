@@ -12,7 +12,7 @@ Prism currently has three different package shapes that matter for an SDK decisi
 
 The root package is not a suitable embeddable SDK as-is because its dependency graph includes CLI and TUI packages: Commander, OpenTUI, and React are root dependencies today (`package.json:44`, `package.json:45`, `package.json:48`, `package.json:52`).
 
-The source already contains a public-looking workflow surface. `src/index.ts` is headed as a public authoring API and re-exports workflow definitions, runner, runtime errors, harness detection, worker contract, and worker metadata (`src/index.ts:1`, `src/index.ts:16`, `src/index.ts:17`, `src/index.ts:18`, `src/index.ts:19`, `src/index.ts:20`). The workflow DSL exports `WorkflowWorkerId`, `defineTask`, and `defineWorkflow` (`src/workflows.ts:58`, `src/workflows.ts:423`, `src/workflows.ts:432`). The runner exports `runWorkflow` (`src/workflow-runner.ts:1045`). The store and direct worker registry are CLI/runtime internals for v0 and are not root SDK exports after the runtime-boundary correction (`src/workflow-sdk-graph.test.ts:73`, `src/workflow-node-compat.test.ts:51`).
+The source already contains a public-looking workflow surface. `src/index.ts` is headed as a public authoring API and re-exports workflow definitions, runner, runtime errors, harness detection, worker contract, and worker metadata (`src/index.ts:1`, `src/index.ts:16`, `src/index.ts:17`, `src/index.ts:18`, `src/index.ts:19`, `src/index.ts:20`). The workflow DSL exports `WorkflowWorkerId`, permission-mode types, `defineTask`, and `defineWorkflow` (`src/workflows.ts:74`, `src/workflows.ts:82`, `src/workflows.ts:90`, `src/workflows.ts:423`, `src/workflows.ts:432`). The runner exports `runWorkflow` (`src/workflow-runner.ts:1045`). The store and direct worker registry are CLI/runtime internals for v0 and are not root SDK exports after the runtime-boundary correction (`src/workflow-sdk-graph.test.ts:73`, `src/workflow-node-compat.test.ts:51`).
 
 The direct worker implementations exist for the eight current workflow workers: Amp, Antigravity, Claude, Codex, Grok, Hermes, Kimi, and OpenCode (`src/workflow-amp-worker.ts:161`, `src/workflow-antigravity-worker.ts:396`, `src/workflow-claude-worker.ts:235`, `src/workflow-codex-worker.ts:125`, `src/workflow-grok-worker.ts:149`, `src/workflow-hermes-worker.ts:82`, `src/workflow-kimi-worker.ts:133`, `src/workflow-opencode-worker.ts:127`).
 
@@ -51,14 +51,14 @@ The v0 SDK root is Node-importable, but not every operation is Node-executable. 
 Workflow authoring and execution:
 
 - `defineTask`, `defineWorkflow`, workflow definition/task/agent/model/finish-criterion types, workflow shape guards, and task output decoding from the workflow DSL (`src/workflows.ts:8`, `src/workflows.ts:54`, `src/workflows.ts:240`, `src/workflows.ts:297`, `src/workflows.ts:324`, `src/workflows.ts:396`, `src/workflows.ts:423`, `src/workflows.ts:432`, `src/workflows.ts:463`).
+- `WorkflowWorkerId`, `WorkflowPermissionMode`, `AntigravityWorkflowPermissionMode`, and worker option types from the workflow DSL. These are part of the authoring contract because `src/index.ts` re-exports `./workflows.js` from the public root today (`src/index.ts:18`; `src/workflows.ts:74`, `src/workflows.ts:82`, `src/workflows.ts:90`, `src/workflows.ts:102`).
 - `runWorkflow`, `WorkflowTaskExecutor`, workflow task execution/result types, and workflow runtime errors from the runner/error surface (`src/workflow-runner.ts:39`, `src/workflow-runner.ts:55`, `src/workflow-runner.ts:122`, `src/workflow-runner.ts:62`, `src/workflow-runner.ts:1045`).
 - `WorkflowBunRuntimeUnavailableError` and SDK-visible harness detection helpers for startup checks (`src/workflow-errors.ts:30`, `src/workflow-harness-detection.ts:223`).
 
 Deferred from the v0 root surface:
 
-- `WorkflowWorkerId` and permission-mode types (`src/workflows.ts:58`, `src/workflows.ts:68`).
 - The store contract and Bun-backed store implementation for persisted runs, cache, events, monitors, and detached-run coordination remain out of the root SDK export until a dedicated persisted-runtime entrypoint is designed (`src/workflow-store.ts:10`, `src/workflow-store.ts:630`; `src/workflow-sdk-graph.test.ts:78`).
-- Direct single-task harness worker dispatch remains internal until the SDK package owns a stable worker-adapter entrypoint. The CLI can still import those modules directly (`src/workflow-workers.ts:164`, `src/workflow-workers.ts:183`; `src/workflow-amp-worker.ts:161`, `src/workflow-grok-worker.ts:149`).
+- Worker adapter APIs, worker metadata, and direct single-task harness worker dispatch remain internal until the SDK package owns a stable worker-adapter entrypoint. The CLI can still import those modules directly (`src/workflow-workers.ts:164`, `src/workflow-workers.ts:183`; `src/workflow-amp-worker.ts:161`, `src/workflow-grok-worker.ts:149`).
 
 ### Out
 

@@ -37,7 +37,7 @@ export const CACHE_FORMAT_VERSION = 3;
  * fixes such as generated tool naming or permission-lowering changes.
  */
 export const COMPILER_SEMANTICS_VERSION =
-  "2026-06-12-compose-manifest-metadata-v1";
+  "2026-07-03-model-free-agent-surface-v1";
 
 type SourceLike =
   | Identity

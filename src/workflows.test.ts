@@ -5,6 +5,7 @@ import {
   defineTask,
   defineWorkflow,
   resolveWorkflowTaskModel,
+  resolveWorkflowTaskModelResolution,
   WorkflowModelResolutionError,
   type WorkflowAgentRef,
   type WorkflowModelProfileRef,
@@ -13,6 +14,7 @@ import {
   type WorkflowWorkerId,
   type WorkflowTaskOutput,
 } from "./workflows.js";
+import { WORKFLOW_HARNESS_IDS, workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
 import { resolveWorkflowTaskPermission } from "./workflow-workers.js";
 import { buildAmpArgs } from "./workflow-amp-worker.js";
 import { buildAgyArgs } from "./workflow-antigravity-worker.js";
@@ -271,6 +273,69 @@ describe("workflow authoring primitives", () => {
     });
 
     expect(() => resolveWorkflowTaskModel(build)).toThrow(WorkflowModelResolutionError);
+  });
+
+  test("rescues an agent modelspace profile with partial harness coverage via the registry default (WDX-009)", () => {
+    // Mirrors the real scaffold bug: an agent's modelspace profile only
+    // targets a handful of harnesses (like forge.explorer's deep-explorer
+    // profile), and a task is run under a worker the profile never enumerated
+    // (e.g. grok). Previously this threw "no concrete model for workflow
+    // worker 'grok'" at run time even after a green `validate`.
+    const partiallyCoveredBuilder = {
+      ...builder,
+      model: {
+        modelspace: "agent-foundations:empirical-modelspaces",
+        profile: "deep-explorer",
+        targets: {
+          "claude-code": { model: "claude-opus-4-8" },
+          "codex-cli": { model: "gpt-5.5", variant: "high" },
+          // deliberately missing: amp-code, antigravity-cli, grok, hermes, kimi-code, opencode
+        },
+      },
+    } as const satisfies WorkflowAgentRef;
+
+    for (const worker of WORKFLOW_HARNESS_IDS) {
+      const task = defineTask({
+        id: `probe-${worker}`,
+        agent: partiallyCoveredBuilder,
+        prompt: "Probe.",
+        output: PatchReport,
+        worker: { worker },
+      });
+
+      expect(() => resolveWorkflowTaskModel(task)).not.toThrow();
+      const resolution = resolveWorkflowTaskModelResolution(task);
+      expect(resolution).toBeDefined();
+      expect(typeof resolution?.model).toBe("string");
+
+      if (worker === "claude-code" || worker === "codex-cli") {
+        expect(resolution?.source).toBe("profile");
+      } else {
+        expect(resolution?.source).toBe("default");
+        expect(resolution?.model).toBe(workflowHarnessDefaultModel(worker));
+      }
+    }
+  });
+
+  test("an explicit CLI --model fallback still wins over the harness registry default", () => {
+    const partiallyCoveredBuilder = {
+      ...builder,
+      model: {
+        modelspace: "agent-foundations:empirical-modelspaces",
+        profile: "deep-explorer",
+        targets: { "claude-code": { model: "claude-opus-4-8" } },
+      },
+    } as const satisfies WorkflowAgentRef;
+    const task = defineTask({
+      id: "build",
+      agent: partiallyCoveredBuilder,
+      prompt: "Use the CLI fallback.",
+      output: PatchReport,
+      worker: { worker: "grok" },
+    });
+
+    const resolution = resolveWorkflowTaskModelResolution(task, { fallbackModel: "operator-supplied-model" });
+    expect(resolution).toEqual({ model: "operator-supplied-model", source: "cli-fallback" });
   });
 
   test("decodes task output at the workflow boundary", () => {

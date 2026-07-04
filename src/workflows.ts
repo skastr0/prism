@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import type { Either } from "effect/Either";
 import type { ParseError } from "effect/ParseResult";
 import type { WorkflowRuntimeError } from "./workflow-errors.js";
+import { workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
 
@@ -209,18 +210,47 @@ const resolveModelTargetForPicker = (
   return result;
 };
 
-export const resolveWorkflowTaskModel = (
+export type WorkflowTaskModelResolutionSource = "task" | "profile" | "default" | "cli-fallback";
+
+export interface WorkflowTaskModelResolution {
+  readonly model: string;
+  readonly source: WorkflowTaskModelResolutionSource;
+}
+
+/**
+ * Resolves the CLI --model fallback (if supplied); otherwise the harness's
+ * cheap-fast registry default (workflow-harness-detection.ts). CLI intent
+ * always wins over the baked-in default when both are available.
+ *
+ * Intentionally NOT consulted by the final catch-all below: a task with no
+ * task/profile/agent model info at all resolves to `undefined` there (as
+ * before this change) so per-worker CLIs that tolerate an omitted --model
+ * flag (e.g. opencode) keep doing so. The registry default only rescues the
+ * agent-modelspace branch, whose ref exists but doesn't cover this worker —
+ * the concrete "no concrete model for workflow worker X" crash this exists
+ * to fix (see WDX-009).
+ */
+const resolveFallbackModel = (
+  worker: string | undefined,
+  fallbackModel: string | undefined,
+): WorkflowTaskModelResolution | undefined => {
+  if (fallbackModel !== undefined) return { model: fallbackModel, source: "cli-fallback" };
+  const defaultModel = worker !== undefined ? workflowHarnessDefaultModel(worker) : undefined;
+  return defaultModel !== undefined ? { model: defaultModel, source: "default" } : undefined;
+};
+
+export const resolveWorkflowTaskModelResolution = (
   task: AnyWorkflowTask,
   options: { readonly worker?: string; readonly fallbackModel?: string } = {},
-): string | undefined => {
+): WorkflowTaskModelResolution | undefined => {
   const explicit = task.worker?.model;
-  if (typeof explicit === "string") return explicit;
+  if (typeof explicit === "string") return { model: explicit, source: "task" };
 
   const worker = task.worker?.worker ?? options.worker;
   if (isWorkflowModelProfileRef(explicit)) {
     const target = modelTargetForWorker(explicit, worker);
     const model = firstModelString(target);
-    if (model !== undefined) return model;
+    if (model !== undefined) return { model, source: "task" };
     throw new WorkflowModelResolutionError(
       `modelspace profile ${describeModelRef(explicit)} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
     );
@@ -235,7 +265,7 @@ export const resolveWorkflowTaskModel = (
     }
     const resolved = resolveModelTargetForPicker(agentTarget);
     const picked = task.worker.modelResolver(resolved);
-    if (typeof picked === "string" && picked.length > 0) return picked;
+    if (typeof picked === "string" && picked.length > 0) return { model: picked, source: "task" };
     throw new WorkflowModelResolutionError(
       `modelResolver for agent ${task.agent.plugin}:${task.agent.name} returned an invalid model string for worker '${worker ?? "<missing>"}'`,
     );
@@ -244,14 +274,21 @@ export const resolveWorkflowTaskModel = (
   if (task.agent.model?.modelspace !== undefined || task.agent.model?.profile !== undefined) {
     const target = modelTargetForWorker(task.agent.model, worker);
     const model = firstModelString(target);
-    if (model !== undefined) return model;
+    if (model !== undefined) return { model, source: "profile" };
+    const fallback = resolveFallbackModel(worker, options.fallbackModel);
+    if (fallback !== undefined) return fallback;
     throw new WorkflowModelResolutionError(
       `agent ${task.agent.plugin}:${task.agent.name} modelspace profile ${describeModelRef(task.agent.model ?? {})} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
     );
   }
 
-  return options.fallbackModel;
+  return options.fallbackModel !== undefined ? { model: options.fallbackModel, source: "cli-fallback" } : undefined;
 };
+
+export const resolveWorkflowTaskModel = (
+  task: AnyWorkflowTask,
+  options: { readonly worker?: string; readonly fallbackModel?: string } = {},
+): string | undefined => resolveWorkflowTaskModelResolution(task, options)?.model;
 
 export interface WorkflowFinishCriterionContext<Output> {
   readonly output: Output;

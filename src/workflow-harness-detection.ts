@@ -1,20 +1,19 @@
+import { workflowWorkerHarnessIds, type WorkflowWorkerHarnessId } from "./lowerer-capabilities.js";
 import type { HarnessId } from "./types.js";
 import { workflowBunRuntime } from "./workflow-bun-runtime.js";
 import { WorkflowBunRuntimeUnavailableError, WorkflowUnsupportedHarnessError } from "./workflow-errors.js";
-import type { WorkflowWorkerId } from "./workflows.js";
 
-export const WORKFLOW_HARNESS_IDS = [
-  "amp-code",
-  "antigravity-cli",
-  "claude-code",
-  "codex-cli",
-  "grok",
-  "hermes",
-  "kimi-code",
-  "opencode",
-] as const satisfies ReadonlyArray<WorkflowWorkerId>;
+/**
+ * Workflow-worker harness ids, derived from the capability registry's
+ * `workflowWorker` bit (`lowerer-capabilities.ts`) — the single source of
+ * truth for this set (PQ-163). Never hand-list these ids here; add a harness
+ * by flipping its `workflowWorker` capability in the registry, which also
+ * forces `WORKFLOW_HARNESS_DETECTION_SPECS` below to gain the matching entry
+ * at compile time.
+ */
+export const WORKFLOW_HARNESS_IDS: ReadonlyArray<WorkflowWorkerHarnessId> = workflowWorkerHarnessIds();
 
-export type WorkflowHarnessId = (typeof WORKFLOW_HARNESS_IDS)[number];
+export type WorkflowHarnessId = WorkflowWorkerHarnessId;
 
 export type WorkflowHarnessDetectionStatus = "available" | "missing" | "broken";
 
@@ -48,6 +47,14 @@ export interface WorkflowHarnessDetectionSpec {
   readonly command: string;
   readonly envVar: string;
   readonly probeArgs: ReadonlyArray<string>;
+  /**
+   * Cheap-fast-tier model used by `resolveWorkflowTaskModel` when a task
+   * declares this harness but nothing (task, profile, or CLI --model) supplies
+   * a concrete model. Chosen from the empirical modelspace's throughput/triage
+   * profiles (not the premium tier) so a scaffolded workflow never crashes at
+   * run with "no concrete model for workflow worker X".
+   */
+  readonly defaultModel: string;
 }
 
 export interface WorkflowHarnessProbeRunResult {
@@ -92,48 +99,57 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     command: "amp",
     envVar: "PRISM_WORKFLOW_AMP_BIN",
     probeArgs: ["--version"],
+    // "rush" is Amp's fast mode (vs. "deep"); the only two valid values.
+    defaultModel: "rush",
   },
   "antigravity-cli": {
     harness: "antigravity-cli",
     command: "agy",
     envVar: "PRISM_WORKFLOW_ANTIGRAVITY_BIN",
     probeArgs: ["--version"],
+    defaultModel: "Gemini 3.5 Flash (Low)",
   },
   "claude-code": {
     harness: "claude-code",
     command: "claude",
     envVar: "PRISM_WORKFLOW_CLAUDE_BIN",
     probeArgs: ["--version"],
+    defaultModel: "claude-haiku-4-5",
   },
   "codex-cli": {
     harness: "codex-cli",
     command: "codex",
     envVar: "PRISM_WORKFLOW_CODEX_BIN",
     probeArgs: ["--version"],
+    defaultModel: "gpt-5.4-mini",
   },
   grok: {
     harness: "grok",
     command: "grok",
     envVar: "PRISM_WORKFLOW_GROK_BIN",
     probeArgs: ["--version"],
+    defaultModel: "grok-build",
   },
   hermes: {
     harness: "hermes",
     command: "hermes",
     envVar: "PRISM_WORKFLOW_HERMES_BIN",
     probeArgs: ["--version"],
+    defaultModel: "grok-composer-2.5-fast",
   },
   "kimi-code": {
     harness: "kimi-code",
     command: "kimi",
     envVar: "PRISM_WORKFLOW_KIMI_BIN",
     probeArgs: ["--version"],
+    defaultModel: "kimi-code/kimi-for-coding",
   },
   opencode: {
     harness: "opencode",
     command: "opencode",
     envVar: "PRISM_WORKFLOW_OPENCODE_BIN",
     probeArgs: ["--version"],
+    defaultModel: "synthetic/hf:moonshotai/Kimi-K2.6",
   },
 } as const;
 
@@ -141,6 +157,14 @@ const workflowHarnessIdSet = new Set<string>(WORKFLOW_HARNESS_IDS);
 
 export const isWorkflowHarnessId = (id: string): id is WorkflowHarnessId =>
   workflowHarnessIdSet.has(id);
+
+/**
+ * Cheap-fast-tier default model for a workflow harness, or `undefined` for an
+ * id outside the registry. Single source of truth for `resolveWorkflowTaskModel`
+ * (src/workflows.ts) — do not hand-maintain a second per-harness default list.
+ */
+export const workflowHarnessDefaultModel = (harness: string): string | undefined =>
+  isWorkflowHarnessId(harness) ? WORKFLOW_HARNESS_DETECTION_SPECS[harness].defaultModel : undefined;
 
 export const workflowHarnessIdsForHarnesses = (
   harnesses: ReadonlyArray<HarnessId>,

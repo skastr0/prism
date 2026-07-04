@@ -7,7 +7,7 @@ import type { ComposedAgent } from "./compile/compose.js";
 import { planLowering } from "./compile/lowerers/grok.js";
 import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
 import type { DesiredFile } from "./sync/desired.js";
-import { validateWorkflowFile, WorkflowLoadError } from "./workflow-loader.js";
+import { validateWorkflowFile, WorkflowLoadError, WorkflowValidationError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
@@ -335,6 +335,180 @@ export default defineWorkflow({ name: "all-task-workers-smoke", tasks: [build, r
 `;
 };
 
+const modelResolutionWorkflowSource = () => {
+  return `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const explicitModelAgent = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "explicit-agent",
+  description: "Explicit model agent",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["claude-code"],
+};
+
+const partialAgent = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "partial-agent",
+  description: "Partial modelspace agent",
+  sourceHash: "${"c".repeat(64)}",
+  manifestHash: "${"d".repeat(64)}",
+  model: {
+    modelspace: "agent-foundations:empirical-modelspaces",
+    profile: "deep-explorer",
+    targets: {
+      "claude-code": { model: "claude-opus-4-8" },
+    },
+  },
+  installs: ["grok"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+
+const explicitTask = defineTask({
+  id: "explicit",
+  agent: explicitModelAgent,
+  prompt: "Use explicit model.",
+  output,
+  worker: { worker: "claude-code", model: "claude-opus-4-8" },
+});
+
+const profileTask = defineTask({
+  id: "profile",
+  agent: partialAgent,
+  prompt: "Use profile model.",
+  output,
+  worker: { worker: "claude-code" },
+});
+
+const defaultTask = defineTask({
+  id: "default",
+  agent: partialAgent,
+  prompt: "Use the grok registry default.",
+  output,
+  worker: { worker: "grok" },
+});
+
+const deferredTask = defineTask({
+  id: "deferred",
+  agent: explicitModelAgent,
+  prompt: "Worker chosen at run time.",
+  output,
+});
+
+export default defineWorkflow({ name: "model-resolution-smoke", tasks: [explicitTask, profileTask, defaultTask, deferredTask] });
+`;
+};
+
+const unknownWorkerWorkflowSource = () => {
+  return `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const builder = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build.",
+  output,
+  worker: { worker: "not-a-real-worker" as any },
+});
+
+export default defineWorkflow({ name: "unknown-worker-smoke", tasks: [build] });
+`;
+};
+
+const explicitProfileMissingTargetWorkflowSource = () => {
+  return `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const builder = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["codex-cli"],
+};
+
+const opencodeOnlyProfile = {
+  kind: "model-profile-ref" as const,
+  plugin: "agent-foundations",
+  modelspace: "empirical-modelspaces",
+  profile: "trusted-production",
+  targets: { opencode: { model: "crof/kimi-k2.6" } },
+};
+
+const output = Schema.Struct({ summary: Schema.String });
+const build = defineTask({
+  id: "build",
+  agent: builder,
+  prompt: "Build.",
+  output,
+  worker: { worker: "codex-cli", model: opencodeOnlyProfile },
+});
+
+export default defineWorkflow({ name: "explicit-profile-missing-target", tasks: [build] });
+`;
+};
+
+const scaffoldLikeDynamicWorkflowSource = () => {
+  return `
+import { Effect, Schema } from "effect";
+import { defineTask, defineWorkflow } from "prism";
+
+const explorer = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "explorer",
+  description: "Exploration specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["claude-code", "grok"],
+};
+
+const Result = Schema.Struct({ worker: Schema.String, summary: Schema.String });
+
+const probe = (id: string, worker: "claude-code" | "grok") =>
+  defineTask({
+    id,
+    agent: explorer,
+    prompt: \`Run under \${worker}.\`,
+    output: Result,
+    cacheKey: \`scaffold-\${worker}-v1\`,
+    worker: { worker },
+  });
+
+export const workflow = defineWorkflow({
+  name: "scaffold-like",
+  run: (wf) =>
+    Effect.gen(function* () {
+      const results = yield* Effect.all(
+        [wf.runTask(probe("a", "claude-code")), wf.runTask(probe("b", "grok"))],
+        { concurrency: "unbounded" },
+      );
+      return { results };
+    }),
+});
+`;
+};
+
 describe("workflow loader", () => {
   // Integration tests spawn the full CLI per test and compile plugins. The
   // default 5s timeout is too tight once workflow refs are also emitted.
@@ -403,6 +577,86 @@ describe("workflow loader", () => {
     expect(summary.name).toBe("dynamic-loader-smoke");
     expect(summary.dynamic).toBe(true);
     expect(summary.tasks).toEqual([]);
+  });
+
+  test("validate emits a worker->model resolution row for every task (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, modelResolutionWorkflowSource());
+
+    const summary = await validateWorkflowFile(file);
+
+    expect(summary.modelResolution).toHaveLength(4);
+    expect(summary.modelResolution).toEqual([
+      { id: "explicit", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
+      { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "profile" },
+      { id: "default", worker: "grok", model: "grok-build", source: "default" },
+      { id: "deferred" },
+    ]);
+  });
+
+  test("validate fails with the allowed worker id list for an unknown worker (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, unknownWorkerWorkflowSource());
+
+    await expect(validateWorkflowFile(file)).rejects.toThrow(WorkflowValidationError);
+    await expect(validateWorkflowFile(file)).rejects.toThrow(
+      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, kimi-code, opencode/,
+    );
+  });
+
+  test("validate fails naming task and worker when an explicit model profile has no target for the declared worker (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, explicitProfileMissingTargetWorkflowSource());
+
+    await expect(validateWorkflowFile(file)).rejects.toThrow(WorkflowValidationError);
+    await expect(validateWorkflowFile(file)).rejects.toThrow(/task 'build'/);
+    await expect(validateWorkflowFile(file)).rejects.toThrow(/worker 'codex-cli'/);
+  });
+
+  test("validate annotates a dynamic workflow with statically discoverable worker ids and registry defaults (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, scaffoldLikeDynamicWorkflowSource());
+
+    const summary = await validateWorkflowFile(file);
+
+    expect(summary.dynamic).toBe(true);
+    expect(summary.tasks).toEqual([]);
+    expect(summary.modelResolution).toEqual([]);
+    expect(summary.note).toBeDefined();
+    expect(summary.note?.length ?? 0).toBeGreaterThan(0);
+    expect(summary.staticWorkers).toEqual([
+      { worker: "claude-code", defaultModel: "claude-haiku-4-5" },
+      { worker: "grok", defaultModel: "grok-build" },
+    ]);
+  });
+
+  test("CLI workflow validate --table prints a human-readable resolution table (WDX-009)", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "workflow.ts");
+    await writeFile(file, modelResolutionWorkflowSource());
+
+    const processHandle = Bun.spawn({
+      cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), "workflow", "validate", file, "--table"],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("task");
+    expect(stdout).toContain("worker");
+    expect(stdout).toContain("grok-build");
+    expect(stdout).toContain("default");
   });
 
   test("rejects modules that do not export a workflow definition", async () => {
@@ -559,15 +813,23 @@ describe("workflow loader", () => {
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout) as {
       output: { reviewerStatus: string; fusion: { reviewerStatus: string; verdict: string } };
-      tasks: Array<{ id: string; cached: boolean; output: unknown }>;
+      tasks: Array<{ id: string; cached: boolean; status: string; error?: string; output: unknown }>;
     };
     expect(result.output).toEqual({
       reviewerStatus: "failed",
       fusion: { reviewerStatus: "failed", verdict: "needs-work" },
     });
-    expect(result.tasks.map((task) => task.id)).toEqual(["fusion"]);
-    expect(result.tasks[0]?.output).toEqual({ reviewerStatus: "failed", verdict: "needs-work" });
-    expect(result.tasks[0]?.cached).toBe(false);
+    // PQ-166 decided semantic: an isolated task failure is recorded as a
+    // WorkflowRunTaskResult and stays visible in run results — the failed
+    // reviewer is surfaced alongside fusion, not dropped.
+    expect(result.tasks.map((task) => task.id)).toEqual(["reviewer", "fusion"]);
+    const [reviewerTask, fusionTask] = result.tasks;
+    expect(reviewerTask?.status).toBe("failed");
+    expect(typeof reviewerTask?.error).toBe("string");
+    expect(reviewerTask?.error?.length).toBeGreaterThan(0);
+    expect(fusionTask?.status).toBe("completed");
+    expect(fusionTask?.output).toEqual({ reviewerStatus: "failed", verdict: "needs-work" });
+    expect(fusionTask?.cached).toBe(false);
   });
 
   test("CLI dynamic workflows pass completed reviewer output into fusion", async () => {

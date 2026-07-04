@@ -15,7 +15,6 @@ import type {
 } from "./workflow-runner.js";
 import {
   workflowContinuationAdapterForWorker,
-  workflowWorkerSupportsRepairLoopContinuation,
   type WorkflowRepairLoopContinuationCapability,
   type WorkflowRepairLoopContinuationCapabilityForWorker,
 } from "./workflow-session.js";
@@ -204,17 +203,7 @@ export const createWorkflowWorkerExecutor = (input: {
       processTimeoutMs: task.worker?.processTimeoutMs ?? input.taskTimeoutMs,
       abortSignal: context?.abortSignal,
     };
-    if (context?.repair !== undefined) {
-      if (!workflowWorkerSupportsRepairLoopContinuation(worker)) {
-        throw new WorkflowWorkerContinuationError(
-          `workflow worker '${worker}' does not support repair-loop continuation`,
-        );
-      }
-      if (context.repair.mode !== "native-continuation") {
-        throw new WorkflowWorkerContinuationError(
-          `workflow worker '${worker}' repair requires stable sessionId (${context.repair.fallbackReason})`,
-        );
-      }
+    if (context?.repair?.mode === "native-continuation") {
       const expectedAdapter = workflowContinuationAdapterForWorker(worker);
       if (expectedAdapter !== undefined && context.repair.continuation.adapter !== expectedAdapter) {
         throw new WorkflowWorkerContinuationError(
@@ -227,6 +216,11 @@ export const createWorkflowWorkerExecutor = (input: {
       });
     }
 
+    // Fresh-executor-invocation fallback: continuation metadata is missing or the worker does
+    // not advertise a resumable session, so re-prompt with a brand-new invocation instead of
+    // aborting. The runner has already appended the original prompt, the malformed output, and
+    // the repair instruction onto the task, so the adapter runs it as an ordinary fresh call —
+    // no resume, no repair context. Continuation stays the preferred path when it works above.
     return getWorkflowWorkerAdapter(worker).runTask(task, {
       ...commonOptions,
       ...(context !== undefined ? { context: { abortSignal: context.abortSignal } } : {}),

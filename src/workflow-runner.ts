@@ -14,7 +14,6 @@ import {
   type WorkflowRuntimeError,
 } from "./workflows.js";
 import {
-  toWorkflowRuntimeError,
   WorkflowRunStoppedError,
   WorkflowTaskDecodeError,
   WorkflowTaskEscalatedError,
@@ -41,6 +40,8 @@ export interface WorkflowTaskExecution {
   readonly metadata?: Record<string, unknown>;
 }
 
+export type WorkflowRunTaskResultStatus = "completed" | "failed" | "escalated";
+
 export interface WorkflowRunTaskResult {
   readonly id: string;
   readonly agent: {
@@ -49,7 +50,20 @@ export interface WorkflowRunTaskResult {
   };
   readonly output: unknown;
   readonly cached: boolean;
+  readonly status: WorkflowRunTaskResultStatus;
   readonly metadata?: Record<string, unknown>;
+  readonly error?: string;
+}
+
+/**
+ * Fault-isolation envelope for a single task attempt. A task that crashes, times out, or
+ * exhausts repair resolves to `{ result: <failed>, failure }` instead of rejecting, so the
+ * dynamic runtime can keep siblings and downstream tasks running. Only a run-level stop
+ * (user requested) rejects out of {@link executeWorkflowTask}.
+ */
+interface WorkflowTaskOutcome {
+  readonly result: WorkflowRunTaskResult;
+  readonly failure?: unknown;
 }
 
 export interface WorkflowRunResult {
@@ -298,14 +312,13 @@ const createTaskLimiter = (maxConcurrentTasks: number): TaskExecutionLimiter => 
     active -= 1;
   };
   return {
+    // cancelPending is reserved for run-level stop; a single task failure must not cancel
+    // queued siblings (fault isolation), so `run` no longer cancels on operation failure.
     cancelPending,
     run: async (operation) => {
       await acquire();
       try {
         return await operation();
-      } catch (error) {
-        cancelPending(error);
-        throw error;
       } finally {
         release();
       }
@@ -358,6 +371,42 @@ const executeOrReuseTask = async (input: {
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const failedTaskResult = (
+  task: AnyWorkflowTask,
+  cached: boolean,
+  error: unknown,
+): WorkflowRunTaskResult => {
+  const message = errorMessage(error);
+  const output: Record<string, unknown> = { error: message };
+  const rawText = (error as { readonly rawText?: unknown } | null | undefined)?.rawText;
+  if (rawText !== undefined) output.rawText = rawText;
+  return {
+    id: task.id,
+    agent: taskAgent(task),
+    output,
+    cached,
+    status: error instanceof WorkflowTaskEscalatedError ? "escalated" : "failed",
+    error: message,
+    metadata: workflowContractMetadata,
+  };
+};
+
+/**
+ * The failure surfaced by {@link WorkflowRuntime.runTask} for a task that crashed, timed out,
+ * or exhausted repair. Authors may isolate it per-arm (e.g. `Effect.either`); its `message`
+ * mirrors the underlying task error so author-side `error.message` reads unchanged. When it
+ * instead reaches the top of a dynamic program unhandled, the run recognises it and still
+ * completes with partial results — a single task's failure never aborts the whole run. A
+ * genuine failure of the author's own program (an explicit `Effect.fail`, a defect) is *not*
+ * a WorkflowTaskFailure and still fails the run.
+ */
+class WorkflowTaskFailure extends Error {
+  override readonly name = "WorkflowTaskFailure";
+  constructor(readonly taskError: unknown) {
+    super(errorMessage(taskError));
+  }
+}
 
 const appendRepairPrompt = (task: AnyWorkflowTask, repairPrompt: string): AnyWorkflowTask => ({
   ...task,
@@ -653,7 +702,7 @@ const executeWorkflowTask = async (input: {
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly limiter?: TaskExecutionLimiter;
   readonly abortSignal?: AbortSignal;
-}): Promise<WorkflowRunTaskResult> => {
+}): Promise<WorkflowTaskOutcome> => {
   const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache, mockOutput } = input;
   assertRunStillRunning(store, runId);
   if (store !== undefined && runId !== null) {
@@ -944,13 +993,21 @@ const executeWorkflowTask = async (input: {
       metadata: finalMetadata,
       ...(isLastTask ? { finishRunStatus: "completed" as const } : {}),
     });
-    return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, metadata: finalMetadata };
+    return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, status: "completed", metadata: finalMetadata };
   };
 
-  if (cacheHit || input.limiter === undefined) {
-    return runTaskBoundary();
+  try {
+    const result = cacheHit || input.limiter === undefined
+      ? await runTaskBoundary()
+      : await input.limiter.run(runTaskBoundary);
+    return { result };
+  } catch (error) {
+    // A user-requested run-level stop is a genuine abort: propagate so the run halts.
+    if (error instanceof WorkflowRunStoppedError) throw error;
+    // Every other failure (crash, timeout, decode, exhausted repair, escalation) is
+    // isolated into a recorded failed result so siblings and downstream tasks keep running.
+    return { result: failedTaskResult(task, cacheHit, error), failure: error };
   }
-  return input.limiter.run(runTaskBoundary);
 };
 
 const runStaticWorkflow = async (input: {
@@ -970,7 +1027,9 @@ const runStaticWorkflow = async (input: {
   }
   for (const [index, task] of input.workflow.tasks.entries()) {
     const identity = workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions);
-    tasks.push(await executeWorkflowTask({
+    // A static pipeline is sequential: a failed task must stop the downstream chain, so its
+    // captured failure is re-thrown rather than isolated.
+    const outcome = await executeWorkflowTask({
       isLastTask: index === input.workflow.tasks.length - 1,
       ordinal: index,
       task,
@@ -983,7 +1042,9 @@ const runStaticWorkflow = async (input: {
       runtimeOptions: input.runtimeOptions,
       limiter: input.limiter,
       abortSignal: input.abortSignal,
-    }));
+    });
+    if (outcome.failure !== undefined) throw outcome.failure;
+    tasks.push(outcome.result);
   }
   return tasks;
 };
@@ -1002,45 +1063,74 @@ const runDynamicWorkflow = async (input: {
   readonly abortSignal?: AbortSignal;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
   const tasks: Array<WorkflowRunTaskResult | undefined> = [];
-  const inFlightTasks: Array<Promise<WorkflowRunTaskResult>> = [];
+  const inFlightTasks: Array<Promise<WorkflowTaskOutcome>> = [];
   let ordinal = 0;
+  const collectTasks = (): ReadonlyArray<WorkflowRunTaskResult> =>
+    tasks.flatMap((task) => task === undefined ? [] : [task]);
+  const finishRun = (status: WorkflowRunTaskResultStatus): void => {
+    const runId = input.runId;
+    if (runId === null || input.store === undefined) return;
+    if (input.store.getRun(runId)?.status === "running") input.store.finishRun(runId, status);
+  };
   const runtime: WorkflowRuntime = {
-    runTask: (task) => Effect.tryPromise({
-      try: async () => {
-        const taskOrdinal = ordinal++;
-        const taskRun = executeWorkflowTask({
-          finishRunOnFailure: false,
-          ordinal: taskOrdinal,
-          task,
-          identity: workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions),
-          runId: input.runId,
-          store: input.store,
-          executeTask: input.executeTask,
-          useCache: input.useCache,
-          mockOutput: input.mockOutput,
-          runtimeOptions: input.runtimeOptions,
-          limiter: input.limiter,
-          abortSignal: input.abortSignal,
-        });
-        inFlightTasks.push(taskRun);
-        const result = await taskRun;
-        tasks[taskOrdinal] = result;
-        return result.output as never;
-      },
-      catch: (error) => toWorkflowRuntimeError(error),
+    runTask: (task) => Effect.suspend(() => {
+      const taskOrdinal = ordinal++;
+      // Record the settled result the moment the task finishes — inside the promise chain,
+      // not after an Effect await — so a failed sibling's outcome survives fan-out
+      // interruption and forked fibers are never orphaned; every started task lands in
+      // inFlightTasks and is awaited before the run reports its results.
+      const taskRun = executeWorkflowTask({
+        finishRunOnFailure: false,
+        ordinal: taskOrdinal,
+        task,
+        identity: workflowTaskIdentity(input.workflow.name, task, input.runtimeOptions),
+        runId: input.runId,
+        store: input.store,
+        executeTask: input.executeTask,
+        useCache: input.useCache,
+        mockOutput: input.mockOutput,
+        runtimeOptions: input.runtimeOptions,
+        limiter: input.limiter,
+        abortSignal: input.abortSignal,
+      }).then((outcome) => {
+        tasks[taskOrdinal] = outcome.result;
+        return outcome;
+      });
+      inFlightTasks.push(taskRun);
+      // taskRun only rejects for a run-level stop; surfacing that as a defect keeps it from
+      // being swallowed by author-level error handling (Effect.either) so a user stop still
+      // aborts the whole run. A task failure resolves and fails the E channel with a
+      // WorkflowTaskFailure marker, which authors may isolate per-arm.
+      return Effect.flatMap(Effect.promise(() => taskRun), (outcome) =>
+        outcome.failure === undefined
+          ? Effect.succeed(outcome.result.output as never)
+          : Effect.fail(new WorkflowTaskFailure(outcome.failure)));
     }),
   };
   try {
     const output = await Effect.runPromise(input.workflow.run(runtime));
     await Promise.allSettled(inFlightTasks);
-    if (input.runId !== null) input.store?.finishRun(input.runId, "completed");
-    return { output, tasks: tasks.flatMap((task) => task === undefined ? [] : [task]) };
+    finishRun("completed");
+    return { output, tasks: collectTasks() };
   } catch (error) {
-    input.limiter.cancelPending(error);
-    await Promise.allSettled(inFlightTasks);
-    if (input.runId !== null && input.store?.listRuns().find((run) => run.runId === input.runId)?.status === "running") {
-      input.store.finishRun(input.runId, error instanceof WorkflowTaskEscalatedError ? "escalated" : "failed");
+    if (error instanceof WorkflowRunStoppedError) {
+      // Run-level stop requested by the user: abort. Cancel queued work, then fail the run.
+      input.limiter.cancelPending(error);
+      await Promise.allSettled(inFlightTasks);
+      finishRun("failed");
+      throw error;
     }
+    await Promise.allSettled(inFlightTasks);
+    if (error instanceof WorkflowTaskFailure) {
+      // An unhandled task failure reached the top of the author's program. Fault isolation:
+      // the run still completes with the partial results already recorded — one task failing
+      // never flips the whole run to an abort. An escalation keeps its distinct run status.
+      finishRun(error.taskError instanceof WorkflowTaskEscalatedError ? "escalated" : "completed");
+      return { output: undefined, tasks: collectTasks() };
+    }
+    // A genuine failure of the author's own program (an explicit Effect.fail, a defect):
+    // preserve the abort so a real error is never silently swallowed.
+    finishRun("failed");
     throw error;
   }
 };

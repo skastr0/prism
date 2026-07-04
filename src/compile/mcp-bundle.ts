@@ -1016,6 +1016,20 @@ const configuredMaxRequestBytes = Number(process.env.PRISM_MCP_MAX_REQUEST_BYTES
 const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes > 0
   ? configuredMaxRequestBytes
   : 1048576;
+// Must stay well under the 255s idleTimeout below so a standalone SSE stream
+// never sits fully idle long enough for Bun to close the socket.
+const configuredSseKeepaliveMs = Number(process.env.PRISM_MCP_SSE_KEEPALIVE_MS ?? "20000");
+const sseKeepaliveIntervalMs = Number.isFinite(configuredSseKeepaliveMs) && configuredSseKeepaliveMs > 0
+  ? configuredSseKeepaliveMs
+  : 20000;
+const configuredShutdownDrainMs = Number(process.env.PRISM_MCP_SHUTDOWN_DRAIN_MS ?? "10000");
+const shutdownDrainMs = Number.isFinite(configuredShutdownDrainMs) && configuredShutdownDrainMs >= 0
+  ? configuredShutdownDrainMs
+  : 10000;
+const configuredShutdownFlushMs = Number(process.env.PRISM_MCP_SHUTDOWN_FLUSH_MS ?? "300");
+const shutdownFlushGraceMs = Number.isFinite(configuredShutdownFlushMs) && configuredShutdownFlushMs >= 0
+  ? configuredShutdownFlushMs
+  : 300;
 const sessions = new Map<string, HttpSessionState>();
 let pendingSessionBootstraps = 0;
 
@@ -1177,6 +1191,159 @@ const readJsonBody = async (request: Request): Promise<unknown> => {
 const sseDisabledForRequest = (url: URL): boolean =>
   url.searchParams.get(sseDisabledSearchParam) === "off";
 
+// SSE comment frame per the event-stream spec: a line starting with ":" is
+// ignored by EventSource clients but is still real bytes on the wire, so it
+// resets Bun's per-socket idle timer the same as any other traffic.
+const SSE_KEEPALIVE_FRAME = ":\\n\\n";
+
+// Standalone GET SSE streams (server push / notifications) are tracked here
+// so shutdown can end them explicitly instead of leaving them to abrupt
+// socket teardown.
+const activeSseStreamEnders = new Set<() => void>();
+
+/**
+ * Wraps an SSE Response with a periodic keepalive comment frame so the
+ * standalone GET notification stream never sits fully idle for
+ * sseKeepaliveIntervalMs, well inside the 255s idleTimeout Bun would
+ * otherwise silently enforce on a truly idle connection. Non-SSE responses
+ * (DELETE, disabled-SSE GET) pass through unchanged.
+ */
+const withSseKeepalive = (response: Response): Response => {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.body || !contentType.includes("text/event-stream")) return response;
+
+  const encoder = new TextEncoder();
+  const source = response.body;
+  const reader = source.getReader();
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+  let ended = false;
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+  const stopKeepalive = (): void => {
+    if (keepaliveTimer !== undefined) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = undefined;
+    }
+  };
+
+  const endStream = (): void => {
+    if (ended) return;
+    ended = true;
+    activeSseStreamEnders.delete(endStream);
+    stopKeepalive();
+    try {
+      controllerRef?.close();
+    } catch {
+      // Controller may already be closed by the pump loop or the consumer.
+    }
+    void reader.cancel().catch(() => {});
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controllerRef = controller;
+      activeSseStreamEnders.add(endStream);
+      keepaliveTimer = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(SSE_KEEPALIVE_FRAME));
+        } catch {
+          // Controller already closed; the pump loop below settles \`ended\`.
+        }
+      }, sseKeepaliveIntervalMs);
+
+      void (async () => {
+        try {
+          while (!ended) {
+            const { done, value } = await reader.read();
+            if (done || ended) break;
+            controller.enqueue(value);
+          }
+          if (!ended) {
+            ended = true;
+            activeSseStreamEnders.delete(endStream);
+            stopKeepalive();
+            controller.close();
+          }
+        } catch (error) {
+          if (!ended) {
+            ended = true;
+            activeSseStreamEnders.delete(endStream);
+            stopKeepalive();
+            controller.error(error);
+          }
+        }
+      })();
+    },
+    cancel(reason) {
+      if (ended) return;
+      ended = true;
+      activeSseStreamEnders.delete(endStream);
+      stopKeepalive();
+      void reader.cancel(reason).catch(() => {});
+    },
+  });
+
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
+};
+
+// In-flight Streamable HTTP request/response cycles racing against shutdown.
+// See raceAgainstShutdown for why this is required rather than relying on
+// WebStandardStreamableHTTPServerTransport#close().
+const inFlightShutdownWaiters = new Set<() => void>();
+
+const bestEffortJsonRpcId = (parsedBody: unknown): unknown => {
+  if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody) && "id" in parsedBody) {
+    return (parsedBody as { id?: unknown }).id ?? null;
+  }
+  return null;
+};
+
+/**
+ * Races a Streamable HTTP request/response cycle against server shutdown.
+ *
+ * WebStandardStreamableHTTPServerTransport's JSON-response mode (enabled
+ * below) resolves the HTTP response only when transport.send() delivers the
+ * final tool-call result. Its close() -- called while draining sessions on
+ * shutdown -- clears the internal stream map via a \`cleanup\` callback that,
+ * for a pending JSON-mode stream, only deletes the map entry: it never calls
+ * the stored \`resolveJson\`. Left alone, that orphans the awaited Promise and
+ * the caller's HTTP request simply hangs (until it hits its own multi-minute
+ * client-side timeout) instead of ever seeing a response. Racing the real
+ * transport promise against an explicit shutdown signal guarantees a
+ * terminal JSON-RPC error is sent instead.
+ */
+const raceAgainstShutdown = async (
+  request: Request,
+  parsedBody: unknown,
+  inner: Promise<Response>,
+): Promise<Response> => {
+  let resolveShutdown: (() => void) | undefined;
+  const shutdownResponse = new Promise<Response>((resolve) => {
+    resolveShutdown = () =>
+      resolve(
+        jsonResponse(
+          {
+            jsonrpc: "2.0",
+            id: bestEffortJsonRpcId(parsedBody),
+            error: { code: -32000, message: "Prism MCP server is shutting down" },
+          },
+          { status: 503 },
+          request,
+        ),
+      );
+    inFlightShutdownWaiters.add(resolveShutdown);
+  });
+  try {
+    return await Promise.race([inner, shutdownResponse]);
+  } finally {
+    if (resolveShutdown) inFlightShutdownWaiters.delete(resolveShutdown);
+  }
+};
+
 // Prism only routes a new HTTP session here. The SDK transport still owns
 // initialize semantics and the protocol method dispatch after routing.
 const isSdkSessionBootstrapRequest = (value: unknown): boolean =>
@@ -1214,7 +1381,7 @@ const handleSdkSessionBootstrapPost = async (
 
   try {
     await server.connect(transport);
-    const response = await transport.handleRequest(request, { parsedBody });
+    const response = await raceAgainstShutdown(request, parsedBody, transport.handleRequest(request, { parsedBody }));
     if (initializedSessionID) touchSession(initializedSessionID);
     return attachResponseHeaders(response, request);
   } finally {
@@ -1258,7 +1425,12 @@ const handlePost = async (
   }
 
   touchSession(sessionID);
-  return attachResponseHeaders(await session.transport.handleRequest(request, { parsedBody }), request);
+  const response = await raceAgainstShutdown(
+    request,
+    parsedBody,
+    session.transport.handleRequest(request, { parsedBody }),
+  );
+  return attachResponseHeaders(response, request);
 };
 
 const handleSessionRequest = async (request: Request): Promise<Response> => {
@@ -1269,7 +1441,7 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
     return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 }, request);
   }
   touchSession(sessionID);
-  return attachResponseHeaders(await session.transport.handleRequest(request), request);
+  return withSseKeepalive(attachResponseHeaders(await session.transport.handleRequest(request), request));
 };
 
 const server = Bun.serve({
@@ -1278,8 +1450,13 @@ const server = Bun.serve({
   // MCP connections sit idle between tool calls. Bun's default idleTimeout is
   // 10s, which silently closes the socket; clients that reuse the closed
   // connection (observed with Grok) then hang until their own multi-minute
-  // timeout. 255 is Bun's maximum. For idle gaps beyond 255s the client must
-  // reconnect on its own; see keepalive follow-up.
+  // timeout. 255 is Bun's maximum. A per-request JSON-mode tool call never
+  // trips this: Bun only counts idle time between distinct request/response
+  // cycles on a connection, not time spent awaiting a still-in-flight
+  // handler (confirmed empirically against Bun 1.3.14). The one connection
+  // that genuinely sits idle between byte transfers is the standalone GET
+  // SSE stream, which withSseKeepalive keeps alive with periodic comment
+  // frames well inside this window; see PRISM_MCP_SSE_KEEPALIVE_MS.
   idleTimeout: 255,
   fetch: async (request) => {
     const url = new URL(request.url);
@@ -1310,10 +1487,30 @@ const stopServer = async (): Promise<void> => {
   // still open (e.g. idle SSE streams). Avoids dropping live tool calls on
   // restart/SIGTERM.
   server.stop();
-  const drainDeadline = Date.now() + 10_000;
+
+  // Standalone SSE notification streams have no tool-call-style "let it
+  // finish" completion condition -- they're just left open for future
+  // server-initiated pushes -- so end them now instead of making clients
+  // wait out the drain window before observing a close.
+  for (const endSseStream of [...activeSseStreamEnders]) endSseStream();
+
+  const drainDeadline = Date.now() + shutdownDrainMs;
   while (activeToolCalls > 0 && Date.now() < drainDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+
+  // A tool call that outlived the graceful drain window gets an explicit
+  // terminal JSON-RPC error here instead of a silent drop: closeSession's
+  // transport.close() below clears the SDK's internal stream map without
+  // ever settling a pending JSON-mode response promise (see
+  // raceAgainstShutdown), so without this the caller's request would just
+  // hang until socket teardown -- exactly the multi-minute-timeout failure
+  // this exists to prevent.
+  for (const resolvePending of [...inFlightShutdownWaiters]) resolvePending();
+  if (shutdownFlushGraceMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, shutdownFlushGraceMs));
+  }
+
   await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
   process.exit(0);

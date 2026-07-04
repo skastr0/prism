@@ -26,6 +26,7 @@ import {
   mcpSdkStdioBundleImportPath,
   mcpSdkWebStandardHttpBundleImportPath,
   zodV4BundleImportPath,
+  udsRegistryBundleImportPath,
 } from "./runtime-deps.js";
 import {
   generatedToolNameForBinding,
@@ -983,6 +984,8 @@ const createPrismMcpServer = (enabledToolNames?: ReadonlySet<string>): McpServer
 const MCP_SDK_HTTP_RUNTIME = `// Runtime identity is never baked into bundle bytes: the daemon supervisor
 // passes host/port via environment when it spawns this server, or unix socket path for UDS.
 const udsPath = process.env.PRISM_MCP_UDS_PATH;
+const registryPluginName = process.env.PRISM_MCP_REGISTRY_PLUGIN_NAME;
+const registryBundleHash = process.env.PRISM_MCP_REGISTRY_BUNDLE_HASH;
 const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? "127.0.0.1";
 const isLoopbackBindHost = (value: string): boolean =>
   value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
@@ -1487,6 +1490,29 @@ const server = Bun.serve({
   },
 });
 
+// Register daemon in the UDS registry if plugin name and bundle hash are available
+const registerInRegistry = async (): Promise<void> => {
+  if (!registryPluginName || !registryBundleHash || !udsPath) {
+    // Registry only works with UDS mode and requires plugin/bundle identifiers
+    return;
+  }
+
+  try {
+    await registerDaemon(registryPluginName, {
+      pid: process.pid,
+      sock: udsPath,
+      bundleHash: registryBundleHash,
+      startedAt: Date.now(),
+      lastUsed: Date.now(),
+    });
+  } catch (error) {
+    // Registry write failure is not fatal; log and continue
+    console.error(\`Failed to register daemon in UDS registry: \${error instanceof Error ? error.message : String(error)}\`);
+  }
+};
+
+void registerInRegistry();
+
 const stopServer = async (): Promise<void> => {
   // Graceful drain: stop accepting new connections, let in-flight tool calls
   // finish within a bounded window, then close sessions and force-close anything
@@ -1519,6 +1545,16 @@ const stopServer = async (): Promise<void> => {
 
   await Promise.all([...sessions.keys()].map(closeSession));
   server.stop(true);
+
+  // Unregister daemon from the UDS registry if in use
+  if (registryPluginName) {
+    try {
+      await unregisterDaemon(registryPluginName);
+    } catch (error) {
+      // Registry cleanup failure is not fatal; log and continue
+      console.error(\`Failed to unregister daemon from UDS registry: \${error instanceof Error ? error.message : String(error)}\`);
+    }
+  }
 
   // Clean up UDS socket file if in use.
   if (udsPath) {
@@ -1852,6 +1888,7 @@ const renderMcpServerEntry = (options: {
     `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
     `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
+    `import { registerDaemon, unregisterDaemon } from ${JSON.stringify(udsRegistryBundleImportPath())};`,
     imports,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),

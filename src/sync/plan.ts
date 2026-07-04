@@ -196,6 +196,21 @@ const removeOrphanedRegion = (
   }
 };
 
+const legacyCodexRulesMarker = "<!-- prism:rules source=";
+const legacyCodexRulesFirstLine = /^<!-- prism:rules source=(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s>]+) -->$/;
+
+const canResetUnmanagedFile = (content: string, signature: string): boolean => {
+  if (!content.includes(signature)) return false;
+  if (signature !== legacyCodexRulesMarker) return true;
+
+  const firstLine = content
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .split(/\r?\n/, 1)[0]
+    ?.trimEnd();
+  return firstLine !== undefined && legacyCodexRulesFirstLine.test(firstLine);
+};
+
 const planOwnedFile = async (options: {
   readonly desired: DesiredFile;
   readonly snapshotEntry: SnapshotEntry | undefined;
@@ -296,7 +311,7 @@ const planSharedFileRegions = async (options: {
     && options.desired.some((region) =>
       region.kind === "marker"
       && region.resetUnmanagedFileIfContains !== undefined
-      && original.includes(region.resetUnmanagedFileIfContains)
+      && canResetUnmanagedFile(original, region.resetUnmanagedFileIfContains)
     );
 
   let content = resetUnmanagedFile ? "" : original;

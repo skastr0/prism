@@ -135,8 +135,38 @@ const WORKFLOW_RUNTIME_BUN_PATTERNS = [
   { name: "bun: require", pattern: /require\(\s*["']bun:[^"']+["']\s*\)/u },
   { name: "Bun global", pattern: /\bBun\./u },
   { name: "globalThis.Bun", pattern: /\bglobalThis\.Bun\b/u },
+  {
+    name: "casted globalThis.Bun",
+    pattern: /\(\s*globalThis\s+as\b[\s\S]{0,200}?\)\s*\.Bun\b/u,
+  },
   { name: "Bun typeof guard", pattern: /\btypeof\s+Bun\b/u },
 ] as const;
+
+test("workflow engine Bun-only API gate catches casted globalThis seam access", () => {
+  const blockedSamples = [
+    { name: "direct", source: "globalThis.Bun" },
+    { name: "single cast", source: "(globalThis as { Bun?: unknown }).Bun" },
+    {
+      name: "double cast",
+      source: "(globalThis as unknown as { Bun?: unknown }).Bun",
+    },
+    {
+      name: "multiline cast",
+      source: `(
+        globalThis as {
+          Bun?: unknown;
+        }
+      ).Bun`,
+    },
+  ] as const;
+
+  for (const sample of blockedSamples) {
+    const matched = WORKFLOW_RUNTIME_BUN_PATTERNS.filter((gate) =>
+      gate.pattern.test(sample.source),
+    ).map((gate) => gate.name);
+    expect(matched, sample.name).not.toEqual([]);
+  }
+});
 
 test("workflow engine Bun-only APIs stay behind the runtime seam", async () => {
   const violations: string[] = [];

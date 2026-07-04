@@ -227,9 +227,17 @@ const validateOwnedSnapshotEntry = async (
 
   // Grok's owned .mcp.json bundles a dynamic host:port the owner daemon can
   // rebind on every restart; normalize it out of the comparison so a port
-  // change alone is never reported as drift (PQ-167).
-  const ownedHash = manifest.harness === "grok" ? computeMcpHttpConfigContentHash : computeContentHash;
-  if (ownedHash(content) === entry.contentHash) return [];
+  // change alone is never reported as drift (PQ-167). A snapshot entry
+  // written before this normalization existed still holds a raw (unnormalized)
+  // hash, so accept either domain — otherwise every pre-existing grok
+  // .mcp.json, even a byte-identical one, false-flags as drifted until its
+  // next refresh re-snapshots it.
+  if (
+    computeContentHash(content) === entry.contentHash ||
+    (manifest.harness === "grok" && computeMcpHttpConfigContentHash(content) === entry.contentHash)
+  ) {
+    return [];
+  }
   return [finding({
     severity: "warning",
     family: "snapshot.disk-drift",

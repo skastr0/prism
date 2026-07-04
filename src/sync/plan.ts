@@ -249,8 +249,14 @@ const planOwnedFile = async (options: {
     // plain "source-changed" (Prism's own routine update) compares against
     // the snapshot in the same normalized domain the entry was stored in, so
     // a port-only difference (e.g. a crash between a write and its snapshot
-    // commit) is never mistaken for external tampering (PQ-167).
-    const drifted = snapshotEntry.contentHash !== ownedFileContentHash(harness, diskContent);
+    // commit) is never mistaken for external tampering (PQ-167). A snapshot
+    // entry written before this normalization existed still holds a raw
+    // (unnormalized) hash, so accept either domain — otherwise a port-only
+    // change on a legacy grok snapshot spuriously reads as external drift and
+    // takes a needless backup.
+    const drifted =
+      diskHash !== snapshotEntry.contentHash &&
+      ownedFileContentHash(harness, diskContent) !== snapshotEntry.contentHash;
     return [{
       kind: "repair",
       targetPath: desired.targetPath,

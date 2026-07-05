@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-core",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "description": "Core Prism contracts, refs, stable JSON, and manifest codecs for Prism runtimes and workflow tooling.",
   "license": "MIT",

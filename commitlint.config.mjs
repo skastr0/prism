@@ -12,9 +12,17 @@
  * The newest pre-gate non-conventional commit is f25a9d3; every commit after it
  * is conventional, and CI never lints pre-tip history, so older commits are
  * permanent, documented exceptions; see docs/release-train.md.
+ *
+ * config-conventional's defaultIgnores only skips capital-M "Merge branch ..."
+ * / "Merge pull request ..." messages (git's own auto-merge wording). This
+ * repo's release train uses lowercase --no-ff merges of the form
+ * "merge: stab/foo (wave N)", which defaultIgnores does not match and which
+ * is not a real conventional-commit type. Ignore only those merge commits;
+ * every other type must still pass the config-conventional type-enum.
  */
 export default {
   extends: ["@commitlint/config-conventional"],
+  ignores: [(message) => /^merge(\(|:| )/i.test(message)],
   rules: {
     // Commit bodies here quote long changelog-style sentences and Co-Authored-By
     // trailers; wrapping them is not worth failing an otherwise-valid commit.

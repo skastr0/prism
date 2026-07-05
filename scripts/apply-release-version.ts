@@ -6,7 +6,7 @@
  * Scope of the rewrite:
  *   - the workspace root package.json (the version scripts/compile.ts stamps
  *     into the built binary as APP_VERSION), and
- *   - every workspace package (packages/prism-core + packages/npm/*), and
+ *   - every workspace package (packages/prism-sdk + packages/npm/*), and
  *   - any @skastr0/prism* dependency pin that is exact-equal to the current
  *     version. The umbrella (@skastr0/prism) pins its platform packages by
  *     exact version in optionalDependencies; those pins must move with the
@@ -14,9 +14,10 @@
  *     than the previous release. Range pins (e.g. workspace:* or ^x) are left
  *     untouched because they do not carry a frozen release version.
  *
- * The bump is *derived* by svu in .github/workflows/release.yml; this script
- * only *applies* a decided version, keeping derivation and file rewrite
- * separable and independently testable.
+ * The bump is *derived* by scripts/derive-version.ts in
+ * .github/workflows/release.yml; this script only *applies* a decided
+ * version, keeping derivation and file rewrite separable and independently
+ * testable.
  *
  * Usage:
  *   bun scripts/apply-release-version.ts 0.3.0
@@ -150,7 +151,7 @@ const runSelfTest = (): void => {
         "@skastr0/prism-linux-x64": "0.2.2",
       },
       dependencies: {
-        "@skastr0/prism-core": "workspace:*",
+        "@skastr0/prism-sdk": "workspace:*",
         effect: "^3.21.1",
       },
     },
@@ -161,7 +162,7 @@ const runSelfTest = (): void => {
   assert("exact platform pin bumped", opt["@skastr0/prism-darwin-arm64"] === "0.3.0");
   assert("exact platform pin bumped 2", opt["@skastr0/prism-linux-x64"] === "0.3.0");
   const deps = umbrella.pkg.dependencies as Record<string, string>;
-  assert("workspace:* pin untouched", deps["@skastr0/prism-core"] === "workspace:*");
+  assert("workspace:* pin untouched", deps["@skastr0/prism-sdk"] === "workspace:*");
   assert("non-prism dep untouched", deps["effect"] === "^3.21.1");
 
   const noop = applyVersion({ version: "0.3.0" }, "0.3.0", "0.3.0");

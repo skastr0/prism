@@ -31,16 +31,20 @@ Three workflows, one direction, no loops:
   six packages in dependency order. **Unchanged by RT-001**; its approval gate
   is deliberately kept.
 
-## Version derivation — svu
+## Version derivation — scripts/derive-version.ts
 
-The train derives the bump with [`svu`](https://github.com/caarlos0/svu)
-(`v3.4.1`, pinned in `release.yml`), not changesets or git-cliff:
+The train derives the bump with an in-repo script, `scripts/derive-version.ts`
+(pure Bun + git, zero external dependencies), not svu, changesets, or
+git-cliff:
 
-- **No changelog file.** svu computes a version from git history and prints it —
-  nothing else. changesets requires per-PR changeset files (a changelog-file
-  flow this repo does not use); git-cliff is fundamentally a changelog generator
-  whose version output is a byproduct. svu is the one tool whose entire job is
-  the derivation this train needs.
+- **No changelog file.** The script computes a version from git history and
+  prints it — nothing else. changesets requires per-PR changeset files (a
+  changelog-file flow this repo does not use); git-cliff is fundamentally a
+  changelog generator whose version output is a byproduct. svu was the one
+  external tool whose entire job was this derivation, but pulling in a 1k-star
+  Go binary (plus a whole Go toolchain in CI) for ~30 lines of semver logic was
+  not worth the dependency; the logic is now in-repo and unit-tested
+  (`scripts/derive-version.test.ts`).
 - **`--v0`.** While the project is on `0.x`, a breaking change bumps the *minor*
   (`0.Y.0`) instead of auto-cutting `v1.0.0`. Without this flag a stray `feat!:`
   or `BREAKING CHANGE:` footer during stabilization would cut and publish
@@ -50,12 +54,14 @@ The derivation is a pure read of git history. To see what the train *would* cut
 right now, from a full clone:
 
 ```
-go install github.com/caarlos0/svu/v3@v3.4.1
-svu current      # last tag, e.g. v0.2.2
-svu next --v0    # next version from conventional commits, e.g. v0.3.0
+bun scripts/derive-version.ts current    # last tag, e.g. v0.2.2
+bun scripts/derive-version.ts next --v0  # next version from conventional commits, e.g. v0.3.0
 ```
 
-If `svu next` equals `svu current`, the range holds only non-releasable commits
+`bun scripts/derive-version.ts --self-test` runs the fixture table (commit
+list -> expected bump) that backs the bump rules.
+
+If `next` equals `current`, the range holds only non-releasable commits
 (docs/chore/test/refactor) and `release.yml` skips — no empty release.
 
 ## The version bump
@@ -65,7 +71,7 @@ lockstep across:
 
 - the workspace root `package.json` (the version `scripts/compile.ts` stamps
   into the binary as `APP_VERSION`),
-- every workspace package (`packages/prism-core`, `packages/npm/*`), and
+- every workspace package (`packages/prism-sdk`, `packages/npm/*`), and
 - the umbrella `@skastr0/prism` `optionalDependencies` pins on the four platform
   packages — these are exact-version pins and must move with the release so the
   umbrella resolves the freshly cut platform builds.
@@ -79,7 +85,7 @@ Range pins (`workspace:*`, `^x`) are left alone. Run
   with `chore(release):`. The train pushes with a PAT (see below), and PAT
   pushes *do* re-trigger workflows, so this guard is load-bearing, not
   decorative.
-- **No empty release.** The `svu current == svu next` check skips pushes that
+- **No empty release.** The `current == next` check skips pushes that
   carry no releasable commit.
 
 ## Required secret and branch permission

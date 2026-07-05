@@ -7,5 +7,5 @@ export {
   emptySnapshotManifest,
   encodeSnapshotManifest,
   migrateSnapshotManifest,
-} from "@skastr0/prism-core/snapshot";
-export type { SnapshotEntry, SnapshotManifest } from "@skastr0/prism-core/snapshot";
+} from "@skastr0/prism-sdk/snapshot";
+export type { SnapshotEntry, SnapshotManifest } from "@skastr0/prism-sdk/snapshot";

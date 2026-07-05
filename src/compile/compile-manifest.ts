@@ -21,9 +21,9 @@ import {
   type CompileManifestToolspaceTool,
   type HarnessId,
   type HarnessScope,
-} from "@skastr0/prism-core/compile-manifest";
-import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
-import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
+} from "@skastr0/prism-sdk/compile-manifest";
+import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-sdk/refs";
+import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
 import { ensureDir, exists, readFile, writeFile } from "../fs.js";
 import { projectCompileManifestPath } from "../project-key.js";
 import { withSnapshotLock } from "../state/lock.js";
@@ -31,7 +31,7 @@ import type { AgentCacheDescriptor, CacheInputFile } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
 import { collectPluginRegistries, type PluginRegistry } from "./registry.js";
 
-export * from "@skastr0/prism-core/compile-manifest";
+export * from "@skastr0/prism-sdk/compile-manifest";
 
 /**
  * The per-project compile manifest partition

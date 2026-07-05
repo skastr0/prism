@@ -62,7 +62,7 @@ const FusionPlan = Schema.Struct({
       rank: Schema.Number,
       title: Schema.String,
       outcome: Schema.String,
-      owner: Schema.Literal("prism-core", "prism-skill", "orbit-compiler", "docs-emit"),
+      owner: Schema.Literal("prism-sdk", "prism-skill", "orbit-compiler", "docs-emit"),
       milestones: Schema.Array(Schema.String),
     }),
   ),

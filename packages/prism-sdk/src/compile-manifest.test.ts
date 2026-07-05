@@ -11,7 +11,7 @@ import {
   getCompileManifestAgentForTarget,
   verifyAgentManifestHash,
   verifyCompileManifestHash,
-} from "@skastr0/prism-core/compile-manifest";
+} from "@skastr0/prism-sdk/compile-manifest";
 
 const withAgentHash = (agent: Omit<CompileManifestAgent, "manifestHash">): CompileManifestAgent => {
   const hashed = { ...agent, manifestHash: "" };

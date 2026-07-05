@@ -60,7 +60,7 @@ const DEFAULT_POLL_INTERVAL_MS = 50;
  * `prismHome` is threaded explicitly (never read from the environment
  * here): the CLI edge resolves `PRISM_HOME` once via `resolvePrismHome()`
  * and passes the result down. An omitted value falls back to the same
- * `~/.prism` default `resolvePrismHome()` uses when unset -- `prism-core`
+ * `~/.prism` default `resolvePrismHome()` uses when unset -- `prism-sdk`
  * cannot import that resolver itself (no dependency on the root `src/`
  * tree).
  */

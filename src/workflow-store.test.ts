@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
-import { stableJsonHash } from "@skastr0/prism-core/stable-json";
+import { stableJsonHash } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";

@@ -4,7 +4,7 @@ import {
   emptySnapshotManifest,
   encodeSnapshotManifest,
   migrateSnapshotManifest,
-} from "@skastr0/prism-core/snapshot";
+} from "@skastr0/prism-sdk/snapshot";
 
 const fixtureManifest = () =>
   emptySnapshotManifest({ harness: "codex-cli", root: "/Users/alice/.codex" });

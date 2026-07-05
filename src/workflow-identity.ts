@@ -1,4 +1,4 @@
-import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-core/stable-json";
+import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
 import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowRuntimeOptions } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 

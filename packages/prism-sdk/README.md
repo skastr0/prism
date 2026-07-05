@@ -1,12 +1,12 @@
-# @skastr0/prism-core
+# @skastr0/prism-sdk
 
 Core Prism contracts and codecs shared by Prism runtimes and workflow tooling.
 
 This package publishes compiled ESM JavaScript plus TypeScript declarations for these public export paths:
 
-- `@skastr0/prism-core/compile-manifest`
-- `@skastr0/prism-core/refs`
-- `@skastr0/prism-core/snapshot`
-- `@skastr0/prism-core/stable-json`
+- `@skastr0/prism-sdk/compile-manifest`
+- `@skastr0/prism-sdk/refs`
+- `@skastr0/prism-sdk/snapshot`
+- `@skastr0/prism-sdk/stable-json`
 
 It has no Prism CLI dependency. Consumers should import the explicit subpath they need.

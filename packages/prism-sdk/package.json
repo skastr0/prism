@@ -1,5 +1,5 @@
 {
-  "name": "@skastr0/prism-core",
+  "name": "@skastr0/prism-sdk",
   "version": "0.3.0",
   "type": "module",
   "description": "Core Prism contracts, refs, stable JSON, and manifest codecs for Prism runtimes and workflow tooling.",
@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/skastr0/prism.git",
-    "directory": "packages/prism-core"
+    "directory": "packages/prism-sdk"
   },
   "homepage": "https://github.com/skastr0/prism#readme",
   "bugs": {

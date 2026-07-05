@@ -42,6 +42,20 @@ const writeText = async (path: string, content: string): Promise<void> => {
   await writeFile(path, content);
 };
 
+/**
+ * Base env for a shim subprocess, with the globally-sandboxed `PRISM_HOME`
+ * (set once for the whole `bun test` run by `scripts/test-preload.ts`)
+ * stripped out. `shim-main.ts` resolves `PRISM_HOME` (falling back to
+ * `~/.prism` under the caller's overridden `HOME` only when `PRISM_HOME` is
+ * unset) and threads it to `pluginBundlePath`/`udsPathFor` -- an inherited
+ * `PRISM_HOME` would win over the test's own short `home` override and send
+ * the shim looking for the fixture bundle under the wrong sandbox path.
+ */
+const shimSubprocessEnv = (home: string): Record<string, string> => {
+  const { PRISM_HOME: _inheritedPrismHome, ...rest } = process.env as Record<string, string>;
+  return { ...rest, HOME: home };
+};
+
 const effectImportPath = join(process.cwd(), "node_modules", "effect", "dist", "esm", "index.js").replace(
   /\\/g,
   "/",
@@ -150,8 +164,7 @@ test("shim aggregates tools/list, dispatches tools/call, and isolates a dead plu
     command: "bun",
     args: [shimMainPath],
     env: {
-      ...(process.env as Record<string, string>),
-      HOME: homeRoot,
+      ...shimSubprocessEnv(homeRoot),
       PRISM_SHIM_PLUGINS: `${daemonA.pluginName},${daemonB.pluginName}`,
       PRISM_SHIM_DAEMON_TIMEOUT_MS: "2000",
     },
@@ -212,8 +225,7 @@ test("prism mcp shim CLI subcommand wires the same aggregating shim", async () =
     command: process.execPath,
     args: ["run", cliPath, "mcp", "shim"],
     env: {
-      ...(process.env as Record<string, string>),
-      HOME: homeRoot,
+      ...shimSubprocessEnv(homeRoot),
       PRISM_SHIM_PLUGINS: daemon.pluginName,
       PRISM_SHIM_DAEMON_TIMEOUT_MS: "2000",
     },

@@ -179,11 +179,22 @@ const makeShimClient = (
   options: { readonly spawnTimeoutMs: number; readonly idleTtlMs: number },
 ): ShimClient => {
   const shimMainPath = join(process.cwd(), "src", "mcp", "shim-main.ts");
+  // shim-main.ts resolves `PRISM_HOME` (falling back to `~/.prism` under
+  // the overridden `HOME` below only when `PRISM_HOME` is unset) and
+  // threads it all the way to `pluginBundlePath`/`udsPathFor` -- so the
+  // globally-sandboxed `PRISM_HOME` this whole test run inherits from
+  // `scripts/test-preload.ts` must NOT leak into this subprocess, or the
+  // shim looks for the fixture bundle under the wrong (and much longer)
+  // sandbox path instead of this test's own short `homeRoot`.
+  const { PRISM_HOME: _inheritedPrismHome, ...envWithoutInheritedPrismHome } = process.env as Record<
+    string,
+    string
+  >;
   const transport = new StdioClientTransport({
     command: "bun",
     args: [shimMainPath],
     env: {
-      ...(process.env as Record<string, string>),
+      ...envWithoutInheritedPrismHome,
       HOME: homeRoot,
       PRISM_SHIM_PLUGINS: plugin,
       PRISM_SHIM_DAEMON_TIMEOUT_MS: "5000",

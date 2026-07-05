@@ -304,6 +304,15 @@ export type ResolveOrSpawnFn = (plugin: string) => Promise<RegistryEntry>;
 
 export interface ShimAggregatorOptions {
   readonly plugins: ReadonlyArray<string>;
+  /**
+   * Prism home directory, threaded from the process entrypoint (see
+   * `src/mcp/shim-main.ts`, which resolves `PRISM_HOME` once via
+   * `resolvePrismHome()`). Forwarded to the default `resolveOrSpawn` so a
+   * `PRISM_HOME` override locates the same bundle/socket path `prism
+   * refresh` wrote, instead of always falling back to `~/.prism`. Ignored
+   * when `resolveOrSpawn` is supplied directly.
+   */
+  readonly prismHome?: string;
   readonly daemonTimeoutMs?: number;
   readonly spawnTimeoutMs?: number;
   readonly getDaemon?: GetDaemonFn;
@@ -347,7 +356,12 @@ export class ShimAggregator {
     this.resolveOrSpawn =
       options.resolveOrSpawn ??
       ((plugin: string) =>
-        resolveOrSpawnDaemon({ plugin, getDaemon: this.getDaemon, spawnTimeoutMs: this.spawnTimeoutMs }));
+        resolveOrSpawnDaemon({
+          plugin,
+          prismHome: options.prismHome,
+          getDaemon: this.getDaemon,
+          spawnTimeoutMs: this.spawnTimeoutMs,
+        }));
   }
 
   /**
@@ -495,6 +509,8 @@ export const createShimServer = (aggregator: ShimAggregator): Server => {
 
 export interface RunShimOptions {
   readonly plugins: ReadonlyArray<string>;
+  /** Prism home directory, threaded from the process entrypoint. See `ShimAggregatorOptions.prismHome`. */
+  readonly prismHome?: string;
   readonly daemonTimeoutMs?: number;
   readonly spawnTimeoutMs?: number;
   readonly getDaemon?: GetDaemonFn;

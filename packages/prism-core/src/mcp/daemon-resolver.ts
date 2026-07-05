@@ -52,19 +52,28 @@ export const DEFAULT_SPAWN_TIMEOUT_MS = 15_000;
 const DEFAULT_POLL_INTERVAL_MS = 50;
 
 /**
- * `~/.prism/runtime/mcp/<plugin>` -- the per-plugin runtime directory that
- * owns this plugin's registry file, socket file(s), and compiled bundle.
- * Derived from `udsPathFor` (any hash value yields the same parent
+ * `<prismHome>/runtime/mcp/<plugin>` -- the per-plugin runtime directory
+ * that owns this plugin's registry file, socket file(s), and compiled
+ * bundle. Derived from `udsPathFor` (any hash value yields the same parent
  * directory) rather than re-deriving the layout independently.
+ *
+ * `prismHome` is threaded explicitly (never read from the environment
+ * here): the CLI edge resolves `PRISM_HOME` once via `resolvePrismHome()`
+ * and passes the result down. An omitted value falls back to the same
+ * `~/.prism` default `resolvePrismHome()` uses when unset -- `prism-core`
+ * cannot import that resolver itself (no dependency on the root `src/`
+ * tree).
  */
-export const pluginRuntimeDir = (plugin: string): string => dirname(udsPathForDefault(plugin, ""));
+export const pluginRuntimeDir = (plugin: string, prismHome?: string): string =>
+  dirname(udsPathForDefault(plugin, "", prismHome));
 
 /**
- * `~/.prism/runtime/mcp/<plugin>/server.mjs` -- the canonical compiled
+ * `<prismHome>/runtime/mcp/<plugin>/server.mjs` -- the canonical compiled
  * bundle a `prism refresh` run produces. This module only ever reads it; it
  * never writes or rebuilds it.
  */
-export const pluginBundlePath = (plugin: string): string => join(pluginRuntimeDir(plugin), "server.mjs");
+export const pluginBundlePath = (plugin: string, prismHome?: string): string =>
+  join(pluginRuntimeDir(plugin, prismHome), "server.mjs");
 
 const sha256Hex = (content: Buffer | string): string => createHash("sha256").update(content).digest("hex");
 
@@ -111,6 +120,13 @@ const defaultSpawnDaemon: SpawnDaemonFn = ({ plugin, bundlePath, udsPath, bundle
 
 export interface ResolveOrSpawnOptions {
   readonly plugin: string;
+  /**
+   * Prism home directory, threaded from the CLI edge (`resolvePrismHome()`).
+   * Only consulted to build the *default* `bundlePathFor`/`udsPathFor`; a
+   * caller that supplies either override directly takes over that
+   * resolution entirely and this is ignored for that one.
+   */
+  readonly prismHome?: string;
   readonly spawnTimeoutMs?: number;
   readonly pollIntervalMs?: number;
   readonly getDaemon?: GetDaemonFn;
@@ -196,8 +212,10 @@ export const resolveOrSpawnDaemon = async (options: ResolveOrSpawnOptions): Prom
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const getDaemon = options.getDaemon ?? getDaemonDefault;
   const probeSocketLiveness = options.probeSocketLiveness ?? probeSocketLivenessDefault;
-  const bundlePathFor = options.bundlePathFor ?? pluginBundlePath;
-  const buildUdsPath = options.udsPathFor ?? udsPathForDefault;
+  const bundlePathFor =
+    options.bundlePathFor ?? ((plugin: string) => pluginBundlePath(plugin, options.prismHome));
+  const buildUdsPath =
+    options.udsPathFor ?? ((plugin: string, bundleHash: string) => udsPathForDefault(plugin, bundleHash, options.prismHome));
   const hashBundle = options.hashBundle ?? defaultHashBundle;
   const spawnDaemon = options.spawnDaemon ?? defaultSpawnDaemon;
 

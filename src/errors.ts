@@ -347,12 +347,25 @@ export interface PrismCauseDescription {
   readonly path?: string;
 }
 
+const nestedErrorLine = (error: unknown): string =>
+  error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
 const describeDefect = (defect: unknown): PrismCauseDescription => {
   if (isPrismError(defect)) return describePrismError(defect);
   const hint =
     typeof (defect as { hint?: unknown })?.hint === "string"
       ? (defect as { hint: string }).hint
       : undefined;
+  // AggregateError (e.g. Bun.build rejecting with an unresolvable-import
+  // failure) carries the actually-useful diagnostics in `.errors`, not
+  // `.message` — surface each one instead of silently dropping them.
+  if (defect instanceof AggregateError) {
+    return {
+      headline: `${defect.name}: ${defect.message || "multiple errors"}`,
+      detail: defect.errors.map(nestedErrorLine),
+      ...(hint ? { hint } : {}),
+    };
+  }
   if (defect instanceof Error) {
     return {
       headline: `${defect.name}: ${defect.message}`,

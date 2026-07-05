@@ -5126,6 +5126,71 @@ test("compilePluginForTarget renders Claude MCP config as HTTP", async () => {
   ).toBe(true);
 });
 
+test("compilePluginForTarget with mcpTransport stdio-shim never spawns the legacy TCP daemon", async () => {
+  // No pre-served daemon, no static runtime.mcp port configured: before the
+  // fix, `assertHttpMcpLifecycleGate`'s default mode="serve" unconditionally
+  // called `serveMcp` regardless of transport, spawning an orphaned HTTP
+  // daemon nobody ever references under stdio-shim (the shim resolves its
+  // own UDS daemon instead). `serveMcp` records its liveness by writing
+  // `runtime.json` next to the compiled bundle -- that file's absence is
+  // the deterministic signal no HTTP daemon lifecycle ever ran.
+  const { pluginRoot, hermesRoot: claudeRoot } = await createHermesHttpToolPlugin({
+    target: "claude-code",
+    pluginName: "claude-shim-demo",
+    omitPort: true,
+  });
+  const runtimeMetadataPath = join(
+    testPrismHome(),
+    "runtime",
+    "mcp",
+    "claude-shim-demo",
+    "runtime.json",
+  );
+  expect(await pathExists(runtimeMetadataPath)).toBe(false);
+
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "claude-code",
+      scope: "global",
+      root: claudeRoot,
+      dryRun: false,
+      mcpTransport: "stdio-shim",
+    }),
+  );
+
+  expect(result.outputRoot).toBe(claudeRoot);
+  expect(result.failures).toEqual([]);
+  expect(result.blocked).toEqual([]);
+
+  // The compiled bundle itself still gets built/written (the shim
+  // resolve-or-spawns it over UDS); only the HTTP daemon lifecycle is
+  // skipped.
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "claude-shim-demo"))).toBe(true);
+  expect(await pathExists(runtimeMetadataPath)).toBe(false);
+
+  const config = JSON.parse(
+    await readFile(
+      join(claudeRoot, "skills", "prism-generated-claude-shim-demo", ".mcp.json"),
+      "utf8",
+    ),
+  ) as {
+    mcpServers?: Record<
+      string,
+      { command?: string; args?: string[]; type?: string; env?: Record<string, string> }
+    >;
+  };
+  expect(config.mcpServers?.["prism-mcp-shim"]).toEqual({
+    command: "prism",
+    args: ["mcp", "shim"],
+    env: {
+      PRISM_SHIM_PLUGINS: "claude-shim-demo",
+      PRISM_SHIM_EXPOSURE: "prism-generated-claude-shim-demo:claude-code",
+    },
+  });
+});
+
 test("compilePluginForTarget verifies a running Hermes HTTP MCP daemon before config write", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({

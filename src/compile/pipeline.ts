@@ -646,6 +646,7 @@ const resolveCompileMcpRuntimePort = (options: {
   readonly registry: PluginRegistry;
   readonly targetId: HarnessId;
   readonly prismHome: string;
+  readonly mcpTransport: McpHarnessTransportMode;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
 }): Effect.Effect<number | undefined, CompileError> => {
@@ -654,7 +655,15 @@ const resolveCompileMcpRuntimePort = (options: {
     agents: options.agents,
     artifacts: options.artifacts,
   });
-  if (bindings.length === 0 || !targetHasGeneratedMcpConfig(options.targetId)) {
+  // stdio-shim targets never get an HTTP url artifact -- the harness spawns
+  // `prism mcp shim`, which resolves-or-spawns its own UDS daemon per
+  // plugin. Resolving/serving an HTTP port here would be dead work at best
+  // and an orphaned, never-referenced TCP daemon at worst.
+  if (
+    bindings.length === 0 ||
+    !targetHasGeneratedMcpConfig(options.targetId) ||
+    options.mcpTransport === "stdio-shim"
+  ) {
     return Effect.succeed(undefined);
   }
   const runtime = resolveMcpRuntime(options.registry, options.targetId);
@@ -732,6 +741,7 @@ const assertHttpMcpLifecycleGate = (options: {
   readonly targetId: HarnessId;
   readonly outputRoot: string;
   readonly prismHome: string;
+  readonly mcpTransport: McpHarnessTransportMode;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
   readonly expectedServerSha256?: string;
@@ -741,10 +751,15 @@ const assertHttpMcpLifecycleGate = (options: {
     agents: options.agents,
     artifacts: options.artifacts,
   });
+  // stdio-shim never writes an HTTP url artifact, so there is nothing here
+  // for the legacy TCP daemon lifecycle to gate: asserting it "serve" this
+  // target would spawn (and never reference) an orphaned HTTP daemon
+  // alongside the UDS daemon the shim itself resolves-or-spawns.
   if (
     options.compileOptions.dryRun ||
     bindings.length === 0 ||
-    !targetHasGeneratedMcpConfig(options.targetId)
+    !targetHasGeneratedMcpConfig(options.targetId) ||
+    options.mcpTransport === "stdio-shim"
   ) {
     return Effect.void;
   }
@@ -1265,6 +1280,9 @@ const prepareLoweringInputs = (
       orbits,
     });
     const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
+    // Resolved before the HTTP-only steps below so they can skip entirely
+    // for stdio-shim targets (which never get an HTTP url artifact).
+    const mcpTransport = resolveMcpHarnessTransportMode(context.targetId, options.mcpTransport);
     // Build (and write) the canonical union bundle BEFORE any daemon
     // lifecycle interaction so `prism mcp serve` reads compiled bytes.
     const mcpServer = yield* prepareUnionMcpServer({
@@ -1279,10 +1297,10 @@ const prepareLoweringInputs = (
       registry,
       targetId: context.targetId,
       prismHome: context.prismHome,
+      mcpTransport,
       agents: composedForLowering,
       artifacts,
     });
-    const mcpTransport = resolveMcpHarnessTransportMode(context.targetId, options.mcpTransport);
     return {
       context,
       registry,
@@ -1382,6 +1400,7 @@ export const compilePluginForTarget = (
       targetId: context.targetId,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
+      mcpTransport,
       agents: composedForLowering,
       artifacts,
       ...(mcpServer ? { expectedServerSha256: mcpServer.serverSha256 } : {}),

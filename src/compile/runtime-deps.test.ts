@@ -9,6 +9,8 @@ import {
   mcpSdkWebStandardHttpBundleImportPath,
   opencodePluginBundleImportPath,
   typescriptBundleImportPath,
+  udsRegistryBundleImportPath,
+  udsSingletonBundleImportPath,
   zodV4BundleImportPath,
 } from "./runtime-deps.js";
 
@@ -119,6 +121,25 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     `{"name":"zod","type":"module"}\n`,
   );
   await writeText(join(root, "node_modules", "zod", "v4", "index.js"), "\n");
+  await writeText(
+    join(root, "node_modules", "@skastr0", "prism-core", "package.json"),
+    `${JSON.stringify({
+      name: "@skastr0/prism-core",
+      type: "module",
+      exports: {
+        "./mcp/uds-registry": { import: "./dist/mcp/uds-registry.js" },
+        "./mcp/uds-singleton": { import: "./dist/mcp/uds-singleton.js" },
+      },
+    })}\n`,
+  );
+  await writeText(
+    join(root, "node_modules", "@skastr0", "prism-core", "dist", "mcp", "uds-registry.js"),
+    "\n",
+  );
+  await writeText(
+    join(root, "node_modules", "@skastr0", "prism-core", "dist", "mcp", "uds-singleton.js"),
+    "\n",
+  );
 
   await withRuntimeDepsRoot(root, async () => {
     const resolvedRoot = root;
@@ -152,6 +173,17 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     );
     expect(zodV4BundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "zod", "v4", "index.js").replace(/\\/g, "/"),
+    );
+    // uds-registry/uds-singleton are internal prism-core modules, resolved
+    // as package-specifier subpath exports rather than a relative
+    // `import.meta.resolve` walk (see runtime-deps.ts for why: a relative
+    // walk from a compiled standalone binary lands on a nonexistent virtual
+    // path instead of the real prism-core source).
+    expect(udsRegistryBundleImportPath()).toBe(
+      join(resolvedRoot, "node_modules", "@skastr0", "prism-core", "dist", "mcp", "uds-registry.js").replace(/\\/g, "/"),
+    );
+    expect(udsSingletonBundleImportPath()).toBe(
+      join(resolvedRoot, "node_modules", "@skastr0", "prism-core", "dist", "mcp", "uds-singleton.js").replace(/\\/g, "/"),
     );
   });
 });

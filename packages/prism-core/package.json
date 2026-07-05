@@ -44,6 +44,14 @@
     "./mcp/shim": {
       "types": "./dist/mcp/shim.d.ts",
       "import": "./dist/mcp/shim.js"
+    },
+    "./mcp/uds-registry": {
+      "types": "./dist/mcp/uds-registry.d.ts",
+      "import": "./dist/mcp/uds-registry.js"
+    },
+    "./mcp/uds-singleton": {
+      "types": "./dist/mcp/uds-singleton.d.ts",
+      "import": "./dist/mcp/uds-singleton.js"
     }
   },
   "files": [

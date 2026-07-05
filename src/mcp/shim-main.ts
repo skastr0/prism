@@ -2,15 +2,15 @@
 /**
  * Bin entry for the aggregating MCP shim (see `@skastr0/prism-core/mcp/shim`
  * for the actual protocol/aggregation logic). This is the process a harness
- * spawns directly over stdio; it reads its plugin set, daemon-request
+ * spawns directly over stdio (via the `prism mcp shim` CLI subcommand, and
+ * the `command`/`args` a `stdio-shim`-transport lowerer writes into the
+ * harness's generated MCP config); it reads its plugin set, daemon-request
  * timeout, and resolve-or-spawn timeout from the environment and hands off
  * to `runShim`.
- *
- * Not yet wired into any harness lowerer or CLI subcommand — this file is
- * the process entrypoint a later wave points harness MCP configs at.
  */
 
 import { runShim } from "@skastr0/prism-core/mcp/shim";
+import { resolvePrismHome } from "../prism-home.js";
 
 const parsePluginList = (raw: string | undefined): ReadonlyArray<string> =>
   (raw ?? "")
@@ -45,6 +45,10 @@ if (plugins.length === 0) {
 
 await runShim({
   plugins,
+  // Resolved once, here, at the process entrypoint (the CLI edge for this
+  // process) -- never re-read from the environment inside prism-core, which
+  // has no dependency on this resolver (see `ShimAggregatorOptions.prismHome`).
+  prismHome: resolvePrismHome(),
   daemonTimeoutMs: parseTimeoutMs(process.env.PRISM_SHIM_DAEMON_TIMEOUT_MS),
   spawnTimeoutMs: parseTimeoutMs(process.env.PRISM_SHIM_SPAWN_TIMEOUT_MS),
   enabledTools: parseToolNameSet(process.env.PRISM_SHIM_ENABLED_TOOLS),

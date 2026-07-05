@@ -41,14 +41,20 @@ function truncateHash(bundleHash: string): string {
 /**
  * Construct a content-addressed UDS socket path.
  *
- * Returns: `~/.prism/runtime/mcp/<plugin>/<truncated-hash>.sock`
+ * Returns: `<prismHome>/runtime/mcp/<plugin>/<truncated-hash>.sock`
  *
  * @param plugin - Plugin identifier (must match /^[a-zA-Z0-9_-]+$/)
  * @param bundleHash - Full content hash; will be truncated to first 16 hex
+ * @param prismHome - Prism home directory. Threaded explicitly by the
+ *   caller (the CLI edge resolves `PRISM_HOME` once via `resolvePrismHome()`
+ *   and passes the result down); this package cannot import that resolver
+ *   itself (`packages/prism-core` has no dependency on the root `src/`
+ *   tree), so an omitted value falls back to the same default
+ *   (`~/.prism`) `resolvePrismHome()` uses when unset.
  * @returns Absolute path to the socket file
  * @throws UDSPathLengthError if resulting path exceeds 100 bytes
  */
-export function udsPathFor(plugin: string, bundleHash: string): string {
+export function udsPathFor(plugin: string, bundleHash: string, prismHome?: string): string {
   // Validate plugin name
   if (!VALID_PLUGIN_NAME.test(plugin)) {
     throw new Error(
@@ -60,9 +66,9 @@ export function udsPathFor(plugin: string, bundleHash: string): string {
   const truncated = truncateHash(bundleHash);
 
   // Build the path
-  const home = homedir();
-  const relativePath = `prism/runtime/mcp/${plugin}/${truncated}.sock`;
-  const fullPath = `${home}/.${relativePath}`;
+  const home = prismHome ?? `${homedir()}/.prism`;
+  const relativePath = `runtime/mcp/${plugin}/${truncated}.sock`;
+  const fullPath = `${home}/${relativePath}`;
 
   // Assert length constraint
   const pathLength = Buffer.byteLength(fullPath, "utf8");

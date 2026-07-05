@@ -183,6 +183,22 @@ test("renderPrismCause renders unknown defects as name + message without stack",
   expect(rendered).not.toMatch(STACK_FRAME);
 });
 
+test("renderPrismCause unpacks an AggregateError's nested causes", async () => {
+  const defect = new AggregateError(
+    [new Error("Could not resolve: \"/packages/prism-core/src/mcp/uds-registry.js\"")],
+    "Bundle failed",
+  );
+
+  const exit = await Effect.runPromiseExit(Effect.promise(() => Promise.reject(defect)));
+  expect(exit._tag).toBe("Failure");
+  if (exit._tag !== "Failure") return;
+
+  const rendered = renderPrismCause(exit.cause);
+  expect(rendered).toContain("AggregateError: Bundle failed");
+  expect(rendered).toContain('Could not resolve: "/packages/prism-core/src/mcp/uds-registry.js"');
+  expect(rendered).not.toMatch(STACK_FRAME);
+});
+
 test("renderPrismCause appends a hint line when a defect carries one", async () => {
   const defect = Object.assign(new Error("daemon not running"), {
     hint: "run: prism mcp serve <plugin>",

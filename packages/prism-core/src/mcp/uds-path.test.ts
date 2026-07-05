@@ -28,6 +28,21 @@ describe("udsPathFor", () => {
     });
   });
 
+  describe("prismHome override", () => {
+    it("uses the explicit prismHome instead of raw homedir()-based ~/.prism", () => {
+      const path = udsPathFor("my-plugin", "abcd1234abcd1234", "/custom/prism-home");
+      expect(path).toBe("/custom/prism-home/runtime/mcp/my-plugin/abcd1234abcd1234.sock");
+      expect(path).not.toContain(homedir());
+    });
+
+    it("falls back to ~/.prism when prismHome is omitted (unchanged default)", () => {
+      const withoutOverride = udsPathFor("my-plugin", "abcd1234abcd1234");
+      const withUndefinedOverride = udsPathFor("my-plugin", "abcd1234abcd1234", undefined);
+      expect(withoutOverride).toBe(`${homedir()}/.prism/runtime/mcp/my-plugin/abcd1234abcd1234.sock`);
+      expect(withUndefinedOverride).toBe(withoutOverride);
+    });
+  });
+
   describe("determinism", () => {
     it("produces same path for same inputs", () => {
       const plugin = "stable-plugin";

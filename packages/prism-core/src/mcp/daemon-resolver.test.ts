@@ -45,6 +45,19 @@ describe("pluginRuntimeDir / pluginBundlePath", () => {
     expect(pluginRuntimeDir("my-plugin")).toBe(dirname(udsPathFor("my-plugin", "")));
     expect(pluginBundlePath("my-plugin")).toBe(join(pluginRuntimeDir("my-plugin"), "server.mjs"));
   });
+
+  it("thread an explicit prismHome through to udsPathFor instead of raw homedir()", () => {
+    const prismHome = "/custom/prism-home";
+    expect(pluginRuntimeDir("my-plugin", prismHome)).toBe(
+      dirname(udsPathFor("my-plugin", "", prismHome)),
+    );
+    expect(pluginRuntimeDir("my-plugin", prismHome)).toBe(
+      "/custom/prism-home/runtime/mcp/my-plugin",
+    );
+    expect(pluginBundlePath("my-plugin", prismHome)).toBe(
+      "/custom/prism-home/runtime/mcp/my-plugin/server.mjs",
+    );
+  });
 });
 
 describe("resolveOrSpawnDaemon", () => {
@@ -103,6 +116,41 @@ describe("resolveOrSpawnDaemon", () => {
     expect(spawnCalls).toBe(1);
     expect(result.bundleHash).toBe(hash);
     expect(result.sock).toBe(join(dir, `plugin-x-${hash}.sock`));
+  });
+
+  it("honors options.prismHome in the default bundlePathFor/udsPathFor when neither is overridden", async () => {
+    // Short prefix + short plugin name: udsPathFor's 100-byte sun_path
+    // assertion leaves little headroom once the OS tmpdir prefix is added.
+    const prismHome = await mkdtemp(join(tmpdir(), "ph"));
+    tempDirs.push(prismHome);
+    const bundlePath = pluginBundlePath("p", prismHome);
+    const content = "console.log('v1');";
+    await writeBundle(bundlePath, content);
+    const hash = sha256Hex(content);
+    const expectedSock = udsPathFor("p", hash, prismHome);
+
+    let registered: RegistryEntry | undefined;
+    let spawnCalls = 0;
+
+    const result = await resolveOrSpawnDaemon({
+      plugin: "p",
+      prismHome,
+      spawnTimeoutMs: 2000,
+      pollIntervalMs: 10,
+      getDaemon: async (): Promise<RegistryResult<RegistryEntry>> =>
+        registered ? { kind: "ok", value: registered } : { kind: "absent" },
+      spawnDaemon: ({ udsPath, bundleHash }) => {
+        spawnCalls += 1;
+        expect(udsPath).toBe(expectedSock);
+        setTimeout(() => {
+          bindFakeDaemon(udsPath);
+          registered = { pid: 5151, sock: udsPath, bundleHash, startedAt: Date.now(), lastUsed: Date.now() };
+        }, 30);
+      },
+    });
+
+    expect(spawnCalls).toBe(1);
+    expect(result.sock).toBe(expectedSock);
   });
 
   it("treats a hash-mismatched registered entry as stale and spawns fresh on a new socket", async () => {

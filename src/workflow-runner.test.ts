@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Either, Fiber, Schema } from "effect";
-import { compareCodePoint } from "@skastr0/prism-core/stable-json";
+import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { WorkflowStore } from "./workflow-store.js";
 import { runWorkflow, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
@@ -1100,7 +1100,7 @@ console.log(JSON.stringify(result));
     }
   });
 
-  test("cache-key key sort uses the same code-point comparator as prism-core stable-json, not locale ordering", () => {
+  test("cache-key key sort uses the same code-point comparator as prism-sdk stable-json, not locale ordering", () => {
     const keys = ["b", "a", "ä", "Z"];
 
     const manualCodePointOrder = [...keys].sort((left, right) => {

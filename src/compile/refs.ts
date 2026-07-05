@@ -3,12 +3,12 @@ import {
   parseNamedRef,
   parseSpaceItemRef,
   registryForRef,
-} from "@skastr0/prism-core/refs";
+} from "@skastr0/prism-sdk/refs";
 import { UnknownDependencyError, type CompileError } from "./errors.js";
 import type { PluginRegistry } from "./registry.js";
 
 export { parseNamedRef, parseSpaceItemRef, registryForRef };
-export type { ParsedNamedRef, ParsedSpaceItemRef } from "@skastr0/prism-core/refs";
+export type { ParsedNamedRef, ParsedSpaceItemRef } from "@skastr0/prism-sdk/refs";
 
 export const resolveRefToRegistry = (
   ref: string,

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
+import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-sdk/refs";
 import type { CompileManifest, CompileManifestAgent, CompileManifestOrbit, CompileManifestTrait, CompileManifestCanonicalTool, CompileManifestToolspaceTool } from "./compile-manifest.js";
 import { projectGeneratedRefsDir } from "../project-key.js";
 import type { DesiredRoot } from "../sync/desired.js";

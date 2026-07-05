@@ -8,7 +8,7 @@
         "@opentui/core",
         "@opentui/react",
         "@opencode-ai/plugin",
-        "@skastr0/prism-core",
+        "@skastr0/prism-sdk",
         "commander",
         "effect",
         "gray-matter",

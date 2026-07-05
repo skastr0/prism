@@ -26,7 +26,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { pluginWireNamespace } from "@skastr0/prism-core/mcp/shim";
+import { pluginWireNamespace } from "@skastr0/prism-sdk/mcp/shim";
 import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
 

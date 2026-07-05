@@ -49,7 +49,7 @@ const currentTarget = (): SupportedTarget => {
 const target = currentTarget();
 const platformPackageDir = platformPackageByTarget[target];
 const wrapperPackageDir = "packages/npm/prism";
-const prismCorePackageDir = "packages/prism-core";
+const prismSdkPackageDir = "packages/prism-sdk";
 
 const run = async (
   label: string,
@@ -279,13 +279,13 @@ const main = async (): Promise<void> => {
     const mcpPort = await getFreePort();
     await createCanonicalToolFixture(pluginRoot, mcpPort);
 
-    // Platform packages declare "@skastr0/prism-core" as a real (non-workspace)
+    // Platform packages declare "@skastr0/prism-sdk" as a real (non-workspace)
     // dependency. If it is not also packed and installed alongside from a local
     // tarball, npm resolves it from the public registry — where an unpublished
-    // (e.g. not-yet-released) version 404s. Packing prism-core here and listing
+    // (e.g. not-yet-released) version 404s. Packing prism-sdk here and listing
     // it in the same `npm install` invocation makes npm satisfy that dependency
     // from the local tarball instead of ever hitting the registry.
-    const prismCoreTarball = await packPackage(prismCorePackageDir, tarballDir);
+    const prismSdkTarball = await packPackage(prismSdkPackageDir, tarballDir);
     const platformTarball = await packPackage(platformPackageDir, tarballDir);
     const wrapperTarball = await packPackage(wrapperPackageDir, tarballDir);
 
@@ -298,7 +298,7 @@ const main = async (): Promise<void> => {
         "--no-audit",
         "--no-fund",
         "--omit=optional",
-        prismCoreTarball,
+        prismSdkTarball,
         platformTarball,
         wrapperTarball,
       ],

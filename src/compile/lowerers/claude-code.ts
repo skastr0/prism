@@ -79,7 +79,7 @@ export interface ClaudeCodeLowerTarget {
  * builds each visible tool's permission string as `mcp__<this key>__<tool
  * name the server returns>`; the shim's own `tools/list` already returns
  * `p_<hash8>__<tool>` per owner (see `pluginWireNamespace` in
- * `@skastr0/prism-core/mcp/shim`), so that inner segment survives unchanged
+ * `@skastr0/prism-sdk/mcp/shim`), so that inner segment survives unchanged
  * regardless of what this outer key is named.
  */
 const STDIO_SHIM_WIRE_NAME = "prism-mcp-shim";

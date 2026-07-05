@@ -1,5 +1,5 @@
 import { Cause, Effect, Either, Exit } from "effect";
-import { compareCodePoint } from "@skastr0/prism-core/stable-json";
+import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import {
   decodeTaskOutput,
@@ -256,7 +256,7 @@ const stableValue = (value: unknown): unknown => {
   if (typeof value !== "object" || value === null) return value;
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      // NFC code-point sort, not locale-sensitive: mirrors packages/prism-core/src/stable-json.ts
+      // NFC code-point sort, not locale-sensitive: mirrors packages/prism-sdk/src/stable-json.ts
       // (compareCodePoint) so cache keys stay stable across machines/locales.
       .sort(([left], [right]) => compareCodePoint(left, right))
       .map(([key, nested]) => [key, stableValue(nested)]),

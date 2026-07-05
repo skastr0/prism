@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Bin entry for the aggregating MCP shim (see `@skastr0/prism-core/mcp/shim`
+ * Bin entry for the aggregating MCP shim (see `@skastr0/prism-sdk/mcp/shim`
  * for the actual protocol/aggregation logic). This is the process a harness
  * spawns directly over stdio (via the `prism mcp shim` CLI subcommand, and
  * the `command`/`args` a `stdio-shim`-transport lowerer writes into the
@@ -9,7 +9,7 @@
  * to `runShim`.
  */
 
-import { runShim } from "@skastr0/prism-core/mcp/shim";
+import { runShim } from "@skastr0/prism-sdk/mcp/shim";
 import { resolvePrismHome } from "../prism-home.js";
 
 const parsePluginList = (raw: string | undefined): ReadonlyArray<string> =>
@@ -46,7 +46,7 @@ if (plugins.length === 0) {
 await runShim({
   plugins,
   // Resolved once, here, at the process entrypoint (the CLI edge for this
-  // process) -- never re-read from the environment inside prism-core, which
+  // process) -- never re-read from the environment inside prism-sdk, which
   // has no dependency on this resolver (see `ShimAggregatorOptions.prismHome`).
   prismHome: resolvePrismHome(),
   daemonTimeoutMs: parseTimeoutMs(process.env.PRISM_SHIM_DAEMON_TIMEOUT_MS),

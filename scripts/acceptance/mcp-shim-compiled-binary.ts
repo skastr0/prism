@@ -221,7 +221,7 @@ const main = async (): Promise<void> => {
     await symlink(join(REPO_ROOT, "node_modules"), join(work, "node_modules"), "dir");
 
     // A real npm-installed platform package ships its own node_modules
-    // (effect/zod/mcp-sdk/typescript/@skastr0/prism-core/...) right next to
+    // (effect/zod/mcp-sdk/typescript/@skastr0/prism-sdk/...) right next to
     // the binary; a bare `bun build --compile` output has none. Simulate
     // the shipped-package shape so `resolveRuntimePackageImportPath` (see
     // runtime-deps.ts) has a real root to resolve against, exactly as the

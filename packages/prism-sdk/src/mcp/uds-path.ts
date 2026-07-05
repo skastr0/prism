@@ -48,7 +48,7 @@ function truncateHash(bundleHash: string): string {
  * @param prismHome - Prism home directory. Threaded explicitly by the
  *   caller (the CLI edge resolves `PRISM_HOME` once via `resolvePrismHome()`
  *   and passes the result down); this package cannot import that resolver
- *   itself (`packages/prism-core` has no dependency on the root `src/`
+ *   itself (`packages/prism-sdk` has no dependency on the root `src/`
  *   tree), so an omitted value falls back to the same default
  *   (`~/.prism`) `resolvePrismHome()` uses when unset.
  * @returns Absolute path to the socket file

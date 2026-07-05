@@ -38,7 +38,7 @@ jobs:
         run: bun install --frozen-lockfile --cpu='*' --os='*'
       - name: Verify
         run: bun run verify
-      - name: Smoke prism-core package
+      - name: Smoke prism-sdk package
         run: bun run smoke:core
       - name: Smoke npm CLI packages
         run: bun run smoke:npm-cli

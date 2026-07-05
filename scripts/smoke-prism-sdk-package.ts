@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const repoRoot = resolve(import.meta.dir, "..");
-const packageDir = join(repoRoot, "packages", "prism-core");
+const packageDir = join(repoRoot, "packages", "prism-sdk");
 
 const run = async (
   label: string,
@@ -36,14 +36,14 @@ const run = async (
 
 const packPackage = async (tarballDir: string): Promise<string> => {
   const stdout = await run(
-    "Packing prism-core",
+    "Packing prism-sdk",
     ["npm", "pack", "--json", "--pack-destination", tarballDir],
     { cwd: packageDir, capture: true },
   );
   const parsed = JSON.parse(stdout) as Array<{ readonly filename: string }>;
   const filename = parsed[0]?.filename;
   if (!filename) {
-    throw new Error("npm pack did not return a prism-core tarball");
+    throw new Error("npm pack did not return a prism-sdk tarball");
   }
   return join(tarballDir, filename);
 };
@@ -62,11 +62,11 @@ const requiredDistFiles = [
 for (const file of requiredDistFiles) {
   const path = join(packageDir, "dist", file);
   if (!existsSync(path)) {
-    throw new Error(`Missing built prism-core package file: ${path}`);
+    throw new Error(`Missing built prism-sdk package file: ${path}`);
   }
 }
 
-const tempRoot = await mkdtemp(join(tmpdir(), "prism-core-smoke-"));
+const tempRoot = await mkdtemp(join(tmpdir(), "prism-sdk-smoke-"));
 
 try {
   const tarballDir = join(tempRoot, "tarballs");
@@ -77,7 +77,7 @@ try {
 
   const tarball = await packPackage(tarballDir);
   await run(
-    "Installing packed prism-core into clean project",
+    "Installing packed prism-sdk into clean project",
     ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
     { cwd: appRoot },
   );
@@ -86,10 +86,10 @@ try {
   await writeFile(
     consumerPath,
     `
-import { decodeCompileManifest, emptyCompileManifest, encodeCompileManifest, verifyCompileManifestHash } from "@skastr0/prism-core/compile-manifest";
-import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-core/refs";
-import { emptySnapshotManifest, encodeSnapshotManifest } from "@skastr0/prism-core/snapshot";
-import { stableJsonHash, stableJsonStringify } from "@skastr0/prism-core/stable-json";
+import { decodeCompileManifest, emptyCompileManifest, encodeCompileManifest, verifyCompileManifestHash } from "@skastr0/prism-sdk/compile-manifest";
+import { parseNamedRef, parseSpaceItemRef } from "@skastr0/prism-sdk/refs";
+import { emptySnapshotManifest, encodeSnapshotManifest } from "@skastr0/prism-sdk/snapshot";
+import { stableJsonHash, stableJsonStringify } from "@skastr0/prism-sdk/stable-json";
 
 const manifest = emptyCompileManifest();
 const encoded = encodeCompileManifest(manifest);
@@ -105,16 +105,16 @@ if (!encodeSnapshotManifest(emptySnapshotManifest({ harness: "codex-cli", root: 
 if (stableJsonStringify({ b: 1, a: 2 }) !== '{"a":2,"b":1}') throw new Error("stable JSON did not sort keys");
 if (stableJsonHash({ a: 1 }).length !== 64) throw new Error("stable JSON hash did not hash");
 
-const resolved = await import.meta.resolve("@skastr0/prism-core/compile-manifest");
-if (!resolved.endsWith("/node_modules/@skastr0/prism-core/dist/compile-manifest.js")) {
+const resolved = await import.meta.resolve("@skastr0/prism-sdk/compile-manifest");
+if (!resolved.endsWith("/node_modules/@skastr0/prism-sdk/dist/compile-manifest.js")) {
   throw new Error(\`compile-manifest resolved outside the packed install: \${resolved}\`);
 }
 `,
   );
 
-  await run("Importing prism-core public subpaths from packed install", ["node", consumerPath], { cwd: appRoot });
+  await run("Importing prism-sdk public subpaths from packed install", ["node", consumerPath], { cwd: appRoot });
 
-  console.log("prism-core package exports smoke passed");
+  console.log("prism-sdk package exports smoke passed");
 } finally {
   await rm(tempRoot, { recursive: true, force: true });
 }

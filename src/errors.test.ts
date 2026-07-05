@@ -185,7 +185,7 @@ test("renderPrismCause renders unknown defects as name + message without stack",
 
 test("renderPrismCause unpacks an AggregateError's nested causes", async () => {
   const defect = new AggregateError(
-    [new Error("Could not resolve: \"/packages/prism-core/src/mcp/uds-registry.js\"")],
+    [new Error("Could not resolve: \"/packages/prism-sdk/src/mcp/uds-registry.js\"")],
     "Bundle failed",
   );
 
@@ -195,7 +195,7 @@ test("renderPrismCause unpacks an AggregateError's nested causes", async () => {
 
   const rendered = renderPrismCause(exit.cause);
   expect(rendered).toContain("AggregateError: Bundle failed");
-  expect(rendered).toContain('Could not resolve: "/packages/prism-core/src/mcp/uds-registry.js"');
+  expect(rendered).toContain('Could not resolve: "/packages/prism-sdk/src/mcp/uds-registry.js"');
   expect(rendered).not.toMatch(STACK_FRAME);
 });
 

@@ -65,7 +65,7 @@ import { resolveOrSpawnDaemon, DaemonResolveError, DEFAULT_SPAWN_TIMEOUT_MS } fr
  * Kimi Code, Cursor, Grok) already bakes into compiled permission strings
  * and tool FQNs (e.g. Claude Code's `mcp__p_<hash8>__<tool>`).
  *
- * `packages/prism-core` cannot import that root-package module (its
+ * `packages/prism-sdk` cannot import that root-package module (its
  * `tsconfig.json` `rootDir` is `./src`; a real `import` of anything under
  * the workspace root `src/` fails to compile), so the tiny pure function is
  * duplicated here rather than re-derived with a different algorithm. Using

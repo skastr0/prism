@@ -983,25 +983,18 @@ const createPrismMcpServer = (enabledToolNames?: ReadonlySet<string>): McpServer
 };`;
 
 const MCP_SDK_HTTP_RUNTIME = `// Runtime identity is never baked into bundle bytes: the daemon supervisor
-// passes host/port via environment when it spawns this server, or unix socket path for UDS.
+// passes the unix socket path via environment when it spawns this server.
+// This server binds a Unix domain socket ONLY -- there is no TCP fallback.
 const udsPath = process.env.PRISM_MCP_UDS_PATH;
+if (!udsPath) {
+  throw new Error("Prism MCP Streamable HTTP server requires env PRISM_MCP_UDS_PATH (unix socket path)");
+}
 const registryPluginName = process.env.PRISM_MCP_REGISTRY_PLUGIN_NAME;
 const registryBundleHash = process.env.PRISM_MCP_REGISTRY_BUNDLE_HASH;
-const httpHost = process.env.PRISM_MCP_HTTP_HOST ?? "127.0.0.1";
-const isLoopbackBindHost = (value: string): boolean =>
-  value === "127.0.0.1" || value === "localhost" || value === "::1" || value === "[::1]";
-if (!udsPath && !isLoopbackBindHost(httpHost) && process.env.PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP !== "1") {
-  throw new Error("Prism MCP Streamable HTTP server refuses to bind non-loopback hosts unless PRISM_MCP_ALLOW_NON_LOOPBACK_HTTP=1");
-}
-const httpPort = !udsPath ? Number(process.env.PRISM_MCP_HTTP_PORT ?? "0") : 0;
-if (!udsPath && (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535)) {
-  throw new Error("Prism MCP Streamable HTTP server requires env PRISM_MCP_HTTP_PORT (1-65535)");
-}
 const httpPath = process.env.PRISM_MCP_HTTP_PATH ?? "/mcp";
 const httpHealthPath = process.env.PRISM_MCP_HTTP_HEALTH_PATH ?? "/healthz";
 const serverStartedAt = Date.now();
 const serverSha256 = process.env.PRISM_MCP_SERVER_SHA256;
-const sseDisabledSearchParam = "prism_sse";
 
 interface HttpSessionState {
   server: McpServer;
@@ -1026,12 +1019,6 @@ const configuredMaxRequestBytes = Number(process.env.PRISM_MCP_MAX_REQUEST_BYTES
 const maxRequestBytes = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes > 0
   ? configuredMaxRequestBytes
   : 1048576;
-// Must stay well under the 255s idleTimeout below so a standalone SSE stream
-// never sits fully idle long enough for Bun to close the socket.
-const configuredSseKeepaliveMs = Number(process.env.PRISM_MCP_SSE_KEEPALIVE_MS ?? "20000");
-const sseKeepaliveIntervalMs = Number.isFinite(configuredSseKeepaliveMs) && configuredSseKeepaliveMs > 0
-  ? configuredSseKeepaliveMs
-  : 20000;
 const configuredShutdownDrainMs = Number(process.env.PRISM_MCP_SHUTDOWN_DRAIN_MS ?? "10000");
 const shutdownDrainMs = Number.isFinite(configuredShutdownDrainMs) && configuredShutdownDrainMs >= 0
   ? configuredShutdownDrainMs
@@ -1042,8 +1029,8 @@ const shutdownFlushGraceMs = Number.isFinite(configuredShutdownFlushMs) && confi
   : 300;
 const sessions = new Map<string, HttpSessionState>();
 let pendingSessionBootstraps = 0;
-// Idle-reap: track active connections (requests + SSE streams) to trigger shutdown
-// when no activity for PRISM_MCP_IDLE_TTL_MS with zero connections
+// Idle-reap: track active connections to trigger shutdown when no activity
+// for PRISM_MCP_IDLE_TTL_MS with zero connections
 let activeConnections = 0;
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -1056,19 +1043,17 @@ const activeOrPendingSessionCount = (): number =>
   sessions.size + pendingSessionBootstraps;
 
 // Schedule idle-reap timer: fires after idleTtlMs of inactivity with zero active connections.
-// Resets on any activity (connection start/end). Counts both HTTP requests (activeConnections)
-// and long-lived SSE streams (activeSseStreamEnders.size).
+// Resets on any activity (connection start/end).
 // Timer.unref() ensures it does not keep the process alive.
-const totalActiveConnections = (): number =>
-  activeConnections + activeSseStreamEnders.size;
+const totalActiveConnections = (): number => activeConnections;
 
 const resetIdleTimer = (): void => {
   if (idleTimer !== undefined) clearTimeout(idleTimer);
 
   idleTimer = setTimeout(() => {
     const activeCount = totalActiveConnections();
-    console.error(\`[prism-mcp] idle-reap timer fired: activeConnections=\${activeConnections}, sseStreams=\${activeSseStreamEnders.size}, total=\${activeCount}\`);
-    // Only reap if no active connections or SSE streams
+    console.error(\`[prism-mcp] idle-reap timer fired: activeConnections=\${activeConnections}, total=\${activeCount}\`);
+    // Only reap if no active connections
     if (activeCount === 0) {
       console.error(\`[prism-mcp] idle-reap: triggering shutdown after \${idleTtlMs}ms of inactivity\`);
       void stopServer();
@@ -1159,16 +1144,13 @@ const touchSession = (sessionID: string): void => {
 const isAllowedHostHeader = (value: string | null): boolean => {
   if (!value) return false;
   const lower = value.toLowerCase();
-  const configured = httpHost.toLowerCase();
   return (
     lower === "localhost" ||
     lower.startsWith("localhost:") ||
     lower === "127.0.0.1" ||
     lower.startsWith("127.0.0.1:") ||
     lower === "[::1]" ||
-    lower.startsWith("[::1]:") ||
-    lower === configured ||
-    lower.startsWith(configured + ":")
+    lower.startsWith("[::1]:")
   );
 };
 
@@ -1247,108 +1229,6 @@ const readJsonBody = async (request: Request): Promise<unknown> => {
   const text = await readLimitedRequestBody(request);
   if (text.trim().length === 0) return undefined;
   return JSON.parse(text);
-};
-
-const sseDisabledForRequest = (url: URL): boolean =>
-  url.searchParams.get(sseDisabledSearchParam) === "off";
-
-// SSE comment frame per the event-stream spec: a line starting with ":" is
-// ignored by EventSource clients but is still real bytes on the wire, so it
-// resets Bun's per-socket idle timer the same as any other traffic.
-const SSE_KEEPALIVE_FRAME = ":\\n\\n";
-
-// Standalone GET SSE streams (server push / notifications) are tracked here
-// so shutdown can end them explicitly instead of leaving them to abrupt
-// socket teardown.
-const activeSseStreamEnders = new Set<() => void>();
-
-/**
- * Wraps an SSE Response with a periodic keepalive comment frame so the
- * standalone GET notification stream never sits fully idle for
- * sseKeepaliveIntervalMs, well inside the 255s idleTimeout Bun would
- * otherwise silently enforce on a truly idle connection. Non-SSE responses
- * (DELETE, disabled-SSE GET) pass through unchanged.
- */
-const withSseKeepalive = (response: Response): Response => {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!response.body || !contentType.includes("text/event-stream")) return response;
-
-  const encoder = new TextEncoder();
-  const source = response.body;
-  const reader = source.getReader();
-  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
-  let ended = false;
-  let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
-
-  const stopKeepalive = (): void => {
-    if (keepaliveTimer !== undefined) {
-      clearInterval(keepaliveTimer);
-      keepaliveTimer = undefined;
-    }
-  };
-
-  const endStream = (): void => {
-    if (ended) return;
-    ended = true;
-    activeSseStreamEnders.delete(endStream);
-    stopKeepalive();
-    try {
-      controllerRef?.close();
-    } catch {
-      // Controller may already be closed by the pump loop or the consumer.
-    }
-    void reader.cancel().catch(() => {});
-  };
-
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controllerRef = controller;
-      activeSseStreamEnders.add(endStream);
-      keepaliveTimer = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(SSE_KEEPALIVE_FRAME));
-        } catch {
-          // Controller already closed; the pump loop below settles \`ended\`.
-        }
-      }, sseKeepaliveIntervalMs);
-
-      void (async () => {
-        try {
-          while (!ended) {
-            const { done, value } = await reader.read();
-            if (done || ended) break;
-            controller.enqueue(value);
-          }
-          if (!ended) {
-            ended = true;
-            activeSseStreamEnders.delete(endStream);
-            stopKeepalive();
-            controller.close();
-          }
-        } catch (error) {
-          if (!ended) {
-            ended = true;
-            activeSseStreamEnders.delete(endStream);
-            stopKeepalive();
-            controller.error(error);
-          }
-        }
-      })();
-    },
-    cancel(reason) {
-      if (ended) return;
-      ended = true;
-      activeSseStreamEnders.delete(endStream);
-      stopKeepalive();
-      void reader.cancel(reason).catch(() => {});
-    },
-  });
-
-  return new Response(stream, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: new Headers(response.headers),
-  });
 };
 
 // In-flight Streamable HTTP request/response cycles racing against shutdown.
@@ -1502,25 +1382,22 @@ const handleSessionRequest = async (request: Request): Promise<Response> => {
     return jsonResponse({ jsonrpc: "2.0", error: { code: -32000, message: "Missing or invalid MCP session" }, id: null }, { status: sessionID ? 404 : 400 }, request);
   }
   touchSession(sessionID);
-  return withSseKeepalive(attachResponseHeaders(await session.transport.handleRequest(request), request));
+  return attachResponseHeaders(await session.transport.handleRequest(request), request);
 };
 
 const serveOptions = {
-  ...(udsPath ? { unix: udsPath } : { hostname: httpHost, port: httpPort }),
+  unix: udsPath,
   // MCP connections sit idle between tool calls. Bun's default idleTimeout is
   // 10s, which silently closes the socket; clients that reuse the closed
   // connection (observed with Grok) then hang until their own multi-minute
   // timeout. 255 is Bun's maximum. A per-request JSON-mode tool call never
   // trips this: Bun only counts idle time between distinct request/response
   // cycles on a connection, not time spent awaiting a still-in-flight
-  // handler (confirmed empirically against Bun 1.3.14). The one connection
-  // that genuinely sits idle between byte transfers is the standalone GET
-  // SSE stream, which withSseKeepalive keeps alive with periodic comment
-  // frames well inside this window; see PRISM_MCP_SSE_KEEPALIVE_MS.
+  // handler (confirmed empirically against Bun 1.3.14).
   idleTimeout: 255,
   fetch: async (request) => {
     // Track active connections for idle-reap: increment on request start,
-    // decrement when response is sent (including SSE streams which remain active).
+    // decrement when response is sent.
     incrementActiveConnections();
     try {
       const url = new URL(request.url);
@@ -1537,10 +1414,7 @@ const serveOptions = {
       if (authorization.denied) return authorization.denied;
 
       if (request.method === "POST") return await handlePost(request, authorization.enabledToolNames);
-      if (request.method === "GET" && sseDisabledForRequest(url)) {
-        return jsonResponse({ error: "SSE stream disabled for this MCP client" }, { status: 405 }, request);
-      }
-      if (request.method === "DELETE" || request.method === "GET") return await handleSessionRequest(request);
+      if (request.method === "DELETE") return await handleSessionRequest(request);
       return jsonResponse({ error: "method not allowed" }, { status: 405 }, request);
     } finally {
       decrementActiveConnections();
@@ -1548,18 +1422,13 @@ const serveOptions = {
   },
 };
 
-// Singleton + stale-socket recovery for UDS mode: probe, recover from a
-// stale socket, and call Bun.serve() all inside the same held file lock, so
-// no other process can bind between "the path looked free" and "we bound
-// it" (the prior two-step check-then-bind here left exactly that window
-// open, and a Bun.serve() called with zero try/catch crashed uncaught on
-// EADDRINUSE when a racing process won it). TCP mode needs none of this:
-// there is no shared path for two processes to race on.
+// Singleton + stale-socket recovery: probe, recover from a stale socket, and
+// call Bun.serve() all inside the same held file lock, so no other process
+// can bind between "the path looked free" and "we bound it" (the prior
+// two-step check-then-bind here left exactly that window open, and a
+// Bun.serve() called with zero try/catch crashed uncaught on EADDRINUSE when
+// a racing process won it).
 const bindMcpServer = async () => {
-  if (!udsPath) {
-    return Bun.serve(serveOptions);
-  }
-
   const outcome = await bindUnixSocketSingleton(udsPath, () => Bun.serve(serveOptions));
   if (outcome.kind === "already-served") {
     // Another daemon owns this socket; exit cleanly rather than crash.
@@ -1573,8 +1442,8 @@ const server = await bindMcpServer();
 
 // Register daemon in the UDS registry if plugin name and bundle hash are available
 const registerInRegistry = async (): Promise<void> => {
-  if (!registryPluginName || !registryBundleHash || !udsPath) {
-    // Registry only works with UDS mode and requires plugin/bundle identifiers
+  if (!registryPluginName || !registryBundleHash) {
+    // Registration requires plugin/bundle identifiers.
     return;
   }
 
@@ -1603,16 +1472,9 @@ const stopServer = async (): Promise<void> => {
   if (idleTimer !== undefined) clearTimeout(idleTimer);
 
   // Graceful drain: stop accepting new connections, let in-flight tool calls
-  // finish within a bounded window, then close sessions and force-close anything
-  // still open (e.g. idle SSE streams). Avoids dropping live tool calls on
-  // restart/SIGTERM.
+  // finish within a bounded window, then close sessions. Avoids dropping
+  // live tool calls on restart/SIGTERM.
   server.stop();
-
-  // Standalone SSE notification streams have no tool-call-style "let it
-  // finish" completion condition -- they're just left open for future
-  // server-initiated pushes -- so end them now instead of making clients
-  // wait out the drain window before observing a close.
-  for (const endSseStream of [...activeSseStreamEnders]) endSseStream();
 
   const drainDeadline = Date.now() + shutdownDrainMs;
   while (activeToolCalls > 0 && Date.now() < drainDeadline) {
@@ -1649,7 +1511,7 @@ const stopServer = async (): Promise<void> => {
       // Cleanup failure is not fatal; log and continue
       console.error(\`Failed to clean up daemon registration: \${error instanceof Error ? error.message : String(error)}\`);
     }
-  } else if (udsPath) {
+  } else {
     // No registry plugin identity configured for this run: there is no
     // record to check ownership against, so fall back to the prior
     // unconditional cleanup of our own socket file.
@@ -1666,7 +1528,7 @@ const stopServer = async (): Promise<void> => {
 process.on("SIGTERM", () => void stopServer());
 process.on("SIGINT", () => void stopServer());
 
-console.error(\`prism MCP Streamable HTTP server listening on http://\${server.hostname}:\${server.port}\${httpPath}\`);`;
+console.error(\`prism MCP Streamable HTTP server listening on unix:\${udsPath}\${httpPath}\`);`;
 
 const MCP_SDK_STDIO_RUNTIME = `const enabledToolNamesFromEnv = (): ReadonlySet<string> | undefined => {
   const raw = process.env.PRISM_MCP_ENABLED_TOOLS;
@@ -1978,7 +1840,8 @@ const renderMcpServerEntry = (options: {
     `#!/usr/bin/env bun
 // GENERATED by prism — do not edit.
 // Standalone MCP server for compiled canonical tool bindings.
-// Streamable HTTP identity (host/port) is read from the environment at startup.`,
+// Streamable HTTP over a Unix domain socket; the socket path (PRISM_MCP_UDS_PATH)
+// is read from the environment at startup.`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     `import { McpServer } from ${JSON.stringify(mcpSdkMcpBundleImportPath())};`,
     `import { WebStandardStreamableHTTPServerTransport } from ${JSON.stringify(mcpSdkWebStandardHttpBundleImportPath())};`,

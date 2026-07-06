@@ -13,7 +13,6 @@ import { loadPlugin } from "../compile/load.js";
 import type { PluginRegistry } from "../compile/registry.js";
 import { mcpServerRuntimeSourceSha256 } from "../compile/mcp-bundle.js";
 import {
-  assertMcpHttpTargetSupported,
   generatedMcpServerName,
   isLoopbackMcpHost,
   resolveMcpRuntime,
@@ -241,8 +240,6 @@ const withMcpServerLock = async <A>(
 };
 
 const assertSupportedLifecycleTarget = (options: McpLifecycleCommonOptions): void => {
-  assertMcpHttpTargetSupported(options.harness, "lifecycle");
-
   const harness = getHarness(options.harness);
   if (options.scope === "project" && !harnessSupportsProjectScope(harness)) {
     throw new Error(`${harness.name} MCP lifecycle does not support project scope.`);

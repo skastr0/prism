@@ -45,7 +45,6 @@ import {
   type CompileResult,
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
-import type { McpHarnessTransportMode } from "./compile/mcp-runtime.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import { topologicallySortedPlugins } from "./plugin-order.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
@@ -156,11 +155,6 @@ program
     parseMcpLifecycleMode,
     "serve"
   )
-  .option(
-    "--mcp-transport <mode>",
-    "MCP transport rollout flag for how a harness invokes the generated server (http|stdio-shim); default http",
-    parseMcpTransportMode,
-  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       await runRefreshCommand("refresh", pluginPath, options);
@@ -196,11 +190,6 @@ program
     "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
     parseMcpLifecycleMode,
     "serve"
-  )
-  .option(
-    "--mcp-transport <mode>",
-    "MCP transport rollout flag for how a harness invokes the generated server (http|stdio-shim); default http",
-    parseMcpTransportMode,
   )
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -1392,7 +1381,6 @@ type RefreshCommandOptions = {
   clean?: boolean;
   compileRoot?: string;
   mcpLifecycle?: CompileMcpLifecycleMode;
-  mcpTransport?: McpHarnessTransportMode;
 };
 
 type NormalizedRefreshOptions = {
@@ -1410,7 +1398,6 @@ type NormalizedRefreshOptions = {
   clean: boolean;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
-  mcpTransport?: McpHarnessTransportMode;
 };
 
 type RefreshCommandContext = LoadedPlugin & {
@@ -1454,7 +1441,6 @@ type DirectoryRefreshOptions = {
   projectPath?: string;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
-  mcpTransport?: McpHarnessTransportMode;
   validate?: boolean;
   dryRun: boolean;
   overwrite: boolean;
@@ -1517,7 +1503,6 @@ async function runRefreshSingleCommand(
     projectPath: context.options.project,
     compileRoot: context.options.compileRoot,
     mcpLifecycle: context.options.mcpLifecycle,
-    mcpTransport: context.options.mcpTransport,
     clean: context.options.clean,
     dryRun: context.options.dryRun,
     quiet: context.options.json,
@@ -1884,7 +1869,6 @@ async function runRefreshDirectoryCommand(
     projectPath: options.project,
     compileRoot: options.compileRoot,
     mcpLifecycle: options.mcpLifecycle,
-    mcpTransport: options.mcpTransport,
     validate: options.validate,
     dryRun: options.dryRun,
     overwrite: options.overwrite,
@@ -2047,7 +2031,6 @@ async function refreshDiscoveredPlugin(
     projectPath: options.projectPath,
     compileRoot: options.compileRoot,
     mcpLifecycle: options.mcpLifecycle,
-    mcpTransport: options.mcpTransport,
     clean: options.clean,
     dryRun: options.dryRun,
     quiet: options.json,
@@ -2413,7 +2396,6 @@ async function runCompilePhaseForPlugin(options: {
   projectPath?: string;
   compileRoot?: string;
   mcpLifecycle: CompileMcpLifecycleMode;
-  mcpTransport?: McpHarnessTransportMode;
   clean?: boolean;
   dryRun: boolean;
   indent?: string;
@@ -2447,7 +2429,6 @@ async function runCompilePhaseForPlugin(options: {
         prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
         mcpLifecycle: options.mcpLifecycle,
-        ...(options.mcpTransport ? { mcpTransport: options.mcpTransport } : {}),
         ...(options.emitWorkflowRefs !== undefined
           ? { emitWorkflowRefs: options.emitWorkflowRefs }
           : {}),
@@ -2534,11 +2515,6 @@ function parseWorkflowPermissionMode(value: string): WorkflowPermissionMode {
 function parseMcpLifecycleMode(value: string): CompileMcpLifecycleMode {
   if (value === "none" || value === "verify" || value === "serve") return value;
   throw new InvalidArgumentError("--mcp-lifecycle must be one of: none, verify, serve.");
-}
-
-function parseMcpTransportMode(value: string): McpHarnessTransportMode {
-  if (value === "http" || value === "stdio-shim") return value;
-  throw new InvalidArgumentError("--mcp-transport must be one of: http, stdio-shim.");
 }
 
 function assertProjectPathForProjectScope(

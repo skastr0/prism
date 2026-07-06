@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Cause, Effect, Layer, Option } from "effect";
 import { compilePluginForTarget } from "./pipeline.js";
-import { resolveOwnerMcpRuntime, renderMcpHttpUrl } from "./mcp-runtime.js";
+import { resolveOwnerMcpRuntime } from "./mcp-runtime.js";
 import { loadPlugin } from "./load.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
 import { stopMcp } from "../mcp/lifecycle.js";
@@ -282,26 +282,6 @@ test("resolveOwnerMcpRuntime falls back to static plugin.json runtime config", a
   expect(resolved).toBeDefined();
   expect(resolved?.port).toBe(33333);
   expect(resolved?.host).toBe("127.0.0.1");
-  await sandbox.cleanup();
-});
-
-test("resolveOwnerMcpRuntime signals missing port when neither runtime.json nor static config exists", async () => {
-  const sandbox = await createPrismSandbox();
-  const ownerRoot = await createOwnerPlugin(sandbox.root);
-  const consumerRoot = await createConsumerPlugin(sandbox.root, { ownerPath: ownerRoot });
-  const registry = await Effect.runPromise(loadPlugin(consumerRoot));
-
-  const resolved = await resolveOwnerMcpRuntime({
-    prismHome: sandbox.prismHome,
-    registry,
-    targetId: "claude-code",
-    ownerPluginName: "owner-tools",
-  });
-
-  expect(resolved).toBeDefined();
-  expect(resolved!.host).toBe("127.0.0.1");
-  expect(resolved!.port).toBeUndefined();
-  expect(() => renderMcpHttpUrl(resolved!)).toThrow("requires a resolved port");
   await sandbox.cleanup();
 });
 

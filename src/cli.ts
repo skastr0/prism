@@ -79,7 +79,7 @@ import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
-import { defaultWorkflowStorePath, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
+import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import {
   buildWorkflowCatalog,
   pickDefaultAgentRef,
@@ -508,6 +508,14 @@ workflow
         },
       });
       console.log(JSON.stringify(result, null, 2));
+      // A run can complete (the author program itself succeeded, e.g. by isolating a task
+      // failure via Effect.either) while still carrying a failed/escalated task — that is not
+      // a caller-visible success. Map the persisted terminal status to the process exit code
+      // so a caller's `$?` reflects the real outcome instead of always reading 0.
+      const finalRunStatus = store.getRun(executionRunId!)?.status ?? "unknown";
+      if (!isWorkflowRunOutcomeSuccessful(finalRunStatus, result.tasks.map((task) => task.status))) {
+        exitWith(EXIT_CODES.domainFailure);
+      }
     } catch (error) {
       if (store !== undefined && executionRunId !== undefined && store.getRun(executionRunId)?.status === "running") {
         store.finishRun(executionRunId, "failed");
@@ -833,11 +841,18 @@ workflowRuns
           throw new CliUsageError(`workflow run not found: ${runId}`);
         }
         if (run.status !== "running") {
+          const tasks = store.listRunTasks(runId);
           console.log(JSON.stringify({
             run,
             taskSummary: store.summarizeRunTasks(runId).map(withoutOrdinal),
-            tasks: store.listRunTasks(runId).map(withoutOrdinal),
+            tasks: tasks.map(withoutOrdinal),
           }, null, 2));
+          // Same terminal-status mapping as `workflow run`: a "completed" run can still carry
+          // an isolated failed/escalated task, which must read as a non-zero exit for a caller
+          // polling via `$?`.
+          if (!isWorkflowRunOutcomeSuccessful(run.status, tasks.map((task) => task.status))) {
+            exitWith(EXIT_CODES.domainFailure);
+          }
           return;
         }
         if (Date.now() - started >= options.timeoutMs) {

@@ -197,6 +197,21 @@ export interface WorkflowRunRecord {
 
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "escalated" | "unknown";
 
+/**
+ * A run's persisted status can read "completed" while carrying isolated task failures: the
+ * dynamic runtime's fault-isolation contract (PQ-166) lets an author's `run` program finish
+ * successfully after recovering from a task that itself failed or escalated (e.g. via
+ * `Effect.either`). That is not a caller-visible success — a caller gating on `$?` (the CLI)
+ * must still see the partial failure. Success requires both: the run itself reached
+ * "completed", and every recorded task did too.
+ */
+export function isWorkflowRunOutcomeSuccessful(
+  runStatus: WorkflowRunStatus,
+  taskStatuses: ReadonlyArray<WorkflowRunTaskProgressStatus>,
+): boolean {
+  return runStatus === "completed" && taskStatuses.every((status) => status === "completed");
+}
+
 export interface WorkflowEventRecord {
   readonly sequence: number;
   readonly runId: string;

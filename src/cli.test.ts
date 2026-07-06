@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -113,6 +113,66 @@ test("workflow monitor help exposes store and polling options", async () => {
   expect(result.stdout).toContain("--poll-ms");
   expect(result.stdout).toContain("--fail-stale-after-ms");
 });
+
+test("workflow scaffold writes to ~/.prism/workflows by default and never instructs git add (PQ-176)", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const fakeHome = join(root, "home");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+  await mkdir(fakeHome, { recursive: true });
+  // Copy the fixture rather than compiling the checked-in example in place —
+  // refresh writes a fresh prism.lock next to the plugin source, which would
+  // otherwise dirty the repo on every test run.
+  const pluginPath = join(root, "prism-harness-qa");
+  await cp(join(repoRoot, "examples", "prism-harness-qa"), pluginPath, { recursive: true });
+  // HOME redirects the harness roots (~/.claude, ~/.codex) into the sandbox —
+  // refresh must never touch the real machine's harness configs.
+  const env = { PRISM_HOME: prismHome, HOME: fakeHome };
+
+  const refresh = await runCli(
+    ["refresh", pluginPath, "--harness", "claude-code,codex-cli", "--scope", "global"],
+    env,
+    { cwd: projectRoot },
+  );
+  expect(refresh.stderr).toBe("");
+  expect(refresh.exitCode).toBe(0);
+
+  const scaffold = await runCli(["workflow", "scaffold", "pq176-smoke"], env, { cwd: projectRoot });
+  expect(scaffold.exitCode).toBe(0);
+  expect(scaffold.stdout).not.toContain("git add");
+
+  const expectedPath = join(prismHome, "workflows", "pq176-smoke.workflow.ts");
+  expect(scaffold.stdout).toContain(expectedPath);
+  expect(await pathExists(expectedPath)).toBe(true);
+  // Never written under the project repo the doc warns against.
+  expect(await pathExists(join(projectRoot, "workflows", "pq176-smoke.workflow.ts"))).toBe(false);
+
+  const source = await readFile(expectedPath, "utf8");
+  expect(source).not.toContain("git add");
+  expect(source).toContain("agents.");
+
+  const validate = await runCli(["workflow", "validate", expectedPath], env, { cwd: projectRoot });
+  expect(validate.exitCode).toBe(0);
+  const summary = JSON.parse(validate.stdout) as { dynamic: boolean };
+  // The scaffold's `run:` fan-out is dynamic (tasks constructed at runtime),
+  // so validate's static summary reports no enumerable tasks — expected.
+  expect(summary.dynamic).toBe(true);
+
+  // The scaffold template names its tasks "a" and (when two workers are
+  // picked) "b" — supply both; an unused mock key is harmless.
+  const mockOutputPath = join(root, "mock-output.json");
+  await writeFile(
+    mockOutputPath,
+    JSON.stringify({ a: { worker: "x", summary: "ok" }, b: { worker: "x", summary: "ok" } }),
+  );
+  const run = await runCli(
+    ["workflow", "run", expectedPath, "--mock-output", mockOutputPath],
+    env,
+    { cwd: projectRoot },
+  );
+  expect(run.exitCode).toBe(0);
+}, 60_000);
 
 test("workflow typecheck accepts a workflow against shipped Prism declarations", async () => {
   const root = await createTempRoot();

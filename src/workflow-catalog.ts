@@ -277,28 +277,64 @@ export const renderRefsStatus = (status: RefsStatus): string => {
 // --- scaffold -----------------------------------------------------------------
 
 /**
- * Pick a sensible default agent ref for a starter workflow: the generic Forge
+ * Pick a sensible default agent for a starter workflow: the generic Forge
  * explorer if present, then any explorer, then any orchestrator, then anything.
  */
-export const pickDefaultAgentRef = (catalog: WorkflowCatalog): string => {
+export const pickDefaultAgent = (catalog: WorkflowCatalog): CatalogAgent | undefined => {
   const all = catalog.namespaces.flatMap((ns) => ns.agents);
   return (
-    all.find((agent) => agent.ref === "agents.forge.explorer")?.ref ??
-    all.find((agent) => agent.name === "explorer")?.ref ??
-    all.find((agent) => agent.name.includes("orchestrator"))?.ref ??
-    all[0]?.ref ??
-    "agents.forge.explorer"
+    all.find((agent) => agent.ref === "agents.forge.explorer") ??
+    all.find((agent) => agent.name === "explorer") ??
+    all.find((agent) => agent.name.includes("orchestrator")) ??
+    all[0]
   );
 };
 
-/** A complete, validating starter workflow source that uses a real discovered agent ref. */
-export const scaffoldWorkflowSource = (name: string, agentRef: string): string =>
-  `/**
+/** Same pick as {@link pickDefaultAgent}, projected to its ref string. */
+export const pickDefaultAgentRef = (catalog: WorkflowCatalog): string =>
+  pickDefaultAgent(catalog)?.ref ?? "agents.forge.explorer";
+
+/**
+ * Pick 1-2 workers for the scaffold's example tasks, restricted to harnesses
+ * the chosen agent is actually compiled for (`agent.installs`) that also have
+ * a Prism workflow-worker module (`catalog.workers`) — never a harness the
+ * generated workflow can't run against out of the box (PQ-176 footgun #2).
+ * Two workers reproduce the illustrative cross-harness fan-out; one worker
+ * degrades to a single task when the agent is installed on only one workflow
+ * harness. Falls back to "claude-code" alone when the agent has no recorded
+ * installs (e.g. an empty/minimal catalog) since it's the most commonly
+ * available workflow worker.
+ */
+export const pickDefaultWorkers = (
+  catalog: WorkflowCatalog,
+  agent: CatalogAgent | undefined,
+): readonly [string] | readonly [string, string] => {
+  const workerSet = new Set(catalog.workers);
+  const runnable = (agent?.installs ?? []).filter((harness) => workerSet.has(harness));
+  if (runnable.length === 0) return ["claude-code"];
+  // Prefer claude-code first when it's installed — the most broadly
+  // authenticated default harness — so fan-out order reads predictably
+  // instead of drifting with the (alphabetical) installs list.
+  const ordered = runnable.includes("claude-code")
+    ? ["claude-code", ...runnable.filter((harness) => harness !== "claude-code")]
+    : runnable;
+  return ordered.length >= 2 ? [ordered[0]!, ordered[1]!] : [ordered[0]!];
+};
+
+/** A complete, validating starter workflow source that uses a real discovered agent ref and installed workers. */
+export const scaffoldWorkflowSource = (
+  name: string,
+  agentRef: string,
+  workers: readonly [string] | readonly [string, string],
+): string => {
+  const header = `/**
  * ${name} — scaffolded by \`prism workflow scaffold\`.
+ * Lives at ~/.prism/workflows/${name}.workflow.ts by convention — never inside
+ * (or git-added to) the project repo it drives; tasks reference their target
+ * repo by absolute path, so the file's own location doesn't matter to it.
  * Edit the tasks, then:
- *   git add workflows/${name}.workflow.ts
- *   prism workflow validate workflows/${name}.workflow.ts
- *   prism workflow run      workflows/${name}.workflow.ts --max-concurrent-tasks 2
+ *   prism workflow validate ~/.prism/workflows/${name}.workflow.ts
+ *   prism workflow run      ~/.prism/workflows/${name}.workflow.ts --max-concurrent-tasks 2
  *
  * Discover other agents/orbits/models with: prism workflow catalog
  */
@@ -310,8 +346,10 @@ const Result = Schema.Struct({
   worker: Schema.String,
   summary: Schema.String,
 });
+`;
 
-const probe = (id: string, worker: "claude-code" | "grok") =>
+  const workerUnion = workers.map((worker) => JSON.stringify(worker)).join(" | ");
+  const probe = `const probe = (id: string, worker: ${workerUnion}) =>
   defineTask({
     id,
     agent: ${agentRef},
@@ -320,17 +358,32 @@ const probe = (id: string, worker: "claude-code" | "grok") =>
     cacheKey: \`${name}-\${worker}-v1\`,
     worker: { worker },
   });
+`;
 
-export const workflow = defineWorkflow({
+  const run =
+    workers.length === 2
+      ? `export const workflow = defineWorkflow({
   name: "${name}",
   run: (wf) =>
     Effect.gen(function* () {
       const results = yield* Effect.all(
-        [wf.runTask(probe("a", "claude-code")), wf.runTask(probe("b", "grok"))],
+        [wf.runTask(probe("a", ${JSON.stringify(workers[0])})), wf.runTask(probe("b", ${JSON.stringify(workers[1])}))],
         { concurrency: "unbounded" },
       );
       return { results };
     }),
 });
+`
+      : `export const workflow = defineWorkflow({
+  name: "${name}",
+  run: (wf) =>
+    Effect.gen(function* () {
+      const result = yield* wf.runTask(probe("a", ${JSON.stringify(workers[0])}));
+      return { results: [result] };
+    }),
+});
 `;
+
+  return `${header}\n${probe}\n${run}`;
+};
 

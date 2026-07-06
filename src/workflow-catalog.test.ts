@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { LOWERER_CAPABILITIES } from "./lowerer-capabilities.js";
 import {
+  pickDefaultAgent,
   pickDefaultAgentRef,
+  pickDefaultWorkers,
   projectCatalog,
   renderRefsStatus,
   scaffoldWorkflowSource,
@@ -170,12 +172,74 @@ describe("pickDefaultAgentRef", () => {
   });
 });
 
+const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyArray<string>): WorkflowCatalog => ({
+  namespaces: [
+    {
+      namespace: "x",
+      orbit: null,
+      agents: [
+        { ref: "agents.x.builder", plugin: "x", name: "builder", description: "", installs, modelByHarness: {} },
+      ],
+    },
+  ],
+  workers,
+  modelProfiles: [],
+});
+
+describe("pickDefaultWorkers", () => {
+  test("picks two workers when the agent is installed on 2+ workflow-worker harnesses", () => {
+    const catalog = catalogWithInstalls(["claude-code", "grok", "cursor"], ["claude-code", "grok", "codex-cli"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "grok"]);
+  });
+
+  test("degrades to one worker when only one install is a workflow-worker harness (PQ-176 footgun #2)", () => {
+    // cursor is a real harness but has no workflow-worker module — it must
+    // never be picked, and the agent isn't installed on any other worker.
+    const catalog = catalogWithInstalls(["claude-code", "cursor"], ["claude-code", "grok", "codex-cli"]);
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code"]);
+  });
+
+  test("never picks a worker the agent has no install for", () => {
+    const catalog = catalogWithInstalls(["claude-code"], ["claude-code", "grok", "codex-cli"]);
+    const agent = pickDefaultAgent(catalog);
+    const workers = pickDefaultWorkers(catalog, agent);
+    expect(workers).toEqual(["claude-code"]);
+    expect(workers).not.toContain("grok");
+  });
+
+  test("falls back to claude-code when the agent has no recorded installs", () => {
+    expect(pickDefaultWorkers(catalogWithInstalls([], ["grok"]), undefined)).toEqual(["claude-code"]);
+  });
+
+  test("prefers claude-code first even when it sorts later in installs", () => {
+    const catalog = catalogWithInstalls(
+      ["amp-code", "claude-code", "codex-cli"],
+      ["amp-code", "claude-code", "codex-cli"],
+    );
+    const agent = pickDefaultAgent(catalog);
+    expect(pickDefaultWorkers(catalog, agent)).toEqual(["claude-code", "amp-code"]);
+  });
+});
+
 describe("scaffoldWorkflowSource", () => {
-  const src = scaffoldWorkflowSource("my-flow", "agents.forge.explorer");
+  const src = scaffoldWorkflowSource("my-flow", "agents.forge.explorer", ["claude-code", "grok"]);
   test("embeds the workflow name, the chosen agent ref, and the refs import", () => {
     expect(src).toContain(`name: "my-flow"`);
     expect(src).toContain("agent: agents.forge.explorer,");
     expect(src).toContain('from "prism/refs"');
+  });
+
+  test("never instructs git add — workflows live outside the project repo", () => {
+    expect(src).not.toContain("git add");
+  });
+
+  test("degrades to a single task when only one worker is available", () => {
+    const singleWorkerSrc = scaffoldWorkflowSource("solo-flow", "agents.forge.explorer", ["claude-code"]);
+    expect(singleWorkerSrc).toContain('probe("a", "claude-code")');
+    expect(singleWorkerSrc).not.toContain("Effect.all");
+    expect(singleWorkerSrc).not.toContain("grok");
   });
 });
 

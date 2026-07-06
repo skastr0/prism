@@ -6,6 +6,7 @@ import { backupManagedTarget, managedBackupTargetRoot } from "./managed-backups.
 import {
   defaultPrismConfig,
   prismConfigPath,
+  prismWorkflowsSourceDir,
   readPrismConfig,
   resolvePrismHome,
 } from "./prism-home.js";
@@ -36,6 +37,11 @@ test("resolvePrismHome honors PRISM_HOME", async () => {
   process.env.PRISM_HOME = root;
 
   expect(resolvePrismHome()).toBe(root);
+});
+
+test("prismWorkflowsSourceDir lives under the home root, never the project repo (PQ-176)", () => {
+  const root = "/tmp/example-prism-home";
+  expect(prismWorkflowsSourceDir(root)).toBe(join(root, "workflows"));
 });
 
 test("readPrismConfig returns managed backup defaults when config is absent", async () => {

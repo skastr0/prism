@@ -64,7 +64,8 @@ const MATRIX: readonly MatrixEntry[] = [
     harness: "grok",
     workflow: "smoke-grok.workflow.ts",
     challenge: "grok-2026-06-20-001",
-    expectedModel: "grok-build",
+    // Not "grok-build" — see the model comment in smoke-grok.workflow.ts (PQ-176).
+    expectedModel: "grok-composer-2.5-fast",
   },
   {
     harness: "hermes",

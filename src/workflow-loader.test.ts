@@ -590,7 +590,7 @@ describe("workflow loader", () => {
     expect(summary.modelResolution).toEqual([
       { id: "explicit", worker: "claude-code", model: "claude-opus-4-8", source: "task" },
       { id: "profile", worker: "claude-code", model: "claude-opus-4-8", source: "profile" },
-      { id: "default", worker: "grok", model: "grok-build", source: "default" },
+      { id: "default", worker: "grok", model: "grok-composer-2.5-fast", source: "default" },
       { id: "deferred" },
     ]);
   });
@@ -630,7 +630,7 @@ describe("workflow loader", () => {
     expect(summary.note?.length ?? 0).toBeGreaterThan(0);
     expect(summary.staticWorkers).toEqual([
       { worker: "claude-code", defaultModel: "claude-haiku-4-5" },
-      { worker: "grok", defaultModel: "grok-build" },
+      { worker: "grok", defaultModel: "grok-composer-2.5-fast" },
     ]);
   });
 
@@ -655,7 +655,7 @@ describe("workflow loader", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("task");
     expect(stdout).toContain("worker");
-    expect(stdout).toContain("grok-build");
+    expect(stdout).toContain("grok-composer-2.5-fast");
     expect(stdout).toContain("default");
   });
 

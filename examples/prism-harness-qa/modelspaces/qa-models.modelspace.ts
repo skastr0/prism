@@ -10,7 +10,9 @@ export default {
         "amp-code": { model: "deep" },
         "claude-code": { model: "sonnet" },
         "codex-cli": { model: "gpt-5.4-mini" },
-        grok: { model: "grok-build" },
+        // Not "grok-build" — fails config validation against a restricted
+        // custom --agent file (every Prism-generated agent); see PQ-176.
+        grok: { model: "grok-composer-2.5-fast" },
         hermes: { model: "grok-composer-2.5-fast" },
         "kimi-code": { model: "kimi-code/kimi-for-coding" },
         opencode: { model: "ollama-cloud/deepseek-v4-flash" },

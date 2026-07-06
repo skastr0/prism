@@ -123,7 +123,11 @@ export const buildGrokArgs = (input: {
     : [];
   return [
     "--model",
-    input.model ?? "grok-build",
+    // Keep in sync with WORKFLOW_HARNESS_DETECTION_SPECS.grok.defaultModel
+    // (workflow-harness-detection.ts) — "grok-build" fails config validation
+    // against Prism-generated agents (PQ-176); this fallback only fires when
+    // buildGrokArgs is called directly without going through model resolution.
+    input.model ?? "grok-composer-2.5-fast",
     "--agent",
     input.agent,
     "--cwd",
@@ -216,7 +220,10 @@ export const runGrokWorkflowTask = async (
   const command = options.bin ?? process.env.PRISM_WORKFLOW_GROK_BIN ?? "grok";
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS)
-    ?? 120_000;
+    // Was 120_000 (PQ-176): too tight for real multi-turn tasks and the
+    // outlier among workflow workers — every other worker (claude, codex,
+    // hermes, amp, kimi, antigravity) already defaults to 360_000. Match it.
+    ?? 360_000;
   const runtime = await prepareGrokWorkflowRuntime(task);
   const args = buildGrokArgs({
     cwd: options.cwd,
@@ -256,7 +263,8 @@ export const runGrokWorkflowTask = async (
   const metadata = {
     adapter: "grok-cli",
     nativeAgent: task.agent.name,
-    model: options.model ?? "grok-build",
+    // Keep in sync with buildGrokArgs' own fallback above.
+    model: options.model ?? "grok-composer-2.5-fast",
     durationMs,
     processTimeoutMs,
     sessionId: sessionId ?? runOutput.sessionId,

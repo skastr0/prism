@@ -16,50 +16,6 @@ const DEFAULT_HTTP_HOST = "127.0.0.1";
 export type McpRuntimeTransport = "streamable-http";
 export const MCP_EXPOSURE_HEADER = "X-Prism-Mcp-Exposure" as const;
 
-/**
- * Per-harness rollout flag for *how a harness invokes* a plugin's generated
- * MCP server — not to be confused with `McpRuntimeTransport` above, which is
- * the wire protocol the daemon itself speaks (always Streamable HTTP today).
- * `"http"` (default) is today's one-http-entry-per-owner-plugin `.mcp.json`
- * shape. `"stdio-shim"` points the harness at the aggregating stdio shim
- * (`prism mcp shim`) instead, which fans out to the same daemons over UDS.
- */
-export type McpHarnessTransportMode = "http" | "stdio-shim";
-export const DEFAULT_MCP_HARNESS_TRANSPORT: McpHarnessTransportMode = "http";
-
-/**
- * Canary override env var name for a given harness, e.g. `claude-code` ->
- * `PRISM_MCP_TRANSPORT_CLAUDE_CODE`. Lets an operator flip one harness to
- * `stdio-shim` without touching plugin.json or CLI flags.
- */
-export const mcpHarnessTransportEnvVar = (targetId: HarnessId): string =>
-  `PRISM_MCP_TRANSPORT_${targetId.replace(/-/g, "_").toUpperCase()}`;
-
-const parseMcpHarnessTransportMode = (raw: string | undefined): McpHarnessTransportMode | undefined =>
-  raw === "http" || raw === "stdio-shim" ? raw : undefined;
-
-/**
- * Resolves the per-harness MCP transport rollout flag. Precedence: the
- * `PRISM_MCP_TRANSPORT_<HARNESS>` env var (canary escape hatch, read fresh
- * on every call) wins over the compiled/configured default, which itself
- * defaults to `"http"` — the flag-off behavior every existing lowerer and
- * golden fixture already assumes.
- */
-export const resolveMcpHarnessTransportMode = (
-  targetId: HarnessId,
-  configured?: McpHarnessTransportMode,
-): McpHarnessTransportMode =>
-  parseMcpHarnessTransportMode(process.env[mcpHarnessTransportEnvVar(targetId)]) ??
-  configured ??
-  DEFAULT_MCP_HARNESS_TRANSPORT;
-
-export type McpHttpSupportState = "supported" | "unsupported";
-
-export interface McpHttpTargetSupport {
-  readonly config: McpHttpSupportState;
-  readonly lifecycle: McpHttpSupportState;
-  readonly reason?: string;
-}
 
 export interface ResolvedMcpRuntime {
   readonly targetId: HarnessId;
@@ -70,40 +26,6 @@ export interface ResolvedMcpRuntime {
   readonly toolTimeoutMs: number;
 }
 
-const HTTP_SUPPORT: Partial<Record<HarnessId, McpHttpTargetSupport>> = {
-  hermes: {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  "codex-cli": {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  "claude-code": {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  "antigravity-cli": {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  "factory-droid": {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  "kimi-code": {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  cursor: {
-    config: "supported",
-    lifecycle: "supported",
-  },
-  grok: {
-    config: "supported",
-    lifecycle: "supported",
-  },
-};
 
 export const generatedMcpServerName = (pluginName: string): string =>
   `${GENERATED_SERVER_PREFIX}-${normalizeBundleSegment(pluginName)}`;
@@ -116,23 +38,6 @@ export const mcpExposureProfileForTarget = (
   targetId: HarnessId,
 ): string => `${serverName}:${targetId}`;
 
-export const getMcpHttpTargetSupport = (targetId: HarnessId): McpHttpTargetSupport =>
-  HTTP_SUPPORT[targetId] ?? {
-    config: "unsupported",
-    lifecycle: "unsupported",
-    reason: `Target '${targetId}' does not have a verified Streamable HTTP MCP config renderer.`,
-  };
-
-export const assertMcpHttpTargetSupported = (
-  targetId: HarnessId,
-  surface: keyof Pick<McpHttpTargetSupport, "config" | "lifecycle">,
-): void => {
-  const support = getMcpHttpTargetSupport(targetId);
-  if (support[surface] === "supported") return;
-  throw new Error(
-    `Streamable HTTP MCP is not supported for target '${targetId}'${support.reason ? `: ${support.reason}` : "."}`,
-  );
-};
 
 const stringValue = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -192,7 +97,6 @@ export const resolveMcpRuntime = (
     "toolTimeoutMs",
   ) ?? DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS;
 
-  assertMcpHttpTargetSupported(targetId, "config");
   if (!isLoopbackMcpHost(host)) {
     throw new Error(
       `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.host to be a loopback host.`,
@@ -229,22 +133,6 @@ export const resolveMcpRuntime = (
   };
 };
 
-export interface McpHttpUrlOptions {
-  readonly disableSse?: boolean;
-}
-
-export const renderMcpHttpUrl = (
-  runtime: ResolvedMcpRuntime,
-  options: McpHttpUrlOptions = {},
-): string => {
-  if (runtime.port === undefined) {
-    throw new Error(
-      `Streamable HTTP MCP transport for target '${runtime.targetId}' requires a resolved port before URL rendering.`,
-    );
-  }
-  const query = options.disableSse === true ? "?prism_sse=off" : "";
-  return `http://${runtime.host}:${runtime.port}/mcp${query}`;
-};
 
 const ownerRuntimeMetadataPath = (prismHome: string, pluginName: string): string =>
   join(prismMcpRuntimeDir(prismHome), normalizeBundleSegment(pluginName), "runtime.json");

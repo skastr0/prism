@@ -4,10 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Cause, Effect, Layer, Option } from "effect";
 import { compilePluginForTarget } from "./pipeline.js";
-import { resolveOwnerMcpRuntime, renderMcpHttpUrl } from "./mcp-runtime.js";
+import { resolveOwnerMcpRuntime } from "./mcp-runtime.js";
 import { loadPlugin } from "./load.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
-import { stopMcp } from "../mcp/lifecycle.js";
 import { generatedOwnerToolName } from "./generated-plugin.js";
 import { getFreePort, roundTripCompiledBundle } from "./test-helpers/mcp-http-roundtrip.js";
 import { createPrismSandbox } from "../testing/prism-sandbox.js";
@@ -285,26 +284,6 @@ test("resolveOwnerMcpRuntime falls back to static plugin.json runtime config", a
   await sandbox.cleanup();
 });
 
-test("resolveOwnerMcpRuntime signals missing port when neither runtime.json nor static config exists", async () => {
-  const sandbox = await createPrismSandbox();
-  const ownerRoot = await createOwnerPlugin(sandbox.root);
-  const consumerRoot = await createConsumerPlugin(sandbox.root, { ownerPath: ownerRoot });
-  const registry = await Effect.runPromise(loadPlugin(consumerRoot));
-
-  const resolved = await resolveOwnerMcpRuntime({
-    prismHome: sandbox.prismHome,
-    registry,
-    targetId: "claude-code",
-    ownerPluginName: "owner-tools",
-  });
-
-  expect(resolved).toBeDefined();
-  expect(resolved!.host).toBe("127.0.0.1");
-  expect(resolved!.port).toBeUndefined();
-  expect(() => renderMcpHttpUrl(resolved!)).toThrow("requires a resolved port");
-  await sandbox.cleanup();
-});
-
 test("cross-plugin canonical tool call round-trip", async () => {
   const sandbox = await createPrismSandbox();
   const projectRoot = join(sandbox.root, "project");
@@ -361,13 +340,6 @@ test("cross-plugin canonical tool call round-trip", async () => {
     expect(roundTrip.toolNames).toContain(scopedToolName);
     expect(roundTrip.callResult.structuredContent).toEqual({ acknowledged: true });
   } finally {
-    await stopMcp({
-      pluginPath: ownerRoot,
-      harness: "claude-code",
-      scope: "project",
-      projectPath: projectRoot,
-      prismHome: sandbox.prismHome,
-    }).catch(() => undefined);
     await sandbox.cleanup();
   }
 }, 30_000);

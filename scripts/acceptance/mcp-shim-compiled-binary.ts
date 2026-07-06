@@ -1,11 +1,15 @@
 /**
- * Acceptance gate: mcp-shim-compiled-binary (UDS-000 wave 2.5 regression net).
+ * Acceptance gate: mcp-shim-compiled-binary (UDS-000 wave 2.5 regression net;
+ * migrated to UDS-only in the WS6 manual-TCP-daemon retirement).
  *
  * Builds the REAL standalone `prism` binary (`bun build --compile`, current
  * platform only — cross-target coverage is `bun run build`'s job, not this
- * gate's) and runs `refresh` against a minimal MCP-owner plugin fixture, in
- * BOTH `--mcp-transport` modes (`http` and `stdio-shim`), asserting exit 0
- * and the generated `.mcp.json` artifact.
+ * gate's) and runs `refresh` against a minimal MCP-owner plugin fixture,
+ * asserting exit 0, the generated `.mcp.json` artifact, and the canonical
+ * UDS-only server bundle. It also proves `prism mcp status` works against
+ * the real binary over the UDS registry (no crash, reports a state) --
+ * there is no more TCP transport to select, so there is nothing left to loop
+ * over per-transport.
  *
  * This is the exact gap every other gate missed: `runtime-deps.test.ts`
  * exercises `udsRegistryBundleImportPath`/`udsSingletonBundleImportPath`'s
@@ -15,7 +19,9 @@
  * `import.meta.resolve` from an embedded module resolves differently than
  * from a real source-tree file. Only compiling and running the standalone
  * binary reproduces the "Could not resolve" `Bun.build` failure this wave's
- * fixes target.
+ * fixes target -- and, for WS6, the "Streamable HTTP MCP transport requires
+ * a resolved port before URL rendering" failure the manual-TCP-daemon
+ * retirement fixes.
  *
  * Sandboxed against a SHORT `/tmp`-rooted HOME (never `os.tmpdir()`'s
  * `/var/folders/...`, which already eats most of the 100-byte
@@ -25,7 +31,7 @@
  *
  * Usage: bun scripts/acceptance/mcp-shim-compiled-binary.ts
  */
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { constants, access } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { compile as compilePrismBinary, type Target } from "../compile.js";
@@ -121,15 +127,14 @@ const mcpConfigPath = (home: string): string =>
 const canonicalBundlePath = (home: string): string =>
   join(home, ".prism", "runtime", "mcp", PLUGIN_NAME, "server.mjs");
 
-const runTransportMode = async (options: {
+const runShimSmoke = async (options: {
   readonly binaryPath: string;
   readonly pluginRoot: string;
   readonly packageRoot: string;
   readonly work: string;
-  readonly transport: "http" | "stdio-shim";
 }): Promise<{ readonly gates: SubGate[]; readonly failures: string[] }> => {
-  const { binaryPath, pluginRoot, transport } = options;
-  const home = await mkdtemp(join(options.work, `h-${transport}-`));
+  const { binaryPath, pluginRoot } = options;
+  const home = await mkdtemp(join(options.work, "h-"));
   const env: Record<string, string | undefined> = {
     ...process.env,
     HOME: home,
@@ -144,23 +149,13 @@ const runTransportMode = async (options: {
   const failures: string[] = [];
 
   const refreshResult = await run(
-    [
-      binaryPath,
-      "refresh",
-      pluginRoot,
-      "--harness",
-      HARNESS,
-      "--scope",
-      "global",
-      "--mcp-transport",
-      transport,
-    ],
+    [binaryPath, "refresh", pluginRoot, "--harness", HARNESS, "--scope", "global"],
     { cwd: pluginRoot, env },
   );
 
   const exitOk = refreshResult.exitCode === 0;
   gates.push({
-    gate: `mcp-shim-compiled-binary:${transport}:refresh-exit-0`,
+    gate: "mcp-shim-compiled-binary:refresh-exit-0",
     pass: exitOk,
     expected: "PASS",
     detail: exitOk
@@ -168,48 +163,58 @@ const runTransportMode = async (options: {
       : `refresh exited ${refreshResult.exitCode}; stderr: ${refreshResult.stderr.trim().slice(0, 2_000) || refreshResult.stdout.trim().slice(0, 2_000)}`,
   });
   if (!exitOk) {
-    failures.push(`${transport} refresh failed (exit ${refreshResult.exitCode})`);
+    failures.push(`refresh failed (exit ${refreshResult.exitCode})`);
   }
 
   const configPath = mcpConfigPath(home);
   const configExists = await pathExists(configPath);
   gates.push({
-    gate: `mcp-shim-compiled-binary:${transport}:mcp-json-artifact`,
+    gate: "mcp-shim-compiled-binary:mcp-json-artifact",
     pass: configExists,
     expected: "PASS",
     detail: configExists ? `${configPath} written` : `${configPath} missing`,
   });
-  if (!configExists) failures.push(`${transport} .mcp.json artifact missing`);
+  if (!configExists) failures.push(".mcp.json artifact missing");
 
   const bundlePath = canonicalBundlePath(home);
   const bundleExists = await pathExists(bundlePath);
   gates.push({
-    gate: `mcp-shim-compiled-binary:${transport}:server-bundle-built`,
+    gate: "mcp-shim-compiled-binary:server-bundle-built",
     pass: bundleExists,
     expected: "PASS",
     detail: bundleExists
       ? `${bundlePath} built (uds-registry/uds-singleton resolved from the compiled binary)`
       : `${bundlePath} missing`,
   });
-  if (!bundleExists) failures.push(`${transport} canonical server.mjs bundle missing`);
+  if (!bundleExists) failures.push("canonical server.mjs bundle missing");
 
-  // http mode starts a real background daemon (`prism mcp serve`); stop it
-  // so this gate never leaves an orphan process behind. stdio-shim mode
-  // never starts one (that is the fix this gate exists to prove).
-  if (transport === "http" && exitOk) {
-    await run(
-      [binaryPath, "mcp", "stop", pluginRoot, "--harness", HARNESS, "--scope", "global"],
-      { cwd: pluginRoot, env },
-    );
-  }
+  // `mcp status` is pure observability over the UDS registry -- it must
+  // never crash even when nothing has ever spawned a daemon for this plugin
+  // (refresh only compiles the bundle; the shim resolve-or-spawns a daemon
+  // lazily on first tool call). A clean "stopped" report proves the status
+  // path works end to end from the compiled binary.
+  const statusResult = await run(
+    [binaryPath, "mcp", "status", pluginRoot, "--harness", HARNESS, "--scope", "global"],
+    { cwd: pluginRoot, env },
+  );
+  const statusOk = statusResult.exitCode === 0 && /^stopped\s/.test(statusResult.stdout.trim());
+  gates.push({
+    gate: "mcp-shim-compiled-binary:mcp-status-uds",
+    pass: statusOk,
+    expected: "PASS",
+    detail: statusOk
+      ? `mcp status reported: ${statusResult.stdout.trim()}`
+      : `mcp status exited ${statusResult.exitCode}; stdout: ${statusResult.stdout.trim().slice(0, 500)}; stderr: ${statusResult.stderr.trim().slice(0, 500)}`,
+  });
+  if (!statusOk) failures.push("mcp status failed or did not report a clean state over UDS");
 
   return { gates, failures };
 };
 
 const main = async (): Promise<void> => {
   const work = await mkdtemp("/tmp/prism-shim-smoke-");
-  const gates: SubGate[] = [];
-  const failures: string[] = [];
+  let gates: SubGate[] = [];
+  let failures: string[] = [];
 
   try {
     const pluginRoot = join(work, "plugin");
@@ -239,11 +244,9 @@ const main = async (): Promise<void> => {
     await mkdir(join(work, "bin"), { recursive: true });
     await compilePrismBinary(currentBinaryTarget(), binaryPath);
 
-    for (const transport of ["http", "stdio-shim"] as const) {
-      const result = await runTransportMode({ binaryPath, pluginRoot, packageRoot, work, transport });
-      gates.push(...result.gates);
-      failures.push(...result.failures);
-    }
+    const result = await runShimSmoke({ binaryPath, pluginRoot, packageRoot, work });
+    gates = result.gates;
+    failures = result.failures;
   } finally {
     await rm(work, { recursive: true, force: true });
   }
@@ -260,7 +263,7 @@ const main = async (): Promise<void> => {
     details: {
       plugin: PLUGIN_NAME,
       harness: HARNESS,
-      transports: ["http", "stdio-shim"],
+      transport: "uds-only",
       ...(failures.length > 0 ? { failures } : {}),
     },
   };

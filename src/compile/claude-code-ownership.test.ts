@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/claude-code.js";
-import { generatedMcpWireServerName } from "./mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -26,11 +26,10 @@ afterEach(async () => {
   );
 });
 
-test("claude-code lowerer owner-qualifies foreign tool bindings without copying owner MCP config", async () => {
+test("claude-code lowerer owner-qualifies foreign tool bindings and wires the shim to the owner plugin", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");
   const ownerPluginName = "ot";
-  const ownerServerName = generatedMcpWireServerName(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -72,11 +71,20 @@ test("claude-code lowerer owner-qualifies foreign tool bindings without copying 
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  expect(agent?.content).toContain(`mcp__${ownerServerName}__ot_echo`);
+  const echoPermission = renderAllowlist("claude-code", ownerPluginName, "ot_echo");
+  expect(agent?.content).toContain(echoPermission);
   expect(agent?.content).not.toContain("mcp__prism-generated-consumer-plugin__ot_echo");
 
+  // The shim resolves the owner's daemon on demand — no per-owner runtime
+  // resolution (and so no registry) is required at compile time; the
+  // referenced owner plugin is simply named in PRISM_SHIM_PLUGINS.
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  expect(mcpConfig).toBeUndefined();
+  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, { env?: Record<string, string> }>;
+  };
+  expect(parsed.mcpServers?.[shimServerKey("claude-code")]?.env?.PRISM_SHIM_PLUGINS).toBe(
+    ownerPluginName,
+  );
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();

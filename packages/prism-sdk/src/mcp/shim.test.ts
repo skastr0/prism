@@ -2,47 +2,13 @@ import { describe, it, expect, afterEach } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  pluginWireNamespace,
-  namespacedToolName,
-  splitNamespacedToolName,
-  ShimAggregator,
-  ShimDaemonError,
-  type GetDaemonFn,
-  type ResolveOrSpawnFn,
-} from "./shim";
+import { ShimAggregator, ShimDaemonError, type GetDaemonFn, type ResolveOrSpawnFn } from "./shim";
 import type { RegistryEntry, RegistryResult } from "./uds-registry";
+import { SHIM_HARNESS_IDS, renderAllowlist, renderWire, type ShimHarnessId } from "./wire-naming";
 
-describe("pluginWireNamespace / namespacedToolName", () => {
-  it("produces the fixed p_<8-hex> shape", () => {
-    expect(pluginWireNamespace("some-plugin")).toMatch(/^p_[0-9a-f]{8}$/);
-  });
-
-  it("is a pure deterministic function of the plugin name", () => {
-    expect(pluginWireNamespace("forge")).toBe(pluginWireNamespace("forge"));
-    expect(pluginWireNamespace("forge")).not.toBe(pluginWireNamespace("beacon"));
-  });
-
-  it("round-trips through splitNamespacedToolName", () => {
-    const fq = namespacedToolName("forge", "create_glyph");
-    const split = splitNamespacedToolName(fq);
-    expect(split).toEqual({ namespace: pluginWireNamespace("forge"), toolName: "create_glyph" });
-  });
-
-  it("round-trips even when the tool name itself contains '__'", () => {
-    const fq = namespacedToolName("forge", "weird__tool__name");
-    const split = splitNamespacedToolName(fq);
-    expect(split).toEqual({ namespace: pluginWireNamespace("forge"), toolName: "weird__tool__name" });
-  });
-
-  it("rejects a name with no separator", () => {
-    expect(splitNamespacedToolName("not-namespaced")).toBeUndefined();
-  });
-
-  it("rejects a name whose prefix is not the namespace shape", () => {
-    expect(splitNamespacedToolName("wrong_prefix_xx__tool")).toBeUndefined();
-  });
-});
+/** The harness these merge/dispatch/isolation tests exercise the aggregator under. */
+const TEST_HARNESS: ShimHarnessId = "claude-code";
+const namespacedToolName = (plugin: string, tool: string): string => renderWire(TEST_HARNESS, plugin, tool);
 
 // ---------------------------------------------------------------------------
 // ShimAggregator: fake daemons (plain Bun.serve over UDS speaking the same
@@ -149,6 +115,7 @@ describe("ShimAggregator", () => {
     );
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a", "plugin-b"],
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sockA, "plugin-b": sockB })),
     });
@@ -175,6 +142,7 @@ describe("ShimAggregator", () => {
     );
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
     });
@@ -187,6 +155,7 @@ describe("ShimAggregator", () => {
 
   it("omits an absent plugin from tools/list without failing the merge", async () => {
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-missing"],
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({})),
     });
@@ -207,6 +176,7 @@ describe("ShimAggregator", () => {
     );
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-dead", "plugin-alive"],
       daemonTimeoutMs: 500,
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-dead": sockDead, "plugin-alive": sockAlive })),
@@ -223,6 +193,7 @@ describe("ShimAggregator", () => {
 
   it("tools/call on an unresolvable or dead plugin throws a typed ShimDaemonError", async () => {
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-missing"],
       daemonTimeoutMs: 500,
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({})),
@@ -255,6 +226,7 @@ describe("ShimAggregator", () => {
     // gamma is not in enabledTools, so it should be filtered out
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       enabledTools: new Set([alphaFq, betaFq]),
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
@@ -283,6 +255,7 @@ describe("ShimAggregator", () => {
     const betaFq = namespacedToolName("plugin-a", "beta");
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       enabledTools: new Set([alphaFq]), // only alpha is enabled
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
@@ -312,6 +285,7 @@ describe("ShimAggregator", () => {
     );
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       // enabledTools not set -- all tools should be exposed
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
@@ -364,6 +338,7 @@ describe("ShimAggregator", () => {
     fakeDaemons.push({ sock, stop: () => server.stop(true) });
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       exposureProfile: "prism-generated-test:grok",
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
@@ -430,6 +405,7 @@ describe("DaemonConnection resilience", () => {
     fakeDaemons.push({ sock, stop: () => server.stop(true) });
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
     });
@@ -480,6 +456,7 @@ describe("DaemonConnection resilience", () => {
     fakeDaemons.push({ sock, stop: () => server.stop(true) });
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
     });
@@ -522,6 +499,7 @@ describe("DaemonConnection resilience", () => {
     fakeDaemons.push({ sock, stop: () => server.stop(true) });
 
     const aggregator = new ShimAggregator({
+      harness: TEST_HARNESS,
       plugins: ["plugin-a"],
       resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "plugin-a": sock })),
     });
@@ -536,4 +514,54 @@ describe("DaemonConnection resilience", () => {
       expect(result.content[0]?.text).toBe("ok");
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Per-harness parity: the wire name this shim actually advertises in
+// `tools/list`, for a given harness, must be the exact tool-segment a
+// lowerer compiled for that harness embeds in its own allowlist config
+// (`enabled_tools` / `tools.include` / `enabledTools` / the `tools:`
+// frontmatter). A drift here is silent at runtime -- the harness's
+// allowlist simply never matches anything the shim advertises, and every
+// tool from that plugin vanishes with no error on either side.
+// ---------------------------------------------------------------------------
+
+describe("per-harness wire/allowlist parity", () => {
+  for (const harness of SHIM_HARNESS_IDS) {
+    it(`${harness}: advertised tools/list wire name == lowerer allowlist tool-segment`, async () => {
+      const dir = await mkdtemp(join(tmpdir(), "shim-parity-test-"));
+      tempDirs.push(dir);
+      const sock = join(dir, "a.sock");
+
+      fakeDaemons.push(
+        await startFakeDaemon(sock, {
+          tools: [{ name: "search_glyph", inputSchema: { type: "object" } }],
+          callResult: (name) => ({ content: [{ type: "text", text: name }] }),
+        }),
+      );
+
+      const aggregator = new ShimAggregator({
+        harness,
+        plugins: ["test-plugin"],
+        resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ "test-plugin": sock })),
+      });
+
+      const tools = await aggregator.listTools();
+      expect(tools).toHaveLength(1);
+      const advertisedWire = tools[0]?.name;
+
+      // The allowlist string a compiled lowerer for this harness would
+      // write always carries `advertisedWire` -- as the whole string for a
+      // `within-server` shape, or as its suffix for `global-prefixed`.
+      const allowlistEntry = renderAllowlist(harness, "test-plugin", "search_glyph");
+      expect(advertisedWire).toBeDefined();
+      expect(allowlistEntry.endsWith(advertisedWire!)).toBe(true);
+
+      // And dispatch actually round-trips through that same advertised name.
+      const result = (await aggregator.callTool(advertisedWire!, {})) as {
+        content: ReadonlyArray<{ text: string }>;
+      };
+      expect(result.content[0]?.text).toBe("search_glyph");
+    });
+  }
 });

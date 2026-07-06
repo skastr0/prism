@@ -8,7 +8,7 @@ import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-h
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
+import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 
 let root: string;
 let originalHome: string | undefined;
@@ -444,31 +444,18 @@ test("doctor --fix drops stale snapshot region entries for missing marker fences
 
 test("doctor validates generated harness config references", async () => {
   const prismHome = join(root, "prism-home");
-  const bundlePath = prismMcpServerPath(prismHome, "filter");
-  await writeText(bundlePath, "known_tool\n");
-  const demoWireServerName = generatedMcpWireServerName("demo");
-  const filterWireServerName = generatedMcpWireServerName("filter");
-  const legacyWireServerName = generatedMcpWireServerName("legacy");
+  const codexServerName = shimServerKey("codex-cli");
+  const claudeServerName = shimServerKey("claude-code");
+  // Codex: a legacy remnant (old HTTP-era `command`/`args`, no PRISM_SHIM_*
+  // env, non-array enabled_tools) under the *correct* stdio-shim server key
+  // -- every stdio-shim shape check should fire.
   await writeText(
     join(process.env.HOME!, ".codex", "config.toml"),
     [
-      `["mcp_servers"."${demoWireServerName}"]`,
-      'url = "http://127.0.0.1:38463/mcp"',
-      'enabled_tools = "not-an-array"',
-      `["mcp_servers"."${demoWireServerName}"."headers"]`,
-      '"X-Prism-Mcp-Exposure" = "prism-generated-demo:codex-cli"',
-      "",
-      `["mcp_servers"."${filterWireServerName}"]`,
-      'url = "http://127.0.0.1:38464/mcp"',
-      'enabled_tools = ["missing_tool"]',
-      `["mcp_servers"."${filterWireServerName}"."headers"]`,
-      '"X-Prism-Mcp-Exposure" = "prism-generated-filter:codex-cli"',
-      "",
-      `["mcp_servers"."${legacyWireServerName}"]`,
+      `["mcp_servers"."${codexServerName}"]`,
       'command = "bun"',
       'args = ["/missing/prism/server.mjs"]',
-      `["mcp_servers"."${legacyWireServerName}"."headers"]`,
-      '"X-Prism-Mcp-Exposure" = "prism-generated-legacy:codex-cli"',
+      'enabled_tools = "not-an-array"',
       "",
     ].join("\n"),
   );
@@ -476,22 +463,19 @@ test("doctor validates generated harness config references", async () => {
     join(process.env.HOME!, ".config", "opencode", "opencode.json"),
     `${JSON.stringify({ plugin: ["file:///missing/prism-generated-demo"] }, null, 2)}\n`,
   );
+  // Claude: a well-formed shim command/args/env, but referencing an owner
+  // plugin ("demo") with no compiled MCP bundle on disk, plus an allowlist
+  // entry that isn't wire-naming shaped.
   await writeText(
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
     `${JSON.stringify({
       mcpServers: {
-        [demoWireServerName]: {
-          type: "http",
-          url: "http://127.0.0.1:38465/mcp",
-          headers: {
-            "X-Prism-Mcp-Exposure": "prism-generated-demo:claude-code",
-          },
-        },
-        [legacyWireServerName]: {
-          command: "bun",
-          args: ["/missing/server.mjs"],
-          headers: {
-            "X-Prism-Mcp-Exposure": "prism-generated-legacy:claude-code",
+        [claudeServerName]: {
+          command: "prism",
+          args: ["mcp", "shim"],
+          env: {
+            PRISM_SHIM_PLUGINS: "demo",
+            PRISM_SHIM_HARNESS: "claude-code",
           },
         },
       },
@@ -509,15 +493,95 @@ test("doctor validates generated harness config references", async () => {
     fix: false,
   });
 
+  const codesFor = (harness: string): string[] =>
+    report.findings.filter((f) => f.harness === harness).map((f) => f.code);
+  const codexCodes = codesFor("codex-cli");
+  expect(codexCodes).toContain("config.codex-enabled-tools-invalid");
+  expect(codexCodes).toContain("config.mcp-shim-command-unresolvable");
+  expect(codexCodes).toContain("config.mcp-shim-args-invalid");
+  expect(codexCodes).toContain("config.mcp-shim-env-harness-mismatch");
+  expect(codexCodes).toContain("config.mcp-shim-env-plugins-missing");
+
+  const claudeCodes = codesFor("claude-code");
+  expect(claudeCodes).toContain("config.mcp-shim-plugin-bundle-missing");
+  expect(claudeCodes).toContain("config.claude-hook-command-missing");
+  // The well-formed command/args/env on the Claude entry must NOT trip the
+  // shape checks that only the (deliberately broken) Codex entry violates.
+  expect(claudeCodes).not.toContain("config.mcp-shim-command-unresolvable");
+  expect(claudeCodes).not.toContain("config.mcp-shim-args-invalid");
+  expect(claudeCodes).not.toContain("config.mcp-shim-env-harness-mismatch");
+
   const codes = report.findings.map((finding) => finding.code);
-  expect(codes).toContain("config.codex-mcp-bundle-missing");
-  expect(codes).toContain("config.codex-mcp-stdio-removed");
-  expect(codes).toContain("config.codex-enabled-tools-invalid");
-  expect(codes).toContain("config.enabled-tool-missing-from-bundle");
   expect(codes).toContain("config.opencode-plugin-missing");
-  expect(codes).toContain("config.claude-mcp-bundle-missing");
-  expect(codes).toContain("config.claude-mcp-stdio-removed");
-  expect(codes).toContain("config.claude-hook-command-missing");
+});
+
+test("doctor reports zero findings for a correctly-generated stdio-shim MCP config (claude-code, codex-cli, hermes)", async () => {
+  const prismHome = join(root, "prism-home");
+  await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
+
+  const claudeServerName = shimServerKey("claude-code");
+  await writeText(
+    join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
+    `${JSON.stringify({
+      mcpServers: {
+        [claudeServerName]: {
+          command: "prism",
+          args: ["mcp", "shim"],
+          env: { PRISM_SHIM_PLUGINS: "demo", PRISM_SHIM_HARNESS: "claude-code" },
+        },
+      },
+    }, null, 2)}\n`,
+  );
+
+  const codexServerName = shimServerKey("codex-cli");
+  await writeText(
+    join(process.env.HOME!, ".codex", "config.toml"),
+    [
+      `["mcp_servers"."${codexServerName}"]`,
+      'command = "prism"',
+      'args = ["mcp", "shim"]',
+      "enabled = true",
+      "required = false",
+      `enabled_tools = ["p_a1b2c3d4_search"]`,
+      `["mcp_servers"."${codexServerName}"."env"]`,
+      'PRISM_SHIM_PLUGINS = "demo"',
+      'PRISM_SHIM_HARNESS = "codex-cli"',
+      "",
+    ].join("\n"),
+  );
+
+  const hermesServerName = shimServerKey("hermes");
+  await writeText(
+    join(process.env.HOME!, ".hermes", "config.yaml"),
+    [
+      "mcp_servers:",
+      `# --- prism:hermes.mcp.${hermesServerName} begin ---`,
+      `  ${hermesServerName}:`,
+      "    command: prism",
+      "    args:",
+      "      - mcp",
+      "      - shim",
+      "    enabled: true",
+      "    env:",
+      "      PRISM_SHIM_PLUGINS: demo",
+      "      PRISM_SHIM_HARNESS: hermes",
+      "    tools:",
+      "      include:",
+      "        - p_a1b2c3d4_search",
+      `# --- prism:hermes.mcp.${hermesServerName} end ---`,
+      "",
+    ].join("\n"),
+  );
+
+  const report = await runDoctor({
+    harnesses: ["claude-code", "codex-cli", "hermes"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const mcpShimFindings = report.findings.filter((f) => f.code.startsWith("config.mcp-shim-"));
+  expect(mcpShimFindings).toEqual([]);
 });
 
 test("doctor accepts an OpenCode plugin entry that already targets the bundle file (PQ-167)", async () => {

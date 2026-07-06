@@ -209,34 +209,6 @@ const main = async (): Promise<void> => {
     "serve",
   ];
 
-  const stopMcp = async (
-    label: string,
-    options: {
-      readonly command: readonly string[];
-      readonly cwd: string;
-      readonly home: string;
-      readonly env?: Record<string, string | undefined>;
-    },
-  ): Promise<void> => {
-    const result = await run([
-      ...options.command,
-      "mcp",
-      "stop",
-      pluginDir,
-      "--harness",
-      HARNESS,
-      "--scope",
-      "global",
-    ], {
-      cwd: options.cwd,
-      env: { PRISM_HOME: options.home, ...options.env },
-    });
-    if (result.exitCode !== 0) {
-      const detail = result.stderr.trim() || result.stdout.trim();
-      compileFailures.push(`${label} stop: exit ${result.exitCode}; output: ${detail.slice(0, 2_000)}`);
-    }
-  };
-
   const compile = async (
     label: string,
     options: {
@@ -258,9 +230,7 @@ const main = async (): Promise<void> => {
     if (result.exitCode !== 0) {
       const detail = result.stderr.trim() || result.stdout.trim();
       compileFailures.push(`${label}: exit ${result.exitCode}; output: ${detail.slice(0, 2_000)}`);
-      return;
     }
-    await stopMcp(`${label}`, options);
   };
 
   try {

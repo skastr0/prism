@@ -111,7 +111,6 @@ test(
         root,
         prismHome,
         dryRun: true,
-        mcpTransport: "stdio-shim",
       }),
     );
 
@@ -158,7 +157,6 @@ test(
         root,
         prismHome,
         dryRun: true,
-        mcpTransport: "stdio-shim",
       }),
     );
 
@@ -205,7 +203,6 @@ test(
         root,
         prismHome,
         dryRun: true,
-        mcpTransport: "stdio-shim",
       }),
     );
 

@@ -10,7 +10,28 @@
  */
 
 import { runShim } from "@skastr0/prism-sdk/mcp/shim";
+import { SHIM_HARNESS_IDS, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { resolvePrismHome } from "../prism-home.js";
+
+/**
+ * Wire naming is harness-specific (see `wire-naming.ts`'s `renderWire`), so
+ * a harness whose lowerer forgot to set `PRISM_SHIM_HARNESS` — or an older
+ * config predating this env var — needs a defined fallback rather than an
+ * `undefined` that would crash `ShimAggregator`'s per-harness lookup.
+ * Claude Code is the harness the original shim branch was written against,
+ * so it is the least-surprising default.
+ */
+const DEFAULT_SHIM_HARNESS: ShimHarnessId = "claude-code";
+
+const parseHarness = (raw: string | undefined): ShimHarnessId => {
+  if (raw !== undefined && (SHIM_HARNESS_IDS as ReadonlyArray<string>).includes(raw)) {
+    return raw as ShimHarnessId;
+  }
+  console.error(
+    `[prism-mcp-shim] PRISM_SHIM_HARNESS is missing or unrecognized ('${raw ?? ""}'); defaulting to '${DEFAULT_SHIM_HARNESS}' wire naming.`,
+  );
+  return DEFAULT_SHIM_HARNESS;
+};
 
 const parsePluginList = (raw: string | undefined): ReadonlyArray<string> =>
   (raw ?? "")
@@ -45,6 +66,7 @@ if (plugins.length === 0) {
 
 await runShim({
   plugins,
+  harness: parseHarness(process.env.PRISM_SHIM_HARNESS),
   // Resolved once, here, at the process entrypoint (the CLI edge for this
   // process) -- never re-read from the environment inside prism-sdk, which
   // has no dependency on this resolver (see `ShimAggregatorOptions.prismHome`).

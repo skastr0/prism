@@ -5,7 +5,7 @@
       "path": "<HARNESS_ROOT>/skills/prism-generated-canonical-compile-fixture/.claude-plugin/plugin.json"
     },
     {
-      "content": "{\n  \"mcpServers\": {\n    \"prism-mcp-shim\": {\n      \"command\": \"prism\",\n      \"args\": [\n        \"mcp\",\n        \"shim\"\n      ],\n      \"env\": {\n        \"PRISM_SHIM_PLUGINS\": \"canonical-compile-fixture,protocol-core\",\n        \"PRISM_SHIM_EXPOSURE\": \"prism-generated-canonical-compile-fixture:claude-code\"\n      }\n    }\n  }\n}\n",
+      "content": "{\n  \"mcpServers\": {\n    \"prism-mcp-shim\": {\n      \"command\": \"prism\",\n      \"args\": [\n        \"mcp\",\n        \"shim\"\n      ],\n      \"env\": {\n        \"PRISM_SHIM_PLUGINS\": \"canonical-compile-fixture,protocol-core\",\n        \"PRISM_SHIM_HARNESS\": \"claude-code\",\n        \"PRISM_SHIM_EXPOSURE\": \"prism-generated-canonical-compile-fixture:claude-code\"\n      }\n    }\n  }\n}\n",
       "path": "<HARNESS_ROOT>/skills/prism-generated-canonical-compile-fixture/.mcp.json"
     },
     {

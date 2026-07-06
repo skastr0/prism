@@ -1,124 +1,16 @@
-import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { resolve } from "node:path";
-import { EXIT_CODES, exitWith } from "../exit.js";
 import { chmodFile, writeFile } from "../fs.js";
 
-export interface SupervisorMcpDaemon {
-  readonly pid: number;
-  readonly prismHome: string;
-  readonly serverName: string;
-  readonly serverPath: string;
-}
-
-type SupervisorMcpDaemonIdentity = Omit<SupervisorMcpDaemon, "pid">;
-
-const supervisedMcpDaemons = new Map<number, SupervisorMcpDaemon>();
-let installedReaper = false;
-
-const normalizePath = (path: string): string => resolve(path);
-
-const isPathWithin = (path: string, parent: string): boolean => {
-  const normalized = normalizePath(path);
-  const normalizedParent = normalizePath(parent);
-  return normalized === normalizedParent || normalized.startsWith(`${normalizedParent}/`);
-};
-
-const shouldSuperviseMcpDaemon = (prismHome: string): boolean => {
-  if (process.env.PRISM_MCP_SUPERVISE_DAEMONS === "1") return true;
-  if (process.env.PRISM_MCP_SUPERVISE_DAEMONS === "0") return false;
-  return isPathWithin(prismHome, tmpdir());
-};
-
-const processIsRunning = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
-};
-
-const pidCommandSync = (pid: number): string | undefined => {
-  try {
-    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return undefined;
-  }
-};
-
-const commandLooksLikeSupervisedMcpDaemon = (command: string | undefined, serverPath: string): boolean => {
-  if (!command) return false;
-  const trimmed = command.trimEnd();
-  if (!trimmed.endsWith(serverPath)) return false;
-  return (
-    /(?:^|\s)(?:\S*[/\\])?bun(?:\.exe)?(?:\s|$)/iu.test(command) ||
-    /(?:^|\s)__mcp-server(?:\s|$)/u.test(command)
-  );
-};
-
-const sameSupervisedMcpServer = (
-  left: SupervisorMcpDaemonIdentity,
-  right: SupervisorMcpDaemonIdentity,
-): boolean =>
-  normalizePath(left.prismHome) === normalizePath(right.prismHome) &&
-  left.serverName === right.serverName &&
-  normalizePath(left.serverPath) === normalizePath(right.serverPath);
-
-const reapSupervisedMcpDaemonsSync = (): void => {
-  for (const [pid, daemon] of supervisedMcpDaemons) {
-    if (!processIsRunning(pid)) {
-      supervisedMcpDaemons.delete(pid);
-      continue;
-    }
-    if (!commandLooksLikeSupervisedMcpDaemon(pidCommandSync(pid), daemon.serverPath)) {
-      supervisedMcpDaemons.delete(pid);
-      continue;
-    }
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Already exited or no longer owned by this process.
-    }
-    supervisedMcpDaemons.delete(pid);
-  }
-};
-
-const installSupervisorReaper = (): void => {
-  if (installedReaper) return;
-  installedReaper = true;
-  process.once("beforeExit", reapSupervisedMcpDaemonsSync);
-  process.once("exit", reapSupervisedMcpDaemonsSync);
-  for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] as NodeJS.Signals[]) {
-    process.once(signal, () => {
-      reapSupervisedMcpDaemonsSync();
-      exitWith(EXIT_CODES.domainFailure);
-    });
-  }
-};
-
-export const registerSupervisorMcpDaemon = (daemon: SupervisorMcpDaemon): void => {
-  if (!Number.isInteger(daemon.pid) || daemon.pid <= 0) return;
-  if (!shouldSuperviseMcpDaemon(daemon.prismHome)) return;
-  supervisedMcpDaemons.set(daemon.pid, daemon);
-  installSupervisorReaper();
-};
-
-export const unregisterSupervisorMcpDaemon = (pid: number | undefined): void => {
-  if (pid === undefined) return;
-  supervisedMcpDaemons.delete(pid);
-};
-
-export const unregisterSupervisorMcpDaemonsForServer = (
-  identity: SupervisorMcpDaemonIdentity,
-): void => {
-  for (const [pid, daemon] of supervisedMcpDaemons) {
-    if (sameSupervisedMcpServer(daemon, identity)) supervisedMcpDaemons.delete(pid);
-  }
-};
+/**
+ * Process-supervision (registering/reaping spawned MCP daemon child
+ * processes) lived here before the UDS consolidation: it existed only to
+ * support the manual `prism mcp serve`/`stop`/`restart` commands, which are
+ * retired. Daemons are now resolve-or-spawned by the stdio shim and
+ * idle-reap themselves (see `packages/prism-sdk/src/mcp/daemon-resolver.ts`
+ * and `src/compile/mcp-bundle.ts`'s `MCP_SDK_HTTP_RUNTIME`), so there is no
+ * long-lived parent process left to supervise a child. Only the plain
+ * atomic-file-write helpers below remain in use (by
+ * `src/mcp/runtime-metadata.ts`).
+ */
 
 export const writeSupervisorTextFile = async (
   path: string,

@@ -7,7 +7,7 @@ import { Effect } from "effect";
 import { composeAgent } from "./compose.js";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/kimi-code.js";
-import { generatedMcpWireServerName } from "./mcp-runtime.js";
+import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { instantiateOrbit, resolveAgent, validateOrbit } from "./resolve.js";
 import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
 
@@ -94,7 +94,6 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
     target: {
       scope: "global",
       root: outputRoot,
-      mcpRuntimePort: 38467,
       sourcePluginName: "prism-harness-qa",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -119,7 +118,7 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   expect(manifestJson.mcpServers).toBeDefined();
 
   const mcpServerName = Object.keys(manifestJson.mcpServers ?? {})[0];
-  expect(mcpServerName).toBe(generatedMcpWireServerName("prism-harness-qa"));
+  expect(mcpServerName).toBe(shimServerKey("kimi-code"));
 
   const contextSkill = findContentOperation(files, "skills/prism-context/SKILL.md");
   expect(contextSkill?.content).toContain("<!-- prism:kimi-context -->");

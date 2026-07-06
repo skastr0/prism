@@ -7,6 +7,7 @@ import { Effect } from "effect";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import {
   generateMcpServerBundle,
@@ -20,6 +21,7 @@ import { resolvePrismHome } from "../prism-home.js";
 import {
   getFreePort,
   httpRpc,
+  socketPathForPort,
   waitForChildClose,
   waitForHttpServer,
   waitForUdsSocket,
@@ -290,14 +292,15 @@ const httpDeleteSession = async (args: {
   readonly port: number;
   readonly sessionId: string;
 }): Promise<Response> =>
-  fetch(`http://127.0.0.1:${args.port}/mcp`, {
+  fetch("http://localhost/mcp", {
     method: "DELETE",
     headers: {
       accept: "application/json, text/event-stream",
       "mcp-session-id": args.sessionId,
       "mcp-protocol-version": "2025-11-25",
     },
-  });
+    unix: await socketPathForPort(args.port),
+  } as RequestInit);
 
 afterEach(async () => {
   process.env.PRISM_HOME = originalPrismHome;
@@ -436,11 +439,12 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
       PRISM_MCP_SERVER_SHA256: "f".repeat(64),
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -449,11 +453,10 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
   try {
     await waitForHttpServer(port);
 
-    const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
+    const health = await fetch("http://localhost/healthz", {
       method: "GET",
-      headers: {
-      },
-    });
+      unix: socketPath,
+    } as RequestInit);
     expect(health.status).toBe(200);
     const healthBody = await health.json();
     expect(healthBody).toMatchObject({
@@ -469,7 +472,7 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     expect(typeof healthBody.uptimeMs).toBe("number");
     expect(healthBody.uptimeMs).toBeGreaterThanOrEqual(0);
 
-    const forbiddenHost = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const forbiddenHost = await fetch("http://localhost/mcp", {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
@@ -487,7 +490,8 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
           clientInfo: { name: "evil", version: "0.1.0" },
         },
       }),
-    });
+      unix: socketPath,
+    } as RequestInit);
     expect(forbiddenHost.status).toBe(403);
 
     const forbidden = await httpRpc({
@@ -498,7 +502,7 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     });
     expect(forbidden.response.status).toBe(403);
 
-    const invalidProtocol = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const invalidProtocol = await fetch("http://localhost/mcp", {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
@@ -506,7 +510,8 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
         "mcp-protocol-version": "1900-01-01",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
-    });
+      unix: socketPath,
+    } as RequestInit);
     expect(invalidProtocol.status).toBe(400);
 
     const firstInit = await httpRpc({
@@ -529,61 +534,22 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
     expect(secondSession).toBeTruthy();
     expect(secondSession).not.toBe(firstSession);
 
-    const noSseInit = await fetch(`http://127.0.0.1:${port}/mcp?prism_sse=off`, {
-      method: "POST",
-      headers: {
-        accept: "application/json, text/event-stream",
-        "content-type": "application/json",
-        "mcp-protocol-version": "2025-11-25",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-11-25",
-          capabilities: {},
-          clientInfo: { name: "client-no-sse", version: "0.1.0" },
-        },
-      }),
-    });
-    const noSseSession = noSseInit.headers.get("mcp-session-id");
-    expect(noSseInit.status).toBe(200);
-    expect(noSseSession).toBeTruthy();
-
-    const noSseGet = await fetch(`http://127.0.0.1:${port}/mcp?prism_sse=off`, {
+    // Post-consolidation: the standalone GET/SSE stream is gone entirely --
+    // GET is simply not a supported method on /mcp anymore (only POST for
+    // JSON-RPC and DELETE for session termination).
+    const getUnsupported = await fetch("http://localhost/mcp", {
       method: "GET",
       headers: {
         accept: "application/json, text/event-stream",
-        "mcp-session-id": noSseSession!,
+        "mcp-session-id": firstSession!,
         "mcp-protocol-version": "2025-11-25",
       },
+      unix: socketPath,
+    } as RequestInit);
+    expect(getUnsupported.status).toBe(405);
+    expect(await getUnsupported.json()).toEqual({
+      error: "method not allowed",
     });
-    expect(noSseGet.status).toBe(405);
-    expect(await noSseGet.json()).toEqual({
-      error: "SSE stream disabled for this MCP client",
-    });
-
-    const noSseList = await fetch(`http://127.0.0.1:${port}/mcp?prism_sse=off`, {
-      method: "POST",
-      headers: {
-        accept: "application/json, text/event-stream",
-        "content-type": "application/json",
-        "mcp-session-id": noSseSession!,
-        "mcp-protocol-version": "2025-11-25",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/list",
-      }),
-    });
-    const noSseListBody = await noSseList.json();
-    expect(noSseList.status).toBe(200);
-    expect(noSseListBody.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "forge_submit_review_review_details",
-      "orbit_core_create_glyph",
-    ]);
 
     const missingSession = await httpRpc({ port, method: "tools/list" });
     expect(missingSession.response.status).toBe(400);
@@ -642,97 +608,12 @@ test("MCP bundle Streamable HTTP serves multiple sessions from one process", asy
       method: "tools/list",
     });
     expect(secondAfterExit.response.status).toBe(404);
-    const noSseExit = await httpDeleteSession({
-      port,
-      sessionId: noSseSession!,
-    });
-    expect([200, 202]).toContain(noSseExit.status);
     expect(child.killed).toBe(false);
   } finally {
     child.kill();
     await waitForChildClose(child).catch(() => undefined);
   }
 });
-
-test("MCP bundle Streamable HTTP sends periodic SSE keepalive frames on the standalone GET stream", async () => {
-  const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
-  const compile = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "opencode",
-      scope: "project",
-      projectPath: projectRoot,
-      dryRun: false,
-    }),
-  );
-
-  const port = await getFreePort();
-  const builder = compile.composed.find((agent) => agent.name === "builder");
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: "forge",
-    serverName: "prism-mcp-forge",
-    bundleId: "forge",
-    bindings: builder?.toolBindings ?? [],
-  });
-
-  const serverPath = join(projectRoot, bundle.relativePath);
-  await writeText(serverPath, bundle.content);
-  const child = spawn("bun", [serverPath], {
-    cwd: projectRoot,
-    env: {
-      ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
-      // Well under the real 20s default and light-years under Bun's 255s
-      // idleTimeout, so the test observes several frames quickly.
-      PRISM_MCP_SSE_KEEPALIVE_MS: "80",
-    },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-
-  try {
-    await waitForHttpServer(port);
-    const init = await httpRpc({
-      port,
-      method: "initialize",
-      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "sse-client", version: "0.1.0" } },
-    });
-    const sessionId = init.response.headers.get("mcp-session-id");
-    expect(sessionId).toBeTruthy();
-
-    const streamResponse = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: "GET",
-      headers: {
-        accept: "text/event-stream",
-        "mcp-session-id": sessionId!,
-        "mcp-protocol-version": "2025-11-25",
-      },
-    });
-    expect(streamResponse.status).toBe(200);
-    expect(streamResponse.headers.get("content-type")).toContain("text/event-stream");
-
-    const reader = streamResponse.body!.getReader();
-    const decoder = new TextDecoder();
-    let collected = "";
-    const frameCount = (): number => (collected.match(/:\n\n/g) ?? []).length;
-
-    const deadline = Date.now() + 2_000;
-    while (frameCount() < 3 && Date.now() < deadline) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      collected += decoder.decode(value, { stream: true });
-    }
-    await reader.cancel().catch(() => undefined);
-
-    // At an 80ms interval, holding the stream open for up to 2s should
-    // easily observe several keepalive comment frames -- proof the
-    // standalone GET stream is not sitting fully idle between them.
-    expect(frameCount()).toBeGreaterThanOrEqual(3);
-  } finally {
-    child.kill();
-    await waitForChildClose(child).catch(() => undefined);
-  }
-}, 15_000);
 
 test("MCP bundle Streamable HTTP sends a terminal JSON-RPC error for an in-flight tool call when shutdown outlives the drain window", async () => {
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
@@ -758,11 +639,12 @@ test("MCP bundle Streamable HTTP sends a terminal JSON-RPC error for an in-fligh
 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
       // Short drain + flush window so the test doesn't wait out the real
       // 10s production default while still exercising the same code path.
       PRISM_MCP_SHUTDOWN_DRAIN_MS: "150",
@@ -846,17 +728,24 @@ test("MCP bundle Streamable HTTP works with the official SDK client", async () =
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
 
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
 
-  const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+  // The SDK's own transport has no concept of a unix socket -- inject one
+  // via its custom-fetch hook so the same official client exercises the
+  // real (UDS-only) generated server.
+  const udsFetch: FetchLike = (url, init) =>
+    fetch(url, { ...init, unix: socketPath } as RequestInit);
+  const transport = new StreamableHTTPClientTransport(new URL("http://localhost/mcp"), {
     requestInit: {},
+    fetch: udsFetch,
   });
   const client = new Client({ name: "prism-sdk-test", version: "0.1.0" });
 
@@ -963,11 +852,12 @@ test("MCP bundle tool schemas emit enum instead of const for string literals", a
   await writeText(serverPath, bundle.content);
 
   const port = await getFreePort();
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -1015,11 +905,12 @@ test("MCP bundle Streamable HTTP rejects tool calls over concurrency limit", asy
 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -1094,11 +985,12 @@ test("MCP bundle Streamable HTTP releases concurrency slot when timed-out work i
 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
       PRISM_MCP_MAX_CONCURRENT_CALLS: "1",
       PRISM_MCP_TOOL_TIMEOUT_MS: "50",
     },
@@ -1176,11 +1068,12 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
       PRISM_MCP_MAX_SESSIONS: "1",
       PRISM_MCP_MAX_REQUEST_BYTES: "512",
     },
@@ -1205,7 +1098,7 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
     expect(initializations.filter((init) => init.response.status === 200)).toHaveLength(1);
     expect(initializations.filter((init) => init.response.status === 429)).toHaveLength(5);
 
-    const oversized = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const oversized = await fetch("http://localhost/mcp", {
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
@@ -1218,7 +1111,8 @@ test("MCP bundle Streamable HTTP enforces session and request-size caps", async 
         method: "initialize",
         params: { payload: "x".repeat(1024) },
       }),
-    });
+      unix: socketPath,
+    } as RequestInit);
     expect(oversized.status).toBe(400);
   } finally {
     child.kill();
@@ -1346,11 +1240,12 @@ export default defineTool({
   await writeText(serverPath, bundle.content);
 
   const port = await getFreePort();
+  const socketPath = await socketPathForPort(port);
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
     env: {
       ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
+      PRISM_MCP_UDS_PATH: socketPath,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -1670,7 +1565,10 @@ test("MCP bundle Streamable HTTP with UDS path: socket file created", async () =
   }
 });
 
-test("MCP bundle Streamable HTTP TCP behavior unchanged when UDS_PATH not set", async () => {
+test("MCP bundle Streamable HTTP refuses to start when PRISM_MCP_UDS_PATH is not set", async () => {
+  // Post-consolidation: the generated server binds a Unix domain socket
+  // ONLY -- there is no TCP fallback left to fall back to. Omitting
+  // PRISM_MCP_UDS_PATH must fail fast and loud, not silently bind a port.
   const { pluginRoot, projectRoot } = await createSdlcMcpFixture();
   const compile = await Effect.runPromise(
     compilePluginForTarget({
@@ -1683,7 +1581,6 @@ test("MCP bundle Streamable HTTP TCP behavior unchanged when UDS_PATH not set", 
     }),
   );
 
-  const port = await getFreePort();
   const builder = compile.composed.find((agent) => agent.name === "builder");
   const bundle = await generateMcpServerBundle({
     sourcePluginName: "forge",
@@ -1695,31 +1592,21 @@ test("MCP bundle Streamable HTTP TCP behavior unchanged when UDS_PATH not set", 
   const serverPath = join(projectRoot, bundle.relativePath);
   await writeText(serverPath, bundle.content);
 
-  // Don't set PRISM_MCP_UDS_PATH -- TCP behavior should work unchanged
+  // Explicitly NOT setting PRISM_MCP_UDS_PATH.
   const child = spawn("bun", [serverPath], {
     cwd: projectRoot,
-    env: {
-      ...process.env,
-      PRISM_MCP_HTTP_PORT: String(port),
-      // Explicitly NOT setting PRISM_MCP_UDS_PATH
-    },
+    env: { ...process.env },
     stdio: ["pipe", "pipe", "pipe"],
   });
 
-  try {
-    await waitForHttpServer(port);
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
 
-    const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
-      method: "GET",
-    });
-    expect(health.status).toBe(200);
-    const healthBody = await health.json();
-    expect(healthBody.transport).toBe("streamable-http");
-    expect(healthBody.serverName).toBe("prism-mcp-forge");
-  } finally {
-    child.kill("SIGTERM");
-    await waitForChildClose(child).catch(() => undefined);
-  }
+  const exit = await waitForChildClose(child);
+  expect(exit.code).not.toBe(0);
+  expect(stderr).toContain("PRISM_MCP_UDS_PATH");
 });
 
 // Regression: bind() used to run as a bare `Bun.serve(...)` call outside any

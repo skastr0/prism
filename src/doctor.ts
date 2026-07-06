@@ -23,7 +23,7 @@ import {
 } from "./manifest.js";
 import { compilePluginForTarget } from "./compile/pipeline.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { MCP_EXPOSURE_HEADER } from "./compile/mcp-runtime.js";
+import { shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
 import {
@@ -435,18 +435,6 @@ const validateTomlConfig = async (options: {
   return findings;
 };
 
-const isLoopbackHttpUrl = (value: string): boolean => {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "http:" &&
-      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1")
-    );
-  } catch {
-    return false;
-  }
-};
-
 const validateHarnessConfig = async (options: {
   readonly harness: HarnessId;
   readonly scope: HarnessScope;
@@ -624,78 +612,177 @@ const generatedConfigPathExists = async (
   path: string,
 ): Promise<boolean> => exists(expandPath(path));
 
-const GENERATED_MCP_SERVER_PREFIX = "prism-generated-";
+/**
+ * Doctor's per-harness MCP validation, migrated to the stdio-shim-only world
+ * (overhaul: HTTP transport retired, `stdio-shim` is the only transport).
+ * Every shim harness registers the shim under `shimServerKey(harness)` with
+ * exactly `{ command: "prism", args: ["mcp", "shim"], env: { PRISM_SHIM_*
+ * } }` (see `packages/prism-sdk/src/mcp/wire-naming.ts` and each lowerer's
+ * `planMcpServer`/shim branch) -- there is no more port, url, or HTTP
+ * headers to validate. This section validates a harness's on-disk MCP
+ * server entry against that exact contract, the same one the lowerers emit.
+ */
 
-const pluginNameFromReadableMcpServerName = (
-  serverName: string,
-): string | undefined => {
-  if (!serverName.startsWith(GENERATED_MCP_SERVER_PREFIX)) return undefined;
-  const pluginName = serverName.slice(GENERATED_MCP_SERVER_PREFIX.length);
-  return pluginName.length > 0 ? pluginName : undefined;
+/** `p_<hash8>_` -- the fixed-width namespace segment every wire name carries (see `canonicalNamespace`). */
+const WIRE_NAME_NAMESPACE = /p_[0-9a-f]{8}_/u;
+
+/**
+ * "Resolvable" here means shape-correct, not PATH-resolved: every lowerer
+ * emits the literal token `"prism"`, and requiring an actual PATH lookup
+ * would make doctor flaky in a dev loop that runs against an uninstalled
+ * checkout. A path-shaped command (containing a separator) is still checked
+ * for existence on disk, so a genuine remnant (e.g. a stale `bun`/`node` +
+ * missing bundle path from the retired per-plugin HTTP daemon) is caught.
+ */
+const isResolvablePrismShimCommand = async (command: unknown): Promise<boolean> => {
+  if (typeof command !== "string" || command.length === 0) return false;
+  if (command === "prism") return true;
+  if (command.includes("/") || command.includes("\\")) {
+    return generatedConfigPathExists(command);
+  }
+  return false;
 };
 
-const exposureProfileFromMcpServer = (
-  server: Record<string, unknown>,
-): string | undefined => {
-  const headers = server.headers;
-  if (!headers || typeof headers !== "object") return undefined;
-  const profile = (headers as Record<string, unknown>)[MCP_EXPOSURE_HEADER];
-  return typeof profile === "string" ? profile : undefined;
+const hasStdioShimArgs = (args: unknown): boolean =>
+  Array.isArray(args) && args.includes("mcp") && args.includes("shim");
+
+const shimServerEnv = (server: Record<string, unknown>): Record<string, unknown> | undefined => {
+  const env = server.env;
+  return env && typeof env === "object" && !Array.isArray(env) ? (env as Record<string, unknown>) : undefined;
 };
 
-const pluginNameFromExposureProfile = (
-  exposureProfile: string | undefined,
-): string | undefined => {
-  if (!exposureProfile) return undefined;
-  const [serverName] = exposureProfile.split(":");
-  return serverName ? pluginNameFromReadableMcpServerName(serverName) : undefined;
-};
-
-const pluginNameForMcpServerConfig = (
-  serverName: string,
-  server: Record<string, unknown>,
-): string | undefined =>
-  pluginNameFromReadableMcpServerName(serverName) ??
-    pluginNameFromExposureProfile(exposureProfileFromMcpServer(server));
-
-const isPrismGeneratedMcpServerConfig = (
-  serverName: string,
-  server: Record<string, unknown>,
-): boolean => pluginNameForMcpServerConfig(serverName, server) !== undefined;
-
-const canonicalMcpBundlePathForServer = (
+const missingShimPluginBundles = async (
   prismHome: string,
-  serverName: string,
-  server: Record<string, unknown>,
-): string | undefined => {
-  const pluginName = pluginNameForMcpServerConfig(serverName, server);
-  return pluginName ? prismMcpServerPath(prismHome, pluginName) : undefined;
+  pluginsCsv: string,
+): Promise<string[]> => {
+  const names = pluginsCsv.split(",").map((value) => value.trim()).filter((value) => value.length > 0);
+  const missing: string[] = [];
+  for (const pluginName of names) {
+    if (!(await generatedConfigPathExists(prismMcpServerPath(prismHome, pluginName)))) missing.push(pluginName);
+  }
+  return missing;
 };
 
-const enabledToolFindings = async (options: {
+interface StdioShimVerdict {
+  readonly commandResolvable: boolean;
+  readonly argsValid: boolean;
+  readonly envHarnessMatches: boolean;
+  readonly envPluginsPresent: boolean;
+  readonly missingPluginBundles: ReadonlyArray<string>;
+  readonly invalidAllowlistEntries: ReadonlyArray<string>;
+}
+
+/**
+ * Evaluates one harness's on-disk stdio-shim MCP server entry against the
+ * lowerer contract. Returns a plain verdict rather than `DoctorFinding[]` so
+ * every call site can emit its own static, double-quoted finding code (the
+ * `finding-catalog.test.ts` meta-test greps `doctor.ts` for exactly that
+ * literal shape, so a code built from a template-literal variable would
+ * silently escape the catalog-completeness check).
+ */
+const evaluateStdioShimServerEntry = async (options: {
   readonly harness: HarnessId;
-  readonly configPath: string;
-  readonly serverName: string;
-  readonly bundlePath: string;
-  readonly enabledTools: ReadonlyArray<string>;
-}): Promise<DoctorFinding[]> => {
-  if (!(await exists(options.bundlePath))) return [];
-  const bundle = await readFile(options.bundlePath);
-  return options.enabledTools
-    .filter((tool) => !bundle.includes(tool))
-    .map((tool) => finding({
+  readonly server: Record<string, unknown>;
+  readonly prismHome: string;
+  readonly allowlist?: ReadonlyArray<string>;
+}): Promise<StdioShimVerdict> => {
+  const env = shimServerEnv(options.server);
+  const pluginsRaw = env?.PRISM_SHIM_PLUGINS;
+  const envPluginsPresent = typeof pluginsRaw === "string" && pluginsRaw.trim().length > 0;
+  return {
+    commandResolvable: await isResolvablePrismShimCommand(options.server.command),
+    argsValid: hasStdioShimArgs(options.server.args),
+    envHarnessMatches: env?.PRISM_SHIM_HARNESS === options.harness,
+    envPluginsPresent,
+    missingPluginBundles: envPluginsPresent
+      ? await missingShimPluginBundles(options.prismHome, pluginsRaw as string)
+      : [],
+    invalidAllowlistEntries: (options.allowlist ?? []).filter((entry) => !WIRE_NAME_NAMESPACE.test(entry)),
+  };
+};
+
+/** Shared finding builder: every stdio-shim call site reports the same six checks under the same codes. */
+const findingsFromStdioShimVerdict = (
+  verdict: StdioShimVerdict,
+  options: {
+    readonly harness: HarnessId;
+    readonly serverName: string;
+    readonly path: string;
+    readonly root?: string;
+  },
+): DoctorFinding[] => {
+  const base = {
+    family: "harness.config" as const,
+    harness: options.harness,
+    path: options.path,
+    fix: "refresh" as const,
+    ...(options.root ? { root: options.root } : {}),
+  };
+  const findings: DoctorFinding[] = [];
+  if (!verdict.commandResolvable) {
+    findings.push(finding({
+      ...base,
       severity: "error",
-      family: "harness.config",
-      code: "config.enabled-tool-missing-from-bundle",
-      message: `${options.harness} MCP server '${options.serverName}' enables tool '${tool}' but the generated bundle does not contain that tool name`,
-      harness: options.harness,
-      path: options.configPath,
-      fix: "refresh",
-      data: {
-        bundlePath: options.bundlePath,
-        tool,
-      },
+      code: "config.mcp-shim-command-unresolvable",
+      message: `${options.harness} MCP server '${options.serverName}' command does not resolve to a prism binary`,
     }));
+  }
+  if (!verdict.argsValid) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-args-invalid",
+      message: `${options.harness} MCP server '${options.serverName}' args do not invoke 'prism mcp shim'`,
+    }));
+  }
+  if (!verdict.envHarnessMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-env-harness-mismatch",
+      message: `${options.harness} MCP server '${options.serverName}' env.PRISM_SHIM_HARNESS is missing or does not match '${options.harness}'`,
+    }));
+  }
+  if (!verdict.envPluginsPresent) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-env-plugins-missing",
+      message: `${options.harness} MCP server '${options.serverName}' is missing env.PRISM_SHIM_PLUGINS`,
+    }));
+  }
+  if (verdict.missingPluginBundles.length > 0) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-plugin-bundle-missing",
+      message: `${options.harness} MCP server '${options.serverName}' references owner plugin(s) with no compiled MCP bundle: ${verdict.missingPluginBundles.join(", ")}`,
+      data: { missingPluginBundles: verdict.missingPluginBundles },
+    }));
+  }
+  if (verdict.invalidAllowlistEntries.length > 0) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-allowlist-invalid",
+      message: `${options.harness} MCP server '${options.serverName}' allowlist entries do not match the stdio-shim wire naming: ${verdict.invalidAllowlistEntries.join(", ")}`,
+      data: { invalidAllowlistEntries: verdict.invalidAllowlistEntries },
+    }));
+  }
+  return findings;
+};
+
+const validateStdioShimServerEntry = async (options: {
+  readonly harness: HarnessId;
+  readonly path: string;
+  readonly root?: string;
+  readonly serverName: string;
+  readonly server: Record<string, unknown>;
+  readonly prismHome: string;
+  readonly allowlist?: ReadonlyArray<string>;
+}): Promise<DoctorFinding[]> => {
+  const verdict = await evaluateStdioShimServerEntry(options);
+  return findingsFromStdioShimVerdict(verdict, options);
 };
 
 const pathFromCommandString = (command: string): string | undefined => {
@@ -717,80 +804,34 @@ const validateCodexConfigReferences = async (
   const findings: DoctorFinding[] = [];
   const mcpServers = parsed.mcp_servers;
   if (mcpServers && typeof mcpServers === "object") {
-    for (const [name, raw] of Object.entries(mcpServers as Record<string, unknown>)) {
+    const expectedServerName = shimServerKey("codex-cli");
+    const raw = (mcpServers as Record<string, unknown>)[expectedServerName];
+    if (raw && typeof raw === "object") {
       const server = raw as Record<string, unknown>;
-      if (!raw || typeof raw !== "object" || !isPrismGeneratedMcpServerConfig(name, server)) {
-        continue;
-      }
-      const bundle = canonicalMcpBundlePathForServer(prismHome, name, server);
-      const args = Array.isArray(server.args) ? server.args : [];
-      const stdioBundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
-      if (typeof server.command === "string" || stdioBundle) {
-        findings.push(finding({
-          severity: "error",
-          family: "harness.config",
-          code: "config.codex-mcp-stdio-removed",
-          message: `Codex MCP server '${name}' still uses removed stdio command/args config; refresh to Streamable HTTP`,
-          harness: "codex-cli",
-          path,
-          fix: "refresh",
-        }));
-      }
-      if (bundle && !(await generatedConfigPathExists(bundle))) {
-        findings.push(finding({
-          severity: "error",
-          family: "harness.config",
-          code: "config.codex-mcp-bundle-missing",
-          message: `Codex MCP server '${name}' references a missing canonical bundle: ${bundle}`,
-          harness: "codex-cli",
-          path,
-          fix: "refresh",
-        }));
-      }
-      if (typeof server.url !== "string") {
-        findings.push(finding({
-          severity: "error",
-          family: "harness.config",
-          code: "config.codex-mcp-url-missing",
-          message: `Codex MCP server '${name}' is missing Streamable HTTP url`,
-          harness: "codex-cli",
-          path,
-          fix: "refresh",
-        }));
-      } else if (!isLoopbackHttpUrl(server.url)) {
-        findings.push(finding({
-          severity: "error",
-          family: "harness.config",
-          code: "config.codex-mcp-url-non-loopback",
-          message: `Codex MCP server '${name}' must use a loopback HTTP url`,
-          harness: "codex-cli",
-          path,
-          fix: "refresh",
-        }));
-      }
       if ("enabled_tools" in server && !Array.isArray(server.enabled_tools)) {
         findings.push(finding({
           severity: "error",
           family: "harness.config",
           code: "config.codex-enabled-tools-invalid",
-          message: `Codex MCP server '${name}' has non-array enabled_tools`,
+          message: `Codex MCP server '${expectedServerName}' has non-array enabled_tools`,
           harness: "codex-cli",
           path,
           fix: "refresh",
         }));
-      } else if (bundle && Array.isArray(server.enabled_tools)) {
-        findings.push(
-          ...(await enabledToolFindings({
-            harness: "codex-cli",
-            configPath: path,
-            serverName: name,
-            bundlePath: bundle,
-            enabledTools: server.enabled_tools.filter(
-              (tool): tool is string => typeof tool === "string",
-            ),
-          })),
-        );
       }
+      const allowlist = Array.isArray(server.enabled_tools)
+        ? server.enabled_tools.filter((tool): tool is string => typeof tool === "string")
+        : undefined;
+      findings.push(
+        ...(await validateStdioShimServerEntry({
+          harness: "codex-cli",
+          path,
+          serverName: expectedServerName,
+          server,
+          prismHome,
+          allowlist,
+        })),
+      );
     }
   }
 
@@ -950,70 +991,19 @@ const validateClaudeGeneratedPlugin = async (
       const parsed = JSON.parse(await readFile(mcpPath)) as {
         readonly mcpServers?: Record<string, Record<string, unknown>>;
       };
-      for (const [name, server] of Object.entries(parsed.mcpServers ?? {})) {
-        const bundle = canonicalMcpBundlePathForServer(prismHome, name, server);
-        const args = Array.isArray(server.args) ? server.args : [];
-        const stdioBundle = args.find((item): item is string => typeof item === "string" && item.includes("server.mjs"));
-        if (typeof server.command === "string" || stdioBundle) {
-          findings.push(finding({
-            severity: "error",
-            family: "harness.config",
-            code: "config.claude-mcp-stdio-removed",
-            message: `Claude generated plugin '${name}' still uses removed stdio command/args config; refresh to Streamable HTTP`,
+      const expectedServerName = shimServerKey("claude-code");
+      const server = parsed.mcpServers?.[expectedServerName];
+      if (server && Object.keys(server).length > 0) {
+        findings.push(
+          ...(await validateStdioShimServerEntry({
             harness: "claude-code",
             root,
             path: mcpPath,
-            fix: "refresh",
-          }));
-        }
-        if (bundle && !(await generatedConfigPathExists(bundle))) {
-          findings.push(finding({
-            severity: "error",
-            family: "harness.config",
-            code: "config.claude-mcp-bundle-missing",
-            message: `Claude generated plugin '${name}' references a missing canonical bundle: ${bundle}`,
-            harness: "claude-code",
-            root,
-            path: mcpPath,
-            fix: "refresh",
-          }));
-        }
-        if (Object.keys(server).length > 0 && typeof server.url !== "string") {
-          findings.push(finding({
-            severity: "error",
-            family: "harness.config",
-            code: "config.claude-mcp-url-missing",
-            message: `Claude generated plugin '${name}' is missing Streamable HTTP url`,
-            harness: "claude-code",
-            root,
-            path: mcpPath,
-            fix: "refresh",
-          }));
-        } else if (Object.keys(server).length > 0 && !isLoopbackHttpUrl(server.url as string)) {
-          findings.push(finding({
-            severity: "error",
-            family: "harness.config",
-            code: "config.claude-mcp-url-non-loopback",
-            message: `Claude generated plugin '${name}' must use a loopback HTTP url`,
-            harness: "claude-code",
-            root,
-            path: mcpPath,
-            fix: "refresh",
-          }));
-        }
-        const headers = server.headers;
-        if (Object.keys(server).length > 0 && (!headers || typeof headers !== "object")) {
-          findings.push(finding({
-            severity: "error",
-            family: "harness.config",
-            code: "config.claude-mcp-headers-missing",
-            message: `Claude generated plugin '${name}' is missing HTTP headers`,
-            harness: "claude-code",
-            root,
-            path: mcpPath,
-            fix: "refresh",
-          }));
-        }
+            serverName: expectedServerName,
+            server,
+            prismHome,
+          })),
+        );
       }
     } catch (error) {
       findings.push(finding({
@@ -1096,6 +1086,193 @@ const validateClaudeGeneratedPluginReferences = async (
   return findings;
 };
 
+/**
+ * Cursor keeps the shim entry directly under the harness's own shared
+ * `mcp.json` (a `json-key` sync region, not a per-generated-plugin file --
+ * see `src/compile/lowerers/cursor.ts`), so, unlike the other JSON-based
+ * shim harnesses, there is exactly one file and one root to read per scope.
+ */
+const validateCursorConfigReferences = async (
+  path: string,
+  root: string,
+  prismHome: string,
+): Promise<DoctorFinding[]> => {
+  if (!(await exists(path))) return [];
+  let parsed: { readonly mcpServers?: Record<string, Record<string, unknown>> };
+  try {
+    parsed = JSON.parse(await readFile(path));
+  } catch (error) {
+    return [finding({
+      severity: "error",
+      family: "harness.config",
+      code: "config.mcp-shim-json-invalid",
+      message: `Cursor MCP config is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      harness: "cursor",
+      root,
+      path,
+      fix: "manual",
+    })];
+  }
+  const serverName = shimServerKey("cursor");
+  const server = parsed.mcpServers?.[serverName];
+  if (!server || Object.keys(server).length === 0) return [];
+  return validateStdioShimServerEntry({
+    harness: "cursor",
+    root,
+    path,
+    serverName,
+    server,
+    prismHome,
+  });
+};
+
+/**
+ * Grok, Antigravity CLI, Kimi Code, and Factory Droid each write the shim
+ * entry into a JSON manifest inside their own generated-plugin directory
+ * (mirroring Claude Code's `.mcp.json`, just a different subdir and
+ * filename per harness -- see each lowerer's `planMcpServer`/manifest
+ * write). One shared reader covers all four; only the scan subdir, config
+ * filename, and (for Kimi) the allowlist field name differ.
+ */
+const validateGeneratedPluginMcpReferences = async (options: {
+  readonly harness: ShimHarnessId;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+  readonly prismHome: string;
+  readonly pluginsSubdir: string;
+  readonly configFileName: string;
+  readonly allowlistField?: string;
+}): Promise<DoctorFinding[]> => {
+  const rootsList = rootsForHarness(options.harness, options.scope, options.projectPath, options.roots);
+  const findings: DoctorFinding[] = [];
+  const serverName = shimServerKey(options.harness);
+  for (const root of rootsList) {
+    const pluginsRoot = join(root, options.pluginsSubdir);
+    if (!(await exists(pluginsRoot))) continue;
+    for (const entry of await listDir(pluginsRoot)) {
+      if (!entry.startsWith("prism-generated-")) continue;
+      const configPath = join(pluginsRoot, entry, options.configFileName);
+      if (!(await exists(configPath))) continue;
+      let parsed: { readonly mcpServers?: Record<string, Record<string, unknown>> };
+      try {
+        parsed = JSON.parse(await readFile(configPath));
+      } catch (error) {
+        findings.push(finding({
+          severity: "error",
+          family: "harness.config",
+          code: "config.mcp-shim-json-invalid",
+          message: `${options.harness} generated plugin has invalid ${options.configFileName}: ${error instanceof Error ? error.message : String(error)}`,
+          harness: options.harness,
+          root,
+          path: configPath,
+          fix: "refresh",
+        }));
+        continue;
+      }
+      const server = parsed.mcpServers?.[serverName];
+      if (!server || Object.keys(server).length === 0) continue;
+      const allowlistRaw = options.allowlistField ? server[options.allowlistField] : undefined;
+      const allowlist = Array.isArray(allowlistRaw)
+        ? allowlistRaw.filter((tool): tool is string => typeof tool === "string")
+        : undefined;
+      findings.push(
+        ...(await validateStdioShimServerEntry({
+          harness: options.harness,
+          root,
+          path: configPath,
+          serverName,
+          server,
+          prismHome: options.prismHome,
+          allowlist,
+        })),
+      );
+    }
+  }
+  return findings;
+};
+
+const indentOf = (line: string): number => line.length - line.trimStart().length;
+
+const yamlSiblingBlock = (lines: ReadonlyArray<string>, startIndex: number, indent: number): string[] => {
+  const block: string[] = [];
+  for (let index = startIndex; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.trim().length === 0) continue;
+    if (line.trim().startsWith("#")) continue;
+    if (indentOf(line) <= indent) break;
+    block.push(line);
+  }
+  return block;
+};
+
+const yamlUnquote = (value: string): string =>
+  value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1) : value;
+
+const yamlScalarValue = (lines: ReadonlyArray<string>, indent: number, key: string): string | undefined => {
+  const line = lines.find((entry) => indentOf(entry) === indent && entry.trim().startsWith(`${key}:`));
+  if (!line) return undefined;
+  const value = line.trim().slice(key.length + 1).trim();
+  return value.length > 0 ? yamlUnquote(value) : undefined;
+};
+
+const yamlListItems = (lines: ReadonlyArray<string>, indent: number): string[] =>
+  lines
+    .filter((line) => indentOf(line) === indent && line.trim().startsWith("- "))
+    .map((line) => yamlUnquote(line.trim().slice(2).trim()));
+
+const yamlChildBlock = (
+  lines: ReadonlyArray<string>,
+  indent: number,
+  key: string,
+): string[] => {
+  const keyIndex = lines.findIndex((line) => indentOf(line) === indent && line.trim() === `${key}:`);
+  return keyIndex === -1 ? [] : yamlSiblingBlock(lines, keyIndex + 1, indent);
+};
+
+/**
+ * Hermes writes its MCP server config as hand-rolled YAML text (see
+ * `renderHermesStdioShimMcpServerYaml` in `src/compile/lowerers/hermes.ts`)
+ * -- there is no YAML parser dependency anywhere in this codebase, and
+ * adding one solely to read back a handful of mechanically-generated lines
+ * is not worth it. This reads the exact same fixed-indentation grammar the
+ * lowerer writes, rather than parsing YAML in general.
+ */
+const validateHermesConfigReferences = async (
+  path: string,
+  prismHome: string,
+): Promise<DoctorFinding[]> => {
+  if (!(await exists(path))) return [];
+  const lines = (await readFile(path)).split("\n");
+  const rootBlock = yamlChildBlock(lines, 0, "mcp_servers");
+  if (rootBlock.length === 0) return [];
+  const serverName = shimServerKey("hermes");
+  const serverBlock = yamlChildBlock(rootBlock, 2, serverName);
+  if (serverBlock.length === 0) return [];
+
+  const envBlock = yamlChildBlock(serverBlock, 4, "env");
+  const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
+  const allowlist = yamlChildBlock(toolsBlock, 6, "include").length > 0
+    ? yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8)
+    : [];
+
+  return validateStdioShimServerEntry({
+    harness: "hermes",
+    path,
+    serverName,
+    server: {
+      command: yamlScalarValue(serverBlock, 4, "command"),
+      args: yamlListItems(yamlChildBlock(serverBlock, 4, "args"), 6),
+      env: {
+        PRISM_SHIM_HARNESS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_HARNESS"),
+        PRISM_SHIM_PLUGINS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_PLUGINS"),
+      },
+    },
+    prismHome,
+    allowlist,
+  });
+};
+
 const validateHarnessConfigReferences = async (options: {
   readonly harness: HarnessId;
   readonly scope: HarnessScope;
@@ -1115,6 +1292,53 @@ const validateHarnessConfigReferences = async (options: {
       return path ? validateOpenCodeConfigReferences(path) : [];
     case "claude-code":
       return validateClaudeGeneratedPluginReferences(options.scope, options.projectPath, options.prismHome, options.roots);
+    case "hermes":
+      return path ? validateHermesConfigReferences(path, options.prismHome) : [];
+    case "cursor": {
+      const root = rootForHarness(options.harness, options.scope, options.projectPath, options.roots);
+      return path && root ? validateCursorConfigReferences(path, root, options.prismHome) : [];
+    }
+    case "grok":
+      return validateGeneratedPluginMcpReferences({
+        harness: "grok",
+        scope: options.scope,
+        projectPath: options.projectPath,
+        roots: options.roots,
+        prismHome: options.prismHome,
+        pluginsSubdir: "plugins",
+        configFileName: ".mcp.json",
+      });
+    case "antigravity-cli":
+      return validateGeneratedPluginMcpReferences({
+        harness: "antigravity-cli",
+        scope: options.scope,
+        projectPath: options.projectPath,
+        roots: options.roots,
+        prismHome: options.prismHome,
+        pluginsSubdir: "plugins",
+        configFileName: "mcp_config.json",
+      });
+    case "factory-droid":
+      return validateGeneratedPluginMcpReferences({
+        harness: "factory-droid",
+        scope: options.scope,
+        projectPath: options.projectPath,
+        roots: options.roots,
+        prismHome: options.prismHome,
+        pluginsSubdir: "plugins",
+        configFileName: "mcp.json",
+      });
+    case "kimi-code":
+      return validateGeneratedPluginMcpReferences({
+        harness: "kimi-code",
+        scope: options.scope,
+        projectPath: options.projectPath,
+        roots: options.roots,
+        prismHome: options.prismHome,
+        pluginsSubdir: join("plugins", "managed"),
+        configFileName: "kimi.plugin.json",
+        allowlistField: "enabledTools",
+      });
     default:
       return [];
   }
@@ -1191,7 +1415,7 @@ const validateMcpHealth = async (options: {
         message: status.detail,
         harness,
         plugin: manifest.name,
-        path: status.descriptor.runtimePath,
+        path: status.descriptor.serverPath,
         fix: "mcp-restart",
         data: {
           serverName: status.descriptor.serverName,

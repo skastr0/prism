@@ -7,15 +7,10 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import {
-  MCP_EXPOSURE_HEADER,
   generatedMcpServerName,
-  generatedMcpWireServerName,
   mcpExposureProfileForTarget,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-  type McpHarnessTransportMode,
-  type ResolvedMcpRuntime,
 } from "../mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -26,6 +21,7 @@ import {
   collectBindingNameMap,
   groupBindingsByOwner,
   mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
@@ -45,20 +41,9 @@ import {
 
 const TARGET_ID = "codex-cli" as const;
 
-/**
- * `.mcp.json` server key for the aggregated stdio shim entry (`mcpTransport
- * === "stdio-shim"`). Fixed and singular — unlike http mode's one key
- * per owner plugin, one shim process fronts every owner this harness
- * references, so there is exactly one key to choose.
- */
-const STDIO_SHIM_WIRE_NAME = "prism-mcp-shim" as const;
-
 export interface CodexCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpRuntimePort?: number;
-  /** Per-harness MCP transport rollout flag; defaults to `"http"` when absent. */
-  readonly mcpTransport?: McpHarnessTransportMode;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -160,24 +145,6 @@ const composeModelConfig = (agent: ComposedAgent): Record<string, unknown> => {
   return output;
 };
 
-const renderCodexMcpServerToml = (options: {
-  readonly name: string;
-  readonly exposureProfile: string;
-  readonly runtime: ResolvedMcpRuntime;
-  readonly enabledTools: ReadonlyArray<string>;
-}): string[] => {
-  return [
-    tomlDottedTable(["mcp_servers", options.name]),
-    `url = ${quote(renderMcpHttpUrl(options.runtime))}`,
-    "enabled = true",
-    "required = false",
-    'default_tools_approval_mode = "approve"',
-    `enabled_tools = ${tomlArray(options.enabledTools)}`,
-    tomlDottedTable(["mcp_servers", options.name, "headers"]),
-    `${quote(MCP_EXPOSURE_HEADER)} = ${quote(options.exposureProfile)}`,
-  ];
-};
-
 const renderCodexStdioShimMcpServerToml = (options: {
   readonly name: string;
   readonly exposureProfile: string;
@@ -194,6 +161,7 @@ const renderCodexStdioShimMcpServerToml = (options: {
     `enabled_tools = ${tomlArray(options.enabledTools)}`,
     tomlDottedTable(["mcp_servers", options.name, "env"]),
     `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
+    `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
   ];
   if (options.exposureProfile) {
     lines.push(`PRISM_SHIM_EXPOSURE = ${quote(options.exposureProfile)}`);
@@ -202,11 +170,10 @@ const renderCodexStdioShimMcpServerToml = (options: {
 };
 
 const renderCodexOwnerMcpServerRef = (options: {
-  readonly name: string;
   readonly readableName: string;
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => [
-  `# MCP tools requested from ${options.readableName} (wire ${options.name}): ${options.enabledTools.join(", ")}`,
+  `# MCP tools requested from ${options.readableName} (shim wire): ${options.enabledTools.join(", ")}`,
 ];
 
 const renderAgentToml = (
@@ -240,14 +207,15 @@ const renderAgentToml = (
   const ownerGroups = groupBindingsByOwner(target.sourcePluginName, agent.toolBindings);
   for (const [ownerPlugin, bindings] of ownerGroups) {
     const enabledTools = uniqueSorted(
-      bindings.map((binding) => mcpToolNameForBinding(target.sourcePluginName, binding)),
+      bindings.map((binding) =>
+        renderAllowlist("codex-cli", ownerPlugin, mcpToolNameForBinding(ownerPlugin, binding)),
+      ),
     );
     if (enabledTools.length === 0) continue;
     lines.push(
       "",
       "# prism diagnostic: Codex agent role files cannot carry partial mcp_servers tables.",
       ...renderCodexOwnerMcpServerRef({
-        name: generatedMcpWireServerName(ownerPlugin),
         readableName: generatedMcpServerName(ownerPlugin),
         enabledTools,
       }),
@@ -292,9 +260,10 @@ const collectCanonicalToolNames = (
   sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): ReadonlyMap<string, string> =>
-  collectBindingNameMap(bindings, (binding) =>
-    mcpToolNameForBinding(sourcePluginName, binding),
-  );
+  collectBindingNameMap(bindings, (binding) => {
+    const owner = ownerPluginForBinding(sourcePluginName, binding);
+    return renderAllowlist("codex-cli", owner, mcpToolNameForBinding(owner, binding));
+  });
 
 const hookMatcher = (
   nativeEvent: string,
@@ -435,12 +404,6 @@ const planMcpServer = (
   input: LowerInput,
 ):
   | {
-      readonly kind: "http";
-      readonly mcpServerName: string;
-      readonly mcpRuntime: ResolvedMcpRuntime;
-      readonly globalToolNames: string[];
-    }
-  | {
       readonly kind: "stdio-shim";
       readonly mcpServerName: string;
       readonly globalToolNames: string[];
@@ -454,51 +417,30 @@ const planMcpServer = (
   );
   if (bindingsByOwner.size === 0) return { kind: "none" };
 
-  if (input.target.mcpTransport === "stdio-shim") {
-    // One shim process fans out to every owner plugin's daemon, so there is
-    // exactly one entry — no per-owner runtime/port resolution at compile time.
-    const mcpServerName = STDIO_SHIM_WIRE_NAME;
-    const allGlobalTools = uniqueSorted([
-      ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map(
-        (binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding),
-      ),
-      ...Array.from(bindingsByOwner.values())
-        .flat()
-        .filter((binding) => binding.kind === "synthetic")
-        .map((binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding)),
-    ]);
-    return {
-      kind: "stdio-shim",
-      mcpServerName,
-      globalToolNames: allGlobalTools,
-      plugins: Array.from(bindingsByOwner.keys()),
-    };
-  }
-
-  // HTTP mode (default)
-  const ownedBindings = bindingsByOwner.get(input.target.sourcePluginName) ?? [];
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: ownedBindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
-  if (ownedBindings.length === 0 && bindingsByOwner.size === 0) return { kind: "none" };
-
-  const mcpServerName = generatedMcpWireServerName(input.target.sourcePluginName);
-  const globalToolNames = uniqueSorted([
-    ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools ?? []).map(
-      (binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding),
+  // One shim process fans out to every owner plugin's daemon, so there is
+  // exactly one entry — no per-owner runtime/port resolution at compile time.
+  // Both binding sets below are always self-owned (see `ownerPluginForBinding`:
+  // a canonical-tool binding's owner is always `sourcePluginName`, and a
+  // synthetic binding's owner is always the compiling plugin), so rendering
+  // against `sourcePluginName` is the correct owner for every entry here.
+  const sourcePluginName = input.target.sourcePluginName;
+  const mcpServerName = shimServerKey("codex-cli");
+  const allGlobalTools = uniqueSorted([
+    ...bindingsFromCanonicalTools(sourcePluginName, input.tools ?? []).map((binding) =>
+      renderAllowlist("codex-cli", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
     ),
-    ...ownedBindings
+    ...Array.from(bindingsByOwner.values())
+      .flat()
       .filter((binding) => binding.kind === "synthetic")
-      .map((binding) => mcpToolNameForBinding(input.target.sourcePluginName, binding)),
+      .map((binding) =>
+        renderAllowlist("codex-cli", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
+      ),
   ]);
-  if (globalToolNames.length === 0) return { kind: "none" };
-
   return {
-    kind: "http",
+    kind: "stdio-shim",
     mcpServerName,
-    mcpRuntime: runtime,
-    globalToolNames,
+    globalToolNames: allGlobalTools,
+    plugins: Array.from(bindingsByOwner.keys()),
   };
 };
 
@@ -597,24 +539,7 @@ const planConfigRegions = (
   const plugin = input.target.sourcePluginName;
   const regions: DesiredRegion[] = [];
 
-  if (mcp.kind === "http" && mcp.globalToolNames.length > 0) {
-    regions.push({
-      kind: "marker",
-      targetPath: configTarget,
-      regionKey: `codex.mcp.${mcp.mcpServerName}`,
-      commentPrefix: "#",
-      content: renderCodexMcpServerToml({
-        name: mcp.mcpServerName,
-        exposureProfile: mcpExposureProfileForTarget(
-          generatedMcpServerName(plugin),
-          TARGET_ID,
-        ),
-        runtime: mcp.mcpRuntime,
-        enabledTools: mcp.globalToolNames,
-      }).join("\n"),
-      plugin,
-    });
-  } else if (mcp.kind === "stdio-shim" && mcp.globalToolNames.length > 0) {
+  if (mcp.kind === "stdio-shim" && mcp.globalToolNames.length > 0) {
     regions.push({
       kind: "marker",
       targetPath: configTarget,

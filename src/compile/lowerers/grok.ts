@@ -11,19 +11,19 @@ import { type ComposedAgent } from "../compose.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
+import { generatedMcpWireServerName } from "../mcp-runtime.js";
 import {
-  MCP_EXPOSURE_HEADER,
-  generatedMcpWireServerName,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-} from "../mcp-runtime.js";
-import { stableHash8 } from "../stable-hash.js";
+  type GrokCollisionGuard,
+  createGrokCollisionGuard,
+  renderAllowlist,
+  shimServerKey,
+} from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
+  allReferencedBindingsByOwner,
   collectBindingNameMap,
-  bindingsOwnedByPlugin,
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
@@ -49,18 +49,14 @@ import {
 } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
-const GROK_MCP_NAME_SEPARATOR = "__";
 
-// Grok drops (silently, with no error) any MCP tool whose fully-qualified
-// name exceeds 64 chars or fails ^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$. The
-// server-prefix + separator + tool-segment composition is bounded at <=64
-// today by construction elsewhere (wire server keys are `p_` + 8 hex, and
-// GENERATED_EXTERNAL_TOOL_NAME_MAX_LENGTH reserves exactly enough room for
-// that), but that bound is an accident of two unrelated constants agreeing.
-// Enforce it explicitly here so a future change to either constant fails
-// safe (truncate + hash) instead of failing silent (Grok drops the tool).
-export const GROK_MAX_TOOL_NAME_LENGTH = 64;
-
+/**
+ * The plugin's `p_<hash8>` HTTP-mode wire server name. Retained only for
+ * external consumers still on the (deleted) HTTP-mode assertion path — the
+ * lowerer's own naming now goes entirely through `@skastr0/prism-sdk/mcp/
+ * wire-naming`'s `renderAllowlist`/`renderWire`, which caps and namespaces
+ * per the shim's single "prism" server key, not per owner plugin.
+ */
 export const grokMcpServerNameForPlugin = (sourcePluginName: string): string =>
   generatedMcpWireServerName(sourcePluginName);
 
@@ -68,7 +64,6 @@ export interface GrokLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -231,56 +226,24 @@ const renderAgentMarkdown = (
 
 const grokNativeHookEvent = prePostSessionNativeHookEvent;
 
-const grokQualifiedMcpToolName = (
-  sourcePluginName: string,
-  binding: ResolvedContractBinding,
-): string =>
-  `${grokMcpServerNameForPlugin(sourcePluginName)}${GROK_MCP_NAME_SEPARATOR}${mcpToolNameForBinding(sourcePluginName, binding)}`;
-
-/**
- * Deterministic overflow policy for a Grok-qualified tool name: names that
- * already fit stay byte-identical (regeneration must not rename a compliant
- * tool); names over the limit are truncated and given a stable hash suffix
- * so the result is unique, regex-safe, and reproducible across compiles.
- */
-export const capGrokToolName = (name: string): string => {
-  if (name.length <= GROK_MAX_TOOL_NAME_LENGTH) return name;
-  const suffix = stableHash8(name);
-  const prefixLength = GROK_MAX_TOOL_NAME_LENGTH - suffix.length - 1;
-  const prefix = name.slice(0, prefixLength).replace(/_+$/g, "");
-  return `${prefix}_${suffix}`;
-};
-
 interface GrokToolNamer {
   readonly name: (ownerPlugin: string, binding: ResolvedContractBinding) => string;
 }
 
 /**
- * Applies capGrokToolName across every tool name this compile emits for a
- * single Grok bundle, and guards against the one collision the cap itself
- * can introduce: two distinct qualified names truncating to the same
- * capped name on the same wire server.
+ * Renders every tool name this compile emits through the shared
+ * `renderAllowlist("grok", ...)` — canonical wire name, Grok-capped at
+ * <=64 chars, prefixed `<shim server key>__`. One `GrokCollisionGuard` per
+ * lowering pass: since every owner plugin's tools now funnel through the
+ * same single "prism" shim server (not one server per owner, as HTTP mode
+ * had), the collision guard is correctly scoped globally across the whole
+ * compile, not per owner.
  */
 const createGrokToolNamer = (): GrokToolNamer => {
-  const seenByServer = new Map<string, Map<string, string>>();
+  const guard: GrokCollisionGuard = createGrokCollisionGuard();
   return {
-    name: (ownerPlugin, binding) => {
-      const qualified = grokQualifiedMcpToolName(ownerPlugin, binding);
-      const capped = capGrokToolName(qualified);
-      if (capped !== qualified) {
-        const server = grokMcpServerNameForPlugin(ownerPlugin);
-        const seen = seenByServer.get(server) ?? new Map<string, string>();
-        const existing = seen.get(capped);
-        if (existing !== undefined && existing !== qualified) {
-          throw new Error(
-            `Grok MCP tool name collision on server '${server}': '${existing}' and '${qualified}' both truncate to '${capped}'`,
-          );
-        }
-        seen.set(capped, qualified);
-        seenByServer.set(server, seen);
-      }
-      return capped;
-    },
+    name: (ownerPlugin, binding) =>
+      renderAllowlist("grok", ownerPlugin, mcpToolNameForBinding(ownerPlugin, binding), guard),
   };
 };
 
@@ -349,41 +312,43 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
-const planMcpServer = async (
+const planMcpServer = (
   input: LowerInput,
   files: DesiredFile[],
   desiredRelativePaths: Set<string>,
-): Promise<void> => {
-  const ownedBindings = bindingsOwnedByPlugin(
+): void => {
+  const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: ownedBindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
-  const mcpServerName = grokMcpServerNameForPlugin(input.target.sourcePluginName);
+  if (bindingsByOwner.size === 0) return;
 
-  const mcpServers: Record<string, unknown> = {};
-  if (ownedBindings.length > 0) {
-    mcpServers[mcpServerName] = {
-      type: "http",
-      url: renderMcpHttpUrl(runtime),
-      headers: {
-        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
-      },
-    };
+  // One shim process fans out to every owner plugin's daemon over UDS, so
+  // there is exactly one entry here — no per-owner runtime/port resolution
+  // needed at compile time; the shim resolves live daemons on demand.
+  const env: Record<string, string> = {
+    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
+    PRISM_SHIM_HARNESS: TARGET_ID,
+  };
+  if (input.target.mcpExposureProfile) {
+    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
   }
-
-  if (Object.keys(mcpServers).length === 0) return;
 
   pushWrite(
     files,
     desiredRelativePaths,
     input.target,
     ".mcp.json",
-    json({ mcpServers }),
+    json({
+      mcpServers: {
+        [shimServerKey("grok")]: {
+          command: "prism",
+          args: ["mcp", "shim"],
+          env,
+        },
+      },
+    }),
   );
 };
 

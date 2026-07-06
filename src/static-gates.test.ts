@@ -54,7 +54,7 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     allowedFiles: new Set([GATE_FILE]),
     reason:
       "deleted in WS3 — HTTP identity (host/port) is never baked into bundle bytes; " +
-      "the server reads PRISM_MCP_HTTP_HOST/PRISM_MCP_HTTP_PORT at startup",
+      "the server reads PRISM_MCP_UDS_PATH at startup (Unix domain socket only, no TCP)",
   },
   {
     pattern: /executeStandardLowering/,

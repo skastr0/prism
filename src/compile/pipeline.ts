@@ -74,14 +74,11 @@ import {
   type AgentCacheDescriptor,
 } from "./cache.js";
 import { writeLockfile } from "./lockfile.js";
-import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
 import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
   mcpExposureProfileForTarget,
-  resolveMcpHarnessTransportMode,
   resolveMcpRuntime,
-  type McpHarnessTransportMode,
 } from "./mcp-runtime.js";
 import {
   prismMcpServerPath,
@@ -97,7 +94,6 @@ import {
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { bindingsOwnedByPlugin } from "./tool-bindings.js";
-import { getFreePort } from "../mcp/ports.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -111,8 +107,6 @@ interface LowererModule {
       readonly scope: HarnessScope;
       readonly root: string;
       readonly mcpExposureProfile?: string;
-      readonly mcpRuntimePort?: number;
-      readonly mcpTransport?: McpHarnessTransportMode;
       readonly prismHome?: string;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
@@ -167,8 +161,6 @@ export interface CompileOptions {
   readonly prismHome: string;
   readonly dryRun: boolean;
   readonly mcpLifecycle?: CompileMcpLifecycleMode;
-  /** Per-harness MCP transport rollout flag; defaults to `"http"`. See `resolveMcpHarnessTransportMode`. */
-  readonly mcpTransport?: McpHarnessTransportMode;
   readonly packageMode?: boolean;
   readonly emitWorkflowRefs?: boolean;
   /** Optional per-op progress listener (fires only on real apply, not dry-run). */
@@ -595,33 +587,6 @@ const resolveCompileTargetContext = (
     };
   });
 
-const shellQuote = (value: string): string =>
-  /^[A-Za-z0-9_./:=@+-]+$/u.test(value)
-    ? value
-    : `'${value.replace(/'/g, "'\\''")}'`;
-
-const renderMcpServeCommand = (options: {
-  readonly pluginPath: string;
-  readonly targetId: HarnessId;
-  readonly scope: HarnessScope;
-  readonly projectPath?: string;
-  readonly registry: PluginRegistry;
-}): string => {
-  const configured = resolveMcpRuntime(options.registry, options.targetId);
-  return [
-    "prism",
-    "mcp",
-    "serve",
-    shellQuote(options.pluginPath),
-    "--harness",
-    options.targetId,
-    "--scope",
-    options.scope,
-    ...(options.projectPath ? ["--project", shellQuote(options.projectPath)] : []),
-    ...(configured?.port ? ["--port", String(configured.port)] : []),
-  ].join(" ");
-};
-
 const mcpBindingsForTarget = (options: {
   readonly registry: PluginRegistry;
   readonly agents: ReadonlyArray<ComposedAgent>;
@@ -640,173 +605,6 @@ const portFromMcpMetadata = (metadata: { readonly port?: number } | undefined): 
   metadata.port <= 65535
     ? metadata.port
     : undefined;
-
-const resolveCompileMcpRuntimePort = (options: {
-  readonly compileOptions: CompileOptions;
-  readonly registry: PluginRegistry;
-  readonly targetId: HarnessId;
-  readonly prismHome: string;
-  readonly mcpTransport: McpHarnessTransportMode;
-  readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly artifacts: TargetArtifacts;
-}): Effect.Effect<number | undefined, CompileError> => {
-  const bindings = mcpBindingsForTarget({
-    registry: options.registry,
-    agents: options.agents,
-    artifacts: options.artifacts,
-  });
-  // stdio-shim targets never get an HTTP url artifact -- the harness spawns
-  // `prism mcp shim`, which resolves-or-spawns its own UDS daemon per
-  // plugin. Resolving/serving an HTTP port here would be dead work at best
-  // and an orphaned, never-referenced TCP daemon at worst.
-  if (
-    bindings.length === 0 ||
-    !targetHasGeneratedMcpConfig(options.targetId) ||
-    options.mcpTransport === "stdio-shim"
-  ) {
-    return Effect.succeed(undefined);
-  }
-  const runtime = resolveMcpRuntime(options.registry, options.targetId);
-  if (runtime.port !== undefined) {
-    return Effect.succeed(undefined);
-  }
-
-  const mode = options.compileOptions.mcpLifecycle ?? "serve";
-  const serveCommand = renderMcpServeCommand({
-    pluginPath: options.compileOptions.pluginPath,
-    targetId: options.targetId,
-    scope: options.compileOptions.scope,
-    projectPath: options.compileOptions.projectPath,
-    registry: options.registry,
-  });
-
-  return Effect.tryPromise({
-    try: async () => {
-      if (options.compileOptions.dryRun) {
-        // Reuse the running daemon's port so `plan` previews the same URL
-        // that `refresh` already wrote. Otherwise `plan` allocates a fresh
-        // free port and reports every MCP URL artifact as source-changed.
-        const status = await getMcpStatus({
-          pluginPath: options.compileOptions.pluginPath,
-          harness: options.targetId,
-          scope: options.compileOptions.scope,
-          projectPath: options.compileOptions.projectPath,
-          prismHome: options.prismHome,
-        });
-        const runningPort = status.state === "running" ? portFromMcpMetadata(status.metadata) : undefined;
-        if (runningPort !== undefined) return runningPort;
-        return getFreePort(runtime.host);
-      }
-
-      if (mode === "serve") {
-        const served = await serveMcp({
-          pluginPath: options.compileOptions.pluginPath,
-          harness: options.targetId,
-          scope: options.compileOptions.scope,
-          projectPath: options.compileOptions.projectPath,
-          prismHome: options.prismHome,
-        });
-        const port = portFromMcpMetadata(served.metadata);
-        if (port !== undefined) return port;
-        throw new Error(
-          `${options.targetId} Streamable HTTP MCP daemon started without recording a runtime port.`,
-        );
-      }
-
-      const status = await getMcpStatus({
-        pluginPath: options.compileOptions.pluginPath,
-        harness: options.targetId,
-        scope: options.compileOptions.scope,
-        projectPath: options.compileOptions.projectPath,
-        prismHome: options.prismHome,
-      });
-      const port = status.state === "running" ? portFromMcpMetadata(status.metadata) : undefined;
-      if (port !== undefined) return port;
-
-      throw new Error(
-        `${options.targetId} Streamable HTTP MCP runtime has no configured port and no running metadata; ` +
-          `refusing to write url config that may point to nothing. ` +
-          `Run: ${serveCommand}` +
-          (mode === "none" ? `\nOr rerun compile/install with --mcp-lifecycle serve.` : ""),
-      );
-    },
-    catch: (error) =>
-      PluginManifestError.forPlugin(options.compileOptions.pluginPath, error instanceof Error ? error.message : String(error)),
-  });
-};
-
-const assertHttpMcpLifecycleGate = (options: {
-  readonly compileOptions: CompileOptions;
-  readonly registry: PluginRegistry;
-  readonly targetId: HarnessId;
-  readonly outputRoot: string;
-  readonly prismHome: string;
-  readonly mcpTransport: McpHarnessTransportMode;
-  readonly agents: ReadonlyArray<ComposedAgent>;
-  readonly artifacts: TargetArtifacts;
-  readonly expectedServerSha256?: string;
-}): Effect.Effect<void, CompileError> => {
-  const bindings = mcpBindingsForTarget({
-    registry: options.registry,
-    agents: options.agents,
-    artifacts: options.artifacts,
-  });
-  // stdio-shim never writes an HTTP url artifact, so there is nothing here
-  // for the legacy TCP daemon lifecycle to gate: asserting it "serve" this
-  // target would spawn (and never reference) an orphaned HTTP daemon
-  // alongside the UDS daemon the shim itself resolves-or-spawns.
-  if (
-    options.compileOptions.dryRun ||
-    bindings.length === 0 ||
-    !targetHasGeneratedMcpConfig(options.targetId) ||
-    options.mcpTransport === "stdio-shim"
-  ) {
-    return Effect.void;
-  }
-
-  const mode = options.compileOptions.mcpLifecycle ?? "serve";
-  const serveCommand = renderMcpServeCommand({
-    pluginPath: options.compileOptions.pluginPath,
-    targetId: options.targetId,
-    scope: options.compileOptions.scope,
-    projectPath: options.compileOptions.projectPath,
-    registry: options.registry,
-  });
-  const expectedServerSha256 = options.expectedServerSha256;
-
-  return Effect.tryPromise({
-    try: async () => {
-      if (mode === "serve") {
-        await serveMcp({
-          pluginPath: options.compileOptions.pluginPath,
-          harness: options.targetId,
-          scope: options.compileOptions.scope,
-          projectPath: options.compileOptions.projectPath,
-          prismHome: options.prismHome,
-        });
-      }
-
-      const status = await getMcpStatus({
-        pluginPath: options.compileOptions.pluginPath,
-        harness: options.targetId,
-        scope: options.compileOptions.scope,
-        projectPath: options.compileOptions.projectPath,
-        prismHome: options.prismHome,
-        expectedServerSha256,
-      });
-      if (status.state === "running") return;
-
-      throw new Error(
-        `${options.targetId} Streamable HTTP MCP daemon '${status.descriptor.serverName}' is ${status.state}; ` +
-          `refusing to write url config that may point to nothing. ` +
-          `Run: ${serveCommand}` +
-          (mode === "none" ? `\nOr rerun compile/install with --mcp-lifecycle serve.` : ""),
-      );
-    },
-    catch: (error) =>
-      PluginManifestError.forPlugin(options.compileOptions.pluginPath, error instanceof Error ? error.message : String(error)),
-  });
-};
 
 const selectTargetSurfaces = (
   registry: PluginRegistry,
@@ -1133,8 +931,6 @@ const planTargetLowering = (options: {
   readonly outputRoot: string;
   readonly prismHome: string;
   readonly mcpServer?: PreparedMcpServer;
-  readonly mcpRuntimePort?: number;
-  readonly mcpTransport: McpHarnessTransportMode;
 }): Effect.Effect<LowerOutput, CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
@@ -1166,8 +962,6 @@ const planTargetLowering = (options: {
               ),
             }
           : {}),
-        ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
-        mcpTransport: options.mcpTransport,
         prismHome: options.prismHome,
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
@@ -1253,8 +1047,6 @@ const prepareLoweringInputs = (
   readonly composedForLowering: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
   readonly mcpServer?: PreparedMcpServer;
-  readonly mcpRuntimePort?: number;
-  readonly mcpTransport: McpHarnessTransportMode;
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
@@ -1280,24 +1072,12 @@ const prepareLoweringInputs = (
       orbits,
     });
     const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
-    // Resolved before the HTTP-only steps below so they can skip entirely
-    // for stdio-shim targets (which never get an HTTP url artifact).
-    const mcpTransport = resolveMcpHarnessTransportMode(context.targetId, options.mcpTransport);
     // Build (and write) the canonical union bundle BEFORE any daemon
     // lifecycle interaction so `prism mcp serve` reads compiled bytes.
     const mcpServer = yield* prepareUnionMcpServer({
       compileOptions: options,
       context,
       registry,
-      agents: composedForLowering,
-      artifacts,
-    });
-    const mcpRuntimePort = yield* resolveCompileMcpRuntimePort({
-      compileOptions: options,
-      registry,
-      targetId: context.targetId,
-      prismHome: context.prismHome,
-      mcpTransport,
       agents: composedForLowering,
       artifacts,
     });
@@ -1309,9 +1089,7 @@ const prepareLoweringInputs = (
       orbits,
       composedForLowering,
       artifacts,
-      mcpTransport,
       ...(mcpServer ? { mcpServer } : {}),
-      ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     };
   });
 
@@ -1328,8 +1106,6 @@ export const planPluginForTarget = (
       composedForLowering,
       artifacts,
       mcpServer,
-      mcpRuntimePort,
-      mcpTransport,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1342,9 +1118,7 @@ export const planPluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
-      mcpTransport,
       ...(mcpServer ? { mcpServer } : {}),
-      ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
     });
 
     return {
@@ -1376,8 +1150,6 @@ export const compilePluginForTarget = (
       composedForLowering,
       artifacts,
       mcpServer,
-      mcpRuntimePort,
-      mcpTransport,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1390,20 +1162,7 @@ export const compilePluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
-      mcpTransport,
       ...(mcpServer ? { mcpServer } : {}),
-      ...(mcpRuntimePort ? { mcpRuntimePort } : {}),
-    });
-    yield* assertHttpMcpLifecycleGate({
-      compileOptions: options,
-      registry,
-      targetId: context.targetId,
-      outputRoot: context.outputRoot,
-      prismHome: context.prismHome,
-      mcpTransport,
-      agents: composedForLowering,
-      artifacts,
-      ...(mcpServer ? { expectedServerSha256: mcpServer.serverSha256 } : {}),
     });
     const report = yield* Effect.promise(() =>
       syncDesiredRoot({

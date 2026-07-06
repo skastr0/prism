@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { grokMcpServerNameForPlugin, planLowering } from "./lowerers/grok.js";
+import { planLowering } from "./lowerers/grok.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -25,11 +26,10 @@ afterEach(async () => {
   );
 });
 
-test("grok lowerer owner-qualifies foreign tool bindings without copying owner MCP config", async () => {
+test("grok lowerer owner-qualifies foreign tool bindings and wires the shim to the owner plugin", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const ownerPluginName = "ot";
-  const ownerMcpServerName = grokMcpServerNameForPlugin(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -68,11 +68,20 @@ test("grok lowerer owner-qualifies foreign tool bindings without copying owner M
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  expect(agent?.content).toContain(`${ownerMcpServerName}__ot_echo`);
+  const echoWire = renderAllowlist("grok", ownerPluginName, "ot_echo");
+  expect(agent?.content).toContain(echoWire);
   expect(agent?.content).not.toContain("prism-generated-consumer-plugin__ot_echo");
 
+  // The shim resolves the owner's daemon on demand — no per-owner runtime
+  // resolution is required at compile time; the referenced owner plugin is
+  // simply named in PRISM_SHIM_PLUGINS.
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  expect(mcpConfig).toBeUndefined();
+  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
+    mcpServers?: Record<string, { env?: Record<string, string> }>;
+  };
+  expect(parsed.mcpServers?.[shimServerKey("grok")]?.env?.PRISM_SHIM_PLUGINS).toBe(
+    ownerPluginName,
+  );
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();

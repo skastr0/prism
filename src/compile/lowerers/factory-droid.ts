@@ -10,15 +10,7 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import {
-  MCP_EXPOSURE_HEADER,
-  generatedMcpServerName,
-  generatedMcpWireServerName,
-  mcpExposureProfileForTarget,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-  resolveOwnerMcpRuntime,
-} from "../mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -56,8 +48,6 @@ export interface FactoryDroidLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
-  readonly prismHome?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -135,10 +125,10 @@ const factoryOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> 
   agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
 
 const factoryMcpToolNameForBinding = (
-  sourcePluginName: string,
-  pluginId: string,
+  ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string => `mcp__${pluginId}__${mcpToolNameForBinding(sourcePluginName, binding)}`;
+): string =>
+  renderAllowlist("factory-droid", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
 
 const composeFactoryTools = (
   agent: ComposedAgent,
@@ -154,11 +144,8 @@ const composeFactoryTools = (
     target.sourcePluginName,
     agent,
   )) {
-    const ownerServerName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
-      generatedTools.push(
-        factoryMcpToolNameForBinding(ownerPlugin, ownerServerName, binding),
-      );
+      generatedTools.push(factoryMcpToolNameForBinding(ownerPlugin, binding));
     }
   }
   const category = stringValue(override?.tools);
@@ -243,7 +230,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return factoryMcpToolNameForBinding(owner, generatedMcpWireServerName(owner), binding);
+      return factoryMcpToolNameForBinding(owner, binding);
     },
   );
 
@@ -320,43 +307,30 @@ const planMcpServer = async (
   );
   if (bindingsByOwner.size === 0) return;
 
-  const mcpServers: Record<string, unknown> = {};
-  for (const [ownerPluginName, bindings] of bindingsByOwner) {
-    const isSelf = ownerPluginName === input.target.sourcePluginName;
-    const runtime = isSelf
-      ? resolveMcpRuntime(input.registry, TARGET_ID, {
-          requirePort: bindings.length > 0,
-          resolvedPort: input.target.mcpRuntimePort,
-        })
-      : input.target.prismHome && input.registry
-        ? await resolveOwnerMcpRuntime({
-            prismHome: input.target.prismHome,
-            registry: input.registry,
-            targetId: TARGET_ID,
-            ownerPluginName,
-          })
-        : undefined;
-    if (!runtime) continue;
-
-    const serverName = generatedMcpWireServerName(ownerPluginName);
-    const exposureServerName = generatedMcpServerName(ownerPluginName);
-    mcpServers[serverName] = {
-      type: "http",
-      url: renderMcpHttpUrl(runtime),
-      headers: {
-        [MCP_EXPOSURE_HEADER]: mcpExposureProfileForTarget(exposureServerName, TARGET_ID),
-      },
-    };
+  // One shim process fans out to every owner plugin's daemon over UDS, so
+  // there is exactly one entry here — no per-owner runtime/port resolution
+  // needed at compile time; the shim resolves live daemons on demand.
+  const env: Record<string, string> = {
+    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
+    PRISM_SHIM_HARNESS: TARGET_ID,
+  };
+  if (input.target.mcpExposureProfile) {
+    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
   }
-
-  if (Object.keys(mcpServers).length === 0) return;
-
   pushWrite(
     files,
     desiredRelativePaths,
     input.target,
     "mcp.json",
-    json({ mcpServers }),
+    json({
+      mcpServers: {
+        [shimServerKey("factory-droid")]: {
+          command: "prism",
+          args: ["mcp", "shim"],
+          env,
+        },
+      },
+    }),
   );
 };
 

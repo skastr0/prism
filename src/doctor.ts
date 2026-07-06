@@ -1191,7 +1191,7 @@ const validateMcpHealth = async (options: {
         message: status.detail,
         harness,
         plugin: manifest.name,
-        path: status.descriptor.runtimePath,
+        path: status.descriptor.serverPath,
         fix: "mcp-restart",
         data: {
           serverName: status.descriptor.serverName,

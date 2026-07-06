@@ -74,7 +74,6 @@ import {
   type AgentCacheDescriptor,
 } from "./cache.js";
 import { writeLockfile } from "./lockfile.js";
-import { getMcpStatus, serveMcp } from "../mcp/lifecycle.js";
 import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
@@ -95,7 +94,6 @@ import {
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { bindingsOwnedByPlugin } from "./tool-bindings.js";
-import { getFreePort } from "../mcp/ports.js";
 
 interface LowererModule {
   readonly planLowering: (input: {

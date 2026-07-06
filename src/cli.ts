@@ -49,16 +49,10 @@ import { cleanCache, getCacheDir } from "./compile/cache.js";
 import { topologicallySortedPlugins } from "./plugin-order.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
 import {
-  formatMcpServeResult,
   formatMcpStatus,
-  formatMcpStopResult,
   getMcpStatus,
   listMcpStatuses,
-  restartMcp,
-  serveMcp,
-  stopMcp,
   type McpLifecycleHarness,
-  type McpPortSelection,
 } from "./mcp/lifecycle.js";
 import { resolvePrismHome } from "./prism-home.js";
 import { discoverPluginPaths } from "./plugin-inventory.js";
@@ -1008,45 +1002,13 @@ program
 
 const mcpCommand = program
   .command("mcp")
-  .description("Manage Prism-generated MCP HTTP daemon lifecycle");
-
-mcpCommand
-  .command("serve <plugin-path>")
-  .description("Start a Prism-generated HTTP MCP daemon")
-  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
-  .option(
-    "--scope <scope>",
-    `Output scope (${HARNESS_SCOPES.join("|")})`,
-    parseHarnessScope,
-    "global"
-  )
-  .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--host <host>", "HTTP bind host")
-  .option("--port <port>", "HTTP port or 'auto'")
-  .option("--foreground", "Run the generated server in the current process group", false)
-  .action(async (pluginPath: string, options) => {
-    try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      const result = await serveMcp({
-        pluginPath,
-        harness: options.harness,
-        scope: options.scope,
-        projectPath: options.project,
-        prismHome: resolvePrismHome(),
-        host: options.host,
-        port: parseMcpPortSelection(options.port),
-        foreground: options.foreground,
-      });
-      console.log(formatMcpServeResult(result));
-    } catch (error) {
-      printCliError(error, "MCP serve error");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    }
-  });
+  .description(
+    "Observe Prism-generated MCP daemons (UDS-only; the stdio shim resolves-or-spawns and idle-reaps them)",
+  );
 
 mcpCommand
   .command("status [plugin-path]")
-  .description("Show Prism-generated MCP daemon status")
+  .description("Show Prism-generated MCP daemon status (read from the UDS registry)")
   .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
   .option(
     "--scope <scope>",
@@ -1088,66 +1050,6 @@ mcpCommand
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
-
-mcpCommand
-  .command("stop <plugin-path>")
-  .description("Stop a Prism-owned MCP HTTP daemon")
-  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
-  .option(
-    "--scope <scope>",
-    `Output scope (${HARNESS_SCOPES.join("|")})`,
-    parseHarnessScope,
-    "global"
-  )
-  .option("-p, --project <path>", "Project root when using --scope project")
-  .action(async (pluginPath: string, options) => {
-    try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      const result = await stopMcp({
-        pluginPath,
-        harness: options.harness,
-        scope: options.scope,
-        projectPath: options.project,
-        prismHome: resolvePrismHome(),
-      });
-      console.log(formatMcpStopResult(result));
-    } catch (error) {
-      printCliError(error, "MCP stop error");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    }
-  });
-
-mcpCommand
-  .command("restart <plugin-path>")
-  .description("Restart a Prism-owned MCP HTTP daemon")
-  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
-  .option(
-    "--scope <scope>",
-    `Output scope (${HARNESS_SCOPES.join("|")})`,
-    parseHarnessScope,
-    "global"
-  )
-  .option("-p, --project <path>", "Project root when using --scope project")
-  .option("--host <host>", "HTTP bind host")
-  .option("--port <port>", "HTTP port or 'auto'")
-  .action(async (pluginPath: string, options) => {
-    try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      const result = await restartMcp({
-        pluginPath,
-        harness: options.harness,
-        scope: options.scope,
-        projectPath: options.project,
-        prismHome: resolvePrismHome(),
-        host: options.host,
-        port: parseMcpPortSelection(options.port),
-      });
-      console.log(formatMcpServeResult(result));
-    } catch (error) {
-      printCliError(error, "MCP restart error");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    }
-});
 
 mcpCommand
   .command("shim")
@@ -2493,16 +2395,6 @@ function parseMcpLifecycleHarness(value: string): McpLifecycleHarness {
   throw new InvalidArgumentError(
     `Invalid MCP lifecycle harness '${value}'. Expected one of: ${getAllHarnessIds().join(", ")}.`
   );
-}
-
-function parseMcpPortSelection(value: string | undefined): McpPortSelection | undefined {
-  if (value === undefined) return undefined;
-  if (value === "auto") return "auto";
-
-  const port = Number(value);
-  if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
-
-  throw new InvalidArgumentError("--port must be 'auto' or an integer from 1 to 65535.");
 }
 
 function parseWorkflowPermissionMode(value: string): WorkflowPermissionMode {

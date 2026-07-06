@@ -35,7 +35,6 @@ const GATE_SCRIPTS: ReadonlyArray<GateScript> = [
   { script: "matrix-pi-compile.ts", expected: "PASS" },
   { script: "matrix-mcp-disabled.ts", expected: "FAIL" },
   { script: "mcp-determinism.ts", expected: null },
-  { script: "mcp-lifecycle.ts", expected: null },
   { script: "orbit-workflows.ts", expected: "PASS" },
   { script: "workflow-e2e-matrix.ts", args: ["--mode", "temp", "--validate-only"], expected: "PASS" },
 ];

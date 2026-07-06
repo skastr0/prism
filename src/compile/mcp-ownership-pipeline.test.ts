@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { exists } from "../fs.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
-import { compilePluginForTarget, planPluginForTarget } from "./pipeline.js";
-import { getMcpStatus, stopMcp } from "../mcp/lifecycle.js";
+import { compilePluginForTarget } from "./pipeline.js";
 import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
@@ -132,88 +131,12 @@ export default defineAgent({
   expect(await exists(prismMcpServerPath(prismHome, "orbit-consumer"))).toBe(false);
 });
 
-test("dry-run plan reuses the running MCP daemon port for generated URL artifacts", async () => {
-  const root = await createTempRoot();
-  const prismHome = join(root, "prism-home");
-  const pluginRoot = join(root, "cursor-tools");
-  const cursorRoot = join(root, "cursor");
-  await mkdir(cursorRoot, { recursive: true });
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "cursor-tools",
-        version: "0.1.0",
-        targets: { tools: ["cursor"] },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "tools", "ping.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "ping",
-  description: "Ping for plan/refresh parity test.",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ pong: Schema.String }),
-  async handle(input) {
-    return { pong: input.message };
-  },
-});
-`,
-  );
-
-  const compiled = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome,
-      pluginPath: pluginRoot,
-      target: "cursor",
-      scope: "global",
-      dryRun: false,
-      mcpLifecycle: "serve",
-    }),
-  );
-  expect(compiled.failures).toHaveLength(0);
-
-  const status = await getMcpStatus({
-    pluginPath: pluginRoot,
-    harness: "cursor",
-    scope: "global",
-    prismHome,
-  });
-  expect(status.state).toBe("running");
-  const runningPort = status.metadata?.port;
-  expect(runningPort).toBeGreaterThan(0);
-
-  try {
-    const planned = await Effect.runPromise(
-      planPluginForTarget({
-        prismHome,
-        pluginPath: pluginRoot,
-        target: "cursor",
-        scope: "global",
-        dryRun: true,
-      }),
-    );
-
-    const mcpRegion = planned.regions.find(
-      (region) => region.kind === "json-key" && region.regionKey.startsWith("mcpServers."),
-    );
-    expect(mcpRegion).toBeDefined();
-    expect(mcpRegion?.kind === "json-key" ? mcpRegion.value : undefined).toMatchObject({
-      url: expect.stringContaining(`:${runningPort}/`),
-    });
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "cursor",
-      scope: "global",
-      prismHome,
-    }).catch(() => undefined);
-  }
-}, 20_000);
+// The "dry-run plan reuses the running MCP daemon port for generated URL
+// artifacts" test that used to live here tested two things that no longer
+// exist: `mcpLifecycle: "serve"` starting a daemon during compile (that
+// option has been a no-op since the compile pipeline stopped driving the
+// MCP lifecycle), and a URL-bearing `mcpServers.*` region for the "cursor"
+// harness (every harness lowerer now emits a stdio-shim command instead --
+// see the wire-naming/stdio-shim consolidation). Deleted rather than
+// migrated: nothing in the consolidated UDS-shim world reuses a "daemon
+// port" in a dry-run plan.

@@ -7,7 +7,6 @@ import { compilePluginForTarget } from "./pipeline.js";
 import { resolveOwnerMcpRuntime } from "./mcp-runtime.js";
 import { loadPlugin } from "./load.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
-import { stopMcp } from "../mcp/lifecycle.js";
 import { generatedOwnerToolName } from "./generated-plugin.js";
 import { getFreePort, roundTripCompiledBundle } from "./test-helpers/mcp-http-roundtrip.js";
 import { createPrismSandbox } from "../testing/prism-sandbox.js";
@@ -341,13 +340,6 @@ test("cross-plugin canonical tool call round-trip", async () => {
     expect(roundTrip.toolNames).toContain(scopedToolName);
     expect(roundTrip.callResult.structuredContent).toEqual({ acknowledged: true });
   } finally {
-    await stopMcp({
-      pluginPath: ownerRoot,
-      harness: "claude-code",
-      scope: "project",
-      projectPath: projectRoot,
-      prismHome: sandbox.prismHome,
-    }).catch(() => undefined);
     await sandbox.cleanup();
   }
 }, 30_000);

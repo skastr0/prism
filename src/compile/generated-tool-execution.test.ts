@@ -7,12 +7,12 @@ import { Effect } from "effect";
 import { compilePluginForTarget } from "./pipeline.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
 import { withPrismSandbox } from "../testing/prism-sandbox.js";
-import { stopMcp } from "../mcp/lifecycle.js";
 import type { HarnessId } from "../types.js";
 import {
   getFreePort,
   httpRpc,
   roundTripCompiledBundle,
+  socketPathForPort,
   waitForHttpServer,
   waitForChildClose,
 } from "./test-helpers/mcp-http-roundtrip.js";
@@ -70,23 +70,6 @@ export default defineTool({
   );
 };
 
-const stopGeneratedMcpDaemon = async (
-  pluginPath: string,
-  target: HarnessId,
-  prismHome: string,
-): Promise<void> => {
-  try {
-    await stopMcp({
-      pluginPath,
-      harness: target,
-      scope: "global",
-      prismHome,
-    });
-  } catch {
-    // Ignore stop failures; the manual round-trip starts its own bundle.
-  }
-};
-
 test(
   "generated canonical tool execution matrix",
   async () => {
@@ -105,10 +88,6 @@ test(
             dryRun: false,
           }),
         );
-      }
-
-      for (const target of GENERATED_MCP_TARGETS) {
-        await stopGeneratedMcpDaemon(pluginRoot, target, sandbox.prismHome);
       }
 
       const serverPath = prismMcpServerPath(sandbox.prismHome, "tool-matrix-demo");
@@ -149,15 +128,15 @@ test(
           dryRun: false,
         }),
       );
-      await stopGeneratedMcpDaemon(pluginRoot, "cursor", sandbox.prismHome);
 
       const serverPath = prismMcpServerPath(sandbox.prismHome, "tool-matrix-demo");
       const port = await getFreePort("127.0.0.1");
+      const socketPath = await socketPathForPort(port);
       const child = spawn("bun", [serverPath], {
         cwd: sandbox.prismHome,
         env: {
           ...process.env,
-          PRISM_MCP_HTTP_PORT: String(port),
+          PRISM_MCP_UDS_PATH: socketPath,
         },
         stdio: ["pipe", "pipe", "pipe"],
       }) as ChildProcessWithoutNullStreams;
@@ -304,7 +283,6 @@ export default defineAgent({
           dryRun: false,
         }),
       );
-      await stopGeneratedMcpDaemon(ownerRoot, "cursor", sandbox.prismHome);
 
       await Effect.runPromise(
         compilePluginForTarget({

@@ -61,7 +61,6 @@ import { resolvePrismHome } from "../prism-home.js";
 import { commitSnapshot, readSnapshot } from "../state/store.js";
 import type { DesiredRegion } from "../sync/desired.js";
 import { serializeRegionRef } from "../sync/plan.js";
-import { serveMcp, stopMcp } from "../mcp/lifecycle.js";
 import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
@@ -258,32 +257,6 @@ export default defineTool({
   );
 
   return { pluginRoot, hermesRoot };
-};
-
-/**
- * Build the canonical PRISM_HOME union bundle for a hermes http fixture —
- * what `prism refresh` produces — so `prism mcp serve` can consume it.
- */
-const prebuildHermesCanonicalBundle = async (
-  pluginRoot: string,
-  pluginName: string,
-): Promise<string> => {
-  const bindings = [
-    bindingFromToolSource(pluginName, join(pluginRoot, "tools", "echo.tool.ts")),
-  ];
-  const bundle = await generateMcpServerBundle({
-    sourcePluginName: pluginName,
-    sourcePluginRoot: pluginRoot,
-    serverName: `prism-generated-${pluginName}`,
-    bundleId: `prism-generated-${pluginName}`,
-    bindings,
-    exposureProfiles: [{
-      name: `prism-generated-${pluginName}:hermes`,
-      toolNames: mcpToolNamesForBindings(pluginName, bindings),
-    }],
-  });
-  const write = await writePrismMcpServerBundle(testPrismHome(), pluginName, bundle.content);
-  return write.path;
 };
 
 const skillPermissionAction = (
@@ -3057,14 +3030,19 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   });
 
   const mcpConfig = JSON.parse(await readFile(join(outputPluginRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { serverUrl?: string; headers?: Record<string, string>; trust?: unknown }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; trust?: unknown }>;
   };
   const antigravityWireServerName = generatedMcpWireServerName("antigravity_plugin.demo");
   const antigravityMcpToolName = `mcp_${antigravityWireServerName}_antigravity_plugin_demo_submit_work`;
-  const antigravityMcp = mcpConfig.mcpServers?.[antigravityWireServerName];
-  expect(antigravityMcp?.serverUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\?prism_sse=off$/);
-  expect(antigravityMcp?.headers).toEqual({
-    "X-Prism-Mcp-Exposure": "prism-generated-antigravity_plugin.demo:antigravity-cli",
+  // Post-consolidation: every harness (antigravity-cli included) spawns the
+  // aggregating stdio shim instead of dialing a Streamable HTTP URL directly.
+  const antigravityMcp = mcpConfig.mcpServers?.[shimServerKey("antigravity-cli")];
+  expect(antigravityMcp?.command).toBe("prism");
+  expect(antigravityMcp?.args).toEqual(["mcp", "shim"]);
+  expect(antigravityMcp?.env).toEqual({
+    PRISM_SHIM_PLUGINS: "antigravity_plugin.demo",
+    PRISM_SHIM_HARNESS: "antigravity-cli",
+    PRISM_SHIM_EXPOSURE: "prism-generated-antigravity_plugin.demo:antigravity-cli",
   });
   expect(antigravityMcp).not.toHaveProperty("trust");
 
@@ -3292,12 +3270,18 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
 
   const antigravityRoot = join(projectRoot, ".agents", "plugins", "prism-generated-tool-only-demo");
   const antigravityMcpConfig = JSON.parse(await readFile(join(antigravityRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { serverUrl?: string; headers?: Record<string, string> }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(antigravityMcpConfig.mcpServers?.[wireServerName]?.serverUrl)
-    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\?prism_sse=off$/);
-  expect(antigravityMcpConfig.mcpServers?.[wireServerName]?.headers)
-    .toEqual({ "X-Prism-Mcp-Exposure": "prism-generated-tool-only-demo:antigravity-cli" });
+  // Post-consolidation: antigravity-cli spawns the aggregating stdio shim
+  // instead of dialing a Streamable HTTP URL directly.
+  const antigravityShim = antigravityMcpConfig.mcpServers?.[shimServerKey("antigravity-cli")];
+  expect(antigravityShim?.command).toBe("prism");
+  expect(antigravityShim?.args).toEqual(["mcp", "shim"]);
+  expect(antigravityShim?.env).toEqual({
+    PRISM_SHIM_PLUGINS: "tool-only-demo",
+    PRISM_SHIM_HARNESS: "antigravity-cli",
+    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:antigravity-cli",
+  });
   expect(await pathExists(join(antigravityRoot, "mcp"))).toBe(false);
 
   const factoryRoot = join(projectRoot, ".factory", "plugins", "prism-generated-tool-only-demo");
@@ -3801,90 +3785,6 @@ test("compilePluginForTarget leaves never-managed Cursor MCP entries untouched",
   )).toBe(false);
   expect(await readFile(configPath, "utf8")).toBe(currentConfig);
   expect(await readFile(staleServerPath, "utf8")).toBe(staleServerContent);
-});
-
-test("compilePluginForTarget lowers Cursor Streamable HTTP MCP config", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = join(root, "cursor-http-demo");
-  const cursorRoot = join(root, "cursor-home");
-  const port = await getFreePort("127.0.0.1");
-  await mkdir(pluginRoot, { recursive: true });
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "cursor-http-demo",
-        version: "0.1.0",
-        targets: { tools: ["cursor"] },
-        runtime: {
-          mcp: {
-            cursor: {
-              transport: "streamable-http",
-              host: "127.0.0.1",
-              port,
-            },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "tools", "echo-message.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "echo-message",
-  description: "Echo through Cursor HTTP MCP.",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
-    return { message: input.message };
-  },
-});
-`,
-  );
-
-  let result: CompileResult;
-  try {
-    result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "cursor",
-        scope: "global",
-        root: cursorRoot,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "cursor",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-
-  // The union bundle is written once to the canonical PRISM_HOME path — it
-  // never appears as a lowered harness-root operation.
-  const serverPath = prismMcpServerPath(testPrismHome(), "cursor-http-demo");
-  expect(await pathExists(serverPath)).toBe(true);
-  expect(result.operations.some((operation) =>
-    operation.targetPath.endsWith("server.mjs"),
-  )).toBe(false);
-  const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
-  };
-  expect(config.mcpServers?.[generatedMcpWireServerName("cursor-http-demo")]).toEqual({
-    url: `http://127.0.0.1:${port}/mcp`,
-    headers: {
-      "X-Prism-Mcp-Exposure": "prism-generated-cursor-http-demo:cursor",
-    },
-  });
 });
 
 test("compilePluginForTarget emits a Codex project bundle", async () => {
@@ -4963,54 +4863,6 @@ export default defineTool({
   }
 });
 
-test("compilePluginForTarget serves Hermes HTTP MCP by default before config write", async () => {
-  const port = await getFreePort("127.0.0.1");
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-gate-demo",
-    port,
-  });
-
-  try {
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
-
-    expect(result.outputRoot).toBe(hermesRoot);
-    const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-    expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
-    expect(config).toContain('X-Prism-Mcp-Exposure: "prism-generated-hermes-http-gate-demo:hermes"');
-    const configWrite = result.operations.find(
-      (operation) =>
-        operation.kind === "patch-regions" &&
-        operation.targetPath === join(hermesRoot, "config.yaml"),
-    );
-    expect(configWrite).toBeDefined();
-    expect(
-      await pathExists(
-        join(testPrismHome(), "runtime", "mcp", "hermes-http-gate-demo", "runtime.json"),
-      ),
-    ).toBe(true);
-    expect(
-      await pathExists(prismMcpServerPath(testPrismHome(), "hermes-http-gate-demo")),
-    ).toBe(true);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-});
-
 test("compilePluginForTarget renders Codex MCP config as HTTP", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
@@ -5127,234 +4979,6 @@ test("compilePluginForTarget renders Claude MCP config as HTTP", async () => {
   ).toBe(true);
 });
 
-test("compilePluginForTarget verifies a running Hermes HTTP MCP daemon before config write", async () => {
-  const port = await getFreePort("127.0.0.1");
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-verify-demo",
-    port,
-  });
-
-  await prebuildHermesCanonicalBundle(pluginRoot, "hermes-http-verify-demo");
-  await serveMcp({
-    pluginPath: pluginRoot,
-    harness: "hermes",
-    scope: "global",
-    prismHome: testPrismHome(),
-  });
-  try {
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "verify",
-      }),
-    );
-
-    expect(result.outputRoot).toBe(hermesRoot);
-    const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-    expect(config).toContain("prism-generated-hermes-http-verify-demo:");
-    expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-});
-
-test("compilePluginForTarget rejects stale Hermes HTTP daemons before config write", async () => {
-  const port = await getFreePort("127.0.0.1");
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-stale-demo",
-    port,
-  });
-
-  await prebuildHermesCanonicalBundle(pluginRoot, "hermes-http-stale-demo");
-  await serveMcp({
-    pluginPath: pluginRoot,
-    harness: "hermes",
-    scope: "global",
-    prismHome: testPrismHome(),
-  });
-  try {
-    await writeText(
-      join(pluginRoot, "tools", "echo.tool.ts"),
-      (await readFile(join(pluginRoot, "tools", "echo.tool.ts"), "utf8")).replace(
-        "Echo through Hermes MCP.",
-        "Echo through changed Hermes MCP.",
-      ),
-    );
-
-    await expect(
-      Effect.runPromise(
-        compilePluginForTarget({
-          prismHome: testPrismHome(),
-          pluginPath: pluginRoot,
-          target: "hermes",
-          scope: "global",
-          root: hermesRoot,
-          dryRun: false,
-          mcpLifecycle: "verify",
-        }),
-      ),
-    ).rejects.toThrow(/stale-build/);
-
-    expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-});
-
-test("compilePluginForTarget can start Hermes HTTP MCP before config write", async () => {
-  const port = await getFreePort("127.0.0.1");
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-serve-demo",
-    port,
-  });
-
-  try {
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
-
-    expect(result.outputRoot).toBe(hermesRoot);
-    expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(true);
-    expect(
-      await pathExists(
-        join(testPrismHome(), "runtime", "mcp", "hermes-http-serve-demo", "runtime.json"),
-      ),
-    ).toBe(true);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-});
-
-test("compilePluginForTarget regenerates a Hermes HTTP bundle whose runtime-source fingerprint predates current prism (PQ-170)", async () => {
-  // Regression coverage for PQ-170: simulate the incident precondition — a
-  // canonical bundle already sitting at the path a previous prism build
-  // wrote, carrying a runtime-source fingerprint that predates whatever this
-  // build's templates now produce — before compile/refresh has ever run for
-  // this plugin against this build. The compile-triggered "ensure/start"
-  // path (prepareUnionMcpServer, always run before daemon lifecycle) must
-  // regenerate the bundle so its embedded fingerprint matches current
-  // source, not silently keep serving the stale one.
-  const pluginName = "hermes-http-source-stale-demo";
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName,
-    omitPort: true,
-  });
-
-  const staleSourceSha = "a".repeat(64);
-  const canonicalServerPath = prismMcpServerPath(testPrismHome(), pluginName);
-  await writeText(
-    canonicalServerPath,
-    `#!/usr/bin/env bun\n// stale prism build\nvar PRISM_MCP_SERVER_SOURCE_SHA = "${staleSourceSha}";\n`,
-  );
-  expect(
-    readMcpServerSourceSha256FromBundle(await readFile(canonicalServerPath, "utf8")),
-  ).toBe(staleSourceSha);
-
-  try {
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
-
-    expect(result.outputRoot).toBe(hermesRoot);
-    const regenerated = await readFile(canonicalServerPath, "utf8");
-    const regeneratedSourceSha = readMcpServerSourceSha256FromBundle(regenerated);
-    expect(regeneratedSourceSha).toBe(mcpServerRuntimeSourceSha256());
-    expect(regeneratedSourceSha).not.toBe(staleSourceSha);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-});
-
-test("compilePluginForTarget can auto-select a Hermes HTTP MCP port before config write", async () => {
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-auto-port-demo",
-    omitPort: true,
-  });
-
-  try {
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
-
-    expect(result.outputRoot).toBe(hermesRoot);
-    const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-    const match = config.match(/url: "http:\/\/127\.0\.0\.1:(\d+)\/mcp"/u);
-    expect(match).not.toBeNull();
-    const port = Number(match?.[1]);
-    expect(Number.isInteger(port) && port > 0 && port <= 65535).toBe(true);
-
-    const runtime = JSON.parse(
-      await readFile(
-        join(
-          testPrismHome(),
-          "runtime",
-          "mcp",
-          "hermes-http-auto-port-demo",
-          "runtime.json",
-        ),
-        "utf8",
-      ),
-    ) as { readonly port?: number };
-    expect(runtime.port).toBe(port);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
-});
-
 test("compilePluginForTarget previews an auto-selected Hermes HTTP MCP port in dry-run", async () => {
   const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
     pluginName: "hermes-http-auto-port-dry-run-demo",
@@ -5390,48 +5014,6 @@ test("compilePluginForTarget previews an auto-selected Hermes HTTP MCP port in d
       ),
     ),
   ).toBe(false);
-});
-
-test("compilePluginForTarget verifies an existing auto-port Hermes HTTP MCP daemon", async () => {
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-auto-port-verify-demo",
-    omitPort: true,
-  });
-
-  await prebuildHermesCanonicalBundle(pluginRoot, "hermes-http-auto-port-verify-demo");
-  const served = await serveMcp({
-    pluginPath: pluginRoot,
-    harness: "hermes",
-    scope: "global",
-    prismHome: testPrismHome(),
-  });
-  try {
-    const port = served.metadata?.port;
-    expect(typeof port).toBe("number");
-
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "verify",
-      }),
-    );
-
-      expect(result.outputRoot).toBe(hermesRoot);
-      const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-      expect(config).toContain(`url: "http://127.0.0.1:${port}/mcp"`);
-  } finally {
-    await stopMcp({
-      pluginPath: pluginRoot,
-      harness: "hermes",
-      scope: "global",
-      prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
 });
 
 test("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ignored)", async () => {
@@ -7425,14 +7007,6 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   ).toBe(true);
   expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
-
-  await stopMcp({
-    pluginPath: protocolRoot,
-    harness: "claude-code",
-    scope: "project",
-    projectPath: projectRoot,
-    prismHome: testPrismHome(),
-  }).catch(() => undefined);
 });
 
 test("compilePluginForTarget lowers Grok plugin-bundle surfaces", async () => {
@@ -8817,63 +8391,54 @@ export default defineAgent({
 `,
   );
 
-  try {
-    const ownerCompiled = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: coreRoot,
-        target: "factory-droid",
-        scope: "global",
-        root: factoryRoot,
-        dryRun: false,
-        mcpLifecycle: "serve",
-      }),
-    );
-
-    const consumerCompiled = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "factory-droid",
-        scope: "global",
-        root: factoryRoot,
-        dryRun: false,
-        mcpLifecycle: "none",
-      }),
-    );
-
-    expect(await pathExists(prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"))).toBe(false);
-    expect(consumerCompiled.operations.some((operation) =>
-      operation.targetPath.endsWith("server.mjs")
-    )).toBe(false);
-
-    const consumerMcpPath = join(
-      factoryRoot,
-      "plugins",
-      "prism-generated-factory-http-agent-demo",
-      "mcp.json",
-    );
-    const consumerMcp = JSON.parse(await readFile(consumerMcpPath, "utf8"));
-    expect(consumerMcp.mcpServers).toHaveProperty(shimServerKey("factory-droid"));
-
-    // The owner bundle carries the agent-bound dependency tool and lives at
-    // the canonical PRISM_HOME path; the consumer does not duplicate it.
-    const bundleContent = await readFile(
-      prismMcpServerPath(testPrismHome(), "factory-tool-core"),
-      "utf8",
-    );
-    expect(bundleContent).toContain("factory_tool_core_submit_work");
-    expect(ownerCompiled.operations.some((operation) =>
-      operation.targetPath.endsWith("server.mjs")
-    )).toBe(false);
-  } finally {
-    await stopMcp({
-      pluginPath: coreRoot,
-      harness: "factory-droid",
-      scope: "global",
+  const ownerCompiled = await Effect.runPromise(
+    compilePluginForTarget({
       prismHome: testPrismHome(),
-    }).catch(() => undefined);
-  }
+      pluginPath: coreRoot,
+      target: "factory-droid",
+      scope: "global",
+      root: factoryRoot,
+      dryRun: false,
+      mcpLifecycle: "serve",
+    }),
+  );
+
+  const consumerCompiled = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "factory-droid",
+      scope: "global",
+      root: factoryRoot,
+      dryRun: false,
+      mcpLifecycle: "none",
+    }),
+  );
+
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "factory-http-agent-demo"))).toBe(false);
+  expect(consumerCompiled.operations.some((operation) =>
+    operation.targetPath.endsWith("server.mjs")
+  )).toBe(false);
+
+  const consumerMcpPath = join(
+    factoryRoot,
+    "plugins",
+    "prism-generated-factory-http-agent-demo",
+    "mcp.json",
+  );
+  const consumerMcp = JSON.parse(await readFile(consumerMcpPath, "utf8"));
+  expect(consumerMcp.mcpServers).toHaveProperty(shimServerKey("factory-droid"));
+
+  // The owner bundle carries the agent-bound dependency tool and lives at
+  // the canonical PRISM_HOME path; the consumer does not duplicate it.
+  const bundleContent = await readFile(
+    prismMcpServerPath(testPrismHome(), "factory-tool-core"),
+    "utf8",
+  );
+  expect(bundleContent).toContain("factory_tool_core_submit_work");
+  expect(ownerCompiled.operations.some((operation) =>
+    operation.targetPath.endsWith("server.mjs")
+  )).toBe(false);
 });
 
 test("compilePluginForTarget prunes stale Factory plugin bundle for template-only orbit targets", async () => {

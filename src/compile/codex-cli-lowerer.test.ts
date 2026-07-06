@@ -7,6 +7,7 @@ import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/codex-cli.js";
 import { generatedMcpServerName, generatedMcpWireServerName } from "./mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { applySync } from "../sync/apply.js";
 import { planSync } from "../sync/plan.js";
 import { readSnapshot } from "../state/store.js";
@@ -269,7 +270,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpRuntimePort: 38464,
       sourcePluginName: "codex-mcp-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
@@ -295,8 +295,9 @@ export default defineTool({
   expect(agentToml?.content).not.toContain("cwd = ");
   expect(agentToml?.content).not.toContain('default_tools_approval_mode = "approve"');
   expect(agentToml?.content).not.toContain('enabled_tools = ["codex_mcp_fixture_echo"]');
+  const echoWire = renderAllowlist("codex-cli", "codex-mcp-fixture", "codex_mcp_fixture_echo");
   expect(agentToml?.content).toContain(
-    `# MCP tools requested from ${readableServerName} (wire ${wireServerName}): codex_mcp_fixture_echo`,
+    `# MCP tools requested from ${readableServerName} (shim wire): ${echoWire}`,
   );
 
   const skill = findFile(lowered.files, join("skills", "testing", "SKILL.md"));
@@ -520,131 +521,6 @@ trust_level = "trusted"
   expect(afterRemoval).toContain('trust_level = "trusted"');
 });
 
-test("codex-cli lowerer renders canonical HTTP MCP config when HTTP runtime is configured", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".codex");
-  const pluginRoot = join(root, "codex-http-fixture");
-  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "codex-http-fixture",
-        version: "0.1.0",
-        targets: {
-          tools: ["codex-cli"],
-        },
-        runtime: {
-          mcp: {
-            "codex-cli": {
-              transport: "streamable-http",
-              host: "127.0.0.1",
-              port: 38464,
-            },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    toolPath,
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "echo",
-  description: "Echo over HTTP",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
-    return { message: input.message };
-  },
-});
-`,
-  );
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const tool = registry.tools.get("echo");
-  if (!tool) throw new Error("expected echo tool");
-
-  const lowered = await planLowering({
-    agents: [
-      {
-        name: "reviewer",
-        description: "Reviews through Codex MCP",
-        body: "# Reviewer",
-        color: undefined,
-        model: {},
-        targetOverride: {},
-        skills: [],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: [
-          {
-            kind: "permission",
-            logicalName: "echo",
-            toolPluginName: "codex-http-fixture",
-            toolName: "echo",
-            toolSourcePath: toolPath,
-          },
-        ],
-      },
-    ],
-    orbits: [],
-    tools: [tool],
-    skills: [],
-    hooks: [],
-    registry,
-    target: {
-      scope: "project",
-      root: outputRoot,
-      sourcePluginName: "codex-http-fixture",
-      sourcePluginVersion: "0.1.0",
-      sourcePluginPath: pluginRoot,
-    },
-  });
-
-  const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
-  const wireServerName = generatedMcpWireServerName("codex-http-fixture");
-  const readableServerName = generatedMcpServerName("codex-http-fixture");
-  expect(agentToml?.content).not.toContain(`["mcp_servers"."${wireServerName}"]`);
-  expect(agentToml?.content).not.toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(agentToml?.content).not.toContain('command = "bun"');
-  expect(agentToml?.content).not.toContain("args = ");
-  expect(agentToml?.content).not.toContain("http_headers");
-  expect(agentToml?.content).not.toContain("codex-static-token");
-  expect(agentToml?.content).not.toContain('enabled_tools = ["codex_http_fixture_echo"]');
-  expect(agentToml?.content).toContain(
-    `# MCP tools requested from ${readableServerName} (wire ${wireServerName}): codex_http_fixture_echo`,
-  );
-  expect(agentToml?.mode).toBeUndefined();
-
-  const mcpRegion = markerContent(
-    findRegion(lowered.regions, `codex.mcp.${wireServerName}`),
-  );
-  expect(mcpRegion).toContain(`["mcp_servers"."${wireServerName}"]`);
-  expect(mcpRegion).toContain('url = "http://127.0.0.1:38464/mcp"');
-  expect(mcpRegion).not.toContain('command = "bun"');
-  expect(mcpRegion).not.toContain("args = ");
-  expect(mcpRegion).not.toContain("http_headers");
-  expect(mcpRegion).not.toContain("codex-static-token");
-  expect(mcpRegion).toContain('enabled_tools = ["codex_http_fixture_echo"]');
-  expect(mcpRegion).toContain(`["mcp_servers"."${wireServerName}"."headers"]`);
-  expect(mcpRegion).toContain(
-    '"X-Prism-Mcp-Exposure" = "prism-generated-codex-http-fixture:codex-cli"',
-  );
-
-  // No hooks: no hooks region and no features region.
-  expect(findRegion(lowered.regions, "codex.hooks.codex-http-fixture")).toBeUndefined();
-  expect(findRegion(lowered.regions, "codex.features.hooks")).toBeUndefined();
-
-  // HTTP daemons consume the canonical PRISM_HOME bundle; nothing is
-  // written into the harness root (or any shared runtime root) anymore.
-  expect(findFile(lowered.files, "server.mjs")).toBeUndefined();
-});
 
 test("codex-cli lowerer emits prompt and permission request hook wrappers", async () => {
   const root = await createTempRoot();
@@ -863,28 +739,32 @@ test("codex-cli consumer plugin references owner MCP servers without a self daem
   const agentToml = findFile(lowered.files, join("agents", "orchestrator.toml"));
   const towerWireServerName = generatedMcpWireServerName("tower");
   const boothWireServerName = generatedMcpWireServerName("booth");
-  const selfWireServerName = generatedMcpWireServerName("orbit-consumer-fixture");
   const towerReadableServerName = generatedMcpServerName("tower");
   const boothReadableServerName = generatedMcpServerName("booth");
   expect(agentToml?.content).not.toContain(`["mcp_servers"."${towerWireServerName}"]`);
   expect(agentToml?.content).not.toContain(`["mcp_servers"."${boothWireServerName}"]`);
   expect(agentToml?.content).not.toContain('enabled_tools = ["tower_claim_glyph"]');
   expect(agentToml?.content).not.toContain('enabled_tools = ["booth_register_draft"]');
+  const towerWire = renderAllowlist("codex-cli", "tower", "tower_claim_glyph");
+  const boothWire = renderAllowlist("codex-cli", "booth", "booth_register_draft");
   expect(agentToml?.content).toContain(
-    `# MCP tools requested from ${towerReadableServerName} (wire ${towerWireServerName}): tower_claim_glyph`,
+    `# MCP tools requested from ${towerReadableServerName} (shim wire): ${towerWire}`,
   );
   expect(agentToml?.content).toContain(
-    `# MCP tools requested from ${boothReadableServerName} (wire ${boothWireServerName}): booth_register_draft`,
+    `# MCP tools requested from ${boothReadableServerName} (shim wire): ${boothWire}`,
   );
   expect(agentToml?.content).not.toContain("prism-generated-orbit-consumer-fixture");
   expect(agentToml?.content).not.toContain("url = ");
 
+  // Neither self-owned nor synthetic bindings exist here (only foreign
+  // "permission" references), so the shim's own enabled_tools set is empty
+  // and no mcp region is emitted at all.
   expect(
-    findRegion(lowered.regions, `codex.mcp.${selfWireServerName}`),
+    findRegion(lowered.regions, `codex.mcp.${shimServerKey("codex-cli")}`),
   ).toBeUndefined();
 });
 
-test("codex-cli lowerer emits aggregated stdio-shim MCP config when mcpTransport is set", async () => {
+test("codex-cli lowerer emits aggregated stdio-shim MCP config", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".codex");
   const pluginRoot = join(root, "codex-stdio-shim-fixture");
@@ -959,30 +839,35 @@ export default defineTool({
       sourcePluginName: "codex-stdio-shim-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
-      mcpTransport: "stdio-shim",
     },
   });
 
   const agentToml = findFile(lowered.files, join("agents", "reviewer.toml"));
   const wireServerName = generatedMcpWireServerName("codex-stdio-shim-fixture");
   const readableServerName = generatedMcpServerName("codex-stdio-shim-fixture");
-  // When using stdio-shim, agent toml should not contain the config
+  const echoWireName = renderAllowlist(
+    "codex-cli",
+    "codex-stdio-shim-fixture",
+    "codex_stdio_shim_fixture_echo",
+  );
+  // The stdio shim config lives in config.toml, not the agent role file.
   expect(agentToml?.content).not.toContain(`["mcp_servers"."${wireServerName}"]`);
   expect(agentToml?.content).not.toContain('command = "prism"');
   expect(agentToml?.content).not.toContain('args = ["mcp", "shim"]');
   expect(agentToml?.content).toContain(
-    `# MCP tools requested from ${readableServerName} (wire ${wireServerName}): codex_stdio_shim_fixture_echo`,
+    `# MCP tools requested from ${readableServerName} (shim wire): ${echoWireName}`,
   );
 
   // stdio-shim config should be in config.toml region with command/args/env
   const mcpRegion = markerContent(
-    findRegion(lowered.regions, "codex.mcp.prism-mcp-shim"),
+    findRegion(lowered.regions, `codex.mcp.${shimServerKey("codex-cli")}`),
   );
   expect(mcpRegion).toContain('["mcp_servers"."prism-mcp-shim"]');
   expect(mcpRegion).toContain('command = "prism"');
   expect(mcpRegion).toContain('args = ["mcp", "shim"]');
-  expect(mcpRegion).toContain('enabled_tools = ["codex_stdio_shim_fixture_echo"]');
+  expect(mcpRegion).toContain(`enabled_tools = ["${echoWireName}"]`);
   expect(mcpRegion).toContain('PRISM_SHIM_PLUGINS = "codex-stdio-shim-fixture"');
+  expect(mcpRegion).toContain('PRISM_SHIM_HARNESS = "codex-cli"');
   expect(mcpRegion).toContain(
     'PRISM_SHIM_EXPOSURE = "prism-generated-codex-stdio-shim-fixture:codex-cli"',
   );

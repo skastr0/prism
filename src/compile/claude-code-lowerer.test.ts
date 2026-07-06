@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/claude-code.js";
-import { generatedMcpWireServerName } from "./mcp-runtime.js";
+import { renderAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -223,7 +223,7 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpRuntimePort: 38465,
+      mcpExposureProfile: "prism-generated-claude-plugin-fixture:claude-code",
       sourcePluginName: "claude-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -248,8 +248,12 @@ export default defineTool({
   expect(agent?.content).toContain('effort: "high"');
   expect(agent?.content).toContain("temperature: 0.1");
   expect(agent?.content).toContain("top_p: 0.7");
-  const wireServerName = generatedMcpWireServerName("claude-plugin-fixture");
-  expect(agent?.content).toContain(`- "mcp__${wireServerName}__claude_plugin_fixture_echo"`);
+  const echoPermission = renderAllowlist(
+    "claude-code",
+    "claude-plugin-fixture",
+    "claude_plugin_fixture_echo",
+  );
+  expect(agent?.content).toContain(`- "${echoPermission}"`);
   expect(agent?.content).not.toContain('- "claude_plugin_fixture_echo"');
   expect(agent?.content).toContain('- "Bash"');
   expect(agent?.content).toContain('- "Grep"');
@@ -266,16 +270,17 @@ export default defineTool({
   expect(command?.content).toContain("Say hello from Claude plugin bundle.");
 
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  expect(mcpConfig?.content).toContain(`"${wireServerName}"`);
   const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  const httpEntry = mcpParsed.mcpServers?.[wireServerName];
-  expect(httpEntry).toEqual({
-    type: "http",
-    url: "http://127.0.0.1:38465/mcp",
-    headers: {
-      "X-Prism-Mcp-Exposure": "prism-generated-claude-plugin-fixture:claude-code",
+  expect(Object.keys(mcpParsed.mcpServers ?? {})).toEqual(["prism-mcp-shim"]);
+  expect(mcpParsed.mcpServers?.["prism-mcp-shim"]).toEqual({
+    command: "prism",
+    args: ["mcp", "shim"],
+    env: {
+      PRISM_SHIM_PLUGINS: "claude-plugin-fixture",
+      PRISM_SHIM_HARNESS: "claude-code",
+      PRISM_SHIM_EXPOSURE: "prism-generated-claude-plugin-fixture:claude-code",
     },
   });
 
@@ -290,9 +295,7 @@ export default defineTool({
   expect(hookConfig?.content).toContain('"SessionEnd"');
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "Bash"');
-  expect(hookConfig?.content).toContain(
-    `"matcher": "mcp__${wireServerName}__claude_plugin_fixture_echo"`,
-  );
+  expect(hookConfig?.content).toContain(`"matcher": "${echoPermission}"`);
   expect(hookConfig?.content).toContain('node \\"${CLAUDE_PLUGIN_ROOT}/hooks/audit-shell.mjs\\"');
 
   const hookWrapper = findContentOperation(operations, join("hooks", "audit-shell.mjs"));
@@ -313,113 +316,7 @@ export default defineTool({
   expect(blocked.stderr).toContain("blocked");
 });
 
-test("claude-code lowerer emits Streamable HTTP MCP config when opted in", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".claude");
-  const pluginRoot = join(root, "claude-http-fixture");
-  const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "claude-http-fixture",
-        version: "0.1.0",
-        targets: {
-          tools: ["claude-code"],
-        },
-        runtime: {
-          mcp: {
-            "claude-code": {
-              transport: "streamable-http",
-              host: "127.0.0.1",
-              port: 38465,
-            },
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    toolPath,
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
-
-export default defineTool({
-  name: "echo",
-  description: "Echo over HTTP",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
-    return { message: input.message };
-  },
-});
-`,
-  );
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const { files: operations } = await planLowering({
-    agents: [
-      {
-        name: "reviewer",
-        description: "Reviews through Claude HTTP MCP",
-        body: "# Reviewer",
-        color: undefined,
-        model: {},
-        targetOverride: {},
-        skills: [],
-        allowedSkills: [],
-        allowedTools: [],
-        toolBindings: [
-          {
-            kind: "permission",
-            logicalName: "echo",
-            toolPluginName: "claude-http-fixture",
-            toolName: "echo",
-            toolSourcePath: toolPath,
-          },
-        ],
-      },
-    ],
-    orbits: [],
-    skills: [],
-    hooks: [],
-    registry,
-    target: {
-      scope: "project",
-      root: outputRoot,
-      sourcePluginName: "claude-http-fixture",
-      sourcePluginVersion: "0.1.0",
-      sourcePluginPath: pluginRoot,
-    },
-  });
-
-  const mcpConfig = findContentOperation(operations, ".mcp.json");
-  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, unknown>;
-  };
-  expect(parsed.mcpServers?.[generatedMcpWireServerName("claude-http-fixture")]).toEqual({
-    type: "http",
-    url: "http://127.0.0.1:38465/mcp",
-    headers: {
-      "X-Prism-Mcp-Exposure": "prism-generated-claude-http-fixture:claude-code",
-    },
-  });
-  expect(mcpConfig?.content).not.toContain('"command"');
-  expect(mcpConfig?.content).not.toContain('"args"');
-  expect(mcpConfig?.mode).toBeUndefined();
-
-  // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
-  // plans no bundle write anywhere.
-  const bundle = operations.find(
-    (operation) => operation.targetPath.endsWith("server.mjs"),
-  );
-  expect(bundle).toBeUndefined();
-});
-
-test("claude-code lowerer emits one aggregated stdio-shim MCP entry when opted in", async () => {
+test("claude-code lowerer emits one aggregated stdio-shim MCP entry", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");
   const pluginRoot = join(root, "claude-shim-fixture");
@@ -487,7 +384,6 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      mcpTransport: "stdio-shim",
       mcpExposureProfile: "prism-generated-claude-shim-fixture:claude-code",
       sourcePluginName: "claude-shim-fixture",
       sourcePluginVersion: "0.1.0",
@@ -506,6 +402,7 @@ export default defineTool({
     args: ["mcp", "shim"],
     env: {
       PRISM_SHIM_PLUGINS: "claude-shim-fixture",
+      PRISM_SHIM_HARNESS: "claude-code",
       PRISM_SHIM_EXPOSURE: "prism-generated-claude-shim-fixture:claude-code",
     },
   });

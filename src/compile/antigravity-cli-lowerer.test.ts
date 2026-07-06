@@ -6,7 +6,6 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/antigravity-cli.js";
-import { generatedMcpWireServerName } from "./mcp-runtime.js";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -290,29 +289,20 @@ export default defineHook({
   expect(JSON.parse(stopResult.stdout.trim())).toEqual({ decision: "continue" });
 });
 
-test("antigravity-cli lowerer emits Streamable HTTP MCP config when opted in", async () => {
+test("antigravity-cli lowerer emits an aggregated stdio-shim MCP entry for self-owned tools", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".agents");
-  const pluginRoot = join(root, "antigravity-http-fixture");
+  const pluginRoot = join(root, "antigravity-shim-fixture");
   const toolPath = join(pluginRoot, "tools", "echo.tool.ts");
 
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
       {
-        name: "antigravity-http-fixture",
+        name: "antigravity-shim-fixture",
         version: "0.1.0",
         targets: {
           tools: ["antigravity-cli"],
-        },
-        runtime: {
-          mcp: {
-            "antigravity-cli": {
-              transport: "streamable-http",
-              host: "127.0.0.1",
-              port: 38466,
-            },
-          },
         },
       },
       null,
@@ -326,7 +316,7 @@ import { defineTool } from ${JSON.stringify(PRISM_IMPORT)};
 
 export default defineTool({
   name: "echo",
-  description: "Echo over Antigravity HTTP",
+  description: "Echo via the stdio shim",
   input: Schema.Struct({ message: Schema.String }),
   output: Schema.Struct({ message: Schema.String }),
   async handle(input) {
@@ -346,7 +336,8 @@ export default defineTool({
     target: {
       scope: "project",
       root: outputRoot,
-      sourcePluginName: "antigravity-http-fixture",
+      mcpExposureProfile: "prism-generated-antigravity-shim-fixture:antigravity-cli",
+      sourcePluginName: "antigravity-shim-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,
     },
@@ -354,21 +345,26 @@ export default defineTool({
 
   const manifest = findContentOperation(operations, "plugin.json");
   expect(JSON.parse(manifest?.content ?? "{}")).toEqual({
-    name: "prism-generated-antigravity-http-fixture",
+    name: "prism-generated-antigravity-shim-fixture",
     version: "0.1.0",
   });
 
   const mcpConfig = findContentOperation(operations, "mcp_config.json");
   const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, unknown>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(parsed.mcpServers?.[generatedMcpWireServerName("antigravity-http-fixture")]).toEqual({
-    serverUrl: "http://127.0.0.1:38466/mcp?prism_sse=off",
-    headers: {},
+  expect(Object.keys(parsed.mcpServers ?? {})).toEqual(["prism-mcp-shim"]);
+  expect(parsed.mcpServers?.["prism-mcp-shim"]).toEqual({
+    command: "prism",
+    args: ["mcp", "shim"],
+    env: {
+      PRISM_SHIM_PLUGINS: "antigravity-shim-fixture",
+      PRISM_SHIM_HARNESS: "antigravity-cli",
+      PRISM_SHIM_EXPOSURE: "prism-generated-antigravity-shim-fixture:antigravity-cli",
+    },
   });
 
-  // HTTP daemons consume the canonical PRISM_HOME bundle; the lowerer
-  // plans no bundle write anywhere.
+  // The bundle itself lives in PRISM_HOME — never in the generated plugin.
   const bundle = operations.find(
     (operation) => operation.targetPath.endsWith("server.mjs"),
   );

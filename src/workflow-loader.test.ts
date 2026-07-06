@@ -1194,7 +1194,6 @@ describe("workflow loader", () => {
         sourcePluginName,
         sourcePluginVersion: "0.1.0",
         sourcePluginPath: join(root, sourcePluginName),
-        mcpRuntimePort: 49152,
         mcpExposureProfile: `prism-generated-${sourcePluginName}:grok`,
       },
     });

@@ -12,16 +12,7 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
-import {
-  MCP_EXPOSURE_HEADER,
-  generatedMcpServerName,
-  generatedMcpWireServerName,
-  mcpExposureProfileForTarget,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-  resolveOwnerMcpRuntime,
-  type McpHarnessTransportMode,
-} from "../mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -62,27 +53,10 @@ export interface ClaudeCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
-  /** Per-harness MCP transport rollout flag; defaults to `"http"` when absent. */
-  readonly mcpTransport?: McpHarnessTransportMode;
-  readonly prismHome?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
 }
-
-/**
- * `.mcp.json` server key for the aggregated stdio shim entry (`mcpTransport
- * === "stdio-shim"`). Fixed and singular — unlike http mode's one `p_<hash8>`
- * key per owner plugin, one shim process fronts every owner this generated
- * plugin references, so there is exactly one key to choose. Claude Code
- * builds each visible tool's permission string as `mcp__<this key>__<tool
- * name the server returns>`; the shim's own `tools/list` already returns
- * `p_<hash8>__<tool>` per owner (see `pluginWireNamespace` in
- * `@skastr0/prism-sdk/mcp/shim`), so that inner segment survives unchanged
- * regardless of what this outer key is named.
- */
-const STDIO_SHIM_WIRE_NAME = "prism-mcp-shim";
 
 export interface LowerInput {
   readonly agents: ReadonlyArray<ComposedAgent>;
@@ -170,11 +144,8 @@ const composeAgentFrontmatter = (
     target.sourcePluginName,
     agent,
   )) {
-    const ownerServerName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
-      generatedTools.push(
-        claudeMcpPermissionNameForBinding(ownerPlugin, ownerServerName, binding),
-      );
+      generatedTools.push(claudeMcpPermissionNameForBinding(ownerPlugin, binding));
     }
   }
   // Claude Code treats a subagent's `tools:` frontmatter as an EXCLUSIVE allowlist
@@ -248,11 +219,18 @@ const renderAgentMarkdown = (
 
 const claudeNativeHookEvent = prePostSessionNativeHookEvent;
 
+/**
+ * Claude Code's per-agent `tools:` frontmatter is an exclusive allowlist of
+ * fully-qualified `mcp__<server>__<tool>` permission strings, checked
+ * against whatever names the (single, aggregating) stdio shim advertises —
+ * so the string built here must be byte-identical to what `renderAllowlist`
+ * would embed in the shim's `.mcp.json` entry for the same owner+binding.
+ */
 const claudeMcpPermissionNameForBinding = (
-  sourcePluginName: string,
-  pluginId: string,
+  ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string => `mcp__${pluginId}__${mcpToolNameForBinding(sourcePluginName, binding)}`;
+): string =>
+  renderAllowlist("claude-code", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
@@ -265,7 +243,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return claudeMcpPermissionNameForBinding(owner, generatedMcpWireServerName(owner), binding);
+      return claudeMcpPermissionNameForBinding(owner, binding);
     },
   );
 
@@ -356,71 +334,30 @@ const planMcpServer = async (
   );
   if (bindingsByOwner.size === 0) return;
 
-  if (input.target.mcpTransport === "stdio-shim") {
-    // One shim process fans out to every owner plugin's daemon over UDS, so
-    // there is exactly one entry here — no per-owner runtime/port resolution
-    // needed at compile time; the shim resolves live daemons on demand.
-    const env: Record<string, string> = {
-      PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
-    };
-    if (input.target.mcpExposureProfile) {
-      env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
-    }
-    pushWrite(
-      files,
-      desiredRelativePaths,
-      input.target,
-      ".mcp.json",
-      json({
-        mcpServers: {
-          [STDIO_SHIM_WIRE_NAME]: {
-            command: "prism",
-            args: ["mcp", "shim"],
-            env,
-          },
-        },
-      }),
-    );
-    return;
+  // One shim process fans out to every owner plugin's daemon over UDS, so
+  // there is exactly one entry here — no per-owner runtime/port resolution
+  // needed at compile time; the shim resolves live daemons on demand.
+  const env: Record<string, string> = {
+    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
+    PRISM_SHIM_HARNESS: TARGET_ID,
+  };
+  if (input.target.mcpExposureProfile) {
+    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
   }
-
-  const mcpServers: Record<string, unknown> = {};
-  for (const [ownerPluginName, bindings] of bindingsByOwner) {
-    const isSelf = ownerPluginName === input.target.sourcePluginName;
-    const runtime = isSelf
-      ? resolveMcpRuntime(input.registry, TARGET_ID, {
-          requirePort: bindings.length > 0,
-          resolvedPort: input.target.mcpRuntimePort,
-        })
-      : input.target.prismHome && input.registry
-        ? await resolveOwnerMcpRuntime({
-            prismHome: input.target.prismHome,
-            registry: input.registry,
-            targetId: TARGET_ID,
-            ownerPluginName,
-          })
-        : undefined;
-    if (!runtime) continue;
-
-    const serverName = generatedMcpWireServerName(ownerPluginName);
-    const exposureServerName = generatedMcpServerName(ownerPluginName);
-    mcpServers[serverName] = {
-      type: "http",
-      url: renderMcpHttpUrl(runtime),
-      headers: {
-        [MCP_EXPOSURE_HEADER]: mcpExposureProfileForTarget(exposureServerName, TARGET_ID),
-      },
-    };
-  }
-
-  if (Object.keys(mcpServers).length === 0) return;
-
   pushWrite(
     files,
     desiredRelativePaths,
     input.target,
     ".mcp.json",
-    json({ mcpServers }),
+    json({
+      mcpServers: {
+        [shimServerKey("claude-code")]: {
+          command: "prism",
+          args: ["mcp", "shim"],
+          env,
+        },
+      },
+    }),
   );
 };
 

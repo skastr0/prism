@@ -7,20 +7,15 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   mcpToolNameForBinding,
-  mcpToolNamesForBindings,
 } from "../mcp-bundle.js";
-import {
-  generatedMcpWireServerName,
-  MCP_EXPOSURE_HEADER,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-} from "../mcp-runtime.js";
+import { generatedMcpWireServerName } from "../mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
+  allReferencedBindingsByOwner,
   collectBindingNameMap,
-  bindingsOwnedByPlugin,
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
@@ -51,7 +46,6 @@ export interface KimiCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -409,57 +403,64 @@ const planContextSkillWrite = (
   );
 };
 
+/**
+ * `enabledTools` is the load-bearing gate: it filters incoming `tools/call`
+ * requests by the exact wire name the shim advertises, so every entry here
+ * must come from `renderAllowlist("kimi-code", ...)`, never a bare or
+ * `qualifyKimiMcpToolName`-display name (that cosmetic form is only ever
+ * shown in the per-role skill markdown, never fed into a config gate).
+ */
 const renderKimiMcpServerEntry = (options: {
-  readonly runtime: ReturnType<typeof resolveMcpRuntime>;
+  readonly plugins: ReadonlyArray<string>;
   readonly exposureProfile?: string;
   readonly toolNames: ReadonlyArray<string>;
 }): Record<string, unknown> => {
-  const base = {
-    enabled: true,
-    enabledTools: options.toolNames,
-    startupTimeoutMs: options.runtime.connectTimeoutMs,
-    toolTimeoutMs: options.runtime.toolTimeoutMs,
+  const env: Record<string, string> = {
+    PRISM_SHIM_PLUGINS: options.plugins.join(","),
+    PRISM_SHIM_HARNESS: TARGET_ID,
   };
-  const headers = {
-    ...(options.exposureProfile
-      ? { [MCP_EXPOSURE_HEADER]: options.exposureProfile }
-      : {}),
-  };
-  const hasHeaders = Object.keys(headers).length > 0;
-
+  if (options.exposureProfile) {
+    env.PRISM_SHIM_EXPOSURE = options.exposureProfile;
+  }
   return {
-    ...base,
-    url: renderMcpHttpUrl(options.runtime),
-    ...(hasHeaders ? { headers } : {}),
+    enabled: true,
+    command: "prism",
+    args: ["mcp", "shim"],
+    env,
+    enabledTools: options.toolNames,
   };
 };
 
-const planMcpServer = async (input: LowerInput): Promise<ReadonlyMap<string, Record<string, unknown>>> => {
-  const ownedBindings = bindingsOwnedByPlugin(
+const planMcpServer = (input: LowerInput): ReadonlyMap<string, Record<string, unknown>> => {
+  const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools ?? [],
     input.agents,
   );
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: ownedBindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
-
   const servers = new Map<string, Record<string, unknown>>();
-  if (ownedBindings.length > 0) {
-    const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
-    const toolNames = uniqueSorted(
-      mcpToolNamesForBindings(input.target.sourcePluginName, ownedBindings),
-    );
-    servers.set(
-      serverName,
-      renderKimiMcpServerEntry({
-        runtime,
-        ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
-        toolNames,
-      }),
-    );
-  }
+  if (bindingsByOwner.size === 0) return servers;
+
+  // enabledTools stays scoped to this plugin's own bindings (pre-existing
+  // Kimi behavior, unchanged): a foreign-owner tool referenced only via an
+  // agent's toolBindings is named in the role-skill markdown but not gated
+  // into this compile's own enabledTools list. PRISM_SHIM_PLUGINS, by
+  // contrast, must include every referenced owner so the shim can actually
+  // reach their daemons.
+  const sourcePluginName = input.target.sourcePluginName;
+  const ownedBindings = bindingsByOwner.get(sourcePluginName) ?? [];
+  const toolNames = uniqueSorted(
+    ownedBindings.map((binding) =>
+      renderAllowlist("kimi-code", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
+    ),
+  );
+  servers.set(
+    shimServerKey("kimi-code"),
+    renderKimiMcpServerEntry({
+      plugins: [...bindingsByOwner.keys()],
+      ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
+      toolNames,
+    }),
+  );
 
   return servers;
 };

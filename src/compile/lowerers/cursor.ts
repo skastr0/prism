@@ -1,13 +1,7 @@
 /** Cursor lowerer. */
 
 import { join } from "node:path";
-import {
-  MCP_EXPOSURE_HEADER,
-  generatedMcpWireServerName,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-  type ResolvedMcpRuntime,
-} from "../mcp-runtime.js";
+import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -22,7 +16,6 @@ export interface CursorLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -39,25 +32,24 @@ export interface LowerInput {
 }
 
 type CursorMcpServerEntry = {
-  readonly url: string;
-  readonly headers?: {
-    readonly [MCP_EXPOSURE_HEADER]?: string;
-  };
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly env: Record<string, string>;
 };
 
 const configPath = (target: CursorLowerTarget): string =>
   join(target.root, "mcp.json");
 
-const renderCursorMcpServerEntry = (options: {
-  readonly target: CursorLowerTarget;
-  readonly runtime: ResolvedMcpRuntime;
-}): CursorMcpServerEntry =>
-  ({
-    url: renderMcpHttpUrl(options.runtime),
-    ...(options.target.mcpExposureProfile
-      ? { headers: { [MCP_EXPOSURE_HEADER]: options.target.mcpExposureProfile } }
-      : {}),
-  });
+const renderCursorMcpServerEntry = (target: CursorLowerTarget): CursorMcpServerEntry => {
+  const env: Record<string, string> = {
+    PRISM_SHIM_PLUGINS: target.sourcePluginName,
+    PRISM_SHIM_HARNESS: TARGET_ID,
+  };
+  if (target.mcpExposureProfile) {
+    env.PRISM_SHIM_EXPOSURE = target.mcpExposureProfile;
+  }
+  return { command: "prism", args: ["mcp", "shim"], env };
+};
 
 const planMcpServer = (
   input: LowerInput,
@@ -65,25 +57,18 @@ const planMcpServer = (
   readonly serverName: string;
   readonly entry?: CursorMcpServerEntry;
 } => {
-  const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
+  const serverName = shimServerKey("cursor");
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: ownedBindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
 
   if (ownedBindings.length === 0) return { serverName };
 
   return {
     serverName,
-    entry: renderCursorMcpServerEntry({
-      target: input.target,
-      runtime,
-    }),
+    entry: renderCursorMcpServerEntry(input.target),
   };
 };
 

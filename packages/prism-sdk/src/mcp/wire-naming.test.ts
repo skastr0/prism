@@ -144,14 +144,13 @@ describe("renderWire / renderAllowlist — per-harness parity", () => {
   const plugin = "forge";
   const tool = "forge_create_glyph";
 
-  it("is within-server (allowlist === wire, no server-key prefix) for codex-cli, hermes, kimi-code, antigravity-cli, cursor, factory-droid", () => {
+  it("is within-server (allowlist === wire, no server-key prefix) for codex-cli, hermes, kimi-code, antigravity-cli, cursor", () => {
     const withinServerHarnesses: ReadonlyArray<ShimHarnessId> = [
       "codex-cli",
       "hermes",
       "kimi-code",
       "antigravity-cli",
       "cursor",
-      "factory-droid",
     ];
     for (const harness of withinServerHarnesses) {
       const wire = renderWire(harness, plugin, tool);
@@ -161,12 +160,14 @@ describe("renderWire / renderAllowlist — per-harness parity", () => {
     }
   });
 
-  it("is global-prefixed mcp__<server>__<wire> for claude-code", () => {
-    const wire = renderWire("claude-code", plugin, tool);
-    const allowlist = renderAllowlist("claude-code", plugin, tool);
-    expect(wire).toBe(canonicalBase(plugin, tool));
-    expect(allowlist).toBe(`mcp__${shimServerKey("claude-code")}__${wire}`);
-    expect(shimServerKey("claude-code")).toBe("prism-mcp-shim");
+  it("is global-prefixed mcp__<server>__<wire> for claude-code and factory-droid", () => {
+    for (const harness of ["claude-code", "factory-droid"] as const) {
+      const wire = renderWire(harness, plugin, tool);
+      const allowlist = renderAllowlist(harness, plugin, tool);
+      expect(wire).toBe(canonicalBase(plugin, tool));
+      expect(allowlist).toBe(`mcp__${shimServerKey(harness)}__${wire}`);
+      expect(shimServerKey(harness)).toBe("prism-mcp-shim");
+    }
   });
 
   it("is global-prefixed <server>__<wire> (no mcp__ prefix) for grok", () => {

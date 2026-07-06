@@ -2,16 +2,8 @@
 
 import { dirname, join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
-import { mcpToolNamesForBindings } from "../mcp-bundle.js";
-import { mcpTimeoutMsToClientSeconds } from "../mcp-policy.js";
-import {
-  generatedMcpWireServerName,
-  MCP_EXPOSURE_HEADER,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-  type McpHarnessTransportMode,
-  type ResolvedMcpRuntime,
-} from "../mcp-runtime.js";
+import { mcpToolNameForBinding } from "../mcp-bundle.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -30,21 +22,10 @@ import {
 
 const TARGET_ID = "hermes" as const;
 
-/**
- * `config.yaml` server key for the aggregated stdio shim entry (`mcpTransport
- * === "stdio-shim"`). Fixed and singular — unlike http mode's one key
- * per owner plugin, one shim process fronts every owner this harness
- * references, so there is exactly one key to choose.
- */
-const STDIO_SHIM_WIRE_NAME = "prism-mcp-shim" as const;
-
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
-  /** Per-harness MCP transport rollout flag; defaults to `"http"` when absent. */
-  readonly mcpTransport?: McpHarnessTransportMode;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -118,6 +99,7 @@ const renderHermesStdioShimMcpServerYaml = (options: {
     `      enabled: false`,
     `    env:`,
     `      PRISM_SHIM_PLUGINS: ${yamlScalar(options.plugins.join(","))}`,
+    `      PRISM_SHIM_HARNESS: ${yamlScalar(TARGET_ID)}`,
   ];
   if (options.exposureProfile) {
     lines.push(`      PRISM_SHIM_EXPOSURE: ${yamlScalar(options.exposureProfile)}`);
@@ -130,39 +112,7 @@ const renderHermesStdioShimMcpServerYaml = (options: {
   return lines;
 };
 
-const renderHermesMcpServerYaml = (options: {
-  readonly serverName: string;
-  readonly runtime: ResolvedMcpRuntime;
-  readonly exposureProfile?: string;
-  readonly toolNames: ReadonlyArray<string>;
-}): string[] => {
-  return [
-    `  ${options.serverName}:`,
-    `    url: ${yamlScalar(renderMcpHttpUrl(options.runtime))}`,
-    `    connect_timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.connectTimeoutMs)}`,
-    `    timeout: ${mcpTimeoutMsToClientSeconds(options.runtime.toolTimeoutMs)}`,
-    `    enabled: true`,
-    `    sampling:`,
-    `      enabled: false`,
-    ...(options.exposureProfile
-      ? [
-          `    headers:`,
-          `      ${MCP_EXPOSURE_HEADER}: ${yamlScalar(options.exposureProfile)}`,
-        ]
-      : []),
-    `    tools:`,
-    `      include:`,
-    ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
-  ];
-};
-
 type PlannedMcpServer =
-  | {
-      readonly kind: "http";
-      readonly serverName: string;
-      readonly runtime: ResolvedMcpRuntime;
-      readonly toolNames: ReadonlyArray<string>;
-    }
   | {
       readonly kind: "stdio-shim";
       readonly serverName: string;
@@ -172,45 +122,30 @@ type PlannedMcpServer =
   | { readonly kind: "none" };
 
 const planMcpServer = (input: LowerInput): PlannedMcpServer => {
+  // Hermes never receives agents (filtered by capability validation), so
+  // every binding here is self-owned — `bindingsByOwner` has at most one
+  // key, `sourcePluginName`.
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
-    [], // hermes never receives agents (filtered by capability validation)
+    [],
   );
   if (bindingsByOwner.size === 0) return { kind: "none" };
 
-  if (input.target.mcpTransport === "stdio-shim") {
-    // One shim process fans out to every owner plugin's daemon, so there is
-    // exactly one entry — no per-owner runtime/port resolution at compile time.
-    const mcpServerName = STDIO_SHIM_WIRE_NAME;
-    const allToolNames = uniqueSorted(
-      mcpToolNamesForBindings(input.target.sourcePluginName, [
-        ...bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools),
-        ...Array.from(bindingsByOwner.values()).flat(),
-      ]),
-    );
-    return {
-      kind: "stdio-shim",
-      serverName: mcpServerName,
-      toolNames: allToolNames,
-      plugins: Array.from(bindingsByOwner.keys()),
-    };
-  }
-
-  // HTTP mode (default)
-  const bindings = bindingsFromCanonicalTools(input.target.sourcePluginName, input.tools);
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: bindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
-
-  if (bindings.length === 0) return { kind: "none" };
-
+  // One shim process fans out to every owner plugin's daemon, so there is
+  // exactly one entry — no per-owner runtime/port resolution at compile time.
+  const sourcePluginName = input.target.sourcePluginName;
+  const allToolNames = uniqueSorted([
+    ...bindingsFromCanonicalTools(sourcePluginName, input.tools),
+    ...Array.from(bindingsByOwner.values()).flat(),
+  ].map((binding) =>
+    renderAllowlist("hermes", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
+  ));
   return {
-    kind: "http",
-    serverName: generatedMcpWireServerName(input.target.sourcePluginName),
-    runtime,
-    toolNames: mcpToolNamesForBindings(input.target.sourcePluginName, bindings),
+    kind: "stdio-shim",
+    serverName: shimServerKey("hermes"),
+    toolNames: allToolNames,
+    plugins: Array.from(bindingsByOwner.keys()),
   };
 };
 
@@ -261,22 +196,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   // top-level `mcp_servers:` key of config.yaml. The fence is anchored to
   // that key so the region content lands inside the mapping (the anchor line
   // is created when absent); the rest of config.yaml is never rewritten.
-  if (mcp.kind === "http" && mcp.toolNames.length > 0) {
-    regions.push({
-      kind: "marker",
-      targetPath: configPath(input.target),
-      regionKey: `hermes.mcp.${mcp.serverName}`,
-      commentPrefix: "#",
-      anchor: "mcp_servers:",
-      content: renderHermesMcpServerYaml({
-        serverName: mcp.serverName,
-        runtime: mcp.runtime,
-        exposureProfile: input.target.mcpExposureProfile,
-        toolNames: mcp.toolNames,
-      }).join("\n"),
-      plugin,
-    });
-  } else if (mcp.kind === "stdio-shim" && mcp.toolNames.length > 0) {
+  if (mcp.kind === "stdio-shim" && mcp.toolNames.length > 0) {
     regions.push({
       kind: "marker",
       targetPath: configPath(input.target),

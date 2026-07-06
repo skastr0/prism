@@ -11,12 +11,7 @@ import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import {
-  MCP_EXPOSURE_HEADER,
-  generatedMcpWireServerName,
-  renderMcpHttpUrl,
-  resolveMcpRuntime,
-} from "../mcp-runtime.js";
+import { renderWire, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -51,7 +46,6 @@ export interface AntigravityCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
   readonly mcpExposureProfile?: string;
-  readonly mcpRuntimePort?: number;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -105,11 +99,8 @@ const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: Antigr
     target.sourcePluginName,
     agent,
   )) {
-    const ownerServerName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
-      generatedTools.push(
-        antigravityMcpToolNameForBinding(ownerPlugin, ownerServerName, binding),
-      );
+      generatedTools.push(antigravityMcpToolNameForBinding(ownerPlugin, binding));
     }
   }
   const tools = uniqueSorted([
@@ -182,11 +173,21 @@ const renderContext = (contexts: ReadonlyArray<{ label: string; content: string 
   return lines.join("\n");
 };
 
+/**
+ * Antigravity's per-agent `tools:` frontmatter is a flat, cross-server
+ * identifier space requiring a `mcp_<server>_<tool>` prefix (single
+ * underscore, `mcp_` literal) to disambiguate which configured MCP server a
+ * permission targets — this is Antigravity's own established convention
+ * (predates the shim), not the generic `mcp__<server>__<tool>` shape
+ * `renderAllowlist`'s "global-prefixed" branch renders for Claude/Grok, so
+ * this composes the prefix locally around the shared wire-name primitive
+ * rather than calling `renderAllowlist` directly.
+ */
 const antigravityMcpToolNameForBinding = (
-  sourcePluginName: string,
-  serverName: string,
+  ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string => `mcp_${serverName}_${mcpToolNameForBinding(sourcePluginName, binding)}`;
+): string =>
+  `mcp_${shimServerKey("antigravity-cli")}_${renderWire("antigravity-cli", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding))}`;
 
 const matcherForHook = (
   match: ResolvedHookMatch,
@@ -288,7 +289,7 @@ const planHooks = async (
     ),
     (binding) => {
       const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-      return antigravityMcpToolNameForBinding(owner, generatedMcpWireServerName(owner), binding);
+      return antigravityMcpToolNameForBinding(owner, binding);
     },
   );
   const config: Record<string, Record<string, unknown>> = {};
@@ -325,28 +326,28 @@ const planHooks = async (
   });
 };
 
-const planMcpServers = async (input: LowerInput): Promise<Record<string, unknown>> => {
+const planMcpServers = (input: LowerInput): Record<string, unknown> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  const runtime = resolveMcpRuntime(input.registry, TARGET_ID, {
-    requirePort: ownedBindings.length > 0,
-    resolvedPort: input.target.mcpRuntimePort,
-  });
+  if (ownedBindings.length === 0) return {};
 
-  const serverName = generatedMcpWireServerName(input.target.sourcePluginName);
-  const mcpServers: Record<string, unknown> = {};
-  if (ownedBindings.length > 0) {
-    mcpServers[serverName] = {
-      serverUrl: renderMcpHttpUrl(runtime, { disableSse: true }),
-      headers: {
-        [MCP_EXPOSURE_HEADER]: input.target.mcpExposureProfile,
-      },
-    };
+  const env: Record<string, string> = {
+    PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
+    PRISM_SHIM_HARNESS: TARGET_ID,
+  };
+  if (input.target.mcpExposureProfile) {
+    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
   }
-  return mcpServers;
+  return {
+    [shimServerKey("antigravity-cli")]: {
+      command: "prism",
+      args: ["mcp", "shim"],
+      env,
+    },
+  };
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {

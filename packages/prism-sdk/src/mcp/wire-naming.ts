@@ -231,14 +231,25 @@ const HARNESS_WIRE_CONFIG: Record<ShimHarnessId, HarnessWireConfig> = {
   "codex-cli": { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
   hermes: { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
   "kimi-code": { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
-  // Open item (see design risks): antigravity-cli/cursor/factory-droid were
-  // HTTP-only before consolidation, so their shim-mode allowlist shape is
-  // unconfirmed. Default to the within-server shape shared by Codex/Hermes/
-  // Kimi, locked here by a golden so a future correction is a one-line diff
-  // instead of a silent naming drift.
-  "antigravity-cli": { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
+  // Cursor carries no per-tool allowlist at all in its lowerer (a single
+  // `mcpServers.<key>` entry, no `enabledTools`/`tools:` array) — the shape
+  // label is moot for it, but `within-server` (bare wire, no prefix) is the
+  // harmless default since nothing ever reads it through `renderAllowlist`.
   cursor: { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
-  "factory-droid": { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
+  // Factory Droid's per-agent `tools:` frontmatter is a flat, cross-server
+  // identifier space using the exact same `mcp__<server>__<tool>` shape as
+  // Claude Code (confirmed by reading its pre-shim lowerer + golden fixture,
+  // which already emitted `mcp__<owner p_hash>__<tool>`).
+  "factory-droid": { serverKey: SHIM_SERVER_KEY, allowlistShape: "global-prefixed", globalPrefix: "mcp__" },
+  // Antigravity CLI's per-agent `tools:` frontmatter is ALSO a flat,
+  // cross-server identifier space, but with its own established
+  // single-underscore `mcp_<server>_<tool>` convention (confirmed the same
+  // way) — a different literal joiner than the `__` this module's
+  // `global-prefixed` branch renders for Claude/Grok/Factory Droid, so
+  // `antigravity-cli.ts` composes that prefix locally around `renderWire`
+  // rather than through `renderAllowlist`. This label stays `within-server`
+  // (harmless: nothing calls `renderAllowlist("antigravity-cli", ...)`).
+  "antigravity-cli": { serverKey: SHIM_SERVER_KEY, allowlistShape: "within-server" },
   grok: {
     serverKey: GROK_SHIM_SERVER_KEY,
     allowlistShape: "global-prefixed",

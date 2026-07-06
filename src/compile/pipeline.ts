@@ -109,7 +109,6 @@ interface LowererModule {
       readonly scope: HarnessScope;
       readonly root: string;
       readonly mcpExposureProfile?: string;
-      readonly mcpRuntimePort?: number;
       readonly prismHome?: string;
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
@@ -934,7 +933,6 @@ const planTargetLowering = (options: {
   readonly outputRoot: string;
   readonly prismHome: string;
   readonly mcpServer?: PreparedMcpServer;
-  readonly mcpRuntimePort?: number;
 }): Effect.Effect<LowerOutput, CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
@@ -966,7 +964,6 @@ const planTargetLowering = (options: {
               ),
             }
           : {}),
-        ...(options.mcpRuntimePort ? { mcpRuntimePort: options.mcpRuntimePort } : {}),
         prismHome: options.prismHome,
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
@@ -1052,7 +1049,6 @@ const prepareLoweringInputs = (
   readonly composedForLowering: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
   readonly mcpServer?: PreparedMcpServer;
-  readonly mcpRuntimePort?: number;
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);

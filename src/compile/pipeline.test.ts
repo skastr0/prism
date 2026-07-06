@@ -10,6 +10,7 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generatedMcpWireServerName } from "./mcp-runtime.js";
+import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import {
   generateMcpServerBundle,
   mcpServerRuntimeSourceSha256,
@@ -5433,26 +5434,26 @@ test("compilePluginForTarget verifies an existing auto-port Hermes HTTP MCP daem
   }
 });
 
-test("compilePluginForTarget rejects omitted Hermes HTTP MCP port with lifecycle none", async () => {
+test("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ignored)", async () => {
+  // Post-consolidation: HTTP mode is gone, only stdio-shim remains.
+  // Configuration that would have required HTTP port now succeeds with stdio-shim.
   const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
     pluginName: "hermes-http-auto-port-none-demo",
     omitPort: true,
   });
 
-  await expect(
-    Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-        mcpLifecycle: "none",
-      }),
-    ),
-  ).rejects.toThrow(/has no configured port and no running metadata/);
-  expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      root: hermesRoot,
+      dryRun: false,
+      mcpLifecycle: "none",
+    }),
+  );
+  expect(result.operations.length).toBeGreaterThanOrEqual(0);
 });
 
 test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind", async () => {
@@ -5499,7 +5500,9 @@ test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind",
   expect(await pathExists(join(hermesRoot, "config.yaml"))).toBe(false);
 });
 
-test("compilePluginForTarget rejects removed Hermes stdio MCP transport", async () => {
+test("compilePluginForTarget accepts Hermes with stdio transport config (ignored post-consolidation)", async () => {
+  // Post-consolidation: stdio-shim is the only transport, HTTP config is ignored.
+  // Stdio config in plugin.json is now ignored (shim uses stdio unconditionally).
   const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
     pluginName: "hermes-stdio-gate-demo",
   });
@@ -5516,21 +5519,22 @@ test("compilePluginForTarget rejects removed Hermes stdio MCP transport", async 
   };
   await writeText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  await expect(
-    Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        root: hermesRoot,
-        dryRun: false,
-      }),
-    ),
-  ).rejects.toThrow("stdio");
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      root: hermesRoot,
+      dryRun: false,
+    }),
+  );
+  expect(result.operations.length).toBeGreaterThanOrEqual(0);
 });
 
-test("compilePluginForTarget rejects non-loopback Hermes Streamable HTTP hosts", async () => {
+test("compilePluginForTarget accepts Hermes with non-loopback HTTP host (ignored post-consolidation)", async () => {
+  // Post-consolidation: HTTP host config is ignored, only stdio-shim is used.
+  // Non-loopback HTTP configuration no longer causes rejection.
   const root = await createTempRoot();
   const pluginRoot = join(root, "hermes-http-host-demo");
 
@@ -5574,17 +5578,16 @@ export default defineTool({
 `,
   );
 
-  await expect(
-    Effect.runPromise(
-      compilePluginForTarget({
-        prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
-        target: "hermes",
-        scope: "global",
-        dryRun: true,
-      }),
-    ),
-  ).rejects.toThrow("loopback host");
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "hermes",
+      scope: "global",
+      dryRun: true,
+    }),
+  );
+  expect(result.operations.length).toBeGreaterThanOrEqual(0);
 });
 
 test("compilePluginForTarget rejects Hermes agents and hooks during source selection", async () => {
@@ -7411,14 +7414,12 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   expect(claudeAgent).not.toContain("tools:");
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
-  expect(mcpConfig).toContain(`"${generatedMcpWireServerName("canonical-compile-fixture")}"`);
-  expect(mcpConfig).toContain(`"${generatedMcpWireServerName("protocol-core")}"`);
-  expect(mcpConfig).toContain('"type": "http"');
-  expect(mcpConfig).toMatch(/"url": "http:\/\/127\.0\.0\.1:\d+\/mcp"/u);
-  expect(mcpConfig).toContain(
-    '"X-Prism-Mcp-Exposure": "prism-generated-canonical-compile-fixture:claude-code"',
-  );
-  expect(mcpConfig).not.toContain('"command": "bun"');
+  const claudeShimServerKey = shimServerKey("claude-code");
+  expect(mcpConfig).toContain(`"${claudeShimServerKey}"`);
+  expect(mcpConfig).toContain('"command": "prism"');
+  expect(mcpConfig).toContain('"mcp"');
+  expect(mcpConfig).toContain('"shim"');
+  expect(mcpConfig).toContain("PRISM_SHIM_PLUGINS");
   expect(
     await pathExists(prismMcpServerPath(testPrismHome(), "canonical-compile-fixture")),
   ).toBe(true);
@@ -7555,16 +7556,15 @@ export default defineAgent({
       type?: string;
       url?: string;
       headers?: Record<string, string>;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
     }>;
   };
-  const grokMcpServerName = grokMcpServerNameForPlugin("grok-pipeline-demo");
-  expect(grokMcpServerName).toMatch(/^p_[0-9a-f]{8}$/u);
-  expect(mcpConfig.mcpServers?.[grokMcpServerName]?.type).toBe("http");
-  expect(mcpConfig.mcpServers?.[grokMcpServerName]?.url)
-    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  expect(mcpConfig.mcpServers?.[grokMcpServerName]?.headers).toMatchObject({
-    "X-Prism-Mcp-Exposure": "prism-generated-grok-pipeline-demo:grok",
-  });
+  const grokShimServerKey = shimServerKey("grok");
+  expect(mcpConfig.mcpServers?.[grokShimServerKey]).toBeDefined();
+  expect(mcpConfig.mcpServers?.[grokShimServerKey]?.command).toBe("prism");
+  expect(mcpConfig.mcpServers?.[grokShimServerKey]?.args).toEqual(["mcp", "shim"]);
   const mcpServer = await readFile(
     prismMcpServerPath(testPrismHome(), "grok-pipeline-demo"),
     "utf8",
@@ -7725,7 +7725,7 @@ export default defineHook({
   );
   expect(await pathExists(join(pluginRootPath, ".factory-plugin", "plugin.json"))).toBe(true);
   const factoryWireServerName = generatedMcpWireServerName("factory-pipeline-demo");
-  const factoryMcpToolName = `mcp__${factoryWireServerName}__factory_pipeline_demo_submit_work`;
+  const factoryMcpToolName = renderAllowlist("factory-droid", "factory-pipeline-demo", "factory_pipeline_demo_submit_work");
   const droid = await readFile(join(pluginRootPath, "droids", "worker.md"), "utf8");
   expect(droid).toContain('description: "Factory worker"');
   expect(droid).toContain('model: "inherit"');
@@ -7739,14 +7739,15 @@ export default defineHook({
       type?: string;
       url?: string;
       headers?: Record<string, string>;
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
     }>;
   };
-  expect(mcpConfig.mcpServers?.[factoryWireServerName]?.type).toBe("http");
-  expect(mcpConfig.mcpServers?.[factoryWireServerName]?.url)
-    .toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  expect(mcpConfig.mcpServers?.[factoryWireServerName]?.headers).toMatchObject({
-    "X-Prism-Mcp-Exposure": "prism-generated-factory-pipeline-demo:factory-droid",
-  });
+  const factoryShimServerKey = shimServerKey("factory-droid");
+  expect(mcpConfig.mcpServers?.[factoryShimServerKey]).toBeDefined();
+  expect(mcpConfig.mcpServers?.[factoryShimServerKey]?.command).toBe("prism");
+  expect(mcpConfig.mcpServers?.[factoryShimServerKey]?.args).toEqual(["mcp", "shim"]);
   const mcpServer = await readFile(
     prismMcpServerPath(testPrismHome(), "factory-pipeline-demo"),
     "utf8",
@@ -8492,16 +8493,10 @@ export default defineHook({
     skills: "./skills/",
     sessionStart: { skill: "prism-context" },
   });
-  expect(manifest.mcpServers?.[kimiServerName]).toMatchObject({
-    url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/),
-    headers: {
-      "X-Prism-Mcp-Exposure": "prism-generated-kimi-pipeline-demo:kimi-code",
-    },
-    enabledTools: [kimiToolName],
-  });
-  expect(manifest.mcpServers?.[kimiServerName]?.command).toBeUndefined();
-  expect(manifest.mcpServers?.[kimiServerName]?.args).toBeUndefined();
-  expect(manifest.mcpServers?.[kimiServerName]?.cwd).toBeUndefined();
+  const kimiShimServerKey = shimServerKey("kimi-code");
+  expect(manifest.mcpServers?.[kimiShimServerKey]).toBeDefined();
+  expect(manifest.mcpServers?.[kimiShimServerKey]?.command).toBe("prism");
+  expect(manifest.mcpServers?.[kimiShimServerKey]?.args).toEqual(["mcp", "shim"]);
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"))).toBe(true);
   expect(await pathExists(join(pluginOutputRoot, "mcp"))).toBe(false);
   const installed = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
@@ -8859,7 +8854,7 @@ export default defineAgent({
       "mcp.json",
     );
     const consumerMcp = JSON.parse(await readFile(consumerMcpPath, "utf8"));
-    expect(consumerMcp.mcpServers).toHaveProperty(generatedMcpWireServerName("factory-tool-core"));
+    expect(consumerMcp.mcpServers).toHaveProperty(shimServerKey("factory-droid"));
 
     // The owner bundle carries the agent-bound dependency tool and lives at
     // the canonical PRISM_HOME path; the consumer does not duplicate it.

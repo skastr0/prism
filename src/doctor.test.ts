@@ -555,6 +555,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
     join(process.env.HOME!, ".hermes", "config.yaml"),
     [
       "mcp_servers:",
+      `# --- prism:hermes.mcp.${hermesServerName} begin ---`,
       `  ${hermesServerName}:`,
       "    command: prism",
       "    args:",
@@ -567,6 +568,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       "    tools:",
       "      include:",
       "        - p_a1b2c3d4_search",
+      `# --- prism:hermes.mcp.${hermesServerName} end ---`,
       "",
     ].join("\n"),
   );

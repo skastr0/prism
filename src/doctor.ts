@@ -1199,6 +1199,7 @@ const yamlSiblingBlock = (lines: ReadonlyArray<string>, startIndex: number, inde
   for (let index = startIndex; index < lines.length; index++) {
     const line = lines[index]!;
     if (line.trim().length === 0) continue;
+    if (line.trim().startsWith("#")) continue;
     if (indentOf(line) <= indent) break;
     block.push(line);
   }

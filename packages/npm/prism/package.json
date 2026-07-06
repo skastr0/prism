@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Unified plugin distribution CLI for AI coding harnesses.",
   "license": "MIT",
@@ -35,9 +35,9 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "@skastr0/prism-darwin-arm64": "0.3.0",
-    "@skastr0/prism-darwin-x64": "0.3.0",
-    "@skastr0/prism-linux-arm64": "0.3.0",
-    "@skastr0/prism-linux-x64": "0.3.0"
+    "@skastr0/prism-darwin-arm64": "0.4.0",
+    "@skastr0/prism-darwin-x64": "0.4.0",
+    "@skastr0/prism-linux-arm64": "0.4.0",
+    "@skastr0/prism-linux-x64": "0.4.0"
   }
 }

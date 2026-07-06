@@ -3033,7 +3033,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; trust?: unknown }>;
   };
   const antigravityWireServerName = generatedMcpWireServerName("antigravity_plugin.demo");
-  const antigravityMcpToolName = `mcp_${antigravityWireServerName}_antigravity_plugin_demo_submit_work`;
+  const antigravityMcpToolName = `mcp_${shimServerKey("antigravity-cli")}_${antigravityWireServerName}_antigravity_plugin_demo_submit_work`;
   // Post-consolidation: every harness (antigravity-cli included) spawns the
   // aggregating stdio shim instead of dialing a Streamable HTTP URL directly.
   const antigravityMcp = mcpConfig.mcpServers?.[shimServerKey("antigravity-cli")];
@@ -3248,32 +3248,38 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
     bundleEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
   ).toEqual(["tool-only-demo"]);
 
+  // Post-consolidation: every generated-MCP harness spawns the aggregating
+  // stdio shim under its own fixed server key instead of dialing a
+  // Streamable HTTP URL directly.
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
-  expect(codexConfig).toContain(`["mcp_servers"."${wireServerName}"]`);
-  expect(codexConfig).toContain('enabled_tools = ["tool_only_demo_echo_message"]');
-  expect(codexConfig).toMatch(/url = "http:\/\/127\.0\.0\.1:\d+\/mcp"/);
-  expect(codexConfig).toContain(`["mcp_servers"."${wireServerName}"."headers"]`);
-  expect(codexConfig).toContain('"X-Prism-Mcp-Exposure" = "prism-generated-tool-only-demo:codex-cli"');
-  expect(codexConfig).not.toContain('command = "bun"');
+  expect(codexConfig).toContain(`["mcp_servers"."${shimServerKey("codex-cli")}"]`);
+  expect(codexConfig).toContain('command = "prism"');
+  expect(codexConfig).toContain('args = ["mcp", "shim"]');
+  expect(codexConfig).toContain(`enabled_tools = ["${wireServerName}_${expectedToolName}"]`);
+  expect(codexConfig).toContain('PRISM_SHIM_PLUGINS = "tool-only-demo"');
+  expect(codexConfig).toContain('PRISM_SHIM_HARNESS = "codex-cli"');
+  expect(codexConfig).toContain('PRISM_SHIM_EXPOSURE = "prism-generated-tool-only-demo:codex-cli"');
+  expect(codexConfig).not.toMatch(/url = "http/u);
   expect(await pathExists(join(projectRoot, ".codex", "mcp"))).toBe(false);
 
   const claudeRoot = join(projectRoot, ".claude", "skills", "prism-generated-tool-only-demo");
   const claudeMcp = JSON.parse(await readFile(join(claudeRoot, ".mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(claudeMcp.mcpServers?.[wireServerName]).toMatchObject({
-    type: "http",
-    headers: { "X-Prism-Mcp-Exposure": "prism-generated-tool-only-demo:claude-code" },
+  const claudeShim = claudeMcp.mcpServers?.[shimServerKey("claude-code")];
+  expect(claudeShim?.command).toBe("prism");
+  expect(claudeShim?.args).toEqual(["mcp", "shim"]);
+  expect(claudeShim?.env).toEqual({
+    PRISM_SHIM_PLUGINS: "tool-only-demo",
+    PRISM_SHIM_HARNESS: "claude-code",
+    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:claude-code",
   });
-  expect(claudeMcp.mcpServers?.[wireServerName]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
   expect(await pathExists(join(claudeRoot, "mcp"))).toBe(false);
 
   const antigravityRoot = join(projectRoot, ".agents", "plugins", "prism-generated-tool-only-demo");
   const antigravityMcpConfig = JSON.parse(await readFile(join(antigravityRoot, "mcp_config.json"), "utf8")) as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  // Post-consolidation: antigravity-cli spawns the aggregating stdio shim
-  // instead of dialing a Streamable HTTP URL directly.
   const antigravityShim = antigravityMcpConfig.mcpServers?.[shimServerKey("antigravity-cli")];
   expect(antigravityShim?.command).toBe("prism");
   expect(antigravityShim?.args).toEqual(["mcp", "shim"]);
@@ -3286,20 +3292,29 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
 
   const factoryRoot = join(projectRoot, ".factory", "plugins", "prism-generated-tool-only-demo");
   const factoryMcp = JSON.parse(await readFile(join(factoryRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(factoryMcp.mcpServers?.[wireServerName]?.type).toBe("http");
-  expect(factoryMcp.mcpServers?.[wireServerName]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  expect(factoryMcp.mcpServers?.[wireServerName]?.headers)
-    .toEqual({ "X-Prism-Mcp-Exposure": "prism-generated-tool-only-demo:factory-droid" });
+  const factoryShim = factoryMcp.mcpServers?.[shimServerKey("factory-droid")];
+  expect(factoryShim?.command).toBe("prism");
+  expect(factoryShim?.args).toEqual(["mcp", "shim"]);
+  expect(factoryShim?.env).toEqual({
+    PRISM_SHIM_PLUGINS: "tool-only-demo",
+    PRISM_SHIM_HARNESS: "factory-droid",
+    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:factory-droid",
+  });
   expect(await pathExists(join(factoryRoot, "mcp"))).toBe(false);
 
   const cursorConfig = JSON.parse(await readFile(join(projectRoot, ".cursor", "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(cursorConfig.mcpServers?.[wireServerName]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  expect(cursorConfig.mcpServers?.[wireServerName]?.headers)
-    .toEqual({ "X-Prism-Mcp-Exposure": "prism-generated-tool-only-demo:cursor" });
+  const cursorShim = cursorConfig.mcpServers?.[shimServerKey("cursor")];
+  expect(cursorShim?.command).toBe("prism");
+  expect(cursorShim?.args).toEqual(["mcp", "shim"]);
+  expect(cursorShim?.env).toEqual({
+    PRISM_SHIM_PLUGINS: "tool-only-demo",
+    PRISM_SHIM_HARNESS: "cursor",
+    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:cursor",
+  });
   expect(await pathExists(join(projectRoot, ".cursor", "mcp"))).toBe(false);
 
   // Byte-identical across harness compiles: recompiling another harness must
@@ -3453,31 +3468,35 @@ export default defineAgent({
     "utf8",
   );
   const exposureCoreWireServerName = generatedMcpWireServerName("exposure-core");
-  const exposureDemoWireServerName = generatedMcpWireServerName("exposure-demo");
   expect(codexAgent).toContain(
-    `# MCP tools requested from prism-generated-exposure-core (wire ${exposureCoreWireServerName}): exposure_core_agent_only`,
+    `# MCP tools requested from prism-generated-exposure-core (shim wire): ${exposureCoreWireServerName}_exposure_core_agent_only`,
   );
+  // Post-consolidation: every plugin compiled for a harness converges on the
+  // SAME single stdio-shim region (`codex.mcp.prism-mcp-shim`), not a
+  // per-plugin table -- so the on-disk config reflects whichever plugin was
+  // compiled most recently into this root (exposure-core, compiled last,
+  // above). Deny-by-default for the foreign agent-bound tool now lives
+  // entirely in the agent role file (asserted above): Codex has no
+  // per-role allowlist, so the global `enabled_tools` gate is necessarily
+  // whole-root, not whole-plugin.
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
-  const consumerConfigSection = codexConfig.slice(
-    codexConfig.indexOf(`# --- prism:codex.mcp.${exposureDemoWireServerName} begin ---`),
-    codexConfig.indexOf(`# --- prism:codex.mcp.${exposureDemoWireServerName} end ---`),
-  );
-  expect(consumerConfigSection).toContain('enabled_tools = ["exposure_demo_shared"]');
-  expect(consumerConfigSection).not.toContain('enabled_tools = ["exposure_core_agent_only"');
-  expect(codexConfig).toContain('enabled_tools = ["exposure_core_agent_only"]');
+  expect(codexConfig).toContain(`["mcp_servers"."${shimServerKey("codex-cli")}"]`);
+  expect(codexConfig).toContain(`enabled_tools = ["${exposureCoreWireServerName}_exposure_core_agent_only"]`);
 
   expect(consumerBundle).toContain('"prism-generated-exposure-demo:claude-code"');
 
-  // Claude (harness B): deny-by-default moves to the HTTP exposure profile,
-  // because Streamable HTTP clients do not spawn per-client subprocess env.
+  // Claude (harness B): deny-by-default moves to the `PRISM_SHIM_EXPOSURE`
+  // env var carried in the shim's spawn env -- Claude's .mcp.json has no
+  // per-role allowlist field of its own, so the shim itself gates by this
+  // exposure profile at runtime.
   const claudeMcp = JSON.parse(
     await readFile(
       join(projectRoot, ".claude", "skills", "prism-generated-exposure-demo", ".mcp.json"),
       "utf8",
     ),
-  ) as { mcpServers?: Record<string, { headers?: Record<string, string> }> };
-  const claudeHeaders = claudeMcp.mcpServers?.[exposureDemoWireServerName]?.headers;
-  expect(claudeHeaders?.["X-Prism-Mcp-Exposure"]).toBe("prism-generated-exposure-demo:claude-code");
+  ) as { mcpServers?: Record<string, { env?: Record<string, string> }> };
+  const claudeShimEnv = claudeMcp.mcpServers?.[shimServerKey("claude-code")]?.env;
+  expect(claudeShimEnv?.PRISM_SHIM_EXPOSURE).toBe("prism-generated-exposure-demo:claude-code");
   expect(JSON.stringify(claudeMcp)).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 });
 
@@ -3505,12 +3524,15 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
     }),
   );
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  const cursorMcp = config.mcpServers?.[generatedMcpWireServerName("tool-only-demo")];
-  expect(cursorMcp?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-  expect(cursorMcp?.headers).toEqual({
-    "X-Prism-Mcp-Exposure": "prism-generated-tool-only-demo:cursor",
+  const cursorMcp = config.mcpServers?.[shimServerKey("cursor")];
+  expect(cursorMcp?.command).toBe("prism");
+  expect(cursorMcp?.args).toEqual(["mcp", "shim"]);
+  expect(cursorMcp?.env).toEqual({
+    PRISM_SHIM_PLUGINS: "tool-only-demo",
+    PRISM_SHIM_HARNESS: "cursor",
+    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:cursor",
   });
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "tool-only-demo"))).toBe(true);
   // The mcp.json server entry is a region in the snapshot manifest; the
@@ -3728,7 +3750,7 @@ export default defineTool({
   const config = JSON.parse(await readFile(join(cursorRoot, "mcp.json"), "utf8")) as {
     mcpServers?: Record<string, unknown>;
   };
-  expect(config.mcpServers?.[generatedMcpWireServerName("cursor-mixed-skills-tools")]).toBeDefined();
+  expect(config.mcpServers?.[shimServerKey("cursor")]).toBeDefined();
 });
 
 test("compilePluginForTarget leaves never-managed Cursor MCP entries untouched", async () => {
@@ -3812,15 +3834,15 @@ test("compilePluginForTarget emits a Codex project bundle", async () => {
   expect(config.split("[features]").length - 1).toBe(1);
   expect(config).toContain("# --- prism:codex.hooks.codex-project-demo begin ---");
   const codexProjectWireServerName = generatedMcpWireServerName("codex-project-demo");
-  expect(config).toContain(`# --- prism:codex.mcp.${codexProjectWireServerName} begin ---`);
-  expect(config).toContain(`["mcp_servers"."${codexProjectWireServerName}"]`);
-  expect(config).toContain('enabled_tools = ["codex_project_demo_submit_work"]');
+  expect(config).toContain(`# --- prism:codex.mcp.${shimServerKey("codex-cli")} begin ---`);
+  expect(config).toContain(`["mcp_servers"."${shimServerKey("codex-cli")}"]`);
+  expect(config).toContain(`enabled_tools = ["${codexProjectWireServerName}_codex_project_demo_submit_work"]`);
   expect(config).toContain('[["hooks"."PreToolUse"]]');
   expect(config).toContain('matcher = "shell\\\\.command"');
 
   const agent = await readFile(join(codexRoot, "agents", "reviewer.toml"), "utf8");
   expect(agent).toContain('name = "reviewer"');
-  expect(agent).toContain(`# MCP tools requested from prism-generated-codex-project-demo (wire ${codexProjectWireServerName}):`);
+  expect(agent).toContain(`# MCP tools requested from prism-generated-codex-project-demo (shim wire):`);
 
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "codex-project-demo"))).toBe(true);
   expect(await pathExists(join(codexRoot, "mcp"))).toBe(false);
@@ -4773,17 +4795,27 @@ export default defineTool({
   if (configRegion?.kind === "marker") {
     // Anchored inside the user-shared top-level mcp_servers mapping.
     expect(configRegion.anchor).toBe("mcp_servers:");
-    expect(configRegion.content).toContain("prism-generated-hermes-tool-demo:");
-    expect(configRegion.content).toMatch(/url: "http:\/\/127\.0\.0\.1:\d+\/mcp"/);
-    expect(configRegion.content).toContain("connect_timeout: 10");
-    expect(configRegion.content).toContain("timeout: 120");
+    // Post-consolidation: Hermes spawns the aggregating stdio shim instead
+    // of dialing a Streamable HTTP URL directly.
+    expect(configRegion.content).toContain(`${shimServerKey("hermes")}:`);
+    expect(configRegion.content).toContain("command: prism");
+    expect(configRegion.content).toContain("- mcp");
+    expect(configRegion.content).toContain("- shim");
+    expect(configRegion.content).toContain('PRISM_SHIM_PLUGINS: "hermes-tool-demo"');
+    expect(configRegion.content).toContain('PRISM_SHIM_HARNESS: "hermes"');
+    expect(configRegion.content).toContain('PRISM_SHIM_EXPOSURE: "prism-generated-hermes-tool-demo:hermes"');
     expect(configRegion.content).toContain("sampling:");
     expect(configRegion.content).toContain("enabled: false");
     expect(configRegion.content).toContain("hermes_tool_demo_echo");
   }
 });
 
-test("compilePluginForTarget can lower Hermes canonical tools as Streamable HTTP MCP", async () => {
+// Renamed from "...as Streamable HTTP MCP": HTTP transport is retired, only
+// stdio-shim remains. This plugin still declares a legacy
+// `runtime.mcp.hermes` HTTP block (host/port/timeouts) on purpose -- the
+// point of the test is that it is silently ignored and the output is the
+// same stdio-shim shape as any other Hermes tool plugin.
+test("compilePluginForTarget ignores legacy Hermes HTTP runtime config and still lowers via stdio-shim", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "hermes-http-demo");
 
@@ -4851,19 +4883,26 @@ export default defineTool({
   );
   expect(configRegion?.kind).toBe("marker");
   if (configRegion?.kind === "marker") {
-    expect(configRegion.content).toContain("prism-generated-hermes-http-demo:");
-    expect(configRegion.content).toContain('url: "http://127.0.0.1:38463/mcp"');
-    expect(configRegion.content).toContain("connect_timeout: 15");
-    expect(configRegion.content).toContain("timeout: 90");
-    expect(configRegion.content).toContain('X-Prism-Mcp-Exposure: "prism-generated-hermes-http-demo:hermes"');
+    expect(configRegion.content).toContain(`${shimServerKey("hermes")}:`);
+    expect(configRegion.content).toContain("command: prism");
+    expect(configRegion.content).toContain("- mcp");
+    expect(configRegion.content).toContain("- shim");
+    expect(configRegion.content).toContain('PRISM_SHIM_PLUGINS: "hermes-http-demo"');
+    expect(configRegion.content).toContain('PRISM_SHIM_HARNESS: "hermes"');
+    expect(configRegion.content).toContain('PRISM_SHIM_EXPOSURE: "prism-generated-hermes-http-demo:hermes"');
     expect(configRegion.content).toContain("sampling:");
     expect(configRegion.content).toContain("enabled: false");
     expect(configRegion.content).toContain("hermes_http_demo_echo");
-    expect(configRegion.content).not.toContain("prism-generated-hermes-http-demo:\n    command:");
+    // The legacy runtime.mcp.hermes HTTP block (host/port/timeouts) on this
+    // plugin has no effect on the rendered config at all.
+    expect(configRegion.content).not.toContain("url:");
+    expect(configRegion.content).not.toContain("connect_timeout");
+    expect(configRegion.content).not.toContain("15000");
+    expect(configRegion.content).not.toContain("90000");
   }
 });
 
-test("compilePluginForTarget renders Codex MCP config as HTTP", async () => {
+test("compilePluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP runtime config ignored)", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
@@ -4884,16 +4923,18 @@ test("compilePluginForTarget renders Codex MCP config as HTTP", async () => {
 
   expect(result.outputRoot).toBe(codexRoot);
   const config = await readFile(join(codexRoot, "config.toml"), "utf8");
-  expect(config).toContain(`["mcp_servers"."${generatedMcpWireServerName("codex-http-demo")}"]`);
-  expect(config).toContain(`url = "http://127.0.0.1:${port}/mcp"`);
-  expect(config).toContain('"X-Prism-Mcp-Exposure" = "prism-generated-codex-http-demo:codex-cli"');
+  expect(config).toContain(`["mcp_servers"."${shimServerKey("codex-cli")}"]`);
+  expect(config).toContain('command = "prism"');
+  expect(config).toContain('args = ["mcp", "shim"]');
+  expect(config).toContain(`enabled_tools = ["${generatedMcpWireServerName("codex-http-demo")}_codex_http_demo_echo"]`);
+  expect(config).toContain('PRISM_SHIM_PLUGINS = "codex-http-demo"');
+  expect(config).toContain('PRISM_SHIM_HARNESS = "codex-cli"');
+  expect(config).toContain('PRISM_SHIM_EXPOSURE = "prism-generated-codex-http-demo:codex-cli"');
+  // The legacy runtime.mcp.codex-cli HTTP block (host/port) on this plugin
+  // has no effect on the rendered config at all.
   expect(config).not.toContain('command = "bun"');
-  expect(config).not.toContain("args = ");
-  expect(config).not.toContain("http_headers");
+  expect(config).not.toMatch(/url = "http/u);
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "codex-http-demo"))).toBe(true);
-  expect(
-    await pathExists(join(testPrismHome(), "runtime", "mcp", "codex-http-demo", "runtime.json")),
-  ).toBe(true);
   expect(
     result.operations.some((operation) => operation.targetPath.endsWith("server.mjs")),
   ).toBe(false);
@@ -4902,7 +4943,7 @@ test("compilePluginForTarget renders Codex MCP config as HTTP", async () => {
   ).toBe(false);
 });
 
-test("planPluginForTarget renders Codex MCP config as HTTP", async () => {
+test("planPluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP runtime config ignored)", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
@@ -4923,14 +4964,17 @@ test("planPluginForTarget renders Codex MCP config as HTTP", async () => {
 
   const configRegion = result.regions.find((region): region is Extract<DesiredRegion, { kind: "marker" }> =>
     region.kind === "marker" &&
-    region.regionKey === `codex.mcp.${generatedMcpWireServerName("codex-http-plan-demo")}`
+    region.regionKey === `codex.mcp.${shimServerKey("codex-cli")}`
   );
-  expect(configRegion?.content).toContain(`url = "http://127.0.0.1:${port}/mcp"`);
-  expect(configRegion?.content).not.toContain('command = "bun"');
-  expect(configRegion?.content).not.toContain("args = ");
+  expect(configRegion?.content).toContain('command = "prism"');
+  expect(configRegion?.content).toContain('args = ["mcp", "shim"]');
+  expect(configRegion?.content).toContain(
+    `enabled_tools = ["${generatedMcpWireServerName("codex-http-plan-demo")}_codex_http_plan_demo_echo"]`,
+  );
+  expect(configRegion?.content).not.toMatch(/url = "http/u);
 });
 
-test("compilePluginForTarget renders Claude MCP config as HTTP", async () => {
+test("compilePluginForTarget lowers Claude MCP config via stdio-shim (legacy HTTP runtime config ignored)", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: claudeRoot } = await createHermesHttpToolPlugin({
     target: "claude-code",
@@ -4958,64 +5002,32 @@ test("compilePluginForTarget renders Claude MCP config as HTTP", async () => {
     ),
   ) as {
     mcpServers?: Record<string, {
-      type?: string;
       command?: string;
       args?: string[];
       env?: Record<string, string>;
-      url?: string;
-      headers?: Record<string, string>;
     }>;
   };
-  expect(config.mcpServers?.[generatedMcpWireServerName("claude-http-demo")]).toEqual({
-    type: "http",
-    url: `http://127.0.0.1:${port}/mcp`,
-    headers: {
-      "X-Prism-Mcp-Exposure": "prism-generated-claude-http-demo:claude-code",
+  expect(config.mcpServers?.[shimServerKey("claude-code")]).toEqual({
+    command: "prism",
+    args: ["mcp", "shim"],
+    env: {
+      PRISM_SHIM_PLUGINS: "claude-http-demo",
+      PRISM_SHIM_HARNESS: "claude-code",
+      PRISM_SHIM_EXPOSURE: "prism-generated-claude-http-demo:claude-code",
     },
   });
   expect(await pathExists(canonicalServerPath)).toBe(true);
-  expect(
-    await pathExists(join(testPrismHome(), "runtime", "mcp", "claude-http-demo", "runtime.json")),
-  ).toBe(true);
 });
 
-test("compilePluginForTarget previews an auto-selected Hermes HTTP MCP port in dry-run", async () => {
-  const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
-    pluginName: "hermes-http-auto-port-dry-run-demo",
-    omitPort: true,
-  });
-
-  const result = await Effect.runPromise(
-    compilePluginForTarget({
-      prismHome: testPrismHome(),
-      pluginPath: pluginRoot,
-      target: "hermes",
-      scope: "global",
-      root: hermesRoot,
-      dryRun: true,
-    }),
-  );
-
-  const configRegion = result.regions.find(
-    (region) => region.targetPath === join(hermesRoot, "config.yaml"),
-  );
-  expect(configRegion?.kind).toBe("marker");
-  if (configRegion?.kind === "marker") {
-    expect(configRegion.content).toMatch(/url: "http:\/\/127\.0\.0\.1:\d+\/mcp"/u);
-  }
-  expect(
-    await pathExists(
-      join(
-        testPrismHome(),
-        "runtime",
-        "mcp",
-        "hermes-http-auto-port-dry-run-demo",
-        "runtime.json",
-      ),
-    ),
-  ).toBe(false);
-});
-
+// The former "previews an auto-selected Hermes HTTP MCP port in dry-run"
+// test is removed: port auto-selection is a retired HTTP-transport concept,
+// and its `runtime.json`-absent-in-dry-run assertion is now trivially true
+// in every case (that file is never written at all post-consolidation --
+// see the bundle-not-written dry-run assertions in "compilePluginForTarget
+// lowers Hermes skills and canonical tools into MCP config" above, which
+// already cover the real dry-run invariant). The sibling below absorbs its
+// only remaining value -- confirming an omitted port still compiles -- with
+// a real assertion on the emitted config instead of a vacuous one.
 test("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ignored)", async () => {
   // Post-consolidation: HTTP mode is gone, only stdio-shim remains.
   // Configuration that would have required HTTP port now succeeds with stdio-shim.
@@ -5035,7 +5047,11 @@ test("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ig
       mcpLifecycle: "none",
     }),
   );
-  expect(result.operations.length).toBeGreaterThanOrEqual(0);
+  expect(result.operations.length).toBeGreaterThan(0);
+  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
+  expect(config).toContain(`${shimServerKey("hermes")}:`);
+  expect(config).toContain("command: prism");
+  expect(config).not.toMatch(/url:/u);
 });
 
 test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind", async () => {

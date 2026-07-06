@@ -45,6 +45,10 @@
       "types": "./dist/mcp/shim.d.ts",
       "import": "./dist/mcp/shim.js"
     },
+    "./mcp/wire-naming": {
+      "types": "./dist/mcp/wire-naming.d.ts",
+      "import": "./dist/mcp/wire-naming.js"
+    },
     "./mcp/uds-registry": {
       "types": "./dist/mcp/uds-registry.d.ts",
       "import": "./dist/mcp/uds-registry.js"

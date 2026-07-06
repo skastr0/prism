@@ -26,7 +26,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { pluginWireNamespace } from "@skastr0/prism-sdk/mcp/shim";
+import { canonicalBase } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
 
@@ -197,6 +197,7 @@ const makeShimClient = (
       ...envWithoutInheritedPrismHome,
       HOME: homeRoot,
       PRISM_SHIM_PLUGINS: plugin,
+      PRISM_SHIM_HARNESS: "claude-code",
       PRISM_SHIM_DAEMON_TIMEOUT_MS: "5000",
       PRISM_SHIM_SPAWN_TIMEOUT_MS: String(options.spawnTimeoutMs),
       // Forwarded through the shim's own env to the daemon it spawns
@@ -219,8 +220,7 @@ test(
     const bundleV1 = await compileFixtureBundleContent("echoed");
     const bundlePath = await installBundle(homeRoot, PLUGIN_NAME, bundleV1.content);
 
-    const namespace = pluginWireNamespace(PLUGIN_NAME);
-    const fqName = `${namespace}__${bundleV1.toolName}`;
+    const fqName = canonicalBase(PLUGIN_NAME, bundleV1.toolName);
 
     // --- Phase 1: absent -> 5 concurrent shims race to spawn. ---
     const shims = Array.from({ length: 5 }, () =>

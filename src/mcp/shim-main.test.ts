@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import { pluginWireNamespace } from "@skastr0/prism-sdk/mcp/shim";
+import { canonicalBase } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
 import { waitForChildClose, waitForUdsSocket } from "../compile/test-helpers/mcp-http-roundtrip.js";
@@ -166,6 +166,7 @@ test("shim aggregates tools/list, dispatches tools/call, and isolates a dead plu
     env: {
       ...shimSubprocessEnv(homeRoot),
       PRISM_SHIM_PLUGINS: `${daemonA.pluginName},${daemonB.pluginName}`,
+      PRISM_SHIM_HARNESS: "claude-code",
       PRISM_SHIM_DAEMON_TIMEOUT_MS: "2000",
     },
   });
@@ -178,10 +179,8 @@ test("shim aggregates tools/list, dispatches tools/call, and isolates a dead plu
     const listed = await client.listTools();
     expect(listed.tools).toHaveLength(2);
 
-    const namespaceA = pluginWireNamespace(daemonA.pluginName);
-    const namespaceB = pluginWireNamespace(daemonB.pluginName);
-    const fqNameA = `${namespaceA}__${daemonA.toolName}`;
-    const fqNameB = `${namespaceB}__${daemonB.toolName}`;
+    const fqNameA = canonicalBase(daemonA.pluginName, daemonA.toolName);
+    const fqNameB = canonicalBase(daemonB.pluginName, daemonB.toolName);
 
     expect(listed.tools.map((tool) => tool.name)).toEqual([fqNameA, fqNameB]);
 
@@ -227,6 +226,7 @@ test("prism mcp shim CLI subcommand wires the same aggregating shim", async () =
     env: {
       ...shimSubprocessEnv(homeRoot),
       PRISM_SHIM_PLUGINS: daemon.pluginName,
+      PRISM_SHIM_HARNESS: "claude-code",
       PRISM_SHIM_DAEMON_TIMEOUT_MS: "2000",
     },
   });
@@ -235,8 +235,7 @@ test("prism mcp shim CLI subcommand wires the same aggregating shim", async () =
   try {
     await client.connect(transport);
 
-    const namespace = pluginWireNamespace(daemon.pluginName);
-    const fqName = `${namespace}__${daemon.toolName}`;
+    const fqName = canonicalBase(daemon.pluginName, daemon.toolName);
 
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([fqName]);

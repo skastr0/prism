@@ -51,67 +51,25 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { getDaemon as getDaemonDefault, type RegistryResult, type RegistryEntry } from "./uds-registry.js";
 import { resolveOrSpawnDaemon, DaemonResolveError, DEFAULT_SPAWN_TIMEOUT_MS } from "./daemon-resolver.js";
+import {
+  canonicalNamespace,
+  createGrokCollisionGuard,
+  parseCanonicalBase,
+  renderWire,
+  type ShimHarnessId,
+} from "./wire-naming.js";
+
+export type { ShimHarnessId } from "./wire-naming.js";
 
 // ---------------------------------------------------------------------------
 // Naming: the per-plugin namespace segment used to flatten N plugins' tools
 // into the one flat name-space a single MCP `tools/list` response can hold.
+// The naming scheme itself (`canonicalBase`, per-harness capping/prefixing)
+// lives in `wire-naming.ts` — the one place both this shim and every root
+// lowerer derive a plugin+tool's wire name from, so the name this process
+// advertises is byte-identical to the name a harness's compiled allowlist
+// expects (see that module's file-level comment for the full rationale).
 // ---------------------------------------------------------------------------
-
-/**
- * FNV-1a, 8 hex chars. Deliberately bit-for-bit identical to
- * `stableHash8` in the root package's `src/compile/stable-hash.ts`, which
- * backs `generatedMcpWireServerName` (`p_<hash8>`) — the segment every
- * harness lowerer (Claude Code, Codex CLI, Antigravity, Factory Droid,
- * Kimi Code, Cursor, Grok) already bakes into compiled permission strings
- * and tool FQNs (e.g. Claude Code's `mcp__p_<hash8>__<tool>`).
- *
- * `packages/prism-sdk` cannot import that root-package module (its
- * `tsconfig.json` `rootDir` is `./src`; a real `import` of anything under
- * the workspace root `src/` fails to compile), so the tiny pure function is
- * duplicated here rather than re-derived with a different algorithm. Using
- * the *same* namespace segment the harness side already computes means a
- * later wave that points a harness's MCP config at this shim only has to
- * add an outer wrapper layer around `p_<hash8>__<tool>` (the shim's own
- * server key in that harness's config), not rename every already-compiled
- * permission string from scratch.
- */
-const stableHash8 = (input: string): string => {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index++) {
-    hash ^= input.codePointAt(index)!;
-    hash = Math.trunc(Math.imul(hash, 0x01000193));
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-};
-
-/** `p_<hash8>` — see `stableHash8` above for why this exact shape. */
-export const pluginWireNamespace = (pluginName: string): string => `p_${stableHash8(pluginName)}`;
-
-const NAMESPACE_SEPARATOR = "__";
-/** Fixed width of `p_<hash8>`: literal `p_` (2) + 8 hex chars. */
-const NAMESPACE_LENGTH = 2 + 8;
-
-/** Harness-visible tool name: `<pluginWireNamespace>__<originalToolName>`. */
-export const namespacedToolName = (pluginName: string, toolName: string): string =>
-  `${pluginWireNamespace(pluginName)}${NAMESPACE_SEPARATOR}${toolName}`;
-
-/**
- * Inverse of `namespacedToolName`. The namespace segment has a fixed
- * width, so this splits on position rather than searching for the `__`
- * separator — a tool name is free-form and may itself legally contain
- * `__`, but the namespace segment never does.
- */
-export const splitNamespacedToolName = (
-  fqName: string,
-): { readonly namespace: string; readonly toolName: string } | undefined => {
-  if (fqName.length <= NAMESPACE_LENGTH + NAMESPACE_SEPARATOR.length) return undefined;
-  const namespace = fqName.slice(0, NAMESPACE_LENGTH);
-  const separator = fqName.slice(NAMESPACE_LENGTH, NAMESPACE_LENGTH + NAMESPACE_SEPARATOR.length);
-  if (separator !== NAMESPACE_SEPARATOR) return undefined;
-  const toolName = fqName.slice(NAMESPACE_LENGTH + NAMESPACE_SEPARATOR.length);
-  if (toolName.length === 0) return undefined;
-  return { namespace, toolName };
-};
 
 // ---------------------------------------------------------------------------
 // Daemon-facing HTTP-over-UDS client
@@ -305,6 +263,13 @@ export type ResolveOrSpawnFn = (plugin: string) => Promise<RegistryEntry>;
 export interface ShimAggregatorOptions {
   readonly plugins: ReadonlyArray<string>;
   /**
+   * Which harness this shim process is speaking to — selects the wire
+   * naming this aggregator advertises in `tools/list` (see `wire-naming.ts`,
+   * `renderWire`). Threaded from the process entrypoint (`shim-main.ts`,
+   * `PRISM_SHIM_HARNESS`), never re-derived here.
+   */
+  readonly harness: ShimHarnessId;
+  /**
    * Prism home directory, threaded from the process entrypoint (see
    * `src/mcp/shim-main.ts`, which resolves `PRISM_HOME` once via
    * `resolvePrismHome()`). Forwarded to the default `resolveOrSpawn` so a
@@ -336,8 +301,15 @@ interface NamedTool {
   readonly tool: Tool;
 }
 
+/** A wire name's owning plugin and its pre-namespacing (bare) tool name. */
+interface ResolvedTool {
+  readonly plugin: string;
+  readonly bareTool: string;
+}
+
 export class ShimAggregator {
   private readonly plugins: ReadonlyArray<string>;
+  private readonly harness: ShimHarnessId;
   private readonly daemonTimeoutMs: number;
   private readonly getDaemon: GetDaemonFn;
   private readonly spawnTimeoutMs: number;
@@ -345,9 +317,19 @@ export class ShimAggregator {
   private readonly enabledTools: ReadonlySet<string> | undefined;
   private readonly exposureProfile: string | undefined;
   private readonly connections = new Map<string, { readonly sock: string; readonly connection: DaemonConnection }>();
+  /**
+   * Wire name -> owning plugin + bare tool name, rebuilt wholesale on every
+   * `listTools()` call. This is the only path that can dispatch a
+   * Grok-capped/truncated wire name back to its plugin: capping is not
+   * string-invertible (see `parseCanonicalBase`'s doc comment in
+   * `wire-naming.ts`), so a capped name that never went through this
+   * process's own `listTools()` cannot be parsed positionally at all.
+   */
+  private toolIndex = new Map<string, ResolvedTool>();
 
   constructor(options: ShimAggregatorOptions) {
     this.plugins = options.plugins;
+    this.harness = options.harness;
     this.daemonTimeoutMs = options.daemonTimeoutMs ?? DEFAULT_SHIM_DAEMON_TIMEOUT_MS;
     this.getDaemon = options.getDaemon ?? getDaemonDefault;
     this.spawnTimeoutMs = options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS;
@@ -428,18 +410,43 @@ export class ShimAggregator {
       }),
     );
 
+    const guard = createGrokCollisionGuard();
     const merged: Tool[] = [];
+    const toolIndex = new Map<string, ResolvedTool>();
     for (const named of perPlugin) {
       for (const { plugin, tool } of named) {
-        const fqName = namespacedToolName(plugin, tool.name);
+        const wire = renderWire(this.harness, plugin, tool.name, guard);
         // Filter by enabledTools if set
-        if (this.enabledTools !== undefined && !this.enabledTools.has(fqName)) {
+        if (this.enabledTools !== undefined && !this.enabledTools.has(wire)) {
           continue;
         }
-        merged.push({ ...tool, name: fqName });
+        merged.push({ ...tool, name: wire });
+        toolIndex.set(wire, { plugin, bareTool: tool.name });
       }
     }
+    this.toolIndex = toolIndex;
     return merged;
+  }
+
+  /**
+   * Resolves a wire name to its owning plugin and bare (pre-namespacing)
+   * tool name. Checks `toolIndex` (built by the last `listTools()` call)
+   * first — the only path that can recover a Grok-capped name. Falls back
+   * to positional parsing (`parseCanonicalBase` + matching
+   * `canonicalNamespace` against a configured plugin) for the uncapped
+   * case, so an otherwise-valid `tools/call` still dispatches even when it
+   * arrives before this process's first `tools/list`, or for a plugin whose
+   * last `tools/list` pass failed to resolve it.
+   */
+  private resolveToolName(fqName: string): ResolvedTool | undefined {
+    const indexed = this.toolIndex.get(fqName);
+    if (indexed) return indexed;
+
+    const parsed = parseCanonicalBase(fqName);
+    if (!parsed) return undefined;
+    const plugin = this.plugins.find((candidate) => canonicalNamespace(candidate) === parsed.namespace);
+    if (!plugin) return undefined;
+    return { plugin, bareTool: parsed.tool };
   }
 
   /**
@@ -457,19 +464,15 @@ export class ShimAggregator {
       throw new ShimDaemonError("shim", `tool name '${fqName}' is not enabled`);
     }
 
-    const split = splitNamespacedToolName(fqName);
-    if (!split) {
-      throw new ShimDaemonError("shim", `tool name '${fqName}' is not a namespaced shim tool`);
-    }
-    const plugin = this.plugins.find((candidate) => pluginWireNamespace(candidate) === split.namespace);
-    if (!plugin) {
+    const resolved = this.resolveToolName(fqName);
+    if (!resolved) {
       throw new ShimDaemonError("shim", `tool name '${fqName}' does not match any configured plugin`);
     }
-    const connection = await this.resolveConnection(plugin);
+    const connection = await this.resolveConnection(resolved.plugin);
     if (!connection) {
-      throw new ShimDaemonError(plugin, `plugin has no live daemon registered`);
+      throw new ShimDaemonError(resolved.plugin, `plugin has no live daemon registered`);
     }
-    return connection.callTool(split.toolName, args);
+    return connection.callTool(resolved.bareTool, args);
   }
 }
 
@@ -509,6 +512,8 @@ export const createShimServer = (aggregator: ShimAggregator): Server => {
 
 export interface RunShimOptions {
   readonly plugins: ReadonlyArray<string>;
+  /** See `ShimAggregatorOptions.harness`. */
+  readonly harness: ShimHarnessId;
   /** Prism home directory, threaded from the process entrypoint. See `ShimAggregatorOptions.prismHome`. */
   readonly prismHome?: string;
   readonly daemonTimeoutMs?: number;

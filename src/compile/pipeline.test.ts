@@ -3271,12 +3271,13 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   const claudeMcp = JSON.parse(await readFile(join(claudeRoot, ".mcp.json"), "utf8")) as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  const claudeShim = claudeMcp.mcpServers?.[shimServerKey("claude-code")];
+  const claudeShim = claudeMcp.mcpServers?.[pluginServerKey("tool-only-demo")];
   expect(claudeShim?.command).toBe("prism");
   expect(claudeShim?.args).toEqual(["mcp", "shim"]);
   expect(claudeShim?.env).toEqual({
     PRISM_SHIM_PLUGINS: "tool-only-demo",
     PRISM_SHIM_HARNESS: "claude-code",
+    PRISM_SHIM_NAMING: "per-plugin",
     PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:claude-code",
   });
   expect(await pathExists(join(claudeRoot, "mcp"))).toBe(false);
@@ -3515,7 +3516,7 @@ export default defineAgent({
       "utf8",
     ),
   ) as { mcpServers?: Record<string, { env?: Record<string, string> }> };
-  const claudeShimEnv = claudeMcp.mcpServers?.[shimServerKey("claude-code")]?.env;
+  const claudeShimEnv = claudeMcp.mcpServers?.[pluginServerKey("exposure-demo")]?.env;
   expect(claudeShimEnv?.PRISM_SHIM_EXPOSURE).toBe("prism-generated-exposure-demo:claude-code");
   expect(JSON.stringify(claudeMcp)).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 });
@@ -5044,12 +5045,13 @@ test("compilePluginForTarget lowers Claude MCP config via stdio-shim (legacy HTT
       env?: Record<string, string>;
     }>;
   };
-  expect(config.mcpServers?.[shimServerKey("claude-code")]).toEqual({
+  expect(config.mcpServers?.[pluginServerKey("claude-http-demo")]).toEqual({
     command: "prism",
     args: ["mcp", "shim"],
     env: {
       PRISM_SHIM_PLUGINS: "claude-http-demo",
       PRISM_SHIM_HARNESS: "claude-code",
+      PRISM_SHIM_NAMING: "per-plugin",
       PRISM_SHIM_EXPOSURE: "prism-generated-claude-http-demo:claude-code",
     },
   });
@@ -7050,7 +7052,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   expect(claudeAgent).not.toContain("tools:");
 
   const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
-  const claudeShimServerKey = shimServerKey("claude-code");
+  const claudeShimServerKey = pluginServerKey("canonical-compile-fixture");
   expect(mcpConfig).toContain(`"${claudeShimServerKey}"`);
   expect(mcpConfig).toContain('"command": "prism"');
   expect(mcpConfig).toContain('"mcp"');

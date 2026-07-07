@@ -262,6 +262,36 @@ const HARNESS_WIRE_CONFIG: Record<ShimHarnessId, HarnessWireConfig> = {
 export const shimServerKey = (harness: ShimHarnessId): string => HARNESS_WIRE_CONFIG[harness].serverKey;
 
 /**
+ * Mirror of the root package's `normalizeBundleSegment`
+ * (`src/compile/lowerers/shared.ts`) — the sanitizer inside
+ * `generatedMcpServerName`. Duplicated here (like `stableHash8` before the
+ * shim imported this module) so the shim can derive a daemon's exposure
+ * profile name without depending on the root package.
+ */
+const normalizeSegment = (value: string, fallback = "plugin"): string => {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "");
+  return normalized.length > 0 ? normalized : fallback;
+};
+
+/**
+ * The exposure-profile name `pluginName`'s generated daemon registers for
+ * `harness` — `prism-generated-<plugin>:<harness>`, byte-identical to the
+ * compile pipeline's `mcpExposureProfileForTarget(generatedMcpServerName(
+ * pluginName), harness)` (`src/compile/mcp-runtime.ts`). The shim derives
+ * this per owner daemon: a shared multi-plugin shim config cannot carry a
+ * single `PRISM_SHIM_EXPOSURE` value, because each owner's daemon only
+ * knows its own profiles and 403s any other.
+ */
+export const generatedDaemonExposureProfile = (
+  pluginName: string,
+  harness: ShimHarnessId,
+): string => `prism-generated-${normalizeSegment(pluginName)}:${harness}`;
+
+/**
  * The wire name `harness` advertises (and the shim, told
  * `PRISM_SHIM_HARNESS=harness`, must advertise identically) for `tool` on
  * `pluginName`'s daemon. Byte-identical to `canonicalBase` for every

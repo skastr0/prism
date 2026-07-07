@@ -27,7 +27,7 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { canonicalBase } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
+import { generateMcpServerBundle, mcpToolNamesForBindings } from "../compile/mcp-bundle.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
 
 const execFileAsync = promisify(execFile);
@@ -93,12 +93,19 @@ export default defineTool({
   );
 
   const serverName = `prism-generated-${PLUGIN_NAME}`;
+  const bindings = [bindingFromToolSource(PLUGIN_NAME, join(pluginRoot, "tools", "echo.tool.ts"))];
   const bundle = await generateMcpServerBundle({
     sourcePluginName: PLUGIN_NAME,
     sourcePluginRoot: pluginRoot,
     serverName,
     bundleId: serverName,
-    bindings: [bindingFromToolSource(PLUGIN_NAME, join(pluginRoot, "tools", "echo.tool.ts"))],
+    bindings,
+    // Mirror the pipeline: real bundles register a per-harness exposure
+    // profile, and a shim given no explicit PRISM_SHIM_EXPOSURE derives
+    // `<serverName>:<harness>` per owner daemon.
+    exposureProfiles: [
+      { name: `${serverName}:claude-code`, toolNames: mcpToolNamesForBindings(PLUGIN_NAME, bindings) },
+    ],
   });
   const toolName = bundle.toolNames[0];
   if (!toolName) throw new Error(`fixture bundle for ${PLUGIN_NAME} produced no tools`);

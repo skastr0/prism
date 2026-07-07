@@ -20,7 +20,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { canonicalBase } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { generateMcpServerBundle } from "../compile/mcp-bundle.js";
+import { generateMcpServerBundle, mcpToolNamesForBindings } from "../compile/mcp-bundle.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
 import { waitForChildClose, waitForUdsSocket } from "../compile/test-helpers/mcp-http-roundtrip.js";
 
@@ -119,12 +119,21 @@ export default defineTool({
   );
 
   const serverName = `prism-generated-${options.pluginName}`;
+  const bindings = [
+    bindingFromToolSource(options.pluginName, join(pluginRoot, "tools", "echo.tool.ts")),
+  ];
   const bundle = await generateMcpServerBundle({
     sourcePluginName: options.pluginName,
     sourcePluginRoot: pluginRoot,
     serverName,
     bundleId: serverName,
-    bindings: [bindingFromToolSource(options.pluginName, join(pluginRoot, "tools", "echo.tool.ts"))],
+    bindings,
+    // Mirror the pipeline: real bundles register a per-harness exposure
+    // profile, and a shim given no explicit PRISM_SHIM_EXPOSURE derives
+    // `<serverName>:<harness>` per owner daemon.
+    exposureProfiles: [
+      { name: `${serverName}:claude-code`, toolNames: mcpToolNamesForBindings(options.pluginName, bindings) },
+    ],
   });
   const toolName = bundle.toolNames[0];
   if (!toolName) throw new Error(`fixture bundle for ${options.pluginName} produced no tools`);

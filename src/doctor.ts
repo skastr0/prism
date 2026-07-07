@@ -32,6 +32,8 @@ import {
 import { compilePluginForTarget } from "./compile/pipeline.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { getDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
+import { probeSocketLiveness } from "@skastr0/prism-sdk/mcp/uds-singleton";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
 import {
@@ -718,6 +720,60 @@ const shimServerEnv = (server: Record<string, unknown>): Record<string, unknown>
   return env && typeof env === "object" && !Array.isArray(env) ? (env as Record<string, unknown>) : undefined;
 };
 
+/**
+ * True precondition for "this owner plugin can serve MCP tools right now" --
+ * grounded in `resolveOrSpawnDaemon`
+ * (packages/prism-sdk/src/mcp/daemon-resolver.ts, `mcp-shim-plugin-bundle-missing`
+ * grounding pass, 2026-07-07): the per-plugin UDS daemon architecture keeps
+ * NO artifact at rest once a daemon is live. `prismMcpServerPath`'s
+ * `server.mjs` is written once by compile (`src/compile/pipeline.ts`'s
+ * `prepareUnionMcpServer` -> `writePrismMcpServerBundle`) and is read back
+ * exactly once, by `resolveOrSpawnDaemon`, to SPAWN a fresh `bun <bundle>`
+ * daemon -- it throws `DaemonResolveError` ("cannot spawn: unable to
+ * locate/read compiled bundle") only when it is about to spawn and finds
+ * nothing to read. But that same module's `isBundleStale` treats an
+ * unreadable bundle as "unknown, not proven stale" for an *already-live*
+ * registered daemon: a `bun <bundle>` process that already started keeps
+ * serving over its UDS socket with no bundle file on disk at all, and a
+ * live daemon is deliberately never torn down just because compile output
+ * was pruned/relocated out from under it. So a plugin is servable when
+ * EITHER the bundle exists (a fresh daemon can be spawned) OR the UDS
+ * registry names a daemon that is still live (nothing to spawn --
+ * already running); neither holding is the one state that is genuinely
+ * broken. A plugin that has simply never been spawned yet (no registry
+ * entry at all, bundle present) is intentionally NOT this state -- lazy
+ * first-spawn is healthy, matching `mcp.health`'s own "stopped" bucket in
+ * `src/mcp/lifecycle.ts`'s `classifyStatus`, which treats an absent
+ * registry entry as non-fatal by the same reasoning.
+ */
+/**
+ * Injectable seam for `pluginIsServable`'s two UDS lookups. `getDaemon`
+ * (`@skastr0/prism-sdk/mcp/uds-registry`) resolves its registry root via
+ * `node:os`'s `homedir()`, which -- unlike `prismHome` -- Bun resolves once
+ * at process start and never re-reads from a test's mutated
+ * `process.env.HOME`; a real-function test would silently read/write the
+ * *actual invoking machine's* `~/.prism/runtime/mcp`, not a hermetic
+ * fixture. Tests inject fakes here instead of touching real machine state;
+ * every production call site omits this and gets the real functions.
+ */
+export interface PluginServableDeps {
+  readonly getDaemon?: typeof getDaemon;
+  readonly probeSocketLiveness?: typeof probeSocketLiveness;
+}
+
+export const pluginIsServable = async (
+  prismHome: string,
+  pluginName: string,
+  deps: PluginServableDeps = {},
+): Promise<boolean> => {
+  if (await generatedConfigPathExists(prismMcpServerPath(prismHome, pluginName))) return true;
+  const resolveDaemon = deps.getDaemon ?? getDaemon;
+  const probeLiveness = deps.probeSocketLiveness ?? probeSocketLiveness;
+  const registered = await resolveDaemon(pluginName);
+  if (registered.kind !== "ok") return false;
+  return (await probeLiveness(registered.value.sock)) === "live";
+};
+
 const missingShimPluginBundles = async (
   prismHome: string,
   pluginsCsv: string,
@@ -725,7 +781,7 @@ const missingShimPluginBundles = async (
   const names = pluginsCsv.split(",").map((value) => value.trim()).filter((value) => value.length > 0);
   const missing: string[] = [];
   for (const pluginName of names) {
-    if (!(await generatedConfigPathExists(prismMcpServerPath(prismHome, pluginName)))) missing.push(pluginName);
+    if (!(await pluginIsServable(prismHome, pluginName))) missing.push(pluginName);
   }
   return missing;
 };
@@ -823,7 +879,7 @@ const findingsFromStdioShimVerdict = (
       ...base,
       severity: "error",
       code: "config.mcp-shim-plugin-bundle-missing",
-      message: `${options.harness} MCP server '${options.serverName}' references owner plugin(s) with no compiled MCP bundle: ${verdict.missingPluginBundles.join(", ")}`,
+      message: `${options.harness} MCP server '${options.serverName}' references owner plugin(s) with no compiled MCP bundle and no live daemon: ${verdict.missingPluginBundles.join(", ")}`,
       data: { missingPluginBundles: verdict.missingPluginBundles },
     }));
   }
@@ -907,8 +963,7 @@ const evaluatePerPluginShimServerEntry = async (options: {
     envPluginMatches: expectedPlugin !== undefined,
     serverKeyMatches: expectedPlugin !== undefined && options.serverKey === pluginServerKey(expectedPlugin),
     missingPluginBundle:
-      expectedPlugin !== undefined &&
-      !(await generatedConfigPathExists(prismMcpServerPath(options.prismHome, expectedPlugin))),
+      expectedPlugin !== undefined && !(await pluginIsServable(options.prismHome, expectedPlugin)),
   };
 };
 
@@ -976,7 +1031,7 @@ const findingsFromPerPluginShimVerdict = (
       ...base,
       severity: "error",
       code: "config.mcp-shim-plugin-bundle-missing",
-      message: `${options.harness} MCP server '${options.serverKey}' references an owner plugin with no compiled MCP bundle`,
+      message: `${options.harness} MCP server '${options.serverKey}' references an owner plugin with no compiled MCP bundle and no live daemon`,
     }));
   }
   return findings;

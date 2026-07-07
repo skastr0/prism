@@ -2,13 +2,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { doctorExitCode, runDoctor } from "./doctor.js";
+import { doctorExitCode, pluginIsServable, runDoctor } from "./doctor.js";
 import { EXIT_CODES } from "./exit.js";
 import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
 
 let root: string;
 let originalHome: string | undefined;
@@ -839,4 +840,55 @@ test("doctor warns when Codex hooks.json contains Prism-managed hooks", async ()
   expect(Array.isArray(prismCommands)).toBe(true);
   expect(prismCommands).toHaveLength(1);
   expect(String(prismCommands[0])).toContain("prism-generated-demo");
+});
+
+// ---------------------------------------------------------------------------
+// pluginIsServable -- the true precondition config.mcp-shim-plugin-bundle-missing
+// validates (see doctor.ts's grounding comment on the function itself). The
+// UDS registry lookup (`getDaemon`) resolves via `node:os`'s `homedir()`,
+// which Bun freezes at process start and never re-reads from this file's
+// per-test `process.env.HOME` override -- so these deliberately inject fakes
+// for the daemon-registry branch rather than exercising the real
+// `@skastr0/prism-sdk` functions, which would silently touch the actual
+// invoking machine's real `~/.prism/runtime/mcp` state.
+// ---------------------------------------------------------------------------
+
+const absentDaemon = async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "absent" });
+
+test("pluginIsServable: a compiled bundle at rest is servable -- lazy first-spawn, never even consults the registry", async () => {
+  const prismHome = join(root, "prism-home");
+  await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
+
+  const servable = await pluginIsServable(prismHome, "demo", {
+    getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => {
+      throw new Error("must not consult the daemon registry when the bundle exists on disk");
+    },
+  });
+  expect(servable).toBe(true);
+});
+
+test("pluginIsServable: no bundle and no registered daemon is genuinely unservable", async () => {
+  const prismHome = join(root, "prism-home");
+  const servable = await pluginIsServable(prismHome, "never-compiled", { getDaemon: absentDaemon });
+  expect(servable).toBe(false);
+});
+
+test("pluginIsServable: no bundle but a live registered daemon is servable -- already running, nothing to spawn", async () => {
+  const prismHome = join(root, "prism-home");
+  const entry: RegistryEntry = { pid: 4242, sock: "/tmp/prism-doctor-test.sock", bundleHash: "deadbeef", startedAt: 0, lastUsed: 0 };
+  const servable = await pluginIsServable(prismHome, "demo", {
+    getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "ok", value: entry }),
+    probeSocketLiveness: async () => "live",
+  });
+  expect(servable).toBe(true);
+});
+
+test("pluginIsServable: no bundle and a registered-but-dead daemon is genuinely unservable", async () => {
+  const prismHome = join(root, "prism-home");
+  const entry: RegistryEntry = { pid: 4242, sock: "/tmp/prism-doctor-test.sock", bundleHash: "deadbeef", startedAt: 0, lastUsed: 0 };
+  const servable = await pluginIsServable(prismHome, "demo", {
+    getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "ok", value: entry }),
+    probeSocketLiveness: async () => "stale",
+  });
+  expect(servable).toBe(false);
 });

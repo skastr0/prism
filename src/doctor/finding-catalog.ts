@@ -124,7 +124,8 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     code: "config.mcp-shim-plugin-bundle-missing",
     severity: "error",
     fix: "refresh",
-    description: "A stdio-shim MCP server references an owner plugin with no compiled MCP bundle.",
+    description:
+      "A stdio-shim MCP server references an owner plugin with no compiled MCP bundle AND no live daemon registered -- genuinely unservable, not merely not-yet-spawned.",
   },
   {
     family: "harness.config",

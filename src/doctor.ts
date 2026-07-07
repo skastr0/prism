@@ -794,6 +794,38 @@ const pathFromCommandString = (command: string): string | undefined => {
   return match?.[1] ?? match?.[2] ?? match?.[3];
 };
 
+/**
+ * Grok registers the stdio shim inside `<grok-root>/config.toml` under
+ * `[mcp_servers.<shim server key>]` (a Prism-managed marker region) — the
+ * only MCP source grok actually resolves for installed plugins. Validate
+ * that entry against the stdio-shim contract; there is no per-tool
+ * allowlist in the server table (agent frontmatter `tools:` gates exposure).
+ */
+const validateGrokConfigReferences = async (
+  path: string,
+  prismHome: string,
+): Promise<DoctorFinding[]> => {
+  if (!(await exists(path))) return [];
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = Bun.TOML.parse(await readFile(path)) as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  const mcpServers = parsed.mcp_servers;
+  if (!mcpServers || typeof mcpServers !== "object") return [];
+  const expectedServerName = shimServerKey("grok");
+  const raw = (mcpServers as Record<string, unknown>)[expectedServerName];
+  if (!raw || typeof raw !== "object") return [];
+  return validateStdioShimServerEntry({
+    harness: "grok",
+    path,
+    serverName: expectedServerName,
+    server: raw as Record<string, unknown>,
+    prismHome,
+  });
+};
+
 const validateCodexConfigReferences = async (
   path: string,
   prismHome: string,
@@ -1303,15 +1335,7 @@ const validateHarnessConfigReferences = async (options: {
       return path && root ? validateCursorConfigReferences(path, root, options.prismHome) : [];
     }
     case "grok":
-      return validateGeneratedPluginMcpReferences({
-        harness: "grok",
-        scope: options.scope,
-        projectPath: options.projectPath,
-        roots: options.roots,
-        prismHome: options.prismHome,
-        pluginsSubdir: "plugins",
-        configFileName: ".mcp.json",
-      });
+      return path ? validateGrokConfigReferences(path, options.prismHome) : [];
     case "antigravity-cli":
       return validateGeneratedPluginMcpReferences({
         harness: "antigravity-cli",

@@ -141,7 +141,10 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     command: "hermes",
     envVar: "PRISM_WORKFLOW_HERMES_BIN",
     probeArgs: ["--version"],
-    defaultModel: "grok-composer-2.5-fast",
+    // Hermes proxies grok models but requires the `hf:` prefix — the bare
+    // grok id is rejected with "Your model name should start with an hf:
+    // prefix" (live e2e matrix, 2026-07-07).
+    defaultModel: "hf:grok-composer-2.5-fast",
   },
   "kimi-code": {
     harness: "kimi-code",

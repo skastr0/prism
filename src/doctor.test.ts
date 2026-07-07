@@ -569,6 +569,84 @@ test("doctor validates generated harness config references", async () => {
   expect(codes).toContain("config.opencode-plugin-missing");
 });
 
+test("a real refresh sweeps the retired aggregated shim key, and the legacy-aggregated-entry advisory finds nothing afterward", async () => {
+  const prismHome = join(root, "prism-home");
+  const configPath = join(process.env.HOME!, ".codex", "config.toml");
+  await writeText(prismMcpServerPath(prismHome, "booth"), "search\n");
+
+  // The exact live shape this advisory was written to catch: the retired
+  // union-owner's fenced entry, keyed by the reserved `prism-mcp-shim`
+  // sentinel — codex/hermes/cursor's aggregated scheme, retired in favor of
+  // one region per owner plugin (see src/sync/legacy-prism-entries.ts).
+  const legacyFence = [
+    "# --- prism:codex.mcp.prism-mcp-shim begin ---",
+    '["mcp_servers"."prism-mcp-shim"]',
+    'command = "prism"',
+    'args = ["mcp", "shim"]',
+    "enabled = true",
+    "required = false",
+    'default_tools_approval_mode = "approve"',
+    'enabled_tools = ["booth__context_get"]',
+    '["mcp_servers"."prism-mcp-shim"."env"]',
+    'PRISM_SHIM_PLUGINS = "booth"',
+    'PRISM_SHIM_HARNESS = "codex-cli"',
+    "# --- prism:codex.mcp.prism-mcp-shim end ---",
+  ].join("\n");
+  await writeText(configPath, `${legacyFence}\n`);
+
+  // A real refresh: the sync engine's own entry point (`syncDesiredRoot`,
+  // what `refreshPlugin` calls per harness root), scoped to the live
+  // plugin "booth" the way `refresh.ts` always scopes a real compile —
+  // never to the retired sentinel — proving the sweep does not depend on
+  // scope to reach the legacy entry.
+  const { syncDesiredRoot } = await import("./sync/run.js");
+  const codexServerName = pluginServerKey("booth");
+  await syncDesiredRoot({
+    prismHome,
+    dryRun: false,
+    scopePlugins: new Set(["booth"]),
+    desired: {
+      harness: "codex-cli",
+      root: join(process.env.HOME!, ".codex"),
+      files: [],
+      regions: [{
+        kind: "marker",
+        targetPath: configPath,
+        regionKey: `codex.mcp.${codexServerName}`,
+        commentPrefix: "#",
+        content: [
+          `["mcp_servers"."${codexServerName}"]`,
+          'command = "prism"',
+          'args = ["mcp", "shim"]',
+          "enabled = true",
+          'enabled_tools = ["context_get"]',
+          `["mcp_servers"."${codexServerName}"."env"]`,
+          'PRISM_SHIM_PLUGINS = "booth"',
+          'PRISM_SHIM_HARNESS = "codex-cli"',
+          'PRISM_SHIM_NAMING = "per-plugin"',
+        ].join("\n"),
+        plugin: "booth",
+      }],
+    },
+  });
+
+  const afterRefresh = await Bun.file(configPath).text();
+  expect(afterRefresh).not.toContain("prism-mcp-shim");
+  expect(afterRefresh).toContain(`prism:codex.mcp.${codexServerName}`);
+
+  const report = await runDoctor({
+    harnesses: ["codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const codexCodes = report.findings.filter((f) => f.harness === "codex-cli").map((f) => f.code);
+  expect(codexCodes).not.toContain("config.mcp-shim-legacy-aggregated-entry");
+  // The surviving per-plugin entry is well-formed — no other shim finding.
+  expect(codexCodes.filter((code) => code.startsWith("config.mcp-shim"))).toEqual([]);
+});
+
 test("doctor reports zero findings for a correctly-generated stdio-shim MCP config (claude-code, codex-cli, hermes, grok)", async () => {
   const prismHome = join(root, "prism-home");
   await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");

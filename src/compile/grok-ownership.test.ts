@@ -52,7 +52,7 @@ test("grok lowerer owner-qualifies foreign tool bindings and wires the shim to t
     ],
   };
 
-  const { files: operations } = await planLowering({
+  const { files: operations, regions } = await planLowering({
     agents: [consumerAgent],
     orbits: [],
     skills: [],
@@ -74,14 +74,11 @@ test("grok lowerer owner-qualifies foreign tool bindings and wires the shim to t
 
   // The shim resolves the owner's daemon on demand — no per-owner runtime
   // resolution is required at compile time; the referenced owner plugin is
-  // simply named in PRISM_SHIM_PLUGINS.
-  const mcpConfig = findContentOperation(operations, ".mcp.json");
-  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { env?: Record<string, string> }>;
-  };
-  expect(parsed.mcpServers?.[shimServerKey("grok")]?.env?.PRISM_SHIM_PLUGINS).toBe(
-    ownerPluginName,
-  );
+  // simply named in PRISM_SHIM_PLUGINS, inside the config.toml shim region.
+  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
+  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
+  expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
+  expect(mcpRegion.content).toContain(`PRISM_SHIM_PLUGINS = "${ownerPluginName}"`);
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();

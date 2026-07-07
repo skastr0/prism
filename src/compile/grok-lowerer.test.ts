@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/grok.js";
+import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
 import { mcpToolNameForBinding } from "./mcp-bundle.js";
 import {
   canonicalBase,
@@ -221,7 +222,7 @@ export default defineTool({
     toolSourcePath: toolPath,
   };
 
-  const { files: operations } = await planLowering({
+  const { files: operations, regions } = await planLowering({
     agents: [
       {
         name: "reviewer",
@@ -326,22 +327,24 @@ export default defineTool({
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
 
-  const mcpConfig = findContentOperation(operations, ".mcp.json");
-  const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
-  };
-  expect(Object.keys(mcpParsed.mcpServers ?? {})).toEqual([shimServerKey("grok")]);
-  expect(mcpParsed.mcpServers?.[shimServerKey("grok")]).toEqual({
-    command: "prism",
-    args: ["mcp", "shim"],
-    env: {
-      PRISM_SHIM_PLUGINS: "grok-plugin-fixture",
-      PRISM_SHIM_HARNESS: "grok",
-      PRISM_SHIM_EXPOSURE: "prism-generated-grok-plugin-fixture:grok",
-    },
-  });
-  expect(mcpConfig?.content).not.toContain('"type": "http"');
-  expect(mcpConfig?.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
+  // The shim registration is a managed region in <grok-root>/config.toml —
+  // grok never resolves a `.mcp.json` inside an installed plugin bundle, so
+  // a bundle-level file would leave every generated tool unreachable.
+  expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
+  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
+  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
+  expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
+  expect(mcpRegion.content).toContain(`["mcp_servers"."${shimServerKey("grok")}"]`);
+  expect(mcpRegion.content).toContain('command = "prism"');
+  expect(mcpRegion.content).toContain('args = ["mcp", "shim"]');
+  expect(mcpRegion.content).toContain(`["mcp_servers"."${shimServerKey("grok")}"."env"]`);
+  expect(mcpRegion.content).toContain('PRISM_SHIM_PLUGINS = "grok-plugin-fixture"');
+  expect(mcpRegion.content).toContain('PRISM_SHIM_HARNESS = "grok"');
+  // The shared region is a cross-plugin union: it cannot carry one plugin's
+  // exposure profile (the shim derives the per-owner profile itself).
+  expect(mcpRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
+  expect(mcpRegion.content).not.toContain("http");
+  expect(mcpRegion.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 
   // The bundle itself lives in PRISM_HOME — never in the generated plugin.
   const bundle = operations.find(
@@ -526,7 +529,7 @@ export default defineTool({
   );
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const { files: operations } = await planLowering({
+  const { files: operations, regions } = await planLowering({
     agents: [],
     orbits: [],
     tools: [...registry.tools.values()],
@@ -543,22 +546,24 @@ export default defineTool({
     },
   });
 
-  const mcpConfig = findContentOperation(operations, ".mcp.json");
-  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
-  };
-  expect(Object.keys(parsed.mcpServers ?? {})).toEqual([shimServerKey("grok")]);
-  expect(parsed.mcpServers?.[shimServerKey("grok")]).toEqual({
-    command: "prism",
-    args: ["mcp", "shim"],
-    env: {
-      PRISM_SHIM_PLUGINS: "grok-shim-fixture",
-      PRISM_SHIM_HARNESS: "grok",
-      PRISM_SHIM_EXPOSURE: "prism-generated-grok-shim-fixture:grok",
-    },
-  });
-  expect(mcpConfig?.content).not.toContain('"type": "http"');
-  expect(mcpConfig?.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
+  expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
+  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
+  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
+  expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
+  // The shared shim region is owned by the reserved cross-plugin owner, not
+  // the compiling plugin — its content is a union across installed plugins.
+  expect(mcpRegion.plugin).toBe(SHIM_REGION_OWNER);
+  expect(mcpRegion.content).toBe(
+    [
+      `["mcp_servers"."${shimServerKey("grok")}"]`,
+      'command = "prism"',
+      'args = ["mcp", "shim"]',
+      "enabled = true",
+      `["mcp_servers"."${shimServerKey("grok")}"."env"]`,
+      'PRISM_SHIM_PLUGINS = "grok-shim-fixture"',
+      'PRISM_SHIM_HARNESS = "grok"',
+    ].join("\n"),
+  );
 });
 
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {

@@ -47,7 +47,7 @@ daemon registers only the profile's assigned tools for each MCP session.
 | Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
-| Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin `.mcp.json` | plugin hooks | none for generated bundle |
+| Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via `config.toml#mcp_servers` region | plugin hooks | `config.toml#mcp_servers` |
 
 Gemini CLI is not a supported target. Antigravity CLI is the replacement target.
 Active Antigravity outputs still live under Antigravity's official

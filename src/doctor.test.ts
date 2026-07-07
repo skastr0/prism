@@ -485,9 +485,24 @@ test("doctor validates generated harness config references", async () => {
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", "hooks", "hooks.json"),
     `${JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/missing.mjs"' }] }] } }, null, 2)}\n`,
   );
+  // Grok: a broken shim entry under the correct server key in config.toml
+  // (grok's only resolvable MCP registration surface) — wrong command/args,
+  // env harness naming another harness, no PRISM_SHIM_PLUGINS.
+  const grokServerName = shimServerKey("grok");
+  await writeText(
+    join(process.env.HOME!, ".grok", "config.toml"),
+    [
+      `["mcp_servers"."${grokServerName}"]`,
+      'command = "bun"',
+      'args = ["/missing/prism/server.mjs"]',
+      `["mcp_servers"."${grokServerName}"."env"]`,
+      'PRISM_SHIM_HARNESS = "cursor"',
+      "",
+    ].join("\n"),
+  );
 
   const report = await runDoctor({
-    harnesses: ["codex-cli", "opencode", "claude-code"],
+    harnesses: ["codex-cli", "opencode", "claude-code", "grok"],
     scope: "global",
     prismHome,
     fix: false,
@@ -502,6 +517,12 @@ test("doctor validates generated harness config references", async () => {
   expect(codexCodes).toContain("config.mcp-shim-env-harness-mismatch");
   expect(codexCodes).toContain("config.mcp-shim-env-plugins-missing");
 
+  const grokCodes = codesFor("grok");
+  expect(grokCodes).toContain("config.mcp-shim-command-unresolvable");
+  expect(grokCodes).toContain("config.mcp-shim-args-invalid");
+  expect(grokCodes).toContain("config.mcp-shim-env-harness-mismatch");
+  expect(grokCodes).toContain("config.mcp-shim-env-plugins-missing");
+
   const claudeCodes = codesFor("claude-code");
   expect(claudeCodes).toContain("config.mcp-shim-plugin-bundle-missing");
   expect(claudeCodes).toContain("config.claude-hook-command-missing");
@@ -515,7 +536,7 @@ test("doctor validates generated harness config references", async () => {
   expect(codes).toContain("config.opencode-plugin-missing");
 });
 
-test("doctor reports zero findings for a correctly-generated stdio-shim MCP config (claude-code, codex-cli, hermes)", async () => {
+test("doctor reports zero findings for a correctly-generated stdio-shim MCP config (claude-code, codex-cli, hermes, grok)", async () => {
   const prismHome = join(root, "prism-home");
   await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
 
@@ -550,6 +571,23 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
     ].join("\n"),
   );
 
+  const grokShimServer = shimServerKey("grok");
+  await writeText(
+    join(process.env.HOME!, ".grok", "config.toml"),
+    [
+      `# --- prism:grok.mcp.${grokShimServer} begin ---`,
+      `["mcp_servers"."${grokShimServer}"]`,
+      'command = "prism"',
+      'args = ["mcp", "shim"]',
+      "enabled = true",
+      `["mcp_servers"."${grokShimServer}"."env"]`,
+      'PRISM_SHIM_PLUGINS = "demo"',
+      'PRISM_SHIM_HARNESS = "grok"',
+      `# --- prism:grok.mcp.${grokShimServer} end ---`,
+      "",
+    ].join("\n"),
+  );
+
   const hermesServerName = shimServerKey("hermes");
   await writeText(
     join(process.env.HOME!, ".hermes", "config.yaml"),
@@ -574,7 +612,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
   );
 
   const report = await runDoctor({
-    harnesses: ["claude-code", "codex-cli", "hermes"],
+    harnesses: ["claude-code", "codex-cli", "hermes", "grok"],
     scope: "global",
     prismHome,
     fix: false,

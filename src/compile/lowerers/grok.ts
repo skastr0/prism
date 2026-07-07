@@ -29,7 +29,7 @@ import {
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
-import type { DesiredFile } from "../../sync/desired.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginWritePusher,
@@ -42,10 +42,13 @@ import {
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
   renderPrePostSessionHookWrapperEntry,
+  SHIM_REGION_OWNER,
   stringArray,
+  unionedShimExposure,
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
+  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
@@ -67,6 +70,13 @@ export interface GrokLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
+  /**
+   * Union of every OTHER installed plugin's recorded shim contribution for
+   * this harness root (from the shim-exposure registry). The shared
+   * `config.toml` shim region is rendered from `prior ∪ own` so a
+   * single-plugin compile can never narrow the fence to its own view.
+   */
+  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -312,80 +322,140 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
-const planMcpServer = (
+const quote = (value: string): string => JSON.stringify(value);
+
+const tomlArray = (values: ReadonlyArray<string>): string =>
+  `[${values.map((value) => quote(value)).join(", ")}]`;
+
+const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
+  `[${segments.map((segment) => quote(segment)).join(".")}]`;
+
+/**
+ * The shared shim region carries the UNION of every installed plugin's
+ * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
+ * profile — the shim derives the per-owner daemon profile itself (see
+ * `@skastr0/prism-sdk/mcp/shim.ts`).
+ */
+const renderGrokStdioShimMcpServerToml = (options: {
+  readonly name: string;
+  readonly plugins: ReadonlyArray<string>;
+}): string =>
+  [
+    tomlDottedTable(["mcp_servers", options.name]),
+    `command = ${quote("prism")}`,
+    `args = ${tomlArray(["mcp", "shim"])}`,
+    "enabled = true",
+    tomlDottedTable(["mcp_servers", options.name, "env"]),
+    `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
+    `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
+  ].join("\n");
+
+/**
+ * Registers the stdio shim in `<grok-root>/config.toml` under
+ * `[mcp_servers.<shim server key>]` as a Prism-managed marker region.
+ *
+ * Why config.toml and not a plugin-bundle `.mcp.json`: Grok resolves MCP
+ * servers only from its config sources (`~/.grok/config.toml`, project
+ * `.grok/config.toml`, the project-root `.mcp.json`, and the Claude/Cursor
+ * compat imports — see `grok mcp doctor`'s "Config sources"). A `.mcp.json`
+ * inside an installed plugin bundle is counted by `grok inspect` but never
+ * becomes a live server in an agent run, so every tool name the lowerer
+ * advertised in agent frontmatter resolved to "Tool not found" via
+ * CallMcpTool. One shim entry per grok root (same shared-region semantics
+ * as the Codex lowerer's `codex.mcp.*` region); the shim fans out to every
+ * owner plugin's daemon over UDS.
+ *
+ * The fence is shared by every installed plugin, so it renders the union of
+ * the recorded prior exposure and this compile's own contribution, and is
+ * emitted whenever the UNION is non-empty — even when this plugin
+ * contributes nothing (its removal shrinks the fence instead of
+ * orphan-removing it while other plugins still need it). There is no tool
+ * allowlist in the server table (agent frontmatter `tools:` gates
+ * exposure), so grok's contribution records owner plugins only.
+ */
+const planMcpServerRegion = (
   input: LowerInput,
-  files: DesiredFile[],
-  desiredRelativePaths: Set<string>,
-): void => {
+  regions: DesiredRegion[],
+): ShimExposureContribution => {
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  if (bindingsByOwner.size === 0) return;
-
-  // One shim process fans out to every owner plugin's daemon over UDS, so
-  // there is exactly one entry here — no per-owner runtime/port resolution
-  // needed at compile time; the shim resolves live daemons on demand.
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
-    PRISM_SHIM_HARNESS: TARGET_ID,
+  const shimContribution: ShimExposureContribution = {
+    plugins: uniqueSorted([...bindingsByOwner.keys()]),
+    enabledTools: [],
   };
-  if (input.target.mcpExposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
-  }
 
-  pushWrite(
-    files,
-    desiredRelativePaths,
-    input.target,
-    ".mcp.json",
-    json({
-      mcpServers: {
-        [shimServerKey("grok")]: {
-          command: "prism",
-          args: ["mcp", "shim"],
-          env,
-        },
-      },
+  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
+  if (shimUnion.plugins.length === 0) return shimContribution;
+
+  const serverName = shimServerKey("grok");
+  regions.push({
+    kind: "marker",
+    targetPath: join(input.target.root, "config.toml"),
+    regionKey: `grok.mcp.${serverName}`,
+    commentPrefix: "#",
+    content: renderGrokStdioShimMcpServerToml({
+      name: serverName,
+      plugins: shimUnion.plugins,
     }),
-  );
+    plugin: SHIM_REGION_OWNER,
+  });
+  return shimContribution;
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
+  const regions: DesiredRegion[] = [];
   const namer = createGrokToolNamer();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
 
-  await planGeneratedPluginManifest({
-    input,
-    state,
-    pushWrite,
-    pluginId: generatedPluginId(input.target),
-    json,
-  });
-  await planGeneratedPluginAgentWrites({
-    input,
-    state,
-    pushWrite,
-    renderAgentMarkdown: (agent) => renderAgentMarkdown(agent, input.target, namer),
-  });
-  await planGeneratedPluginSkillWrites({ input, state, pushWrite });
-  await planStandardGeneratedPluginOrbitSkillWrites({
-    input,
-    state,
-    pushWrite,
-  });
-  await planMcpServer(input, state.files, state.desiredRelativePaths);
-  await planGeneratedPluginHookWrites({
-    input,
-    state,
-    renderHooksJson: (hooks, registry, target, bindings) =>
-      renderHooksJson(hooks, registry, target, bindings, namer),
-    bundleHookWrapper,
-    resolveTarget,
-  });
+  // A compile with no grok-lowerable artifacts still reaches this lowerer
+  // when OTHER plugins hold a recorded shim exposure for the root (the
+  // shared config.toml region must be re-rendered from the prior union).
+  // Only the region participates then — an artifact-less compile must not
+  // plant an empty generated plugin bundle.
+  const hasBundleArtifacts =
+    input.agents.length > 0 ||
+    input.orbits.length > 0 ||
+    (input.tools?.length ?? 0) > 0 ||
+    (input.skills?.length ?? 0) > 0 ||
+    (input.hooks?.length ?? 0) > 0;
 
-  return { files: state.files, regions: [] };
+  if (hasBundleArtifacts) {
+    await planGeneratedPluginManifest({
+      input,
+      state,
+      pushWrite,
+      pluginId: generatedPluginId(input.target),
+      json,
+    });
+    await planGeneratedPluginAgentWrites({
+      input,
+      state,
+      pushWrite,
+      renderAgentMarkdown: (agent) => renderAgentMarkdown(agent, input.target, namer),
+    });
+    await planGeneratedPluginSkillWrites({ input, state, pushWrite });
+    await planStandardGeneratedPluginOrbitSkillWrites({
+      input,
+      state,
+      pushWrite,
+    });
+  }
+  const shimContribution = planMcpServerRegion(input, regions);
+  if (hasBundleArtifacts) {
+    await planGeneratedPluginHookWrites({
+      input,
+      state,
+      renderHooksJson: (hooks, registry, target, bindings) =>
+        renderHooksJson(hooks, registry, target, bindings, namer),
+      bundleHookWrapper,
+      resolveTarget,
+    });
+  }
+
+  return { files: state.files, regions, shimContribution };
 };

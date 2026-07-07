@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { exists } from "../fs.js";
+import { computeMcpHttpConfigContentHash } from "../content-hash.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
 import { compilePluginForTarget } from "./pipeline.js";
 import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
-import { readSnapshot } from "../state/store.js";
+import { commitSnapshot, readSnapshot } from "../state/store.js";
 import { shimExposurePath } from "../state/shim-exposure.js";
 import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
@@ -156,12 +157,17 @@ const writeShimUnionPlugin = async (options: {
   readonly pluginRoot: string;
   readonly name: string;
   readonly toolName?: string;
+  readonly harness?: string;
 }): Promise<void> => {
   await rm(options.pluginRoot, { recursive: true, force: true });
   await writeText(
     join(options.pluginRoot, "plugin.json"),
     `${JSON.stringify(
-      { name: options.name, version: "0.1.0", targets: { tools: ["codex-cli"] } },
+      {
+        name: options.name,
+        version: "0.1.0",
+        targets: { tools: [options.harness ?? "codex-cli"] },
+      },
       null,
       2,
     )}\n`,
@@ -264,5 +270,116 @@ test("codex shared shim region unions across plugin compiles and never narrows",
   await compileCodex(betaRoot);
   const afterEmpty = await readFile(configPath, "utf8");
   expect(afterEmpty).not.toContain("prism:codex.mcp.prism-mcp-shim");
+  expect(afterEmpty).not.toContain("PRISM_SHIM_PLUGINS");
+});
+
+test("grok shared shim region unions across plugin compiles, never narrows, and retires legacy bundle .mcp.json", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+  const alphaRoot = join(root, "shim-alpha");
+  const betaRoot = join(root, "shim-beta");
+  const grokRoot = join(projectRoot, ".grok");
+  const configPath = join(grokRoot, "config.toml");
+
+  await writeShimUnionPlugin({
+    pluginRoot: alphaRoot,
+    name: "shim-alpha",
+    toolName: "alpha_tool",
+    harness: "grok",
+  });
+  await writeShimUnionPlugin({
+    pluginRoot: betaRoot,
+    name: "shim-beta",
+    toolName: "beta_tool",
+    harness: "grok",
+  });
+
+  const compileGrok = (pluginPath: string) =>
+    Effect.runPromise(
+      compilePluginForTarget({
+        prismHome,
+        pluginPath,
+        target: "grok",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun: false,
+        mcpLifecycle: "none",
+      }),
+    );
+
+  await compileGrok(alphaRoot);
+  const afterAlpha = await readFile(configPath, "utf8");
+  expect(afterAlpha).toContain('PRISM_SHIM_PLUGINS = "shim-alpha"');
+  expect(afterAlpha).not.toContain("PRISM_SHIM_EXPOSURE");
+
+  // Simulate the legacy (pre-region) lowering that wrote a per-plugin
+  // bundle-level .mcp.json grok never resolves: plant the file and its
+  // snapshot ownership entry, exactly what an old install left behind.
+  const legacyMcpJsonPath = join(
+    grokRoot,
+    "plugins",
+    "prism-generated-shim-alpha",
+    ".mcp.json",
+  );
+  const legacyContent = `${JSON.stringify(
+    { mcpServers: { prism: { command: "prism", args: ["mcp", "shim"] } } },
+    null,
+    2,
+  )}\n`;
+  await writeText(legacyMcpJsonPath, legacyContent);
+  const seeded = await readSnapshot({ prismHome, harness: "grok", root: grokRoot });
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      ...seeded.manifest,
+      entries: [
+        ...seeded.manifest.entries,
+        {
+          targetPath: legacyMcpJsonPath,
+          contentHash: computeMcpHttpConfigContentHash(legacyContent),
+          mode: "owned",
+          plugin: "shim-alpha",
+        },
+      ],
+    },
+  });
+
+  await compileGrok(betaRoot);
+  const afterBeta = await readFile(configPath, "utf8");
+  expect(afterBeta).toContain('PRISM_SHIM_PLUGINS = "shim-alpha,shim-beta"');
+
+  // THE invariant: recompiling alpha converges and the region still names
+  // BOTH plugins — a single-plugin refresh never narrows the union. The
+  // same compile prunes the snapshot-owned legacy .mcp.json (orphaned:
+  // owned in the snapshot, never desired again).
+  await compileGrok(alphaRoot);
+  expect(await readFile(configPath, "utf8")).toBe(afterBeta);
+  expect(await exists(legacyMcpJsonPath)).toBe(false);
+
+  // Exactly one snapshot entry exists for the shim region, owned by the
+  // reserved cross-plugin owner, and the legacy .mcp.json entry is gone.
+  const snapshot = await readSnapshot({ prismHome, harness: "grok", root: grokRoot });
+  const shimEntries = snapshot.manifest.entries.filter(
+    (entry) => entry.mode === "region" && (entry.regionKey ?? "").includes("grok.mcp.prism"),
+  );
+  expect(shimEntries).toHaveLength(1);
+  expect(shimEntries[0]!.plugin).toBe(SHIM_REGION_OWNER);
+  expect(
+    snapshot.manifest.entries.some((entry) => entry.targetPath === legacyMcpJsonPath),
+  ).toBe(false);
+
+  // Shrink: alpha drops its MCP surface -> the region keeps only beta.
+  await writeShimUnionPlugin({ pluginRoot: alphaRoot, name: "shim-alpha", harness: "grok" });
+  await compileGrok(alphaRoot);
+  const afterShrink = await readFile(configPath, "utf8");
+  expect(afterShrink).toContain('PRISM_SHIM_PLUGINS = "shim-beta"');
+
+  // Remove beta's surface too -> the fence is orphan-removed entirely.
+  await writeShimUnionPlugin({ pluginRoot: betaRoot, name: "shim-beta", harness: "grok" });
+  await compileGrok(betaRoot);
+  const afterEmpty = await readFile(configPath, "utf8");
+  expect(afterEmpty).not.toContain("prism:grok.mcp.prism");
   expect(afterEmpty).not.toContain("PRISM_SHIM_PLUGINS");
 });

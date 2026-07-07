@@ -25,6 +25,7 @@ import {
 } from "../../examples/prism-harness-qa/tools/proof.js";
 import { generatedOwnerToolName } from "../../src/compile/generated-plugin.js";
 import { getHarness, resolveHarnessRoot } from "../../src/harnesses.js";
+import { updateShimExposureEntry } from "../../src/state/shim-exposure.js";
 import { syncDesiredRoot } from "../../src/sync/run.js";
 import { cleanupPrismMcpProcessesUnder } from "../../src/testing/mcp-process-cleanup.js";
 
@@ -685,8 +686,16 @@ const cleanupWorkflowE2EQaConfigFallbacks = async (
       )) patched.push(path);
       return patched;
     }
+    case "grok": {
+      // The QA compile registers the stdio shim as a managed region in
+      // grok's config.toml; strip it if snapshot-driven removal missed it.
+      const path = join(root, "config.toml");
+      if (await patchTextFileIfChanged(path, (content) =>
+        removePrismMarkerBlock(content, "grok.mcp.prism"),
+      )) patched.push(path);
+      return patched;
+    }
     case "claude-code":
-    case "grok":
     case "amp-code":
       return patched;
   }
@@ -725,6 +734,20 @@ export const cleanupWorkflowE2EQaArtifacts = async (input: {
     }
 
     const fallbackPatched = await cleanupWorkflowE2EQaConfigFallbacks(harness, root);
+
+    // Shared-shim harnesses (codex/hermes/cursor/grok) record the QA
+    // plugin's contribution in the shim-exposure registry; leaving it
+    // behind would union the retired QA plugin back into the shared shim
+    // region on the next real refresh. Empty contribution deletes the
+    // entry; a no-op for harnesses without one.
+    await updateShimExposureEntry({
+      prismHome,
+      harness,
+      root,
+      sourcePluginName: QA_PLUGIN_NAME,
+      contribution: { plugins: [], enabledTools: [] },
+    });
+
     roots.push({
       harness,
       root,

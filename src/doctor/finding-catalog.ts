@@ -141,6 +141,27 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
   },
   {
     family: "harness.config",
+    code: "config.mcp-shim-per-plugin-naming-missing",
+    severity: "error",
+    fix: "refresh",
+    description: "A per-owner-plugin stdio-shim MCP server is missing env.PRISM_SHIM_NAMING=per-plugin.",
+  },
+  {
+    family: "harness.config",
+    code: "config.mcp-shim-per-plugin-plugin-mismatch",
+    severity: "error",
+    fix: "refresh",
+    description: "A per-owner-plugin stdio-shim MCP server's PRISM_SHIM_PLUGINS or server key does not name exactly one matching owner.",
+  },
+  {
+    family: "harness.config",
+    code: "config.mcp-shim-legacy-aggregated-entry",
+    severity: "warning",
+    fix: "manual",
+    description: "A retired aggregated `prism-mcp-shim` entry survives under the per-owner-plugin scheme.",
+  },
+  {
+    family: "harness.config",
     code: "config.codex-enabled-tools-invalid",
     severity: "error",
     fix: "refresh",

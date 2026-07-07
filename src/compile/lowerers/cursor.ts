@@ -1,19 +1,14 @@
 /** Cursor lowerer. */
 
 import { join } from "node:path";
-import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { bindingsOwnedByPlugin } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredRegion } from "../../sync/desired.js";
-import {
-  SHIM_REGION_OWNER,
-  unionedShimExposure,
-  type LowerOutput,
-  type ShimExposureContribution,
-} from "./shared.js";
+import { type LowerOutput, type ShimExposureContribution } from "./shared.js";
 
 const TARGET_ID = "cursor" as const;
 
@@ -25,10 +20,11 @@ export interface CursorLowerTarget {
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
   /**
-   * Union of every OTHER installed plugin's recorded shim contribution for
-   * this harness root (from the shim-exposure registry). The shared
-   * `mcp.json` shim entry is rendered from `prior ∪ own` so a single-plugin
-   * compile can never narrow `PRISM_SHIM_PLUGINS` to its own view.
+   * @deprecated Dead field. cursor now renders one per-owner-plugin
+   * `mcpServers.<pluginServerKey>` entry (region-owned by that plugin, no
+   * cross-plugin union) instead of one shared entry. Pipeline.ts still
+   * computes and passes this — report the now-unused computation upstream
+   * rather than editing shared pipeline.ts from this lane.
    */
   readonly priorShimExposure?: ShimExposureContribution;
 }
@@ -53,19 +49,21 @@ const configPath = (target: CursorLowerTarget): string =>
   join(target.root, "mcp.json");
 
 /**
- * The shared shim entry carries the UNION of every installed plugin's
- * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
- * profile — the shim derives the per-owner daemon profile itself (see
- * `@skastr0/prism-sdk/mcp/shim.ts`).
+ * A per-owner-plugin entry — exactly one plugin in `PRISM_SHIM_PLUGINS`,
+ * `PRISM_SHIM_NAMING: per-plugin` so the shim advertises its own
+ * `pluginServerKey` identity (no `PRISM_SHIM_EXPOSURE`: the shim derives
+ * that owner's daemon profile itself from the single configured plugin —
+ * see `@skastr0/prism-sdk/mcp/shim.ts`). Cursor carries no tool allowlist
+ * at all (`toolAllowlist: "unsupported"` in the harness MCP contract), so
+ * there is nothing beyond command/args/env to render.
  */
-const renderCursorMcpServerEntry = (
-  plugins: ReadonlyArray<string>,
-): CursorMcpServerEntry => ({
+const renderCursorMcpServerEntry = (plugin: string): CursorMcpServerEntry => ({
   command: "prism",
   args: ["mcp", "shim"],
   env: {
-    PRISM_SHIM_PLUGINS: plugins.join(","),
+    PRISM_SHIM_PLUGINS: plugin,
     PRISM_SHIM_HARNESS: TARGET_ID,
+    PRISM_SHIM_NAMING: "per-plugin",
   },
 });
 
@@ -94,37 +92,28 @@ const assertCursorLoweringInput = (input: LowerInput): void => {
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   assertCursorLoweringInput(input);
-  const serverName = shimServerKey(TARGET_ID);
-  const ownedBindings = bindingsOwnedByPlugin(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-  // Cursor's shim entry has no tool allowlist — only the plugin list unions.
-  const shimContribution: ShimExposureContribution =
-    ownedBindings.length > 0
-      ? { plugins: [input.target.sourcePluginName], enabledTools: [] }
-      : { plugins: [], enabledTools: [] };
+  const sourcePluginName = input.target.sourcePluginName;
+  const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
 
   const regions: DesiredRegion[] = [];
 
-  // The `mcpServers.prism-mcp-shim` key is shared by every installed plugin
-  // (same jsonPath for all), so it is rendered from the union of the
-  // recorded prior exposure and this compile's own contribution, and is
-  // emitted whenever the UNION is non-empty — even when this plugin
-  // contributes nothing (its removal shrinks the entry instead of
-  // orphan-removing it while other plugins still need it).
-  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
-  if (shimUnion.plugins.length > 0) {
+  // A per-plugin server can only ever front ONE daemon, so this plugin's
+  // compile renders `mcpServers.<pluginServerKey>` iff IT is a real MCP
+  // owner — region-owned by this plugin (no cross-plugin union): the sync
+  // engine prunes the entry the moment this plugin stops being an owner.
+  if (ownedBindings.length > 0) {
+    const serverName = pluginServerKey(sourcePluginName);
     regions.push({
       kind: "json-key",
       targetPath: configPath(input.target),
       regionKey: `mcpServers.${serverName}`,
       jsonPath: ["mcpServers", serverName],
-      value: renderCursorMcpServerEntry(shimUnion.plugins),
-      plugin: SHIM_REGION_OWNER,
+      value: renderCursorMcpServerEntry(sourcePluginName),
+      plugin: sourcePluginName,
     });
   }
 
-  return { files: [], regions, shimContribution };
+  // No `shimContribution`: nothing left for the pipeline's shim-exposure
+  // registry to track for this harness now that entries are per-plugin.
+  return { files: [], regions };
 };

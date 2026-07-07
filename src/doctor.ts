@@ -816,6 +816,247 @@ const validateStdioShimServerEntry = async (options: {
   return findingsFromStdioShimVerdict(verdict, options);
 };
 
+// ---------------------------------------------------------------------------
+// Per-plugin server entries — codex-cli / hermes / cursor (the
+// single-config-file family). One MCP-owning plugin, one server entry keyed
+// by `pluginServerKey(plugin)`, advertising bare wire names (no `p_<hash8>_`
+// namespace prefix — see `packages/prism-sdk/src/mcp/wire-naming.ts`'s
+// per-plugin naming section and each lowerer's `planMcpServer`). This is a
+// parallel verdict to `evaluateStdioShimServerEntry` above (never reused by
+// it) because the two schemes disagree on what "valid" means for
+// `PRISM_SHIM_PLUGINS` (exactly one plugin vs. a union) and for allowlist
+// shape (bare vs. `p_<hash8>_`-namespaced) — grok and claude-code still use
+// the aggregated scheme unchanged.
+// ---------------------------------------------------------------------------
+
+/** Detects a Prism-managed shim entry regardless of server key, so a foreign hand-authored MCP server is never touched. */
+const isPrismShimServerEntry = (server: Record<string, unknown>): boolean => {
+  if (server.command === "prism") return true;
+  const env = shimServerEnv(server);
+  return typeof env?.PRISM_SHIM_HARNESS === "string";
+};
+
+interface PerPluginShimVerdict {
+  readonly commandResolvable: boolean;
+  readonly argsValid: boolean;
+  readonly envHarnessMatches: boolean;
+  readonly envNamingMatches: boolean;
+  readonly envPluginMatches: boolean;
+  readonly serverKeyMatches: boolean;
+  readonly missingPluginBundle: boolean;
+}
+
+/**
+ * Evaluates one per-plugin server entry: `serverKey` is the map key this
+ * entry was found under, `expectedPlugin` is `undefined` when
+ * `PRISM_SHIM_PLUGINS` does not resolve to exactly one plugin name (already
+ * a defect worth its own finding, so no plugin-scoped checks — bundle
+ * presence, server-key identity — can run).
+ */
+const evaluatePerPluginShimServerEntry = async (options: {
+  readonly harness: HarnessId;
+  readonly serverKey: string;
+  readonly server: Record<string, unknown>;
+  readonly prismHome: string;
+}): Promise<PerPluginShimVerdict> => {
+  const env = shimServerEnv(options.server);
+  const pluginsRaw = typeof env?.PRISM_SHIM_PLUGINS === "string" ? env.PRISM_SHIM_PLUGINS.trim() : "";
+  const plugins = pluginsRaw.split(",").map((value) => value.trim()).filter((value) => value.length > 0);
+  const expectedPlugin = plugins.length === 1 ? plugins[0] : undefined;
+  return {
+    commandResolvable: await isResolvablePrismShimCommand(options.server.command),
+    argsValid: hasStdioShimArgs(options.server.args),
+    envHarnessMatches: env?.PRISM_SHIM_HARNESS === options.harness,
+    envNamingMatches: env?.PRISM_SHIM_NAMING === "per-plugin",
+    envPluginMatches: expectedPlugin !== undefined,
+    serverKeyMatches: expectedPlugin !== undefined && options.serverKey === pluginServerKey(expectedPlugin),
+    missingPluginBundle:
+      expectedPlugin !== undefined &&
+      !(await generatedConfigPathExists(prismMcpServerPath(options.prismHome, expectedPlugin))),
+  };
+};
+
+const findingsFromPerPluginShimVerdict = (
+  verdict: PerPluginShimVerdict,
+  options: { readonly harness: HarnessId; readonly serverKey: string; readonly path: string; readonly root?: string },
+): DoctorFinding[] => {
+  const base = {
+    family: "harness.config" as const,
+    harness: options.harness,
+    path: options.path,
+    fix: "refresh" as const,
+    ...(options.root ? { root: options.root } : {}),
+  };
+  const findings: DoctorFinding[] = [];
+  if (!verdict.commandResolvable) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-command-unresolvable",
+      message: `${options.harness} MCP server '${options.serverKey}' command does not resolve to a prism binary`,
+    }));
+  }
+  if (!verdict.argsValid) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-args-invalid",
+      message: `${options.harness} MCP server '${options.serverKey}' args do not invoke 'prism mcp shim'`,
+    }));
+  }
+  if (!verdict.envHarnessMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-env-harness-mismatch",
+      message: `${options.harness} MCP server '${options.serverKey}' env.PRISM_SHIM_HARNESS is missing or does not match '${options.harness}'`,
+    }));
+  }
+  if (!verdict.envNamingMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-per-plugin-naming-missing",
+      message: `${options.harness} MCP server '${options.serverKey}' is missing env.PRISM_SHIM_NAMING=per-plugin`,
+    }));
+  }
+  if (!verdict.envPluginMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-per-plugin-plugin-mismatch",
+      message: `${options.harness} MCP server '${options.serverKey}' env.PRISM_SHIM_PLUGINS must name exactly one owner plugin`,
+    }));
+  } else if (!verdict.serverKeyMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-per-plugin-plugin-mismatch",
+      message: `${options.harness} MCP server '${options.serverKey}' key does not match its own PRISM_SHIM_PLUGINS owner`,
+    }));
+  }
+  if (verdict.missingPluginBundle) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-plugin-bundle-missing",
+      message: `${options.harness} MCP server '${options.serverKey}' references an owner plugin with no compiled MCP bundle`,
+    }));
+  }
+  return findings;
+};
+
+/**
+ * The retired aggregated-shim key (`prism-mcp-shim`) surviving under the
+ * per-plugin scheme is a migration artifact, not live config: no lowerer for
+ * this harness family emits it anymore, so it is never re-validated against
+ * either verdict — only flagged. `fix: "manual"` because removing it safely
+ * needs the pipeline's shared shim-exposure scope to include the legacy
+ * region owner on prune (a shared-file change reported upstream, not made
+ * here); until then a plain refresh will not touch this key.
+ */
+const legacyAggregatedShimFinding = (options: {
+  readonly harness: HarnessId;
+  readonly serverKey: string;
+  readonly path: string;
+  readonly root?: string;
+}): DoctorFinding =>
+  finding({
+    family: "harness.config",
+    severity: "warning",
+    code: "config.mcp-shim-legacy-aggregated-entry",
+    message: `${options.harness} MCP config still carries the retired aggregated shim entry '${options.serverKey}' — this harness now renders one server per owner plugin`,
+    harness: options.harness,
+    path: options.path,
+    fix: "manual",
+    ...(options.root ? { root: options.root } : {}),
+  });
+
+const validatePerPluginShimServerEntry = async (options: {
+  readonly harness: HarnessId;
+  readonly serverKey: string;
+  readonly path: string;
+  readonly root?: string;
+  readonly server: Record<string, unknown>;
+  readonly prismHome: string;
+}): Promise<DoctorFinding[]> => {
+  const verdict = await evaluatePerPluginShimServerEntry(options);
+  return findingsFromPerPluginShimVerdict(verdict, options);
+};
+
+/**
+ * Validates every entry under a single-config-file harness's `mcp_servers`
+ * (or `mcpServers`) map for the codex/hermes/cursor per-plugin scheme: the
+ * legacy aggregated key gets the OLD generic verdict (unchanged shape checks)
+ * plus a migration advisory, every other Prism-shaped entry gets the new
+ * per-plugin verdict, and anything that isn't Prism-managed is left alone.
+ */
+const validatePerPluginShimServerMap = async (options: {
+  readonly harness: HarnessId;
+  readonly path: string;
+  readonly root?: string;
+  readonly servers: Record<string, unknown>;
+  readonly prismHome: string;
+  /** Codex only: non-array `enabled_tools` is its own distinct defect. */
+  readonly onEnabledToolsNotArray?: (serverKey: string, server: Record<string, unknown>) => DoctorFinding | undefined;
+}): Promise<DoctorFinding[]> => {
+  const findings: DoctorFinding[] = [];
+  const legacyKey = shimServerKey(options.harness as ShimHarnessId);
+  for (const [serverKey, raw] of Object.entries(options.servers)) {
+    if (!raw || typeof raw !== "object") continue;
+    const server = raw as Record<string, unknown>;
+    // The legacy key is a deterministic, Prism-assigned name — anything
+    // found under it is presumed Prism's regardless of shape (a corrupted
+    // remnant still needs every shape check to fire). Any OTHER key is only
+    // treated as Prism-managed when it looks like a shim entry, so a
+    // foreign hand-authored MCP server is never touched.
+    if (serverKey !== legacyKey && !isPrismShimServerEntry(server)) continue;
+
+    const enabledToolsFinding = options.onEnabledToolsNotArray?.(serverKey, server);
+    if (enabledToolsFinding) findings.push(enabledToolsFinding);
+
+    if (serverKey === legacyKey) {
+      // Every legacy-key call site (codex's TOML `enabled_tools`, hermes's
+      // synthesized `enabled_tools` from its YAML `tools.include`) exposes
+      // the allowlist as this same field on the server object; cursor's
+      // shim entry never had one.
+      const allowlist = Array.isArray(server.enabled_tools)
+        ? server.enabled_tools.filter((tool): tool is string => typeof tool === "string")
+        : undefined;
+      findings.push(
+        ...(await validateStdioShimServerEntry({
+          harness: options.harness,
+          path: options.path,
+          serverName: serverKey,
+          server,
+          prismHome: options.prismHome,
+          ...(allowlist ? { allowlist } : {}),
+          ...(options.root ? { root: options.root } : {}),
+        })),
+      );
+      findings.push(legacyAggregatedShimFinding({
+        harness: options.harness,
+        serverKey,
+        path: options.path,
+        ...(options.root ? { root: options.root } : {}),
+      }));
+      continue;
+    }
+
+    findings.push(
+      ...(await validatePerPluginShimServerEntry({
+        harness: options.harness,
+        serverKey,
+        path: options.path,
+        server,
+        prismHome: options.prismHome,
+        ...(options.root ? { root: options.root } : {}),
+      })),
+    );
+  }
+  return findings;
+};
+
 const pathFromCommandString = (command: string): string | undefined => {
   const match = command.match(/(?:node|bun)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/u);
   return match?.[1] ?? match?.[2] ?? match?.[3];
@@ -867,35 +1108,26 @@ const validateCodexConfigReferences = async (
   const findings: DoctorFinding[] = [];
   const mcpServers = parsed.mcp_servers;
   if (mcpServers && typeof mcpServers === "object") {
-    const expectedServerName = shimServerKey("codex-cli");
-    const raw = (mcpServers as Record<string, unknown>)[expectedServerName];
-    if (raw && typeof raw === "object") {
-      const server = raw as Record<string, unknown>;
-      if ("enabled_tools" in server && !Array.isArray(server.enabled_tools)) {
-        findings.push(finding({
-          severity: "error",
-          family: "harness.config",
-          code: "config.codex-enabled-tools-invalid",
-          message: `Codex MCP server '${expectedServerName}' has non-array enabled_tools`,
-          harness: "codex-cli",
-          path,
-          fix: "refresh",
-        }));
-      }
-      const allowlist = Array.isArray(server.enabled_tools)
-        ? server.enabled_tools.filter((tool): tool is string => typeof tool === "string")
-        : undefined;
-      findings.push(
-        ...(await validateStdioShimServerEntry({
-          harness: "codex-cli",
-          path,
-          serverName: expectedServerName,
-          server,
-          prismHome,
-          allowlist,
-        })),
-      );
-    }
+    findings.push(
+      ...(await validatePerPluginShimServerMap({
+        harness: "codex-cli",
+        path,
+        servers: mcpServers as Record<string, unknown>,
+        prismHome,
+        onEnabledToolsNotArray: (serverKey, server) =>
+          "enabled_tools" in server && !Array.isArray(server.enabled_tools)
+            ? finding({
+                severity: "error",
+                family: "harness.config",
+                code: "config.codex-enabled-tools-invalid",
+                message: `Codex MCP server '${serverKey}' has non-array enabled_tools`,
+                harness: "codex-cli",
+                path,
+                fix: "refresh",
+              })
+            : undefined,
+      })),
+    );
   }
 
   const visitCommands = async (value: unknown): Promise<void> => {
@@ -1193,15 +1425,12 @@ const validateCursorConfigReferences = async (
       fix: "manual",
     })];
   }
-  const serverName = shimServerKey("cursor");
-  const server = parsed.mcpServers?.[serverName];
-  if (!server || Object.keys(server).length === 0) return [];
-  return validateStdioShimServerEntry({
+  if (!parsed.mcpServers || typeof parsed.mcpServers !== "object") return [];
+  return validatePerPluginShimServerMap({
     harness: "cursor",
     root,
     path,
-    serverName,
-    server,
+    servers: parsed.mcpServers,
     prismHome,
   });
 };
@@ -1318,6 +1547,17 @@ const yamlChildBlock = (
  * is not worth it. This reads the exact same fixed-indentation grammar the
  * lowerer writes, rather than parsing YAML in general.
  */
+/** Every top-level `<key>:` mapping name directly under `mcp_servers:` (indent 2). */
+const yamlChildKeyNames = (lines: ReadonlyArray<string>, indent: number): string[] => {
+  const names: string[] = [];
+  for (const line of lines) {
+    if (indentOf(line) !== indent) continue;
+    const match = line.trim().match(/^([^\s:]+):\s*$/u);
+    if (match) names.push(match[1]!);
+  }
+  return names;
+};
+
 const validateHermesConfigReferences = async (
   path: string,
   prismHome: string,
@@ -1326,30 +1566,37 @@ const validateHermesConfigReferences = async (
   const lines = (await readFile(path)).split("\n");
   const rootBlock = yamlChildBlock(lines, 0, "mcp_servers");
   if (rootBlock.length === 0) return [];
-  const serverName = shimServerKey("hermes");
-  const serverBlock = yamlChildBlock(rootBlock, 2, serverName);
-  if (serverBlock.length === 0) return [];
 
-  const envBlock = yamlChildBlock(serverBlock, 4, "env");
-  const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
-  const allowlist = yamlChildBlock(toolsBlock, 6, "include").length > 0
-    ? yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8)
-    : [];
-
-  return validateStdioShimServerEntry({
-    harness: "hermes",
-    path,
-    serverName,
-    server: {
+  const servers: Record<string, unknown> = {};
+  for (const serverKey of yamlChildKeyNames(rootBlock, 2)) {
+    const serverBlock = yamlChildBlock(rootBlock, 2, serverKey);
+    if (serverBlock.length === 0) continue;
+    const envBlock = yamlChildBlock(serverBlock, 4, "env");
+    const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
+    const allowlist = yamlChildBlock(toolsBlock, 6, "include").length > 0
+      ? yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8)
+      : undefined;
+    servers[serverKey] = {
       command: yamlScalarValue(serverBlock, 4, "command"),
       args: yamlListItems(yamlChildBlock(serverBlock, 4, "args"), 6),
       env: {
         PRISM_SHIM_HARNESS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_HARNESS"),
         PRISM_SHIM_PLUGINS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_PLUGINS"),
+        PRISM_SHIM_NAMING: yamlScalarValue(envBlock, 6, "PRISM_SHIM_NAMING"),
       },
-    },
+      // Normalized onto the same `enabled_tools` field codex/cursor's real
+      // parsed objects already carry, so the legacy-key branch inside
+      // `validatePerPluginShimServerMap` can read every harness's allowlist
+      // the same way regardless of source config shape.
+      ...(allowlist ? { enabled_tools: allowlist } : {}),
+    };
+  }
+
+  return validatePerPluginShimServerMap({
+    harness: "hermes",
+    path,
+    servers,
     prismHome,
-    allowlist,
   });
 };
 

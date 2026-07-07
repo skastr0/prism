@@ -18,7 +18,6 @@ import {
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
-  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "hermes" as const;
@@ -30,14 +29,6 @@ export interface HermesLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * @deprecated Dead field. hermes now renders one per-owner-plugin
-   * `mcp_servers.<pluginServerKey>` mapping (region-owned by that plugin,
-   * no cross-plugin union) instead of one shared fence. Pipeline.ts still
-   * computes and passes this — report the now-unused computation upstream
-   * rather than editing shared pipeline.ts from this lane.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -221,7 +212,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     });
   }
 
-  // No `shimContribution`: nothing left for the pipeline's shim-exposure
-  // registry to track for this harness now that regions are per-plugin.
+  // Each region is per-plugin — no cross-plugin coordination needed.
   return { files, regions };
 };

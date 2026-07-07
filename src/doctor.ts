@@ -3,7 +3,15 @@ import { join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
-import { exists, expandPath, listDir, listDirRecursive, pathContains, readFile } from "./fs.js";
+import {
+  exists,
+  expandPath,
+  listDir,
+  listDirRecursive,
+  pathContains,
+  readFile,
+  removeDir,
+} from "./fs.js";
 import type { HarnessId, HarnessScope } from "./types.js";
 import { HarnessRoots, type HarnessRootsEnv } from "./services/prism-env.js";
 import { refreshPlugin, type RefreshResult } from "./refresh.js";
@@ -15,7 +23,6 @@ import {
   type SnapshotManifest,
 } from "./state/snapshot.js";
 import { gcSnapshots, snapshotDir } from "./state/store.js";
-import { gcShimExposure } from "./state/shim-exposure.js";
 import { parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
@@ -515,9 +522,9 @@ const validateSnapshotDiskState = async (options: {
 
 const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => {
   const result = await gcSnapshots(prismHome);
-  // The shim-exposure registry is keyed by harness root exactly like the
-  // snapshot store; gc it in the same pass (silent — it is a derived cache).
-  await gcShimExposure(prismHome);
+  // The shim-exposure registry (state/shim-exposure.ts) is retired — wipe any
+  // leftover directory from a pre-migration install (silent, one-time sweep).
+  await removeDir(join(prismHome, "state", "shim-exposure"));
   const findings: DoctorFinding[] = result.dropped.map((dropped) => finding({
     severity: "info",
     family: "snapshot.gc",
@@ -950,10 +957,9 @@ const findingsFromPerPluginShimVerdict = (
  * The retired aggregated-shim key (`prism-mcp-shim`) surviving under the
  * per-plugin scheme is a migration artifact, not live config: no lowerer for
  * this harness family emits it anymore, so it is never re-validated against
- * either verdict — only flagged. `fix: "manual"` because removing it safely
- * needs the pipeline's shared shim-exposure scope to include the legacy
- * region owner on prune (a shared-file change reported upstream, not made
- * here); until then a plain refresh will not touch this key.
+ * either verdict — only flagged. `fix: "manual"` because no plugin's own
+ * compile is scoped to prune a key it never owned; a plain refresh will not
+ * touch this key, so the operator removes it by hand once migrated.
  */
 const legacyAggregatedShimFinding = (options: {
   readonly harness: HarnessId;

@@ -32,7 +32,6 @@ import {
   renderStandardOrbitSkill,
   uniqueSorted,
   type LowerOutput,
-  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
@@ -43,15 +42,6 @@ export interface CodexCliLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * @deprecated Dead field. codex-cli now renders one per-owner-plugin
-   * `mcp_servers.<pluginServerKey>` region (region-owned by that plugin, no
-   * cross-plugin union) instead of one shared fence, so there is nothing to
-   * thread a prior union into. Pipeline.ts still computes and passes this —
-   * that computation is now unused work; report it upstream rather than
-   * editing shared pipeline.ts from this lane.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -595,8 +585,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const regions = planConfigRegions(input, mcp, hooks);
   await planRulesRegion(input, regions);
 
-  // No `shimContribution`: the per-plugin server region is owned by (and
-  // pruned with) this plugin's own snapshot scope — there is no cross-plugin
-  // union for the pipeline's shim-exposure registry to track here anymore.
+  // The per-plugin server region is owned by (and pruned with) this plugin's
+  // own snapshot scope — no cross-plugin coordination needed.
   return { files, regions };
 };

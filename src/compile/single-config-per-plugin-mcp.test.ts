@@ -108,11 +108,6 @@ test("codex renders a distinct server region per owner plugin, bare wire names, 
   // alpha's server never mentions beta, and vice versa — no aggregation.
   expect(alphaRegion.content).not.toContain("beta");
   expect(betaRegion.content).not.toContain("alpha");
-
-  // No shimContribution: nothing left for the pipeline's shim-exposure
-  // registry to track once regions are per-plugin.
-  expect(fromAlpha.shimContribution).toBeUndefined();
-  expect(fromBeta.shimContribution).toBeUndefined();
 });
 
 test("codex emits no server region for a plugin that owns no tools", async () => {
@@ -164,7 +159,6 @@ test("hermes renders a distinct mapping per owner plugin, bare wire names, no un
   expect(alphaRegion.content).toContain('PRISM_SHIM_PLUGINS: "alpha"');
   expect(alphaRegion.content).toContain('PRISM_SHIM_NAMING: "per-plugin"');
   expect(alphaRegion.content).not.toContain("beta");
-  expect(fromAlpha.shimContribution).toBeUndefined();
 });
 
 test("hermes emits no mapping for a plugin that owns no tools", async () => {
@@ -232,7 +226,6 @@ test("cursor renders a distinct mcpServers entry per owner plugin, no union", as
       PRISM_SHIM_NAMING: "per-plugin",
     },
   });
-  expect(fromAlpha.shimContribution).toBeUndefined();
 });
 
 test("cursor emits no entry for a plugin that owns no tools", async () => {

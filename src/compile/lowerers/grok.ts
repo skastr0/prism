@@ -43,11 +43,9 @@ import {
   prePostSessionNativeHookEvent,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
-  unionedShimExposure,
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
-  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
@@ -70,13 +68,6 @@ export interface GrokLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * Union of every OTHER installed plugin's recorded shim contribution for
-   * this harness root (from the shim-exposure registry). The shared
-   * `config.toml` shim region is rendered from `prior ∪ own` so a
-   * single-plugin compile can never narrow the fence to its own view.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -383,34 +374,23 @@ const renderGrokPerPluginShimServerToml = (owner: string): string => {
  * CallMcpTool.
  *
  * Consumer plugins referencing a foreign owner's tools never get their own
- * server entry — only the owner does, wherever its own region is rendered
- * from (that plugin's own compile, or any other compile that references it;
- * the region's content depends only on `owner`, so it is byte-identical and
- * `plugin`-stable regardless of which compile happens to emit it). Every
- * region renders from the UNION of the recorded prior exposure and this
- * compile's own contribution, so a single-plugin compile can never narrow
- * another plugin's still-needed owner entries out of config.toml; an owner
- * dropping out of every compiling plugin's union simply stops being emitted,
- * and the sync engine prunes its now-orphaned region. There is no tool
- * allowlist in the server table (agent frontmatter `tools:` gates exposure),
- * so grok's contribution records owner plugins only.
+ * server entry — only the owner does. This compile already knows every
+ * owner it needs a region for (itself, plus any owner its own agents
+ * reference), computed directly from its own resolved bindings — no
+ * cross-plugin state required: the owner's own compile (or any other
+ * compile that references it) renders the byte-identical region
+ * independently, region-owned by that plugin, and the sync engine prunes it
+ * the moment no compiling plugin references that owner anymore. There is no
+ * tool allowlist in the server table (agent frontmatter `tools:` gates
+ * exposure), so only owner plugins are tracked here.
  */
-const planMcpServerRegion = (
-  input: LowerInput,
-  regions: DesiredRegion[],
-): ShimExposureContribution => {
+const planMcpServerRegion = (input: LowerInput, regions: DesiredRegion[]): void => {
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  const shimContribution: ShimExposureContribution = {
-    plugins: uniqueSorted([...bindingsByOwner.keys()]),
-    enabledTools: [],
-  };
-
-  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
-  for (const owner of shimUnion.plugins) {
+  for (const owner of uniqueSorted([...bindingsByOwner.keys()])) {
     regions.push({
       kind: "marker",
       targetPath: join(input.target.root, "config.toml"),
@@ -420,7 +400,6 @@ const planMcpServerRegion = (
       plugin: owner,
     });
   }
-  return shimContribution;
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
@@ -430,11 +409,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
 
-  // A compile with no grok-lowerable artifacts still reaches this lowerer
-  // when OTHER plugins hold a recorded shim exposure for the root (the
-  // shared config.toml region must be re-rendered from the prior union).
-  // Only the region participates then — an artifact-less compile must not
-  // plant an empty generated plugin bundle.
+  // An artifact-less compile must not plant an empty generated plugin
+  // bundle — only the MCP server region (if any owner is referenced)
+  // participates then.
   const hasBundleArtifacts =
     input.agents.length > 0 ||
     input.orbits.length > 0 ||
@@ -463,7 +440,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       pushWrite,
     });
   }
-  const shimContribution = planMcpServerRegion(input, regions);
+  planMcpServerRegion(input, regions);
   if (hasBundleArtifacts) {
     await planGeneratedPluginHookWrites({
       input,
@@ -475,5 +452,5 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     });
   }
 
-  return { files: state.files, regions, shimContribution };
+  return { files: state.files, regions };
 };

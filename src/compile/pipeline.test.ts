@@ -28,7 +28,6 @@ import {
 import { WORKFLOW_REFS_HARNESS, workflowAgentsPath, workflowModelsPath, workflowRefsRoot, workflowSkillsPath, workflowToolsPath } from "./workflow-refs-emitter.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
 import { grokMcpServerNameForPlugin } from "./lowerers/grok.js";
-import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
 import { deriveProjectKey } from "../project-key.js";
 import { expandPath } from "../fs.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
@@ -3570,15 +3569,12 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
   expect(snapshot.manifest.entries.some((entry) =>
     entry.targetPath.endsWith("server.mjs")
   )).toBe(false);
-  // The per-plugin server region is attributed to the owner plugin itself —
-  // never the reserved cross-plugin shim owner (there is no cross-plugin
-  // union anymore).
+  // The per-plugin server region is attributed to the owner plugin itself.
   expect(snapshot.manifest.entries.some((entry) =>
     entry.plugin === "tool-only-demo" &&
     entry.targetPath === join(cursorRoot, "mcp.json") &&
     entry.mode === "region"
   )).toBe(true);
-  expect(snapshot.manifest.entries.some((entry) => entry.plugin === SHIM_REGION_OWNER)).toBe(false);
 });
 
 test("compilePluginForTarget emits a runnable MCP bundle into PRISM_HOME", async () => {

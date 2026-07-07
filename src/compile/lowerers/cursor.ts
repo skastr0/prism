@@ -8,7 +8,7 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { bindingsOwnedByPlugin } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredRegion } from "../../sync/desired.js";
-import { type LowerOutput, type ShimExposureContribution } from "./shared.js";
+import { type LowerOutput } from "./shared.js";
 
 const TARGET_ID = "cursor" as const;
 
@@ -19,14 +19,6 @@ export interface CursorLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * @deprecated Dead field. cursor now renders one per-owner-plugin
-   * `mcpServers.<pluginServerKey>` entry (region-owned by that plugin, no
-   * cross-plugin union) instead of one shared entry. Pipeline.ts still
-   * computes and passes this — report the now-unused computation upstream
-   * rather than editing shared pipeline.ts from this lane.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -113,7 +105,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     });
   }
 
-  // No `shimContribution`: nothing left for the pipeline's shim-exposure
-  // registry to track for this harness now that entries are per-plugin.
+  // Entries are per-plugin — no cross-plugin coordination needed.
   return { files: [], regions };
 };

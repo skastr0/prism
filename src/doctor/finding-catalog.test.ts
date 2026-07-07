@@ -6,9 +6,12 @@ import { FINDING_CATALOG, FINDING_CODES } from "./finding-catalog.js";
 /**
  * Extract every literal finding code emitted by `src/doctor.ts`.
  *
- * The source contains two dynamic families:
+ * The source contains three dynamic families:
  *   - `sync.${op.kind}` from refresh ops
  *   - `mcp.${status.state}` from MCP health checks
+ *   - `code: violation.code` from `topology.*` (the literal codes live in
+ *     `./mcp-topology-checks.ts`'s `TOPOLOGY_FINDING_CODES`, the single
+ *     source of truth also used by `finding-catalog.ts`)
  *
  * We enumerate the concrete suffixes that can reach a `finding(...)` call.
  */
@@ -36,6 +39,14 @@ const expectedCodesFromSource = async (): Promise<Set<string>> => {
     for (const state of ["port-conflict", "stale-pid", "stale-build", "stale-health"]) {
       codes.add(`mcp.${state}`);
     }
+  }
+
+  // Dynamic topology codes: `findingFromTopologyViolation` reads
+  // `violation.code` (never a literal), so its codes come from the shared
+  // module rather than a grep of doctor.ts itself.
+  if (source.includes("code: violation.code,")) {
+    const { TOPOLOGY_FINDING_CODES } = await import("./mcp-topology-checks.js");
+    for (const code of TOPOLOGY_FINDING_CODES) codes.add(code);
   }
 
   return codes;

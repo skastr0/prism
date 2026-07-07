@@ -35,6 +35,14 @@ import { pluginServerKey, shimServerKey, type ShimHarnessId } from "@skastr0/pri
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
 import {
+  isShimHarnessId,
+  loadPluginInventory,
+  verifyHarnessTopology,
+  type McpTopologyAssertion,
+  type McpTopologyViolation,
+} from "./doctor/mcp-topology-checks.js";
+import { discoverPluginPaths } from "./plugin-inventory.js";
+import {
   detectWorkflowHarnesses,
   workflowHarnessIdsForHarnesses,
   type WorkflowHarnessDetection,
@@ -50,7 +58,8 @@ export type DoctorFindingFamily =
   | "namespace.stray"
   | "region.integrity"
   | "mcp.health"
-  | "determinism.selfcheck";
+  | "determinism.selfcheck"
+  | "topology.invariant";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -85,6 +94,17 @@ export interface DoctorOptions {
   readonly fix: boolean;
   /** Optional harness-root resolver; when provided, global roots come from here instead of HOME. */
   readonly roots?: HarnessRootsEnv;
+  /**
+   * Directory of installed plugins (shallow `plugin.json` scan, mirroring
+   * `refresh --plugins`/`plan --plugins`) to verify the MCP topology
+   * invariants (`topology.*` findings) against. Doctor has no persisted
+   * record of "where plugins were installed from" — there is no such state
+   * anywhere in `prism-home` today — so this is opt-in per invocation,
+   * exactly like refresh/plan's own `--plugins` flag. Omitted: the
+   * `topology.*` check family contributes zero findings, unchanged from
+   * doctor's pre-existing behavior.
+   */
+  readonly pluginsDir?: string;
 }
 
 const finding = (input: Omit<DoctorFinding, "schema">): DoctorFinding => ({
@@ -1972,6 +1992,70 @@ const validateDeterminismSelfcheck = async (options: {
   })];
 };
 
+// ---------------------------------------------------------------------------
+// topology.* — the per-plugin MCP topology invariants (assertions A-F),
+// shared with the `mcp-topology-verify` acceptance gate via
+// `./doctor/mcp-topology-checks.js` (one source of truth, two surfaces: this
+// is the runtime-backpressure surface, the acceptance script is the release
+// gate). Opt-in on `options.pluginsDir` -- see `DoctorOptions.pluginsDir`'s
+// doc comment for why doctor has no default corpus to fall back to.
+// ---------------------------------------------------------------------------
+
+/** How `doctor --fix` (i.e. `prism refresh`) is expected to resolve each assertion family's violations. */
+const TOPOLOGY_ASSERTION_FIX: Record<McpTopologyAssertion, DoctorFinding["fix"]> = {
+  A: "manual", // retired/foreign-looking server key -- refresh never renames or removes a key it doesn't recognize as its own
+  B: "refresh", // owner/allowlist drift from the compiler's own canonical shape -- a refresh recomputes and rewrites it
+  C: "refresh", // stale server for a plugin that lost its MCP ownership -- the next refresh's sync-prune removes it
+  D: "manual", // duplicate/orphaned generated bundle directories -- refresh does not delete a stray bundle dir it doesn't own
+  E: "refresh", // owner plugin missing its server entry -- refresh compiles and adds it
+  F: "manual", // dead HTTP transport remnant from the retired transport -- no lowerer emits or removes this shape anymore
+};
+
+const findingFromTopologyViolation = (violation: McpTopologyViolation): DoctorFinding =>
+  finding({
+    severity: violation.severity,
+    family: "topology.invariant",
+    code: violation.code,
+    message: violation.message,
+    harness: violation.harness,
+    fix: TOPOLOGY_ASSERTION_FIX[violation.assertion],
+    ...(violation.plugin ? { plugin: violation.plugin } : {}),
+    ...(violation.path ? { path: violation.path } : {}),
+    ...(violation.data || violation.serverKey
+      ? {
+          data: {
+            assertion: violation.assertion,
+            ...(violation.serverKey ? { serverKey: violation.serverKey } : {}),
+            ...(violation.data ?? {}),
+          },
+        }
+      : {}),
+  });
+
+const validateMcpTopology = async (options: {
+  readonly pluginsDir?: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<DoctorFinding[]> => {
+  if (!options.pluginsDir) return [];
+  const shimHarnesses = options.harnesses.filter(isShimHarnessId);
+  if (shimHarnesses.length === 0) return [];
+
+  const pluginPaths = await discoverPluginPaths(expandPath(options.pluginsDir));
+  const inventory = await loadPluginInventory(pluginPaths, shimHarnesses);
+
+  const findings: DoctorFinding[] = [];
+  for (const harness of shimHarnesses) {
+    const root = rootForHarness(harness, options.scope, options.projectPath, options.roots);
+    if (!root) continue;
+    const report = await verifyHarnessTopology(harness, root, inventory);
+    findings.push(...report.violations.map(findingFromTopologyViolation));
+  }
+  return findings;
+};
+
 const runCompileFixes = async (options: DoctorOptions): Promise<{
   readonly findings: DoctorFinding[];
   readonly failed: boolean;
@@ -2145,6 +2229,16 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       })),
     );
   }
+
+  findings.push(
+    ...(await validateMcpTopology({
+      ...(options.pluginsDir ? { pluginsDir: options.pluginsDir } : {}),
+      harnesses: options.harnesses,
+      scope: options.scope,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
+    })),
+  );
 
   findings.push(
     ...(await validateSnapshotDiskState({

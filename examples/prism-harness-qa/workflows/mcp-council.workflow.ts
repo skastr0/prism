@@ -57,6 +57,20 @@ type Harness = (typeof HARNESSES)[number];
 /** Harnesses whose tools compile in-process (no daemon, no shim, no MCP server). */
 const IN_PROCESS_HARNESSES: ReadonlySet<Harness> = new Set(["opencode", "amp-code"]);
 
+/**
+ * Harnesses whose wire tool name is the bare name alone (`toolAllowlist:
+ * "within-server"` in harness-mcp-contract.ts) — the server key never
+ * appears in anything the model can already see, so "enumerate your MCP
+ * servers" has no cheap answer: the only way to attempt it is to search
+ * (list resources, grep config, guess), which is exactly the crawling that
+ * blew codex-cli's budget and derailed hermes/kimi-code's tool-calling
+ * turn. `claude-code`/`grok` are excluded here — their fully-qualified
+ * tool form (`mcp__<server>__<tool>` / `<server>__<tool>`) already spells
+ * the server key in the one tool name they must call anyway, so the ask
+ * costs them nothing extra.
+ */
+const SERVER_NAME_UNDISCOVERABLE_HARNESSES: ReadonlySet<Harness> = new Set(["codex-cli", "hermes", "kimi-code"]);
+
 // ---------------------------------------------------------------------------
 // Per-plugin naming — computed from the naming module, not guessed.
 // ---------------------------------------------------------------------------
@@ -123,7 +137,9 @@ const councilPrompt = (harness: Harness): string => {
   const toolForm = fullyQualifiedToolForm(harness);
   const serverInstruction = IN_PROCESS_HARNESSES.has(harness)
     ? "This harness bundles the plugin's tools in-process — there is no separate MCP server entry to enumerate. Report serversSeen as an empty array."
-    : `First enumerate the MCP servers registered in your session. The plugin registers exactly one server for itself, named "${PLUGIN_SERVER_KEY}" — never "prism-mcp-shim" and never a "p_<8-hex-chars>_..." name (both are retired shim-era names from before the per-plugin naming scheme). Report every server name you see in serversSeen.`;
+    : SERVER_NAME_UNDISCOVERABLE_HARNESSES.has(harness)
+      ? "If MCP server names are already visible in your session at no extra cost, list them in serversSeen; otherwise report serversSeen as an empty array. Either way, calling the tool below is the important part."
+      : `The fully-qualified tool name below already carries its owning MCP server's key at no extra cost. If a server name is already visible to you that way (or elsewhere in your session at no extra cost), report it in serversSeen — the plugin's own server is named "${PLUGIN_SERVER_KEY}", never "prism-mcp-shim" and never a "p_<8-hex-chars>_..." name (both are retired shim-era names from before the per-plugin naming scheme). Do not search or enumerate beyond what is already visible to you; if nothing is visible, return an empty array.`;
 
   return (
     "You are one seat on the Prism Workflow Council, verifying per-plugin MCP naming. " +
@@ -201,7 +217,13 @@ const councilTask = (harness: Harness, agent: typeof agents.prismHarnessQa.qaTes
 const councilTasks: Record<Harness, ReturnType<typeof councilTask>> = {
   opencode: councilTask("opencode", agents.prismHarnessQa.qaTester, { worker: "opencode" }),
   "claude-code": councilTask("claude-code", agents.prismHarnessQa.qaTester, { worker: "claude-code" }),
-  "codex-cli": councilTask("codex-cli", agents.prismHarnessQa.qaTester, { worker: "codex-cli" }),
+  // codex-cli reproducibly ran past the 360000ms default under the old
+  // "enumerate your MCP servers" ask (task.executor.failed "codex exceeded
+  // Prism process timeout after 360000ms", two consecutive runs) even though
+  // its single-tool-call smoke leg finishes in ~1min; the lightened
+  // SERVER_NAME_UNDISCOVERABLE_HARNESSES prompt above removes the crawl
+  // that caused it, but a wider ceiling stays as a safety margin.
+  "codex-cli": councilTask("codex-cli", agents.prismHarnessQa.qaTester, { worker: "codex-cli", processTimeoutMs: 480_000 }),
   // Not "grok-build": that model fails config validation against a custom
   // --agent file with a restricted tools: list (PQ-176). grok-composer-2.5-fast
   // is grok's own CLI default, verified working against this agent shape.
@@ -282,10 +304,15 @@ interface CouncilVerdict {
 }
 
 const serverNameOk = (harness: Harness, serversSeen: ReadonlyArray<string>): boolean => {
-  if (IN_PROCESS_HARNESSES.has(harness)) return true;
   const sawShimString = serversSeen.some((name) => SHIM_STRING_PATTERN.test(name));
-  const sawPerPluginServer = serversSeen.some((name) => name === PLUGIN_SERVER_KEY);
-  return sawPerPluginServer && !sawShimString;
+  if (sawShimString) return false;
+  // In-process harnesses and within-server harnesses both get an exemption
+  // from having to prove they *saw* the per-plugin server name — the former
+  // structurally has no server to see, the latter structurally has no cheap
+  // way to see it (SERVER_NAME_UNDISCOVERABLE_HARNESSES). Either way a
+  // retired shim string above is still a real regression and still fails.
+  if (IN_PROCESS_HARNESSES.has(harness) || SERVER_NAME_UNDISCOVERABLE_HARNESSES.has(harness)) return true;
+  return serversSeen.some((name) => name === PLUGIN_SERVER_KEY);
 };
 
 const evaluateCouncil = (outcomes: ReadonlyArray<HarnessOutcome>): CouncilVerdict => {

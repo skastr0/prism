@@ -186,7 +186,7 @@ interface ConfigSeedRule {
 }
 
 interface WorkflowE2EQaCleanupRootSummary {
-  readonly harness: Harness;
+  readonly harness: Harness | "cursor";
   readonly root: string;
   readonly syncOps: number;
   readonly fallbackRemoved: readonly string[];
@@ -500,7 +500,7 @@ export const removeWorkflowE2ETempRoots = async (roots: readonly string[]): Prom
 
 const JSONC_FORMAT = { insertSpaces: true, tabSize: 2, eol: "\n" } as const;
 
-const workflowE2EHarnessRoot = (harness: Harness): string => {
+const workflowE2EHarnessRoot = (harness: QaCleanupHarness): string => {
   const root = resolveHarnessRoot(getHarness(harness), "global");
   if (root === null) throw new Error(`workflow E2E cleanup cannot resolve global root for ${harness}`);
   return resolve(root);
@@ -700,10 +700,13 @@ const cleanupWorkflowE2EQaConfigFallbacks = async (
   }
 };
 
+/** QA lowers a cursor server for the single-config live proof; cleanup must reach it too. */
+type QaCleanupHarness = Harness | "cursor";
+
 export const cleanupWorkflowE2EQaArtifacts = async (input: {
   readonly prismHome: string;
-  readonly harnesses: ReadonlySet<Harness>;
-  readonly harnessRoots?: Partial<Record<Harness, string>>;
+  readonly harnesses: ReadonlySet<QaCleanupHarness>;
+  readonly harnessRoots?: Partial<Record<QaCleanupHarness, string>>;
 }): Promise<WorkflowE2EQaCleanupSummary> => {
   const prismHome = resolve(input.prismHome);
   const runtimeMcpRoot = join(prismHome, "runtime", "mcp", QA_PLUGIN_NAME);
@@ -885,7 +888,7 @@ export const classifySetupBlocker = (
     case "kimi-code":
       if (/reached your usage limit for this billing cycle|provider\.api_error: 403/iu.test(output)) {
         return {
-          harness,
+          harness: entry.harness,
           code: "kimi-quota-exhausted",
           message: "Kimi Code provider quota is exhausted for this billing cycle.",
           retryCommand: "wait for quota refresh or upgrade the Kimi plan",
@@ -1400,8 +1403,11 @@ const main = async (): Promise<void> => {
   const shouldRunModelSelection = entries.some((entry) => entry.harness === "opencode");
   const liveHome = resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir());
   const livePrismHome = resolve(process.env.PRISM_HOME ?? join(homedir(), ".prism"));
-  const qaCleanupHarnesses = new Set(entries.map((entry) => entry.harness));
+  const qaCleanupHarnesses = new Set<Harness | "cursor">(entries.map((entry) => entry.harness));
   if (shouldRunModelSelection) qaCleanupHarnesses.add("opencode");
+  // The QA plugin targets cursor for the single-config live proof; its
+  // server entry must be cleaned even though cursor runs no workflow leg.
+  qaCleanupHarnesses.add("cursor");
 
   if (hasFlag("--cleanup-qa-only")) {
     const qaCleanup = await cleanupWorkflowE2EQaArtifacts({

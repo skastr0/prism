@@ -82,6 +82,12 @@ const legacyAggregatedMcpMarkerRegionKey = (harness: string): string | undefined
       return `codex.mcp.${shimServerKey("codex-cli")}`;
     case "hermes":
       return `hermes.mcp.${shimServerKey("hermes")}`;
+    case "grok":
+      // grok's retired union region used the short server key `prism`
+      // (grok's `<server>__<tool>` budget), not `prism-mcp-shim`. The
+      // desired-keys gate protects a real plugin whose name sanitizes to
+      // `prism`, exactly as for the sentinel keys above.
+      return "grok.mcp.prism";
     default:
       return undefined;
   }

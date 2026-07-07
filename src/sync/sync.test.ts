@@ -1142,29 +1142,45 @@ describe("sync engine — legacy Prism MCP entry sweep", () => {
     expect(after).toContain(`prism:codex.mcp.${ownServerKey}`);
   });
 
-  test("grok is unaffected: no legacy marker key defined for it, an untouched hand-authored fence is never swept", async () => {
+  test("grok: the retired union region grok.mcp.prism is swept; a live plugin sanitizing to prism survives via the desired gate", async () => {
     const configToml = join(root, "config.toml");
-    await nodeWriteFile(
-      configToml,
-      "# --- prism:grok.mcp.prism begin ---\n[mcp_servers.prism]\ncommand = \"bun\"\n# --- prism:grok.mcp.prism end ---\n",
-    );
+    const legacyFence = [
+      "# --- prism:grok.mcp.prism begin ---",
+      '["mcp_servers"."prism"]',
+      'command = "prism"',
+      'args = ["mcp", "shim"]',
+      "# --- prism:grok.mcp.prism end ---",
+    ].join("\n");
+    await nodeWriteFile(configToml, `# hand-written\n\n${legacyFence}\n`);
 
-    const ownRegion = {
+    // An unrelated plugin's pass visits the file; nothing claims the
+    // retired key, so the fence is swept.
+    const boothRegion = {
       kind: "marker" as const,
       targetPath: configToml,
       regionKey: "grok.mcp.booth",
       commentPrefix: "#",
-      content: "[mcp_servers.booth]\ncommand = \"prism\"",
+      content: '["mcp_servers"."booth"]\ncommand = "prism"',
       plugin: "booth",
     };
-
-    const report = await refresh(desiredWith({ harness: "grok", regions: [ownRegion] }));
+    const report = await refresh(desiredWith({ harness: "grok", regions: [boothRegion] }));
     expect(kinds(report)).toEqual(["patch-regions"]);
     const after = await readFile(configToml);
-    // grok has no retired aggregated identity in this module's denylist —
-    // an unrelated hand-authored fence sharing the reserved shim server
-    // name coincidentally is left completely alone.
-    expect(after).toContain("prism:grok.mcp.prism begin");
-    expect(after).toContain("prism:grok.mcp.booth");
+    expect(after).not.toContain("grok.mcp.prism");
+    expect(after).toContain("# hand-written");
+
+    // A live plugin whose name sanitizes to `prism` claims the key: survives.
+    await nodeWriteFile(configToml, `# hand-written\n\n${legacyFence}\n`);
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: "grok.mcp.prism",
+      commentPrefix: "#",
+      content: '["mcp_servers"."prism"]\ncommand = "prism"',
+      plugin: "prism",
+    };
+    const claimed = await refresh(desiredWith({ harness: "grok", regions: [ownRegion] }));
+    expect(kinds(claimed)).toEqual(["patch-regions"]);
+    expect(await readFile(configToml)).toContain("prism:grok.mcp.prism begin");
   });
 });

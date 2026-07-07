@@ -579,8 +579,10 @@ const removeYamlMapEntry = (content: string, parentKey: string, entryKey: string
   return [...lines.slice(0, entryIndex), ...lines.slice(endIndex)].join("");
 };
 
-const workflowE2EQaFallbackPaths = (harness: Harness, root: string): readonly string[] => {
+const workflowE2EQaFallbackPaths = (harness: QaCleanupHarness, root: string): readonly string[] => {
   switch (harness) {
+    case "cursor":
+      return [];
     case "opencode":
       return [
         join(root, "plugins", QA_GENERATED_PLUGIN_NAME),
@@ -616,7 +618,7 @@ const workflowE2EQaFallbackPaths = (harness: Harness, root: string): readonly st
   }
 };
 
-const workflowE2EQaStaleFallbackPaths = async (harness: Harness, root: string): Promise<readonly string[]> => {
+const workflowE2EQaStaleFallbackPaths = async (harness: QaCleanupHarness, root: string): Promise<readonly string[]> => {
   const stalePaths: string[] = [];
   const stalePluginRoots =
     harness === "opencode" ? [root]

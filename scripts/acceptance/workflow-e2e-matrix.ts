@@ -1213,6 +1213,15 @@ export const evaluateInvalidModelSelectionCheck = (
   );
 };
 
+/**
+ * `workflow validate` performs model resolution, so the intentionally-invalid
+ * modelspace workflow is REQUIRED to fail validation with the fail-closed
+ * diagnostic — a zero exit there would mean the fail-closed gate is broken.
+ */
+const invalidModelSelectionValidatePass = (
+  invalidValidate: Pick<CommandResult, "exitCode" | "stdout" | "stderr">,
+): boolean => evaluateInvalidModelSelectionCheck(invalidValidate).status === "pass";
+
 const checksPass = (checks: readonly HarnessCheck[] | undefined): boolean =>
   checks === undefined ? false : checks.every((item) => item.status !== "fail");
 
@@ -1226,7 +1235,7 @@ const modelSelectionPass = (result: ModelSelectionResult | undefined, validateOn
   (
     result.refresh.exitCode === 0 &&
     result.validate.exitCode === 0 &&
-    result.invalidValidate.exitCode === 0 &&
+    invalidModelSelectionValidatePass(result.invalidValidate) &&
     (validateOnly || checksPass(result.checks))
   );
 

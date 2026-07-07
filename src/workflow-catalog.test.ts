@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { LOWERER_CAPABILITIES } from "./lowerer-capabilities.js";
 import {
+  lookupCatalogRef,
+  lookupOrbitNamespace,
   pickDefaultAgent,
   pickDefaultAgentRef,
   pickDefaultWorkers,
   projectCatalog,
+  projectCompactIndex,
+  renderCompactIndexHuman,
+  renderQueryResultsHuman,
+  renderRefDetailHuman,
+  renderRefNotFoundMessage,
   renderRefsStatus,
   scaffoldWorkflowSource,
+  searchCatalog,
   WORKFLOW_WORKERS,
   type GeneratedSurface,
   type WorkflowCatalog,
@@ -252,5 +260,209 @@ describe("renderRefsStatus", () => {
     const out = renderRefsStatus({ surfaceDir: "/d", present: true, refsManifestHash: "aaaaaaaaaaaa1", compileManifestHash: "bbbbbbbbbbbb2", freshness: "stale" });
     expect(out).toContain("stale");
     expect(out).toContain("aaaaaaaaaaaa");
+  });
+});
+
+// --- gradual-disclosure catalog modes ------------------------------------------
+
+describe("projectCompactIndex", () => {
+  const catalog = projectCatalog(fixture);
+  const index = projectCompactIndex(catalog, "/surface/dir");
+
+  test("summarizes each namespace with agent count and orbit ref, dropping per-agent detail", () => {
+    expect(index.namespaces).toEqual([
+      { namespace: "forge", orbitRef: "orbits.forge.forge", agentCount: 1 },
+      { namespace: "gleaner", orbitRef: null, agentCount: 1 },
+    ]);
+  });
+
+  test("carries surfaceDir, present, workers, and a model-profile count (not the full list)", () => {
+    expect(index.surfaceDir).toBe("/surface/dir");
+    expect(index.present).toBe(true);
+    expect(index.workers).toEqual(catalog.workers);
+    expect(index.modelProfileCount).toBe(1);
+  });
+});
+
+describe("renderCompactIndexHuman", () => {
+  const index = projectCompactIndex(projectCatalog(fixture), "/surface/dir");
+  const out = renderCompactIndexHuman(index);
+
+  test("lists one line per namespace with agent count and orbit ref", () => {
+    expect(out).toContain("forge  (1 agent, orbit ref: orbits.forge.forge)");
+    expect(out).toContain("gleaner  (1 agent)");
+  });
+
+  test("omits per-agent detail (the point of the compact mode)", () => {
+    expect(out).not.toContain("Builds.");
+    expect(out).not.toContain("agents.forge.builder");
+  });
+
+  test("names every drill-down flag in the footer", () => {
+    expect(out).toContain("--orbit <ns>");
+    expect(out).toContain("--ref <ref>");
+    expect(out).toContain("--query <text>");
+    expect(out).toContain("--full");
+  });
+
+  test("stays compact — well under a context-bomb line count", () => {
+    expect(out.split("\n").length).toBeLessThan(15);
+  });
+});
+
+describe("lookupOrbitNamespace", () => {
+  const catalog = projectCatalog(fixture);
+
+  test("finds a namespace with full per-agent detail intact", () => {
+    const result = lookupOrbitNamespace(catalog, "forge");
+    expect(result.found).toBe(true);
+    expect(result.namespace?.agents[0]?.ref).toBe("agents.forge.builder");
+    expect(result.namespace?.agents[0]?.description).toBe("Builds.");
+  });
+
+  test("reports every namespace as available when the name is unknown", () => {
+    const result = lookupOrbitNamespace(catalog, "nope");
+    expect(result.found).toBe(false);
+    expect(result.namespace).toBeNull();
+    expect(result.available).toEqual(["forge", "gleaner"]);
+  });
+});
+
+describe("lookupCatalogRef", () => {
+  const catalog = projectCatalog(fixture);
+
+  test("resolves an agent ref", () => {
+    const result = lookupCatalogRef(catalog, "agents.forge.builder");
+    expect(result.found).toBe(true);
+    expect(result.entity).toMatchObject({
+      kind: "agent",
+      ref: "agents.forge.builder",
+      plugin: "forge",
+      name: "builder",
+      description: "Builds.",
+    });
+  });
+
+  test("resolves an orbit ref", () => {
+    const result = lookupCatalogRef(catalog, "orbits.forge.forge");
+    expect(result.found).toBe(true);
+    expect(result.entity).toEqual({ kind: "orbit", ref: "orbits.forge.forge", plugin: "forge", name: "forge" });
+  });
+
+  test("resolves a model-profile ref", () => {
+    const result = lookupCatalogRef(catalog, "models.agent-foundations.empirical-modelspaces.coding-frontier");
+    expect(result.found).toBe(true);
+    expect(result.entity).toEqual({
+      kind: "model",
+      ref: "models.agent-foundations.empirical-modelspaces.coding-frontier",
+      plugin: "agent-foundations",
+      modelspace: "empirical-modelspaces",
+      profile: "coding-frontier",
+    });
+  });
+
+  test("suggests up to 5 closest refs for an unknown ref by substring match", () => {
+    const result = lookupCatalogRef(catalog, "agents.forge.build");
+    expect(result.found).toBe(false);
+    expect(result.entity).toBeNull();
+    expect(result.suggestions).toContain("agents.forge.builder");
+    expect(result.suggestions.length).toBeLessThanOrEqual(5);
+  });
+
+  test("empty suggestions when nothing is close", () => {
+    const result = lookupCatalogRef(catalog, "totally-unrelated-ref");
+    expect(result.found).toBe(false);
+    expect(result.suggestions).toEqual([]);
+  });
+});
+
+describe("renderRefDetailHuman", () => {
+  const catalog = projectCatalog(fixture);
+
+  test("renders full agent detail including per-harness models", () => {
+    const { entity } = lookupCatalogRef(catalog, "agents.forge.builder");
+    const out = renderRefDetailHuman(entity!);
+    expect(out).toContain("agents.forge.builder");
+    expect(out).toContain("claude-code: claude-opus-4-8");
+    expect(out).toContain("Builds.");
+    expect(out).toContain("claude-code, grok");
+  });
+
+  test("renders orbit detail", () => {
+    const { entity } = lookupCatalogRef(catalog, "orbits.forge.forge");
+    const out = renderRefDetailHuman(entity!);
+    expect(out).toContain("orbits.forge.forge");
+    expect(out).toContain("plugin: forge");
+  });
+
+  test("renders model-profile detail", () => {
+    const { entity } = lookupCatalogRef(catalog, "models.agent-foundations.empirical-modelspaces.coding-frontier");
+    const out = renderRefDetailHuman(entity!);
+    expect(out).toContain("modelspace: empirical-modelspaces");
+    expect(out).toContain("profile: coding-frontier");
+  });
+});
+
+describe("renderRefNotFoundMessage", () => {
+  test("lists suggestions when present", () => {
+    expect(renderRefNotFoundMessage("agents.forge.build", ["agents.forge.builder"])).toContain(
+      "Closest matches: agents.forge.builder",
+    );
+  });
+
+  test("points at --query when there are no suggestions", () => {
+    expect(renderRefNotFoundMessage("zzz", [])).toContain("--query");
+  });
+});
+
+describe("searchCatalog", () => {
+  const catalog = projectCatalog(fixture);
+
+  test("matches agents by description substring, case-insensitively", () => {
+    const hits = searchCatalog(catalog, "BUILDS");
+    expect(hits).toEqual([{ ref: "agents.forge.builder", name: "builder", descriptionExcerpt: "Builds." }]);
+  });
+
+  test("matches orbit refs and names", () => {
+    const hits = searchCatalog(catalog, "orbits.forge");
+    expect(hits.map((h) => h.ref)).toContain("orbits.forge.forge");
+  });
+
+  test("matches model-profile refs", () => {
+    const hits = searchCatalog(catalog, "coding-frontier");
+    expect(hits.map((h) => h.ref)).toContain("models.agent-foundations.empirical-modelspaces.coding-frontier");
+  });
+
+  test("zero hits for a non-matching query", () => {
+    expect(searchCatalog(catalog, "nonexistent-xyz")).toEqual([]);
+  });
+
+  test("truncates long descriptions to ~100 chars with an ellipsis", () => {
+    const longDescription = "x".repeat(150);
+    const surface: GeneratedSurface = {
+      agents: { ns: { a: { plugin: "p", name: "a", description: longDescription } } },
+      orbits: {},
+      models: {},
+    };
+    const hits = searchCatalog(projectCatalog(surface), "xxx");
+    expect(hits[0]!.descriptionExcerpt.length).toBe(101);
+    expect(hits[0]!.descriptionExcerpt.endsWith("…")).toBe(true);
+  });
+});
+
+describe("renderQueryResultsHuman", () => {
+  test("zero hits suggests the compact index", () => {
+    const out = renderQueryResultsHuman([], "nonexistent-xyz");
+    expect(out).toContain("No matches");
+    expect(out).toContain("prism workflow catalog");
+  });
+
+  test("formats each hit as ref — name — description and hints --ref", () => {
+    const out = renderQueryResultsHuman(
+      [{ ref: "agents.forge.builder", name: "builder", descriptionExcerpt: "Builds." }],
+      "build",
+    );
+    expect(out).toContain("agents.forge.builder — builder — Builds.");
+    expect(out).toContain("--ref <ref>");
   });
 });

@@ -164,6 +164,14 @@ export const updateDetachedWorkflowRun = async (input: {
   readonly file: string;
   readonly storePath: string;
   readonly options: WorkflowDetachedRunOptions;
+  /**
+   * When true (the `resume` CLI verb), a previous run that already reached a
+   * terminal status (stopped/failed/completed) is tolerated: the next run
+   * starts directly against the same store/cache instead of requiring the
+   * previous run to still be `running`. Defaults to false so `update` keeps
+   * its original contract — the previous run must still be running.
+   */
+  readonly allowTerminalPreviousRun?: boolean;
 }): Promise<WorkflowUpdateResult> => {
   const workflow = await loadWorkflowFile(input.file, { skipTypecheck: true });
   const store = await WorkflowStore.open(expandPath(input.storePath));
@@ -172,7 +180,7 @@ export const updateDetachedWorkflowRun = async (input: {
     if (previousRun === null) {
       throw new Error(`workflow run not found: ${input.runId}`);
     }
-    if (previousRun.status !== "running") {
+    if (previousRun.status !== "running" && input.allowTerminalPreviousRun !== true) {
       throw new Error(`workflow run is not running: ${input.runId}`);
     }
     const effectiveOptions = mergeWorkflowRunOptions(store.getRunSnapshot(input.runId)?.options, input.options);
@@ -181,23 +189,42 @@ export const updateDetachedWorkflowRun = async (input: {
     }
     const nextRunId = randomUUID();
     const token = randomUUID();
-    const stoppedRun = store.restartRunningRun({
-      previousRunId: input.runId,
-      nextRunId,
-      nextWorkflow: workflow.name,
-      handoffToken: token,
-      reason: "update-requested",
-      mode: "restart-with-cache",
-    });
-    if (stoppedRun === null) {
-      throw new Error(`workflow run is no longer running: ${input.runId}`);
+    const wasRunning = previousRun.status === "running";
+    let stoppedRun: WorkflowRunRecord;
+    if (wasRunning) {
+      const restarted = store.restartRunningRun({
+        previousRunId: input.runId,
+        nextRunId,
+        nextWorkflow: workflow.name,
+        handoffToken: token,
+        reason: "update-requested",
+        mode: "restart-with-cache",
+      });
+      if (restarted === null) {
+        throw new Error(`workflow run is no longer running: ${input.runId}`);
+      }
+      stoppedRun = restarted;
+    } else {
+      // Already terminal (resume-of-terminal path) — nothing to stop; start the
+      // next run directly and link it back to the previous run for provenance,
+      // mirroring what restartRunningRun does above minus the "fail old" half.
+      store.createRun(workflow.name, nextRunId);
+      store.recordEvent({
+        runId: nextRunId,
+        type: "run.updated_from",
+        payload: { previousRunId: input.runId, mode: "restart-with-cache" },
+      });
+      store.setRunHandoffToken(nextRunId, token);
+      stoppedRun = previousRun;
     }
     store.recordRunSnapshot({
       runId: nextRunId,
       workflowFile: expandPath(input.file),
       options: workflowRunOptionsSnapshot(effectiveOptions),
     });
-    requestWorkflowRunnerTermination(store, stoppedRun, "update-requested");
+    if (wasRunning) {
+      requestWorkflowRunnerTermination(store, stoppedRun, "update-requested");
+    }
     try {
       const runnerPid = startDetachedWorkflowRun(input.file, effectiveOptions, { runId: nextRunId, storePath: input.storePath, token });
       store.markRunRunnerStarted(nextRunId, runnerPid);

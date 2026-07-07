@@ -75,11 +75,19 @@ import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import {
   buildWorkflowCatalog,
+  lookupCatalogRef,
+  lookupOrbitNamespace,
   pickDefaultAgent,
   pickDefaultWorkers,
+  projectCompactIndex,
   renderCatalogHuman,
+  renderCompactIndexHuman,
+  renderQueryResultsHuman,
+  renderRefDetailHuman,
+  renderRefNotFoundMessage,
   renderRefsStatus,
   scaffoldWorkflowSource,
+  searchCatalog,
   workflowRefsStatus,
 } from "./workflow-catalog.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
@@ -255,19 +263,83 @@ workflow
 
 workflow
   .command("catalog")
-  .description("List orbits, agents, and model profiles compiled for this project (workflow authoring discovery)")
+  .description(
+    "Discover refs (agents.*/orbits.*/models.*) compiled for this project. Default: compact index. " +
+      "--orbit <ns> for one namespace, --ref <ref> for one entity, --query <text> to search, --full for the complete dump.",
+  )
   .option("--json", "Emit machine-readable JSON")
-  .option("--orbit <name>", "Filter to one orbit/namespace")
-  .action(async (options: { readonly json?: boolean; readonly orbit?: string }) => {
+  .option("--orbit <name>", "Full detail for one orbit/namespace")
+  .option("--ref <ref>", "Full detail for exactly one entity by ref")
+  .option("--query <text>", "Case-insensitive substring search across refs, names, and descriptions")
+  .option("--full", "Print the complete catalog dump")
+  .action(async (options: {
+    readonly json?: boolean;
+    readonly orbit?: string;
+    readonly ref?: string;
+    readonly query?: string;
+    readonly full?: boolean;
+  }) => {
     try {
+      const modeCount = [options.orbit !== undefined, options.ref !== undefined, options.query !== undefined, options.full === true]
+        .filter(Boolean).length;
+      if (modeCount > 1) {
+        throw new CliUsageError("--orbit, --ref, --query, and --full are mutually exclusive — pass at most one");
+      }
+
       const result = await buildWorkflowCatalog();
-      const output = options.json === true
-        ? JSON.stringify({ surfaceDir: result.surfaceDir, present: result.present, ...(result.catalog ?? {}) }, null, 2)
-        : renderCatalogHuman(result, options.orbit);
+      if (result.catalog === null) {
+        const output = options.json === true
+          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: false }, null, 2)
+          : renderCatalogHuman(result);
+        await writeStdout(`${output}\n`);
+        return;
+      }
+      const catalog = result.catalog;
+
+      if (options.ref !== undefined) {
+        const lookup = lookupCatalogRef(catalog, options.ref);
+        if (!lookup.found || lookup.entity === null) {
+          printCliError(new Error(renderRefNotFoundMessage(options.ref, lookup.suggestions)), "Workflow catalog failed");
+          exitWith(EXIT_CODES.domainFailure);
+          return;
+        }
+        const output = options.json === true ? JSON.stringify(lookup.entity, null, 2) : renderRefDetailHuman(lookup.entity);
+        await writeStdout(`${output}\n`);
+        return;
+      }
+
+      if (options.query !== undefined) {
+        const hits = searchCatalog(catalog, options.query);
+        const output = options.json === true
+          ? JSON.stringify({ query: options.query, hits }, null, 2)
+          : renderQueryResultsHuman(hits, options.query);
+        await writeStdout(`${output}\n`);
+        return;
+      }
+
+      if (options.orbit !== undefined) {
+        const lookup = lookupOrbitNamespace(catalog, options.orbit);
+        const output = options.json === true
+          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: true, ...lookup }, null, 2)
+          : renderCatalogHuman(result, options.orbit);
+        await writeStdout(`${output}\n`);
+        return;
+      }
+
+      if (options.full === true) {
+        const output = options.json === true
+          ? JSON.stringify({ surfaceDir: result.surfaceDir, present: true, ...catalog }, null, 2)
+          : renderCatalogHuman(result);
+        await writeStdout(`${output}\n`);
+        return;
+      }
+
+      const index = projectCompactIndex(catalog, result.surfaceDir);
+      const output = options.json === true ? JSON.stringify(index, null, 2) : renderCompactIndexHuman(index);
       await writeStdout(`${output}\n`);
     } catch (error) {
       printCliError(error, "Workflow catalog failed");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });
 
@@ -884,6 +956,40 @@ workflowRuns
       console.log(JSON.stringify(result, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs update failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+workflowRuns
+  .command("resume <runId> <file>")
+  .description(
+    "Resume a workflow run: stop it if still running, then start a new detached run against the same store " +
+      "so completed tasks replay from cache. Foreground equivalent: `prism workflow run <file> --store <same-store>`.",
+  )
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--mock-output <path>", "JSON object keyed by workflow task id")
+  .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
+  .option("--model <model>", "Fallback model for tasks without task-level model selection")
+  .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
+  .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
+  .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
+  .option("--no-cache", "Disable workflow task cache lookup and writes")
+  .action(async (runId: string, file: string, options: {
+    readonly store?: string;
+    readonly mockOutput?: string;
+    readonly worker?: string;
+    readonly model?: string;
+    readonly permission?: string;
+    readonly maxConcurrentTasks?: number;
+    readonly taskTimeoutMs?: number;
+    readonly cache?: boolean;
+  }) => {
+    try {
+      const storePath = expandPath(options.store ?? defaultWorkflowStorePathForCwd());
+      const result = await updateDetachedWorkflowRun({ runId, file, storePath, options, allowTerminalPreviousRun: true });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      printCliError(error, "Workflow runs resume failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     }
   });

@@ -179,16 +179,19 @@ export const buildWorkflowCatalog = async (
   return { surfaceDir, present: surface !== null, catalog: surface ? projectCatalog(surface) : null };
 };
 
-/** Human-readable catalog rendering. */
+const renderMissingSurfaceHuman = (surfaceDir: string): string =>
+  [
+    `No compiled workflow surface found for this project at:`,
+    `  ${surfaceDir}`,
+    ``,
+    `Compile this project first: \`prism refresh <plugin-path>\` (or \`prism compile\`),`,
+    `then re-run \`prism workflow catalog\`.`,
+  ].join("\n");
+
+/** Human-readable full-detail catalog rendering (used by `--full` and `--orbit <ns>`). */
 export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: string): string => {
   if (!result.present || !result.catalog) {
-    return [
-      `No compiled workflow surface found for this project at:`,
-      `  ${result.surfaceDir}`,
-      ``,
-      `Compile this project first: \`prism refresh <plugin-path>\` (or \`prism compile\`),`,
-      `then re-run \`prism workflow catalog\`.`,
-    ].join("\n");
+    return renderMissingSurfaceHuman(result.surfaceDir);
   }
   const lines: string[] = [`Workflow surface (import refs from \`prism/refs\`):`, `  ${result.surfaceDir}`, ``];
   let shown = 0;
@@ -215,6 +218,175 @@ export const renderCatalogHuman = (result: BuildCatalogResult, filterOrbit?: str
     const sample = profiles.slice(0, 3).map((p) => p.ref).join(", ");
     lines.push(`model profiles: ${profiles.length}${profiles.length > 0 ? ` (e.g. ${sample})` : ""}`);
   }
+  return lines.join("\n");
+};
+
+// --- gradual-disclosure catalog modes ------------------------------------------
+//
+// `prism workflow catalog` defaults to a compact index (this section) instead of
+// the full dump (`renderCatalogHuman` above) — the full dump is a context bomb
+// for an agent skimming for one ref. Every mode below composes with `--json`.
+
+export interface CompactNamespaceEntry {
+  readonly namespace: string;
+  readonly orbitRef: string | null;
+  readonly agentCount: number;
+}
+
+export interface CompactCatalogIndex {
+  readonly surfaceDir: string;
+  readonly present: true;
+  readonly namespaces: ReadonlyArray<CompactNamespaceEntry>;
+  readonly workers: ReadonlyArray<string>;
+  readonly modelProfileCount: number;
+}
+
+/** Pure projection: one line per namespace, no per-agent detail — the default `catalog` view. */
+export const projectCompactIndex = (catalog: WorkflowCatalog, surfaceDir: string): CompactCatalogIndex => ({
+  surfaceDir,
+  present: true,
+  namespaces: catalog.namespaces
+    .filter((ns) => ns.agents.length > 0 || ns.orbit !== null)
+    .map((ns) => ({ namespace: ns.namespace, orbitRef: ns.orbit?.ref ?? null, agentCount: ns.agents.length })),
+  workers: catalog.workers,
+  modelProfileCount: catalog.modelProfiles.length,
+});
+
+export const renderCompactIndexHuman = (index: CompactCatalogIndex): string => {
+  const lines: string[] = [`Workflow surface (compact index — import refs from \`prism/refs\`):`, `  ${index.surfaceDir}`, ``];
+  for (const ns of index.namespaces) {
+    const agentCount = `${ns.agentCount} agent${ns.agentCount === 1 ? "" : "s"}`;
+    lines.push(ns.orbitRef ? `${ns.namespace}  (${agentCount}, orbit ref: ${ns.orbitRef})` : `${ns.namespace}  (${agentCount})`);
+  }
+  lines.push(``);
+  lines.push(`workers: ${index.workers.join(", ")}`);
+  lines.push(`model profiles: ${index.modelProfileCount}`);
+  lines.push(``);
+  lines.push(
+    `Drill down: --orbit <ns> (one namespace) | --ref <ref> (one entity) | --query <text> (search) | --full (complete dump)`,
+  );
+  return lines.join("\n");
+};
+
+export interface OrbitLookupResult {
+  readonly found: boolean;
+  readonly namespace: CatalogNamespace | null;
+  readonly available: ReadonlyArray<string>;
+}
+
+/** Pure lookup backing `--orbit <name>`'s JSON output (the human path still uses {@link renderCatalogHuman}). */
+export const lookupOrbitNamespace = (catalog: WorkflowCatalog, orbitName: string): OrbitLookupResult => {
+  const namespace = catalog.namespaces.find((ns) => ns.namespace === orbitName) ?? null;
+  return { found: namespace !== null, namespace, available: catalog.namespaces.map((ns) => ns.namespace) };
+};
+
+/** A single catalog entity resolved by ref, tagged with its kind so `--ref` output stays a discriminated union. */
+export type CatalogEntity =
+  | ({ readonly kind: "agent" } & CatalogAgent)
+  | ({ readonly kind: "orbit" } & CatalogOrbit)
+  | ({ readonly kind: "model" } & CatalogModelProfile);
+
+export interface RefLookupResult {
+  readonly found: boolean;
+  readonly entity: CatalogEntity | null;
+  /** Up to 5 refs closest to the query, by simple substring match, when not found. */
+  readonly suggestions: ReadonlyArray<string>;
+}
+
+const catalogEntities = (catalog: WorkflowCatalog): ReadonlyArray<CatalogEntity> => {
+  const entities: CatalogEntity[] = [];
+  for (const ns of catalog.namespaces) {
+    if (ns.orbit) entities.push({ kind: "orbit", ...ns.orbit });
+    for (const agent of ns.agents) entities.push({ kind: "agent", ...agent });
+  }
+  for (const profile of catalog.modelProfiles) entities.push({ kind: "model", ...profile });
+  return entities;
+};
+
+/** Pure lookup backing `--ref <ref>`: exact match, else up to 5 substring-closest suggestions. */
+export const lookupCatalogRef = (catalog: WorkflowCatalog, ref: string): RefLookupResult => {
+  const entities = catalogEntities(catalog);
+  const hit = entities.find((entity) => entity.ref === ref);
+  if (hit) return { found: true, entity: hit, suggestions: [] };
+  const needle = ref.toLowerCase();
+  const suggestions = entities
+    .filter((entity) => {
+      const candidate = entity.ref.toLowerCase();
+      return candidate.includes(needle) || needle.includes(candidate);
+    })
+    .map((entity) => entity.ref)
+    .sort((a, b) => a.length - b.length || a.localeCompare(b))
+    .slice(0, 5);
+  return { found: false, entity: null, suggestions };
+};
+
+export const renderRefNotFoundMessage = (ref: string, suggestions: ReadonlyArray<string>): string =>
+  suggestions.length > 0
+    ? `no entity with ref "${ref}". Closest matches: ${suggestions.join(", ")}`
+    : `no entity with ref "${ref}". No close matches — try \`prism workflow catalog --query <text>\` to search.`;
+
+export const renderRefDetailHuman = (entity: CatalogEntity): string => {
+  if (entity.kind === "agent") {
+    const modelLines = Object.entries(entity.modelByHarness).map(([harness, model]) => `  ${harness}: ${model}`);
+    return [
+      `${entity.ref}`,
+      `  plugin: ${entity.plugin}`,
+      `  name: ${entity.name}`,
+      `  description: ${entity.description}`,
+      `  installs: ${entity.installs.length > 0 ? entity.installs.join(", ") : "(none recorded)"}`,
+      `  model by harness:`,
+      ...(modelLines.length > 0 ? modelLines : [`    (none recorded)`]),
+    ].join("\n");
+  }
+  if (entity.kind === "orbit") {
+    return [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  name: ${entity.name}`].join("\n");
+  }
+  return [`${entity.ref}`, `  plugin: ${entity.plugin}`, `  modelspace: ${entity.modelspace}`, `  profile: ${entity.profile}`].join("\n");
+};
+
+export interface CatalogQueryHit {
+  readonly ref: string;
+  readonly name: string;
+  /** First ~100 chars of the entity's description; empty for entities without one (orbits, model profiles). */
+  readonly descriptionExcerpt: string;
+}
+
+const excerpt = (description: string, maxLength = 100): string =>
+  description.length > maxLength ? `${description.slice(0, maxLength)}…` : description;
+
+/** Pure search backing `--query <text>`: case-insensitive substring match over refs, names, and descriptions. */
+export const searchCatalog = (catalog: WorkflowCatalog, query: string): ReadonlyArray<CatalogQueryHit> => {
+  const needle = query.toLowerCase();
+  const matches = (...haystack: ReadonlyArray<string>): boolean =>
+    haystack.some((text) => text.toLowerCase().includes(needle));
+  const hits: CatalogQueryHit[] = [];
+  for (const ns of catalog.namespaces) {
+    if (ns.orbit && matches(ns.orbit.ref, ns.orbit.name)) {
+      hits.push({ ref: ns.orbit.ref, name: ns.orbit.name, descriptionExcerpt: "" });
+    }
+    for (const agent of ns.agents) {
+      if (matches(agent.ref, agent.name, agent.description)) {
+        hits.push({ ref: agent.ref, name: agent.name, descriptionExcerpt: excerpt(agent.description) });
+      }
+    }
+  }
+  for (const profile of catalog.modelProfiles) {
+    if (matches(profile.ref, profile.profile)) {
+      hits.push({ ref: profile.ref, name: profile.profile, descriptionExcerpt: "" });
+    }
+  }
+  return hits;
+};
+
+export const renderQueryResultsHuman = (hits: ReadonlyArray<CatalogQueryHit>, query: string): string => {
+  if (hits.length === 0) {
+    return [`No matches for "${query}".`, `Run \`prism workflow catalog\` for the compact index.`].join("\n");
+  }
+  const lines = hits.map((hit) =>
+    hit.descriptionExcerpt.length > 0 ? `${hit.ref} — ${hit.name} — ${hit.descriptionExcerpt}` : `${hit.ref} — ${hit.name}`,
+  );
+  lines.push(``);
+  lines.push(`Drill in: \`prism workflow catalog --ref <ref>\``);
   return lines.join("\n");
 };
 

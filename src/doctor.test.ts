@@ -8,7 +8,7 @@ import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-h
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 
 let root: string;
 let originalHome: string | undefined;
@@ -445,7 +445,9 @@ test("doctor --fix drops stale snapshot region entries for missing marker fences
 test("doctor validates generated harness config references", async () => {
   const prismHome = join(root, "prism-home");
   const codexServerName = shimServerKey("codex-cli");
-  const claudeServerName = shimServerKey("claude-code");
+  // Claude Code's per-plugin server is keyed by the owner plugin's own name
+  // (`pluginServerKey`), not the retired shared `shimServerKey("claude-code")`.
+  const claudeServerName = pluginServerKey("demo");
   // Codex: a legacy remnant (old HTTP-era `command`/`args`, no PRISM_SHIM_*
   // env, non-array enabled_tools) under the *correct* stdio-shim server key
   // -- every stdio-shim shape check should fire.
@@ -540,7 +542,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
   const prismHome = join(root, "prism-home");
   await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
 
-  const claudeServerName = shimServerKey("claude-code");
+  const claudeServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
     `${JSON.stringify({
@@ -548,7 +550,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
         [claudeServerName]: {
           command: "prism",
           args: ["mcp", "shim"],
-          env: { PRISM_SHIM_PLUGINS: "demo", PRISM_SHIM_HARNESS: "claude-code" },
+          env: { PRISM_SHIM_PLUGINS: "demo", PRISM_SHIM_HARNESS: "claude-code", PRISM_SHIM_NAMING: "per-plugin" },
         },
       },
     }, null, 2)}\n`,

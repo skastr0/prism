@@ -6,14 +6,12 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/grok.js";
-import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
 import { mcpToolNameForBinding } from "./mcp-bundle.js";
 import {
-  canonicalBase,
   capGrokWireName,
   createGrokCollisionGuard,
-  renderAllowlist,
-  shimServerKey,
+  pluginServerKey,
+  renderPluginAllowlist,
 } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
@@ -331,17 +329,20 @@ export default defineTool({
   // grok never resolves a `.mcp.json` inside an installed plugin bundle, so
   // a bundle-level file would leave every generated tool unreachable.
   expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
-  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
+  const ownerServerKey = pluginServerKey("grok-plugin-fixture");
+  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${ownerServerKey}`);
   if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
   expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
-  expect(mcpRegion.content).toContain(`["mcp_servers"."${shimServerKey("grok")}"]`);
+  expect(mcpRegion.plugin).toBe("grok-plugin-fixture");
+  expect(mcpRegion.content).toContain(`["mcp_servers"."${ownerServerKey}"]`);
   expect(mcpRegion.content).toContain('command = "prism"');
   expect(mcpRegion.content).toContain('args = ["mcp", "shim"]');
-  expect(mcpRegion.content).toContain(`["mcp_servers"."${shimServerKey("grok")}"."env"]`);
+  expect(mcpRegion.content).toContain(`["mcp_servers"."${ownerServerKey}"."env"]`);
   expect(mcpRegion.content).toContain('PRISM_SHIM_PLUGINS = "grok-plugin-fixture"');
   expect(mcpRegion.content).toContain('PRISM_SHIM_HARNESS = "grok"');
-  // The shared region is a cross-plugin union: it cannot carry one plugin's
-  // exposure profile (the shim derives the per-owner profile itself).
+  expect(mcpRegion.content).toContain('PRISM_SHIM_NAMING = "per-plugin"');
+  // Per-plugin regions never carry an explicit exposure profile: absent, the
+  // shim derives `prism-generated-<owner>:grok` itself.
   expect(mcpRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
   expect(mcpRegion.content).not.toContain("http");
   expect(mcpRegion.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
@@ -357,24 +358,17 @@ export default defineTool({
   expect(hookConfig?.content).toContain('"SessionEnd"');
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_terminal_cmd"');
-  const generatedEchoTool = renderAllowlist("grok", "grok-plugin-fixture", "grok_plugin_fixture_echo");
-  const generatedSyntheticTool = renderAllowlist(
+  const generatedEchoTool = renderPluginAllowlist("grok", "grok-plugin-fixture", "grok_plugin_fixture_echo");
+  const generatedSyntheticTool = renderPluginAllowlist(
     "grok",
     "grok-plugin-fixture",
     mcpToolNameForBinding("grok-plugin-fixture", longSyntheticBinding),
   );
+  expect(generatedEchoTool).toBe(`${ownerServerKey}__echo`);
   expect(generatedEchoTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   expect(generatedSyntheticTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   expect(generatedSyntheticTool.split("__")).toHaveLength(2);
   expect(agent?.content).toContain(`- "${generatedSyntheticTool}"`);
-  // The pre-cap synthetic name overflows Grok's 64-char limit, so its
-  // byte-identical uncapped form must never appear literally in the output.
-  const uncappedSyntheticTool = `${shimServerKey("grok")}__${canonicalBase(
-    "grok-plugin-fixture",
-    mcpToolNameForBinding("grok-plugin-fixture", longSyntheticBinding),
-  )}`;
-  expect(uncappedSyntheticTool.length).toBeGreaterThan(GROK_MAX_TOOL_NAME_LENGTH);
-  expect(agent?.content).not.toContain(uncappedSyntheticTool);
   expect(hookConfig?.content).toContain(
     `"matcher": "${generatedEchoTool}"`,
   );
@@ -492,7 +486,7 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(omissionAgent?.content).not.toContain("direct-skill");
 });
 
-test("grok lowerer emits an aggregated stdio-shim MCP entry for self-owned tools", async () => {
+test("grok lowerer emits a per-owner-plugin stdio-shim MCP entry for self-owned tools", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const pluginRoot = join(root, "grok-shim-fixture");
@@ -547,21 +541,24 @@ export default defineTool({
   });
 
   expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
-  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
+  const ownerServerKey = pluginServerKey("grok-shim-fixture");
+  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${ownerServerKey}`);
   if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
   expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
-  // The shared shim region is owned by the reserved cross-plugin owner, not
-  // the compiling plugin — its content is a union across installed plugins.
-  expect(mcpRegion.plugin).toBe(SHIM_REGION_OWNER);
+  // The region is owned by the plugin whose server it registers, not
+  // whichever compile happens to render it — stable across every compile
+  // that references this owner.
+  expect(mcpRegion.plugin).toBe("grok-shim-fixture");
   expect(mcpRegion.content).toBe(
     [
-      `["mcp_servers"."${shimServerKey("grok")}"]`,
+      `["mcp_servers"."${ownerServerKey}"]`,
       'command = "prism"',
       'args = ["mcp", "shim"]',
       "enabled = true",
-      `["mcp_servers"."${shimServerKey("grok")}"."env"]`,
+      `["mcp_servers"."${ownerServerKey}"."env"]`,
       'PRISM_SHIM_PLUGINS = "grok-shim-fixture"',
       'PRISM_SHIM_HARNESS = "grok"',
+      'PRISM_SHIM_NAMING = "per-plugin"',
     ].join("\n"),
   );
 });
@@ -646,7 +643,7 @@ test("grok lowerer reproduces the reported typefully-cli overflow and keeps it c
   });
 
   const agent = findContentOperation(operations, join("agents", "typefully-consumer.md"));
-  const expectedName = renderAllowlist(
+  const expectedName = renderPluginAllowlist(
     "grok",
     "typefully-cli",
     mcpToolNameForBinding("typefully-cli", binding),
@@ -654,14 +651,13 @@ test("grok lowerer reproduces the reported typefully-cli overflow and keeps it c
 
   // The reported drop was caused by a server prefix that spelled out the
   // full plugin id ("prism-generated-typefully-cli", 29 chars) instead of a
-  // compact key. Post-consolidation the server segment is the constant,
-  // 5-char shim key ("prism") shared by every plugin, and the owner's
-  // identity lives in the wire segment's `p_<8 hex>` namespace instead —
-  // even more headroom than the original compact-key fix. Assert the
-  // compact form is what's actually emitted, with no truncation needed.
-  expect(shimServerKey("grok")).toBe("prism");
+  // compact key. Under the per-plugin server scheme the server segment is
+  // the owner's own (short) plugin name, and the wire segment is the bare
+  // tool name with the redundant own-namespace prefix stripped — even more
+  // headroom than the original compact-key fix. Assert the compact form is
+  // what's actually emitted, with no truncation needed.
   expect(expectedName).toBe(
-    `${shimServerKey("grok")}__${canonicalBase("typefully-cli", "typefully_cli_linkedin_organizations_resolve")}`,
+    `${pluginServerKey("typefully-cli")}__linkedin_organizations_resolve`,
   );
   expect(expectedName.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   expect(expectedName).toMatch(GROK_TOOL_NAME_REGEX);
@@ -723,12 +719,20 @@ test("grok lowerer caps every generated tool name at 64 chars across a corpus of
     expect(name).toMatch(GROK_TOOL_NAME_REGEX);
   }
 
-  // Every emitted name must exactly match `renderAllowlist`'s own decision
-  // (byte-identical when it fits uncapped; deterministically capped when it
-  // doesn't) — regeneration must never rename a compliant tool.
-  const guard = createGrokCollisionGuard();
+  // Every emitted name must exactly match `renderPluginAllowlist`'s own
+  // decision (byte-identical when it fits uncapped; deterministically capped
+  // when it doesn't) — regeneration must never rename a compliant tool.
+  // Collisions can only occur within one owner's own server namespace (see
+  // `createGrokToolNamer`), so the guard is scoped per owner, matching the
+  // real lowerer.
+  const guards = new Map<string, ReturnType<typeof createGrokCollisionGuard>>();
   for (const { plugin, tool } of corpus) {
-    const expected = renderAllowlist(
+    let guard = guards.get(plugin);
+    if (!guard) {
+      guard = createGrokCollisionGuard();
+      guards.set(plugin, guard);
+    }
+    const expected = renderPluginAllowlist(
       "grok",
       plugin,
       mcpToolNameForBinding(plugin, permissionBinding(plugin, tool)),
@@ -746,7 +750,7 @@ test("grok lowerer caps every generated tool name at 64 chars across a corpus of
 // dangling underscore where the hash suffix is joined on — exercised here at
 // the budget Grok's shim actually uses.
 test("capGrokWireName does not leave a doubled or dangling underscore at a mid-run-of-underscores truncation boundary", () => {
-  const budget = GROK_MAX_TOOL_NAME_LENGTH - shimServerKey("grok").length - 2;
+  const budget = GROK_MAX_TOOL_NAME_LENGTH - pluginServerKey("typefully-cli").length - 2;
   const prefixLength = budget - 8 - 1;
   const trailingUnderscoreAtBoundary = `${"a".repeat(prefixLength - 5)}_____${"b".repeat(50)}`;
   const cappedTrailingUnderscore = capGrokWireName(trailingUnderscoreAtBoundary, budget);

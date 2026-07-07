@@ -7174,17 +7174,19 @@ export default defineAgent({
   expect(agent).toContain('skills:\n  - "testing"');
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
   // Shim registration lands in <grok-root>/config.toml (the only MCP source
-  // grok resolves for installed plugins), never in a bundle-level .mcp.json.
+  // grok resolves for installed plugins), never in a bundle-level .mcp.json,
+  // one server per MCP-owning plugin keyed by that plugin's own name.
   expect(await pathExists(join(pluginRootPath, ".mcp.json"))).toBe(false);
-  const grokShimServerKey = shimServerKey("grok");
+  const grokOwnerServerKey = pluginServerKey("grok-pipeline-demo");
   const grokConfig = await readFile(join(projectRoot, ".grok", "config.toml"), "utf8");
-  expect(grokConfig).toContain(`# --- prism:grok.mcp.${grokShimServerKey} begin ---`);
-  expect(grokConfig).toContain(`["mcp_servers"."${grokShimServerKey}"]`);
+  expect(grokConfig).toContain(`# --- prism:grok.mcp.${grokOwnerServerKey} begin ---`);
+  expect(grokConfig).toContain(`["mcp_servers"."${grokOwnerServerKey}"]`);
   expect(grokConfig).toContain('command = "prism"');
   expect(grokConfig).toContain('args = ["mcp", "shim"]');
-  expect(grokConfig).toContain(`["mcp_servers"."${grokShimServerKey}"."env"]`);
+  expect(grokConfig).toContain(`["mcp_servers"."${grokOwnerServerKey}"."env"]`);
   expect(grokConfig).toContain('PRISM_SHIM_PLUGINS = "grok-pipeline-demo"');
   expect(grokConfig).toContain('PRISM_SHIM_HARNESS = "grok"');
+  expect(grokConfig).toContain('PRISM_SHIM_NAMING = "per-plugin"');
   const mcpServer = await readFile(
     prismMcpServerPath(testPrismHome(), "grok-pipeline-demo"),
     "utf8",

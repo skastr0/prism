@@ -1063,11 +1063,17 @@ const pathFromCommandString = (command: string): string | undefined => {
 };
 
 /**
- * Grok registers the stdio shim inside `<grok-root>/config.toml` under
- * `[mcp_servers.<shim server key>]` (a Prism-managed marker region) — the
- * only MCP source grok actually resolves for installed plugins. Validate
- * that entry against the stdio-shim contract; there is no per-tool
- * allowlist in the server table (agent frontmatter `tools:` gates exposure).
+ * Grok registers the stdio shim inside `<grok-root>/config.toml` — the only
+ * MCP source grok actually resolves for installed plugins — under ONE
+ * `[mcp_servers.<pluginServerKey(owner)>]` entry PER MCP-owning plugin (a
+ * Prism-managed marker region each), not a single shared key. There is no
+ * fixed key to look up, so every `mcp_servers` entry is scanned and any that
+ * carries a Prism shim marker — `command == "prism"` or an
+ * `env.PRISM_SHIM_HARNESS` key present (even on an otherwise-broken entry
+ * with a corrupted command) — is validated against the stdio-shim contract.
+ * An entry with neither signal is a user's own server (Linear, Sentry, ...)
+ * and is left alone. There is no per-tool allowlist in the server table
+ * (agent frontmatter `tools:` gates exposure).
  */
 const validateGrokConfigReferences = async (
   path: string,
@@ -1082,16 +1088,24 @@ const validateGrokConfigReferences = async (
   }
   const mcpServers = parsed.mcp_servers;
   if (!mcpServers || typeof mcpServers !== "object") return [];
-  const expectedServerName = shimServerKey("grok");
-  const raw = (mcpServers as Record<string, unknown>)[expectedServerName];
-  if (!raw || typeof raw !== "object") return [];
-  return validateStdioShimServerEntry({
-    harness: "grok",
-    path,
-    serverName: expectedServerName,
-    server: raw as Record<string, unknown>,
-    prismHome,
-  });
+  const findings: DoctorFinding[] = [];
+  for (const [serverName, raw] of Object.entries(mcpServers as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object") continue;
+    const server = raw as Record<string, unknown>;
+    const env = shimServerEnv(server);
+    const looksLikePrismShim = server.command === "prism" || env?.PRISM_SHIM_HARNESS !== undefined;
+    if (!looksLikePrismShim) continue;
+    findings.push(
+      ...(await validateStdioShimServerEntry({
+        harness: "grok",
+        path,
+        serverName,
+        server,
+        prismHome,
+      })),
+    );
+  }
+  return findings;
 };
 
 const validateCodexConfigReferences = async (

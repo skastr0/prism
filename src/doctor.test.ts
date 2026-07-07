@@ -515,10 +515,10 @@ test("doctor validates generated harness config references", async () => {
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", "hooks", "hooks.json"),
     `${JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/missing.mjs"' }] }] } }, null, 2)}\n`,
   );
-  // Grok: a broken shim entry under the correct server key in config.toml
-  // (grok's only resolvable MCP registration surface) — wrong command/args,
-  // env harness naming another harness, no PRISM_SHIM_PLUGINS.
-  const grokServerName = shimServerKey("grok");
+  // Grok: a broken shim entry under an owner-plugin server key in
+  // config.toml (grok's only resolvable MCP registration surface) — wrong
+  // command/args, env harness naming another harness, no PRISM_SHIM_PLUGINS.
+  const grokServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".grok", "config.toml"),
     [
@@ -605,7 +605,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
     ].join("\n"),
   );
 
-  const grokShimServer = shimServerKey("grok");
+  const grokShimServer = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".grok", "config.toml"),
     [
@@ -617,6 +617,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       `["mcp_servers"."${grokShimServer}"."env"]`,
       'PRISM_SHIM_PLUGINS = "demo"',
       'PRISM_SHIM_HARNESS = "grok"',
+      'PRISM_SHIM_NAMING = "per-plugin"',
       `# --- prism:grok.mcp.${grokShimServer} end ---`,
       "",
     ].join("\n"),

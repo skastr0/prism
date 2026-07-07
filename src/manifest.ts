@@ -805,14 +805,14 @@ export function resolveManifestTargets(targets: readonly PluginTargetId[]): Harn
 
 export function resolveManifestTargetsForArtifact(
   targets: readonly PluginTargetId[],
-  artifact: PluginArtifactType
+  artifact: AnyArtifactType
 ): HarnessId[] {
   return resolveManifestTargetsForSourceNoun(targets, artifact);
 }
 
 export function getManifestArtifactTargets(
   manifest: PluginManifest,
-  artifact: PluginArtifactType
+  artifact: AnyArtifactType
 ): HarnessId[] {
   return resolveManifestTargetsForArtifact(manifest.targets[artifact] ?? [], artifact);
 }

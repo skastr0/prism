@@ -6,10 +6,7 @@ import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import {
-  generatedMcpServerName,
-  mcpExposureProfileForTarget,
-} from "../mcp-runtime.js";
+import { generatedMcpServerName } from "../mcp-runtime.js";
 import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
@@ -35,8 +32,11 @@ import {
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
+  SHIM_REGION_OWNER,
+  unionedShimExposure,
   uniqueSorted,
   type LowerOutput,
+  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
@@ -47,6 +47,13 @@ export interface CodexCliLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
+  /**
+   * Union of every OTHER installed plugin's recorded shim contribution for
+   * this harness root (from the shim-exposure registry). The shared
+   * `config.toml` shim region is rendered from `prior ∪ own` so a
+   * single-plugin compile can never narrow the fence to its own view.
+   */
+  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -145,29 +152,28 @@ const composeModelConfig = (agent: ComposedAgent): Record<string, unknown> => {
   return output;
 };
 
+/**
+ * The shared shim region carries the UNION of every installed plugin's
+ * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
+ * profile — the shim derives the per-owner daemon profile itself (see
+ * `@skastr0/prism-sdk/mcp/shim.ts`).
+ */
 const renderCodexStdioShimMcpServerToml = (options: {
   readonly name: string;
-  readonly exposureProfile: string;
   readonly enabledTools: ReadonlyArray<string>;
   readonly plugins: ReadonlyArray<string>;
-}): string[] => {
-  const lines = [
-    tomlDottedTable(["mcp_servers", options.name]),
-    `command = ${quote("prism")}`,
-    `args = ${tomlArray(["mcp", "shim"])}`,
-    "enabled = true",
-    "required = false",
-    'default_tools_approval_mode = "approve"',
-    `enabled_tools = ${tomlArray(options.enabledTools)}`,
-    tomlDottedTable(["mcp_servers", options.name, "env"]),
-    `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
-    `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
-  ];
-  if (options.exposureProfile) {
-    lines.push(`PRISM_SHIM_EXPOSURE = ${quote(options.exposureProfile)}`);
-  }
-  return lines;
-};
+}): string[] => [
+  tomlDottedTable(["mcp_servers", options.name]),
+  `command = ${quote("prism")}`,
+  `args = ${tomlArray(["mcp", "shim"])}`,
+  "enabled = true",
+  "required = false",
+  'default_tools_approval_mode = "approve"',
+  `enabled_tools = ${tomlArray(options.enabledTools)}`,
+  tomlDottedTable(["mcp_servers", options.name, "env"]),
+  `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
+  `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
+];
 
 const renderCodexOwnerMcpServerRef = (options: {
   readonly readableName: string;
@@ -533,28 +539,33 @@ const planRulesRegion = async (
 const planConfigRegions = (
   input: LowerInput,
   mcp: PlannedMcpServer,
+  ownContribution: ShimExposureContribution,
   hooks: ReadonlyArray<PlannedHook>,
 ): DesiredRegion[] => {
   const configTarget = join(input.target.root, "config.toml");
   const plugin = input.target.sourcePluginName;
   const regions: DesiredRegion[] = [];
 
-  if (mcp.kind === "stdio-shim" && mcp.globalToolNames.length > 0) {
+  // The shim region is shared by every installed plugin (one fence per
+  // root), so its content is the union of the recorded prior exposure and
+  // this compile's own contribution — and it is emitted whenever the UNION
+  // is non-empty, even when this plugin contributes nothing (dropping this
+  // plugin's MCP surface must shrink the fence, not orphan-remove it while
+  // other plugins still need it).
+  const shimUnion = unionedShimExposure(input.target.priorShimExposure, ownContribution);
+  if (shimUnion.plugins.length > 0 && shimUnion.enabledTools.length > 0) {
+    const mcpServerName = mcp.kind === "stdio-shim" ? mcp.mcpServerName : shimServerKey(TARGET_ID);
     regions.push({
       kind: "marker",
       targetPath: configTarget,
-      regionKey: `codex.mcp.${mcp.mcpServerName}`,
+      regionKey: `codex.mcp.${mcpServerName}`,
       commentPrefix: "#",
       content: renderCodexStdioShimMcpServerToml({
-        name: mcp.mcpServerName,
-        exposureProfile: mcpExposureProfileForTarget(
-          generatedMcpServerName(plugin),
-          TARGET_ID,
-        ),
-        enabledTools: mcp.globalToolNames,
-        plugins: mcp.plugins,
+        name: mcpServerName,
+        enabledTools: shimUnion.enabledTools,
+        plugins: shimUnion.plugins,
       }).join("\n"),
-      plugin,
+      plugin: SHIM_REGION_OWNER,
     });
   }
 
@@ -585,13 +596,19 @@ const planConfigRegions = (
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const mcp = planMcpServer(input);
+  // The compiling plugin's own shim contribution (empty when it has no
+  // shim-exposed tools — matching the region's historical emission gate).
+  const shimContribution: ShimExposureContribution =
+    mcp.kind === "stdio-shim" && mcp.globalToolNames.length > 0
+      ? { plugins: mcp.plugins, enabledTools: mcp.globalToolNames }
+      : { plugins: [], enabledTools: [] };
 
   planAgentWrites(input, files);
   await planManagedSkillWrites(input, files);
   planOrbitWrites(input, files);
   const hooks = await planHooks(input, files);
-  const regions = planConfigRegions(input, mcp, hooks);
+  const regions = planConfigRegions(input, mcp, shimContribution, hooks);
   await planRulesRegion(input, regions);
 
-  return { files, regions };
+  return { files, regions, shimContribution };
 };

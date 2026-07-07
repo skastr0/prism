@@ -28,6 +28,7 @@ import {
 import { WORKFLOW_REFS_HARNESS, workflowAgentsPath, workflowModelsPath, workflowRefsRoot, workflowSkillsPath, workflowToolsPath } from "./workflow-refs-emitter.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
 import { grokMcpServerNameForPlugin } from "./lowerers/grok.js";
+import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
 import { deriveProjectKey } from "../project-key.js";
 import { expandPath } from "../fs.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";
@@ -3258,7 +3259,9 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   expect(codexConfig).toContain(`enabled_tools = ["${wireServerName}_${expectedToolName}"]`);
   expect(codexConfig).toContain('PRISM_SHIM_PLUGINS = "tool-only-demo"');
   expect(codexConfig).toContain('PRISM_SHIM_HARNESS = "codex-cli"');
-  expect(codexConfig).toContain('PRISM_SHIM_EXPOSURE = "prism-generated-tool-only-demo:codex-cli"');
+  // Shared shim regions carry the cross-plugin union, so they never name a
+  // single plugin's exposure profile — the shim derives it per owner daemon.
+  expect(codexConfig).not.toContain("PRISM_SHIM_EXPOSURE");
   expect(codexConfig).not.toMatch(/url = "http/u);
   expect(await pathExists(join(projectRoot, ".codex", "mcp"))).toBe(false);
 
@@ -3313,7 +3316,6 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   expect(cursorShim?.env).toEqual({
     PRISM_SHIM_PLUGINS: "tool-only-demo",
     PRISM_SHIM_HARNESS: "cursor",
-    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:cursor",
   });
   expect(await pathExists(join(projectRoot, ".cursor", "mcp"))).toBe(false);
 
@@ -3473,15 +3475,18 @@ export default defineAgent({
   );
   // Post-consolidation: every plugin compiled for a harness converges on the
   // SAME single stdio-shim region (`codex.mcp.prism-mcp-shim`), not a
-  // per-plugin table -- so the on-disk config reflects whichever plugin was
-  // compiled most recently into this root (exposure-core, compiled last,
-  // above). Deny-by-default for the foreign agent-bound tool now lives
-  // entirely in the agent role file (asserted above): Codex has no
-  // per-role allowlist, so the global `enabled_tools` gate is necessarily
-  // whole-root, not whole-plugin.
+  // per-plugin table -- and the region carries the UNION of every installed
+  // plugin's exposure (shim-exposure registry), regardless of which plugin
+  // compiled most recently into this root. Deny-by-default for the foreign
+  // agent-bound tool now lives entirely in the agent role file (asserted
+  // above): Codex has no per-role allowlist, so the global `enabled_tools`
+  // gate is necessarily whole-root, not whole-plugin.
   const codexConfig = await readFile(join(projectRoot, ".codex", "config.toml"), "utf8");
   expect(codexConfig).toContain(`["mcp_servers"."${shimServerKey("codex-cli")}"]`);
-  expect(codexConfig).toContain(`enabled_tools = ["${exposureCoreWireServerName}_exposure_core_agent_only"]`);
+  expect(codexConfig).toContain(
+    `enabled_tools = ["${exposureCoreWireServerName}_exposure_core_agent_only", "${generatedMcpWireServerName("exposure-demo")}_exposure_demo_shared"]`,
+  );
+  expect(codexConfig).toContain('PRISM_SHIM_PLUGINS = "exposure-core,exposure-demo"');
 
   expect(consumerBundle).toContain('"prism-generated-exposure-demo:claude-code"');
 
@@ -3532,7 +3537,6 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
   expect(cursorMcp?.env).toEqual({
     PRISM_SHIM_PLUGINS: "tool-only-demo",
     PRISM_SHIM_HARNESS: "cursor",
-    PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:cursor",
   });
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "tool-only-demo"))).toBe(true);
   // The mcp.json server entry is a region in the snapshot manifest; the
@@ -3545,8 +3549,10 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
   expect(snapshot.manifest.entries.some((entry) =>
     entry.targetPath.endsWith("server.mjs")
   )).toBe(false);
+  // The shared shim region is attributed to the reserved cross-plugin owner
+  // (its content is the union of every installed plugin's exposure).
   expect(snapshot.manifest.entries.some((entry) =>
-    entry.plugin === "tool-only-demo" &&
+    entry.plugin === SHIM_REGION_OWNER &&
     entry.targetPath === join(cursorRoot, "mcp.json") &&
     entry.mode === "region"
   )).toBe(true);
@@ -4803,7 +4809,7 @@ export default defineTool({
     expect(configRegion.content).toContain("- shim");
     expect(configRegion.content).toContain('PRISM_SHIM_PLUGINS: "hermes-tool-demo"');
     expect(configRegion.content).toContain('PRISM_SHIM_HARNESS: "hermes"');
-    expect(configRegion.content).toContain('PRISM_SHIM_EXPOSURE: "prism-generated-hermes-tool-demo:hermes"');
+    expect(configRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
     expect(configRegion.content).toContain("sampling:");
     expect(configRegion.content).toContain("enabled: false");
     expect(configRegion.content).toContain("hermes_tool_demo_echo");
@@ -4889,7 +4895,7 @@ export default defineTool({
     expect(configRegion.content).toContain("- shim");
     expect(configRegion.content).toContain('PRISM_SHIM_PLUGINS: "hermes-http-demo"');
     expect(configRegion.content).toContain('PRISM_SHIM_HARNESS: "hermes"');
-    expect(configRegion.content).toContain('PRISM_SHIM_EXPOSURE: "prism-generated-hermes-http-demo:hermes"');
+    expect(configRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
     expect(configRegion.content).toContain("sampling:");
     expect(configRegion.content).toContain("enabled: false");
     expect(configRegion.content).toContain("hermes_http_demo_echo");
@@ -4929,7 +4935,7 @@ test("compilePluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP
   expect(config).toContain(`enabled_tools = ["${generatedMcpWireServerName("codex-http-demo")}_codex_http_demo_echo"]`);
   expect(config).toContain('PRISM_SHIM_PLUGINS = "codex-http-demo"');
   expect(config).toContain('PRISM_SHIM_HARNESS = "codex-cli"');
-  expect(config).toContain('PRISM_SHIM_EXPOSURE = "prism-generated-codex-http-demo:codex-cli"');
+  expect(config).not.toContain("PRISM_SHIM_EXPOSURE");
   // The legacy runtime.mcp.codex-cli HTTP block (host/port) on this plugin
   // has no effect on the rendered config at all.
   expect(config).not.toContain('command = "bun"');

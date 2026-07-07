@@ -462,15 +462,30 @@ export const planSync = async (options: {
   const carriedRegionKeys = new Set<string>();
   const snapshotOwned = new Map<string, SnapshotEntry>();
   const snapshotRegions = new Map<string, SnapshotEntry>();
+  // A desired region claims EVERY snapshot entry with the same region
+  // identity (targetPath + serialized ref), regardless of attributed plugin
+  // or scope: one physical fence can only have one true entry, so a stale
+  // same-identity entry recorded under another owner (e.g. the pre-union
+  // per-plugin shim-region entries) is superseded rather than carried —
+  // otherwise duplicates accumulate one per plugin and doctor reports
+  // marker drift against every stale copy.
+  const desiredRegionIdentities = new Set(
+    options.desired.regions.map(
+      (region) => `${region.targetPath} ${serializeRegionRef(region)}`,
+    ),
+  );
   for (const entry of options.snapshot.entries) {
     if (entry.mode === "owned") {
       if (inScope(entry.plugin)) snapshotOwned.set(entry.targetPath, entry);
       else carriedEntries.push(entry);
-    } else if (inScope(entry.plugin)) {
-      snapshotRegions.set(`${entry.targetPath} ${entry.regionKey ?? ""}`, entry);
+      continue;
+    }
+    const identity = `${entry.targetPath} ${entry.regionKey ?? ""}`;
+    if (inScope(entry.plugin) || desiredRegionIdentities.has(identity)) {
+      snapshotRegions.set(identity, entry);
     } else {
       carriedEntries.push(entry);
-      carriedRegionKeys.add(`${entry.targetPath} ${entry.regionKey ?? ""}`);
+      carriedRegionKeys.add(identity);
     }
   }
 

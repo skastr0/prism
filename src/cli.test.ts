@@ -1106,7 +1106,12 @@ test("refresh --plugins compiles Hermes child plugins into an explicit profile r
   expect(result.stdout).toContain("All plugin refreshes completed successfully");
   const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
   expect(config).toContain("mcp_servers:");
-  expect(config).toContain("prism-generated-cli-hermes-tools:");
+  // Post-consolidation the config registers the aggregating stdio shim under
+  // its fixed key; the plugin is named in the shim's PRISM_SHIM_PLUGINS env
+  // (the previous `prism-generated-cli-hermes-tools:` substring match was
+  // satisfied only by the retired PRISM_SHIM_EXPOSURE env line).
+  expect(config).toContain("prism-mcp-shim:");
+  expect(config).toContain('PRISM_SHIM_PLUGINS: "cli-hermes-tools"');
   expect(
     await pathExists(join(prismHome, "runtime", "mcp", "cli-hermes-tools", "server.mjs")),
   ).toBe(true);

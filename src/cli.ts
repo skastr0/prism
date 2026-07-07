@@ -1086,7 +1086,9 @@ Env vars read (all optional except PRISM_SHIM_PLUGINS):
   PRISM_SHIM_DAEMON_TIMEOUT_MS   per-request daemon timeout
   PRISM_SHIM_SPAWN_TIMEOUT_MS    resolve-or-spawn timeout for a cold daemon
   PRISM_SHIM_ENABLED_TOOLS       comma-separated allowlist of wire tool names
-  PRISM_SHIM_EXPOSURE            X-Prism-Mcp-Exposure value forwarded to daemons
+  PRISM_SHIM_EXPOSURE            explicit X-Prism-Mcp-Exposure value forwarded to
+                                 every daemon; when unset the shim derives the
+                                 per-owner profile prism-generated-<owner>:<harness>
 `,
   )
   .action(async () => {

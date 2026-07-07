@@ -15,9 +15,12 @@ import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   pushDesiredFile,
   renderGeneratedOrbitSkill,
+  SHIM_REGION_OWNER,
+  unionedShimExposure,
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
+  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "hermes" as const;
@@ -29,6 +32,13 @@ export interface HermesLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
+  /**
+   * Union of every OTHER installed plugin's recorded shim contribution for
+   * this harness root (from the shim-exposure registry). The shared
+   * `config.yaml` shim region is rendered from `prior ∪ own` so a
+   * single-plugin compile can never narrow the fence to its own view.
+   */
+  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -82,35 +92,32 @@ const copyTargetedSkillArtifacts = async (
   }
 };
 
+/**
+ * The shared shim region carries the UNION of every installed plugin's
+ * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
+ * profile — the shim derives the per-owner daemon profile itself (see
+ * `@skastr0/prism-sdk/mcp/shim.ts`).
+ */
 const renderHermesStdioShimMcpServerYaml = (options: {
   readonly serverName: string;
-  readonly exposureProfile?: string;
   readonly toolNames: ReadonlyArray<string>;
   readonly plugins: ReadonlyArray<string>;
-}): string[] => {
-  const lines = [
-    `  ${options.serverName}:`,
-    `    command: prism`,
-    `    args:`,
-    `      - mcp`,
-    `      - shim`,
-    `    enabled: true`,
-    `    sampling:`,
-    `      enabled: false`,
-    `    env:`,
-    `      PRISM_SHIM_PLUGINS: ${yamlScalar(options.plugins.join(","))}`,
-    `      PRISM_SHIM_HARNESS: ${yamlScalar(TARGET_ID)}`,
-  ];
-  if (options.exposureProfile) {
-    lines.push(`      PRISM_SHIM_EXPOSURE: ${yamlScalar(options.exposureProfile)}`);
-  }
-  lines.push(
-    `    tools:`,
-    `      include:`,
-    ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
-  );
-  return lines;
-};
+}): string[] => [
+  `  ${options.serverName}:`,
+  `    command: prism`,
+  `    args:`,
+  `      - mcp`,
+  `      - shim`,
+  `    enabled: true`,
+  `    sampling:`,
+  `      enabled: false`,
+  `    env:`,
+  `      PRISM_SHIM_PLUGINS: ${yamlScalar(options.plugins.join(","))}`,
+  `      PRISM_SHIM_HARNESS: ${yamlScalar(TARGET_ID)}`,
+  `    tools:`,
+  `      include:`,
+  ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
+];
 
 type PlannedMcpServer =
   | {
@@ -191,27 +198,40 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   }
 
   const mcp = planMcpServer(input);
+  // The compiling plugin's own shim contribution (empty when it has no
+  // shim-exposed tools — matching the region's historical emission gate).
+  const shimContribution: ShimExposureContribution =
+    mcp.kind === "stdio-shim" && mcp.toolNames.length > 0
+      ? { plugins: [...mcp.plugins], enabledTools: [...mcp.toolNames] }
+      : { plugins: [], enabledTools: [] };
 
   // The hermes MCP wiring is one child mapping inside the user-shared
   // top-level `mcp_servers:` key of config.yaml. The fence is anchored to
   // that key so the region content lands inside the mapping (the anchor line
   // is created when absent); the rest of config.yaml is never rewritten.
-  if (mcp.kind === "stdio-shim" && mcp.toolNames.length > 0) {
+  //
+  // The fence is shared by every installed plugin, so it renders the union
+  // of the recorded prior exposure and this compile's own contribution, and
+  // is emitted whenever the UNION is non-empty — even when this plugin
+  // contributes nothing (its removal shrinks the fence instead of
+  // orphan-removing it while other plugins still need it).
+  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
+  if (shimUnion.plugins.length > 0 && shimUnion.enabledTools.length > 0) {
+    const serverName = mcp.kind === "stdio-shim" ? mcp.serverName : shimServerKey(TARGET_ID);
     regions.push({
       kind: "marker",
       targetPath: configPath(input.target),
-      regionKey: `hermes.mcp.${mcp.serverName}`,
+      regionKey: `hermes.mcp.${serverName}`,
       commentPrefix: "#",
       anchor: "mcp_servers:",
       content: renderHermesStdioShimMcpServerYaml({
-        serverName: mcp.serverName,
-        exposureProfile: input.target.mcpExposureProfile,
-        toolNames: mcp.toolNames,
-        plugins: mcp.plugins,
+        serverName,
+        toolNames: shimUnion.enabledTools,
+        plugins: shimUnion.plugins,
       }).join("\n"),
-      plugin,
+      plugin: SHIM_REGION_OWNER,
     });
   }
 
-  return { files, regions };
+  return { files, regions, shimContribution };
 };

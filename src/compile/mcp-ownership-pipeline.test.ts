@@ -1,11 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { exists } from "../fs.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
 import { compilePluginForTarget } from "./pipeline.js";
+import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
+import { readSnapshot } from "../state/store.js";
+import { shimExposurePath } from "../state/shim-exposure.js";
 import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
@@ -140,3 +143,126 @@ export default defineAgent({
 // see the wire-naming/stdio-shim consolidation). Deleted rather than
 // migrated: nothing in the consolidated UDS-shim world reuses a "daemon
 // port" in a dry-run plan.
+
+// ---------------------------------------------------------------------------
+// Shared-shim union invariant: the codex config.toml shim region is ONE
+// fence shared by every installed plugin, so per-plugin compiles must
+// accumulate (never narrow) it, converge byte-identically, keep exactly one
+// snapshot entry for it, shrink it when a plugin's MCP surface disappears,
+// and orphan-remove it only when no plugin needs it anymore.
+// ---------------------------------------------------------------------------
+
+const writeShimUnionPlugin = async (options: {
+  readonly pluginRoot: string;
+  readonly name: string;
+  readonly toolName?: string;
+}): Promise<void> => {
+  await rm(options.pluginRoot, { recursive: true, force: true });
+  await writeText(
+    join(options.pluginRoot, "plugin.json"),
+    `${JSON.stringify(
+      { name: options.name, version: "0.1.0", targets: { tools: ["codex-cli"] } },
+      null,
+      2,
+    )}\n`,
+  );
+  if (options.toolName) {
+    await writeText(
+      join(options.pluginRoot, "tools", `${options.toolName}.tool.ts`),
+      `import { Schema } from ${JSON.stringify(effectImportPath)};
+import { defineTool } from ${JSON.stringify(prismImportPath)};
+
+export default defineTool({
+  name: ${JSON.stringify(options.toolName)},
+  description: "Echo fixture",
+  input: Schema.Struct({ message: Schema.String }),
+  output: Schema.Struct({ message: Schema.String }),
+  async handle(input) { return { message: input.message }; },
+});
+`,
+    );
+  }
+};
+
+test("codex shared shim region unions across plugin compiles and never narrows", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+  const alphaRoot = join(root, "shim-alpha");
+  const betaRoot = join(root, "shim-beta");
+  const configPath = join(projectRoot, ".codex", "config.toml");
+
+  await writeShimUnionPlugin({ pluginRoot: alphaRoot, name: "shim-alpha", toolName: "alpha_tool" });
+  await writeShimUnionPlugin({ pluginRoot: betaRoot, name: "shim-beta", toolName: "beta_tool" });
+
+  const compileCodex = (pluginPath: string, dryRun = false) =>
+    Effect.runPromise(
+      compilePluginForTarget({
+        prismHome,
+        pluginPath,
+        target: "codex-cli",
+        scope: "project",
+        projectPath: projectRoot,
+        dryRun,
+        mcpLifecycle: "none",
+      }),
+    );
+
+  // A dry-run plan never mutates the exposure registry.
+  await compileCodex(alphaRoot, true);
+  expect(
+    await exists(shimExposurePath(prismHome, join(projectRoot, ".codex"))),
+  ).toBe(false);
+
+  await compileCodex(alphaRoot);
+  const afterAlpha = await readFile(configPath, "utf8");
+  expect(afterAlpha).toContain('PRISM_SHIM_PLUGINS = "shim-alpha"');
+
+  await compileCodex(betaRoot);
+  const afterBeta = await readFile(configPath, "utf8");
+  expect(afterBeta).toContain('PRISM_SHIM_PLUGINS = "shim-alpha,shim-beta"');
+  expect(afterBeta).toContain("shim_alpha_alpha_tool");
+  expect(afterBeta).toContain("shim_beta_beta_tool");
+
+  // THE invariant: recompiling alpha converges (skip-regions) and the region
+  // still names BOTH plugins — a single-plugin refresh never narrows the union.
+  const alphaRecompile = await compileCodex(alphaRoot);
+  expect(alphaRecompile.converged).toBe(true);
+  expect(
+    alphaRecompile.operations.some(
+      (operation) => operation.kind === "skip-regions" && operation.targetPath === configPath,
+    ),
+  ).toBe(true);
+  expect(await readFile(configPath, "utf8")).toBe(afterBeta);
+
+  // Exactly one snapshot entry exists for the shim region, owned by the
+  // reserved cross-plugin owner — no per-plugin duplicate accumulation, so
+  // doctor has nothing to report marker drift against.
+  const snapshot = await readSnapshot({
+    prismHome,
+    harness: "codex-cli",
+    root: join(projectRoot, ".codex"),
+  });
+  const shimEntries = snapshot.manifest.entries.filter(
+    (entry) =>
+      entry.mode === "region" && (entry.regionKey ?? "").includes("codex.mcp.prism-mcp-shim"),
+  );
+  expect(shimEntries).toHaveLength(1);
+  expect(shimEntries[0]!.plugin).toBe(SHIM_REGION_OWNER);
+
+  // Shrink: alpha drops its MCP surface -> the region keeps only beta.
+  await writeShimUnionPlugin({ pluginRoot: alphaRoot, name: "shim-alpha" });
+  await compileCodex(alphaRoot);
+  const afterShrink = await readFile(configPath, "utf8");
+  expect(afterShrink).toContain('PRISM_SHIM_PLUGINS = "shim-beta"');
+  expect(afterShrink).not.toContain("shim_alpha_alpha_tool");
+  expect(afterShrink).toContain("shim_beta_beta_tool");
+
+  // Remove beta's surface too -> the fence is orphan-removed entirely.
+  await writeShimUnionPlugin({ pluginRoot: betaRoot, name: "shim-beta" });
+  await compileCodex(betaRoot);
+  const afterEmpty = await readFile(configPath, "utf8");
+  expect(afterEmpty).not.toContain("prism:codex.mcp.prism-mcp-shim");
+  expect(afterEmpty).not.toContain("PRISM_SHIM_PLUGINS");
+});

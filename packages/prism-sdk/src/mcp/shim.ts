@@ -54,6 +54,7 @@ import { resolveOrSpawnDaemon, DaemonResolveError, DEFAULT_SPAWN_TIMEOUT_MS } fr
 import {
   canonicalNamespace,
   createGrokCollisionGuard,
+  generatedDaemonExposureProfile,
   parseCanonicalBase,
   renderWire,
   type ShimHarnessId,
@@ -290,7 +291,14 @@ export interface ShimAggregatorOptions {
   readonly resolveOrSpawn?: ResolveOrSpawnFn;
   /** Optional set of tool names to enable; if present, only these tools are exposed. */
   readonly enabledTools?: ReadonlySet<string>;
-  /** Optional exposure profile to pass to daemon as X-Prism-Mcp-Exposure header. */
+  /**
+   * Optional explicit exposure profile to pass to every daemon as the
+   * X-Prism-Mcp-Exposure header (legacy per-plugin shim configs). When
+   * absent, the aggregator derives the per-OWNER profile
+   * `prism-generated-<owner>:<harness>` for each daemon it contacts — a
+   * shared multi-plugin shim cannot send one plugin's profile to every
+   * owner, because a daemon 403s any profile it did not register.
+   */
   readonly exposureProfile?: string;
 }
 
@@ -378,7 +386,7 @@ export class ShimAggregator {
       plugin,
       entry.sock,
       this.daemonTimeoutMs,
-      this.exposureProfile,
+      this.exposureProfile ?? generatedDaemonExposureProfile(plugin, this.harness),
     );
     this.connections.set(plugin, { sock: entry.sock, connection });
     return connection;

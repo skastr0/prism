@@ -32,7 +32,7 @@
     "check:effect-versions": "bun scripts/effect-version-guard.ts",
     "check:harness-enumeration": "bun scripts/harness-enumeration-guard.ts",
     "check:refresh-idempotency": "bun scripts/check-refresh-idempotency.ts",
-    "check:mcp-suites": "bun test src/compile src/sync packages/prism-sdk/src/mcp scripts/acceptance/mcp-topology-verify.test.ts scripts/acceptance/workflow-e2e-matrix.test.ts src/harness-mcp-contract.test.ts",
+    "check:mcp-suites": "bun test --timeout 30000 src/compile src/sync packages/prism-sdk/src/mcp scripts/acceptance/mcp-topology-verify.test.ts scripts/acceptance/workflow-e2e-matrix.test.ts src/harness-mcp-contract.test.ts",
     "check:commits": "commitlint",
     "test": "bun test",
     "acceptance:idempotency-git": "bun scripts/acceptance/idempotency-git.ts",

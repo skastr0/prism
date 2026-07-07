@@ -1,15 +1,16 @@
 /**
- * Shared-shim union rendering: codex-cli / hermes / cursor / grok hold ONE shim
- * config region per harness root, so the lowerers must render the union of
- * the recorded prior exposure (other installed plugins) and their own
- * contribution — byte-identical regardless of which plugin compiles, never
- * narrowed to the compiling plugin's own view, and still emitted when the
- * compiling plugin itself contributes nothing.
+ * Shared-shim union rendering: codex-cli / hermes / cursor hold ONE shim
+ * config region per harness root; grok holds ONE region PER MCP-owning
+ * plugin (`pluginServerKey(owner)`), rendered from the SAME recorded prior
+ * exposure ∪ own contribution — so every lowerer must render byte-identical
+ * output regardless of which plugin compiles, never narrowed to the
+ * compiling plugin's own view, and still emit whatever the union still needs
+ * when the compiling plugin itself contributes nothing.
  */
 
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { mcpToolNameForBinding } from "./mcp-bundle.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
 import { CanonicalTool } from "./sources.js";
@@ -323,9 +324,10 @@ const planGrokFor = async (options: {
   });
 };
 
-test("grok shim region renders the sorted plugin union and stays byte-identical across compilers", async () => {
+test("grok shim regions render one entry per owner, byte-identical across compilers", async () => {
   const root = "/tmp/prism-shim-union-fixture";
-  const regionKey = `grok.mcp.${shimServerKey("grok")}`;
+  const alphaRegionKey = `grok.mcp.${pluginServerKey("alpha")}`;
+  const betaRegionKey = `grok.mcp.${pluginServerKey("beta")}`;
 
   const fromAlpha = await planGrokFor({
     root,
@@ -340,47 +342,59 @@ test("grok shim region renders the sorted plugin union and stays byte-identical 
     prior: { plugins: ["alpha"], enabledTools: [] },
   });
 
-  const alphaRegion = markerRegion(fromAlpha.regions, regionKey);
-  const betaRegion = markerRegion(fromBeta.regions, regionKey);
+  // Every compile renders the FULL union as N per-owner regions, not just
+  // its own — byte-identical per owner regardless of which plugin compiled.
+  const alphaFromAlpha = markerRegion(fromAlpha.regions, alphaRegionKey);
+  const alphaFromBeta = markerRegion(fromBeta.regions, alphaRegionKey);
+  expect(alphaFromAlpha.content).toBe(alphaFromBeta.content);
+  expect(alphaFromAlpha.plugin).toBe("alpha");
+  expect(alphaFromAlpha.content).toContain('PRISM_SHIM_PLUGINS = "alpha"');
+  expect(alphaFromAlpha.content).toContain('PRISM_SHIM_HARNESS = "grok"');
+  expect(alphaFromAlpha.content).toContain('PRISM_SHIM_NAMING = "per-plugin"');
 
-  // Byte-identical regardless of which plugin triggered the compile.
-  expect(alphaRegion.content).toBe(betaRegion.content);
-  expect(alphaRegion.plugin).toBe(SHIM_REGION_OWNER);
-  expect(alphaRegion.content).toContain('PRISM_SHIM_PLUGINS = "alpha,beta"');
-  expect(alphaRegion.content).toContain('PRISM_SHIM_HARNESS = "grok"');
-  // The union cannot name one plugin's exposure profile, and grok's server
-  // table carries no tool allowlist (agent frontmatter gates exposure).
-  expect(alphaRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
-  expect(alphaRegion.content).not.toContain("enabled_tools");
+  const betaFromAlpha = markerRegion(fromAlpha.regions, betaRegionKey);
+  const betaFromBeta = markerRegion(fromBeta.regions, betaRegionKey);
+  expect(betaFromAlpha.content).toBe(betaFromBeta.content);
+  expect(betaFromAlpha.plugin).toBe("beta");
+  expect(betaFromAlpha.content).toContain('PRISM_SHIM_PLUGINS = "beta"');
+
+  // No entry ever carries an exposure profile or a tool allowlist (agent
+  // frontmatter gates exposure; absent PRISM_SHIM_EXPOSURE, the shim derives
+  // the per-owner daemon profile itself).
+  expect(alphaFromAlpha.content).not.toContain("PRISM_SHIM_EXPOSURE");
+  expect(alphaFromAlpha.content).not.toContain("enabled_tools");
 
   // Own contribution reported for the registry — own view only, not the union.
   expect(fromAlpha.shimContribution).toEqual({ plugins: ["alpha"], enabledTools: [] });
   expect(fromBeta.shimContribution).toEqual({ plugins: ["beta"], enabledTools: [] });
 });
 
-test("grok emits the shim region from prior exposure even with an empty own contribution", async () => {
+test("grok emits only the prior-exposure owner's region when its own contribution is empty", async () => {
   const lowered = await planGrokFor({
     root: "/tmp/prism-shim-union-fixture",
     plugin: "alpha",
     prior: { plugins: ["beta"], enabledTools: [] },
   });
 
-  const region = markerRegion(lowered.regions, `grok.mcp.${shimServerKey("grok")}`);
+  const region = markerRegion(lowered.regions, `grok.mcp.${pluginServerKey("beta")}`);
   expect(region.content).toContain('PRISM_SHIM_PLUGINS = "beta"');
+  expect(region.plugin).toBe("beta");
+  // Alpha itself contributes nothing this compile and gets no region.
+  expect(
+    lowered.regions.find((r) => r.regionKey === `grok.mcp.${pluginServerKey("alpha")}`),
+  ).toBeUndefined();
   // Empty own contribution → the pipeline deletes alpha's registry entry —
   // and the artifact-less compile plants no generated plugin bundle.
   expect(lowered.shimContribution).toEqual({ plugins: [], enabledTools: [] });
   expect(lowered.files).toHaveLength(0);
 });
 
-test("grok emits no shim region when both prior and own are empty", async () => {
+test("grok emits no shim regions when both prior and own are empty", async () => {
   const lowered = await planGrokFor({
     root: "/tmp/prism-shim-union-fixture",
     plugin: "alpha",
     prior: { plugins: [], enabledTools: [] },
   });
-  expect(
-    lowered.regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`),
-  ).toBeUndefined();
+  expect(lowered.regions).toEqual([]);
   expect(lowered.shimContribution).toEqual({ plugins: [], enabledTools: [] });
 });

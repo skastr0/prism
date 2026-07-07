@@ -8478,14 +8478,15 @@ export default defineAgent({
     operation.targetPath.endsWith("server.mjs")
   )).toBe(false);
 
+  // A pure consumer owns no bindings, so it gets NO MCP server entry at all
+  // under the per-plugin scheme — the owner's own bundle carries the server.
   const consumerMcpPath = join(
     factoryRoot,
     "plugins",
     "prism-generated-factory-http-agent-demo",
     "mcp.json",
   );
-  const consumerMcp = JSON.parse(await readFile(consumerMcpPath, "utf8"));
-  expect(consumerMcp.mcpServers).toHaveProperty(shimServerKey("factory-droid"));
+  expect(await pathExists(consumerMcpPath)).toBe(false);
 
   // The owner bundle carries the agent-bound dependency tool and lives at
   // the canonical PRISM_HOME path; the consumer does not duplicate it.

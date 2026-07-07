@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
@@ -654,28 +654,37 @@ const generatedConfigPathExists = async (
  * Doctor's per-harness MCP validation, migrated to the stdio-shim-only world
  * (overhaul: HTTP transport retired, `stdio-shim` is the only transport).
  * Every shim harness registers the shim under `shimServerKey(harness)` with
- * exactly `{ command: "prism", args: ["mcp", "shim"], env: { PRISM_SHIM_*
- * } }` (see `packages/prism-sdk/src/mcp/wire-naming.ts` and each lowerer's
+ * exactly `{ command, args: ["mcp", "shim"], env: { PRISM_SHIM_* } }` (see
+ * `packages/prism-sdk/src/mcp/wire-naming.ts` and each lowerer's
  * `planMcpServer`/shim branch) -- there is no more port, url, or HTTP
  * headers to validate. This section validates a harness's on-disk MCP
  * server entry against that exact contract, the same one the lowerers emit.
+ *
+ * `command` is no longer always the literal `"prism"`: the compiler stamps
+ * the binary that ran the compile (`shim-command.ts`'s
+ * `shimCommandForCompile`), so a dev compile (`prism-dev`, or any other
+ * compiled-binary name) carries its own absolute self path instead. Doctor
+ * accepts both shapes.
  */
 
 /** `p_<hash8>_` -- the fixed-width namespace segment every wire name carries (see `canonicalNamespace`). */
 const WIRE_NAME_NAMESPACE = /p_[0-9a-f]{8}_/u;
 
 /**
- * "Resolvable" here means shape-correct, not PATH-resolved: every lowerer
- * emits the literal token `"prism"`, and requiring an actual PATH lookup
- * would make doctor flaky in a dev loop that runs against an uninstalled
- * checkout. A path-shaped command (containing a separator) is still checked
- * for existence on disk, so a genuine remnant (e.g. a stale `bun`/`node` +
- * missing bundle path from the retired per-plugin HTTP daemon) is caught.
+ * "Resolvable" here means shape-correct, not PATH-resolved: the literal
+ * token `"prism"` is always accepted without a PATH lookup, so doctor stays
+ * non-flaky in a dev loop that runs against an uninstalled checkout. A
+ * path-shaped command (containing a separator) must additionally have a
+ * basename starting with `prism` (the self-stamped dev-binary shape) and
+ * exist on disk -- catching both a genuine stale remnant (e.g. a leftover
+ * `bun`/`node` + missing bundle path from the retired per-plugin HTTP
+ * daemon) and an unrelated absolute path that happens to exist.
  */
 const isResolvablePrismShimCommand = async (command: unknown): Promise<boolean> => {
   if (typeof command !== "string" || command.length === 0) return false;
   if (command === "prism") return true;
   if (command.includes("/") || command.includes("\\")) {
+    if (!basename(command).toLowerCase().startsWith("prism")) return false;
     return generatedConfigPathExists(command);
   }
   return false;

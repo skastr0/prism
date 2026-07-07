@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -95,7 +96,7 @@ const renderHermesOwnerMcpServerYaml = (options: {
   readonly toolNames: ReadonlyArray<string>;
 }): string[] => [
   `  ${options.serverName}:`,
-  `    command: prism`,
+  `    command: ${shimCommandForCompile()}`,
   `    args:`,
   `      - mcp`,
   `      - shim`,

@@ -12,6 +12,7 @@ import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import { generatedMcpWireServerName } from "../mcp-runtime.js";
+import { shimCommandForCompile } from "../shim-command.js";
 import {
   type GrokCollisionGuard,
   createGrokCollisionGuard,
@@ -349,7 +350,7 @@ const renderGrokPerPluginShimServerToml = (owner: string): string => {
   const serverName = pluginServerKey(owner);
   return [
     tomlDottedTable(["mcp_servers", serverName]),
-    `command = ${quote("prism")}`,
+    `command = ${quote(shimCommandForCompile())}`,
     `args = ${tomlArray(["mcp", "shim"])}`,
     "enabled = true",
     tomlDottedTable(["mcp_servers", serverName, "env"]),

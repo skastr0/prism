@@ -25,6 +25,7 @@ import {
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
+import { shimCommandForCompile } from "../shim-command.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -429,7 +430,7 @@ const renderKimiMcpServerEntry = (options: {
   }
   return {
     enabled: true,
-    command: "prism",
+    command: shimCommandForCompile(),
     args: ["mcp", "shim"],
     env,
     enabledTools: options.toolNames,

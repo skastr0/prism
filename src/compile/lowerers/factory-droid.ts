@@ -11,6 +11,7 @@ import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -327,7 +328,7 @@ const planMcpServer = async (
     json({
       mcpServers: {
         [pluginServerKey(input.target.sourcePluginName)]: {
-          command: "prism",
+          command: shimCommandForCompile(),
           args: ["mcp", "shim"],
           env,
         },

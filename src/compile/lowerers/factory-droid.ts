@@ -10,13 +10,13 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  allReferencedBindingsByOwner,
+  bindingsOwnedByPlugin,
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
@@ -128,7 +128,7 @@ const factoryMcpToolNameForBinding = (
   ownerPluginName: string,
   binding: ResolvedContractBinding,
 ): string =>
-  renderAllowlist("factory-droid", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
+  renderPluginAllowlist("factory-droid", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
 
 const composeFactoryTools = (
   agent: ComposedAgent,
@@ -300,19 +300,21 @@ const planMcpServer = async (
   files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  const bindingsByOwner = allReferencedBindingsByOwner(
+  // Per-plugin server: only a plugin that OWNS bindings (its own generated
+  // tools or synthetic dispatch bindings) gets a server entry, keyed by its
+  // own name and exposing only itself. Consumers referencing foreign owners
+  // get no server here — their agents' allowlists name the owner's server.
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  if (bindingsByOwner.size === 0) return;
+  if (ownedBindings.length === 0) return;
 
-  // One shim process fans out to every owner plugin's daemon over UDS, so
-  // there is exactly one entry here — no per-owner runtime/port resolution
-  // needed at compile time; the shim resolves live daemons on demand.
   const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
+    PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
     PRISM_SHIM_HARNESS: TARGET_ID,
+    PRISM_SHIM_NAMING: "per-plugin",
   };
   if (input.target.mcpExposureProfile) {
     env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
@@ -324,7 +326,7 @@ const planMcpServer = async (
     "mcp.json",
     json({
       mcpServers: {
-        [shimServerKey("factory-droid")]: {
+        [pluginServerKey(input.target.sourcePluginName)]: {
           command: "prism",
           args: ["mcp", "shim"],
           env,

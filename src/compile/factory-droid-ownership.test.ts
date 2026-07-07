@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/factory-droid.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -26,7 +26,7 @@ afterEach(async () => {
   );
 });
 
-test("factory-droid lowerer owner-qualifies foreign tool bindings and wires the shim to the owner plugin", async () => {
+test("factory-droid lowerer owner-qualifies foreign tool bindings and emits no server for consumers", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".factory");
   const ownerPluginName = "ot";
@@ -67,21 +67,19 @@ test("factory-droid lowerer owner-qualifies foreign tool bindings and wires the 
     },
   });
 
+  // The agent's allowlist names the OWNER plugin's own server with the bare
+  // wire tool — never a shared shim key, never a hash-namespaced name.
   const droid = findContentOperation(operations, join("droids", "consumer.md"));
-  const echoPermission = renderAllowlist("factory-droid", ownerPluginName, "ot_echo");
+  const echoPermission = renderPluginAllowlist("factory-droid", ownerPluginName, "ot_echo");
+  expect(echoPermission).toBe("mcp__ot__echo");
   expect(droid?.content).toContain(`${echoPermission}`);
+  expect(droid?.content).not.toContain("prism-mcp-shim");
   expect(droid?.content).not.toContain("mcp__prism-generated-consumer-plugin__ot_echo");
 
-  // The shim resolves the owner's daemon on demand — no per-owner runtime
-  // resolution (and so no registry) is required at compile time; the
-  // referenced owner plugin is simply named in PRISM_SHIM_PLUGINS.
+  // A pure consumer owns no bindings, so it gets NO MCP server entry at all:
+  // the owner's own bundle carries the server; consumers only reference it.
   const mcpConfig = findContentOperation(operations, "mcp.json");
-  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { env?: Record<string, string> }>;
-  };
-  expect(parsed.mcpServers?.[shimServerKey("factory-droid")]?.env?.PRISM_SHIM_PLUGINS).toBe(
-    ownerPluginName,
-  );
+  expect(mcpConfig).toBeUndefined();
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();

@@ -3301,12 +3301,13 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   const factoryMcp = JSON.parse(await readFile(join(factoryRoot, "mcp.json"), "utf8")) as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  const factoryShim = factoryMcp.mcpServers?.[shimServerKey("factory-droid")];
+  const factoryShim = factoryMcp.mcpServers?.[pluginServerKey("tool-only-demo")];
   expect(factoryShim?.command).toBe("prism");
   expect(factoryShim?.args).toEqual(["mcp", "shim"]);
   expect(factoryShim?.env).toEqual({
     PRISM_SHIM_PLUGINS: "tool-only-demo",
     PRISM_SHIM_HARNESS: "factory-droid",
+    PRISM_SHIM_NAMING: "per-plugin",
     PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:factory-droid",
   });
   expect(await pathExists(join(factoryRoot, "mcp"))).toBe(false);
@@ -7355,7 +7356,7 @@ export default defineHook({
   );
   expect(await pathExists(join(pluginRootPath, ".factory-plugin", "plugin.json"))).toBe(true);
   const factoryWireServerName = generatedMcpWireServerName("factory-pipeline-demo");
-  const factoryMcpToolName = renderAllowlist("factory-droid", "factory-pipeline-demo", "factory_pipeline_demo_submit_work");
+  const factoryMcpToolName = renderPluginAllowlist("factory-droid", "factory-pipeline-demo", "factory_pipeline_demo_submit_work");
   const droid = await readFile(join(pluginRootPath, "droids", "worker.md"), "utf8");
   expect(droid).toContain('description: "Factory worker"');
   expect(droid).toContain('model: "inherit"');
@@ -7374,7 +7375,7 @@ export default defineHook({
       env?: Record<string, string>;
     }>;
   };
-  const factoryShimServerKey = shimServerKey("factory-droid");
+  const factoryShimServerKey = pluginServerKey("factory-pipeline-demo");
   expect(mcpConfig.mcpServers?.[factoryShimServerKey]).toBeDefined();
   expect(mcpConfig.mcpServers?.[factoryShimServerKey]?.command).toBe("prism");
   expect(mcpConfig.mcpServers?.[factoryShimServerKey]?.args).toEqual(["mcp", "shim"]);

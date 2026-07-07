@@ -24,7 +24,7 @@ import {
 } from "./manifest.js";
 import { compilePluginForTarget } from "./compile/pipeline.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
 import {
@@ -1015,10 +1015,24 @@ const validateOpenCodeConfigReferences = async (path: string): Promise<DoctorFin
   return findings;
 };
 
+/** Mirrors the claude-code lowerer's `generatedPluginId` prefix (`prism-generated-<plugin>`). */
+const CLAUDE_GENERATED_PLUGIN_PREFIX = "prism-generated-";
+
+/**
+ * Per-plugin server shape: a generated plugin bundle's `.mcp.json` (when
+ * present at all — a pure consumer plugin has none, see the claude-code
+ * lowerer's `planMcpServer`) registers exactly one server, keyed by
+ * `pluginServerKey` of the SOURCE plugin the bundle was generated from — not
+ * the shared `shimServerKey("claude-code")` the retired aggregated shape
+ * used. `generatedPluginDirName` is that bundle directory's own basename
+ * (`prism-generated-<plugin>`), so stripping the fixed prefix recovers the
+ * same plugin-name input the lowerer fed `pluginServerKey` at compile time.
+ */
 const validateClaudeGeneratedPlugin = async (
   root: string,
   pluginRoot: string,
   prismHome: string,
+  generatedPluginDirName: string,
 ): Promise<DoctorFinding[]> => {
   const findings: DoctorFinding[] = [];
   const mcpPath = join(pluginRoot, ".mcp.json");
@@ -1027,7 +1041,10 @@ const validateClaudeGeneratedPlugin = async (
       const parsed = JSON.parse(await readFile(mcpPath)) as {
         readonly mcpServers?: Record<string, Record<string, unknown>>;
       };
-      const expectedServerName = shimServerKey("claude-code");
+      const sourcePluginName = generatedPluginDirName.startsWith(CLAUDE_GENERATED_PLUGIN_PREFIX)
+        ? generatedPluginDirName.slice(CLAUDE_GENERATED_PLUGIN_PREFIX.length)
+        : generatedPluginDirName;
+      const expectedServerName = pluginServerKey(sourcePluginName);
       const server = parsed.mcpServers?.[expectedServerName];
       if (server && Object.keys(server).length > 0) {
         findings.push(
@@ -1116,7 +1133,7 @@ const validateClaudeGeneratedPluginReferences = async (
     for (const entry of await listDir(skillsRoot)) {
       if (!entry.startsWith("prism-generated-")) continue;
       const pluginRoot = join(skillsRoot, entry);
-      findings.push(...(await validateClaudeGeneratedPlugin(root, pluginRoot, prismHome)));
+      findings.push(...(await validateClaudeGeneratedPlugin(root, pluginRoot, prismHome, entry)));
     }
   }
   return findings;

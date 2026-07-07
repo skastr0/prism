@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
-import { createHash } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   registerDaemon,
@@ -14,11 +14,74 @@ import {
   type RegistryEntry,
   UDSRegistryError,
 } from "./uds-registry.js";
+import { resolvePrismHomeForSdk } from "./prism-home-resolve.js";
+
+// Regression conviction: this suite's beforeEach/afterEach used to compute
+// the registry root as an unconditional `join(homedir(), ".prism",
+// "runtime", "mcp")` -- never sandboxed -- and `rm(..., { recursive: true,
+// force: true })` it. `getDaemon`/`registerDaemon`/etc. under test resolve
+// their own root via `resolvePrismHomeForSdk()` (explicit param, then
+// `PRISM_HOME`, then `~/.prism`); every call in this file omits the
+// explicit param, so this suite sandboxes itself the same way -- via
+// `PRISM_HOME` -- rather than duplicating the resolver's fallback chain a
+// second, divergence-prone time.
+const realPrismHome = join(homedir(), ".prism");
+const realRegistryRoot = join(realPrismHome, "runtime", "mcp");
+
+let sandboxPrismHome: string;
+const originalPrismHome = process.env.PRISM_HOME;
+
+// Regression canary (task 4): plant a marker under the REAL homedir
+// runtime root before this suite runs, and assert it survives after --
+// the property "this suite can never eat the user's runtime again" is
+// enforced by an assertion, not by code review. Skipped if the sandbox and
+// the real root ever coincide (e.g. a machine whose real HOME already is a
+// throwaway sandbox), since in that case "survives" is meaningless.
+const canaryDir = join(realRegistryRoot, `canary-regression-${randomUUID()}`);
+const canaryFile = join(canaryDir, "server.mjs");
+const canaryContent = `// regression canary ${randomUUID()}\n`;
+let canaryPlanted = false;
+
+beforeAll(async () => {
+  sandboxPrismHome = await mkdtemp(join(tmpdir(), "prism-uds-registry-test-"));
+  process.env.PRISM_HOME = sandboxPrismHome;
+
+  if (sandboxPrismHome !== realPrismHome) {
+    // Sandbox is confirmed distinct from the real home; plant the canary.
+    await mkdir(canaryDir, { recursive: true });
+    await writeFile(canaryFile, canaryContent, "utf8");
+    canaryPlanted = true;
+  }
+});
+
+afterAll(async () => {
+  try {
+    if (canaryPlanted) {
+      const survived = existsSync(canaryFile) && (await readFile(canaryFile, "utf8")) === canaryContent;
+      if (!survived) {
+        throw new Error(
+          `Regression: '${canaryFile}' under the REAL ~/.prism/runtime/mcp did not survive the ` +
+            "uds-registry suite. A test in this file escaped its PRISM_HOME sandbox.",
+        );
+      }
+    }
+  } finally {
+    // Clean up only the exact canary this run planted -- never a recursive
+    // delete of the real root itself.
+    await rm(canaryDir, { recursive: true, force: true }).catch(() => undefined);
+
+    if (originalPrismHome === undefined) delete process.env.PRISM_HOME;
+    else process.env.PRISM_HOME = originalPrismHome;
+    await rm(sandboxPrismHome, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
 
 // Mirrors the module's private path-derivation logic so tests can locate
 // (and corrupt, for negative tests) a specific plugin's registry file
-// without depending on any exported path helper.
-const registryRootDir = (): string => join(homedir(), ".prism", "runtime", "mcp");
+// without depending on any exported path helper. Resolves through the same
+// `resolvePrismHomeForSdk()` the production module uses, so it tracks the
+// sandboxed `PRISM_HOME` set in `beforeAll` above instead of the real home.
+const registryRootDir = (): string => join(resolvePrismHomeForSdk(), "runtime", "mcp");
 const sanitizePluginSegment = (plugin: string): string => {
   const sanitized = plugin.replace(/[^a-zA-Z0-9._-]/g, "_");
   return sanitized.length > 0 ? sanitized : "_";

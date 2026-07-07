@@ -8,19 +8,24 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
-import { generatedMcpWireServerName } from "../mcp-runtime.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import {
+  pluginServerKey,
+  renderPluginAllowlist,
+  renderPluginWire,
+  stableHash8,
+} from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  allReferencedBindingsByOwner,
+  bindingsOwnedByPlugin,
   collectBindingNameMap,
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
+import { shimCommandForCompile } from "../shim-command.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -115,18 +120,13 @@ const KIMI_MCP_NAME_PREFIX = "mcp__";
 const KIMI_MCP_NAME_SEPARATOR = "__";
 const KIMI_MCP_MAX_QUALIFIED_LENGTH = 64;
 
-// Mirrors Kimi Code's packages/agent-core/src/mcp/tool-naming.ts contract.
+// Mirrors Kimi Code's packages/agent-core/src/mcp/tool-naming.ts contract for
+// the qualified tool name Kimi itself reports at hook/native-tool-call time.
+// Under the per-plugin server scheme every owner's `pluginServerKey` is
+// globally unique, so (unlike the retired aggregated `prism-mcp-shim` scheme)
+// no `plugin-<id>:` runtime-disambiguation prefix is needed here anymore.
 const sanitizeKimiMcpNamePart = (part: string): string =>
   part.replace(/[^a-zA-Z0-9_-]/gu, "_").replace(/_+/gu, "_");
-
-const stableHash8 = (input: string): string => {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < input.length; index++) {
-    hash ^= input.codePointAt(index)!;
-    hash = Math.trunc(Math.imul(hash, 0x01000193));
-  }
-  return hash.toString(16).padStart(8, "0");
-};
 
 const qualifyKimiMcpToolName = (serverName: string, toolName: string): string => {
   const full = [
@@ -142,20 +142,19 @@ const qualifyKimiMcpToolName = (serverName: string, toolName: string): string =>
   return `${head}_${hash}`;
 };
 
-const kimiPluginMcpRuntimeName = (pluginId: string, serverName: string): string =>
-  `plugin-${pluginId}:${serverName}`;
-
+/**
+ * The fully-qualified name Kimi reports for `binding` (owned by
+ * `ownerPluginName`) at hook/native-tool-call time: the per-plugin server key
+ * plus the bare wire name that server's own `enabledTools` advertises for it.
+ */
 const kimiMcpToolName = (
-  serverName: string,
-  sourcePluginName: string,
+  ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string => {
-  const pluginId = `${GENERATED_PLUGIN_PREFIX}-${normalizeBundleSegment(sourcePluginName)}`;
-  return qualifyKimiMcpToolName(
-    kimiPluginMcpRuntimeName(pluginId, serverName),
-    mcpToolNameForBinding(sourcePluginName, binding),
+): string =>
+  qualifyKimiMcpToolName(
+    pluginServerKey(ownerPluginName),
+    renderPluginWire("kimi-code", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding)),
   );
-};
 
 const installedPluginsPath = (target: KimiCodeLowerTarget): string =>
   join(target.root, "plugins", "installed.json");
@@ -212,9 +211,8 @@ const renderKimiAgentRoleSkill = (
     target.sourcePluginName,
     agent,
   )) {
-    const serverName = generatedMcpWireServerName(ownerPlugin);
     for (const binding of bindings) {
-      generatedTools.push(kimiMcpToolName(serverName, ownerPlugin, binding));
+      generatedTools.push(kimiMcpToolName(ownerPlugin, binding));
     }
   }
   const tools = uniqueSorted(generatedTools, { dropEmpty: true });
@@ -405,10 +403,11 @@ const planContextSkillWrite = (
 
 /**
  * `enabledTools` is the load-bearing gate: it filters incoming `tools/call`
- * requests by the exact wire name the shim advertises, so every entry here
- * must come from `renderAllowlist("kimi-code", ...)`, never a bare or
- * `qualifyKimiMcpToolName`-display name (that cosmetic form is only ever
- * shown in the per-role skill markdown, never fed into a config gate).
+ * requests by the exact wire name this per-plugin server advertises, so
+ * every entry here must come from `renderPluginAllowlist("kimi-code", ...)`,
+ * never a bare or `qualifyKimiMcpToolName`-display name (that cosmetic form
+ * is only ever shown in the per-role skill markdown, never fed into a config
+ * gate) -- the Kimi law: allowlist == advertised wire names.
  */
 const renderKimiMcpServerEntry = (options: {
   readonly plugins: ReadonlyArray<string>;
@@ -418,45 +417,53 @@ const renderKimiMcpServerEntry = (options: {
   const env: Record<string, string> = {
     PRISM_SHIM_PLUGINS: options.plugins.join(","),
     PRISM_SHIM_HARNESS: TARGET_ID,
+    // Per-plugin-manifest law: this server always fronts exactly one owner
+    // plugin, so it must tell the shim to advertise (and gate `enabledTools`
+    // against) the bare per-plugin wire names -- never the shim's default
+    // `aggregated` `p_<hash>_<tool>` shape (see `shim-main.ts#parseNaming`).
+    // Without this, the running shim's real `tools/list` diverges from what
+    // `enabledTools` below expects and every tool call 404s.
+    PRISM_SHIM_NAMING: "per-plugin",
   };
   if (options.exposureProfile) {
     env.PRISM_SHIM_EXPOSURE = options.exposureProfile;
   }
   return {
     enabled: true,
-    command: "prism",
+    command: shimCommandForCompile(),
     args: ["mcp", "shim"],
     env,
     enabledTools: options.toolNames,
   };
 };
 
+/**
+ * Per-plugin-manifest law: this compile's `kimi.plugin.json` carries an MCP
+ * server entry ONLY when the compiling plugin itself owns generated tools
+ * (own canonical tools, plus its own synthetic trait/orbit dispatch tools) --
+ * one server, keyed by `pluginServerKey(sourcePluginName)`, scoped to that
+ * plugin's own bindings alone. A plugin whose agents merely reference a
+ * foreign owner's tools is a consumer and gets NO server entry here: the
+ * foreign owner's own compile carries its own server (reachable once that
+ * owner's generated plugin is installed too), so this compile does not
+ * duplicate it.
+ */
 const planMcpServer = (input: LowerInput): ReadonlyMap<string, Record<string, unknown>> => {
-  const bindingsByOwner = allReferencedBindingsByOwner(
-    input.target.sourcePluginName,
-    input.tools ?? [],
-    input.agents,
-  );
-  const servers = new Map<string, Record<string, unknown>>();
-  if (bindingsByOwner.size === 0) return servers;
-
-  // enabledTools stays scoped to this plugin's own bindings (pre-existing
-  // Kimi behavior, unchanged): a foreign-owner tool referenced only via an
-  // agent's toolBindings is named in the role-skill markdown but not gated
-  // into this compile's own enabledTools list. PRISM_SHIM_PLUGINS, by
-  // contrast, must include every referenced owner so the shim can actually
-  // reach their daemons.
   const sourcePluginName = input.target.sourcePluginName;
-  const ownedBindings = bindingsByOwner.get(sourcePluginName) ?? [];
+  const servers = new Map<string, Record<string, unknown>>();
+
+  const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
+  if (ownedBindings.length === 0) return servers;
+
   const toolNames = uniqueSorted(
     ownedBindings.map((binding) =>
-      renderAllowlist("kimi-code", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
+      renderPluginAllowlist("kimi-code", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
     ),
   );
   servers.set(
-    shimServerKey("kimi-code"),
+    pluginServerKey(sourcePluginName),
     renderKimiMcpServerEntry({
-      plugins: [...bindingsByOwner.keys()],
+      plugins: [sourcePluginName],
       ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
       toolNames,
     }),
@@ -531,8 +538,7 @@ const planHooks = async (
   );
   const canonicalToolNames = collectBindingNameMap(bindings, (binding) => {
     const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-    const serverName = generatedMcpWireServerName(owner);
-    return kimiMcpToolName(serverName, owner, binding);
+    return kimiMcpToolName(owner, binding);
   });
 
   const planned: PlannedHook[] = [];

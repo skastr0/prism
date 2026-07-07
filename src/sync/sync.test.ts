@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile as nodeWriteFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { exists, readFile } from "../fs.js";
 import { computeContentHash } from "../content-hash.js";
 import { commitSnapshot, readSnapshot, snapshotPath } from "../state/store.js";
@@ -731,5 +732,455 @@ describe("sync engine — shared-file regions", () => {
 
     const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
     expect(snapshot.manifest.entries.map((entry) => entry.targetPath)).toEqual([skill]);
+  });
+});
+
+// Root cause (see src/sync/legacy-prism-entries.ts's module doc): codex,
+// hermes, and cursor's now-retired aggregated MCP scheme attributed its one
+// shared region/entry to the synthetic union-owner sentinel 'prism#shim'
+// (commit be15253), never a real, individually-compilable plugin. A refresh
+// is always scoped to a real plugin (`refresh.ts`'s `scopePlugins`), so the
+// standard snapshot-driven orphan prune can never fire for that sentinel —
+// the entry is carried into every manifest, forever, even on a full refresh.
+// Grok and claude-code never had this problem: their per-plugin regions
+// (and, for claude-code, whole per-plugin-bundle files) were always
+// attributed to a REAL owner plugin, so the existing orphan-prune already
+// converges them the moment that plugin stops being an owner. These tests
+// exercise the fix: a scope-independent sweep for reserved legacy identities
+// that runs on every refresh regardless of snapshot history.
+describe("sync engine — legacy Prism MCP entry sweep", () => {
+  test("codex: refresh sweeps the retired aggregated marker fence; the plugin's own region and surrounding user bytes survive", async () => {
+    const configToml = join(root, "config.toml");
+    const legacyFence = [
+      "# --- prism:codex.mcp.prism-mcp-shim begin ---",
+      '["mcp_servers"."prism-mcp-shim"]',
+      'command = "prism"',
+      'args = ["mcp", "shim"]',
+      "enabled = true",
+      "required = false",
+      'default_tools_approval_mode = "approve"',
+      'enabled_tools = ["booth__context_get", "tower__create_glyph"]',
+      '["mcp_servers"."prism-mcp-shim"."env"]',
+      'PRISM_SHIM_PLUGINS = "booth,tower"',
+      'PRISM_SHIM_HARNESS = "codex-cli"',
+      "# --- prism:codex.mcp.prism-mcp-shim end ---",
+    ].join("\n");
+    await nodeWriteFile(configToml, `# my hand-written config\n\n${legacyFence}\n`);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: `codex.mcp.${ownServerKey}`,
+      commentPrefix: "#",
+      content: [
+        `["mcp_servers"."${ownServerKey}"]`,
+        'command = "prism"',
+        'args = ["mcp", "shim"]',
+        "enabled = true",
+        'enabled_tools = ["context_get"]',
+        `["mcp_servers"."${ownServerKey}"."env"]`,
+        'PRISM_SHIM_PLUGINS = "booth"',
+        'PRISM_SHIM_HARNESS = "codex-cli"',
+        'PRISM_SHIM_NAMING = "per-plugin"',
+      ].join("\n"),
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+    expect(report.failures).toEqual([]);
+    expect(report.blocked).toEqual([]);
+
+    const after = await readFile(configToml);
+    expect(after).not.toContain("prism-mcp-shim");
+    expect(after).toContain("prism:codex.mcp.booth");
+    expect(after).toContain(`["mcp_servers"."${ownServerKey}"]`);
+    expect(after).toContain("# my hand-written config");
+
+    // Idempotent: nothing left to sweep, converges silently.
+    const second = await refresh(desiredWith({ regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+  });
+
+  test("hermes: refresh sweeps the retired aggregated marker fence in config.yaml; the plugin's own region survives", async () => {
+    const configYaml = join(root, "config.yaml");
+    const legacyFence = [
+      "# --- prism:hermes.mcp.prism-mcp-shim begin ---",
+      "mcp_servers:",
+      "  prism-mcp-shim:",
+      '    command: "prism"',
+      "    args: [mcp, shim]",
+      "    tools:",
+      "      include: [booth__context_get]",
+      "# --- prism:hermes.mcp.prism-mcp-shim end ---",
+    ].join("\n");
+    await nodeWriteFile(configYaml, `# hermes hand-written config\n\n${legacyFence}\n`);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configYaml,
+      regionKey: `hermes.mcp.${ownServerKey}`,
+      commentPrefix: "#",
+      content: [
+        "mcp_servers:",
+        `  ${ownServerKey}:`,
+        '    command: "prism"',
+        "    args: [mcp, shim]",
+      ].join("\n"),
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ harness: "hermes", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const after = await readFile(configYaml);
+    expect(after).not.toContain("prism-mcp-shim");
+    expect(after).toContain(`prism:hermes.mcp.${ownServerKey}`);
+    expect(after).toContain("# hermes hand-written config");
+
+    const second = await refresh(desiredWith({ harness: "hermes", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+  });
+
+  test("cursor: refresh sweeps the legacy shim entry AND both dead pre-shim HTTP-era entries (X-Prism-Mcp-Exposure provenance); the plugin's own entry and a hand-authored server survive", async () => {
+    const mcpJson = join(root, "mcp.json");
+    const legacyContent = {
+      mcpServers: {
+        "prism-mcp-shim": {
+          command: "prism",
+          args: ["mcp", "shim"],
+          env: { PRISM_SHIM_PLUGINS: "booth,tower", PRISM_SHIM_HARNESS: "cursor" },
+        },
+        // Pre-shim HTTP-transport era artifacts (docs/mcp-http-goal.md):
+        // dead loopback servers, no live daemon behind either port. The
+        // X-Prism-Mcp-Exposure header is the real dead pair's provenance —
+        // without it, name shape alone must never be grounds for removal.
+        "prism-generated-cursor-tools": {
+          url: "http://127.0.0.1:53966/mcp",
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-cursor-tools:cursor" },
+        },
+        p_4b4d1659: {
+          url: "http://127.0.0.1:64410/mcp",
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-cursor-tools:cursor" },
+        },
+        "hand-authored-server": { command: "node", args: ["server.js"] },
+      },
+    };
+    await nodeWriteFile(mcpJson, `${JSON.stringify(legacyContent, null, 2)}\n`);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "json-key" as const,
+      targetPath: mcpJson,
+      regionKey: `mcpServers.${ownServerKey}`,
+      jsonPath: ["mcpServers", ownServerKey],
+      value: {
+        command: "prism",
+        args: ["mcp", "shim"],
+        env: { PRISM_SHIM_PLUGINS: "booth", PRISM_SHIM_HARNESS: "cursor", PRISM_SHIM_NAMING: "per-plugin" },
+      },
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const parsed = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(Object.keys(parsed.mcpServers).sort()).toEqual(["hand-authored-server", ownServerKey].sort());
+    expect(parsed.mcpServers["hand-authored-server"]).toEqual({ command: "node", args: ["server.js"] });
+    expect(parsed.mcpServers[ownServerKey]).toEqual(ownRegion.value);
+
+    const second = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+  });
+
+  test("cursor: provenance gating — a user's own p_<hash8> and prism-generated-<name> servers survive; only genuine prism-provenance legacy is pruned", async () => {
+    const mcpJson = join(root, "mcp.json");
+    const legacyContent = {
+      mcpServers: {
+        // Genuine retired Prism artifact: legacy name shape AND real
+        // provenance (the dead HTTP-era pair's X-Prism-Mcp-Exposure header)
+        // — this one, and only this one, must be pruned.
+        p_1a2b3c4d: {
+          url: "http://127.0.0.1:9999/mcp",
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-retired:cursor" },
+        },
+        // A user's OWN server that happens to collide with the bare
+        // p_<hash8> namespace shape — no Prism provenance at all.
+        p_a1b2c3d4: { command: "my-own-tool", args: ["--serve"] },
+        // A user's OWN server literally named with the retired
+        // prism-generated- prefix — again, no Prism provenance.
+        "prism-generated-my-internal-tool": { url: "https://my.internal/mcp" },
+        // An unrelated server, name doesn't even match the legacy shape.
+        "my-other-server": { command: "node", args: ["server.js"] },
+      },
+    };
+    await nodeWriteFile(mcpJson, `${JSON.stringify(legacyContent, null, 2)}\n`);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "json-key" as const,
+      targetPath: mcpJson,
+      regionKey: `mcpServers.${ownServerKey}`,
+      jsonPath: ["mcpServers", ownServerKey],
+      value: {
+        command: "prism",
+        args: ["mcp", "shim"],
+        env: { PRISM_SHIM_PLUGINS: "booth", PRISM_SHIM_HARNESS: "cursor", PRISM_SHIM_NAMING: "per-plugin" },
+      },
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const parsed = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(Object.keys(parsed.mcpServers).sort()).toEqual(
+      ["my-other-server", "p_a1b2c3d4", "prism-generated-my-internal-tool", ownServerKey].sort(),
+    );
+    expect(parsed.mcpServers.p_a1b2c3d4).toEqual({ command: "my-own-tool", args: ["--serve"] });
+    expect(parsed.mcpServers["prism-generated-my-internal-tool"]).toEqual({ url: "https://my.internal/mcp" });
+    expect(parsed.mcpServers["my-other-server"]).toEqual({ command: "node", args: ["server.js"] });
+    expect(parsed.mcpServers[ownServerKey]).toEqual(ownRegion.value);
+  });
+
+  test("cursor: a live plugin literally named p_deadbeef survives its own compile — no self-cannibalization, snapshot stays truthful, idempotent", async () => {
+    // pluginServerKey sanitizes an already-legal name byte-identical, which
+    // is ALSO the retired bare p_<hash8> namespace shape — the exact
+    // collision the provenance + desired-keys gating must resolve.
+    const pluginName = "p_deadbeef";
+    expect(pluginServerKey(pluginName)).toBe("p_deadbeef");
+
+    const mcpJson = join(root, "mcp.json");
+    const ownRegion = {
+      kind: "json-key" as const,
+      targetPath: mcpJson,
+      regionKey: `mcpServers.${pluginName}`,
+      jsonPath: ["mcpServers", pluginName],
+      value: {
+        command: "prism",
+        args: ["mcp", "shim"],
+        env: { PRISM_SHIM_PLUGINS: pluginName, PRISM_SHIM_HARNESS: "cursor", PRISM_SHIM_NAMING: "per-plugin" },
+      },
+      plugin: pluginName,
+    };
+
+    const report = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const parsed = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(parsed.mcpServers[pluginName]).toEqual(ownRegion.value);
+
+    // Snapshot must equal disk: the entry actually landed, so it must be
+    // recorded — never a snapshot lie about a region written then swept
+    // away in the same pass.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "cursor", root });
+    const entry = snapshot.manifest.entries.find(
+      (candidate) => candidate.regionKey?.includes(`mcpServers.${pluginName}`),
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.plugin).toBe(pluginName);
+
+    // Idempotent second pass: no further churn, the entry still survives.
+    const second = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    const parsedAgain = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(parsedAgain.mcpServers[pluginName]).toEqual(ownRegion.value);
+  });
+
+  test("codex: a live plugin whose name sanitizes to prism-mcp-shim survives the marker sweep — snapshot truthful, idempotent", async () => {
+    // pluginServerKey("prism.mcp.shim") sanitizes dots to dashes, colliding
+    // byte-identical with the retired sentinel's region key. The marker
+    // branch must honor its desiredRegions gate exactly like the JSON
+    // branch — fence authorship alone does not disambiguate the retired
+    // sentinel from a live plugin's current region.
+    const pluginName = "prism.mcp.shim";
+    expect(pluginServerKey(pluginName)).toBe("prism-mcp-shim");
+    const target = join(root, "config.toml");
+    await nodeWriteFile(target, "# hand-written\n");
+    const regionKey = `codex.mcp.${pluginServerKey(pluginName)}`;
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: target,
+      regionKey,
+      commentPrefix: "#",
+      content: `["mcp_servers"."${pluginServerKey(pluginName)}"]\ncommand = "prism"`,
+      plugin: pluginName,
+    };
+
+    const report = await refresh(desiredWith({ harness: "codex-cli", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+    const after = await readFile(target);
+    expect(after).toContain(`prism:${regionKey} begin`);
+    expect(after).toContain('command = "prism"');
+
+    // Snapshot must equal disk — the surviving fence is recorded.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    const entry = snapshot.manifest.entries.find(
+      (candidate) => candidate.regionKey?.includes(regionKey),
+    );
+    expect(entry).toBeDefined();
+
+    // Idempotent second pass.
+    const second = await refresh(desiredWith({ harness: "codex-cli", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    expect(await readFile(target)).toContain(`prism:${regionKey} begin`);
+  });
+
+  test("hermes: a live plugin whose name sanitizes to prism-mcp-shim survives the marker sweep — snapshot truthful, idempotent", async () => {
+    // pluginServerKey("prism.mcp.shim") sanitizes dots to dashes, colliding
+    // byte-identical with the retired sentinel's region key. The marker
+    // branch must honor its desiredRegions gate exactly like the JSON
+    // branch — fence authorship alone does not disambiguate the retired
+    // sentinel from a live plugin's current region.
+    const pluginName = "prism.mcp.shim";
+    expect(pluginServerKey(pluginName)).toBe("prism-mcp-shim");
+    const target = join(root, "config.yaml");
+    await nodeWriteFile(target, "# hand-written\n");
+    const regionKey = `hermes.mcp.${pluginServerKey(pluginName)}`;
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: target,
+      regionKey,
+      commentPrefix: "#",
+      content: `["mcp_servers"."${pluginServerKey(pluginName)}"]\ncommand = "prism"`,
+      plugin: pluginName,
+    };
+
+    const report = await refresh(desiredWith({ harness: "hermes", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+    const after = await readFile(target);
+    expect(after).toContain(`prism:${regionKey} begin`);
+    expect(after).toContain('command = "prism"');
+
+    // Snapshot must equal disk — the surviving fence is recorded.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "hermes", root });
+    const entry = snapshot.manifest.entries.find(
+      (candidate) => candidate.regionKey?.includes(regionKey),
+    );
+    expect(entry).toBeDefined();
+
+    // Idempotent second pass.
+    const second = await refresh(desiredWith({ harness: "hermes", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    expect(await readFile(target)).toContain(`prism:${regionKey} begin`);
+  });
+
+  test("a sentinel-owned snapshot entry (prism#shim) is dropped, not carried — doctor never sees owned-but-missing for swept legacy regions", async () => {
+    const configToml = join(root, "config.toml");
+    await nodeWriteFile(configToml, "# hand-written\n");
+    // Seed: a manifest still carrying the retired union scheme's entry.
+    await commitSnapshot({
+      prismHome: home,
+      manifest: {
+        version: 1,
+        harness: "codex-cli",
+        root,
+        entries: [{
+          targetPath: configToml,
+          contentHash: "stale",
+          mode: "region" as const,
+          regionKey: "marker # codex.mcp.prism-mcp-shim",
+          plugin: "prism#shim",
+        }],
+      },
+    });
+
+    // Any real plugin's scoped pass drops the sentinel entry from the manifest.
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: "codex.mcp.booth",
+      commentPrefix: "#",
+      content: '["mcp_servers"."booth"]\ncommand = "prism"',
+      plugin: "booth",
+    };
+    await refresh(desiredWith({ harness: "codex-cli", regions: [ownRegion] }));
+
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(snapshot.manifest.entries.some((entry) => entry.plugin === "prism#shim")).toBe(false);
+    expect(snapshot.manifest.entries.some((entry) => entry.plugin === "booth")).toBe(true);
+  });
+
+  test("codex: an unfenced user TOML table literally named prism-mcp-shim survives — the marker fence delimiters are the provenance, not the key name", async () => {
+    const configToml = join(root, "config.toml");
+    // No `# --- prism:codex.mcp.prism-mcp-shim begin/end ---` fence at all —
+    // this is a hand-authored table that merely shares the retired
+    // sentinel's name, which the marker sweep must never touch.
+    const userContent = [
+      "# my hand-written config",
+      "",
+      '["mcp_servers"."prism-mcp-shim"]',
+      'command = "my-own-tool"',
+      "",
+    ].join("\n");
+    await nodeWriteFile(configToml, userContent);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: `codex.mcp.${ownServerKey}`,
+      commentPrefix: "#",
+      content: [
+        `["mcp_servers"."${ownServerKey}"]`,
+        'command = "prism"',
+        'args = ["mcp", "shim"]',
+      ].join("\n"),
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const after = await readFile(configToml);
+    expect(after).toContain('["mcp_servers"."prism-mcp-shim"]');
+    expect(after).toContain('command = "my-own-tool"');
+    expect(after).toContain("# my hand-written config");
+    expect(after).toContain(`prism:codex.mcp.${ownServerKey}`);
+  });
+
+  test("grok: the retired union region grok.mcp.prism is swept; a live plugin sanitizing to prism survives via the desired gate", async () => {
+    const configToml = join(root, "config.toml");
+    const legacyFence = [
+      "# --- prism:grok.mcp.prism begin ---",
+      '["mcp_servers"."prism"]',
+      'command = "prism"',
+      'args = ["mcp", "shim"]',
+      "# --- prism:grok.mcp.prism end ---",
+    ].join("\n");
+    await nodeWriteFile(configToml, `# hand-written\n\n${legacyFence}\n`);
+
+    // An unrelated plugin's pass visits the file; nothing claims the
+    // retired key, so the fence is swept.
+    const boothRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: "grok.mcp.booth",
+      commentPrefix: "#",
+      content: '["mcp_servers"."booth"]\ncommand = "prism"',
+      plugin: "booth",
+    };
+    const report = await refresh(desiredWith({ harness: "grok", regions: [boothRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+    const after = await readFile(configToml);
+    expect(after).not.toContain("grok.mcp.prism");
+    expect(after).toContain("# hand-written");
+
+    // A live plugin whose name sanitizes to `prism` claims the key: survives.
+    await nodeWriteFile(configToml, `# hand-written\n\n${legacyFence}\n`);
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: "grok.mcp.prism",
+      commentPrefix: "#",
+      content: '["mcp_servers"."prism"]\ncommand = "prism"',
+      plugin: "prism",
+    };
+    const claimed = await refresh(desiredWith({ harness: "grok", regions: [ownRegion] }));
+    expect(kinds(claimed)).toEqual(["patch-regions"]);
+    expect(await readFile(configToml)).toContain("prism:grok.mcp.prism begin");
   });
 });

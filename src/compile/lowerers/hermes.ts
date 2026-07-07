@@ -3,11 +3,12 @@
 import { dirname, join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
-import { allReferencedBindingsByOwner, bindingsFromCanonicalTools } from "../tool-bindings.js";
+import { bindingsOwnedByPlugin } from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -15,12 +16,9 @@ import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   pushDesiredFile,
   renderGeneratedOrbitSkill,
-  SHIM_REGION_OWNER,
-  unionedShimExposure,
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
-  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "hermes" as const;
@@ -32,13 +30,6 @@ export interface HermesLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * Union of every OTHER installed plugin's recorded shim contribution for
-   * this harness root (from the shim-exposure registry). The shared
-   * `config.yaml` shim region is rendered from `prior ∪ own` so a
-   * single-plugin compile can never narrow the fence to its own view.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -93,18 +84,19 @@ const copyTargetedSkillArtifacts = async (
 };
 
 /**
- * The shared shim region carries the UNION of every installed plugin's
- * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
- * profile — the shim derives the per-owner daemon profile itself (see
- * `@skastr0/prism-sdk/mcp/shim.ts`).
+ * A per-owner-plugin mapping — exactly one plugin in `PRISM_SHIM_PLUGINS`,
+ * `PRISM_SHIM_NAMING: per-plugin` so the shim advertises bare wire names
+ * under its own `pluginServerKey` identity (no `PRISM_SHIM_EXPOSURE`: the
+ * shim derives that owner's daemon profile itself from the single
+ * configured plugin — see `@skastr0/prism-sdk/mcp/shim.ts`).
  */
-const renderHermesStdioShimMcpServerYaml = (options: {
+const renderHermesOwnerMcpServerYaml = (options: {
   readonly serverName: string;
+  readonly plugin: string;
   readonly toolNames: ReadonlyArray<string>;
-  readonly plugins: ReadonlyArray<string>;
 }): string[] => [
   `  ${options.serverName}:`,
-  `    command: prism`,
+  `    command: ${shimCommandForCompile()}`,
   `    args:`,
   `      - mcp`,
   `      - shim`,
@@ -112,8 +104,9 @@ const renderHermesStdioShimMcpServerYaml = (options: {
   `    sampling:`,
   `      enabled: false`,
   `    env:`,
-  `      PRISM_SHIM_PLUGINS: ${yamlScalar(options.plugins.join(","))}`,
+  `      PRISM_SHIM_PLUGINS: ${yamlScalar(options.plugin)}`,
   `      PRISM_SHIM_HARNESS: ${yamlScalar(TARGET_ID)}`,
+  `      PRISM_SHIM_NAMING: ${yamlScalar("per-plugin")}`,
   `    tools:`,
   `      include:`,
   ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
@@ -123,36 +116,33 @@ type PlannedMcpServer =
   | {
       readonly kind: "stdio-shim";
       readonly serverName: string;
+      readonly plugin: string;
       readonly toolNames: ReadonlyArray<string>;
-      readonly plugins: ReadonlyArray<string>;
     }
   | { readonly kind: "none" };
 
+/**
+ * A per-plugin server can only ever front ONE daemon (the shim's
+ * `per-plugin` naming mode requires exactly one configured plugin), so this
+ * plugin's compile renders a server entry iff IT is a real MCP owner. Hermes
+ * never receives agents (fail-closed by capability validation), so this is
+ * always the plugin's own canonical-tool bindings.
+ */
 const planMcpServer = (input: LowerInput): PlannedMcpServer => {
-  // Hermes never receives agents (filtered by capability validation), so
-  // every binding here is self-owned — `bindingsByOwner` has at most one
-  // key, `sourcePluginName`.
-  const bindingsByOwner = allReferencedBindingsByOwner(
-    input.target.sourcePluginName,
-    input.tools,
-    [],
-  );
-  if (bindingsByOwner.size === 0) return { kind: "none" };
-
-  // One shim process fans out to every owner plugin's daemon, so there is
-  // exactly one entry — no per-owner runtime/port resolution at compile time.
   const sourcePluginName = input.target.sourcePluginName;
-  const allToolNames = uniqueSorted([
-    ...bindingsFromCanonicalTools(sourcePluginName, input.tools),
-    ...Array.from(bindingsByOwner.values()).flat(),
-  ].map((binding) =>
-    renderAllowlist("hermes", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
-  ));
+  const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, []);
+  if (ownedBindings.length === 0) return { kind: "none" };
+
+  const toolNames = uniqueSorted(
+    ownedBindings.map((binding) =>
+      renderPluginAllowlist("hermes", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
+    ),
+  );
   return {
     kind: "stdio-shim",
-    serverName: shimServerKey("hermes"),
-    toolNames: allToolNames,
-    plugins: Array.from(bindingsByOwner.keys()),
+    serverName: pluginServerKey(sourcePluginName),
+    plugin: sourcePluginName,
+    toolNames,
   };
 };
 
@@ -198,40 +188,31 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   }
 
   const mcp = planMcpServer(input);
-  // The compiling plugin's own shim contribution (empty when it has no
-  // shim-exposed tools — matching the region's historical emission gate).
-  const shimContribution: ShimExposureContribution =
-    mcp.kind === "stdio-shim" && mcp.toolNames.length > 0
-      ? { plugins: [...mcp.plugins], enabledTools: [...mcp.toolNames] }
-      : { plugins: [], enabledTools: [] };
 
   // The hermes MCP wiring is one child mapping inside the user-shared
   // top-level `mcp_servers:` key of config.yaml. The fence is anchored to
   // that key so the region content lands inside the mapping (the anchor line
   // is created when absent); the rest of config.yaml is never rewritten.
   //
-  // The fence is shared by every installed plugin, so it renders the union
-  // of the recorded prior exposure and this compile's own contribution, and
-  // is emitted whenever the UNION is non-empty — even when this plugin
-  // contributes nothing (its removal shrinks the fence instead of
-  // orphan-removing it while other plugins still need it).
-  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
-  if (shimUnion.plugins.length > 0 && shimUnion.enabledTools.length > 0) {
-    const serverName = mcp.kind === "stdio-shim" ? mcp.serverName : shimServerKey(TARGET_ID);
+  // Region-owned by THIS plugin (no cross-plugin union): a per-plugin server
+  // can only ever front one daemon, so only a real MCP owner's own compile
+  // renders (and the sync engine prunes) its mapping.
+  if (mcp.kind === "stdio-shim") {
     regions.push({
       kind: "marker",
       targetPath: configPath(input.target),
-      regionKey: `hermes.mcp.${serverName}`,
+      regionKey: `hermes.mcp.${mcp.serverName}`,
       commentPrefix: "#",
       anchor: "mcp_servers:",
-      content: renderHermesStdioShimMcpServerYaml({
-        serverName,
-        toolNames: shimUnion.enabledTools,
-        plugins: shimUnion.plugins,
+      content: renderHermesOwnerMcpServerYaml({
+        serverName: mcp.serverName,
+        plugin: mcp.plugin,
+        toolNames: mcp.toolNames,
       }).join("\n"),
-      plugin: SHIM_REGION_OWNER,
+      plugin,
     });
   }
 
-  return { files, regions, shimContribution };
+  // Each region is per-plugin — no cross-plugin coordination needed.
+  return { files, regions };
 };

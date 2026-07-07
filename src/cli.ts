@@ -1109,6 +1109,10 @@ program
   .option("-p, --project <path>", "Project root when checking project scope")
   .option("--fix", "Converge fixable refresh findings", false)
   .option("--json", "Print a machine-readable JSON report", false)
+  .option(
+    "--plugins <directory>",
+    "Directory of installed plugins to verify MCP topology against (shallow scan, mirrors refresh --plugins)",
+  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -1119,6 +1123,7 @@ program
         ...(options.project ? { projectPath: options.project } : {}),
         prismHome: resolvePrismHome(),
         fix: options.fix,
+        ...(options.plugins ? { pluginsDir: options.plugins } : {}),
       });
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));

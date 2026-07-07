@@ -6,13 +6,12 @@ import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { generatedMcpServerName } from "../mcp-runtime.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  allReferencedBindingsByOwner,
   bindingsFromCanonicalTools,
   bindingsOwnedByPlugin,
   collectBindingNameMap,
@@ -32,11 +31,8 @@ import {
   regexEscape,
   renderPrePostSessionHookWrapperEntry,
   renderStandardOrbitSkill,
-  SHIM_REGION_OWNER,
-  unionedShimExposure,
   uniqueSorted,
   type LowerOutput,
-  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "codex-cli" as const;
@@ -47,13 +43,6 @@ export interface CodexCliLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * Union of every OTHER installed plugin's recorded shim contribution for
-   * this harness root (from the shim-exposure registry). The shared
-   * `config.toml` shim region is rendered from `prior ∪ own` so a
-   * single-plugin compile can never narrow the fence to its own view.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -153,26 +142,28 @@ const composeModelConfig = (agent: ComposedAgent): Record<string, unknown> => {
 };
 
 /**
- * The shared shim region carries the UNION of every installed plugin's
- * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
- * profile — the shim derives the per-owner daemon profile itself (see
- * `@skastr0/prism-sdk/mcp/shim.ts`).
+ * A per-owner-plugin server entry — exactly one plugin in `PRISM_SHIM_PLUGINS`,
+ * `PRISM_SHIM_NAMING=per-plugin` so the shim advertises bare wire names under
+ * its own `pluginServerKey` identity (no `PRISM_SHIM_EXPOSURE`: the shim
+ * derives that owner's daemon profile itself from the single configured
+ * plugin — see `@skastr0/prism-sdk/mcp/shim.ts`).
  */
-const renderCodexStdioShimMcpServerToml = (options: {
+const renderCodexOwnerMcpServerToml = (options: {
   readonly name: string;
+  readonly plugin: string;
   readonly enabledTools: ReadonlyArray<string>;
-  readonly plugins: ReadonlyArray<string>;
 }): string[] => [
   tomlDottedTable(["mcp_servers", options.name]),
-  `command = ${quote("prism")}`,
+  `command = ${quote(shimCommandForCompile())}`,
   `args = ${tomlArray(["mcp", "shim"])}`,
   "enabled = true",
   "required = false",
   'default_tools_approval_mode = "approve"',
   `enabled_tools = ${tomlArray(options.enabledTools)}`,
   tomlDottedTable(["mcp_servers", options.name, "env"]),
-  `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
+  `PRISM_SHIM_PLUGINS = ${quote(options.plugin)}`,
   `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
+  `PRISM_SHIM_NAMING = ${quote("per-plugin")}`,
 ];
 
 const renderCodexOwnerMcpServerRef = (options: {
@@ -214,7 +205,7 @@ const renderAgentToml = (
   for (const [ownerPlugin, bindings] of ownerGroups) {
     const enabledTools = uniqueSorted(
       bindings.map((binding) =>
-        renderAllowlist("codex-cli", ownerPlugin, mcpToolNameForBinding(ownerPlugin, binding)),
+        renderPluginAllowlist("codex-cli", ownerPlugin, mcpToolNameForBinding(ownerPlugin, binding)),
       ),
     );
     if (enabledTools.length === 0) continue;
@@ -222,7 +213,7 @@ const renderAgentToml = (
       "",
       "# prism diagnostic: Codex agent role files cannot carry partial mcp_servers tables.",
       ...renderCodexOwnerMcpServerRef({
-        readableName: generatedMcpServerName(ownerPlugin),
+        readableName: pluginServerKey(ownerPlugin),
         enabledTools,
       }),
     );
@@ -268,7 +259,7 @@ const collectCanonicalToolNames = (
 ): ReadonlyMap<string, string> =>
   collectBindingNameMap(bindings, (binding) => {
     const owner = ownerPluginForBinding(sourcePluginName, binding);
-    return renderAllowlist("codex-cli", owner, mcpToolNameForBinding(owner, binding));
+    return renderPluginAllowlist("codex-cli", owner, mcpToolNameForBinding(owner, binding));
   });
 
 const hookMatcher = (
@@ -406,47 +397,42 @@ const renderHooksConfig = (
     "",
   ]);
 
+/**
+ * A per-plugin server can only ever front ONE daemon (the shim's
+ * `per-plugin` naming mode requires exactly one configured plugin — see
+ * `@skastr0/prism-sdk/mcp/shim.ts`), so this plugin's compile renders a
+ * server entry iff IT is a real MCP owner (`bindingsOwnedByPlugin`: its own
+ * canonical tools, plus any synthetic dispatch tools it emits). A consumer
+ * plugin that only references a foreign owner's tools via agent bindings
+ * gets no server entry here — that owner's own compile is what maintains
+ * its server (operator-locked shape: consumers never re-export or shadow an
+ * owner's config).
+ */
 const planMcpServer = (
   input: LowerInput,
 ):
   | {
       readonly kind: "stdio-shim";
       readonly mcpServerName: string;
-      readonly globalToolNames: string[];
-      readonly plugins: string[];
+      readonly plugin: string;
+      readonly enabledTools: string[];
     }
   | { readonly kind: "none" } => {
-  const bindingsByOwner = allReferencedBindingsByOwner(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-  if (bindingsByOwner.size === 0) return { kind: "none" };
-
-  // One shim process fans out to every owner plugin's daemon, so there is
-  // exactly one entry — no per-owner runtime/port resolution at compile time.
-  // Both binding sets below are always self-owned (see `ownerPluginForBinding`:
-  // a canonical-tool binding's owner is always `sourcePluginName`, and a
-  // synthetic binding's owner is always the compiling plugin), so rendering
-  // against `sourcePluginName` is the correct owner for every entry here.
   const sourcePluginName = input.target.sourcePluginName;
-  const mcpServerName = shimServerKey("codex-cli");
-  const allGlobalTools = uniqueSorted([
-    ...bindingsFromCanonicalTools(sourcePluginName, input.tools ?? []).map((binding) =>
-      renderAllowlist("codex-cli", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
+  const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
+  if (ownedBindings.length === 0) return { kind: "none" };
+
+  const mcpServerName = pluginServerKey(sourcePluginName);
+  const enabledTools = uniqueSorted(
+    ownedBindings.map((binding) =>
+      renderPluginAllowlist("codex-cli", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
     ),
-    ...Array.from(bindingsByOwner.values())
-      .flat()
-      .filter((binding) => binding.kind === "synthetic")
-      .map((binding) =>
-        renderAllowlist("codex-cli", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
-      ),
-  ]);
+  );
   return {
     kind: "stdio-shim",
     mcpServerName,
-    globalToolNames: allGlobalTools,
-    plugins: Array.from(bindingsByOwner.keys()),
+    plugin: sourcePluginName,
+    enabledTools,
   };
 };
 
@@ -529,7 +515,12 @@ const planRulesRegion = async (
 /**
  * config.toml is user-shared; Prism owns only fenced fragments inside it
  * (one region per concern per plugin, sync-engine marker grammar):
- *  - the plugin's `["mcp_servers"."<name>"]` table (enabled_tools inside),
+ *  - this plugin's own `["mcp_servers"."<pluginServerKey>"]` table
+ *    (enabled_tools inside) — region-owned by the plugin itself, emitted
+ *    only when it is a real MCP owner; a consumer-only compile emits none,
+ *    and the sync engine prunes this plugin's table the moment it stops
+ *    being an owner (snapshot membership scoped to `plugin`, no shared
+ *    cross-plugin fence to narrow),
  *  - the plugin's hook registrations (`[[hooks.<Event>]]` array tables),
  *  - `hooks = true` inside the user's `[features]` table, anchored to the
  *    `[features]` header so a duplicate table is never created. The region
@@ -539,33 +530,24 @@ const planRulesRegion = async (
 const planConfigRegions = (
   input: LowerInput,
   mcp: PlannedMcpServer,
-  ownContribution: ShimExposureContribution,
   hooks: ReadonlyArray<PlannedHook>,
 ): DesiredRegion[] => {
   const configTarget = join(input.target.root, "config.toml");
   const plugin = input.target.sourcePluginName;
   const regions: DesiredRegion[] = [];
 
-  // The shim region is shared by every installed plugin (one fence per
-  // root), so its content is the union of the recorded prior exposure and
-  // this compile's own contribution — and it is emitted whenever the UNION
-  // is non-empty, even when this plugin contributes nothing (dropping this
-  // plugin's MCP surface must shrink the fence, not orphan-remove it while
-  // other plugins still need it).
-  const shimUnion = unionedShimExposure(input.target.priorShimExposure, ownContribution);
-  if (shimUnion.plugins.length > 0 && shimUnion.enabledTools.length > 0) {
-    const mcpServerName = mcp.kind === "stdio-shim" ? mcp.mcpServerName : shimServerKey(TARGET_ID);
+  if (mcp.kind === "stdio-shim") {
     regions.push({
       kind: "marker",
       targetPath: configTarget,
-      regionKey: `codex.mcp.${mcpServerName}`,
+      regionKey: `codex.mcp.${mcp.mcpServerName}`,
       commentPrefix: "#",
-      content: renderCodexStdioShimMcpServerToml({
-        name: mcpServerName,
-        enabledTools: shimUnion.enabledTools,
-        plugins: shimUnion.plugins,
+      content: renderCodexOwnerMcpServerToml({
+        name: mcp.mcpServerName,
+        plugin: mcp.plugin,
+        enabledTools: mcp.enabledTools,
       }).join("\n"),
-      plugin: SHIM_REGION_OWNER,
+      plugin,
     });
   }
 
@@ -596,19 +578,15 @@ const planConfigRegions = (
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const mcp = planMcpServer(input);
-  // The compiling plugin's own shim contribution (empty when it has no
-  // shim-exposed tools — matching the region's historical emission gate).
-  const shimContribution: ShimExposureContribution =
-    mcp.kind === "stdio-shim" && mcp.globalToolNames.length > 0
-      ? { plugins: mcp.plugins, enabledTools: mcp.globalToolNames }
-      : { plugins: [], enabledTools: [] };
 
   planAgentWrites(input, files);
   await planManagedSkillWrites(input, files);
   planOrbitWrites(input, files);
   const hooks = await planHooks(input, files);
-  const regions = planConfigRegions(input, mcp, shimContribution, hooks);
+  const regions = planConfigRegions(input, mcp, hooks);
   await planRulesRegion(input, regions);
 
-  return { files, regions, shimContribution };
+  // The per-plugin server region is owned by (and pruned with) this plugin's
+  // own snapshot scope — no cross-plugin coordination needed.
+  return { files, regions };
 };

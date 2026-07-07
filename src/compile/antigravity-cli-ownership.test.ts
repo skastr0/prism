@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/antigravity-cli.js";
-import { renderWire, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -68,8 +68,10 @@ test("antigravity-cli lowerer owner-qualifies foreign tool bindings without copy
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  const wire = renderWire("antigravity-cli", ownerPluginName, "ot_echo");
-  expect(agent?.content).toContain(`mcp_${shimServerKey("antigravity-cli")}_${wire}`);
+  const wire = renderPluginWire("antigravity-cli", ownerPluginName, "ot_echo");
+  const echoPermission = `mcp_${pluginServerKey(ownerPluginName)}_${wire}`;
+  expect(echoPermission).toBe("mcp_ot_echo");
+  expect(agent?.content).toContain(echoPermission);
   expect(agent?.content).not.toContain("mcp_prism-generated-consumer-plugin_ot_echo");
 
   const mcpConfig = findContentOperation(operations, "mcp_config.json");

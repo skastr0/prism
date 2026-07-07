@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/grok.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -68,17 +68,26 @@ test("grok lowerer owner-qualifies foreign tool bindings and wires the shim to t
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  const echoWire = renderAllowlist("grok", ownerPluginName, "ot_echo");
+  const echoWire = renderPluginAllowlist("grok", ownerPluginName, "ot_echo");
+  expect(echoWire).toBe(`${pluginServerKey(ownerPluginName)}__echo`);
   expect(agent?.content).toContain(echoWire);
   expect(agent?.content).not.toContain("prism-generated-consumer-plugin__ot_echo");
 
   // The shim resolves the owner's daemon on demand — no per-owner runtime
-  // resolution is required at compile time; the referenced owner plugin is
-  // simply named in PRISM_SHIM_PLUGINS, inside the config.toml shim region.
-  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
-  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
+  // resolution is required at compile time; the referenced owner plugin gets
+  // its OWN server entry (never the consumer's), named in PRISM_SHIM_PLUGINS
+  // inside its own config.toml shim region. The consumer plugin itself gets
+  // no server entry at all.
+  const mcpRegion = regions.find(
+    (region) => region.regionKey === `grok.mcp.${pluginServerKey(ownerPluginName)}`,
+  );
+  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the owner's grok shim");
   expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
+  expect(mcpRegion.plugin).toBe(ownerPluginName);
   expect(mcpRegion.content).toContain(`PRISM_SHIM_PLUGINS = "${ownerPluginName}"`);
+  expect(
+    regions.find((region) => region.regionKey === `grok.mcp.${pluginServerKey("consumer-plugin")}`),
+  ).toBeUndefined();
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();

@@ -7,9 +7,7 @@ import { exists } from "../fs.js";
 import { computeMcpHttpConfigContentHash } from "../content-hash.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
 import { compilePluginForTarget } from "./pipeline.js";
-import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
 import { commitSnapshot, readSnapshot } from "../state/store.js";
-import { shimExposurePath } from "../state/shim-exposure.js";
 import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
@@ -190,7 +188,7 @@ export default defineTool({
   }
 };
 
-test("codex shared shim region unions across plugin compiles and never narrows", async () => {
+test("codex per-plugin shim regions stay independent across plugin compiles", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const projectRoot = join(root, "project");
@@ -215,24 +213,30 @@ test("codex shared shim region unions across plugin compiles and never narrows",
       }),
     );
 
-  // A dry-run plan never mutates the exposure registry.
+  // A dry-run plan never mutates anything on disk.
   await compileCodex(alphaRoot, true);
-  expect(
-    await exists(shimExposurePath(prismHome, join(projectRoot, ".codex"))),
-  ).toBe(false);
+  expect(await exists(configPath)).toBe(false);
 
   await compileCodex(alphaRoot);
   const afterAlpha = await readFile(configPath, "utf8");
+  expect(afterAlpha).toContain('["mcp_servers"."shim-alpha"]');
   expect(afterAlpha).toContain('PRISM_SHIM_PLUGINS = "shim-alpha"');
+  expect(afterAlpha).toContain('enabled_tools = ["alpha_tool"]');
+  expect(afterAlpha).not.toContain("shim-beta");
 
+  // THE invariant: a second, unrelated owner plugin gets its OWN region —
+  // never a shared union. Compiling beta must not touch alpha's fence at
+  // all (byte-identical before/after beta's compile).
   await compileCodex(betaRoot);
   const afterBeta = await readFile(configPath, "utf8");
-  expect(afterBeta).toContain('PRISM_SHIM_PLUGINS = "shim-alpha,shim-beta"');
-  expect(afterBeta).toContain("shim_alpha_alpha_tool");
-  expect(afterBeta).toContain("shim_beta_beta_tool");
+  expect(afterBeta).toContain('["mcp_servers"."shim-beta"]');
+  expect(afterBeta).toContain('PRISM_SHIM_PLUGINS = "shim-beta"');
+  expect(afterBeta).toContain('enabled_tools = ["beta_tool"]');
+  expect(afterBeta).toContain(afterAlpha); // alpha's own fence, unchanged, still present
+  expect(afterBeta).not.toContain('PRISM_SHIM_PLUGINS = "shim-alpha,shim-beta"'); // never a union
 
-  // THE invariant: recompiling alpha converges (skip-regions) and the region
-  // still names BOTH plugins — a single-plugin refresh never narrows the union.
+  // Recompiling alpha converges (skip-regions) and beta's fence is untouched
+  // — a single-plugin refresh never rewrites its neighbor's region.
   const alphaRecompile = await compileCodex(alphaRoot);
   expect(alphaRecompile.converged).toBe(true);
   expect(
@@ -242,38 +246,36 @@ test("codex shared shim region unions across plugin compiles and never narrows",
   ).toBe(true);
   expect(await readFile(configPath, "utf8")).toBe(afterBeta);
 
-  // Exactly one snapshot entry exists for the shim region, owned by the
-  // reserved cross-plugin owner — no per-plugin duplicate accumulation, so
-  // doctor has nothing to report marker drift against.
+  // Two independent snapshot entries, each owned by its OWN plugin.
   const snapshot = await readSnapshot({
     prismHome,
     harness: "codex-cli",
     root: join(projectRoot, ".codex"),
   });
   const shimEntries = snapshot.manifest.entries.filter(
-    (entry) =>
-      entry.mode === "region" && (entry.regionKey ?? "").includes("codex.mcp.prism-mcp-shim"),
+    (entry) => entry.mode === "region" && (entry.regionKey ?? "").includes("codex.mcp."),
   );
-  expect(shimEntries).toHaveLength(1);
-  expect(shimEntries[0]!.plugin).toBe(SHIM_REGION_OWNER);
+  expect(shimEntries).toHaveLength(2);
+  expect(shimEntries.map((entry) => entry.plugin).sort()).toEqual(["shim-alpha", "shim-beta"]);
 
-  // Shrink: alpha drops its MCP surface -> the region keeps only beta.
+  // Alpha drops its MCP surface -> ONLY alpha's own region is pruned; beta's
+  // region is untouched.
   await writeShimUnionPlugin({ pluginRoot: alphaRoot, name: "shim-alpha" });
   await compileCodex(alphaRoot);
   const afterShrink = await readFile(configPath, "utf8");
-  expect(afterShrink).toContain('PRISM_SHIM_PLUGINS = "shim-beta"');
-  expect(afterShrink).not.toContain("shim_alpha_alpha_tool");
-  expect(afterShrink).toContain("shim_beta_beta_tool");
+  expect(afterShrink).not.toContain("shim-alpha");
+  expect(afterShrink).toContain('["mcp_servers"."shim-beta"]');
+  expect(afterShrink).toContain('enabled_tools = ["beta_tool"]');
 
-  // Remove beta's surface too -> the fence is orphan-removed entirely.
+  // Remove beta's surface too -> its own fence is orphan-removed entirely.
   await writeShimUnionPlugin({ pluginRoot: betaRoot, name: "shim-beta" });
   await compileCodex(betaRoot);
   const afterEmpty = await readFile(configPath, "utf8");
-  expect(afterEmpty).not.toContain("prism:codex.mcp.prism-mcp-shim");
+  expect(afterEmpty).not.toContain("prism:codex.mcp.");
   expect(afterEmpty).not.toContain("PRISM_SHIM_PLUGINS");
 });
 
-test("grok shared shim region unions across plugin compiles, never narrows, and retires legacy bundle .mcp.json", async () => {
+test("grok per-plugin shim regions stay independent across plugin compiles, and retire a legacy bundle .mcp.json", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const projectRoot = join(root, "project");
@@ -313,6 +315,7 @@ test("grok shared shim region unions across plugin compiles, never narrows, and 
   const afterAlpha = await readFile(configPath, "utf8");
   expect(afterAlpha).toContain('PRISM_SHIM_PLUGINS = "shim-alpha"');
   expect(afterAlpha).not.toContain("PRISM_SHIM_EXPOSURE");
+  expect(afterAlpha).not.toContain("shim-beta");
 
   // Simulate the legacy (pre-region) lowering that wrote a per-plugin
   // bundle-level .mcp.json grok never resolves: plant the file and its
@@ -346,40 +349,47 @@ test("grok shared shim region unions across plugin compiles, never narrows, and 
     },
   });
 
+  // THE invariant: a second, unrelated owner plugin gets its OWN region —
+  // never a shared union. Compiling beta must not touch alpha's fence (or
+  // alpha's legacy entry, out of beta's own snapshot scope) at all.
   await compileGrok(betaRoot);
   const afterBeta = await readFile(configPath, "utf8");
-  expect(afterBeta).toContain('PRISM_SHIM_PLUGINS = "shim-alpha,shim-beta"');
+  expect(afterBeta).toContain('PRISM_SHIM_PLUGINS = "shim-beta"');
+  expect(afterBeta).toContain(afterAlpha); // alpha's own fence, unchanged, still present
+  expect(afterBeta).not.toContain('PRISM_SHIM_PLUGINS = "shim-alpha,shim-beta"'); // never a union
+  expect(await exists(legacyMcpJsonPath)).toBe(true); // out of beta's scope, untouched
 
-  // THE invariant: recompiling alpha converges and the region still names
-  // BOTH plugins — a single-plugin refresh never narrows the union. The
-  // same compile prunes the snapshot-owned legacy .mcp.json (orphaned:
-  // owned in the snapshot, never desired again).
+  // Recompiling alpha converges its own region and prunes ITS OWN
+  // snapshot-owned legacy .mcp.json (orphaned: owned in the snapshot, never
+  // desired again) — beta's fence is untouched.
   await compileGrok(alphaRoot);
   expect(await readFile(configPath, "utf8")).toBe(afterBeta);
   expect(await exists(legacyMcpJsonPath)).toBe(false);
 
-  // Exactly one snapshot entry exists for the shim region, owned by the
-  // reserved cross-plugin owner, and the legacy .mcp.json entry is gone.
+  // Two independent snapshot entries, each owned by its OWN plugin, and the
+  // legacy .mcp.json entry is gone.
   const snapshot = await readSnapshot({ prismHome, harness: "grok", root: grokRoot });
   const shimEntries = snapshot.manifest.entries.filter(
-    (entry) => entry.mode === "region" && (entry.regionKey ?? "").includes("grok.mcp.prism"),
+    (entry) => entry.mode === "region" && (entry.regionKey ?? "").includes("grok.mcp."),
   );
-  expect(shimEntries).toHaveLength(1);
-  expect(shimEntries[0]!.plugin).toBe(SHIM_REGION_OWNER);
+  expect(shimEntries).toHaveLength(2);
+  expect(shimEntries.map((entry) => entry.plugin).sort()).toEqual(["shim-alpha", "shim-beta"]);
   expect(
     snapshot.manifest.entries.some((entry) => entry.targetPath === legacyMcpJsonPath),
   ).toBe(false);
 
-  // Shrink: alpha drops its MCP surface -> the region keeps only beta.
+  // Alpha drops its MCP surface -> ONLY alpha's own region is pruned; beta's
+  // region is untouched.
   await writeShimUnionPlugin({ pluginRoot: alphaRoot, name: "shim-alpha", harness: "grok" });
   await compileGrok(alphaRoot);
   const afterShrink = await readFile(configPath, "utf8");
+  expect(afterShrink).not.toContain("shim-alpha");
   expect(afterShrink).toContain('PRISM_SHIM_PLUGINS = "shim-beta"');
 
-  // Remove beta's surface too -> the fence is orphan-removed entirely.
+  // Remove beta's surface too -> its own fence is orphan-removed entirely.
   await writeShimUnionPlugin({ pluginRoot: betaRoot, name: "shim-beta", harness: "grok" });
   await compileGrok(betaRoot);
   const afterEmpty = await readFile(configPath, "utf8");
-  expect(afterEmpty).not.toContain("prism:grok.mcp.prism");
+  expect(afterEmpty).not.toContain("prism:grok.mcp.");
   expect(afterEmpty).not.toContain("PRISM_SHIM_PLUGINS");
 });

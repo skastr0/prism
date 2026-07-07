@@ -12,15 +12,15 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { renderPluginAllowlist, pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  allReferencedBindingsByOwner,
+  bindingsOwnedByPlugin,
   groupAgentToolBindingsByOwner,
-  mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { listDirRecursive, readFile } from "../../fs.js";
@@ -221,16 +221,19 @@ const claudeNativeHookEvent = prePostSessionNativeHookEvent;
 
 /**
  * Claude Code's per-agent `tools:` frontmatter is an exclusive allowlist of
- * fully-qualified `mcp__<server>__<tool>` permission strings, checked
- * against whatever names the (single, aggregating) stdio shim advertises —
- * so the string built here must be byte-identical to what `renderAllowlist`
- * would embed in the shim's `.mcp.json` entry for the same owner+binding.
+ * fully-qualified `mcp__<server>__<tool>` permission strings. Each
+ * MCP-owning plugin registers its own per-plugin server (keyed by
+ * `pluginServerKey`, see `planMcpServer`), so the string built here names
+ * the OWNER plugin's server — never this compiling plugin's own bundle,
+ * even for a foreign binding referenced by a consumer agent — and must be
+ * byte-identical to what `renderPluginAllowlist` would embed for the same
+ * owner+binding.
  */
 const claudeMcpPermissionNameForBinding = (
   ownerPluginName: string,
   binding: ResolvedContractBinding,
 ): string =>
-  renderAllowlist("claude-code", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
+  renderPluginAllowlist("claude-code", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
@@ -327,19 +330,25 @@ const planMcpServer = async (
   files: DesiredFile[],
   desiredRelativePaths: Set<string>,
 ): Promise<void> => {
-  const bindingsByOwner = allReferencedBindingsByOwner(
+  // Per-plugin server shape: only an MCP-OWNING plugin (one with its own
+  // generated tools or synthetic dispatch bindings — `bindingsOwnedByPlugin`)
+  // attaches a server of its own. A pure consumer plugin that only
+  // *references* a foreign owner's tools gets no `.mcp.json` at all — no
+  // re-export, no facade, no 0-tool shim. Its agents still resolve the
+  // foreign tool by naming the owner's own server key in their allowlist
+  // (`claudeMcpPermissionNameForBinding` / `renderPluginAllowlist`), which
+  // works at session scope as long as the owner plugin is also enabled.
+  const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  if (bindingsByOwner.size === 0) return;
+  if (ownedBindings.length === 0) return;
 
-  // One shim process fans out to every owner plugin's daemon over UDS, so
-  // there is exactly one entry here — no per-owner runtime/port resolution
-  // needed at compile time; the shim resolves live daemons on demand.
   const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
+    PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
     PRISM_SHIM_HARNESS: TARGET_ID,
+    PRISM_SHIM_NAMING: "per-plugin",
   };
   if (input.target.mcpExposureProfile) {
     env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
@@ -351,8 +360,8 @@ const planMcpServer = async (
     ".mcp.json",
     json({
       mcpServers: {
-        [shimServerKey("claude-code")]: {
-          command: "prism",
+        [pluginServerKey(input.target.sourcePluginName)]: {
+          command: shimCommandForCompile(),
           args: ["mcp", "shim"],
           env,
         },

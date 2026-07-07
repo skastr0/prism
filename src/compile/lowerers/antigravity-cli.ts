@@ -11,7 +11,8 @@ import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { renderWire, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -178,16 +179,23 @@ const renderContext = (contexts: ReadonlyArray<{ label: string; content: string 
  * identifier space requiring a `mcp_<server>_<tool>` prefix (single
  * underscore, `mcp_` literal) to disambiguate which configured MCP server a
  * permission targets — this is Antigravity's own established convention
- * (predates the shim), not the generic `mcp__<server>__<tool>` shape
- * `renderAllowlist`'s "global-prefixed" branch renders for Claude/Grok, so
+ * (predates the shim), not the generic `mcp__<server>__<tool>` shape the
+ * per-plugin scheme's `renderPluginAllowlist` renders for Claude/Grok, so
  * this composes the prefix locally around the shared wire-name primitive
- * rather than calling `renderAllowlist` directly.
+ * rather than calling `renderPluginAllowlist` directly.
+ *
+ * Per-plugin server scheme (operator-locked): the server segment is the
+ * OWNER plugin's own `pluginServerKey` — never the aggregated
+ * `prism-mcp-shim` key — and the tool segment is the owner's bare wire name
+ * (the redundant own-plugin namespace stripped), byte-identical to what that
+ * owner's own generated plugin bundle's per-plugin shim advertises for the
+ * same binding.
  */
 const antigravityMcpToolNameForBinding = (
   ownerPluginName: string,
   binding: ResolvedContractBinding,
 ): string =>
-  `mcp_${shimServerKey("antigravity-cli")}_${renderWire("antigravity-cli", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding))}`;
+  `mcp_${pluginServerKey(ownerPluginName)}_${renderPluginWire("antigravity-cli", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding))}`;
 
 const matcherForHook = (
   match: ResolvedHookMatch,
@@ -326,6 +334,15 @@ const planHooks = async (
   });
 };
 
+/**
+ * Per-plugin server scheme (operator-locked): a generated plugin bundle
+ * registers exactly ONE MCP server — its own, keyed by `pluginServerKey` —
+ * and only when the source plugin OWNS generated tools. A consumer plugin
+ * (agents referencing foreign owners' tools only) emits no server entry and
+ * no `mcp_config.json` at all: the owner's own bundle registers the server,
+ * and the consumer's agents name it via `mcp_<owner>_<tool>` frontmatter
+ * entries (`antigravityMcpToolNameForBinding`).
+ */
 const planMcpServers = (input: LowerInput): Record<string, unknown> => {
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
@@ -337,13 +354,14 @@ const planMcpServers = (input: LowerInput): Record<string, unknown> => {
   const env: Record<string, string> = {
     PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
     PRISM_SHIM_HARNESS: TARGET_ID,
+    PRISM_SHIM_NAMING: "per-plugin",
   };
   if (input.target.mcpExposureProfile) {
     env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
   }
   return {
-    [shimServerKey("antigravity-cli")]: {
-      command: "prism",
+    [pluginServerKey(input.target.sourcePluginName)]: {
+      command: shimCommandForCompile(),
       args: ["mcp", "shim"],
       env,
     },

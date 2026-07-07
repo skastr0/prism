@@ -12,11 +12,12 @@ import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import { generatedMcpWireServerName } from "../mcp-runtime.js";
+import { shimCommandForCompile } from "../shim-command.js";
 import {
   type GrokCollisionGuard,
   createGrokCollisionGuard,
-  renderAllowlist,
-  shimServerKey,
+  pluginServerKey,
+  renderPluginAllowlist,
 } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
@@ -42,13 +43,10 @@ import {
   planStandardGeneratedPluginOrbitSkillWrites,
   prePostSessionNativeHookEvent,
   renderPrePostSessionHookWrapperEntry,
-  SHIM_REGION_OWNER,
   stringArray,
-  unionedShimExposure,
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
-  type ShimExposureContribution,
 } from "./shared.js";
 
 const TARGET_ID = "grok" as const;
@@ -57,8 +55,9 @@ const TARGET_ID = "grok" as const;
  * The plugin's `p_<hash8>` HTTP-mode wire server name. Retained only for
  * external consumers still on the (deleted) HTTP-mode assertion path — the
  * lowerer's own naming now goes entirely through `@skastr0/prism-sdk/mcp/
- * wire-naming`'s `renderAllowlist`/`renderWire`, which caps and namespaces
- * per the shim's single "prism" server key, not per owner plugin.
+ * wire-naming`'s `renderPluginAllowlist`/`renderPluginWire`, which registers
+ * one config.toml server per MCP-owning plugin (`pluginServerKey`) and
+ * advertises that plugin's bare, Grok-capped tool names under it.
  */
 export const grokMcpServerNameForPlugin = (sourcePluginName: string): string =>
   generatedMcpWireServerName(sourcePluginName);
@@ -70,13 +69,6 @@ export interface GrokLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
-  /**
-   * Union of every OTHER installed plugin's recorded shim contribution for
-   * this harness root (from the shim-exposure registry). The shared
-   * `config.toml` shim region is rendered from `prior ∪ own` so a
-   * single-plugin compile can never narrow the fence to its own view.
-   */
-  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -242,18 +234,32 @@ interface GrokToolNamer {
 
 /**
  * Renders every tool name this compile emits through the shared
- * `renderAllowlist("grok", ...)` — canonical wire name, Grok-capped at
- * <=64 chars, prefixed `<shim server key>__`. One `GrokCollisionGuard` per
- * lowering pass: since every owner plugin's tools now funnel through the
- * same single "prism" shim server (not one server per owner, as HTTP mode
- * had), the collision guard is correctly scoped globally across the whole
- * compile, not per owner.
+ * `renderPluginAllowlist("grok", ownerPlugin, ...)` — the owner plugin's own
+ * bare wire name (redundant own-namespace prefix stripped), Grok-capped at
+ * <=64 chars for the fully-qualified `<pluginServerKey(owner)>__<bare>` name,
+ * prefixed by that owner's own per-plugin server key (never a shared shim
+ * key). Capping collisions can only occur between two tools on the SAME
+ * owner's server (different owners never share a wire namespace), so the
+ * `GrokCollisionGuard` is scoped per owner plugin, not globally across the
+ * whole compile.
  */
 const createGrokToolNamer = (): GrokToolNamer => {
-  const guard: GrokCollisionGuard = createGrokCollisionGuard();
+  const guards = new Map<string, GrokCollisionGuard>();
+  const guardFor = (ownerPlugin: string): GrokCollisionGuard => {
+    const existing = guards.get(ownerPlugin);
+    if (existing) return existing;
+    const guard = createGrokCollisionGuard();
+    guards.set(ownerPlugin, guard);
+    return guard;
+  };
   return {
     name: (ownerPlugin, binding) =>
-      renderAllowlist("grok", ownerPlugin, mcpToolNameForBinding(ownerPlugin, binding), guard),
+      renderPluginAllowlist(
+        "grok",
+        ownerPlugin,
+        mcpToolNameForBinding(ownerPlugin, binding),
+        guardFor(ownerPlugin),
+      ),
   };
 };
 
@@ -331,28 +337,33 @@ const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
   `[${segments.map((segment) => quote(segment)).join(".")}]`;
 
 /**
- * The shared shim region carries the UNION of every installed plugin's
- * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
- * profile — the shim derives the per-owner daemon profile itself (see
- * `@skastr0/prism-sdk/mcp/shim.ts`).
+ * One `[mcp_servers.<pluginServerKey(owner)>]` entry per MCP-owning plugin
+ * (the operator-locked shape: one server keyed by the plugin's own name,
+ * never a shared shim key). `PRISM_SHIM_NAMING = "per-plugin"` selects the
+ * shim's single-plugin naming mode (bare wire tool names — see
+ * `@skastr0/prism-sdk/mcp/shim.ts`'s `ShimNamingMode`), matching the bare,
+ * per-owner names `renderPluginAllowlist` renders into agent frontmatter.
+ * `PRISM_SHIM_EXPOSURE` is deliberately omitted: absent, the shim derives
+ * the per-owner daemon profile itself (`prism-generated-<owner>:grok`).
  */
-const renderGrokStdioShimMcpServerToml = (options: {
-  readonly name: string;
-  readonly plugins: ReadonlyArray<string>;
-}): string =>
-  [
-    tomlDottedTable(["mcp_servers", options.name]),
-    `command = ${quote("prism")}`,
+const renderGrokPerPluginShimServerToml = (owner: string): string => {
+  const serverName = pluginServerKey(owner);
+  return [
+    tomlDottedTable(["mcp_servers", serverName]),
+    `command = ${quote(shimCommandForCompile())}`,
     `args = ${tomlArray(["mcp", "shim"])}`,
     "enabled = true",
-    tomlDottedTable(["mcp_servers", options.name, "env"]),
-    `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
+    tomlDottedTable(["mcp_servers", serverName, "env"]),
+    `PRISM_SHIM_PLUGINS = ${quote(owner)}`,
     `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
+    `PRISM_SHIM_NAMING = ${quote("per-plugin")}`,
   ].join("\n");
+};
 
 /**
- * Registers the stdio shim in `<grok-root>/config.toml` under
- * `[mcp_servers.<shim server key>]` as a Prism-managed marker region.
+ * Registers one stdio-shim entry per MCP-owning plugin in
+ * `<grok-root>/config.toml`, each its own Prism-managed marker region keyed
+ * `grok.mcp.<pluginServerKey(owner)>`.
  *
  * Why config.toml and not a plugin-bundle `.mcp.json`: Grok resolves MCP
  * servers only from its config sources (`~/.grok/config.toml`, project
@@ -361,48 +372,35 @@ const renderGrokStdioShimMcpServerToml = (options: {
  * inside an installed plugin bundle is counted by `grok inspect` but never
  * becomes a live server in an agent run, so every tool name the lowerer
  * advertised in agent frontmatter resolved to "Tool not found" via
- * CallMcpTool. One shim entry per grok root (same shared-region semantics
- * as the Codex lowerer's `codex.mcp.*` region); the shim fans out to every
- * owner plugin's daemon over UDS.
+ * CallMcpTool.
  *
- * The fence is shared by every installed plugin, so it renders the union of
- * the recorded prior exposure and this compile's own contribution, and is
- * emitted whenever the UNION is non-empty — even when this plugin
- * contributes nothing (its removal shrinks the fence instead of
- * orphan-removing it while other plugins still need it). There is no tool
- * allowlist in the server table (agent frontmatter `tools:` gates
- * exposure), so grok's contribution records owner plugins only.
+ * Consumer plugins referencing a foreign owner's tools never get their own
+ * server entry — only the owner does. This compile already knows every
+ * owner it needs a region for (itself, plus any owner its own agents
+ * reference), computed directly from its own resolved bindings — no
+ * cross-plugin state required: the owner's own compile (or any other
+ * compile that references it) renders the byte-identical region
+ * independently, region-owned by that plugin, and the sync engine prunes it
+ * the moment no compiling plugin references that owner anymore. There is no
+ * tool allowlist in the server table (agent frontmatter `tools:` gates
+ * exposure), so only owner plugins are tracked here.
  */
-const planMcpServerRegion = (
-  input: LowerInput,
-  regions: DesiredRegion[],
-): ShimExposureContribution => {
+const planMcpServerRegion = (input: LowerInput, regions: DesiredRegion[]): void => {
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
     input.agents,
   );
-  const shimContribution: ShimExposureContribution = {
-    plugins: uniqueSorted([...bindingsByOwner.keys()]),
-    enabledTools: [],
-  };
-
-  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
-  if (shimUnion.plugins.length === 0) return shimContribution;
-
-  const serverName = shimServerKey("grok");
-  regions.push({
-    kind: "marker",
-    targetPath: join(input.target.root, "config.toml"),
-    regionKey: `grok.mcp.${serverName}`,
-    commentPrefix: "#",
-    content: renderGrokStdioShimMcpServerToml({
-      name: serverName,
-      plugins: shimUnion.plugins,
-    }),
-    plugin: SHIM_REGION_OWNER,
-  });
-  return shimContribution;
+  for (const owner of uniqueSorted([...bindingsByOwner.keys()])) {
+    regions.push({
+      kind: "marker",
+      targetPath: join(input.target.root, "config.toml"),
+      regionKey: `grok.mcp.${pluginServerKey(owner)}`,
+      commentPrefix: "#",
+      content: renderGrokPerPluginShimServerToml(owner),
+      plugin: owner,
+    });
+  }
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
@@ -412,11 +410,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
 
-  // A compile with no grok-lowerable artifacts still reaches this lowerer
-  // when OTHER plugins hold a recorded shim exposure for the root (the
-  // shared config.toml region must be re-rendered from the prior union).
-  // Only the region participates then — an artifact-less compile must not
-  // plant an empty generated plugin bundle.
+  // An artifact-less compile must not plant an empty generated plugin
+  // bundle — only the MCP server region (if any owner is referenced)
+  // participates then.
   const hasBundleArtifacts =
     input.agents.length > 0 ||
     input.orbits.length > 0 ||
@@ -445,7 +441,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       pushWrite,
     });
   }
-  const shimContribution = planMcpServerRegion(input, regions);
+  planMcpServerRegion(input, regions);
   if (hasBundleArtifacts) {
     await planGeneratedPluginHookWrites({
       input,
@@ -457,5 +453,5 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     });
   }
 
-  return { files: state.files, regions, shimContribution };
+  return { files: state.files, regions };
 };

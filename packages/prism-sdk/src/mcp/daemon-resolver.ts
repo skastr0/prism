@@ -210,7 +210,10 @@ export const resolveOrSpawnDaemon = async (options: ResolveOrSpawnOptions): Prom
   const { plugin } = options;
   const spawnTimeoutMs = options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const getDaemon = options.getDaemon ?? getDaemonDefault;
+  // Bind `prismHome` into the default lookup -- an override supplied
+  // directly via `options.getDaemon` takes over resolution entirely (same
+  // convention as `bundlePathFor`/`udsPathFor` below) and is used as-is.
+  const getDaemon = options.getDaemon ?? ((pluginName: string) => getDaemonDefault(pluginName, options.prismHome));
   const probeSocketLiveness = options.probeSocketLiveness ?? probeSocketLivenessDefault;
   const bundlePathFor =
     options.bundlePathFor ?? ((plugin: string) => pluginBundlePath(plugin, options.prismHome));

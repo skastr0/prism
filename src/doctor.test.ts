@@ -2,13 +2,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { doctorExitCode, runDoctor } from "./doctor.js";
+import { doctorExitCode, pluginIsServable, runDoctor } from "./doctor.js";
 import { EXIT_CODES } from "./exit.js";
 import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
 
 let root: string;
 let originalHome: string | undefined;
@@ -211,6 +212,34 @@ test("doctor reports snapshot drift region integrity and namespace strays", asyn
   expect(codes).toContain("snapshot.owned-drift");
   expect(codes).toContain("region.marker-count");
   expect(codes).toContain("namespace.unowned-prism-path");
+});
+
+test("doctor does not flag Kimi Code's own plugin.json/prism.lock as strays, but still flags a real unowned file", async () => {
+  const prismHome = join(root, "prism-home");
+  const harnessRoot = join(process.env.HOME!, ".kimi-code");
+  const pluginDir = join(harnessRoot, "plugins", "managed", "prism-generated-tower");
+
+  // Kimi Code's own plugin manager writes these two as install-time side
+  // effects; Prism never writes them, so they must not show up as strays.
+  await writeText(join(pluginDir, "plugin.json"), "kimi.plugin.json\n");
+  await writeText(join(pluginDir, "prism.lock"), "{}\n");
+  // A genuinely unowned file in the same directory must still be flagged --
+  // the allowance is scoped to the two known Kimi-manager basenames only.
+  await writeText(join(pluginDir, "unexpected.txt"), "stray\n");
+
+  const report = await runDoctor({
+    harnesses: ["kimi-code"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const strayPaths = report.findings
+    .filter((finding) => finding.code === "namespace.unowned-prism-path")
+    .map((finding) => finding.path);
+  expect(strayPaths).not.toContain(join(pluginDir, "plugin.json"));
+  expect(strayPaths).not.toContain(join(pluginDir, "prism.lock"));
+  expect(strayPaths).toContain(join(pluginDir, "unexpected.txt"));
 });
 
 test("doctor does not flag a grok .mcp.json port change as drift, but still flags a real content change (PQ-167)", async () => {
@@ -445,7 +474,9 @@ test("doctor --fix drops stale snapshot region entries for missing marker fences
 test("doctor validates generated harness config references", async () => {
   const prismHome = join(root, "prism-home");
   const codexServerName = shimServerKey("codex-cli");
-  const claudeServerName = shimServerKey("claude-code");
+  // Claude Code's per-plugin server is keyed by the owner plugin's own name
+  // (`pluginServerKey`), not the retired shared `shimServerKey("claude-code")`.
+  const claudeServerName = pluginServerKey("demo");
   // Codex: a legacy remnant (old HTTP-era `command`/`args`, no PRISM_SHIM_*
   // env, non-array enabled_tools) under the *correct* stdio-shim server key
   // -- every stdio-shim shape check should fire.
@@ -485,10 +516,10 @@ test("doctor validates generated harness config references", async () => {
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", "hooks", "hooks.json"),
     `${JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/missing.mjs"' }] }] } }, null, 2)}\n`,
   );
-  // Grok: a broken shim entry under the correct server key in config.toml
-  // (grok's only resolvable MCP registration surface) — wrong command/args,
-  // env harness naming another harness, no PRISM_SHIM_PLUGINS.
-  const grokServerName = shimServerKey("grok");
+  // Grok: a broken shim entry under an owner-plugin server key in
+  // config.toml (grok's only resolvable MCP registration surface) — wrong
+  // command/args, env harness naming another harness, no PRISM_SHIM_PLUGINS.
+  const grokServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".grok", "config.toml"),
     [
@@ -516,6 +547,9 @@ test("doctor validates generated harness config references", async () => {
   expect(codexCodes).toContain("config.mcp-shim-args-invalid");
   expect(codexCodes).toContain("config.mcp-shim-env-harness-mismatch");
   expect(codexCodes).toContain("config.mcp-shim-env-plugins-missing");
+  // Surviving under the legacy aggregated key at all is itself a migration
+  // artifact now that codex renders one server per owner plugin.
+  expect(codexCodes).toContain("config.mcp-shim-legacy-aggregated-entry");
 
   const grokCodes = codesFor("grok");
   expect(grokCodes).toContain("config.mcp-shim-command-unresolvable");
@@ -536,11 +570,89 @@ test("doctor validates generated harness config references", async () => {
   expect(codes).toContain("config.opencode-plugin-missing");
 });
 
+test("a real refresh sweeps the retired aggregated shim key, and the legacy-aggregated-entry advisory finds nothing afterward", async () => {
+  const prismHome = join(root, "prism-home");
+  const configPath = join(process.env.HOME!, ".codex", "config.toml");
+  await writeText(prismMcpServerPath(prismHome, "booth"), "search\n");
+
+  // The exact live shape this advisory was written to catch: the retired
+  // union-owner's fenced entry, keyed by the reserved `prism-mcp-shim`
+  // sentinel — codex/hermes/cursor's aggregated scheme, retired in favor of
+  // one region per owner plugin (see src/sync/legacy-prism-entries.ts).
+  const legacyFence = [
+    "# --- prism:codex.mcp.prism-mcp-shim begin ---",
+    '["mcp_servers"."prism-mcp-shim"]',
+    'command = "prism"',
+    'args = ["mcp", "shim"]',
+    "enabled = true",
+    "required = false",
+    'default_tools_approval_mode = "approve"',
+    'enabled_tools = ["booth__context_get"]',
+    '["mcp_servers"."prism-mcp-shim"."env"]',
+    'PRISM_SHIM_PLUGINS = "booth"',
+    'PRISM_SHIM_HARNESS = "codex-cli"',
+    "# --- prism:codex.mcp.prism-mcp-shim end ---",
+  ].join("\n");
+  await writeText(configPath, `${legacyFence}\n`);
+
+  // A real refresh: the sync engine's own entry point (`syncDesiredRoot`,
+  // what `refreshPlugin` calls per harness root), scoped to the live
+  // plugin "booth" the way `refresh.ts` always scopes a real compile —
+  // never to the retired sentinel — proving the sweep does not depend on
+  // scope to reach the legacy entry.
+  const { syncDesiredRoot } = await import("./sync/run.js");
+  const codexServerName = pluginServerKey("booth");
+  await syncDesiredRoot({
+    prismHome,
+    dryRun: false,
+    scopePlugins: new Set(["booth"]),
+    desired: {
+      harness: "codex-cli",
+      root: join(process.env.HOME!, ".codex"),
+      files: [],
+      regions: [{
+        kind: "marker",
+        targetPath: configPath,
+        regionKey: `codex.mcp.${codexServerName}`,
+        commentPrefix: "#",
+        content: [
+          `["mcp_servers"."${codexServerName}"]`,
+          'command = "prism"',
+          'args = ["mcp", "shim"]',
+          "enabled = true",
+          'enabled_tools = ["context_get"]',
+          `["mcp_servers"."${codexServerName}"."env"]`,
+          'PRISM_SHIM_PLUGINS = "booth"',
+          'PRISM_SHIM_HARNESS = "codex-cli"',
+          'PRISM_SHIM_NAMING = "per-plugin"',
+        ].join("\n"),
+        plugin: "booth",
+      }],
+    },
+  });
+
+  const afterRefresh = await Bun.file(configPath).text();
+  expect(afterRefresh).not.toContain("prism-mcp-shim");
+  expect(afterRefresh).toContain(`prism:codex.mcp.${codexServerName}`);
+
+  const report = await runDoctor({
+    harnesses: ["codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const codexCodes = report.findings.filter((f) => f.harness === "codex-cli").map((f) => f.code);
+  expect(codexCodes).not.toContain("config.mcp-shim-legacy-aggregated-entry");
+  // The surviving per-plugin entry is well-formed — no other shim finding.
+  expect(codexCodes.filter((code) => code.startsWith("config.mcp-shim"))).toEqual([]);
+});
+
 test("doctor reports zero findings for a correctly-generated stdio-shim MCP config (claude-code, codex-cli, hermes, grok)", async () => {
   const prismHome = join(root, "prism-home");
   await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
 
-  const claudeServerName = shimServerKey("claude-code");
+  const claudeServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".claude", "skills", "prism-generated-demo", ".mcp.json"),
     `${JSON.stringify({
@@ -548,13 +660,13 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
         [claudeServerName]: {
           command: "prism",
           args: ["mcp", "shim"],
-          env: { PRISM_SHIM_PLUGINS: "demo", PRISM_SHIM_HARNESS: "claude-code" },
+          env: { PRISM_SHIM_PLUGINS: "demo", PRISM_SHIM_HARNESS: "claude-code", PRISM_SHIM_NAMING: "per-plugin" },
         },
       },
     }, null, 2)}\n`,
   );
 
-  const codexServerName = shimServerKey("codex-cli");
+  const codexServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".codex", "config.toml"),
     [
@@ -563,15 +675,16 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       'args = ["mcp", "shim"]',
       "enabled = true",
       "required = false",
-      `enabled_tools = ["p_a1b2c3d4_search"]`,
+      `enabled_tools = ["search"]`,
       `["mcp_servers"."${codexServerName}"."env"]`,
       'PRISM_SHIM_PLUGINS = "demo"',
       'PRISM_SHIM_HARNESS = "codex-cli"',
+      'PRISM_SHIM_NAMING = "per-plugin"',
       "",
     ].join("\n"),
   );
 
-  const grokShimServer = shimServerKey("grok");
+  const grokShimServer = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".grok", "config.toml"),
     [
@@ -583,12 +696,13 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       `["mcp_servers"."${grokShimServer}"."env"]`,
       'PRISM_SHIM_PLUGINS = "demo"',
       'PRISM_SHIM_HARNESS = "grok"',
+      'PRISM_SHIM_NAMING = "per-plugin"',
       `# --- prism:grok.mcp.${grokShimServer} end ---`,
       "",
     ].join("\n"),
   );
 
-  const hermesServerName = shimServerKey("hermes");
+  const hermesServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".hermes", "config.yaml"),
     [
@@ -603,9 +717,10 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       "    env:",
       "      PRISM_SHIM_PLUGINS: demo",
       "      PRISM_SHIM_HARNESS: hermes",
+      "      PRISM_SHIM_NAMING: per-plugin",
       "    tools:",
       "      include:",
-      "        - p_a1b2c3d4_search",
+      "        - search",
       `# --- prism:hermes.mcp.${hermesServerName} end ---`,
       "",
     ].join("\n"),
@@ -725,4 +840,55 @@ test("doctor warns when Codex hooks.json contains Prism-managed hooks", async ()
   expect(Array.isArray(prismCommands)).toBe(true);
   expect(prismCommands).toHaveLength(1);
   expect(String(prismCommands[0])).toContain("prism-generated-demo");
+});
+
+// ---------------------------------------------------------------------------
+// pluginIsServable -- the true precondition config.mcp-shim-plugin-bundle-missing
+// validates (see doctor.ts's grounding comment on the function itself). The
+// UDS registry lookup (`getDaemon`) resolves via `node:os`'s `homedir()`,
+// which Bun freezes at process start and never re-reads from this file's
+// per-test `process.env.HOME` override -- so these deliberately inject fakes
+// for the daemon-registry branch rather than exercising the real
+// `@skastr0/prism-sdk` functions, which would silently touch the actual
+// invoking machine's real `~/.prism/runtime/mcp` state.
+// ---------------------------------------------------------------------------
+
+const absentDaemon = async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "absent" });
+
+test("pluginIsServable: a compiled bundle at rest is servable -- lazy first-spawn, never even consults the registry", async () => {
+  const prismHome = join(root, "prism-home");
+  await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
+
+  const servable = await pluginIsServable(prismHome, "demo", {
+    getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => {
+      throw new Error("must not consult the daemon registry when the bundle exists on disk");
+    },
+  });
+  expect(servable).toBe(true);
+});
+
+test("pluginIsServable: no bundle and no registered daemon is genuinely unservable", async () => {
+  const prismHome = join(root, "prism-home");
+  const servable = await pluginIsServable(prismHome, "never-compiled", { getDaemon: absentDaemon });
+  expect(servable).toBe(false);
+});
+
+test("pluginIsServable: no bundle but a live registered daemon is servable -- already running, nothing to spawn", async () => {
+  const prismHome = join(root, "prism-home");
+  const entry: RegistryEntry = { pid: 4242, sock: "/tmp/prism-doctor-test.sock", bundleHash: "deadbeef", startedAt: 0, lastUsed: 0 };
+  const servable = await pluginIsServable(prismHome, "demo", {
+    getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "ok", value: entry }),
+    probeSocketLiveness: async () => "live",
+  });
+  expect(servable).toBe(true);
+});
+
+test("pluginIsServable: no bundle and a registered-but-dead daemon is genuinely unservable", async () => {
+  const prismHome = join(root, "prism-home");
+  const entry: RegistryEntry = { pid: 4242, sock: "/tmp/prism-doctor-test.sock", bundleHash: "deadbeef", startedAt: 0, lastUsed: 0 };
+  const servable = await pluginIsServable(prismHome, "demo", {
+    getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "ok", value: entry }),
+    probeSocketLiveness: async () => "stale",
+  });
+  expect(servable).toBe(false);
 });

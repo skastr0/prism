@@ -24,6 +24,7 @@ import { computeContentHash, computeMcpHttpConfigContentHash } from "../content-
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
+import { RETIRED_SHIM_SENTINEL_OWNER, sweepLegacyPrismMcpEntries } from "./legacy-prism-entries.js";
 import {
   applyRegion,
   removeJsonArrayMemberRegion,
@@ -282,6 +283,7 @@ const planOwnedFile = async (options: {
 
 const planSharedFileRegions = async (options: {
   readonly targetPath: string;
+  readonly harness: string;
   readonly desired: ReadonlyArray<DesiredRegion>;
   readonly orphanedRefs: ReadonlyArray<string>;
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
@@ -314,7 +316,12 @@ const planSharedFileRegions = async (options: {
   let content = original;
   const changedRegions: string[] = [];
   const skippedRegions: string[] = [];
-  const materializedRegionRefs: string[] = [];
+  // Tracked as (region, ref) pairs — not yet the returned ref list — so a
+  // region a later same-pass sweep removes (see the reconciliation below)
+  // can be dropped by its regionKey before this ever becomes a snapshot
+  // entry. The snapshot must equal disk; it may never claim a region that
+  // was written then swept away in the same pass.
+  const materialized: Array<{ readonly regionKey: string; readonly ref: string }> = [];
 
   for (const region of options.desired) {
     let outcome: ReturnType<typeof applyRegion>;
@@ -333,12 +340,14 @@ const planSharedFileRegions = async (options: {
             `${error instanceof Error ? error.message : String(error)} — ` +
             "fix or move the file, then refresh",
         }],
-        materializedRegionRefs,
+        materializedRegionRefs: materialized.map((entry) => entry.ref),
       };
     }
     if (outcome.changed) changedRegions.push(region.regionKey);
     else skippedRegions.push(region.regionKey);
-    if (outcome.materialized !== false) materializedRegionRefs.push(serializeRegionRef(region));
+    if (outcome.materialized !== false) {
+      materialized.push({ regionKey: region.regionKey, ref: serializeRegionRef(region) });
+    }
     content = outcome.content;
   }
 
@@ -350,6 +359,29 @@ const planSharedFileRegions = async (options: {
     if (outcome.changed) removedRegions.push(parsed.regionKey);
     content = outcome.content;
   }
+
+  // Scope-independent sweep for retired Prism MCP identities (the
+  // synthetic union-owner sentinel and pre-shim HTTP-era naming) that the
+  // snapshot-driven orphan removal above can never reach — see
+  // `legacy-prism-entries.ts` for why. Safe on every compile, scoped or
+  // not: gated on positive content provenance AND exclusion of this pass's
+  // own desired keys (threaded through below), so a live entry — however
+  // its name happens to be shaped — is never swept.
+  const legacySweep = sweepLegacyPrismMcpEntries(options.harness, content, options.desired);
+  if (legacySweep.changed) {
+    content = legacySweep.content;
+    removedRegions.push(...legacySweep.removedKeys);
+  }
+
+  // Reconcile: a regionKey removed above (orphan or legacy sweep) is never
+  // also reported as materialized, regardless of why it matched — the
+  // desired-keys exclusion inside the legacy sweep already makes this a
+  // no-op in practice, but the snapshot-truthfulness invariant holds
+  // structurally here rather than depending on that sweep's internals.
+  const removedRegionKeys = new Set(removedRegions);
+  const materializedRegionRefs = materialized
+    .filter((entry) => !removedRegionKeys.has(entry.regionKey))
+    .map((entry) => entry.ref);
 
   if (content === original) {
     return {
@@ -406,6 +438,7 @@ const groupOrphanedRegionRefsByFile = (
 };
 
 const planSharedRegions = async (options: {
+  readonly harness: string;
   readonly desiredRegions: ReadonlyArray<DesiredRegion>;
   readonly snapshotRegions: ReadonlyMap<string, SnapshotEntry>;
   readonly protectedRegionKeys: ReadonlySet<string>;
@@ -426,6 +459,7 @@ const planSharedRegions = async (options: {
   for (const targetPath of [...sharedFiles].sort()) {
     const sharedPlan = await planSharedFileRegions({
       targetPath,
+      harness: options.harness,
       desired: regionsByFile.get(targetPath) ?? [],
       orphanedRefs: orphanedByFile.get(targetPath) ?? [],
       snapshotByRegion: options.snapshotRegions,
@@ -475,6 +509,11 @@ export const planSync = async (options: {
     ),
   );
   for (const entry of options.snapshot.entries) {
+    // The retired union scheme's sentinel owner is not a real plugin: no
+    // refresh is ever scoped to it, so its entries would be carried forever
+    // while the disk sweep removes their content — a permanent snapshot lie
+    // doctor reports as owned-but-missing. Drop them at the source.
+    if (entry.plugin === RETIRED_SHIM_SENTINEL_OWNER) continue;
     if (entry.mode === "owned") {
       if (inScope(entry.plugin)) snapshotOwned.set(entry.targetPath, entry);
       else carriedEntries.push(entry);
@@ -525,6 +564,7 @@ export const planSync = async (options: {
 
   // Shared-file regions, coalesced one write per file.
   const sharedRegionPlan = await planSharedRegions({
+    harness: options.desired.harness,
     desiredRegions: options.desired.regions,
     snapshotRegions,
     protectedRegionKeys: carriedRegionKeys,

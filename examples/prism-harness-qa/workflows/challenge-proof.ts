@@ -15,7 +15,7 @@ export const challengePrompt = (challenge: string): string =>
   `The exact challenge string is ${JSON.stringify(challenge)}; copy it byte-for-byte and do not reorder, normalize, shorten, or derive it from the task id. ` +
   "Call the generated tool named challenge_echo with input " +
   `${JSON.stringify({ challenge })}; in Claude Code it may appear as ` +
-  "mcp__prism-mcp-shim__p_f3119df0_prism_harness_qa_challenge_echo. " +
+  "mcp__prism-harness-qa__challenge_echo. " +
   "The tool's proof value is keyed and cannot be computed without calling the tool. " +
   "Do not use shell, files, env, fallback JSON, or any echo/status helper. " +
   "Return exactly the generated tool response JSON.";

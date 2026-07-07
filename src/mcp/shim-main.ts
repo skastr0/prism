@@ -9,7 +9,7 @@
  * to `runShim`.
  */
 
-import { runShim } from "@skastr0/prism-sdk/mcp/shim";
+import { runShim, type ShimNamingMode } from "@skastr0/prism-sdk/mcp/shim";
 import { SHIM_HARNESS_IDS, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { resolvePrismHome } from "../prism-home.js";
 
@@ -59,6 +59,31 @@ const parseExposureProfile = (raw: string | undefined): string | undefined => {
   return raw.trim();
 };
 
+/**
+ * `PRISM_SHIM_NAMING=per-plugin` selects the per-plugin server shape (one
+ * plugin, bare wire tool names — see `ShimNamingMode`). Anything else —
+ * absent, empty, or unrecognized — is the legacy aggregated shape. A
+ * `per-plugin` value with N != 1 plugins is a lowerer config bug; it is
+ * reported and downgraded to aggregated rather than crashing the harness's
+ * MCP handshake.
+ */
+const parseNaming = (raw: string | undefined, pluginCount: number): ShimNamingMode => {
+  const value = raw?.trim();
+  if (value !== "per-plugin") {
+    if (value !== undefined && value.length > 0 && value !== "aggregated") {
+      console.error(`[prism-mcp-shim] PRISM_SHIM_NAMING unrecognized ('${value}'); using 'aggregated'.`);
+    }
+    return "aggregated";
+  }
+  if (pluginCount !== 1) {
+    console.error(
+      `[prism-mcp-shim] PRISM_SHIM_NAMING=per-plugin requires exactly one plugin (got ${pluginCount}); using 'aggregated'.`,
+    );
+    return "aggregated";
+  }
+  return "per-plugin";
+};
+
 const plugins = parsePluginList(process.env.PRISM_SHIM_PLUGINS);
 if (plugins.length === 0) {
   console.error("[prism-mcp-shim] PRISM_SHIM_PLUGINS is empty; the shim will advertise zero tools.");
@@ -67,6 +92,7 @@ if (plugins.length === 0) {
 await runShim({
   plugins,
   harness: parseHarness(process.env.PRISM_SHIM_HARNESS),
+  naming: parseNaming(process.env.PRISM_SHIM_NAMING, plugins.length),
   // Resolved once, here, at the process entrypoint (the CLI edge for this
   // process) -- never re-read from the environment inside prism-sdk, which
   // has no dependency on this resolver (see `ShimAggregatorOptions.prismHome`).

@@ -7,7 +7,7 @@ import { Effect } from "effect";
 import { composeAgent } from "./compose.js";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/kimi-code.js";
-import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { instantiateOrbit, resolveAgent, validateOrbit } from "./resolve.js";
 import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
 
@@ -109,7 +109,7 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
     readonly version?: string;
     readonly skills?: string;
     readonly sessionStart?: { readonly skill?: string };
-    readonly mcpServers?: Record<string, unknown>;
+    readonly mcpServers?: Record<string, { readonly env?: Record<string, string>; readonly enabledTools?: string[] }>;
   };
   expect(manifestJson.name).toBe(pluginId);
   expect(manifestJson.version).toBe("0.1.0");
@@ -118,7 +118,14 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   expect(manifestJson.mcpServers).toBeDefined();
 
   const mcpServerName = Object.keys(manifestJson.mcpServers ?? {})[0];
-  expect(mcpServerName).toBe(shimServerKey("kimi-code"));
+  expect(mcpServerName).toBe(pluginServerKey("prism-harness-qa"));
+  const mcpServer = manifestJson.mcpServers?.[mcpServerName ?? ""];
+  // Load-bearing: without this the running shim advertises its default
+  // aggregated `p_<hash>_<tool>` names, which won't match `enabledTools`
+  // below and every real tool call would 404 (see kimi-code.ts
+  // renderKimiMcpServerEntry).
+  expect(mcpServer?.env?.PRISM_SHIM_NAMING).toBe("per-plugin");
+  expect(mcpServer?.enabledTools).toEqual(["challenge_echo"]);
 
   const contextSkill = findContentOperation(files, "skills/prism-context/SKILL.md");
   expect(contextSkill?.content).toContain("<!-- prism:kimi-context -->");
@@ -128,7 +135,7 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   expect(roleSkill?.content).toContain("prism-agent-qa-tester");
   expect(roleSkill?.content).toContain("<!-- prism:kimi-agent-role -->");
   expect(roleSkill?.content).toContain("qa-helper");
-  expect(roleSkill?.content).toContain("mcp__plugin-prism-generated-prism-harness-qa");
+  expect(roleSkill?.content).toContain("mcp__prism-harness-qa__challenge_echo");
 
   const commandSkill = findContentOperation(files, "skills/prism-command-qa-report/SKILL.md");
   expect(commandSkill?.content).toContain("prism-command-qa-report");

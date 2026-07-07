@@ -12,7 +12,7 @@
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --cleanup-qa-only
  */
-import { renderAllowlist, renderWire, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import { randomBytes } from "node:crypto";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -25,7 +25,6 @@ import {
 } from "../../examples/prism-harness-qa/tools/proof.js";
 import { generatedOwnerToolName } from "../../src/compile/generated-plugin.js";
 import { getHarness, resolveHarnessRoot } from "../../src/harnesses.js";
-import { updateShimExposureEntry } from "../../src/state/shim-exposure.js";
 import { syncDesiredRoot } from "../../src/sync/run.js";
 import { cleanupPrismMcpProcessesUnder } from "../../src/testing/mcp-process-cleanup.js";
 
@@ -187,7 +186,7 @@ interface ConfigSeedRule {
 }
 
 interface WorkflowE2EQaCleanupRootSummary {
-  readonly harness: Harness;
+  readonly harness: Harness | "cursor";
   readonly root: string;
   readonly syncOps: number;
   readonly fallbackRemoved: readonly string[];
@@ -214,13 +213,13 @@ const TEMP_PRISM_HOME_PREFIX = "pwe2e-prism-";
 // Canonical shim-era wire naming, derived from the same modules the compile
 // pipeline and the shim use — never hand-maintained string literals.
 const CHALLENGE_TOOL_WIRE_SEGMENT = generatedOwnerToolName(QA_PLUGIN_NAME, "challenge_echo");
-export const CLAUDE_CHALLENGE_TOOL_NAME = renderAllowlist(
+export const CLAUDE_CHALLENGE_TOOL_NAME = renderPluginAllowlist(
   "claude-code",
   QA_PLUGIN_NAME,
   CHALLENGE_TOOL_WIRE_SEGMENT,
 );
 export const CODEX_CHALLENGE_COMPLETED_LINE =
-  `mcp: ${shimServerKey("codex-cli")}/${renderWire("codex-cli", QA_PLUGIN_NAME, CHALLENGE_TOOL_WIRE_SEGMENT)} (completed)`;
+  `mcp: ${pluginServerKey(QA_PLUGIN_NAME)}/${renderPluginWire("codex-cli", QA_PLUGIN_NAME, CHALLENGE_TOOL_WIRE_SEGMENT)} (completed)`;
 export const OPENCODE_MODEL_SELECTION_SMOKE_MODEL = "ollama-cloud/deepseek-v4-flash";
 const MODEL_SELECTION_EXPECTED_TASKS: readonly ModelSelectionExpectedTask[] = [
   {
@@ -501,7 +500,7 @@ export const removeWorkflowE2ETempRoots = async (roots: readonly string[]): Prom
 
 const JSONC_FORMAT = { insertSpaces: true, tabSize: 2, eol: "\n" } as const;
 
-const workflowE2EHarnessRoot = (harness: Harness): string => {
+const workflowE2EHarnessRoot = (harness: QaCleanupHarness): string => {
   const root = resolveHarnessRoot(getHarness(harness), "global");
   if (root === null) throw new Error(`workflow E2E cleanup cannot resolve global root for ${harness}`);
   return resolve(root);
@@ -580,8 +579,10 @@ const removeYamlMapEntry = (content: string, parentKey: string, entryKey: string
   return [...lines.slice(0, entryIndex), ...lines.slice(endIndex)].join("");
 };
 
-const workflowE2EQaFallbackPaths = (harness: Harness, root: string): readonly string[] => {
+const workflowE2EQaFallbackPaths = (harness: QaCleanupHarness, root: string): readonly string[] => {
   switch (harness) {
+    case "cursor":
+      return [];
     case "opencode":
       return [
         join(root, "plugins", QA_GENERATED_PLUGIN_NAME),
@@ -617,7 +618,7 @@ const workflowE2EQaFallbackPaths = (harness: Harness, root: string): readonly st
   }
 };
 
-const workflowE2EQaStaleFallbackPaths = async (harness: Harness, root: string): Promise<readonly string[]> => {
+const workflowE2EQaStaleFallbackPaths = async (harness: QaCleanupHarness, root: string): Promise<readonly string[]> => {
   const stalePaths: string[] = [];
   const stalePluginRoots =
     harness === "opencode" ? [root]
@@ -701,10 +702,13 @@ const cleanupWorkflowE2EQaConfigFallbacks = async (
   }
 };
 
+/** QA lowers a cursor server for the single-config live proof; cleanup must reach it too. */
+type QaCleanupHarness = Harness | "cursor";
+
 export const cleanupWorkflowE2EQaArtifacts = async (input: {
   readonly prismHome: string;
-  readonly harnesses: ReadonlySet<Harness>;
-  readonly harnessRoots?: Partial<Record<Harness, string>>;
+  readonly harnesses: ReadonlySet<QaCleanupHarness>;
+  readonly harnessRoots?: Partial<Record<QaCleanupHarness, string>>;
 }): Promise<WorkflowE2EQaCleanupSummary> => {
   const prismHome = resolve(input.prismHome);
   const runtimeMcpRoot = join(prismHome, "runtime", "mcp", QA_PLUGIN_NAME);
@@ -734,19 +738,6 @@ export const cleanupWorkflowE2EQaArtifacts = async (input: {
     }
 
     const fallbackPatched = await cleanupWorkflowE2EQaConfigFallbacks(harness, root);
-
-    // Shared-shim harnesses (codex/hermes/cursor/grok) record the QA
-    // plugin's contribution in the shim-exposure registry; leaving it
-    // behind would union the retired QA plugin back into the shared shim
-    // region on the next real refresh. Empty contribution deletes the
-    // entry; a no-op for harnesses without one.
-    await updateShimExposureEntry({
-      prismHome,
-      harness,
-      root,
-      sourcePluginName: QA_PLUGIN_NAME,
-      contribution: { plugins: [], enabledTools: [] },
-    });
 
     roots.push({
       harness,
@@ -897,6 +888,14 @@ export const classifySetupBlocker = (
       }
       return undefined;
     case "kimi-code":
+      if (/reached your usage limit for this billing cycle|provider\.api_error: 403/iu.test(output)) {
+        return {
+          harness: entry.harness,
+          code: "kimi-quota-exhausted",
+          message: "Kimi Code provider quota is exhausted for this billing cycle.",
+          retryCommand: "wait for quota refresh or upgrade the Kimi plan",
+        };
+      }
       if (/kimi-code requires OAuth login|run `kimi login`|refresh Kimi Code credentials/iu.test(output)) {
         return {
           harness: entry.harness,
@@ -1248,10 +1247,18 @@ const invalidModelSelectionValidatePass = (
 const checksPass = (checks: readonly HarnessCheck[] | undefined): boolean =>
   checks === undefined ? false : checks.every((item) => item.status !== "fail");
 
-const harnessResultPass = (result: HarnessResult, validateOnly: boolean): boolean =>
-  result.refresh.exitCode === 0 &&
-  result.validate.exitCode === 0 &&
-  (validateOnly || (result.proof?.pass === true && checksPass(result.checks)));
+const harnessResultPass = (result: HarnessResult, validateOnly: boolean): boolean => {
+  // An environmental setup blocker (OAuth absent, provider quota exhausted)
+  // excludes the leg from the gate — mirrored from the council's verdict
+  // semantics. The blocker is still surfaced in setupBlockers with a retry
+  // path, so a blocked leg is reported, never silently skipped.
+  if (result.setupBlocker !== undefined) return true;
+  return (
+    result.refresh.exitCode === 0 &&
+    result.validate.exitCode === 0 &&
+    (validateOnly || (result.proof?.pass === true && checksPass(result.checks)))
+  );
+};
 
 const modelSelectionPass = (result: ModelSelectionResult | undefined, validateOnly: boolean): boolean =>
   result === undefined ||
@@ -1406,8 +1413,11 @@ const main = async (): Promise<void> => {
   const shouldRunModelSelection = entries.some((entry) => entry.harness === "opencode");
   const liveHome = resolve(process.env.PRISM_E2E_LIVE_HOME ?? homedir());
   const livePrismHome = resolve(process.env.PRISM_HOME ?? join(homedir(), ".prism"));
-  const qaCleanupHarnesses = new Set(entries.map((entry) => entry.harness));
+  const qaCleanupHarnesses = new Set<Harness | "cursor">(entries.map((entry) => entry.harness));
   if (shouldRunModelSelection) qaCleanupHarnesses.add("opencode");
+  // The QA plugin targets cursor for the single-config live proof; its
+  // server entry must be cleaned even though cursor runs no workflow leg.
+  qaCleanupHarnesses.add("cursor");
 
   if (hasFlag("--cleanup-qa-only")) {
     const qaCleanup = await cleanupWorkflowE2EQaArtifacts({

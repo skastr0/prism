@@ -1,9 +1,17 @@
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { getHarness, resolveHarnessRoot } from "./harnesses.js";
-import { exists, expandPath, listDir, listDirRecursive, pathContains, readFile } from "./fs.js";
+import {
+  exists,
+  expandPath,
+  listDir,
+  listDirRecursive,
+  pathContains,
+  readFile,
+  removeDir,
+} from "./fs.js";
 import type { HarnessId, HarnessScope } from "./types.js";
 import { HarnessRoots, type HarnessRootsEnv } from "./services/prism-env.js";
 import { refreshPlugin, type RefreshResult } from "./refresh.js";
@@ -15,7 +23,6 @@ import {
   type SnapshotManifest,
 } from "./state/snapshot.js";
 import { gcSnapshots, snapshotDir } from "./state/store.js";
-import { gcShimExposure } from "./state/shim-exposure.js";
 import { parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
@@ -24,9 +31,19 @@ import {
 } from "./manifest.js";
 import { compilePluginForTarget } from "./compile/pipeline.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { getDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
+import { probeSocketLiveness } from "@skastr0/prism-sdk/mcp/uds-singleton";
 import { describePrismCause } from "./errors.js";
 import { getMcpStatus } from "./mcp/lifecycle.js";
+import {
+  isShimHarnessId,
+  loadPluginInventory,
+  verifyHarnessTopology,
+  type McpTopologyAssertion,
+  type McpTopologyViolation,
+} from "./doctor/mcp-topology-checks.js";
+import { discoverPluginPaths } from "./plugin-inventory.js";
 import {
   detectWorkflowHarnesses,
   workflowHarnessIdsForHarnesses,
@@ -43,7 +60,8 @@ export type DoctorFindingFamily =
   | "namespace.stray"
   | "region.integrity"
   | "mcp.health"
-  | "determinism.selfcheck";
+  | "determinism.selfcheck"
+  | "topology.invariant";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -78,6 +96,17 @@ export interface DoctorOptions {
   readonly fix: boolean;
   /** Optional harness-root resolver; when provided, global roots come from here instead of HOME. */
   readonly roots?: HarnessRootsEnv;
+  /**
+   * Directory of installed plugins (shallow `plugin.json` scan, mirroring
+   * `refresh --plugins`/`plan --plugins`) to verify the MCP topology
+   * invariants (`topology.*` findings) against. Doctor has no persisted
+   * record of "where plugins were installed from" — there is no such state
+   * anywhere in `prism-home` today — so this is opt-in per invocation,
+   * exactly like refresh/plan's own `--plugins` flag. Omitted: the
+   * `topology.*` check family contributes zero findings, unchanged from
+   * doctor's pre-existing behavior.
+   */
+  readonly pluginsDir?: string;
 }
 
 const finding = (input: Omit<DoctorFinding, "schema">): DoctorFinding => ({
@@ -515,9 +544,9 @@ const validateSnapshotDiskState = async (options: {
 
 const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => {
   const result = await gcSnapshots(prismHome);
-  // The shim-exposure registry is keyed by harness root exactly like the
-  // snapshot store; gc it in the same pass (silent — it is a derived cache).
-  await gcShimExposure(prismHome);
+  // The shim-exposure registry (state/shim-exposure.ts) is retired — wipe any
+  // leftover directory from a pre-migration install (silent, one-time sweep).
+  await removeDir(join(prismHome, "state", "shim-exposure"));
   const findings: DoctorFinding[] = result.dropped.map((dropped) => finding({
     severity: "info",
     family: "snapshot.gc",
@@ -569,6 +598,32 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
   }
 };
 
+/**
+ * Kimi Code's own plugin manager writes these two files as install-time side
+ * effects directly inside every `prism-generated-*` plugin directory it
+ * activates -- `plugin.json` (a symlink to Prism's own `kimi.plugin.json`)
+ * and `prism.lock` (Kimi's own lockfile), grounded by inspecting a real
+ * `~/.kimi-code/plugins/managed/prism-generated-<plugin>/` install. Neither
+ * is written by the kimi-code lowerer, so neither is ever recorded in
+ * Prism's snapshot; without this allowance both would misreport as unowned
+ * strays every doctor run. Scoped to kimi-code only -- no other harness's
+ * scan is affected.
+ */
+const KIMI_MANAGER_ARTIFACT_BASENAMES = new Set(["plugin.json", "prism.lock"]);
+
+const isKimiManagerArtifact = (harnessId: HarnessId, relativePath: string): boolean => {
+  if (harnessId !== "kimi-code") return false;
+  const segments = relativePath.split("/");
+  const basename = segments.at(-1);
+  const parentDir = segments.at(-2);
+  return (
+    basename !== undefined &&
+    KIMI_MANAGER_ARTIFACT_BASENAMES.has(basename) &&
+    parentDir !== undefined &&
+    parentDir.startsWith("prism-generated-")
+  );
+};
+
 const detectNamespaceStrays = async (options: {
   readonly prismHome: string;
   readonly harnesses: ReadonlyArray<HarnessId>;
@@ -592,6 +647,7 @@ const detectNamespaceStrays = async (options: {
         if (!(await exists(base))) continue;
         for (const relativePath of await listDirRecursive(base)) {
           if (!namespaceStrayCandidate(relativePath) && !namespaceStrayCandidate(base)) continue;
+          if (isKimiManagerArtifact(harnessId, relativePath)) continue;
           const absolutePath = resolve(join(base, relativePath));
           if (owned.has(absolutePath)) continue;
           findings.push(finding({
@@ -620,28 +676,37 @@ const generatedConfigPathExists = async (
  * Doctor's per-harness MCP validation, migrated to the stdio-shim-only world
  * (overhaul: HTTP transport retired, `stdio-shim` is the only transport).
  * Every shim harness registers the shim under `shimServerKey(harness)` with
- * exactly `{ command: "prism", args: ["mcp", "shim"], env: { PRISM_SHIM_*
- * } }` (see `packages/prism-sdk/src/mcp/wire-naming.ts` and each lowerer's
+ * exactly `{ command, args: ["mcp", "shim"], env: { PRISM_SHIM_* } }` (see
+ * `packages/prism-sdk/src/mcp/wire-naming.ts` and each lowerer's
  * `planMcpServer`/shim branch) -- there is no more port, url, or HTTP
  * headers to validate. This section validates a harness's on-disk MCP
  * server entry against that exact contract, the same one the lowerers emit.
+ *
+ * `command` is no longer always the literal `"prism"`: the compiler stamps
+ * the binary that ran the compile (`shim-command.ts`'s
+ * `shimCommandForCompile`), so a dev compile (`prism-dev`, or any other
+ * compiled-binary name) carries its own absolute self path instead. Doctor
+ * accepts both shapes.
  */
 
 /** `p_<hash8>_` -- the fixed-width namespace segment every wire name carries (see `canonicalNamespace`). */
 const WIRE_NAME_NAMESPACE = /p_[0-9a-f]{8}_/u;
 
 /**
- * "Resolvable" here means shape-correct, not PATH-resolved: every lowerer
- * emits the literal token `"prism"`, and requiring an actual PATH lookup
- * would make doctor flaky in a dev loop that runs against an uninstalled
- * checkout. A path-shaped command (containing a separator) is still checked
- * for existence on disk, so a genuine remnant (e.g. a stale `bun`/`node` +
- * missing bundle path from the retired per-plugin HTTP daemon) is caught.
+ * "Resolvable" here means shape-correct, not PATH-resolved: the literal
+ * token `"prism"` is always accepted without a PATH lookup, so doctor stays
+ * non-flaky in a dev loop that runs against an uninstalled checkout. A
+ * path-shaped command (containing a separator) must additionally have a
+ * basename starting with `prism` (the self-stamped dev-binary shape) and
+ * exist on disk -- catching both a genuine stale remnant (e.g. a leftover
+ * `bun`/`node` + missing bundle path from the retired per-plugin HTTP
+ * daemon) and an unrelated absolute path that happens to exist.
  */
 const isResolvablePrismShimCommand = async (command: unknown): Promise<boolean> => {
   if (typeof command !== "string" || command.length === 0) return false;
   if (command === "prism") return true;
   if (command.includes("/") || command.includes("\\")) {
+    if (!basename(command).toLowerCase().startsWith("prism")) return false;
     return generatedConfigPathExists(command);
   }
   return false;
@@ -655,6 +720,60 @@ const shimServerEnv = (server: Record<string, unknown>): Record<string, unknown>
   return env && typeof env === "object" && !Array.isArray(env) ? (env as Record<string, unknown>) : undefined;
 };
 
+/**
+ * True precondition for "this owner plugin can serve MCP tools right now" --
+ * grounded in `resolveOrSpawnDaemon`
+ * (packages/prism-sdk/src/mcp/daemon-resolver.ts, `mcp-shim-plugin-bundle-missing`
+ * grounding pass, 2026-07-07): the per-plugin UDS daemon architecture keeps
+ * NO artifact at rest once a daemon is live. `prismMcpServerPath`'s
+ * `server.mjs` is written once by compile (`src/compile/pipeline.ts`'s
+ * `prepareUnionMcpServer` -> `writePrismMcpServerBundle`) and is read back
+ * exactly once, by `resolveOrSpawnDaemon`, to SPAWN a fresh `bun <bundle>`
+ * daemon -- it throws `DaemonResolveError` ("cannot spawn: unable to
+ * locate/read compiled bundle") only when it is about to spawn and finds
+ * nothing to read. But that same module's `isBundleStale` treats an
+ * unreadable bundle as "unknown, not proven stale" for an *already-live*
+ * registered daemon: a `bun <bundle>` process that already started keeps
+ * serving over its UDS socket with no bundle file on disk at all, and a
+ * live daemon is deliberately never torn down just because compile output
+ * was pruned/relocated out from under it. So a plugin is servable when
+ * EITHER the bundle exists (a fresh daemon can be spawned) OR the UDS
+ * registry names a daemon that is still live (nothing to spawn --
+ * already running); neither holding is the one state that is genuinely
+ * broken. A plugin that has simply never been spawned yet (no registry
+ * entry at all, bundle present) is intentionally NOT this state -- lazy
+ * first-spawn is healthy, matching `mcp.health`'s own "stopped" bucket in
+ * `src/mcp/lifecycle.ts`'s `classifyStatus`, which treats an absent
+ * registry entry as non-fatal by the same reasoning.
+ */
+/**
+ * Injectable seam for `pluginIsServable`'s two UDS lookups. `getDaemon`
+ * (`@skastr0/prism-sdk/mcp/uds-registry`) resolves its registry root via
+ * `node:os`'s `homedir()`, which -- unlike `prismHome` -- Bun resolves once
+ * at process start and never re-reads from a test's mutated
+ * `process.env.HOME`; a real-function test would silently read/write the
+ * *actual invoking machine's* `~/.prism/runtime/mcp`, not a hermetic
+ * fixture. Tests inject fakes here instead of touching real machine state;
+ * every production call site omits this and gets the real functions.
+ */
+export interface PluginServableDeps {
+  readonly getDaemon?: typeof getDaemon;
+  readonly probeSocketLiveness?: typeof probeSocketLiveness;
+}
+
+export const pluginIsServable = async (
+  prismHome: string,
+  pluginName: string,
+  deps: PluginServableDeps = {},
+): Promise<boolean> => {
+  if (await generatedConfigPathExists(prismMcpServerPath(prismHome, pluginName))) return true;
+  const resolveDaemon = deps.getDaemon ?? ((plugin: string) => getDaemon(plugin, prismHome));
+  const probeLiveness = deps.probeSocketLiveness ?? probeSocketLiveness;
+  const registered = await resolveDaemon(pluginName);
+  if (registered.kind !== "ok") return false;
+  return (await probeLiveness(registered.value.sock)) === "live";
+};
+
 const missingShimPluginBundles = async (
   prismHome: string,
   pluginsCsv: string,
@@ -662,7 +781,7 @@ const missingShimPluginBundles = async (
   const names = pluginsCsv.split(",").map((value) => value.trim()).filter((value) => value.length > 0);
   const missing: string[] = [];
   for (const pluginName of names) {
-    if (!(await generatedConfigPathExists(prismMcpServerPath(prismHome, pluginName)))) missing.push(pluginName);
+    if (!(await pluginIsServable(prismHome, pluginName))) missing.push(pluginName);
   }
   return missing;
 };
@@ -760,7 +879,7 @@ const findingsFromStdioShimVerdict = (
       ...base,
       severity: "error",
       code: "config.mcp-shim-plugin-bundle-missing",
-      message: `${options.harness} MCP server '${options.serverName}' references owner plugin(s) with no compiled MCP bundle: ${verdict.missingPluginBundles.join(", ")}`,
+      message: `${options.harness} MCP server '${options.serverName}' references owner plugin(s) with no compiled MCP bundle and no live daemon: ${verdict.missingPluginBundles.join(", ")}`,
       data: { missingPluginBundles: verdict.missingPluginBundles },
     }));
   }
@@ -789,17 +908,262 @@ const validateStdioShimServerEntry = async (options: {
   return findingsFromStdioShimVerdict(verdict, options);
 };
 
+// ---------------------------------------------------------------------------
+// Per-plugin server entries — codex-cli / hermes / cursor (the
+// single-config-file family). One MCP-owning plugin, one server entry keyed
+// by `pluginServerKey(plugin)`, advertising bare wire names (no `p_<hash8>_`
+// namespace prefix — see `packages/prism-sdk/src/mcp/wire-naming.ts`'s
+// per-plugin naming section and each lowerer's `planMcpServer`). This is a
+// parallel verdict to `evaluateStdioShimServerEntry` above (never reused by
+// it) because the two schemes disagree on what "valid" means for
+// `PRISM_SHIM_PLUGINS` (exactly one plugin vs. a union) and for allowlist
+// shape (bare vs. `p_<hash8>_`-namespaced) — grok and claude-code still use
+// the aggregated scheme unchanged.
+// ---------------------------------------------------------------------------
+
+/** Detects a Prism-managed shim entry regardless of server key, so a foreign hand-authored MCP server is never touched. */
+const isPrismShimServerEntry = (server: Record<string, unknown>): boolean => {
+  if (server.command === "prism") return true;
+  const env = shimServerEnv(server);
+  return typeof env?.PRISM_SHIM_HARNESS === "string";
+};
+
+interface PerPluginShimVerdict {
+  readonly commandResolvable: boolean;
+  readonly argsValid: boolean;
+  readonly envHarnessMatches: boolean;
+  readonly envNamingMatches: boolean;
+  readonly envPluginMatches: boolean;
+  readonly serverKeyMatches: boolean;
+  readonly missingPluginBundle: boolean;
+}
+
+/**
+ * Evaluates one per-plugin server entry: `serverKey` is the map key this
+ * entry was found under, `expectedPlugin` is `undefined` when
+ * `PRISM_SHIM_PLUGINS` does not resolve to exactly one plugin name (already
+ * a defect worth its own finding, so no plugin-scoped checks — bundle
+ * presence, server-key identity — can run).
+ */
+const evaluatePerPluginShimServerEntry = async (options: {
+  readonly harness: HarnessId;
+  readonly serverKey: string;
+  readonly server: Record<string, unknown>;
+  readonly prismHome: string;
+}): Promise<PerPluginShimVerdict> => {
+  const env = shimServerEnv(options.server);
+  const pluginsRaw = typeof env?.PRISM_SHIM_PLUGINS === "string" ? env.PRISM_SHIM_PLUGINS.trim() : "";
+  const plugins = pluginsRaw.split(",").map((value) => value.trim()).filter((value) => value.length > 0);
+  const expectedPlugin = plugins.length === 1 ? plugins[0] : undefined;
+  return {
+    commandResolvable: await isResolvablePrismShimCommand(options.server.command),
+    argsValid: hasStdioShimArgs(options.server.args),
+    envHarnessMatches: env?.PRISM_SHIM_HARNESS === options.harness,
+    envNamingMatches: env?.PRISM_SHIM_NAMING === "per-plugin",
+    envPluginMatches: expectedPlugin !== undefined,
+    serverKeyMatches: expectedPlugin !== undefined && options.serverKey === pluginServerKey(expectedPlugin),
+    missingPluginBundle:
+      expectedPlugin !== undefined && !(await pluginIsServable(options.prismHome, expectedPlugin)),
+  };
+};
+
+const findingsFromPerPluginShimVerdict = (
+  verdict: PerPluginShimVerdict,
+  options: { readonly harness: HarnessId; readonly serverKey: string; readonly path: string; readonly root?: string },
+): DoctorFinding[] => {
+  const base = {
+    family: "harness.config" as const,
+    harness: options.harness,
+    path: options.path,
+    fix: "refresh" as const,
+    ...(options.root ? { root: options.root } : {}),
+  };
+  const findings: DoctorFinding[] = [];
+  if (!verdict.commandResolvable) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-command-unresolvable",
+      message: `${options.harness} MCP server '${options.serverKey}' command does not resolve to a prism binary`,
+    }));
+  }
+  if (!verdict.argsValid) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-args-invalid",
+      message: `${options.harness} MCP server '${options.serverKey}' args do not invoke 'prism mcp shim'`,
+    }));
+  }
+  if (!verdict.envHarnessMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-env-harness-mismatch",
+      message: `${options.harness} MCP server '${options.serverKey}' env.PRISM_SHIM_HARNESS is missing or does not match '${options.harness}'`,
+    }));
+  }
+  if (!verdict.envNamingMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-per-plugin-naming-missing",
+      message: `${options.harness} MCP server '${options.serverKey}' is missing env.PRISM_SHIM_NAMING=per-plugin`,
+    }));
+  }
+  if (!verdict.envPluginMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-per-plugin-plugin-mismatch",
+      message: `${options.harness} MCP server '${options.serverKey}' env.PRISM_SHIM_PLUGINS must name exactly one owner plugin`,
+    }));
+  } else if (!verdict.serverKeyMatches) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-per-plugin-plugin-mismatch",
+      message: `${options.harness} MCP server '${options.serverKey}' key does not match its own PRISM_SHIM_PLUGINS owner`,
+    }));
+  }
+  if (verdict.missingPluginBundle) {
+    findings.push(finding({
+      ...base,
+      severity: "error",
+      code: "config.mcp-shim-plugin-bundle-missing",
+      message: `${options.harness} MCP server '${options.serverKey}' references an owner plugin with no compiled MCP bundle and no live daemon`,
+    }));
+  }
+  return findings;
+};
+
+/**
+ * The retired aggregated-shim key (`prism-mcp-shim`) surviving under the
+ * per-plugin scheme is a migration artifact, not live config: no lowerer for
+ * this harness family emits it anymore, so it is never re-validated against
+ * either verdict — only flagged. `fix: "manual"` because no plugin's own
+ * compile is scoped to prune a key it never owned; a plain refresh will not
+ * touch this key, so the operator removes it by hand once migrated.
+ */
+const legacyAggregatedShimFinding = (options: {
+  readonly harness: HarnessId;
+  readonly serverKey: string;
+  readonly path: string;
+  readonly root?: string;
+}): DoctorFinding =>
+  finding({
+    family: "harness.config",
+    severity: "warning",
+    code: "config.mcp-shim-legacy-aggregated-entry",
+    message: `${options.harness} MCP config still carries the retired aggregated shim entry '${options.serverKey}' — this harness now renders one server per owner plugin`,
+    harness: options.harness,
+    path: options.path,
+    fix: "manual",
+    ...(options.root ? { root: options.root } : {}),
+  });
+
+const validatePerPluginShimServerEntry = async (options: {
+  readonly harness: HarnessId;
+  readonly serverKey: string;
+  readonly path: string;
+  readonly root?: string;
+  readonly server: Record<string, unknown>;
+  readonly prismHome: string;
+}): Promise<DoctorFinding[]> => {
+  const verdict = await evaluatePerPluginShimServerEntry(options);
+  return findingsFromPerPluginShimVerdict(verdict, options);
+};
+
+/**
+ * Validates every entry under a single-config-file harness's `mcp_servers`
+ * (or `mcpServers`) map for the codex/hermes/cursor per-plugin scheme: the
+ * legacy aggregated key gets the OLD generic verdict (unchanged shape checks)
+ * plus a migration advisory, every other Prism-shaped entry gets the new
+ * per-plugin verdict, and anything that isn't Prism-managed is left alone.
+ */
+const validatePerPluginShimServerMap = async (options: {
+  readonly harness: HarnessId;
+  readonly path: string;
+  readonly root?: string;
+  readonly servers: Record<string, unknown>;
+  readonly prismHome: string;
+  /** Codex only: non-array `enabled_tools` is its own distinct defect. */
+  readonly onEnabledToolsNotArray?: (serverKey: string, server: Record<string, unknown>) => DoctorFinding | undefined;
+}): Promise<DoctorFinding[]> => {
+  const findings: DoctorFinding[] = [];
+  const legacyKey = shimServerKey(options.harness as ShimHarnessId);
+  for (const [serverKey, raw] of Object.entries(options.servers)) {
+    if (!raw || typeof raw !== "object") continue;
+    const server = raw as Record<string, unknown>;
+    // The legacy key is a deterministic, Prism-assigned name — anything
+    // found under it is presumed Prism's regardless of shape (a corrupted
+    // remnant still needs every shape check to fire). Any OTHER key is only
+    // treated as Prism-managed when it looks like a shim entry, so a
+    // foreign hand-authored MCP server is never touched.
+    if (serverKey !== legacyKey && !isPrismShimServerEntry(server)) continue;
+
+    const enabledToolsFinding = options.onEnabledToolsNotArray?.(serverKey, server);
+    if (enabledToolsFinding) findings.push(enabledToolsFinding);
+
+    if (serverKey === legacyKey) {
+      // Every legacy-key call site (codex's TOML `enabled_tools`, hermes's
+      // synthesized `enabled_tools` from its YAML `tools.include`) exposes
+      // the allowlist as this same field on the server object; cursor's
+      // shim entry never had one.
+      const allowlist = Array.isArray(server.enabled_tools)
+        ? server.enabled_tools.filter((tool): tool is string => typeof tool === "string")
+        : undefined;
+      findings.push(
+        ...(await validateStdioShimServerEntry({
+          harness: options.harness,
+          path: options.path,
+          serverName: serverKey,
+          server,
+          prismHome: options.prismHome,
+          ...(allowlist ? { allowlist } : {}),
+          ...(options.root ? { root: options.root } : {}),
+        })),
+      );
+      findings.push(legacyAggregatedShimFinding({
+        harness: options.harness,
+        serverKey,
+        path: options.path,
+        ...(options.root ? { root: options.root } : {}),
+      }));
+      continue;
+    }
+
+    findings.push(
+      ...(await validatePerPluginShimServerEntry({
+        harness: options.harness,
+        serverKey,
+        path: options.path,
+        server,
+        prismHome: options.prismHome,
+        ...(options.root ? { root: options.root } : {}),
+      })),
+    );
+  }
+  return findings;
+};
+
 const pathFromCommandString = (command: string): string | undefined => {
   const match = command.match(/(?:node|bun)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/u);
   return match?.[1] ?? match?.[2] ?? match?.[3];
 };
 
 /**
- * Grok registers the stdio shim inside `<grok-root>/config.toml` under
- * `[mcp_servers.<shim server key>]` (a Prism-managed marker region) — the
- * only MCP source grok actually resolves for installed plugins. Validate
- * that entry against the stdio-shim contract; there is no per-tool
- * allowlist in the server table (agent frontmatter `tools:` gates exposure).
+ * Grok registers the stdio shim inside `<grok-root>/config.toml` — the only
+ * MCP source grok actually resolves for installed plugins — under ONE
+ * `[mcp_servers.<pluginServerKey(owner)>]` entry PER MCP-owning plugin (a
+ * Prism-managed marker region each), not a single shared key. There is no
+ * fixed key to look up, so every `mcp_servers` entry is scanned and any that
+ * carries a Prism shim marker — `command == "prism"` or an
+ * `env.PRISM_SHIM_HARNESS` key present (even on an otherwise-broken entry
+ * with a corrupted command) — is validated against the stdio-shim contract.
+ * An entry with neither signal is a user's own server (Linear, Sentry, ...)
+ * and is left alone. There is no per-tool allowlist in the server table
+ * (agent frontmatter `tools:` gates exposure).
  */
 const validateGrokConfigReferences = async (
   path: string,
@@ -814,16 +1178,24 @@ const validateGrokConfigReferences = async (
   }
   const mcpServers = parsed.mcp_servers;
   if (!mcpServers || typeof mcpServers !== "object") return [];
-  const expectedServerName = shimServerKey("grok");
-  const raw = (mcpServers as Record<string, unknown>)[expectedServerName];
-  if (!raw || typeof raw !== "object") return [];
-  return validateStdioShimServerEntry({
-    harness: "grok",
-    path,
-    serverName: expectedServerName,
-    server: raw as Record<string, unknown>,
-    prismHome,
-  });
+  const findings: DoctorFinding[] = [];
+  for (const [serverName, raw] of Object.entries(mcpServers as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object") continue;
+    const server = raw as Record<string, unknown>;
+    const env = shimServerEnv(server);
+    const looksLikePrismShim = server.command === "prism" || env?.PRISM_SHIM_HARNESS !== undefined;
+    if (!looksLikePrismShim) continue;
+    findings.push(
+      ...(await validateStdioShimServerEntry({
+        harness: "grok",
+        path,
+        serverName,
+        server,
+        prismHome,
+      })),
+    );
+  }
+  return findings;
 };
 
 const validateCodexConfigReferences = async (
@@ -840,35 +1212,26 @@ const validateCodexConfigReferences = async (
   const findings: DoctorFinding[] = [];
   const mcpServers = parsed.mcp_servers;
   if (mcpServers && typeof mcpServers === "object") {
-    const expectedServerName = shimServerKey("codex-cli");
-    const raw = (mcpServers as Record<string, unknown>)[expectedServerName];
-    if (raw && typeof raw === "object") {
-      const server = raw as Record<string, unknown>;
-      if ("enabled_tools" in server && !Array.isArray(server.enabled_tools)) {
-        findings.push(finding({
-          severity: "error",
-          family: "harness.config",
-          code: "config.codex-enabled-tools-invalid",
-          message: `Codex MCP server '${expectedServerName}' has non-array enabled_tools`,
-          harness: "codex-cli",
-          path,
-          fix: "refresh",
-        }));
-      }
-      const allowlist = Array.isArray(server.enabled_tools)
-        ? server.enabled_tools.filter((tool): tool is string => typeof tool === "string")
-        : undefined;
-      findings.push(
-        ...(await validateStdioShimServerEntry({
-          harness: "codex-cli",
-          path,
-          serverName: expectedServerName,
-          server,
-          prismHome,
-          allowlist,
-        })),
-      );
-    }
+    findings.push(
+      ...(await validatePerPluginShimServerMap({
+        harness: "codex-cli",
+        path,
+        servers: mcpServers as Record<string, unknown>,
+        prismHome,
+        onEnabledToolsNotArray: (serverKey, server) =>
+          "enabled_tools" in server && !Array.isArray(server.enabled_tools)
+            ? finding({
+                severity: "error",
+                family: "harness.config",
+                code: "config.codex-enabled-tools-invalid",
+                message: `Codex MCP server '${serverKey}' has non-array enabled_tools`,
+                harness: "codex-cli",
+                path,
+                fix: "refresh",
+              })
+            : undefined,
+      })),
+    );
   }
 
   const visitCommands = async (value: unknown): Promise<void> => {
@@ -1015,10 +1378,24 @@ const validateOpenCodeConfigReferences = async (path: string): Promise<DoctorFin
   return findings;
 };
 
+/** Mirrors the claude-code lowerer's `generatedPluginId` prefix (`prism-generated-<plugin>`). */
+const CLAUDE_GENERATED_PLUGIN_PREFIX = "prism-generated-";
+
+/**
+ * Per-plugin server shape: a generated plugin bundle's `.mcp.json` (when
+ * present at all — a pure consumer plugin has none, see the claude-code
+ * lowerer's `planMcpServer`) registers exactly one server, keyed by
+ * `pluginServerKey` of the SOURCE plugin the bundle was generated from — not
+ * the shared `shimServerKey("claude-code")` the retired aggregated shape
+ * used. `generatedPluginDirName` is that bundle directory's own basename
+ * (`prism-generated-<plugin>`), so stripping the fixed prefix recovers the
+ * same plugin-name input the lowerer fed `pluginServerKey` at compile time.
+ */
 const validateClaudeGeneratedPlugin = async (
   root: string,
   pluginRoot: string,
   prismHome: string,
+  generatedPluginDirName: string,
 ): Promise<DoctorFinding[]> => {
   const findings: DoctorFinding[] = [];
   const mcpPath = join(pluginRoot, ".mcp.json");
@@ -1027,7 +1404,10 @@ const validateClaudeGeneratedPlugin = async (
       const parsed = JSON.parse(await readFile(mcpPath)) as {
         readonly mcpServers?: Record<string, Record<string, unknown>>;
       };
-      const expectedServerName = shimServerKey("claude-code");
+      const sourcePluginName = generatedPluginDirName.startsWith(CLAUDE_GENERATED_PLUGIN_PREFIX)
+        ? generatedPluginDirName.slice(CLAUDE_GENERATED_PLUGIN_PREFIX.length)
+        : generatedPluginDirName;
+      const expectedServerName = pluginServerKey(sourcePluginName);
       const server = parsed.mcpServers?.[expectedServerName];
       if (server && Object.keys(server).length > 0) {
         findings.push(
@@ -1116,7 +1496,7 @@ const validateClaudeGeneratedPluginReferences = async (
     for (const entry of await listDir(skillsRoot)) {
       if (!entry.startsWith("prism-generated-")) continue;
       const pluginRoot = join(skillsRoot, entry);
-      findings.push(...(await validateClaudeGeneratedPlugin(root, pluginRoot, prismHome)));
+      findings.push(...(await validateClaudeGeneratedPlugin(root, pluginRoot, prismHome, entry)));
     }
   }
   return findings;
@@ -1149,26 +1529,146 @@ const validateCursorConfigReferences = async (
       fix: "manual",
     })];
   }
-  const serverName = shimServerKey("cursor");
-  const server = parsed.mcpServers?.[serverName];
-  if (!server || Object.keys(server).length === 0) return [];
-  return validateStdioShimServerEntry({
+  if (!parsed.mcpServers || typeof parsed.mcpServers !== "object") return [];
+  return validatePerPluginShimServerMap({
     harness: "cursor",
     root,
     path,
-    serverName,
-    server,
+    servers: parsed.mcpServers,
     prismHome,
   });
 };
 
 /**
- * Grok, Antigravity CLI, Kimi Code, and Factory Droid each write the shim
- * entry into a JSON manifest inside their own generated-plugin directory
+ * Antigravity CLI's per-plugin server scheme (operator-locked): a generated
+ * plugin bundle's `mcp_config.json` holds exactly one non-empty server, keyed
+ * by that bundle's OWN plugin's `pluginServerKey` — never the aggregated
+ * `prism-mcp-shim` key, never a multi-plugin `PRISM_SHIM_PLUGINS` re-export
+ * closure, never an empty `mcpServers` block (a consumer plugin referencing
+ * only foreign owners' tools must have no `mcp_config.json` at all). Mirrors
+ * `validateClaudeGeneratedPlugin`'s per-plugin checks, adapted to
+ * Antigravity's `plugins/<bundle>/mcp_config.json` shape (see
+ * `src/compile/lowerers/antigravity-cli.ts` `planMcpServers`).
+ */
+const validateAntigravityGeneratedPlugin = async (
+  root: string,
+  pluginRoot: string,
+  prismHome: string,
+): Promise<DoctorFinding[]> => {
+  const findings: DoctorFinding[] = [];
+  const mcpPath = join(pluginRoot, "mcp_config.json");
+  if (!(await exists(mcpPath))) return findings;
+  let parsed: { readonly mcpServers?: Record<string, Record<string, unknown>> };
+  try {
+    parsed = JSON.parse(await readFile(mcpPath)) as {
+      readonly mcpServers?: Record<string, Record<string, unknown>>;
+    };
+  } catch (error) {
+    return [finding({
+      severity: "error",
+      family: "harness.config",
+      code: "config.antigravity-mcp-json-invalid",
+      message: `Antigravity generated plugin has invalid mcp_config.json: ${error instanceof Error ? error.message : String(error)}`,
+      harness: "antigravity-cli",
+      root,
+      path: mcpPath,
+      fix: "refresh",
+    })];
+  }
+
+  const servers = Object.entries(parsed.mcpServers ?? {});
+  if (servers.length === 0) {
+    findings.push(finding({
+      severity: "error",
+      family: "harness.config",
+      code: "config.antigravity-mcp-empty-servers",
+      message: `Antigravity generated plugin ships an empty mcpServers block (a consumer plugin must have no mcp_config.json): ${mcpPath}`,
+      harness: "antigravity-cli",
+      root,
+      path: mcpPath,
+      fix: "refresh",
+    }));
+  }
+  for (const [serverName, server] of servers) {
+    if (serverName === shimServerKey("antigravity-cli")) {
+      findings.push(finding({
+        severity: "error",
+        family: "harness.config",
+        code: "config.antigravity-mcp-legacy-aggregated-shim",
+        message: `Antigravity generated plugin still registers the legacy aggregated '${serverName}' server; per-plugin servers replaced it`,
+        harness: "antigravity-cli",
+        root,
+        path: mcpPath,
+        fix: "refresh",
+      }));
+      continue;
+    }
+    if (!server || Object.keys(server).length === 0) continue;
+    const env = (server.env ?? {}) as Record<string, unknown>;
+    const shimPlugins = typeof env.PRISM_SHIM_PLUGINS === "string"
+      ? env.PRISM_SHIM_PLUGINS.split(",").map((name) => name.trim()).filter((name) => name.length > 0)
+      : [];
+    if (
+      shimPlugins.length !== 1
+      || env.PRISM_SHIM_NAMING !== "per-plugin"
+      || pluginServerKey(shimPlugins[0] ?? "") !== serverName
+    ) {
+      findings.push(finding({
+        severity: "error",
+        family: "harness.config",
+        code: "config.antigravity-mcp-not-per-plugin",
+        message: `Antigravity generated plugin server '${serverName}' is not a single-plugin per-plugin shim entry (PRISM_SHIM_NAMING=per-plugin, PRISM_SHIM_PLUGINS naming exactly the owner whose server key is '${serverName}')`,
+        harness: "antigravity-cli",
+        root,
+        path: mcpPath,
+        fix: "refresh",
+      }));
+    }
+    findings.push(
+      ...(await validateStdioShimServerEntry({
+        harness: "antigravity-cli",
+        root,
+        path: mcpPath,
+        serverName,
+        server,
+        prismHome,
+      })),
+    );
+  }
+  return findings;
+};
+
+const validateAntigravityGeneratedPluginReferences = async (
+  scope: HarnessScope,
+  projectPath: string | undefined,
+  prismHome: string,
+  roots?: HarnessRootsEnv,
+): Promise<DoctorFinding[]> => {
+  const rootsList = rootsForHarness("antigravity-cli", scope, projectPath, roots);
+  const findings: DoctorFinding[] = [];
+  for (const root of rootsList) {
+    const pluginsRoot = join(root, "plugins");
+    if (!(await exists(pluginsRoot))) continue;
+    for (const entry of await listDir(pluginsRoot)) {
+      if (!entry.startsWith("prism-generated-")) continue;
+      findings.push(
+        ...(await validateAntigravityGeneratedPlugin(root, join(pluginsRoot, entry), prismHome)),
+      );
+    }
+  }
+  return findings;
+};
+
+/**
+ * Kimi Code and Factory Droid each write the (still-aggregated) shim entry
+ * into a JSON manifest inside their own generated-plugin directory
  * (mirroring Claude Code's `.mcp.json`, just a different subdir and
  * filename per harness -- see each lowerer's `planMcpServer`/manifest
- * write). One shared reader covers all four; only the scan subdir, config
- * filename, and (for Kimi) the allowlist field name differ.
+ * write). One shared reader covers both; only the scan subdir, config
+ * filename, and (for Kimi) the allowlist field name differ. Antigravity CLI
+ * has its own per-plugin-scheme reader above
+ * (`validateAntigravityGeneratedPluginReferences`) now that its lowerer has
+ * migrated off this aggregated shape.
  */
 const validateGeneratedPluginMcpReferences = async (options: {
   readonly harness: ShimHarnessId;
@@ -1274,6 +1774,17 @@ const yamlChildBlock = (
  * is not worth it. This reads the exact same fixed-indentation grammar the
  * lowerer writes, rather than parsing YAML in general.
  */
+/** Every top-level `<key>:` mapping name directly under `mcp_servers:` (indent 2). */
+const yamlChildKeyNames = (lines: ReadonlyArray<string>, indent: number): string[] => {
+  const names: string[] = [];
+  for (const line of lines) {
+    if (indentOf(line) !== indent) continue;
+    const match = line.trim().match(/^([^\s:]+):\s*$/u);
+    if (match) names.push(match[1]!);
+  }
+  return names;
+};
+
 const validateHermesConfigReferences = async (
   path: string,
   prismHome: string,
@@ -1282,30 +1793,37 @@ const validateHermesConfigReferences = async (
   const lines = (await readFile(path)).split("\n");
   const rootBlock = yamlChildBlock(lines, 0, "mcp_servers");
   if (rootBlock.length === 0) return [];
-  const serverName = shimServerKey("hermes");
-  const serverBlock = yamlChildBlock(rootBlock, 2, serverName);
-  if (serverBlock.length === 0) return [];
 
-  const envBlock = yamlChildBlock(serverBlock, 4, "env");
-  const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
-  const allowlist = yamlChildBlock(toolsBlock, 6, "include").length > 0
-    ? yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8)
-    : [];
-
-  return validateStdioShimServerEntry({
-    harness: "hermes",
-    path,
-    serverName,
-    server: {
+  const servers: Record<string, unknown> = {};
+  for (const serverKey of yamlChildKeyNames(rootBlock, 2)) {
+    const serverBlock = yamlChildBlock(rootBlock, 2, serverKey);
+    if (serverBlock.length === 0) continue;
+    const envBlock = yamlChildBlock(serverBlock, 4, "env");
+    const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
+    const allowlist = yamlChildBlock(toolsBlock, 6, "include").length > 0
+      ? yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8)
+      : undefined;
+    servers[serverKey] = {
       command: yamlScalarValue(serverBlock, 4, "command"),
       args: yamlListItems(yamlChildBlock(serverBlock, 4, "args"), 6),
       env: {
         PRISM_SHIM_HARNESS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_HARNESS"),
         PRISM_SHIM_PLUGINS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_PLUGINS"),
+        PRISM_SHIM_NAMING: yamlScalarValue(envBlock, 6, "PRISM_SHIM_NAMING"),
       },
-    },
+      // Normalized onto the same `enabled_tools` field codex/cursor's real
+      // parsed objects already carry, so the legacy-key branch inside
+      // `validatePerPluginShimServerMap` can read every harness's allowlist
+      // the same way regardless of source config shape.
+      ...(allowlist ? { enabled_tools: allowlist } : {}),
+    };
+  }
+
+  return validatePerPluginShimServerMap({
+    harness: "hermes",
+    path,
+    servers,
     prismHome,
-    allowlist,
   });
 };
 
@@ -1337,15 +1855,12 @@ const validateHarnessConfigReferences = async (options: {
     case "grok":
       return path ? validateGrokConfigReferences(path, options.prismHome) : [];
     case "antigravity-cli":
-      return validateGeneratedPluginMcpReferences({
-        harness: "antigravity-cli",
-        scope: options.scope,
-        projectPath: options.projectPath,
-        roots: options.roots,
-        prismHome: options.prismHome,
-        pluginsSubdir: "plugins",
-        configFileName: "mcp_config.json",
-      });
+      return validateAntigravityGeneratedPluginReferences(
+        options.scope,
+        options.projectPath,
+        options.prismHome,
+        options.roots,
+      );
     case "factory-droid":
       return validateGeneratedPluginMcpReferences({
         harness: "factory-droid",
@@ -1532,6 +2047,70 @@ const validateDeterminismSelfcheck = async (options: {
   })];
 };
 
+// ---------------------------------------------------------------------------
+// topology.* — the per-plugin MCP topology invariants (assertions A-F),
+// shared with the `mcp-topology-verify` acceptance gate via
+// `./doctor/mcp-topology-checks.js` (one source of truth, two surfaces: this
+// is the runtime-backpressure surface, the acceptance script is the release
+// gate). Opt-in on `options.pluginsDir` -- see `DoctorOptions.pluginsDir`'s
+// doc comment for why doctor has no default corpus to fall back to.
+// ---------------------------------------------------------------------------
+
+/** How `doctor --fix` (i.e. `prism refresh`) is expected to resolve each assertion family's violations. */
+const TOPOLOGY_ASSERTION_FIX: Record<McpTopologyAssertion, DoctorFinding["fix"]> = {
+  A: "manual", // retired/foreign-looking server key -- refresh never renames or removes a key it doesn't recognize as its own
+  B: "refresh", // owner/allowlist drift from the compiler's own canonical shape -- a refresh recomputes and rewrites it
+  C: "refresh", // stale server for a plugin that lost its MCP ownership -- the next refresh's sync-prune removes it
+  D: "manual", // duplicate/orphaned generated bundle directories -- refresh does not delete a stray bundle dir it doesn't own
+  E: "refresh", // owner plugin missing its server entry -- refresh compiles and adds it
+  F: "manual", // dead HTTP transport remnant from the retired transport -- no lowerer emits or removes this shape anymore
+};
+
+const findingFromTopologyViolation = (violation: McpTopologyViolation): DoctorFinding =>
+  finding({
+    severity: violation.severity,
+    family: "topology.invariant",
+    code: violation.code,
+    message: violation.message,
+    harness: violation.harness,
+    fix: TOPOLOGY_ASSERTION_FIX[violation.assertion],
+    ...(violation.plugin ? { plugin: violation.plugin } : {}),
+    ...(violation.path ? { path: violation.path } : {}),
+    ...(violation.data || violation.serverKey
+      ? {
+          data: {
+            assertion: violation.assertion,
+            ...(violation.serverKey ? { serverKey: violation.serverKey } : {}),
+            ...(violation.data ?? {}),
+          },
+        }
+      : {}),
+  });
+
+const validateMcpTopology = async (options: {
+  readonly pluginsDir?: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<DoctorFinding[]> => {
+  if (!options.pluginsDir) return [];
+  const shimHarnesses = options.harnesses.filter(isShimHarnessId);
+  if (shimHarnesses.length === 0) return [];
+
+  const pluginPaths = await discoverPluginPaths(expandPath(options.pluginsDir));
+  const inventory = await loadPluginInventory(pluginPaths, shimHarnesses);
+
+  const findings: DoctorFinding[] = [];
+  for (const harness of shimHarnesses) {
+    const root = rootForHarness(harness, options.scope, options.projectPath, options.roots);
+    if (!root) continue;
+    const report = await verifyHarnessTopology(harness, root, inventory);
+    findings.push(...report.violations.map(findingFromTopologyViolation));
+  }
+  return findings;
+};
+
 const runCompileFixes = async (options: DoctorOptions): Promise<{
   readonly findings: DoctorFinding[];
   readonly failed: boolean;
@@ -1705,6 +2284,16 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       })),
     );
   }
+
+  findings.push(
+    ...(await validateMcpTopology({
+      ...(options.pluginsDir ? { pluginsDir: options.pluginsDir } : {}),
+      harnesses: options.harnesses,
+      scope: options.scope,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
+    })),
+  );
 
   findings.push(
     ...(await validateSnapshotDiskState({

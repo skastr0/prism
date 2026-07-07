@@ -223,3 +223,159 @@ describe("renderWire / renderAllowlist — per-harness parity", () => {
     expect(() => renderWire("grok", plugin, longToolA, guard)).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-plugin server naming — the operator-locked target scheme.
+// ---------------------------------------------------------------------------
+
+import {
+  assertUniqueBareTools,
+  bareWireToolName,
+  daemonToolCandidatesForBare,
+  pluginCapBudget,
+  pluginServerKey,
+  pluginToolNamespace,
+  renderPluginAllowlist,
+  renderPluginWire,
+} from "./wire-naming";
+
+const GROK_FQ_REGEX = /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/;
+
+describe("pluginServerKey", () => {
+  it("is the plugin name itself for well-formed plugin names", () => {
+    expect(pluginServerKey("booth")).toBe("booth");
+    expect(pluginServerKey("tower")).toBe("tower");
+    expect(pluginServerKey("meta-ads-cli")).toBe("meta-ads-cli");
+    expect(pluginServerKey("package-authoring")).toBe("package-authoring");
+  });
+
+  it("never contains '__', '.', 'shim', or a p_<hash> namespace", () => {
+    const inputs = ["booth", "a__b", "weird..name", "My Plugin!", "x_._y", "meta-ads-cli"];
+    for (const input of inputs) {
+      const key = pluginServerKey(input);
+      expect(key).not.toContain("__");
+      expect(key).not.toContain(".");
+      expect(key).not.toContain("shim");
+      expect(key).not.toMatch(/^p_[0-9a-f]{8}$/);
+    }
+  });
+
+  it("starts with a grok-legal first character even for digit-leading names", () => {
+    expect(pluginServerKey("1password-cli")).toMatch(/^[a-z_]/);
+    expect(pluginServerKey("-weird-")).toMatch(/^[a-z_]/);
+    expect(pluginServerKey("")).toBe("plugin");
+  });
+
+  it("caps an overlong plugin name deterministically at 32 chars", () => {
+    const long = "an-extremely-long-plugin-name-that-overflows-every-budget";
+    const key = pluginServerKey(long);
+    expect(key.length).toBeLessThanOrEqual(32);
+    expect(key).toBe(pluginServerKey(long));
+    expect(key).not.toContain("__");
+  });
+});
+
+describe("bareWireToolName", () => {
+  it("strips the redundant own-plugin namespace prefix", () => {
+    expect(bareWireToolName("booth", "booth_context_get")).toBe("context_get");
+    expect(bareWireToolName("booth", "booth_drafts_register")).toBe("drafts_register");
+    expect(bareWireToolName("meta-ads-cli", "meta_ads_cli_campaign_list")).toBe("campaign_list");
+  });
+
+  it("passes a foreign-owner daemon tool name through unchanged", () => {
+    expect(bareWireToolName("booth", "tower_create_glyph")).toBe("tower_create_glyph");
+  });
+
+  it("never returns an empty name", () => {
+    expect(bareWireToolName("booth", "booth_").length).toBeGreaterThan(0);
+  });
+});
+
+describe("assertUniqueBareTools", () => {
+  it("accepts an authored plugin's own tool set", () => {
+    expect(() =>
+      assertUniqueBareTools("booth", ["booth_context_get", "booth_drafts_register", "tower_create_glyph"]),
+    ).not.toThrow();
+  });
+
+  it("throws on two daemon tools rendering the same bare name", () => {
+    expect(() => assertUniqueBareTools("booth", ["booth_tower_x", "tower_x"])).toThrow(/bare wire name/);
+  });
+});
+
+describe("renderPluginWire / renderPluginAllowlist", () => {
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["booth", "booth_context_get"],
+    ["tower", "tower_transition_glyph"],
+    ["meta-ads-cli", "meta_ads_cli_campaign_list"],
+    ["package-authoring", "package_authoring_prepare_dispatch"],
+    ["booth", "tower_create_glyph"], // foreign-owner permission tool
+  ];
+
+  it("within-server harnesses see the bare wire name as the allowlist entry (kimi law)", () => {
+    for (const harness of ["codex-cli", "hermes", "kimi-code", "cursor", "antigravity-cli"] as const) {
+      for (const [plugin, daemonTool] of cases) {
+        const wire = renderPluginWire(harness, plugin, daemonTool);
+        expect(renderPluginAllowlist(harness, plugin, daemonTool)).toBe(wire);
+      }
+    }
+  });
+
+  it("claude-code renders mcp__<plugin>__<bare>", () => {
+    expect(renderPluginAllowlist("claude-code", "booth", "booth_context_get")).toBe("mcp__booth__context_get");
+  });
+
+  it("grok renders <plugin>__<bare>", () => {
+    expect(renderPluginAllowlist("grok", "booth", "booth_context_get")).toBe("booth__context_get");
+  });
+
+  it("factory-droid renders mcp__<plugin>__<bare>", () => {
+    expect(renderPluginAllowlist("factory-droid", "booth", "booth_context_get")).toBe("mcp__booth__context_get");
+  });
+
+  it("property: no rendered segment ever contains '__' and every grok FQ name matches grok's regex", () => {
+    const plugins = ["booth", "tower", "meta-ads-cli", "package-authoring", "1password-cli", "a-very-long-plugin-name-beyond-caps"];
+    const toolTails = ["context_get", "a", "campaign_list", "x".repeat(70), "many_words_tool_name_here"];
+    for (const plugin of plugins) {
+      const key = pluginServerKey(plugin);
+      expect(key).not.toContain("__");
+      for (const tail of toolTails) {
+        const daemonTool = `${pluginToolNamespace(plugin)}_${tail}`.replace(/_+/g, "_");
+        for (const harness of SHIM_HARNESS_IDS) {
+          const wire = renderPluginWire(harness, plugin, daemonTool);
+          expect(wire).not.toContain("__");
+          expect(wire.length).toBeGreaterThan(0);
+        }
+        const grokFq = renderPluginAllowlist("grok", plugin, daemonTool);
+        expect(grokFq).toMatch(GROK_FQ_REGEX);
+        expect(grokFq.length).toBeLessThanOrEqual(64);
+        expect(grokFq.split("__").length).toBe(2);
+        const claudeFq = renderPluginAllowlist("claude-code", plugin, daemonTool);
+        expect(claudeFq).toMatch(/^mcp__[a-z][a-z0-9_-]*__[A-Za-z0-9_-]+$/);
+        expect(claudeFq.split("__").length).toBe(3);
+      }
+    }
+  });
+
+  it("grok caps the bare name against the per-plugin budget with a collision guard", () => {
+    const guard = createGrokCollisionGuard();
+    const plugin = "booth";
+    const budget = pluginCapBudget("grok", plugin)!;
+    expect(budget).toBe(64 - "booth".length - 2);
+    const overflow = `booth_${"t".repeat(80)}`;
+    const wire = renderPluginWire("grok", plugin, overflow, guard);
+    expect(wire.length).toBeLessThanOrEqual(budget);
+    expect(`${pluginServerKey(plugin)}__${wire}`).toMatch(GROK_FQ_REGEX);
+    // Non-capping harnesses leave the same input uncapped.
+    expect(pluginCapBudget("claude-code", plugin)).toBeUndefined();
+  });
+});
+
+describe("daemonToolCandidatesForBare", () => {
+  it("puts the prefix-restored own-plugin daemon name first", () => {
+    expect(daemonToolCandidatesForBare("booth", "context_get")).toEqual([
+      "booth_context_get",
+      "context_get",
+    ]);
+  });
+});

@@ -127,7 +127,7 @@ const fetchHealthOverUds = async (socketPath: string): Promise<McpRuntimeHealth 
 const classifyStatus = async (
   descriptor: McpRuntimeDescriptor,
 ): Promise<McpStatusResult> => {
-  const registered = await getDaemon(descriptor.pluginName);
+  const registered = await getDaemon(descriptor.pluginName, descriptor.prismHome);
   if (registered.kind === "absent") {
     return {
       state: "stopped",

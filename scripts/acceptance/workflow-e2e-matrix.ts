@@ -685,8 +685,16 @@ const cleanupWorkflowE2EQaConfigFallbacks = async (
       )) patched.push(path);
       return patched;
     }
+    case "grok": {
+      // The QA compile registers the stdio shim as a managed region in
+      // grok's config.toml; strip it if snapshot-driven removal missed it.
+      const path = join(root, "config.toml");
+      if (await patchTextFileIfChanged(path, (content) =>
+        removePrismMarkerBlock(content, "grok.mcp.prism"),
+      )) patched.push(path);
+      return patched;
+    }
     case "claude-code":
-    case "grok":
     case "amp-code":
       return patched;
   }

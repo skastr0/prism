@@ -635,8 +635,8 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: {
         kind: "generated-mcp",
-        path: "<generated-plugin>/.mcp.json",
-        summary: "Canonical tools lower through the shared Streamable HTTP MCP daemon.",
+        path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
+        summary: "Canonical tools lower to the PRISM_HOME union MCP daemon fronted by the stdio shim.",
       },
       hooks: {
         kind: "native-plugin-bundle",
@@ -644,9 +644,9 @@ export const LOWERER_CAPABILITIES = {
         summary: "Hooks are bundled in Grok plugin format.",
       },
       mcpConfig: {
-        kind: "native-plugin-bundle",
-        path: "<generated-plugin>/.mcp.json",
-        summary: "Generated plugin-local MCP config points at Prism's Streamable HTTP daemon.",
+        kind: "config-patch",
+        path: "<grok-root>/config.toml#mcp_servers",
+        summary: "Compile patches a managed [mcp_servers] stdio-shim region; grok does not resolve plugin-bundle .mcp.json files.",
       },
       agentConfig: {
         kind: "native-plugin-bundle",

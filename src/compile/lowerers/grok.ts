@@ -29,7 +29,7 @@ import {
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
-import type { DesiredFile } from "../../sync/desired.js";
+import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginWritePusher,
@@ -312,11 +312,50 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
-const planMcpServer = (
-  input: LowerInput,
-  files: DesiredFile[],
-  desiredRelativePaths: Set<string>,
-): void => {
+const quote = (value: string): string => JSON.stringify(value);
+
+const tomlArray = (values: ReadonlyArray<string>): string =>
+  `[${values.map((value) => quote(value)).join(", ")}]`;
+
+const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
+  `[${segments.map((segment) => quote(segment)).join(".")}]`;
+
+const renderGrokStdioShimMcpServerToml = (options: {
+  readonly name: string;
+  readonly plugins: ReadonlyArray<string>;
+  readonly exposureProfile?: string;
+}): string => {
+  const lines = [
+    tomlDottedTable(["mcp_servers", options.name]),
+    `command = ${quote("prism")}`,
+    `args = ${tomlArray(["mcp", "shim"])}`,
+    "enabled = true",
+    tomlDottedTable(["mcp_servers", options.name, "env"]),
+    `PRISM_SHIM_PLUGINS = ${quote(options.plugins.join(","))}`,
+    `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
+  ];
+  if (options.exposureProfile) {
+    lines.push(`PRISM_SHIM_EXPOSURE = ${quote(options.exposureProfile)}`);
+  }
+  return lines.join("\n");
+};
+
+/**
+ * Registers the stdio shim in `<grok-root>/config.toml` under
+ * `[mcp_servers.<shim server key>]` as a Prism-managed marker region.
+ *
+ * Why config.toml and not a plugin-bundle `.mcp.json`: Grok resolves MCP
+ * servers only from its config sources (`~/.grok/config.toml`, project
+ * `.grok/config.toml`, the project-root `.mcp.json`, and the Claude/Cursor
+ * compat imports — see `grok mcp doctor`'s "Config sources"). A `.mcp.json`
+ * inside an installed plugin bundle is counted by `grok inspect` but never
+ * becomes a live server in an agent run, so every tool name the lowerer
+ * advertised in agent frontmatter resolved to "Tool not found" via
+ * CallMcpTool. One shim entry per grok root (same LWW region semantics as
+ * the Codex lowerer's `codex.mcp.*` region); the shim fans out to every
+ * owner plugin's daemon over UDS.
+ */
+const planMcpServerRegion = (input: LowerInput, regions: DesiredRegion[]): void => {
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
@@ -324,36 +363,26 @@ const planMcpServer = (
   );
   if (bindingsByOwner.size === 0) return;
 
-  // One shim process fans out to every owner plugin's daemon over UDS, so
-  // there is exactly one entry here — no per-owner runtime/port resolution
-  // needed at compile time; the shim resolves live daemons on demand.
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: [...bindingsByOwner.keys()].join(","),
-    PRISM_SHIM_HARNESS: TARGET_ID,
-  };
-  if (input.target.mcpExposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
-  }
-
-  pushWrite(
-    files,
-    desiredRelativePaths,
-    input.target,
-    ".mcp.json",
-    json({
-      mcpServers: {
-        [shimServerKey("grok")]: {
-          command: "prism",
-          args: ["mcp", "shim"],
-          env,
-        },
-      },
+  const serverName = shimServerKey("grok");
+  regions.push({
+    kind: "marker",
+    targetPath: join(input.target.root, "config.toml"),
+    regionKey: `grok.mcp.${serverName}`,
+    commentPrefix: "#",
+    content: renderGrokStdioShimMcpServerToml({
+      name: serverName,
+      plugins: [...bindingsByOwner.keys()],
+      ...(input.target.mcpExposureProfile
+        ? { exposureProfile: input.target.mcpExposureProfile }
+        : {}),
     }),
-  );
+    plugin: input.target.sourcePluginName,
+  });
 };
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
+  const regions: DesiredRegion[] = [];
   const namer = createGrokToolNamer();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
@@ -377,7 +406,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     state,
     pushWrite,
   });
-  await planMcpServer(input, state.files, state.desiredRelativePaths);
+  planMcpServerRegion(input, regions);
   await planGeneratedPluginHookWrites({
     input,
     state,
@@ -387,5 +416,5 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     resolveTarget,
   });
 
-  return { files: state.files, regions: [] };
+  return { files: state.files, regions };
 };

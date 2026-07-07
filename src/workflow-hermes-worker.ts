@@ -78,6 +78,10 @@ export const buildHermesArgs = (input: {
     input.prompt,
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.provider !== undefined ? ["--provider", input.provider] : []),
+    // Programmatic output: without -Q the TUI renderer line-wraps the final
+    // response inside 80-col boxes, corrupting JSON mid-string before the
+    // worker's extractor sees it.
+    "-Q",
     ...permissionArgs,
   ];
 };

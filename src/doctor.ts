@@ -767,7 +767,7 @@ export const pluginIsServable = async (
   deps: PluginServableDeps = {},
 ): Promise<boolean> => {
   if (await generatedConfigPathExists(prismMcpServerPath(prismHome, pluginName))) return true;
-  const resolveDaemon = deps.getDaemon ?? getDaemon;
+  const resolveDaemon = deps.getDaemon ?? ((plugin: string) => getDaemon(plugin, prismHome));
   const probeLiveness = deps.probeSocketLiveness ?? probeSocketLiveness;
   const registered = await resolveDaemon(pluginName);
   if (registered.kind !== "ok") return false;

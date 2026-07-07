@@ -371,7 +371,11 @@ export class ShimAggregator {
       );
     }
     this.daemonTimeoutMs = options.daemonTimeoutMs ?? DEFAULT_SHIM_DAEMON_TIMEOUT_MS;
-    this.getDaemon = options.getDaemon ?? getDaemonDefault;
+    // Bind `prismHome` into the default lookup so a caller-supplied
+    // `options.prismHome` reaches the registry read, not just
+    // `resolveOrSpawn`'s bundle/socket path derivation below. An explicit
+    // `options.getDaemon` override takes over resolution entirely.
+    this.getDaemon = options.getDaemon ?? ((plugin: string) => getDaemonDefault(plugin, options.prismHome));
     this.spawnTimeoutMs = options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS;
     this.enabledTools = options.enabledTools;
     this.exposureProfile = options.exposureProfile;

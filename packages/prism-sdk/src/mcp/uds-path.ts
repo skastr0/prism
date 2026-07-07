@@ -50,7 +50,13 @@ function truncateHash(bundleHash: string): string {
  *   and passes the result down); this package cannot import that resolver
  *   itself (`packages/prism-sdk` has no dependency on the root `src/`
  *   tree), so an omitted value falls back to the same default
- *   (`~/.prism`) `resolvePrismHome()` uses when unset.
+ *   (`~/.prism`) `resolvePrismHome()` uses when unset. This function never
+ *   reads `PRISM_HOME` itself -- unlike `uds-registry.ts`'s runtime-root
+ *   resolution, `udsPathFor` only ever builds a path string (it never
+ *   touches disk), and every real call site (`daemon-resolver.ts`) already
+ *   threads `prismHome` through explicitly end to end, so there is no
+ *   destructive-operation risk from an omitted override landing on the
+ *   real machine home the way there was for the registry root.
  * @returns Absolute path to the socket file
  * @throws UDSPathLengthError if resulting path exceeds 100 bytes
  */

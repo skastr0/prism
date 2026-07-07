@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/factory-droid.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -244,7 +244,7 @@ export default defineTool({
   expect(droid?.content).toContain('- "Glob"');
   expect(droid?.content).toContain('- "Grep"');
   expect(droid?.content).toContain('- "Read"');
-  const echoPermission = renderAllowlist(
+  const echoPermission = renderPluginAllowlist(
     "factory-droid",
     "factory-plugin-fixture",
     "factory_plugin_fixture_echo",
@@ -259,13 +259,14 @@ export default defineTool({
   const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(Object.keys(mcpParsed.mcpServers ?? {})).toEqual([shimServerKey("factory-droid")]);
-  expect(mcpParsed.mcpServers?.[shimServerKey("factory-droid")]).toEqual({
+  expect(Object.keys(mcpParsed.mcpServers ?? {})).toEqual([pluginServerKey("factory-plugin-fixture")]);
+  expect(mcpParsed.mcpServers?.[pluginServerKey("factory-plugin-fixture")]).toEqual({
     command: "prism",
     args: ["mcp", "shim"],
     env: {
       PRISM_SHIM_PLUGINS: "factory-plugin-fixture",
       PRISM_SHIM_HARNESS: "factory-droid",
+      PRISM_SHIM_NAMING: "per-plugin",
       PRISM_SHIM_EXPOSURE: "prism-generated-factory-plugin-fixture:factory-droid",
     },
   });

@@ -565,3 +565,117 @@ describe("per-harness wire/allowlist parity", () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Per-plugin naming mode: bare wire names under a plugin-named server.
+// ---------------------------------------------------------------------------
+
+describe("ShimAggregator (per-plugin naming)", () => {
+  const startBoothDaemon = async (dir: string): Promise<string> => {
+    const sock = join(dir, "booth.sock");
+    fakeDaemons.push(
+      await startFakeDaemon(sock, {
+        tools: [
+          { name: "booth_context_get", inputSchema: { type: "object" } },
+          { name: "booth_drafts_register", inputSchema: { type: "object" } },
+          { name: "tower_create_glyph", inputSchema: { type: "object" } },
+        ],
+        callResult: (name) => ({ content: [{ type: "text", text: `called:${name}` }] }),
+      }),
+    );
+    return sock;
+  };
+
+  it("advertises bare tool names (own prefix stripped, foreign names untouched)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-pp-test-"));
+    tempDirs.push(dir);
+    const sock = await startBoothDaemon(dir);
+
+    const aggregator = new ShimAggregator({
+      harness: "claude-code",
+      naming: "per-plugin",
+      plugins: ["booth"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ booth: sock })),
+    });
+
+    const tools = await aggregator.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "context_get",
+      "drafts_register",
+      "tower_create_glyph",
+    ]);
+  });
+
+  it("round-trips: a tools/call for a bare name dispatches to the daemon's full tool id", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-pp-test-"));
+    tempDirs.push(dir);
+    const sock = await startBoothDaemon(dir);
+
+    const aggregator = new ShimAggregator({
+      harness: "claude-code",
+      naming: "per-plugin",
+      plugins: ["booth"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ booth: sock })),
+    });
+
+    await aggregator.listTools();
+    const result = (await aggregator.callTool("context_get", {})) as {
+      content: ReadonlyArray<{ text: string }>;
+    };
+    expect(result.content[0]!.text).toBe("called:booth_context_get");
+
+    const foreign = (await aggregator.callTool("tower_create_glyph", {})) as {
+      content: ReadonlyArray<{ text: string }>;
+    };
+    expect(foreign.content[0]!.text).toBe("called:tower_create_glyph");
+  });
+
+  it("cold start: a tools/call arriving before any tools/list still dispatches correctly", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-pp-test-"));
+    tempDirs.push(dir);
+    const sock = await startBoothDaemon(dir);
+
+    const aggregator = new ShimAggregator({
+      harness: "claude-code",
+      naming: "per-plugin",
+      plugins: ["booth"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ booth: sock })),
+    });
+
+    const result = (await aggregator.callTool("drafts_register", {})) as {
+      content: ReadonlyArray<{ text: string }>;
+    };
+    expect(result.content[0]!.text).toBe("called:booth_drafts_register");
+  });
+
+  it("grok: advertised names are bare and the fully-qualified form obeys grok's regex", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "shim-pp-test-"));
+    tempDirs.push(dir);
+    const sock = await startBoothDaemon(dir);
+
+    const aggregator = new ShimAggregator({
+      harness: "grok",
+      naming: "per-plugin",
+      plugins: ["booth"],
+      resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({ booth: sock })),
+    });
+
+    const tools = await aggregator.listTools();
+    for (const tool of tools) {
+      expect(tool.name).not.toContain("__");
+      expect(`booth__${tool.name}`).toMatch(/^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/);
+    }
+  });
+
+  it("rejects per-plugin naming with more than one configured plugin", () => {
+    expect(
+      () =>
+        new ShimAggregator({
+          harness: "claude-code",
+          naming: "per-plugin",
+          plugins: ["booth", "tower"],
+          resolveOrSpawn: legacyResolveOrSpawn(makeRegistry({})),
+        }),
+    ).toThrow(/exactly one configured plugin/);
+  });
+});

@@ -1,7 +1,7 @@
 import { mkdir, writeFile, readFile, unlink, readdir, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { createHash } from "node:crypto";
+import { resolvePrismHomeForSdk } from "./prism-home-resolve.js";
 
 /**
  * Error type for registry operation violations.
@@ -54,9 +54,19 @@ export type RegistryResult<T> = { kind: "ok"; value: T } | { kind: "absent" };
  * per-plugin file itself is never observed half-written.
  */
 
-/** `~/.prism/runtime/mcp` — the root of all registry state. */
-function registryRootDir(): string {
-  return join(homedir(), ".prism", "runtime", "mcp");
+/**
+ * `<prismHome>/runtime/mcp` — the root of all registry state.
+ *
+ * `prismHome` is threaded explicitly by every public function below,
+ * defaulting through `resolvePrismHomeForSdk()` (explicit param, then
+ * `PRISM_HOME` from the environment, then `~/.prism`) when omitted — never
+ * a bare, unconditional `homedir()` read. See that function's doc comment
+ * for why: an unconditional `homedir()` read here is exactly the defect
+ * class that let a test's `beforeEach`/`afterEach` delete the real
+ * `~/.prism/runtime/mcp` on the invoking machine.
+ */
+function registryRootDir(prismHome?: string): string {
+  return join(resolvePrismHomeForSdk(prismHome), "runtime", "mcp");
 }
 
 /**
@@ -72,8 +82,8 @@ function sanitizePluginSegment(plugin: string): string {
   return sanitized.length > 0 ? sanitized : "_";
 }
 
-function pluginDir(plugin: string): string {
-  return join(registryRootDir(), sanitizePluginSegment(plugin));
+function pluginDir(plugin: string, prismHome?: string): string {
+  return join(registryRootDir(prismHome), sanitizePluginSegment(plugin));
 }
 
 /**
@@ -82,9 +92,9 @@ function pluginDir(plugin: string): string {
  * exactly this one path, so there is never ambiguity about which file is
  * "the" current record for that plugin.
  */
-function pluginRegistryFilePath(plugin: string): string {
+function pluginRegistryFilePath(plugin: string, prismHome?: string): string {
   const hash = createHash("sha256").update(plugin).digest("hex").slice(0, 16);
-  return join(pluginDir(plugin), `${hash}.registry.json`);
+  return join(pluginDir(plugin, prismHome), `${hash}.registry.json`);
 }
 
 /** On-disk shape: the entry fields plus the original (unsanitized) plugin name. */
@@ -105,9 +115,9 @@ function isValidStoredRecord(value: unknown): value is StoredRecord {
   );
 }
 
-async function ensurePluginDir(plugin: string): Promise<void> {
+async function ensurePluginDir(plugin: string, prismHome?: string): Promise<void> {
   try {
-    await mkdir(pluginDir(plugin), { recursive: true });
+    await mkdir(pluginDir(plugin, prismHome), { recursive: true });
   } catch {
     // Directory may already exist; proceed.
   }
@@ -121,9 +131,9 @@ async function ensurePluginDir(plugin: string): Promise<void> {
  *
  * Throws UDSRegistryError on I/O failure (unrecoverable).
  */
-async function writePluginEntry(plugin: string, entry: RegistryEntry): Promise<void> {
+async function writePluginEntry(plugin: string, entry: RegistryEntry, prismHome?: string): Promise<void> {
   try {
-    await ensurePluginDir(plugin);
+    await ensurePluginDir(plugin, prismHome);
   } catch (error) {
     throw new UDSRegistryError(
       `Failed to ensure registry directory for plugin ${plugin}: ${error instanceof Error ? error.message : String(error)}`,
@@ -131,7 +141,7 @@ async function writePluginEntry(plugin: string, entry: RegistryEntry): Promise<v
     );
   }
 
-  const finalPath = pluginRegistryFilePath(plugin);
+  const finalPath = pluginRegistryFilePath(plugin, prismHome);
   const randomSuffix = Math.random().toString(36).substring(2, 10);
   const tempPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${randomSuffix}`;
 
@@ -158,9 +168,9 @@ async function writePluginEntry(plugin: string, entry: RegistryEntry): Promise<v
  * does not exist, is corrupted, or is missing required fields — never
  * throws.
  */
-async function readPluginEntry(plugin: string): Promise<RegistryEntry | undefined> {
+async function readPluginEntry(plugin: string, prismHome?: string): Promise<RegistryEntry | undefined> {
   try {
-    const json = await readFile(pluginRegistryFilePath(plugin), "utf8");
+    const json = await readFile(pluginRegistryFilePath(plugin, prismHome), "utf8");
     const parsed: unknown = JSON.parse(json);
     if (!isValidStoredRecord(parsed)) return undefined;
     const { plugin: _plugin, ...entry } = parsed;
@@ -181,8 +191,9 @@ async function readPluginEntry(plugin: string): Promise<RegistryEntry | undefine
 export async function registerDaemon(
   plugin: string,
   entry: RegistryEntry,
+  prismHome?: string,
 ): Promise<void> {
-  await writePluginEntry(plugin, entry);
+  await writePluginEntry(plugin, entry, prismHome);
 }
 
 /**
@@ -193,9 +204,9 @@ export async function registerDaemon(
  *
  * Throws UDSRegistryError on I/O failure (unrecoverable), file-not-found excepted.
  */
-export async function unregisterDaemon(plugin: string): Promise<void> {
+export async function unregisterDaemon(plugin: string, prismHome?: string): Promise<void> {
   try {
-    await unlink(pluginRegistryFilePath(plugin));
+    await unlink(pluginRegistryFilePath(plugin, prismHome));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new UDSRegistryError(
@@ -214,8 +225,8 @@ export async function unregisterDaemon(plugin: string): Promise<void> {
  *
  * Never throws.
  */
-export async function getDaemon(plugin: string): Promise<RegistryResult<RegistryEntry>> {
-  const entry = await readPluginEntry(plugin);
+export async function getDaemon(plugin: string, prismHome?: string): Promise<RegistryResult<RegistryEntry>> {
+  const entry = await readPluginEntry(plugin, prismHome);
   return entry ? { kind: "ok", value: entry } : { kind: "absent" };
 }
 
@@ -229,8 +240,8 @@ export async function getDaemon(plugin: string): Promise<RegistryResult<Registry
  * Never throws; unreadable or corrupted per-plugin files are skipped
  * individually rather than failing the whole scan.
  */
-export async function getAllDaemons(): Promise<RegistryResult<RegistryData>> {
-  const root = registryRootDir();
+export async function getAllDaemons(prismHome?: string): Promise<RegistryResult<RegistryData>> {
+  const root = registryRootDir(prismHome);
   let pluginDirs: string[];
   try {
     pluginDirs = await readdir(root);
@@ -274,13 +285,13 @@ export async function getAllDaemons(): Promise<RegistryResult<RegistryData>> {
  *
  * Throws UDSRegistryError on I/O failure (unrecoverable).
  */
-export async function touchDaemon(plugin: string): Promise<RegistryResult<void>> {
-  const entry = await readPluginEntry(plugin);
+export async function touchDaemon(plugin: string, prismHome?: string): Promise<RegistryResult<void>> {
+  const entry = await readPluginEntry(plugin, prismHome);
   if (!entry) {
     return { kind: "absent" };
   }
 
-  await writePluginEntry(plugin, { ...entry, lastUsed: Date.now() });
+  await writePluginEntry(plugin, { ...entry, lastUsed: Date.now() }, prismHome);
 
   return { kind: "ok", value: undefined };
 }
@@ -317,8 +328,9 @@ export async function cleanupDaemonIfOwner(
   plugin: string,
   pid: number,
   socketPath: string | undefined,
+  prismHome?: string,
 ): Promise<OwnershipCleanupResult> {
-  const result = await getDaemon(plugin);
+  const result = await getDaemon(plugin, prismHome);
 
   if (result.kind === "absent") {
     return "absent";
@@ -335,6 +347,6 @@ export async function cleanupDaemonIfOwner(
     }
   }
 
-  await unregisterDaemon(plugin);
+  await unregisterDaemon(plugin, prismHome);
   return "cleaned";
 }

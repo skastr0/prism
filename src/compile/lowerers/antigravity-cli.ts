@@ -12,6 +12,7 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
@@ -360,7 +361,7 @@ const planMcpServers = (input: LowerInput): Record<string, unknown> => {
   }
   return {
     [pluginServerKey(input.target.sourcePluginName)]: {
-      command: "prism",
+      command: shimCommandForCompile(),
       args: ["mcp", "shim"],
       env,
     },

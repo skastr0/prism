@@ -6,6 +6,7 @@ import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { bindingsOwnedByPlugin } from "../tool-bindings.js";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredRegion } from "../../sync/desired.js";
 import { type LowerOutput } from "./shared.js";
@@ -50,7 +51,7 @@ const configPath = (target: CursorLowerTarget): string =>
  * there is nothing beyond command/args/env to render.
  */
 const renderCursorMcpServerEntry = (plugin: string): CursorMcpServerEntry => ({
-  command: "prism",
+  command: shimCommandForCompile(),
   args: ["mcp", "shim"],
   env: {
     PRISM_SHIM_PLUGINS: plugin,

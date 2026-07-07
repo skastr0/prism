@@ -7,6 +7,7 @@ import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -153,7 +154,7 @@ const renderCodexOwnerMcpServerToml = (options: {
   readonly enabledTools: ReadonlyArray<string>;
 }): string[] => [
   tomlDottedTable(["mcp_servers", options.name]),
-  `command = ${quote("prism")}`,
+  `command = ${quote(shimCommandForCompile())}`,
   `args = ${tomlArray(["mcp", "shim"])}`,
   "enabled = true",
   "required = false",

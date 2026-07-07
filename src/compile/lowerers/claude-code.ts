@@ -13,6 +13,7 @@ import {
   mcpToolNameForBinding,
 } from "../mcp-bundle.js";
 import { renderPluginAllowlist, pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -360,7 +361,7 @@ const planMcpServer = async (
     json({
       mcpServers: {
         [pluginServerKey(input.target.sourcePluginName)]: {
-          command: "prism",
+          command: shimCommandForCompile(),
           args: ["mcp", "shim"],
           env,
         },

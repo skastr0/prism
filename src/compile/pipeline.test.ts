@@ -10,7 +10,7 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generatedMcpWireServerName } from "./mcp-runtime.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import {
   generateMcpServerBundle,
   mcpServerRuntimeSourceSha256,
@@ -3033,16 +3033,21 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   const mcpConfig = JSON.parse(await readFile(join(outputPluginRoot, "mcp_config.json"), "utf8")) as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; trust?: unknown }>;
   };
-  const antigravityWireServerName = generatedMcpWireServerName("antigravity_plugin.demo");
-  const antigravityMcpToolName = `mcp_${shimServerKey("antigravity-cli")}_${antigravityWireServerName}_antigravity_plugin_demo_submit_work`;
+  // Per-plugin server scheme: the server is keyed by the owner plugin's own
+  // `pluginServerKey`, and the tool is the owner's bare wire name (the
+  // redundant own-plugin namespace stripped) prefixed with the `mcp_`
+  // single-underscore convention Antigravity's agent frontmatter requires.
+  const antigravityServerKey = pluginServerKey("antigravity_plugin.demo");
+  const antigravityMcpToolName = `mcp_${antigravityServerKey}_submit_work`;
   // Post-consolidation: every harness (antigravity-cli included) spawns the
-  // aggregating stdio shim instead of dialing a Streamable HTTP URL directly.
-  const antigravityMcp = mcpConfig.mcpServers?.[shimServerKey("antigravity-cli")];
+  // per-plugin stdio shim instead of dialing a Streamable HTTP URL directly.
+  const antigravityMcp = mcpConfig.mcpServers?.[antigravityServerKey];
   expect(antigravityMcp?.command).toBe("prism");
   expect(antigravityMcp?.args).toEqual(["mcp", "shim"]);
   expect(antigravityMcp?.env).toEqual({
     PRISM_SHIM_PLUGINS: "antigravity_plugin.demo",
     PRISM_SHIM_HARNESS: "antigravity-cli",
+    PRISM_SHIM_NAMING: "per-plugin",
     PRISM_SHIM_EXPOSURE: "prism-generated-antigravity_plugin.demo:antigravity-cli",
   });
   expect(antigravityMcp).not.toHaveProperty("trust");
@@ -3283,12 +3288,13 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   const antigravityMcpConfig = JSON.parse(await readFile(join(antigravityRoot, "mcp_config.json"), "utf8")) as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  const antigravityShim = antigravityMcpConfig.mcpServers?.[shimServerKey("antigravity-cli")];
+  const antigravityShim = antigravityMcpConfig.mcpServers?.[pluginServerKey("tool-only-demo")];
   expect(antigravityShim?.command).toBe("prism");
   expect(antigravityShim?.args).toEqual(["mcp", "shim"]);
   expect(antigravityShim?.env).toEqual({
     PRISM_SHIM_PLUGINS: "tool-only-demo",
     PRISM_SHIM_HARNESS: "antigravity-cli",
+    PRISM_SHIM_NAMING: "per-plugin",
     PRISM_SHIM_EXPOSURE: "prism-generated-tool-only-demo:antigravity-cli",
   });
   expect(await pathExists(join(antigravityRoot, "mcp"))).toBe(false);

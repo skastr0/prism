@@ -208,9 +208,13 @@ const sweepJsonServerMap = (
  *
  * `desiredRegions` is this same pass's full desired-region list for the
  * target file (whatever `planSharedFileRegions` was given), threaded
- * through so the JSON-map branch can exclude this pass's own live entries
- * by key — see `desiredJsonServerMapKeys`. The marker branch does not need
- * it: a marker fence's literal text is its own provenance (module doc).
+ * through so BOTH branches can exclude this pass's own live entries by
+ * key. Fence authorship alone is NOT sufficient provenance for the marker
+ * branch: a live plugin whose name sanitizes to the retired sentinel
+ * (pluginServerKey("prism_mcp_shim") === "prism-mcp-shim") produces the
+ * byte-identical region key, so a marker region claimed by any current
+ * desired region is never a sweep candidate — otherwise the sweep would
+ * silently cannibalize the plugin's own just-written region.
  */
 export const sweepLegacyPrismMcpEntries = (
   harness: string,
@@ -219,6 +223,12 @@ export const sweepLegacyPrismMcpEntries = (
 ): LegacySweepOutcome => {
   const markerKey = legacyAggregatedMcpMarkerRegionKey(harness);
   if (markerKey !== undefined) {
+    const claimedByDesired = desiredRegions.some(
+      (region) => "regionKey" in region && region.regionKey === markerKey,
+    );
+    if (claimedByDesired) {
+      return { content, changed: false, removedKeys: [] };
+    }
     const outcome = removeMarkerRegion(content, { commentPrefix: "#", regionKey: markerKey });
     return {
       content: outcome.content,

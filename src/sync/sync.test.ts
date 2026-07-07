@@ -990,6 +990,84 @@ describe("sync engine — legacy Prism MCP entry sweep", () => {
     expect(parsedAgain.mcpServers[pluginName]).toEqual(ownRegion.value);
   });
 
+  test("codex: a live plugin whose name sanitizes to prism-mcp-shim survives the marker sweep — snapshot truthful, idempotent", async () => {
+    // pluginServerKey("prism.mcp.shim") sanitizes dots to dashes, colliding
+    // byte-identical with the retired sentinel's region key. The marker
+    // branch must honor its desiredRegions gate exactly like the JSON
+    // branch — fence authorship alone does not disambiguate the retired
+    // sentinel from a live plugin's current region.
+    const pluginName = "prism.mcp.shim";
+    expect(pluginServerKey(pluginName)).toBe("prism-mcp-shim");
+    const target = join(root, "config.toml");
+    await nodeWriteFile(target, "# hand-written\n");
+    const regionKey = `codex.mcp.${pluginServerKey(pluginName)}`;
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: target,
+      regionKey,
+      commentPrefix: "#",
+      content: `["mcp_servers"."${pluginServerKey(pluginName)}"]\ncommand = "prism"`,
+      plugin: pluginName,
+    };
+
+    const report = await refresh(desiredWith({ harness: "codex-cli", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+    const after = await readFile(target);
+    expect(after).toContain(`prism:${regionKey} begin`);
+    expect(after).toContain('command = "prism"');
+
+    // Snapshot must equal disk — the surviving fence is recorded.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    const entry = snapshot.manifest.entries.find(
+      (candidate) => candidate.regionKey?.includes(regionKey),
+    );
+    expect(entry).toBeDefined();
+
+    // Idempotent second pass.
+    const second = await refresh(desiredWith({ harness: "codex-cli", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    expect(await readFile(target)).toContain(`prism:${regionKey} begin`);
+  });
+
+  test("hermes: a live plugin whose name sanitizes to prism-mcp-shim survives the marker sweep — snapshot truthful, idempotent", async () => {
+    // pluginServerKey("prism.mcp.shim") sanitizes dots to dashes, colliding
+    // byte-identical with the retired sentinel's region key. The marker
+    // branch must honor its desiredRegions gate exactly like the JSON
+    // branch — fence authorship alone does not disambiguate the retired
+    // sentinel from a live plugin's current region.
+    const pluginName = "prism.mcp.shim";
+    expect(pluginServerKey(pluginName)).toBe("prism-mcp-shim");
+    const target = join(root, "config.yaml");
+    await nodeWriteFile(target, "# hand-written\n");
+    const regionKey = `hermes.mcp.${pluginServerKey(pluginName)}`;
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: target,
+      regionKey,
+      commentPrefix: "#",
+      content: `["mcp_servers"."${pluginServerKey(pluginName)}"]\ncommand = "prism"`,
+      plugin: pluginName,
+    };
+
+    const report = await refresh(desiredWith({ harness: "hermes", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+    const after = await readFile(target);
+    expect(after).toContain(`prism:${regionKey} begin`);
+    expect(after).toContain('command = "prism"');
+
+    // Snapshot must equal disk — the surviving fence is recorded.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "hermes", root });
+    const entry = snapshot.manifest.entries.find(
+      (candidate) => candidate.regionKey?.includes(regionKey),
+    );
+    expect(entry).toBeDefined();
+
+    // Idempotent second pass.
+    const second = await refresh(desiredWith({ harness: "hermes", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    expect(await readFile(target)).toContain(`prism:${regionKey} begin`);
+  });
+
   test("codex: an unfenced user TOML table literally named prism-mcp-shim survives — the marker fence delimiters are the provenance, not the key name", async () => {
     const configToml = join(root, "config.toml");
     // No `# --- prism:codex.mcp.prism-mcp-shim begin/end ---` fence at all —

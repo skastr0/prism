@@ -38,6 +38,7 @@
     "acceptance:crash-convergence": "bun scripts/acceptance/crash-convergence.ts",
     "acceptance:mcp-determinism": "bun scripts/acceptance/mcp-determinism.ts",
     "acceptance:mcp-shim-compiled-binary": "bun scripts/acceptance/mcp-shim-compiled-binary.ts",
+    "acceptance:mcp-topology": "bun scripts/acceptance/mcp-topology-verify.ts",
     "acceptance:orbit-workflows": "bun scripts/acceptance/orbit-workflows.ts",
     "acceptance:workflow-e2e": "bun scripts/acceptance/workflow-e2e-matrix.ts",
     "acceptance:all": "bun scripts/acceptance/run-all.ts"

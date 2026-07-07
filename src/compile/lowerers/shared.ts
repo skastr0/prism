@@ -12,8 +12,6 @@
 import { stripBundlerPathComments } from "../bundle-normalize.js";
 import { join } from "node:path";
 import { readFile } from "../../fs.js";
-import type { HarnessId } from "../../types.js";
-import type { ShimExposureContribution } from "../../state/shim-exposure.js";
 import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import type { ComposedAgent } from "../compose.js";
 import {
@@ -41,54 +39,7 @@ import {
 export interface LowerOutput {
   readonly files: ReadonlyArray<DesiredFile>;
   readonly regions: ReadonlyArray<DesiredRegion>;
-  /**
-   * The compiling plugin's OWN shared-shim contribution, present only on
-   * harnesses whose stdio-shim config is one shared region per root
-   * (codex-cli / hermes / cursor / grok — see `SHARED_SHIM_HARNESSES`). The
-   * pipeline persists it into the shim-exposure registry after a successful
-   * apply so later compiles of OTHER plugins can render the full union. Empty
-   * arrays mean "this plugin contributes nothing" (its registry entry is
-   * deleted). Per-plugin-artifact harnesses (claude-code, kimi, …) leave it
-   * undefined — their per-compile scope is already the right scope.
-   */
-  readonly shimContribution?: ShimExposureContribution;
 }
-
-export type { ShimExposureContribution } from "../../state/shim-exposure.js";
-
-/**
- * Reserved snapshot owner for the shared shim region. The region's content
- * is a cross-plugin union, so no single source plugin can own it: attributing
- * it to the compiling plugin made every per-plugin compile record its own
- * snapshot entry for the SAME fence (one manifest entry per MCP-bearing
- * plugin, all but the last stale — the `region.marker-drift` doctor storm).
- * Precedent for the reserved `#` scope suffix: `#file-router` in refresh.ts.
- */
-export const SHIM_REGION_OWNER = "prism#shim";
-
-/**
- * Harnesses whose stdio-shim MCP config is ONE shared region per harness
- * root (same region key for every plugin), rather than a per-plugin
- * generated artifact. These lowerers render the region from the shim
- * exposure union and report `shimContribution`.
- */
-export const SHARED_SHIM_HARNESSES = ["codex-cli", "cursor", "grok", "hermes"] as const;
-export type SharedShimHarnessId = (typeof SHARED_SHIM_HARNESSES)[number];
-
-export const isSharedShimHarness = (target: HarnessId): target is SharedShimHarnessId =>
-  (SHARED_SHIM_HARNESSES as ReadonlyArray<HarnessId>).includes(target);
-
-/**
- * Deterministic shared-shim union: sorted + deduped member-wise, so the
- * rendered region is byte-identical regardless of which plugin compiles.
- */
-export const unionedShimExposure = (
-  prior: ShimExposureContribution | undefined,
-  own: ShimExposureContribution,
-): ShimExposureContribution => ({
-  plugins: uniqueSorted([...(prior?.plugins ?? []), ...own.plugins]),
-  enabledTools: uniqueSorted([...(prior?.enabledTools ?? []), ...own.enabledTools]),
-});
 
 export const uniqueSorted = (
   values: ReadonlyArray<string>,

@@ -9,7 +9,7 @@
     "agents": ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"],
     "orbits": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"],
     "modelspaces": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"],
-    "tools": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code"],
+    "tools": ["opencode", "claude-code", "codex-cli", "grok", "hermes", "kimi-code", "amp-code", "cursor"],
     "hooks": ["opencode", "claude-code", "codex-cli", "grok", "kimi-code", "amp-code"]
   }
 }

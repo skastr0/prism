@@ -316,7 +316,12 @@ const planSharedFileRegions = async (options: {
   let content = original;
   const changedRegions: string[] = [];
   const skippedRegions: string[] = [];
-  const materializedRegionRefs: string[] = [];
+  // Tracked as (region, ref) pairs — not yet the returned ref list — so a
+  // region a later same-pass sweep removes (see the reconciliation below)
+  // can be dropped by its regionKey before this ever becomes a snapshot
+  // entry. The snapshot must equal disk; it may never claim a region that
+  // was written then swept away in the same pass.
+  const materialized: Array<{ readonly regionKey: string; readonly ref: string }> = [];
 
   for (const region of options.desired) {
     let outcome: ReturnType<typeof applyRegion>;
@@ -335,12 +340,14 @@ const planSharedFileRegions = async (options: {
             `${error instanceof Error ? error.message : String(error)} — ` +
             "fix or move the file, then refresh",
         }],
-        materializedRegionRefs,
+        materializedRegionRefs: materialized.map((entry) => entry.ref),
       };
     }
     if (outcome.changed) changedRegions.push(region.regionKey);
     else skippedRegions.push(region.regionKey);
-    if (outcome.materialized !== false) materializedRegionRefs.push(serializeRegionRef(region));
+    if (outcome.materialized !== false) {
+      materialized.push({ regionKey: region.regionKey, ref: serializeRegionRef(region) });
+    }
     content = outcome.content;
   }
 
@@ -357,12 +364,24 @@ const planSharedFileRegions = async (options: {
   // synthetic union-owner sentinel and pre-shim HTTP-era naming) that the
   // snapshot-driven orphan removal above can never reach — see
   // `legacy-prism-entries.ts` for why. Safe on every compile, scoped or
-  // not: no currently-desired entry can ever match a reserved legacy name.
-  const legacySweep = sweepLegacyPrismMcpEntries(options.harness, content);
+  // not: gated on positive content provenance AND exclusion of this pass's
+  // own desired keys (threaded through below), so a live entry — however
+  // its name happens to be shaped — is never swept.
+  const legacySweep = sweepLegacyPrismMcpEntries(options.harness, content, options.desired);
   if (legacySweep.changed) {
     content = legacySweep.content;
     removedRegions.push(...legacySweep.removedKeys);
   }
+
+  // Reconcile: a regionKey removed above (orphan or legacy sweep) is never
+  // also reported as materialized, regardless of why it matched — the
+  // desired-keys exclusion inside the legacy sweep already makes this a
+  // no-op in practice, but the snapshot-truthfulness invariant holds
+  // structurally here rather than depending on that sweep's internals.
+  const removedRegionKeys = new Set(removedRegions);
+  const materializedRegionRefs = materialized
+    .filter((entry) => !removedRegionKeys.has(entry.regionKey))
+    .map((entry) => entry.ref);
 
   if (content === original) {
     return {

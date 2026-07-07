@@ -844,7 +844,7 @@ describe("sync engine — legacy Prism MCP entry sweep", () => {
     expect(kinds(second)).toEqual(["skip-regions"]);
   });
 
-  test("cursor: refresh sweeps the legacy shim entry AND both dead pre-shim HTTP-era entries; the plugin's own entry and a hand-authored server survive", async () => {
+  test("cursor: refresh sweeps the legacy shim entry AND both dead pre-shim HTTP-era entries (X-Prism-Mcp-Exposure provenance); the plugin's own entry and a hand-authored server survive", async () => {
     const mcpJson = join(root, "mcp.json");
     const legacyContent = {
       mcpServers: {
@@ -854,9 +854,17 @@ describe("sync engine — legacy Prism MCP entry sweep", () => {
           env: { PRISM_SHIM_PLUGINS: "booth,tower", PRISM_SHIM_HARNESS: "cursor" },
         },
         // Pre-shim HTTP-transport era artifacts (docs/mcp-http-goal.md):
-        // dead loopback servers, no live daemon behind either port.
-        "prism-generated-cursor-tools": { url: "http://127.0.0.1:53966/mcp" },
-        p_4b4d1659: { url: "http://127.0.0.1:64410/mcp" },
+        // dead loopback servers, no live daemon behind either port. The
+        // X-Prism-Mcp-Exposure header is the real dead pair's provenance —
+        // without it, name shape alone must never be grounds for removal.
+        "prism-generated-cursor-tools": {
+          url: "http://127.0.0.1:53966/mcp",
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-cursor-tools:cursor" },
+        },
+        p_4b4d1659: {
+          url: "http://127.0.0.1:64410/mcp",
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-cursor-tools:cursor" },
+        },
         "hand-authored-server": { command: "node", args: ["server.js"] },
       },
     };
@@ -886,6 +894,138 @@ describe("sync engine — legacy Prism MCP entry sweep", () => {
 
     const second = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
     expect(kinds(second)).toEqual(["skip-regions"]);
+  });
+
+  test("cursor: provenance gating — a user's own p_<hash8> and prism-generated-<name> servers survive; only genuine prism-provenance legacy is pruned", async () => {
+    const mcpJson = join(root, "mcp.json");
+    const legacyContent = {
+      mcpServers: {
+        // Genuine retired Prism artifact: legacy name shape AND real
+        // provenance (the dead HTTP-era pair's X-Prism-Mcp-Exposure header)
+        // — this one, and only this one, must be pruned.
+        p_1a2b3c4d: {
+          url: "http://127.0.0.1:9999/mcp",
+          headers: { "X-Prism-Mcp-Exposure": "prism-generated-retired:cursor" },
+        },
+        // A user's OWN server that happens to collide with the bare
+        // p_<hash8> namespace shape — no Prism provenance at all.
+        p_a1b2c3d4: { command: "my-own-tool", args: ["--serve"] },
+        // A user's OWN server literally named with the retired
+        // prism-generated- prefix — again, no Prism provenance.
+        "prism-generated-my-internal-tool": { url: "https://my.internal/mcp" },
+        // An unrelated server, name doesn't even match the legacy shape.
+        "my-other-server": { command: "node", args: ["server.js"] },
+      },
+    };
+    await nodeWriteFile(mcpJson, `${JSON.stringify(legacyContent, null, 2)}\n`);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "json-key" as const,
+      targetPath: mcpJson,
+      regionKey: `mcpServers.${ownServerKey}`,
+      jsonPath: ["mcpServers", ownServerKey],
+      value: {
+        command: "prism",
+        args: ["mcp", "shim"],
+        env: { PRISM_SHIM_PLUGINS: "booth", PRISM_SHIM_HARNESS: "cursor", PRISM_SHIM_NAMING: "per-plugin" },
+      },
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const parsed = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(Object.keys(parsed.mcpServers).sort()).toEqual(
+      ["my-other-server", "p_a1b2c3d4", "prism-generated-my-internal-tool", ownServerKey].sort(),
+    );
+    expect(parsed.mcpServers.p_a1b2c3d4).toEqual({ command: "my-own-tool", args: ["--serve"] });
+    expect(parsed.mcpServers["prism-generated-my-internal-tool"]).toEqual({ url: "https://my.internal/mcp" });
+    expect(parsed.mcpServers["my-other-server"]).toEqual({ command: "node", args: ["server.js"] });
+    expect(parsed.mcpServers[ownServerKey]).toEqual(ownRegion.value);
+  });
+
+  test("cursor: a live plugin literally named p_deadbeef survives its own compile — no self-cannibalization, snapshot stays truthful, idempotent", async () => {
+    // pluginServerKey sanitizes an already-legal name byte-identical, which
+    // is ALSO the retired bare p_<hash8> namespace shape — the exact
+    // collision the provenance + desired-keys gating must resolve.
+    const pluginName = "p_deadbeef";
+    expect(pluginServerKey(pluginName)).toBe("p_deadbeef");
+
+    const mcpJson = join(root, "mcp.json");
+    const ownRegion = {
+      kind: "json-key" as const,
+      targetPath: mcpJson,
+      regionKey: `mcpServers.${pluginName}`,
+      jsonPath: ["mcpServers", pluginName],
+      value: {
+        command: "prism",
+        args: ["mcp", "shim"],
+        env: { PRISM_SHIM_PLUGINS: pluginName, PRISM_SHIM_HARNESS: "cursor", PRISM_SHIM_NAMING: "per-plugin" },
+      },
+      plugin: pluginName,
+    };
+
+    const report = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const parsed = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(parsed.mcpServers[pluginName]).toEqual(ownRegion.value);
+
+    // Snapshot must equal disk: the entry actually landed, so it must be
+    // recorded — never a snapshot lie about a region written then swept
+    // away in the same pass.
+    const snapshot = await readSnapshot({ prismHome: home, harness: "cursor", root });
+    const entry = snapshot.manifest.entries.find(
+      (candidate) => candidate.regionKey?.includes(`mcpServers.${pluginName}`),
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.plugin).toBe(pluginName);
+
+    // Idempotent second pass: no further churn, the entry still survives.
+    const second = await refresh(desiredWith({ harness: "cursor", regions: [ownRegion] }));
+    expect(kinds(second)).toEqual(["skip-regions"]);
+    const parsedAgain = JSON.parse(await readFile(mcpJson)) as { mcpServers: Record<string, unknown> };
+    expect(parsedAgain.mcpServers[pluginName]).toEqual(ownRegion.value);
+  });
+
+  test("codex: an unfenced user TOML table literally named prism-mcp-shim survives — the marker fence delimiters are the provenance, not the key name", async () => {
+    const configToml = join(root, "config.toml");
+    // No `# --- prism:codex.mcp.prism-mcp-shim begin/end ---` fence at all —
+    // this is a hand-authored table that merely shares the retired
+    // sentinel's name, which the marker sweep must never touch.
+    const userContent = [
+      "# my hand-written config",
+      "",
+      '["mcp_servers"."prism-mcp-shim"]',
+      'command = "my-own-tool"',
+      "",
+    ].join("\n");
+    await nodeWriteFile(configToml, userContent);
+
+    const ownServerKey = pluginServerKey("booth");
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: `codex.mcp.${ownServerKey}`,
+      commentPrefix: "#",
+      content: [
+        `["mcp_servers"."${ownServerKey}"]`,
+        'command = "prism"',
+        'args = ["mcp", "shim"]',
+      ].join("\n"),
+      plugin: "booth",
+    };
+
+    const report = await refresh(desiredWith({ regions: [ownRegion] }));
+    expect(kinds(report)).toEqual(["patch-regions"]);
+
+    const after = await readFile(configToml);
+    expect(after).toContain('["mcp_servers"."prism-mcp-shim"]');
+    expect(after).toContain('command = "my-own-tool"');
+    expect(after).toContain("# my hand-written config");
+    expect(after).toContain(`prism:codex.mcp.${ownServerKey}`);
   });
 
   test("grok is unaffected: no legacy marker key defined for it, an untouched hand-authored fence is never swept", async () => {

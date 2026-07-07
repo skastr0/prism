@@ -8,7 +8,7 @@ import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-h
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
-import { shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 
 let root: string;
 let originalHome: string | undefined;
@@ -516,6 +516,9 @@ test("doctor validates generated harness config references", async () => {
   expect(codexCodes).toContain("config.mcp-shim-args-invalid");
   expect(codexCodes).toContain("config.mcp-shim-env-harness-mismatch");
   expect(codexCodes).toContain("config.mcp-shim-env-plugins-missing");
+  // Surviving under the legacy aggregated key at all is itself a migration
+  // artifact now that codex renders one server per owner plugin.
+  expect(codexCodes).toContain("config.mcp-shim-legacy-aggregated-entry");
 
   const grokCodes = codesFor("grok");
   expect(grokCodes).toContain("config.mcp-shim-command-unresolvable");
@@ -554,7 +557,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
     }, null, 2)}\n`,
   );
 
-  const codexServerName = shimServerKey("codex-cli");
+  const codexServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".codex", "config.toml"),
     [
@@ -563,10 +566,11 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       'args = ["mcp", "shim"]',
       "enabled = true",
       "required = false",
-      `enabled_tools = ["p_a1b2c3d4_search"]`,
+      `enabled_tools = ["search"]`,
       `["mcp_servers"."${codexServerName}"."env"]`,
       'PRISM_SHIM_PLUGINS = "demo"',
       'PRISM_SHIM_HARNESS = "codex-cli"',
+      'PRISM_SHIM_NAMING = "per-plugin"',
       "",
     ].join("\n"),
   );
@@ -588,7 +592,7 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
     ].join("\n"),
   );
 
-  const hermesServerName = shimServerKey("hermes");
+  const hermesServerName = pluginServerKey("demo");
   await writeText(
     join(process.env.HOME!, ".hermes", "config.yaml"),
     [
@@ -603,9 +607,10 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
       "    env:",
       "      PRISM_SHIM_PLUGINS: demo",
       "      PRISM_SHIM_HARNESS: hermes",
+      "      PRISM_SHIM_NAMING: per-plugin",
       "    tools:",
       "      include:",
-      "        - p_a1b2c3d4_search",
+      "        - search",
       `# --- prism:hermes.mcp.${hermesServerName} end ---`,
       "",
     ].join("\n"),

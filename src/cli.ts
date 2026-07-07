@@ -54,7 +54,7 @@ import {
   listMcpStatuses,
   type McpLifecycleHarness,
 } from "./mcp/lifecycle.js";
-import { resolvePrismHome } from "./prism-home.js";
+import { prismWorkflowsSourceDir, resolvePrismHome } from "./prism-home.js";
 import { discoverPluginPaths } from "./plugin-inventory.js";
 import {
   formatPackageOperations,
@@ -75,7 +75,8 @@ import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
 import {
   buildWorkflowCatalog,
-  pickDefaultAgentRef,
+  pickDefaultAgent,
+  pickDefaultWorkers,
   renderCatalogHuman,
   renderRefsStatus,
   scaffoldWorkflowSource,
@@ -288,7 +289,10 @@ workflow
   .command("scaffold <name>")
   .description("Write a validating starter workflow that uses a real discovered agent ref")
   .option("--print", "Print to stdout instead of writing a file")
-  .option("--out <path>", "Output path (default: workflows/<name>.workflow.ts)")
+  .option(
+    "--out <path>",
+    "Output path (default: ~/.prism/workflows/<name>.workflow.ts — never the project repo; workflows reference their target repo by absolute path and are never git-added)",
+  )
   .action(async (name: string, options: { readonly print?: boolean; readonly out?: string }) => {
     try {
       const result = await buildWorkflowCatalog();
@@ -300,17 +304,19 @@ workflow
         exitWith(EXIT_CODES.domainFailure);
         return;
       }
-      const agentRef = pickDefaultAgentRef(result.catalog);
-      const source = scaffoldWorkflowSource(name, agentRef);
+      const agent = pickDefaultAgent(result.catalog);
+      const agentRef = agent?.ref ?? "agents.forge.explorer";
+      const workers = pickDefaultWorkers(result.catalog, agent);
+      const source = scaffoldWorkflowSource(name, agentRef, workers);
       if (options.print === true) {
         await writeStdout(source);
         return;
       }
-      const outPath = options.out ?? join("workflows", `${name}.workflow.ts`);
+      const outPath = options.out ?? join(prismWorkflowsSourceDir(resolvePrismHome()), `${name}.workflow.ts`);
       await ensureDir(dirname(outPath));
       await writeFile(outPath, source, "utf8");
       await writeStdout(
-        `Wrote ${outPath} (agent: ${agentRef}).\nNext: git add ${outPath} && prism workflow validate ${outPath}\n`,
+        `Wrote ${outPath} (agent: ${agentRef}; workers: ${workers.join(", ")}).\nNext: prism workflow validate ${outPath}\n`,
       );
     } catch (error) {
       printCliError(error, "Workflow scaffold failed");

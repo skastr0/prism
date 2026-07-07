@@ -128,7 +128,13 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     command: "grok",
     envVar: "PRISM_WORKFLOW_GROK_BIN",
     probeArgs: ["--version"],
-    defaultModel: "grok-build",
+    // Not "grok-build": that model's built-in run_terminal_cmd tool preset
+    // fails config validation ("auto_background_on_timeout requires
+    // enabled_background to be true") whenever it is paired with a custom
+    // --agent file whose `tools:` frontmatter restricts the tool set (i.e.
+    // every Prism-generated agent) — grok's own CLI default, verified
+    // working against a Prism-generated agent (PQ-176).
+    defaultModel: "grok-composer-2.5-fast",
   },
   hermes: {
     harness: "hermes",

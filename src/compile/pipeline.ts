@@ -39,6 +39,7 @@ import { planLowering as planPiLowering } from "./lowerers/pi.js";
 import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
 import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
 import type { LowerOutput } from "./lowerers/shared.js";
+import { injectSkillReferenceFiles } from "./skill-reference-files.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "../sync/desired.js";
 import type { SyncOp } from "../sync/plan.js";
 import type { SyncOpFailure, SyncOpListener } from "../sync/apply.js";
@@ -969,6 +970,12 @@ const planTargetLowering = (options: {
       },
     });
 
+    // Lowerers that plan a bare `skills/<name>/SKILL.md` file (rather than
+    // copying the skill's whole source tree) silently drop sibling reference
+    // markdown — patch the plan here rather than in the lowerers themselves
+    // (see src/compile/skill-reference-files.ts for why).
+    const loweredFiles = await injectSkillReferenceFiles(lowered.files, options.artifacts.skills);
+
     // Package mode ships the bundle inside the package payload as a desired
     // file (live compiles write the canonical PRISM_HOME bundle instead).
     if (options.mcpServer?.packagedBundleContent !== undefined) {
@@ -990,12 +997,12 @@ const planTargetLowering = (options: {
                 plugin: options.registry.pluginName,
               }]
             : []),
-          ...lowered.files,
+          ...loweredFiles,
         ],
         regions: lowered.regions,
       };
     }
-    return lowered;
+    return { files: loweredFiles, regions: lowered.regions };
   });
 };
 

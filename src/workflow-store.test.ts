@@ -7,7 +7,7 @@ import { Effect, Schema } from "effect";
 import { stableJsonHash } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
-import { WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
+import { isWorkflowRunOutcomeSuccessful, WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
 
@@ -2230,5 +2230,27 @@ describe("workflow store", () => {
     // The identity promptHash must equal the stable hash, proving it uses stableJsonHash.
     expect(identity.promptHash).toBe(stableCanonical);
     expect(identity.promptHash).toBe(stableReversed);
+  });
+});
+
+describe("isWorkflowRunOutcomeSuccessful (PQ-174 exit code mapping)", () => {
+  test("succeeds only when the run status is completed and every task status is completed", () => {
+    expect(isWorkflowRunOutcomeSuccessful("completed", [])).toBe(true);
+    expect(isWorkflowRunOutcomeSuccessful("completed", ["completed", "completed"])).toBe(true);
+  });
+
+  test("fails when the run itself did not complete, even with no failed tasks recorded", () => {
+    expect(isWorkflowRunOutcomeSuccessful("failed", [])).toBe(false);
+    expect(isWorkflowRunOutcomeSuccessful("escalated", [])).toBe(false);
+    expect(isWorkflowRunOutcomeSuccessful("running", [])).toBe(false);
+    expect(isWorkflowRunOutcomeSuccessful("unknown", [])).toBe(false);
+  });
+
+  test("fails on a completed run that carries a fault-isolated failed or escalated task", () => {
+    // PQ-166 fault isolation: the author program can recover from a task failure (e.g. via
+    // Effect.either) and the run itself finishes "completed" — that must still not read as
+    // success, since the underlying task failed.
+    expect(isWorkflowRunOutcomeSuccessful("completed", ["completed", "failed"])).toBe(false);
+    expect(isWorkflowRunOutcomeSuccessful("completed", ["completed", "escalated"])).toBe(false);
   });
 });

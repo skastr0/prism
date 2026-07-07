@@ -398,6 +398,125 @@ export const workflow = defineWorkflow({
   expect(missing.stderr).toContain("workflow run not found: missing-run");
 }, 30_000);
 
+test("workflow run exits 0 for a fully successful run (PQ-174)", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "success.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+  const storePath = join(root, "workflows.sqlite");
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+export const workflow = defineWorkflow({
+  name: "exit-code-success-smoke",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    cacheKey: "exit-code-success-build",
+  })] as const,
+});
+`);
+  await writeFile(mockOutputPath, JSON.stringify({ build: { summary: "ok" } }));
+
+  const run = await runCli([
+    "workflow", "run", workflowPath,
+    "--store", storePath,
+    "--mock-output", mockOutputPath,
+  ], {});
+
+  expect(run.exitCode).toBe(0);
+  const runData = JSON.parse(run.stdout) as { runId: string; tasks: Array<{ status: string }> };
+  expect(runData.tasks.every((task) => task.status === "completed")).toBe(true);
+
+  const show = await runCli(["workflow", "runs", "show", runData.runId, "--store", storePath], {});
+  expect(show.exitCode).toBe(0);
+  const showData = JSON.parse(show.stdout) as { run: { status: string } };
+  expect(showData.run.status).toBe("completed");
+}, 30_000);
+
+test("workflow run and runs wait exit non-zero when a run completes with a fault-isolated failed task (PQ-174)", async () => {
+  // PQ-166 fault isolation lets an author's `run` program recover from a task failure (e.g.
+  // via Effect.either) and finish successfully, so the persisted run status reads
+  // "completed" even though a task failed. That must still surface as a process failure to a
+  // caller checking $? — this is the exact regression PQ-174 fixes.
+  const root = await createTempRoot();
+  const workflowPath = join(root, "fault-isolated.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+  const storePath = join(root, "workflows.sqlite");
+
+  await writeFile(workflowPath, `
+import { Effect, Schema } from "effect";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+const build = defineTask({
+  id: "build",
+  agent,
+  prompt: "Build the slice.",
+  output: Schema.Struct({ summary: Schema.String }),
+  finish: { maxRepairs: 0 },
+});
+
+export const workflow = defineWorkflow({
+  name: "fault-isolated-exit-code-smoke",
+  run: (wf) => Effect.gen(function* () {
+    const outcome = yield* Effect.either(wf.runTask(build));
+    return { isolated: outcome._tag === "Left" };
+  }),
+});
+`);
+  // Deliberately fails schema decode (missing "summary") to force the task to fail; the
+  // workflow's own Effect.either isolates it, so the run itself still completes.
+  await writeFile(mockOutputPath, JSON.stringify({ build: { wrong: "shape" } }));
+
+  const run = await runCli([
+    "workflow", "run", workflowPath,
+    "--store", storePath,
+    "--mock-output", mockOutputPath,
+  ], {});
+
+  expect(run.exitCode).not.toBe(0);
+  const runData = JSON.parse(run.stdout) as { runId: string; tasks: Array<{ status: string }> };
+  expect(runData.tasks).toEqual([expect.objectContaining({ id: "build", status: "failed" })]);
+
+  const show = await runCli(["workflow", "runs", "show", runData.runId, "--store", storePath], {});
+  expect(show.exitCode).toBe(0);
+  const showData = JSON.parse(show.stdout) as { run: { status: string } };
+  // The persisted run status is "completed" (the author program recovered) even though the
+  // CLI process itself must exit non-zero — the assertion this regression test exists for.
+  expect(showData.run.status).toBe("completed");
+
+  const wait = await runCli([
+    "workflow", "runs", "wait", runData.runId,
+    "--store", storePath,
+  ], {});
+  expect(wait.exitCode).not.toBe(0);
+  const waitData = JSON.parse(wait.stdout) as { run: { status: string } };
+  expect(waitData.run.status).toBe("completed");
+}, 30_000);
+
 test("workflow runs summary exposes compact execution evidence in text and JSON", async () => {
   const root = await createTempRoot();
   const workflowPath = join(root, "summary.workflow.ts");

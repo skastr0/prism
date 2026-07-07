@@ -15,6 +15,7 @@ import {
   type SnapshotManifest,
 } from "./state/snapshot.js";
 import { gcSnapshots, snapshotDir } from "./state/store.js";
+import { gcShimExposure } from "./state/shim-exposure.js";
 import { parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
@@ -514,6 +515,9 @@ const validateSnapshotDiskState = async (options: {
 
 const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => {
   const result = await gcSnapshots(prismHome);
+  // The shim-exposure registry is keyed by harness root exactly like the
+  // snapshot store; gc it in the same pass (silent — it is a derived cache).
+  await gcShimExposure(prismHome);
   const findings: DoctorFinding[] = result.dropped.map((dropped) => finding({
     severity: "info",
     family: "snapshot.gc",

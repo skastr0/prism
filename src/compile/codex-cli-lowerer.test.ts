@@ -868,9 +868,9 @@ export default defineTool({
   expect(mcpRegion).toContain(`enabled_tools = ["${echoWireName}"]`);
   expect(mcpRegion).toContain('PRISM_SHIM_PLUGINS = "codex-stdio-shim-fixture"');
   expect(mcpRegion).toContain('PRISM_SHIM_HARNESS = "codex-cli"');
-  expect(mcpRegion).toContain(
-    'PRISM_SHIM_EXPOSURE = "prism-generated-codex-stdio-shim-fixture:codex-cli"',
-  );
+  // The shared region is a cross-plugin union, so it never carries a single
+  // plugin's exposure profile — the shim derives the per-owner profile.
+  expect(mcpRegion).not.toContain("PRISM_SHIM_EXPOSURE");
   // Should NOT contain http url
   expect(mcpRegion).not.toContain('url = "http');
 });

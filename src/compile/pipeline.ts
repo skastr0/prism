@@ -38,7 +38,17 @@ import { planLowering as planFactoryDroidLowering } from "./lowerers/factory-dro
 import { planLowering as planPiLowering } from "./lowerers/pi.js";
 import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
 import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
-import type { LowerOutput } from "./lowerers/shared.js";
+import {
+  isSharedShimHarness,
+  SHIM_REGION_OWNER,
+  type LowerOutput,
+  type ShimExposureContribution,
+} from "./lowerers/shared.js";
+import {
+  priorShimExposureForPlugin,
+  readShimExposure,
+  updateShimExposureEntry,
+} from "../state/shim-exposure.js";
 import { injectSkillReferenceFiles } from "./skill-reference-files.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "../sync/desired.js";
 import type { SyncOp } from "../sync/plan.js";
@@ -112,6 +122,7 @@ interface LowererModule {
       readonly sourcePluginName: string;
       readonly sourcePluginVersion?: string;
       readonly sourcePluginPath?: string;
+      readonly priorShimExposure?: ShimExposureContribution;
     };
   }) => Promise<LowerOutput>;
 }
@@ -932,16 +943,36 @@ const planTargetLowering = (options: {
   readonly outputRoot: string;
   readonly prismHome: string;
   readonly mcpServer?: PreparedMcpServer;
+  readonly priorShimExposure?: ShimExposureContribution;
 }): Effect.Effect<LowerOutput, CompileError> => {
+  // When other plugins hold a recorded shim exposure for this root, the
+  // lowerer must still run even with nothing lowerable of its own: the
+  // shared shim region is re-rendered from the prior union (and this
+  // plugin's empty contribution clears its own registry entry) instead of
+  // being skipped — a skip would either strand a stale entry or, worse,
+  // orphan-remove the fence other plugins still need.
+  const priorShimUnionNonEmpty =
+    options.priorShimExposure !== undefined &&
+    (options.priorShimExposure.plugins.length > 0 ||
+      options.priorShimExposure.enabledTools.length > 0);
   if (
     !options.surfaces.hasLowerableArtifacts &&
+    !priorShimUnionNonEmpty &&
     options.targetId !== "amp-code" &&
     options.targetId !== "factory-droid" &&
     options.targetId !== "pi" &&
     options.targetId !== "kimi-code" &&
     options.targetId !== "cursor"
   ) {
-    return Effect.succeed({ files: [], regions: [] });
+    return Effect.succeed({
+      files: [],
+      regions: [],
+      // Shared-shim harnesses still report an empty contribution so a
+      // plugin whose shim surface vanished has its registry entry deleted.
+      ...(isSharedShimHarness(options.targetId)
+        ? { shimContribution: { plugins: [], enabledTools: [] } }
+        : {}),
+    });
   }
 
   return Effect.promise(async () => {
@@ -967,6 +998,9 @@ const planTargetLowering = (options: {
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
         sourcePluginPath: options.registry.pluginPath,
+        ...(options.priorShimExposure
+          ? { priorShimExposure: options.priorShimExposure }
+          : {}),
       },
     });
 
@@ -1000,9 +1034,18 @@ const planTargetLowering = (options: {
           ...loweredFiles,
         ],
         regions: lowered.regions,
+        ...(lowered.shimContribution !== undefined
+          ? { shimContribution: lowered.shimContribution }
+          : {}),
       };
     }
-    return { files: loweredFiles, regions: lowered.regions };
+    return {
+      files: loweredFiles,
+      regions: lowered.regions,
+      ...(lowered.shimContribution !== undefined
+        ? { shimContribution: lowered.shimContribution }
+        : {}),
+    };
   });
 };
 
@@ -1054,10 +1097,29 @@ const prepareLoweringInputs = (
   readonly composedForLowering: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
   readonly mcpServer?: PreparedMcpServer;
+  readonly priorShimExposure?: ShimExposureContribution;
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
     const registry = yield* loadPlugin(options.pluginPath);
+    // Shared-shim harnesses (codex/hermes/cursor) hold ONE shim region per
+    // root; the union of the other installed plugins' recorded contributions
+    // is threaded into the lowerer so this compile renders the full union
+    // instead of narrowing the fence to its own view. Package mode ships an
+    // inert distributable and must not bake this machine's installed set in.
+    const priorShimExposure =
+      isSharedShimHarness(context.targetId) && options.packageMode !== true
+        ? priorShimExposureForPlugin(
+            (yield* Effect.promise(() =>
+              readShimExposure({
+                prismHome: context.prismHome,
+                harness: context.targetId,
+                root: context.outputRoot,
+              }),
+            )).registry,
+            registry.pluginName,
+          )
+        : undefined;
     const surfaces = selectTargetSurfaces(registry, context.targetId, options.scope);
     yield* assertTargetSupportsAgents(options.target, surfaces.agents);
     yield* assertTargetSupportsHooks(options.target, surfaces.hooks);
@@ -1097,6 +1159,7 @@ const prepareLoweringInputs = (
       composedForLowering,
       artifacts,
       ...(mcpServer ? { mcpServer } : {}),
+      ...(priorShimExposure ? { priorShimExposure } : {}),
     };
   });
 
@@ -1113,6 +1176,7 @@ export const planPluginForTarget = (
       composedForLowering,
       artifacts,
       mcpServer,
+      priorShimExposure,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1126,6 +1190,7 @@ export const planPluginForTarget = (
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
       ...(mcpServer ? { mcpServer } : {}),
+      ...(priorShimExposure ? { priorShimExposure } : {}),
     });
 
     return {
@@ -1157,6 +1222,7 @@ export const compilePluginForTarget = (
       composedForLowering,
       artifacts,
       mcpServer,
+      priorShimExposure,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1170,6 +1236,7 @@ export const compilePluginForTarget = (
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
       ...(mcpServer ? { mcpServer } : {}),
+      ...(priorShimExposure ? { priorShimExposure } : {}),
     });
     const report = yield* Effect.promise(() =>
       syncDesiredRoot({
@@ -1180,12 +1247,43 @@ export const compilePluginForTarget = (
           files: lowered.files,
           regions: lowered.regions,
         },
-        scopePlugins: new Set([registry.pluginName]),
+        // The shared shim region is attributed to the reserved
+        // `prism#shim` owner (its content is a cross-plugin union), so it
+        // must be in prune/replace scope on every compile that plans it —
+        // otherwise each plugin's compile would carry its neighbors' stale
+        // snapshot entries for the same fence forever.
+        scopePlugins: new Set(
+          lowered.shimContribution !== undefined
+            ? [registry.pluginName, SHIM_REGION_OWNER]
+            : [registry.pluginName],
+        ),
         dryRun: options.dryRun || options.packageMode === true,
         ...(options.onOp ? { onOp: options.onOp } : {}),
       }),
     );
     const blocked = blockedTargetErrors(report);
+    // Persist this plugin's own shim contribution AFTER the region landed
+    // (commit-last, like the snapshot): a crash between the two converges on
+    // the next compile because desired state is re-derived from
+    // `registry ∪ self` every run. An empty contribution deletes the entry,
+    // so a plugin that dropped its MCP surface stops holding the union open.
+    if (
+      lowered.shimContribution !== undefined &&
+      !options.dryRun &&
+      options.packageMode !== true &&
+      report.failures.length === 0 &&
+      blocked.length === 0
+    ) {
+      yield* Effect.promise(() =>
+        updateShimExposureEntry({
+          prismHome: context.prismHome,
+          harness: context.targetId,
+          root: context.outputRoot,
+          sourcePluginName: registry.pluginName,
+          contribution: lowered.shimContribution!,
+        }),
+      );
+    }
     const manifestTarget = context.targetId;
     let workflowRefsReport: Awaited<ReturnType<typeof syncDesiredRoot>> | null = null;
     if (

@@ -8,7 +8,12 @@ import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import { bindingsOwnedByPlugin } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredRegion } from "../../sync/desired.js";
-import type { LowerOutput } from "./shared.js";
+import {
+  SHIM_REGION_OWNER,
+  unionedShimExposure,
+  type LowerOutput,
+  type ShimExposureContribution,
+} from "./shared.js";
 
 const TARGET_ID = "cursor" as const;
 
@@ -19,6 +24,13 @@ export interface CursorLowerTarget {
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
+  /**
+   * Union of every OTHER installed plugin's recorded shim contribution for
+   * this harness root (from the shim-exposure registry). The shared
+   * `mcp.json` shim entry is rendered from `prior ∪ own` so a single-plugin
+   * compile can never narrow `PRISM_SHIM_PLUGINS` to its own view.
+   */
+  readonly priorShimExposure?: ShimExposureContribution;
 }
 
 export interface LowerInput {
@@ -40,37 +52,22 @@ type CursorMcpServerEntry = {
 const configPath = (target: CursorLowerTarget): string =>
   join(target.root, "mcp.json");
 
-const renderCursorMcpServerEntry = (target: CursorLowerTarget): CursorMcpServerEntry => {
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: target.sourcePluginName,
+/**
+ * The shared shim entry carries the UNION of every installed plugin's
+ * exposure, so it cannot name a single plugin's `PRISM_SHIM_EXPOSURE`
+ * profile — the shim derives the per-owner daemon profile itself (see
+ * `@skastr0/prism-sdk/mcp/shim.ts`).
+ */
+const renderCursorMcpServerEntry = (
+  plugins: ReadonlyArray<string>,
+): CursorMcpServerEntry => ({
+  command: "prism",
+  args: ["mcp", "shim"],
+  env: {
+    PRISM_SHIM_PLUGINS: plugins.join(","),
     PRISM_SHIM_HARNESS: TARGET_ID,
-  };
-  if (target.mcpExposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = target.mcpExposureProfile;
-  }
-  return { command: "prism", args: ["mcp", "shim"], env };
-};
-
-const planMcpServer = (
-  input: LowerInput,
-): {
-  readonly serverName: string;
-  readonly entry?: CursorMcpServerEntry;
-} => {
-  const serverName = shimServerKey("cursor");
-  const ownedBindings = bindingsOwnedByPlugin(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-
-  if (ownedBindings.length === 0) return { serverName };
-
-  return {
-    serverName,
-    entry: renderCursorMcpServerEntry(input.target),
-  };
-};
+  },
+});
 
 const assertCursorLoweringInput = (input: LowerInput): void => {
   if (input.agents.length > 0) {
@@ -97,19 +94,37 @@ const assertCursorLoweringInput = (input: LowerInput): void => {
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   assertCursorLoweringInput(input);
-  const server = planMcpServer(input);
+  const serverName = shimServerKey(TARGET_ID);
+  const ownedBindings = bindingsOwnedByPlugin(
+    input.target.sourcePluginName,
+    input.tools,
+    input.agents,
+  );
+  // Cursor's shim entry has no tool allowlist — only the plugin list unions.
+  const shimContribution: ShimExposureContribution =
+    ownedBindings.length > 0
+      ? { plugins: [input.target.sourcePluginName], enabledTools: [] }
+      : { plugins: [], enabledTools: [] };
+
   const regions: DesiredRegion[] = [];
 
-  if (server.entry) {
+  // The `mcpServers.prism-mcp-shim` key is shared by every installed plugin
+  // (same jsonPath for all), so it is rendered from the union of the
+  // recorded prior exposure and this compile's own contribution, and is
+  // emitted whenever the UNION is non-empty — even when this plugin
+  // contributes nothing (its removal shrinks the entry instead of
+  // orphan-removing it while other plugins still need it).
+  const shimUnion = unionedShimExposure(input.target.priorShimExposure, shimContribution);
+  if (shimUnion.plugins.length > 0) {
     regions.push({
       kind: "json-key",
       targetPath: configPath(input.target),
-      regionKey: `mcpServers.${server.serverName}`,
-      jsonPath: ["mcpServers", server.serverName],
-      value: server.entry,
-      plugin: input.target.sourcePluginName,
+      regionKey: `mcpServers.${serverName}`,
+      jsonPath: ["mcpServers", serverName],
+      value: renderCursorMcpServerEntry(shimUnion.plugins),
+      plugin: SHIM_REGION_OWNER,
     });
   }
 
-  return { files: [], regions };
+  return { files: [], regions, shimContribution };
 };

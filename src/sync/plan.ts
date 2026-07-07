@@ -24,6 +24,7 @@ import { computeContentHash, computeMcpHttpConfigContentHash } from "../content-
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
+import { sweepLegacyPrismMcpEntries } from "./legacy-prism-entries.js";
 import {
   applyRegion,
   removeJsonArrayMemberRegion,
@@ -282,6 +283,7 @@ const planOwnedFile = async (options: {
 
 const planSharedFileRegions = async (options: {
   readonly targetPath: string;
+  readonly harness: string;
   readonly desired: ReadonlyArray<DesiredRegion>;
   readonly orphanedRefs: ReadonlyArray<string>;
   readonly snapshotByRegion: ReadonlyMap<string, SnapshotEntry>;
@@ -351,6 +353,17 @@ const planSharedFileRegions = async (options: {
     content = outcome.content;
   }
 
+  // Scope-independent sweep for retired Prism MCP identities (the
+  // synthetic union-owner sentinel and pre-shim HTTP-era naming) that the
+  // snapshot-driven orphan removal above can never reach — see
+  // `legacy-prism-entries.ts` for why. Safe on every compile, scoped or
+  // not: no currently-desired entry can ever match a reserved legacy name.
+  const legacySweep = sweepLegacyPrismMcpEntries(options.harness, content);
+  if (legacySweep.changed) {
+    content = legacySweep.content;
+    removedRegions.push(...legacySweep.removedKeys);
+  }
+
   if (content === original) {
     return {
       ops: skippedRegions.length > 0
@@ -406,6 +419,7 @@ const groupOrphanedRegionRefsByFile = (
 };
 
 const planSharedRegions = async (options: {
+  readonly harness: string;
   readonly desiredRegions: ReadonlyArray<DesiredRegion>;
   readonly snapshotRegions: ReadonlyMap<string, SnapshotEntry>;
   readonly protectedRegionKeys: ReadonlySet<string>;
@@ -426,6 +440,7 @@ const planSharedRegions = async (options: {
   for (const targetPath of [...sharedFiles].sort()) {
     const sharedPlan = await planSharedFileRegions({
       targetPath,
+      harness: options.harness,
       desired: regionsByFile.get(targetPath) ?? [],
       orphanedRefs: orphanedByFile.get(targetPath) ?? [],
       snapshotByRegion: options.snapshotRegions,
@@ -525,6 +540,7 @@ export const planSync = async (options: {
 
   // Shared-file regions, coalesced one write per file.
   const sharedRegionPlan = await planSharedRegions({
+    harness: options.desired.harness,
     desiredRegions: options.desired.regions,
     snapshotRegions,
     protectedRegionKeys: carriedRegionKeys,

@@ -9,7 +9,7 @@ This plugin exercises every Prism compile surface that Kimi Code supports:
 - **Skills** → bundled as-is under `skills/`
 - **Agents** → `prism-agent-*` role skills
 - **Orbits** → orbit skills with phase references
-- **Tools** → generated MCP server exposing the deterministic `challenge_echo` proof tool
+- **Tools** → generated MCP server exposing the `challenge_echo` proof tool (keyed HMAC proof when the E2E matrix injects a per-run secret; unkeyed fallback for standalone runs)
 - **Traits** → compile-time capability conformance for agents
 - **Hooks** → `config.toml` hook entries
 

@@ -12,10 +12,18 @@
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --cleanup-qa-only
  */
+import { renderAllowlist, renderWire, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
+import { randomBytes } from "node:crypto";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import {
+  CHALLENGE_PROOF_SECRET_ENV,
+  CHALLENGE_PROOF_SECRET_FILENAME,
+  keyedChallengeProof,
+} from "../../examples/prism-harness-qa/tools/proof.js";
+import { generatedOwnerToolName } from "../../src/compile/generated-plugin.js";
 import { getHarness, resolveHarnessRoot } from "../../src/harnesses.js";
 import { syncDesiredRoot } from "../../src/sync/run.js";
 import { cleanupPrismMcpProcessesUnder } from "../../src/testing/mcp-process-cleanup.js";
@@ -201,7 +209,17 @@ const MODEL_SELECTION_INVALID_WORKFLOW = "model-selection-invalid.workflow.ts";
 const TEMP_PLUGIN_PREFIX = "pwe2e-plugin-";
 const TEMP_HOME_PREFIX = "pwe2e-home-";
 const TEMP_PRISM_HOME_PREFIX = "pwe2e-prism-";
-export const WORKFLOW_E2E_PROOF_PREFIX = "prism-tool-proof:";
+
+// Canonical shim-era wire naming, derived from the same modules the compile
+// pipeline and the shim use — never hand-maintained string literals.
+const CHALLENGE_TOOL_WIRE_SEGMENT = generatedOwnerToolName(QA_PLUGIN_NAME, "challenge_echo");
+export const CLAUDE_CHALLENGE_TOOL_NAME = renderAllowlist(
+  "claude-code",
+  QA_PLUGIN_NAME,
+  CHALLENGE_TOOL_WIRE_SEGMENT,
+);
+export const CODEX_CHALLENGE_COMPLETED_LINE =
+  `mcp: ${shimServerKey("codex-cli")}/${renderWire("codex-cli", QA_PLUGIN_NAME, CHALLENGE_TOOL_WIRE_SEGMENT)} (completed)`;
 export const OPENCODE_MODEL_SELECTION_SMOKE_MODEL = "ollama-cloud/deepseek-v4-flash";
 const MODEL_SELECTION_EXPECTED_TASKS: readonly ModelSelectionExpectedTask[] = [
   {
@@ -792,7 +810,11 @@ const seedLiveConfigs = async (input: {
 const workflowPath = (pluginRoot: string, entry: MatrixEntry): string =>
   join(pluginRoot, "workflows", entry.workflow);
 
-const proofFromRun = (entry: MatrixEntry, run: CommandResult): HarnessResult["proof"] => {
+const proofFromRun = (
+  entry: MatrixEntry,
+  run: CommandResult,
+  expectedProof: string,
+): HarnessResult["proof"] => {
   if (run.exitCode !== 0) {
     return { pass: false, detail: "workflow run exited non-zero" };
   }
@@ -808,13 +830,13 @@ const proofFromRun = (entry: MatrixEntry, run: CommandResult): HarnessResult["pr
     } | undefined;
     const pass =
       output?.challenge === entry.challenge &&
-      output?.proof === `prism-tool-proof:${entry.challenge}` &&
+      output?.proof === expectedProof &&
       output?.source === "prism-generated-tool";
     return {
       pass,
       output,
       metadata: task?.metadata,
-      ...(pass ? {} : { detail: "deterministic generated-tool proof did not match" }),
+      ...(pass ? {} : { detail: "keyed generated-tool proof did not match" }),
     };
   } catch (error) {
     return {
@@ -905,35 +927,17 @@ const stringArrayField = (value: unknown, key: string): readonly string[] => {
   return Array.isArray(field) ? field.filter((item): item is string => typeof item === "string") : [];
 };
 
-const OPENCODE_CHALLENGE_TOOL_CALL_PATTERN = /(?:^|\n)[^\n]*\b[A-Za-z0-9_.-]*challenge_echo\b\s+(\{[^\n}]*"challenge"\s*:[^\n}]*\})/u;
-
-const opencodeChallengeToolCallMatches = (
-  stderrExcerpt: string,
-  expectedChallenge: string,
-): boolean => {
-  const match = stderrExcerpt.match(OPENCODE_CHALLENGE_TOOL_CALL_PATTERN);
-  const json = match?.[1];
-  if (json === undefined) return false;
-  try {
-    const parsed = JSON.parse(json) as unknown;
-    return objectRecord(parsed)?.challenge === expectedChallenge;
-  } catch {
-    return false;
-  }
-};
-
-const CODEX_CHALLENGE_TOOL_COMPLETED_PATTERN = /^mcp:\s+prism-generated-prism-harness-qa\/[A-Za-z0-9_.-]*challenge_echo\s+\(completed\)\s*$/u;
-
 const isCodexChallengeOutputLine = (
   line: string,
   expectedChallenge: string,
+  expectedProof: string,
 ): boolean => {
   if (!line.trimStart().startsWith("{")) return false;
   try {
     const parsed = JSON.parse(line) as unknown;
     const output = objectRecord(parsed);
     return output?.challenge === expectedChallenge &&
-      output.proof === `prism-tool-proof:${expectedChallenge}` &&
+      output.proof === expectedProof &&
       output.source === "prism-generated-tool";
   } catch {
     return false;
@@ -943,17 +947,18 @@ const isCodexChallengeOutputLine = (
 const codexChallengeToolCallMatches = (
   stderrExcerpt: string,
   expectedChallenge: string,
+  expectedProof: string,
 ): boolean => {
   const lines = stderrExcerpt.split(/\r?\n/u).map((line) => line.trim());
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (!CODEX_CHALLENGE_TOOL_COMPLETED_PATTERN.test(line)) continue;
+    if (line !== CODEX_CHALLENGE_COMPLETED_LINE) continue;
     // Codex currently prints the tool result immediately after the completed MCP line.
     // Keep this bounded and stop at another MCP line so evidence fails closed if the
     // stderr shape changes or output from another tool is interleaved.
     for (const candidate of lines.slice(index + 1, index + 4)) {
       if (candidate.startsWith("mcp:")) break;
-      if (isCodexChallengeOutputLine(candidate, expectedChallenge)) return true;
+      if (isCodexChallengeOutputLine(candidate, expectedChallenge, expectedProof)) return true;
     }
   }
   return false;
@@ -1063,6 +1068,7 @@ const generatedToolCallObservedCheck = (
   entry: MatrixEntry,
   metadata: unknown,
   run: CommandResult | undefined,
+  expectedProof: string,
 ): HarnessCheck => {
   if (run?.exitCode !== 0) return incomplete("generated-tool-call-observed", run);
   switch (entry.harness) {
@@ -1070,24 +1076,21 @@ const generatedToolCallObservedCheck = (
       const toolCalls = stringArrayField(metadata, "claudeToolCallNames");
       return check(
         "generated-tool-call-observed",
-        toolCalls.some((name) => name.startsWith("mcp__prism-generated-") && name.includes("challenge_echo")),
-        `expected Claude stream-json tool_use for challenge_echo, got ${toolCalls.length === 0 ? "<none>" : toolCalls.join(", ")}`,
+        toolCalls.includes(CLAUDE_CHALLENGE_TOOL_NAME),
+        `expected Claude stream-json tool_use ${CLAUDE_CHALLENGE_TOOL_NAME}, got ${toolCalls.length === 0 ? "<none>" : toolCalls.join(", ")}`,
       );
     }
-    case "opencode": {
-      const stderrExcerpt = stringField(metadata, "stderrExcerpt") ?? "";
-      return check(
+    case "opencode":
+      return notApplicable(
         "generated-tool-call-observed",
-        opencodeChallengeToolCallMatches(stderrExcerpt, entry.challenge),
-        "expected OpenCode stderr excerpt to include a challenge_echo call with matching JSON challenge input",
+        "OpenCode worker metadata carries no tool-call telemetry (in-process generated tools log nothing to stderr); the keyed challenge proof validates tool execution",
       );
-    }
     case "codex-cli": {
       const stderrExcerpt = stringField(metadata, "stderrExcerpt") ?? "";
       return check(
         "generated-tool-call-observed",
-        codexChallengeToolCallMatches(stderrExcerpt, entry.challenge),
-        "expected Codex stderr excerpt to include generated MCP challenge_echo completion with matching JSON challenge output",
+        codexChallengeToolCallMatches(stderrExcerpt, entry.challenge, expectedProof),
+        "expected Codex stderr excerpt to include shim MCP challenge_echo completion with matching keyed JSON output",
       );
     }
     case "amp-code":
@@ -1103,7 +1106,7 @@ const generatedToolCallObservedCheck = (
 
 export const evaluateHarnessChecks = (
   entry: MatrixEntry,
-  input: Pick<HarnessResult, "run" | "proof">,
+  input: Pick<HarnessResult, "run" | "proof"> & { readonly expectedProof: string },
   options?: { readonly hermesAuthScope?: HermesAuthScope },
 ): readonly HarnessCheck[] => {
   const metadata = input.proof?.metadata;
@@ -1122,7 +1125,7 @@ export const evaluateHarnessChecks = (
     runCompleted
       ? check("model-resolved", model === entry.expectedModel, `expected ${entry.expectedModel}, got ${model ?? "<missing>"}`)
       : incomplete("model-resolved", input.run),
-    generatedToolCallObservedCheck(entry, metadata, input.run),
+    generatedToolCallObservedCheck(entry, metadata, input.run, input.expectedProof),
     expectedAgentCheck(entry, metadata, input.run, options),
     noDefaultFallbackCheck(entry, metadata, input.run, options),
     check(
@@ -1139,17 +1142,19 @@ export const evaluateHarnessChecks = (
 const taskOutputProofPass = (
   task: { readonly output?: unknown } | undefined,
   challenge: string,
+  expectedProof: string,
 ): boolean => {
   const output = objectRecord(task?.output);
   return (
     output?.challenge === challenge &&
-    output?.proof === `${WORKFLOW_E2E_PROOF_PREFIX}${challenge}` &&
+    output?.proof === expectedProof &&
     output?.source === "prism-generated-tool"
   );
 };
 
 export const evaluateModelSelectionChecks = (
   run: Pick<CommandResult, "exitCode" | "stdout" | "stderr"> | undefined,
+  expectedProofFor: (challenge: string) => string,
 ): readonly HarnessCheck[] => {
   if (run === undefined) {
     return [skipped("model-selection-run", "workflow was not run")];
@@ -1181,7 +1186,7 @@ export const evaluateModelSelectionChecks = (
       const finish = objectRecord(objectRecord(metadata)?.finish);
       const repairs = numberField(finish, "repairs");
       return [
-        check(`${expected.id}-proof`, taskOutputProofPass(task, expected.challenge), "deterministic generated-tool proof did not match"),
+        check(`${expected.id}-proof`, taskOutputProofPass(task, expected.challenge, expectedProofFor(expected.challenge)), "keyed generated-tool proof did not match"),
         check(
           `${expected.id}-model`,
           stringField(metadata, "model") === expected.expectedModel,
@@ -1208,6 +1213,15 @@ export const evaluateInvalidModelSelectionCheck = (
   );
 };
 
+/**
+ * `workflow validate` performs model resolution, so the intentionally-invalid
+ * modelspace workflow is REQUIRED to fail validation with the fail-closed
+ * diagnostic — a zero exit there would mean the fail-closed gate is broken.
+ */
+const invalidModelSelectionValidatePass = (
+  invalidValidate: Pick<CommandResult, "exitCode" | "stdout" | "stderr">,
+): boolean => evaluateInvalidModelSelectionCheck(invalidValidate).status === "pass";
+
 const checksPass = (checks: readonly HarnessCheck[] | undefined): boolean =>
   checks === undefined ? false : checks.every((item) => item.status !== "fail");
 
@@ -1221,7 +1235,7 @@ const modelSelectionPass = (result: ModelSelectionResult | undefined, validateOn
   (
     result.refresh.exitCode === 0 &&
     result.validate.exitCode === 0 &&
-    result.invalidValidate.exitCode === 0 &&
+    invalidModelSelectionValidatePass(result.invalidValidate) &&
     (validateOnly || checksPass(result.checks))
   );
 
@@ -1283,6 +1297,7 @@ const runModelSelectionScenario = async (input: {
   readonly pluginRoot: string;
   readonly env: Record<string, string | undefined>;
   readonly validateOnly: boolean;
+  readonly expectedProofFor: (challenge: string) => string;
 }): Promise<ModelSelectionResult> => {
   const refresh = await runCommand([
     process.execPath,
@@ -1343,7 +1358,7 @@ const runModelSelectionScenario = async (input: {
 
   const checks = input.validateOnly
     ? undefined
-    : [...evaluateModelSelectionChecks(run), evaluateInvalidModelSelectionCheck(invalidRun)];
+    : [...evaluateModelSelectionChecks(run, input.expectedProofFor), evaluateInvalidModelSelectionCheck(invalidRun)];
 
   return {
     harness: "opencode",
@@ -1386,6 +1401,16 @@ const main = async (): Promise<void> => {
   }
 
   const pluginRoot = await preparePluginRoot(roots);
+
+  // Per-run keyed proof secret (finding: the old static proof was derivable
+  // from the prompt, so a leg could "pass" without ever reaching the tool).
+  // Injected via env for the workflow-run process and in-process tool bundles,
+  // and via a runtime-dir file for shim daemons (read per call, so a reused
+  // daemon still proves against THIS run's secret).
+  const proofSecret = randomBytes(32).toString("hex");
+  env[CHALLENGE_PROOF_SECRET_ENV] = proofSecret;
+  const expectedProofFor = (challenge: string): string => keyedChallengeProof(challenge, proofSecret);
+
   const hermesAuthScope = entries.some((entry) => entry.harness === "hermes")
     ? resolveHermesAuthScopeForE2E(process.env.PRISM_E2E_HERMES_AUTH_SCOPE, process.env.PRISM_E2E_HERMES_PROFILE)
     : undefined;
@@ -1397,10 +1422,12 @@ const main = async (): Promise<void> => {
   }
   let configSeed: ConfigSeedSummary | undefined;
   let modelSelection: ModelSelectionResult | undefined;
+  let activePrismHome = livePrismHome;
 
   if (mode === "temp") {
     const home = await mkdtemp(join(tmpdir(), TEMP_HOME_PREFIX));
     const prismHome = await mkdtemp(join(tmpdir(), TEMP_PRISM_HOME_PREFIX));
+    activePrismHome = prismHome;
     roots.push(home, prismHome);
     if (hasFlag("--seed-live-configs")) {
       configSeed = await seedLiveConfigs({
@@ -1420,6 +1447,14 @@ const main = async (): Promise<void> => {
     env.PRISM_HOME = prismHome;
     env.KIMI_CODE_HOME = join(home, ".kimi-code");
   }
+
+  // Shim daemons read the secret from this file per call; `prism refresh`
+  // never wipes the runtime dir, and live-mode cleanup removes it after the
+  // run, so a run's secret never outlives that run.
+  const qaRuntimeDir = join(activePrismHome, "runtime", "mcp", QA_PLUGIN_NAME);
+  await mkdir(qaRuntimeDir, { recursive: true });
+  await writeFile(join(qaRuntimeDir, CHALLENGE_PROOF_SECRET_FILENAME), proofSecret, { mode: 0o600 });
+
   const results: HarnessResult[] = [];
   let qaCleanup: WorkflowE2EQaCleanupSummary | undefined;
 
@@ -1461,9 +1496,11 @@ const main = async (): Promise<void> => {
           store,
           "--no-cache",
         ], env);
-        proof = proofFromRun(entry, run);
+        proof = proofFromRun(entry, run, expectedProofFor(entry.challenge));
       }
-      const checks = validateOnly ? undefined : evaluateHarnessChecks(entry, { run, proof }, { hermesAuthScope });
+      const checks = validateOnly
+        ? undefined
+        : evaluateHarnessChecks(entry, { run, proof, expectedProof: expectedProofFor(entry.challenge) }, { hermesAuthScope });
       const setupBlocker = classifySetupBlocker(entry, run);
 
       const partial: HarnessResult = {
@@ -1483,7 +1520,7 @@ const main = async (): Promise<void> => {
     }
 
     if (shouldRunModelSelection) {
-      modelSelection = await runModelSelectionScenario({ mode, pluginRoot, env, validateOnly });
+      modelSelection = await runModelSelectionScenario({ mode, pluginRoot, env, validateOnly, expectedProofFor });
     }
   } finally {
     if (mode === "live") {

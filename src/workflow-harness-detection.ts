@@ -55,6 +55,12 @@ export interface WorkflowHarnessDetectionSpec {
    * run with "no concrete model for workflow worker X".
    */
   readonly defaultModel: string;
+  /**
+   * Inference provider passed alongside `defaultModel` when the harness
+   * multiplexes providers (hermes `--provider`). Omitted for single-provider
+   * harnesses.
+   */
+  readonly defaultProvider?: string;
 }
 
 export interface WorkflowHarnessProbeRunResult {
@@ -141,10 +147,13 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     command: "hermes",
     envVar: "PRISM_WORKFLOW_HERMES_BIN",
     probeArgs: ["--version"],
-    // Hermes proxies grok models but requires the `hf:` prefix — the bare
-    // grok id is rejected with "Your model name should start with an hf:
-    // prefix" (live e2e matrix, 2026-07-07).
-    defaultModel: "hf:grok-composer-2.5-fast",
+    // Hermes multiplexes providers; without `--provider` the configured
+    // default (synthetic/custom) rejects bare grok ids ("Your model name
+    // should start with an hf: prefix" ... "owner/modelName"). The pair
+    // below is proven live: `hermes chat --model grok-composer-2.5-fast
+    // --provider xai-oauth` (e2e matrix, 2026-07-07).
+    defaultModel: "grok-composer-2.5-fast",
+    defaultProvider: "xai-oauth",
   },
   "kimi-code": {
     harness: "kimi-code",
@@ -174,6 +183,10 @@ export const isWorkflowHarnessId = (id: string): id is WorkflowHarnessId =>
  */
 export const workflowHarnessDefaultModel = (harness: string): string | undefined =>
   isWorkflowHarnessId(harness) ? WORKFLOW_HARNESS_DETECTION_SPECS[harness].defaultModel : undefined;
+
+/** Provider paired with `workflowHarnessDefaultModel` for provider-multiplexing harnesses (hermes). */
+export const workflowHarnessDefaultProvider = (harness: string): string | undefined =>
+  isWorkflowHarnessId(harness) ? WORKFLOW_HARNESS_DETECTION_SPECS[harness].defaultProvider : undefined;
 
 export const workflowHarnessIdsForHarnesses = (
   harnesses: ReadonlyArray<HarnessId>,

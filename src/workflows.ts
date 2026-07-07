@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect";
 import type { Either } from "effect/Either";
 import type { ParseError } from "effect/ParseResult";
 import type { WorkflowRuntimeError } from "./workflow-errors.js";
-import { workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
+import { workflowHarnessDefaultModel, workflowHarnessDefaultProvider } from "./workflow-harness-detection.js";
 
 export type { WorkflowRuntimeError } from "./workflow-errors.js";
 
@@ -139,16 +139,26 @@ const modelTargetForWorker = (
   return ref.targets?.[worker];
 };
 
-const firstModelString = (target: WorkflowModelTarget | undefined): string | undefined => {
+const firstModelString = (target: WorkflowModelTarget | undefined): string | undefined =>
+  firstModelChoice(target)?.model;
+
+/** First concrete {model, provider?} pair in a modelspace target (direct or ordered-list form). */
+const firstModelChoice = (
+  target: WorkflowModelTarget | undefined,
+): { readonly model: string; readonly provider?: string } | undefined => {
   if (target === undefined) return undefined;
   const direct = target.model;
-  if (typeof direct === "string" && direct.length > 0) return direct;
+  if (typeof direct === "string" && direct.length > 0) {
+    return { model: direct, ...(typeof target.provider === "string" ? { provider: target.provider } : {}) };
+  }
   const models = target.models;
   if (Array.isArray(models)) {
     for (const candidate of models) {
       if (typeof candidate === "object" && candidate !== null) {
-        const model = (candidate as { readonly model?: unknown }).model;
-        if (typeof model === "string" && model.length > 0) return model;
+        const entry = candidate as { readonly model?: unknown; readonly provider?: unknown };
+        if (typeof entry.model === "string" && entry.model.length > 0) {
+          return { model: entry.model, ...(typeof entry.provider === "string" ? { provider: entry.provider } : {}) };
+        }
       }
     }
   }
@@ -214,6 +224,8 @@ export type WorkflowTaskModelResolutionSource = "task" | "profile" | "default" |
 
 export interface WorkflowTaskModelResolution {
   readonly model: string;
+  /** Harness-side inference provider (e.g. hermes `--provider xai-oauth`), from the modelspace target or harness default. */
+  readonly provider?: string;
   readonly source: WorkflowTaskModelResolutionSource;
 }
 
@@ -236,7 +248,9 @@ const resolveFallbackModel = (
 ): WorkflowTaskModelResolution | undefined => {
   if (fallbackModel !== undefined) return { model: fallbackModel, source: "cli-fallback" };
   const defaultModel = worker !== undefined ? workflowHarnessDefaultModel(worker) : undefined;
-  return defaultModel !== undefined ? { model: defaultModel, source: "default" } : undefined;
+  if (defaultModel === undefined) return undefined;
+  const defaultProvider = worker !== undefined ? workflowHarnessDefaultProvider(worker) : undefined;
+  return { model: defaultModel, ...(defaultProvider !== undefined ? { provider: defaultProvider } : {}), source: "default" };
 };
 
 export const resolveWorkflowTaskModelResolution = (
@@ -249,8 +263,8 @@ export const resolveWorkflowTaskModelResolution = (
   const worker = task.worker?.worker ?? options.worker;
   if (isWorkflowModelProfileRef(explicit)) {
     const target = modelTargetForWorker(explicit, worker);
-    const model = firstModelString(target);
-    if (model !== undefined) return { model, source: "task" };
+    const choice = firstModelChoice(target);
+    if (choice !== undefined) return { ...choice, source: "task" };
     throw new WorkflowModelResolutionError(
       `modelspace profile ${describeModelRef(explicit)} has no concrete model for workflow worker '${worker ?? "<missing>"}'`,
     );
@@ -273,8 +287,8 @@ export const resolveWorkflowTaskModelResolution = (
 
   if (task.agent.model?.modelspace !== undefined || task.agent.model?.profile !== undefined) {
     const target = modelTargetForWorker(task.agent.model, worker);
-    const model = firstModelString(target);
-    if (model !== undefined) return { model, source: "profile" };
+    const choice = firstModelChoice(target);
+    if (choice !== undefined) return { ...choice, source: "profile" };
     const fallback = resolveFallbackModel(worker, options.fallbackModel);
     if (fallback !== undefined) return fallback;
     throw new WorkflowModelResolutionError(

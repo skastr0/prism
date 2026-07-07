@@ -9,6 +9,7 @@ export type HermesWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly provider?: string;
   readonly profile?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
@@ -61,6 +62,7 @@ const assertHermesPermission = (mode: WorkflowPermissionMode): void => {
 export const buildHermesArgs = (input: {
   readonly profile?: string;
   readonly model?: string;
+  readonly provider?: string;
   readonly prompt: string;
   readonly resumeSessionId?: string;
   readonly permission?: WorkflowPermissionMode;
@@ -75,6 +77,7 @@ export const buildHermesArgs = (input: {
     "--query",
     input.prompt,
     ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...(input.provider !== undefined ? ["--provider", input.provider] : []),
     ...permissionArgs,
   ];
 };
@@ -94,6 +97,7 @@ export const runHermesWorkflowTask = async (
   const args = buildHermesArgs({
     profile: options.profile,
     model: options.model,
+    provider: options.provider,
     prompt,
     resumeSessionId,
     permission: options.resolvedPermission,
@@ -129,6 +133,7 @@ export const runHermesWorkflowTask = async (
         manifestHash: task.agent.manifestHash,
       },
       model: options.model,
+      provider: options.provider,
       durationMs,
       processTimeoutMs,
       sessionId: hermesSessionId(stderr) ?? resumeSessionId,

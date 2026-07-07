@@ -739,7 +739,7 @@ describe("workflow-e2e matrix evidence checks", () => {
           harness,
           workflow: `smoke-${harness}.workflow.ts`,
           challenge: `${harness}-2026-06-20-001`,
-          expectedModel: harness === "hermes" ? "hf:grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
+          expectedModel: harness === "hermes" ? "grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
         },
         {
           run: completedRun,
@@ -750,7 +750,7 @@ describe("workflow-e2e matrix evidence checks", () => {
               adapter: harness,
               agentSelection: "prompted-contract",
               agent: { name: "qa-tester" },
-              model: harness === "hermes" ? "hf:grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
+              model: harness === "hermes" ? "grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
               finish: { repairs: 0 },
             },
           },
@@ -766,7 +766,7 @@ describe("workflow-e2e matrix evidence checks", () => {
       harness: "hermes" as const,
       workflow: "smoke-hermes.workflow.ts",
       challenge: "hermes-2026-06-20-001",
-      expectedModel: "hf:grok-composer-2.5-fast",
+      expectedModel: "grok-composer-2.5-fast",
     };
     const proof = {
       pass: true,
@@ -775,7 +775,7 @@ describe("workflow-e2e matrix evidence checks", () => {
         agentSelection: "profile",
         profile: "lyra03",
         agent: { name: "qa-tester" },
-        model: "hf:grok-composer-2.5-fast",
+        model: "grok-composer-2.5-fast",
         finish: { repairs: 0 },
       },
     };
@@ -871,7 +871,7 @@ describe("workflow-e2e matrix evidence checks", () => {
           harness,
           workflow: `smoke-${harness}.workflow.ts`,
           challenge: `${harness}-2026-06-20-001`,
-          expectedModel: harness === "hermes" ? "hf:grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
+          expectedModel: harness === "hermes" ? "grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
         },
         {
           run: completedRun,
@@ -882,7 +882,7 @@ describe("workflow-e2e matrix evidence checks", () => {
               adapter: harness,
               agentSelection: "prompted-contract",
               agentName: "qa-tester",
-              model: harness === "hermes" ? "hf:grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
+              model: harness === "hermes" ? "grok-composer-2.5-fast" : "kimi-code/kimi-for-coding",
               finish: { repairs: 0 },
             },
           },

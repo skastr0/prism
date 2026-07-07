@@ -7,7 +7,7 @@
       "name": "prism-harness-qa",
       "version": "0.1.0",
       "sourcePath": ".",
-      "contentHash": "df9e8cfa396fc6a2d55d07e210e3b29ebcf8b3c076ab613ecb9b1024a142df25",
+      "contentHash": "8ae133104af6e2b20380b0ee37db0e0b71f9314812ddf35b64198c032a918149",
       "dependencies": {},
       "sources": [
         {
@@ -20,7 +20,7 @@
         },
         {
           "path": "modelspaces/qa-models.modelspace.ts",
-          "contentHash": "1af0440293d33ec7a87ad0acafaf3664f5e5819ab3b72d879ce63cc51db64df3"
+          "contentHash": "523dc2db7396b0d7dcd619489439664eae4a8b8acb2cb18a53244da198c30b3b"
         },
         {
           "path": "orbits/qa-orbit.orbit.ts",
@@ -37,5 +37,5 @@
       ]
     }
   ],
-  "generatedAt": "2026-07-07T03:39:09.512Z"
+  "generatedAt": "2026-07-07T05:41:23.814Z"
 }

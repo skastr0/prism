@@ -80,7 +80,7 @@ const MATRIX: readonly MatrixEntry[] = [
     harness: "hermes",
     workflow: "smoke-hermes.workflow.ts",
     challenge: "hermes-2026-06-20-001",
-    expectedModel: "hf:grok-composer-2.5-fast",
+    expectedModel: "grok-composer-2.5-fast",
   },
   {
     harness: "kimi-code",

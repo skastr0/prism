@@ -1,4 +1,4 @@
-import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowPermissionMode, type WorkflowWorkerId } from "./workflows.js";
+import { resolveWorkflowTaskModel, resolveWorkflowTaskModelResolution, type AnyWorkflowTask, type WorkflowPermissionMode, type WorkflowWorkerId } from "./workflows.js";
 import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { resolveAntigravityPermission, runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
@@ -126,15 +126,19 @@ const workflowWorkerAdapters = {
   },
   hermes: {
     id: "hermes",
-    runTask: (task, options) => runHermesWorkflowTask(task, {
-      cwd: options.cwd,
-      model: resolveWorkflowTaskModel(task, { worker: "hermes", fallbackModel: options.model }),
-      profile: task.worker?.profile ?? options.profile,
-      resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
-      abortSignal: options.abortSignal,
-      repair: options.context?.repair,
-    }),
+    runTask: (task, options) => {
+      const resolution = resolveWorkflowTaskModelResolution(task, { worker: "hermes", fallbackModel: options.model });
+      return runHermesWorkflowTask(task, {
+        cwd: options.cwd,
+        model: resolution?.model,
+        provider: resolution?.provider,
+        profile: task.worker?.profile ?? options.profile,
+        resolvedPermission: options.resolvedPermission,
+        processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
+        abortSignal: options.abortSignal,
+        repair: options.context?.repair,
+      });
+    },
   },
   "kimi-code": {
     id: "kimi-code",

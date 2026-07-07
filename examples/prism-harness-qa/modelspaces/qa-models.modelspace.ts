@@ -13,8 +13,9 @@ export default {
         // Not "grok-build" — fails config validation against a restricted
         // custom --agent file (every Prism-generated agent); see PQ-176.
         grok: { model: "grok-composer-2.5-fast" },
-        // Hermes proxies grok models but requires the `hf:` prefix.
-        hermes: { model: "hf:grok-composer-2.5-fast" },
+        // Hermes multiplexes providers; grok models live behind xai-oauth.
+        // Bare model without --provider hits the synthetic default and fails.
+        hermes: { model: "grok-composer-2.5-fast", provider: "xai-oauth" },
         "kimi-code": { model: "kimi-code/kimi-for-coding" },
         opencode: { model: "ollama-cloud/deepseek-v4-flash" },
       },
@@ -26,7 +27,7 @@ export default {
         "claude-code": { model: "opus" },
         "codex-cli": { model: "gpt-5.5" },
         grok: { model: "grok-composer-2.5-fast" },
-        hermes: { model: "hf:grok-4.20-reasoning" },
+        hermes: { model: "grok-4.20-reasoning", provider: "xai-oauth" },
         "kimi-code": { model: "kimi-code/kimi-for-coding" },
         opencode: {
           strategy: "ordered",

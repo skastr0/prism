@@ -805,6 +805,39 @@ const unionMcpTargetHarnesses = (registry: PluginRegistry): HarnessId[] => {
   return [...harnesses].sort((left, right) => left.localeCompare(right));
 };
 
+/**
+ * The bindings a plugin owns for a single (target, scope) — its own
+ * canonical tools plus any synthetic contract-dispatch bindings its agents'
+ * traits materialize (`bindingsOwnedByPlugin`). This is the ONE compiler
+ * predicate for "is this plugin an MCP owner here", reused by the union MCP
+ * bundle below and by `mcp-topology-verify.ts`'s diagnostic-mode owner
+ * detection — never re-derived, so both stay bit-for-bit aligned with what
+ * the lowerers actually emit.
+ */
+export const resolveOwnedMcpBindingsForTarget = (
+  registry: PluginRegistry,
+  target: HarnessId,
+  scope: HarnessScope,
+): Effect.Effect<ReadonlyArray<ResolvedContractBinding>, CompileError> =>
+  Effect.gen(function* () {
+    const surfaces = selectTargetSurfaces(registry, target, scope);
+    const tools = surfaces.tools
+      ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
+      : [];
+    const agents: ComposedAgent[] = [];
+    if (surfaces.agents) {
+      for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) =>
+        a.localeCompare(b),
+      )) {
+        agents.push(composeAgent(yield* resolveAgent(agent, registry, target)));
+      }
+    }
+    const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
+    const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
+    const agentsWithOrbitTools = applyOrbitToolPermissions(agents, orbitToolPermissions);
+    return bindingsOwnedByPlugin(registry.pluginName, tools, agentsWithOrbitTools);
+  });
+
 const resolveUnionMcpBundleInputs = (
   registry: PluginRegistry,
   scope: HarnessScope,
@@ -817,26 +850,7 @@ const resolveUnionMcpBundleInputs = (
     const exposureProfiles: McpServerExposureProfile[] = [];
     const serverName = generatedMcpServerName(registry.pluginName);
     for (const harness of unionMcpTargetHarnesses(registry)) {
-      const surfaces = selectTargetSurfaces(registry, harness, scope);
-      const tools = surfaces.tools
-        ? [...registry.tools.values()].sort((left, right) => left.name.localeCompare(right.name))
-        : [];
-      const agents: ComposedAgent[] = [];
-      if (surfaces.agents) {
-        for (const [, agent] of [...registry.agents.entries()].sort(([a], [b]) =>
-          a.localeCompare(b),
-        )) {
-          agents.push(composeAgent(yield* resolveAgent(agent, registry, harness)));
-        }
-      }
-      const orbits = yield* prepareTargetOrbits(registry, surfaces.orbits);
-      const orbitToolPermissions = yield* resolveOrbitToolPermissions(orbits, registry);
-      const agentsWithOrbitTools = applyOrbitToolPermissions(agents, orbitToolPermissions);
-      const targetBindings = bindingsOwnedByPlugin(
-        registry.pluginName,
-        tools,
-        agentsWithOrbitTools,
-      );
+      const targetBindings = yield* resolveOwnedMcpBindingsForTarget(registry, harness, scope);
       bindings.push(...targetBindings);
       exposureProfiles.push({
         name: mcpExposureProfileForTarget(serverName, harness),

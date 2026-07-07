@@ -1,10 +1,18 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { Effect } from "effect";
+import { generatedToolNameForBinding } from "../../src/compile/generated-plugin.js";
+import { loadPlugin } from "../../src/compile/load.js";
+import { resolveOwnedMcpBindingsForTarget } from "../../src/compile/pipeline.js";
 import type { HarnessRootsEnv } from "../../src/services/prism-env.js";
 import type { HarnessId } from "../../src/types.js";
-import type { ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
+import {
+  pluginServerKey,
+  renderPluginAllowlist,
+  type ShimHarnessId,
+} from "@skastr0/prism-sdk/mcp/wire-naming";
 import { verifyTopology } from "./mcp-topology-verify";
 
 // ---------------------------------------------------------------------------
@@ -20,7 +28,29 @@ const withTempDir = async <T>(fn: (dir: string) => Promise<T>): Promise<T> => {
   }
 };
 
-/** A minimal `plugin.json` + `tools/*.tool.ts` corpus entry — enough for `loadPluginInventory` to read without exercising the full compile pipeline. */
+const writeText = async (path: string, content: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+};
+
+// Resolved off THIS file's own location (via `import.meta`) rather than
+// `process.cwd()` — this script runs fine from a worktree that carries no
+// local `node_modules` of its own, where a cwd-joined path would 404 (Bun's
+// own resolver walks up through parent `node_modules` directories; a
+// hand-joined path does not).
+const effectImportPath = import.meta.resolve("effect");
+const prismImportPath = new URL("../../src/index.ts", import.meta.url).href;
+
+/**
+ * A `plugin.json` + `tools/*.tool.ts` corpus entry. `loadPluginInventory`
+ * now recomputes ownership through the real compiler predicate
+ * (`resolveOwnedMcpBindingsForTarget` -> `loadPlugin` + `resolveAgent` +
+ * `bindingsOwnedByPlugin`), so a fixture tool must be a real, loadable
+ * `ToolSource` (`description`/`input`/`output`/`handle` all present, `handle`
+ * a function, `name` matching the file stem) — a bare `{ name }` stub fails
+ * `parseCanonicalTool`'s strict decode and makes the whole plugin fail to
+ * load, which is indistinguishable from "owns nothing".
+ */
 const writeFixturePlugin = async (
   pluginsRoot: string,
   options: { readonly name: string; readonly ownTools?: readonly string[]; readonly targetsTools?: readonly HarnessId[] },
@@ -40,7 +70,16 @@ const writeFixturePlugin = async (
     for (const tool of options.ownTools) {
       await writeFile(
         join(pluginPath, "tools", `${tool}.tool.ts`),
-        `export default { name: ${JSON.stringify(tool)} };\n`,
+        [
+          `export default {`,
+          `  name: ${JSON.stringify(tool)},`,
+          `  description: "Fixture tool '${tool}'",`,
+          `  input: {},`,
+          `  output: {},`,
+          `  handle: async () => ({}),`,
+          `};`,
+          ``,
+        ].join("\n"),
       );
     }
   }
@@ -353,3 +392,258 @@ test("assertion F detects a prism-looking server carrying a dead HTTP url transp
 // (the `acceptance:mcp-topology` script, self-test mode) exercises this
 // exact path via a plain `bun run` and passes deterministically.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Owner detection — dispatch-only owners (forge-shaped: zero canonical
+// tools, an MCP presence carried entirely by a trait's synthetic
+// contract-dispatch binding over a FOREIGN plugin's tool) must be
+// recognized as owners; a plugin that merely CONSUMES a foreign tool
+// (a plain, unfilled-slot permission binding) must stay a non-owner.
+//
+// These fixtures never call `compilePluginForTarget` (the risky path the
+// baseline comment above documents) — they call the exact same compiler
+// predicate the fix wires the verifier through (`loadPlugin` +
+// `resolveOwnedMcpBindingsForTarget`), which is the lightweight source-load
+// path already exercised by every `writeFixturePlugin`-based test above.
+// ---------------------------------------------------------------------------
+
+/** `provider/tools/<name>.tool.ts` — real slots when `slotted` is set, so a trait can fill them and produce a synthetic binding. */
+const writeProviderTool = async (
+  providerPath: string,
+  name: string,
+  options: { readonly slotted?: boolean } = {},
+): Promise<void> => {
+  await writeText(
+    join(providerPath, "tools", `${name}.tool.ts`),
+    [
+      `import { Schema } from ${JSON.stringify(effectImportPath)};`,
+      `import { defineTool${options.slotted ? ", schemaSlot" : ""} } from ${JSON.stringify(prismImportPath)};`,
+      ``,
+      `export default defineTool({`,
+      `  name: ${JSON.stringify(name)},`,
+      `  description: "Fixture provider tool '${name}'",`,
+      `  input: Schema.Struct({ summary: Schema.String }),`,
+      `  output: Schema.Struct({ acknowledged: Schema.Boolean }),`,
+      options.slotted
+        ? [
+            `  slots: {`,
+            `    details: schemaSlot({ description: "Dispatcher-specific submission details" }),`,
+            `  },`,
+          ].join("\n")
+        : "",
+      `  async handle(input, context) {`,
+      `    return { acknowledged: true };`,
+      `  },`,
+      `});`,
+      ``,
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  );
+};
+
+const writeProviderPlugin = async (root: string, name: string, toolName: string, slotted: boolean): Promise<string> => {
+  const providerPath = join(root, name);
+  await writeText(
+    join(providerPath, "plugin.json"),
+    `${JSON.stringify({ name, version: "0.1.0" }, null, 2)}\n`,
+  );
+  await writeProviderTool(providerPath, toolName, { slotted });
+  return providerPath;
+};
+
+const writeIdentity = async (pluginPath: string, name: string): Promise<void> => {
+  await writeText(
+    join(pluginPath, "identities", `${name}.identity.md`),
+    `---\ndescription: Fixture identity '${name}'\n---\n\n# ${name}\n\nFixture identity body.\n`,
+  );
+};
+
+test("owner detection recognizes a dispatch-only owner (zero canonical tools, one synthetic dispatch binding over a foreign tool)", async () => {
+  await withTempDir(async (dir) => {
+    const depsRoot = join(dir, "dispatcher", "deps");
+    await writeProviderPlugin(depsRoot, "provider", "submit_work", true);
+
+    const dispatcherPath = join(dir, "dispatcher");
+    await writeText(
+      join(dispatcherPath, "plugin.json"),
+      `${JSON.stringify(
+        {
+          name: "dispatcher",
+          version: "0.1.0",
+          deps: { provider: "./deps/provider" },
+          targets: { agents: ["codex-cli"], tools: ["codex-cli"] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeIdentity(dispatcherPath, "builder");
+    await writeText(
+      join(dispatcherPath, "traits", "dispatchable.trait.ts"),
+      [
+        `import { defineTrait } from ${JSON.stringify(prismImportPath)};`,
+        ``,
+        `export default defineTrait({`,
+        `  name: "dispatchable",`,
+        `  description: "Can submit dispatcher-specific work",`,
+        `  tools: {`,
+        `    submit_work: { ref: "provider:submit_work" },`,
+        `  },`,
+        `  require: { tools: ["submit_work"] },`,
+        `});`,
+        ``,
+      ].join("\n"),
+    );
+    await writeText(
+      join(dispatcherPath, "schemas", "details.ts"),
+      `import { Schema } from ${JSON.stringify(effectImportPath)};\n\nexport const Details = Schema.Struct({ verdict: Schema.Literal("done") });\n`,
+    );
+    await writeText(
+      join(dispatcherPath, "agents", "builder.agent.ts"),
+      [
+        `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};`,
+        `import { Details } from "../schemas/details.ts";`,
+        ``,
+        `export default defineAgent({`,
+        `  name: "builder",`,
+        `  description: "Dispatcher builder agent",`,
+        `  identity: "builder",`,
+        `  traits: [`,
+        `    bindTrait("dispatchable", { tools: { submit_work: { slots: { details: Details } } } }),`,
+        `  ],`,
+        `});`,
+        ``,
+      ].join("\n"),
+    );
+
+    // Independently ground what "correct" looks like through the SAME
+    // compiler predicate the fix wires the verifier through — never a
+    // hand-guessed wire name.
+    const registry = await Effect.runPromise(loadPlugin(dispatcherPath));
+    const ownedBindings = await Effect.runPromise(
+      resolveOwnedMcpBindingsForTarget(registry, "codex-cli", "global"),
+    );
+    expect(ownedBindings).toHaveLength(1);
+    expect(ownedBindings[0]?.kind).toBe("synthetic");
+    const expectedAllowlist = ownedBindings.map((binding) =>
+      renderPluginAllowlist("codex-cli", "dispatcher", generatedToolNameForBinding("dispatcher", binding)),
+    );
+
+    const root = join(dir, "harnesses", "codex-cli");
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      join(root, "config.toml"),
+      [
+        `[mcp_servers."${pluginServerKey("dispatcher")}"]`,
+        `command = "prism"`,
+        `args = ["mcp", "shim"]`,
+        `enabled_tools = ${JSON.stringify(expectedAllowlist)}`,
+        `[mcp_servers."${pluginServerKey("dispatcher")}".env]`,
+        `PRISM_SHIM_PLUGINS = "dispatcher"`,
+        `PRISM_SHIM_HARNESS = "codex-cli"`,
+        ``,
+      ].join("\n"),
+    );
+
+    const report = await verifyTopology({
+      pluginPaths: [dispatcherPath],
+      harnesses: ["codex-cli"],
+      roots: singleHarnessRoots("codex-cli", root),
+    });
+
+    const codes = findViolationCodes(report, "codex-cli");
+    expect(codes).not.toContain("topology.owner-not-installed");
+    expect(codes).not.toContain("topology.consumer-has-server");
+    expect(codes).not.toContain("topology.allowlist-mismatch");
+    expect(codes).toEqual([]);
+    expect(report.pass).toBe(true);
+  });
+});
+
+test("owner detection keeps a true consumer (foreign tool referenced, no slots filled) flagged when it carries a server entry", async () => {
+  await withTempDir(async (dir) => {
+    const depsRoot = join(dir, "consumer", "deps");
+    await writeProviderPlugin(depsRoot, "provider2", "helper_tool", false);
+
+    const consumerPath = join(dir, "consumer");
+    await writeText(
+      join(consumerPath, "plugin.json"),
+      `${JSON.stringify(
+        {
+          name: "consumer2",
+          version: "0.1.0",
+          deps: { provider2: "./deps/provider2" },
+          targets: { agents: ["codex-cli"], tools: ["codex-cli"] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeIdentity(consumerPath, "user");
+    await writeText(
+      join(consumerPath, "traits", "usable.trait.ts"),
+      [
+        `import { defineTrait } from ${JSON.stringify(prismImportPath)};`,
+        ``,
+        `export default defineTrait({`,
+        `  name: "usable",`,
+        `  description: "Can use the provider's helper tool",`,
+        `  tools: {`,
+        `    helper_tool: { ref: "provider2:helper_tool" },`,
+        `  },`,
+        `  require: { tools: ["helper_tool"] },`,
+        `});`,
+        ``,
+      ].join("\n"),
+    );
+    await writeText(
+      join(consumerPath, "agents", "user.agent.ts"),
+      [
+        `import { defineAgent } from ${JSON.stringify(prismImportPath)};`,
+        ``,
+        `export default defineAgent({`,
+        `  name: "user",`,
+        `  description: "Consumer agent referencing a foreign tool, no slots filled",`,
+        `  identity: "user",`,
+        `  traits: ["usable"],`,
+        `});`,
+        ``,
+      ].join("\n"),
+    );
+
+    // Ground the negative the same way: the real predicate must return
+    // zero OWNED bindings even though the agent references a real tool.
+    const registry = await Effect.runPromise(loadPlugin(consumerPath));
+    const ownedBindings = await Effect.runPromise(
+      resolveOwnedMcpBindingsForTarget(registry, "codex-cli", "global"),
+    );
+    expect(ownedBindings).toHaveLength(0);
+
+    const root = join(dir, "harnesses", "codex-cli");
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      join(root, "config.toml"),
+      [
+        `[mcp_servers."${pluginServerKey("consumer2")}"]`,
+        `command = "prism"`,
+        `args = ["mcp", "shim"]`,
+        `enabled_tools = ["bogus_tool"]`,
+        `[mcp_servers."${pluginServerKey("consumer2")}".env]`,
+        `PRISM_SHIM_PLUGINS = "consumer2"`,
+        `PRISM_SHIM_HARNESS = "codex-cli"`,
+        ``,
+      ].join("\n"),
+    );
+
+    const report = await verifyTopology({
+      pluginPaths: [consumerPath],
+      harnesses: ["codex-cli"],
+      roots: singleHarnessRoots("codex-cli", root),
+    });
+
+    const codes = findViolationCodes(report, "codex-cli");
+    expect(codes).toContain("topology.consumer-has-server");
+    expect(report.pass).toBe(false);
+  });
+});

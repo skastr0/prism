@@ -71,8 +71,11 @@
 
 import { Effect, Layer } from "effect";
 import { join, resolve } from "node:path";
-import { compilePluginForTarget } from "../../src/compile/pipeline.js";
-import { generatedOwnerToolName } from "../../src/compile/generated-plugin.js";
+import { compilePluginForTarget, resolveOwnedMcpBindingsForTarget } from "../../src/compile/pipeline.js";
+import { generatedToolNameForBinding } from "../../src/compile/generated-plugin.js";
+import { loadPlugin } from "../../src/compile/load.js";
+import type { PluginRegistry } from "../../src/compile/registry.js";
+import type { ResolvedContractBinding } from "../../src/compile/resolve.js";
 import { exists, expandPath, isDirectory, listDir, readFile } from "../../src/fs.js";
 import {
   getHarnessMcpContract,
@@ -127,17 +130,25 @@ export interface TopologyReport {
 
 // ---------------------------------------------------------------------------
 // Plugin inventory — the "installed plugin set" every naming assertion
-// recomputes against. Own-tool discovery is a directory scan, not a hand
-// list: `tools/<name>.tool.ts`'s file stem IS the canonical tool name (the
-// compiler rejects any mismatch — src/compile/load.ts's `parseCanonicalTool`
-// fails the build if `parsed.name !== fileStem`), so scanning filenames is
-// exactly as grounded as parsing the tool source for its `name` field.
+// recomputes against. "Owns MCP here" is decided by the SAME predicate the
+// compiler uses (`bindingsOwnedByPlugin`, reached through the exported
+// `resolveOwnedMcpBindingsForTarget` — never a parallel reimplementation): a
+// plugin owns a binding either because the binding is one of its own
+// canonical tools, OR because it is a synthetic contract-dispatch binding a
+// trait materialized while composing one of the plugin's own agents (a
+// dispatch tool wrapping a FOREIGN plugin's canonical tool, e.g. Forge
+// wrapping Tower's `submit_work` with Forge-specific slots — the plugin then
+// owns zero `tools/*.tool.ts` files yet is still a real MCP owner). This
+// requires the real per-harness compose pass (`loadPlugin` + `resolveAgent`
+// + `composeAgent`), which is genuinely heavier than a directory scan, but
+// it is the only source of truth: a directory scan cannot see a synthetic
+// binding at all, which is exactly the bug this predicate fixes.
 // ---------------------------------------------------------------------------
 
 interface PluginRecord {
   readonly name: string;
-  readonly ownTools: readonly string[];
   readonly targetedHarnesses: ReadonlySet<ShimHarnessId>;
+  readonly ownedBindingsByHarness: ReadonlyMap<ShimHarnessId, ReadonlyArray<ResolvedContractBinding>>;
 }
 
 interface PluginInventory {
@@ -147,20 +158,42 @@ interface PluginInventory {
 const isShimHarnessId = (harness: HarnessId): harness is ShimHarnessId =>
   (SHIM_HARNESS_IDS as readonly HarnessId[]).includes(harness);
 
-const TOOL_SUFFIX = ".tool.ts";
-
-const discoverOwnCanonicalToolNames = async (pluginPath: string): Promise<string[]> => {
-  const toolsDir = join(pluginPath, "tools");
-  if (!(await isDirectory(toolsDir))) return [];
-  const entries = await listDir(toolsDir);
-  return entries
-    .filter((entry) => entry.endsWith(TOOL_SUFFIX))
-    .map((entry) => entry.slice(0, -TOOL_SUFFIX.length))
-    .sort((left, right) => left.localeCompare(right));
+/**
+ * The compiler-grounded owned-binding set for `pluginPath`, per harness —
+ * `resolveOwnedMcpBindingsForTarget(registry, harness, "global")` for each
+ * harness in `harnesses`, always scope `"global"` (this script never reads a
+ * project-scope harness root). A plugin whose own sources don't load/compose
+ * contributes nothing, the same posture the manifest read already takes for
+ * an invalid plugin — `prism validate` is where that surfaces, not this
+ * topology scan.
+ */
+const loadOwnedBindingsByHarness = async (
+  pluginPath: string,
+  harnesses: readonly ShimHarnessId[],
+): Promise<ReadonlyMap<ShimHarnessId, ReadonlyArray<ResolvedContractBinding>>> => {
+  const byHarness = new Map<ShimHarnessId, ReadonlyArray<ResolvedContractBinding>>();
+  let registry: PluginRegistry;
+  try {
+    registry = await Effect.runPromise(loadPlugin(pluginPath));
+  } catch {
+    return byHarness;
+  }
+  for (const harness of harnesses) {
+    try {
+      const bindings = await Effect.runPromise(
+        resolveOwnedMcpBindingsForTarget(registry, harness, "global"),
+      );
+      byHarness.set(harness, bindings);
+    } catch {
+      byHarness.set(harness, []);
+    }
+  }
+  return byHarness;
 };
 
 export const loadPluginInventory = async (
   pluginPaths: readonly string[],
+  harnesses: readonly ShimHarnessId[],
 ): Promise<PluginInventory> => {
   const all = new Map<string, PluginRecord>();
   for (const pluginPath of pluginPaths) {
@@ -179,11 +212,11 @@ export const loadPluginInventory = async (
         `mcp-topology-verify: duplicate plugin name '${manifest.name}' in the --plugins corpus (${pluginPath})`,
       );
     }
-    const ownTools = await discoverOwnCanonicalToolNames(pluginPath);
     const targetedHarnesses = new Set(
       getManifestArtifactTargets(manifest, "tools").filter(isShimHarnessId),
     );
-    all.set(manifest.name, { name: manifest.name, ownTools, targetedHarnesses });
+    const ownedBindingsByHarness = await loadOwnedBindingsByHarness(pluginPath, harnesses);
+    all.set(manifest.name, { name: manifest.name, targetedHarnesses, ownedBindingsByHarness });
   }
   return { all };
 };
@@ -581,7 +614,8 @@ export const verifyHarnessTopology = async (
       );
     }
     const ownerRecord = inventory.all.get(owner);
-    if (!ownerRecord || ownerRecord.ownTools.length === 0) {
+    const ownedBindings = ownerRecord?.ownedBindingsByHarness.get(harness) ?? [];
+    if (ownedBindings.length === 0) {
       violate(
         "B",
         "topology.owner-not-installed",
@@ -591,8 +625,8 @@ export const verifyHarnessTopology = async (
       continue;
     }
     if (allowlistIsWithinServer) {
-      const expected = ownerRecord.ownTools.map((tool) =>
-        renderPluginAllowlist(harness, owner, generatedOwnerToolName(owner, tool)),
+      const expected = ownedBindings.map((binding) =>
+        renderPluginAllowlist(harness, owner, generatedToolNameForBinding(owner, binding)),
       );
       const actual = entry.allowlist ?? [];
       if (!arraysEqualSorted(expected, actual)) {
@@ -608,7 +642,7 @@ export const verifyHarnessTopology = async (
 
   // ---- C: no consumer servers / no 0-tool servers ----
   for (const [name, record] of inventory.all) {
-    if (record.ownTools.length > 0) continue;
+    if ((record.ownedBindingsByHarness.get(harness)?.length ?? 0) > 0) continue;
     if (!record.targetedHarnesses.has(harness)) continue;
     const key = pluginServerKey(name);
     const found = managedByKey.get(key);
@@ -683,7 +717,7 @@ export const verifyHarnessTopology = async (
 
   // ---- E: coverage ----
   for (const [name, record] of inventory.all) {
-    if (record.ownTools.length === 0) continue;
+    if ((record.ownedBindingsByHarness.get(harness)?.length ?? 0) === 0) continue;
     if (!record.targetedHarnesses.has(harness)) continue;
     const key = pluginServerKey(name);
     if (!managedByKey.has(key)) {
@@ -730,7 +764,7 @@ export interface VerifyTopologyOptions {
 }
 
 export const verifyTopology = async (options: VerifyTopologyOptions): Promise<TopologyReport> => {
-  const inventory = await loadPluginInventory(options.pluginPaths);
+  const inventory = await loadPluginInventory(options.pluginPaths, options.harnesses);
   const harnesses: HarnessTopologyReport[] = [];
   for (const harness of options.harnesses) {
     const root = expandPath(options.roots.resolve(harness));

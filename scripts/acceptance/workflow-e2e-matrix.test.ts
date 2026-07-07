@@ -539,7 +539,7 @@ describe("workflow-e2e matrix evidence checks", () => {
       },
     });
 
-    expect(CLAUDE_CHALLENGE_TOOL_NAME).toBe("mcp__prism-mcp-shim__p_f3119df0_prism_harness_qa_challenge_echo");
+    expect(CLAUDE_CHALLENGE_TOOL_NAME).toBe("mcp__prism-harness-qa__challenge_echo");
 
     const passing = evaluateHarnessChecks(entry, claudeInput([CLAUDE_CHALLENGE_TOOL_NAME]));
     expect(passing.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("pass");
@@ -611,11 +611,11 @@ describe("workflow-e2e matrix evidence checks", () => {
       JSON.stringify({ challenge, proof, source });
 
     expect(CODEX_CHALLENGE_COMPLETED_LINE).toBe(
-      "mcp: prism-mcp-shim/p_f3119df0_prism_harness_qa_challenge_echo (completed)",
+      "mcp: prism-harness-qa/challenge_echo (completed)",
     );
 
     const passing = evaluateHarnessChecks(entry, codexInput([
-      "mcp: prism-mcp-shim/p_f3119df0_prism_harness_qa_challenge_echo started",
+      "mcp: prism-harness-qa/challenge_echo started",
       CODEX_CHALLENGE_COMPLETED_LINE,
       toolOutputLine(entry.challenge, proofFor(entry.challenge)),
     ].join("\n")));
@@ -905,7 +905,7 @@ describe("workflow-e2e matrix evidence checks", () => {
           adapter: "codex-cli",
           model: "gpt-5.4-mini",
           stderrExcerpt: [
-            "mcp: prism-mcp-shim/p_f3119df0_prism_harness_qa_challenge_echo started",
+            "mcp: prism-harness-qa/challenge_echo started",
             CODEX_CHALLENGE_COMPLETED_LINE,
             JSON.stringify({
               challenge: "codex-cli-2026-06-20-001",

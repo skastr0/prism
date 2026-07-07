@@ -12,7 +12,7 @@
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --mode live --tower
  *   bun scripts/acceptance/workflow-e2e-matrix.ts --cleanup-qa-only
  */
-import { renderAllowlist, renderWire, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import { randomBytes } from "node:crypto";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -213,13 +213,13 @@ const TEMP_PRISM_HOME_PREFIX = "pwe2e-prism-";
 // Canonical shim-era wire naming, derived from the same modules the compile
 // pipeline and the shim use — never hand-maintained string literals.
 const CHALLENGE_TOOL_WIRE_SEGMENT = generatedOwnerToolName(QA_PLUGIN_NAME, "challenge_echo");
-export const CLAUDE_CHALLENGE_TOOL_NAME = renderAllowlist(
+export const CLAUDE_CHALLENGE_TOOL_NAME = renderPluginAllowlist(
   "claude-code",
   QA_PLUGIN_NAME,
   CHALLENGE_TOOL_WIRE_SEGMENT,
 );
 export const CODEX_CHALLENGE_COMPLETED_LINE =
-  `mcp: ${shimServerKey("codex-cli")}/${renderWire("codex-cli", QA_PLUGIN_NAME, CHALLENGE_TOOL_WIRE_SEGMENT)} (completed)`;
+  `mcp: ${pluginServerKey(QA_PLUGIN_NAME)}/${renderPluginWire("codex-cli", QA_PLUGIN_NAME, CHALLENGE_TOOL_WIRE_SEGMENT)} (completed)`;
 export const OPENCODE_MODEL_SELECTION_SMOKE_MODEL = "ollama-cloud/deepseek-v4-flash";
 const MODEL_SELECTION_EXPECTED_TASKS: readonly ModelSelectionExpectedTask[] = [
   {

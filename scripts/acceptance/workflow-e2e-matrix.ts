@@ -1247,10 +1247,18 @@ const invalidModelSelectionValidatePass = (
 const checksPass = (checks: readonly HarnessCheck[] | undefined): boolean =>
   checks === undefined ? false : checks.every((item) => item.status !== "fail");
 
-const harnessResultPass = (result: HarnessResult, validateOnly: boolean): boolean =>
-  result.refresh.exitCode === 0 &&
-  result.validate.exitCode === 0 &&
-  (validateOnly || (result.proof?.pass === true && checksPass(result.checks)));
+const harnessResultPass = (result: HarnessResult, validateOnly: boolean): boolean => {
+  // An environmental setup blocker (OAuth absent, provider quota exhausted)
+  // excludes the leg from the gate — mirrored from the council's verdict
+  // semantics. The blocker is still surfaced in setupBlockers with a retry
+  // path, so a blocked leg is reported, never silently skipped.
+  if (result.setupBlocker !== undefined) return true;
+  return (
+    result.refresh.exitCode === 0 &&
+    result.validate.exitCode === 0 &&
+    (validateOnly || (result.proof?.pass === true && checksPass(result.checks)))
+  );
+};
 
 const modelSelectionPass = (result: ModelSelectionResult | undefined, validateOnly: boolean): boolean =>
   result === undefined ||

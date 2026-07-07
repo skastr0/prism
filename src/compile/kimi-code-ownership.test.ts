@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/kimi-code.js";
-import { generatedMcpWireServerName } from "./mcp-runtime.js";
+import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -30,8 +30,7 @@ test("kimi-code lowerer owner-qualifies foreign tool bindings without copying ow
   const root = await createTempRoot();
   const outputRoot = join(root, ".kimi-code");
   const ownerPluginName = "ot";
-  const ownerPluginId = `prism-generated-${ownerPluginName}`;
-  const ownerServerName = generatedMcpWireServerName(ownerPluginName);
+  const ownerServerName = pluginServerKey(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -73,15 +72,17 @@ test("kimi-code lowerer owner-qualifies foreign tool bindings without copying ow
     operations,
     join("skills", "prism-agent-consumer", "SKILL.md"),
   );
-  expect(roleSkill?.content).toContain(
-    `mcp__plugin-${ownerPluginId}_${ownerServerName}__ot_echo`,
-  );
+  expect(roleSkill?.content).toContain(`mcp__${ownerServerName}__echo`);
   expect(roleSkill?.content).not.toContain("prism-generated-consumer-plugin");
 
   const manifest = findContentOperation(operations, "kimi.plugin.json");
   const parsed = JSON.parse(manifest?.content ?? "{}") as {
     mcpServers?: Record<string, unknown>;
   };
+  // Consumer plugin (no owned bindings of its own) carries NO mcpServers at
+  // all under the per-plugin-manifest law -- not the owner's server key, and
+  // not its own.
+  expect(parsed.mcpServers).toBeUndefined();
   expect(parsed.mcpServers?.[ownerServerName]).toBeUndefined();
-  expect(parsed.mcpServers?.["prism-generated-consumer-plugin"]).toBeUndefined();
+  expect(parsed.mcpServers?.["consumer-plugin"]).toBeUndefined();
 });

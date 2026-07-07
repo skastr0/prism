@@ -213,6 +213,34 @@ test("doctor reports snapshot drift region integrity and namespace strays", asyn
   expect(codes).toContain("namespace.unowned-prism-path");
 });
 
+test("doctor does not flag Kimi Code's own plugin.json/prism.lock as strays, but still flags a real unowned file", async () => {
+  const prismHome = join(root, "prism-home");
+  const harnessRoot = join(process.env.HOME!, ".kimi-code");
+  const pluginDir = join(harnessRoot, "plugins", "managed", "prism-generated-tower");
+
+  // Kimi Code's own plugin manager writes these two as install-time side
+  // effects; Prism never writes them, so they must not show up as strays.
+  await writeText(join(pluginDir, "plugin.json"), "kimi.plugin.json\n");
+  await writeText(join(pluginDir, "prism.lock"), "{}\n");
+  // A genuinely unowned file in the same directory must still be flagged --
+  // the allowance is scoped to the two known Kimi-manager basenames only.
+  await writeText(join(pluginDir, "unexpected.txt"), "stray\n");
+
+  const report = await runDoctor({
+    harnesses: ["kimi-code"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const strayPaths = report.findings
+    .filter((finding) => finding.code === "namespace.unowned-prism-path")
+    .map((finding) => finding.path);
+  expect(strayPaths).not.toContain(join(pluginDir, "plugin.json"));
+  expect(strayPaths).not.toContain(join(pluginDir, "prism.lock"));
+  expect(strayPaths).toContain(join(pluginDir, "unexpected.txt"));
+});
+
 test("doctor does not flag a grok .mcp.json port change as drift, but still flags a real content change (PQ-167)", async () => {
   const prismHome = join(root, "prism-home");
   const harnessRoot = join(process.env.HOME!, ".grok");

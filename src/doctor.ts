@@ -569,6 +569,32 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
   }
 };
 
+/**
+ * Kimi Code's own plugin manager writes these two files as install-time side
+ * effects directly inside every `prism-generated-*` plugin directory it
+ * activates -- `plugin.json` (a symlink to Prism's own `kimi.plugin.json`)
+ * and `prism.lock` (Kimi's own lockfile), grounded by inspecting a real
+ * `~/.kimi-code/plugins/managed/prism-generated-<plugin>/` install. Neither
+ * is written by the kimi-code lowerer, so neither is ever recorded in
+ * Prism's snapshot; without this allowance both would misreport as unowned
+ * strays every doctor run. Scoped to kimi-code only -- no other harness's
+ * scan is affected.
+ */
+const KIMI_MANAGER_ARTIFACT_BASENAMES = new Set(["plugin.json", "prism.lock"]);
+
+const isKimiManagerArtifact = (harnessId: HarnessId, relativePath: string): boolean => {
+  if (harnessId !== "kimi-code") return false;
+  const segments = relativePath.split("/");
+  const basename = segments.at(-1);
+  const parentDir = segments.at(-2);
+  return (
+    basename !== undefined &&
+    KIMI_MANAGER_ARTIFACT_BASENAMES.has(basename) &&
+    parentDir !== undefined &&
+    parentDir.startsWith("prism-generated-")
+  );
+};
+
 const detectNamespaceStrays = async (options: {
   readonly prismHome: string;
   readonly harnesses: ReadonlyArray<HarnessId>;
@@ -592,6 +618,7 @@ const detectNamespaceStrays = async (options: {
         if (!(await exists(base))) continue;
         for (const relativePath of await listDirRecursive(base)) {
           if (!namespaceStrayCandidate(relativePath) && !namespaceStrayCandidate(base)) continue;
+          if (isKimiManagerArtifact(harnessId, relativePath)) continue;
           const absolutePath = resolve(join(base, relativePath));
           if (owned.has(absolutePath)) continue;
           findings.push(finding({

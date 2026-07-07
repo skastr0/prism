@@ -10,7 +10,7 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
 import { generatedMcpWireServerName } from "./mcp-runtime.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { bareWireToolName, pluginServerKey, renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import {
   generateMcpServerBundle,
   mcpServerRuntimeSourceSha256,
@@ -146,12 +146,6 @@ const qualifyKimiMcpToolName = (serverName: string, toolName: string): string =>
   const hash = kimiStableHash8(full);
   return `${full.slice(0, 64 - hash.length - 1)}_${hash}`;
 };
-
-const kimiPluginMcpToolName = (
-  pluginId: string,
-  serverName: string,
-  toolName: string,
-): string => qualifyKimiMcpToolName(`plugin-${pluginId}:${serverName}`, toolName);
 
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -8062,12 +8056,11 @@ export default defineHook({
 
   expect(compiled.outputRoot).toBe(kimiRoot);
   const kimiPluginId = "prism-generated-kimi-pipeline-demo";
-  const kimiServerName = generatedMcpWireServerName("kimi-pipeline-demo");
-  const kimiToolName = "kimi_pipeline_demo_submit_work";
-  const qualifiedKimiToolName = kimiPluginMcpToolName(kimiPluginId, kimiServerName, kimiToolName);
-  expect(qualifiedKimiToolName.length).toBe(64);
-  expect(qualifiedKimiToolName).toStartWith("mcp__plugin-prism-generated-kimi-pipeline-demo_p_");
-  expect(qualifiedKimiToolName).toContain("_-");
+  const kimiServerKey = pluginServerKey("kimi-pipeline-demo");
+  const kimiDaemonToolName = "kimi_pipeline_demo_submit_work";
+  const kimiWireToolName = bareWireToolName("kimi-pipeline-demo", kimiDaemonToolName);
+  const qualifiedKimiToolName = qualifyKimiMcpToolName(kimiServerKey, kimiWireToolName);
+  expect(qualifiedKimiToolName).toBe("mcp__kimi-pipeline-demo__submit_work");
   const pluginOutputRoot = join(kimiRoot, "plugins", "managed", kimiPluginId);
   const manifest = JSON.parse(await readFile(join(pluginOutputRoot, "kimi.plugin.json"), "utf8")) as {
     name: string;
@@ -8079,6 +8072,7 @@ export default defineHook({
       cwd?: string;
       url?: string;
       headers?: Record<string, string>;
+      env?: Record<string, string>;
       enabledTools?: string[];
     }>;
   };
@@ -8087,10 +8081,11 @@ export default defineHook({
     skills: "./skills/",
     sessionStart: { skill: "prism-context" },
   });
-  const kimiShimServerKey = shimServerKey("kimi-code");
-  expect(manifest.mcpServers?.[kimiShimServerKey]).toBeDefined();
-  expect(manifest.mcpServers?.[kimiShimServerKey]?.command).toBe("prism");
-  expect(manifest.mcpServers?.[kimiShimServerKey]?.args).toEqual(["mcp", "shim"]);
+  expect(manifest.mcpServers?.[kimiServerKey]).toBeDefined();
+  expect(manifest.mcpServers?.[kimiServerKey]?.command).toBe("prism");
+  expect(manifest.mcpServers?.[kimiServerKey]?.args).toEqual(["mcp", "shim"]);
+  expect(manifest.mcpServers?.[kimiServerKey]?.env?.PRISM_SHIM_NAMING).toBe("per-plugin");
+  expect(manifest.mcpServers?.[kimiServerKey]?.enabledTools).toEqual(["submit_work"]);
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"))).toBe(true);
   expect(await pathExists(join(pluginOutputRoot, "mcp"))).toBe(false);
   const installed = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {

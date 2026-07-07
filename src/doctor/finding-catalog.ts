@@ -216,6 +216,34 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     fix: "refresh",
     description: "Claude generated plugin has invalid hooks.json.",
   },
+  {
+    family: "harness.config",
+    code: "config.antigravity-mcp-json-invalid",
+    severity: "error",
+    fix: "refresh",
+    description: "Antigravity generated plugin has invalid mcp_config.json.",
+  },
+  {
+    family: "harness.config",
+    code: "config.antigravity-mcp-empty-servers",
+    severity: "error",
+    fix: "refresh",
+    description: "Antigravity generated plugin ships an empty mcpServers block.",
+  },
+  {
+    family: "harness.config",
+    code: "config.antigravity-mcp-legacy-aggregated-shim",
+    severity: "error",
+    fix: "refresh",
+    description: "Antigravity generated plugin still registers the legacy aggregated shim server.",
+  },
+  {
+    family: "harness.config",
+    code: "config.antigravity-mcp-not-per-plugin",
+    severity: "error",
+    fix: "refresh",
+    description: "Antigravity generated plugin MCP server is not a single-plugin per-plugin shim entry.",
+  },
 
   // snapshot.disk-drift
   {

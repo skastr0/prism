@@ -1450,12 +1450,135 @@ const validateCursorConfigReferences = async (
 };
 
 /**
- * Grok, Antigravity CLI, Kimi Code, and Factory Droid each write the shim
- * entry into a JSON manifest inside their own generated-plugin directory
+ * Antigravity CLI's per-plugin server scheme (operator-locked): a generated
+ * plugin bundle's `mcp_config.json` holds exactly one non-empty server, keyed
+ * by that bundle's OWN plugin's `pluginServerKey` — never the aggregated
+ * `prism-mcp-shim` key, never a multi-plugin `PRISM_SHIM_PLUGINS` re-export
+ * closure, never an empty `mcpServers` block (a consumer plugin referencing
+ * only foreign owners' tools must have no `mcp_config.json` at all). Mirrors
+ * `validateClaudeGeneratedPlugin`'s per-plugin checks, adapted to
+ * Antigravity's `plugins/<bundle>/mcp_config.json` shape (see
+ * `src/compile/lowerers/antigravity-cli.ts` `planMcpServers`).
+ */
+const validateAntigravityGeneratedPlugin = async (
+  root: string,
+  pluginRoot: string,
+  prismHome: string,
+): Promise<DoctorFinding[]> => {
+  const findings: DoctorFinding[] = [];
+  const mcpPath = join(pluginRoot, "mcp_config.json");
+  if (!(await exists(mcpPath))) return findings;
+  let parsed: { readonly mcpServers?: Record<string, Record<string, unknown>> };
+  try {
+    parsed = JSON.parse(await readFile(mcpPath)) as {
+      readonly mcpServers?: Record<string, Record<string, unknown>>;
+    };
+  } catch (error) {
+    return [finding({
+      severity: "error",
+      family: "harness.config",
+      code: "config.antigravity-mcp-json-invalid",
+      message: `Antigravity generated plugin has invalid mcp_config.json: ${error instanceof Error ? error.message : String(error)}`,
+      harness: "antigravity-cli",
+      root,
+      path: mcpPath,
+      fix: "refresh",
+    })];
+  }
+
+  const servers = Object.entries(parsed.mcpServers ?? {});
+  if (servers.length === 0) {
+    findings.push(finding({
+      severity: "error",
+      family: "harness.config",
+      code: "config.antigravity-mcp-empty-servers",
+      message: `Antigravity generated plugin ships an empty mcpServers block (a consumer plugin must have no mcp_config.json): ${mcpPath}`,
+      harness: "antigravity-cli",
+      root,
+      path: mcpPath,
+      fix: "refresh",
+    }));
+  }
+  for (const [serverName, server] of servers) {
+    if (serverName === shimServerKey("antigravity-cli")) {
+      findings.push(finding({
+        severity: "error",
+        family: "harness.config",
+        code: "config.antigravity-mcp-legacy-aggregated-shim",
+        message: `Antigravity generated plugin still registers the legacy aggregated '${serverName}' server; per-plugin servers replaced it`,
+        harness: "antigravity-cli",
+        root,
+        path: mcpPath,
+        fix: "refresh",
+      }));
+      continue;
+    }
+    if (!server || Object.keys(server).length === 0) continue;
+    const env = (server.env ?? {}) as Record<string, unknown>;
+    const shimPlugins = typeof env.PRISM_SHIM_PLUGINS === "string"
+      ? env.PRISM_SHIM_PLUGINS.split(",").map((name) => name.trim()).filter((name) => name.length > 0)
+      : [];
+    if (
+      shimPlugins.length !== 1
+      || env.PRISM_SHIM_NAMING !== "per-plugin"
+      || pluginServerKey(shimPlugins[0] ?? "") !== serverName
+    ) {
+      findings.push(finding({
+        severity: "error",
+        family: "harness.config",
+        code: "config.antigravity-mcp-not-per-plugin",
+        message: `Antigravity generated plugin server '${serverName}' is not a single-plugin per-plugin shim entry (PRISM_SHIM_NAMING=per-plugin, PRISM_SHIM_PLUGINS naming exactly the owner whose server key is '${serverName}')`,
+        harness: "antigravity-cli",
+        root,
+        path: mcpPath,
+        fix: "refresh",
+      }));
+    }
+    findings.push(
+      ...(await validateStdioShimServerEntry({
+        harness: "antigravity-cli",
+        root,
+        path: mcpPath,
+        serverName,
+        server,
+        prismHome,
+      })),
+    );
+  }
+  return findings;
+};
+
+const validateAntigravityGeneratedPluginReferences = async (
+  scope: HarnessScope,
+  projectPath: string | undefined,
+  prismHome: string,
+  roots?: HarnessRootsEnv,
+): Promise<DoctorFinding[]> => {
+  const rootsList = rootsForHarness("antigravity-cli", scope, projectPath, roots);
+  const findings: DoctorFinding[] = [];
+  for (const root of rootsList) {
+    const pluginsRoot = join(root, "plugins");
+    if (!(await exists(pluginsRoot))) continue;
+    for (const entry of await listDir(pluginsRoot)) {
+      if (!entry.startsWith("prism-generated-")) continue;
+      findings.push(
+        ...(await validateAntigravityGeneratedPlugin(root, join(pluginsRoot, entry), prismHome)),
+      );
+    }
+  }
+  return findings;
+};
+
+/**
+ * Kimi Code and Factory Droid each write the (still-aggregated) shim entry
+ * into a JSON manifest inside their own generated-plugin directory
  * (mirroring Claude Code's `.mcp.json`, just a different subdir and
  * filename per harness -- see each lowerer's `planMcpServer`/manifest
- * write). One shared reader covers all four; only the scan subdir, config
- * filename, and (for Kimi) the allowlist field name differ.
+ * write). One shared reader covers both; only the scan subdir, config
+ * filename, and (for Kimi) the allowlist field name differ. Antigravity CLI
+ * has its own per-plugin-scheme reader above
+ * (`validateAntigravityGeneratedPluginReferences`) now that its lowerer has
+ * migrated off this aggregated shape.
  */
 const validateGeneratedPluginMcpReferences = async (options: {
   readonly harness: ShimHarnessId;
@@ -1642,15 +1765,12 @@ const validateHarnessConfigReferences = async (options: {
     case "grok":
       return path ? validateGrokConfigReferences(path, options.prismHome) : [];
     case "antigravity-cli":
-      return validateGeneratedPluginMcpReferences({
-        harness: "antigravity-cli",
-        scope: options.scope,
-        projectPath: options.projectPath,
-        roots: options.roots,
-        prismHome: options.prismHome,
-        pluginsSubdir: "plugins",
-        configFileName: "mcp_config.json",
-      });
+      return validateAntigravityGeneratedPluginReferences(
+        options.scope,
+        options.projectPath,
+        options.prismHome,
+        options.roots,
+      );
     case "factory-droid":
       return validateGeneratedPluginMcpReferences({
         harness: "factory-droid",

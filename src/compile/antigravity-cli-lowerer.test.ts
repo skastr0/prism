@@ -353,13 +353,15 @@ export default defineTool({
   const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
     mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
   };
-  expect(Object.keys(parsed.mcpServers ?? {})).toEqual(["prism-mcp-shim"]);
-  expect(parsed.mcpServers?.["prism-mcp-shim"]).toEqual({
+  // ONE per-plugin entry, keyed by the owner plugin's own server key.
+  expect(Object.keys(parsed.mcpServers ?? {})).toEqual(["antigravity-shim-fixture"]);
+  expect(parsed.mcpServers?.["antigravity-shim-fixture"]).toEqual({
     command: "prism",
     args: ["mcp", "shim"],
     env: {
       PRISM_SHIM_PLUGINS: "antigravity-shim-fixture",
       PRISM_SHIM_HARNESS: "antigravity-cli",
+      PRISM_SHIM_NAMING: "per-plugin",
       PRISM_SHIM_EXPOSURE: "prism-generated-antigravity-shim-fixture:antigravity-cli",
     },
   });

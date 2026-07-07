@@ -24,7 +24,7 @@ import { computeContentHash, computeMcpHttpConfigContentHash } from "../content-
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
-import { sweepLegacyPrismMcpEntries } from "./legacy-prism-entries.js";
+import { RETIRED_SHIM_SENTINEL_OWNER, sweepLegacyPrismMcpEntries } from "./legacy-prism-entries.js";
 import {
   applyRegion,
   removeJsonArrayMemberRegion,
@@ -509,6 +509,11 @@ export const planSync = async (options: {
     ),
   );
   for (const entry of options.snapshot.entries) {
+    // The retired union scheme's sentinel owner is not a real plugin: no
+    // refresh is ever scoped to it, so its entries would be carried forever
+    // while the disk sweep removes their content — a permanent snapshot lie
+    // doctor reports as owned-but-missing. Drop them at the source.
+    if (entry.plugin === RETIRED_SHIM_SENTINEL_OWNER) continue;
     if (entry.mode === "owned") {
       if (inScope(entry.plugin)) snapshotOwned.set(entry.targetPath, entry);
       else carriedEntries.push(entry);

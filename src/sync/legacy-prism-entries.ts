@@ -60,6 +60,17 @@ import { readJsonKeyRegion, removeJsonKeyRegion, removeMarkerRegion } from "./re
 const MCP_EXPOSURE_HEADER = "X-Prism-Mcp-Exposure";
 
 /**
+ * The synthetic owner the retired aggregated union scheme attributed its
+ * shared shim region to (commit be15253). Never a real plugin — `#` is not
+ * legal in plugin names — so a snapshot entry carrying this owner can only
+ * be a leftover of the retired scheme. `planSync` drops such entries
+ * instead of carrying them: their disk content is swept by
+ * `sweepLegacyPrismMcpEntries`, and a carried sentinel entry would make
+ * doctor report the swept region as owned-but-missing forever.
+ */
+export const RETIRED_SHIM_SENTINEL_OWNER = "prism#shim";
+
+/**
  * The retired aggregated-shim marker regionKey for a marker-fenced harness's
  * shared MCP config (`config.toml`/`config.yaml`) — `undefined` for a
  * harness with no such history (it never used the union scheme, or its MCP

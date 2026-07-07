@@ -1068,6 +1068,42 @@ describe("sync engine — legacy Prism MCP entry sweep", () => {
     expect(await readFile(target)).toContain(`prism:${regionKey} begin`);
   });
 
+  test("a sentinel-owned snapshot entry (prism#shim) is dropped, not carried — doctor never sees owned-but-missing for swept legacy regions", async () => {
+    const configToml = join(root, "config.toml");
+    await nodeWriteFile(configToml, "# hand-written\n");
+    // Seed: a manifest still carrying the retired union scheme's entry.
+    await commitSnapshot({
+      prismHome: home,
+      manifest: {
+        version: 1,
+        harness: "codex-cli",
+        root,
+        entries: [{
+          targetPath: configToml,
+          contentHash: "stale",
+          mode: "region" as const,
+          regionKey: "marker # codex.mcp.prism-mcp-shim",
+          plugin: "prism#shim",
+        }],
+      },
+    });
+
+    // Any real plugin's scoped pass drops the sentinel entry from the manifest.
+    const ownRegion = {
+      kind: "marker" as const,
+      targetPath: configToml,
+      regionKey: "codex.mcp.booth",
+      commentPrefix: "#",
+      content: '["mcp_servers"."booth"]\ncommand = "prism"',
+      plugin: "booth",
+    };
+    await refresh(desiredWith({ harness: "codex-cli", regions: [ownRegion] }));
+
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(snapshot.manifest.entries.some((entry) => entry.plugin === "prism#shim")).toBe(false);
+    expect(snapshot.manifest.entries.some((entry) => entry.plugin === "booth")).toBe(true);
+  });
+
   test("codex: an unfenced user TOML table literally named prism-mcp-shim survives — the marker fence delimiters are the provenance, not the key name", async () => {
     const configToml = join(root, "config.toml");
     // No `# --- prism:codex.mcp.prism-mcp-shim begin/end ---` fence at all —

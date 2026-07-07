@@ -883,6 +883,14 @@ export const classifySetupBlocker = (
       }
       return undefined;
     case "kimi-code":
+      if (/reached your usage limit for this billing cycle|provider\.api_error: 403/iu.test(output)) {
+        return {
+          harness,
+          code: "kimi-quota-exhausted",
+          message: "Kimi Code provider quota is exhausted for this billing cycle.",
+          retryCommand: "wait for quota refresh or upgrade the Kimi plan",
+        };
+      }
       if (/kimi-code requires OAuth login|run `kimi login`|refresh Kimi Code credentials/iu.test(output)) {
         return {
           harness: entry.harness,

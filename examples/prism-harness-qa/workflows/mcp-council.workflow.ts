@@ -257,7 +257,7 @@ const errorToMessage = (error: unknown): string => {
 const BLOCKED_PATTERNS: Partial<Record<Harness, RegExp>> = {
   grok: /grok requires xAI OAuth login|run `grok login`|refresh Grok credentials/iu,
   hermes: /xAI OAuth state is missing access_token|Run `hermes model` to re-authenticate|Re-authenticate with `hermes model`/iu,
-  "kimi-code": /kimi-code requires OAuth login|run `kimi login`|refresh Kimi Code credentials/iu,
+  "kimi-code": /kimi-code requires OAuth login|run `kimi login`|refresh Kimi Code credentials|reached your usage limit for this billing cycle|provider\.api_error: 403/iu,
 };
 
 const captureOutcome = (wf: WorkflowRuntime, harness: Harness) =>

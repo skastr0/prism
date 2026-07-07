@@ -52,13 +52,31 @@ import {
 import { getDaemon as getDaemonDefault, type RegistryResult, type RegistryEntry } from "./uds-registry.js";
 import { resolveOrSpawnDaemon, DaemonResolveError, DEFAULT_SPAWN_TIMEOUT_MS } from "./daemon-resolver.js";
 import {
+  assertUniqueBareTools,
   canonicalNamespace,
   createGrokCollisionGuard,
+  daemonToolCandidatesForBare,
   generatedDaemonExposureProfile,
   parseCanonicalBase,
+  pluginServerKey,
+  renderPluginWire,
   renderWire,
   type ShimHarnessId,
 } from "./wire-naming.js";
+
+/**
+ * How this shim process names the tools it advertises:
+ *
+ * - `aggregated` — the legacy multi-plugin shape: one shim fronting N
+ *   plugins, tools namespaced `p_<hash8>_<daemonTool>` (`canonicalBase`).
+ *   Kept as the internal fallback until every harness lowerer is rewired.
+ * - `per-plugin` — the target shape: one shim per MCP-owning plugin,
+ *   registered under the plugin's own server key (`pluginServerKey`),
+ *   advertising bare wire names (`renderPluginWire`): server `booth`
+ *   exposes `context_get`, dispatched to daemon tool `booth_context_get`.
+ *   Requires exactly one configured plugin.
+ */
+export type ShimNamingMode = "aggregated" | "per-plugin";
 
 export type { ShimHarnessId } from "./wire-naming.js";
 
@@ -271,6 +289,13 @@ export interface ShimAggregatorOptions {
    */
   readonly harness: ShimHarnessId;
   /**
+   * Naming mode (see `ShimNamingMode`). Defaults to `aggregated`.
+   * `per-plugin` requires `plugins.length === 1`; the constructor throws
+   * otherwise — a multi-plugin per-plugin server is a config-contract
+   * breach, not a state to accommodate.
+   */
+  readonly naming?: ShimNamingMode;
+  /**
    * Prism home directory, threaded from the process entrypoint (see
    * `src/mcp/shim-main.ts`, which resolves `PRISM_HOME` once via
    * `resolvePrismHome()`). Forwarded to the default `resolveOrSpawn` so a
@@ -318,6 +343,7 @@ interface ResolvedTool {
 export class ShimAggregator {
   private readonly plugins: ReadonlyArray<string>;
   private readonly harness: ShimHarnessId;
+  private readonly naming: ShimNamingMode;
   private readonly daemonTimeoutMs: number;
   private readonly getDaemon: GetDaemonFn;
   private readonly spawnTimeoutMs: number;
@@ -338,6 +364,12 @@ export class ShimAggregator {
   constructor(options: ShimAggregatorOptions) {
     this.plugins = options.plugins;
     this.harness = options.harness;
+    this.naming = options.naming ?? "aggregated";
+    if (this.naming === "per-plugin" && options.plugins.length !== 1) {
+      throw new Error(
+        `per-plugin naming requires exactly one configured plugin, got ${options.plugins.length}`,
+      );
+    }
     this.daemonTimeoutMs = options.daemonTimeoutMs ?? DEFAULT_SHIM_DAEMON_TIMEOUT_MS;
     this.getDaemon = options.getDaemon ?? getDaemonDefault;
     this.spawnTimeoutMs = options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS;
@@ -421,9 +453,22 @@ export class ShimAggregator {
     const guard = createGrokCollisionGuard();
     const merged: Tool[] = [];
     const toolIndex = new Map<string, ResolvedTool>();
+    if (this.naming === "per-plugin") {
+      // Authoring guarantees within-plugin bare-name uniqueness; assert it
+      // before advertising, so a breach is a hard error, not a silent shadow.
+      for (const named of perPlugin) {
+        assertUniqueBareTools(
+          this.plugins[0]!,
+          named.map(({ tool }) => tool.name),
+        );
+      }
+    }
     for (const named of perPlugin) {
       for (const { plugin, tool } of named) {
-        const wire = renderWire(this.harness, plugin, tool.name, guard);
+        const wire =
+          this.naming === "per-plugin"
+            ? renderPluginWire(this.harness, plugin, tool.name, guard)
+            : renderWire(this.harness, plugin, tool.name, guard);
         // Filter by enabledTools if set
         if (this.enabledTools !== undefined && !this.enabledTools.has(wire)) {
           continue;
@@ -446,9 +491,25 @@ export class ShimAggregator {
    * arrives before this process's first `tools/list`, or for a plugin whose
    * last `tools/list` pass failed to resolve it.
    */
-  private resolveToolName(fqName: string): ResolvedTool | undefined {
+  private async resolveToolName(fqName: string): Promise<ResolvedTool | undefined> {
     const indexed = this.toolIndex.get(fqName);
     if (indexed) return indexed;
+
+    if (this.naming === "per-plugin") {
+      // Cold start (a tools/call before this process's first tools/list):
+      // rebuild the index from the daemon's own tools/list — the only
+      // authoritative bare-name -> daemon-name mapping (prefix-restoring
+      // alone cannot distinguish a foreign-owner tool, and a Grok-capped
+      // bare name is not string-invertible at all).
+      await this.listTools();
+      const rebuilt = this.toolIndex.get(fqName);
+      if (rebuilt) return rebuilt;
+      // Daemon unreachable for the list pass: fall back to the candidate
+      // daemon names the bare form could denote, most-specific first.
+      const plugin = this.plugins[0]!;
+      const candidate = daemonToolCandidatesForBare(plugin, fqName)[0]!;
+      return { plugin, bareTool: candidate };
+    }
 
     const parsed = parseCanonicalBase(fqName);
     if (!parsed) return undefined;
@@ -472,7 +533,7 @@ export class ShimAggregator {
       throw new ShimDaemonError("shim", `tool name '${fqName}' is not enabled`);
     }
 
-    const resolved = this.resolveToolName(fqName);
+    const resolved = await this.resolveToolName(fqName);
     if (!resolved) {
       throw new ShimDaemonError("shim", `tool name '${fqName}' does not match any configured plugin`);
     }
@@ -491,8 +552,8 @@ export class ShimAggregator {
 const SERVER_NAME = "prism-mcp-shim";
 const SERVER_VERSION = "0.1.0";
 
-export const createShimServer = (aggregator: ShimAggregator): Server => {
-  const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: {} } });
+export const createShimServer = (aggregator: ShimAggregator, serverName: string = SERVER_NAME): Server => {
+  const server = new Server({ name: serverName, version: SERVER_VERSION }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: await aggregator.listTools(),
@@ -522,6 +583,8 @@ export interface RunShimOptions {
   readonly plugins: ReadonlyArray<string>;
   /** See `ShimAggregatorOptions.harness`. */
   readonly harness: ShimHarnessId;
+  /** Naming mode. See `ShimAggregatorOptions.naming`. */
+  readonly naming?: ShimNamingMode;
   /** Prism home directory, threaded from the process entrypoint. See `ShimAggregatorOptions.prismHome`. */
   readonly prismHome?: string;
   readonly daemonTimeoutMs?: number;
@@ -540,7 +603,11 @@ export interface RunShimOptions {
  */
 export const runShim = async (options: RunShimOptions): Promise<void> => {
   const aggregator = new ShimAggregator(options);
-  const server = createShimServer(aggregator);
+  // A per-plugin server introduces itself by its plugin's name — "shim" is
+  // transport plumbing the user never sees.
+  const serverName =
+    options.naming === "per-plugin" ? pluginServerKey(options.plugins[0]!) : undefined;
+  const server = createShimServer(aggregator, serverName);
   const transport = new StdioServerTransport();
 
   const shutdown = async (): Promise<void> => {

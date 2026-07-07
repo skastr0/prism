@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Applies an already-derived release version across every Prism-owned package
+ * Applies an operator-decided release version across every Prism-owned package
  * in the workspace, in lockstep.
  *
  * Scope of the rewrite:
@@ -14,10 +14,9 @@
  *     than the previous release. Range pins (e.g. workspace:* or ^x) are left
  *     untouched because they do not carry a frozen release version.
  *
- * The bump is *derived* by scripts/derive-version.ts in
- * .github/workflows/release.yml; this script only *applies* a decided
- * version, keeping derivation and file rewrite separable and independently
- * testable.
+ * The version itself is a human decision (see docs/release-train.md); this
+ * script only *applies* a decided version — there is no automatic bump
+ * derivation in the repo.
  *
  * Usage:
  *   bun scripts/apply-release-version.ts 0.3.0

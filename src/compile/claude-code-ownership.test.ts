@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/claude-code.js";
-import { renderAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -26,7 +26,7 @@ afterEach(async () => {
   );
 });
 
-test("claude-code lowerer owner-qualifies foreign tool bindings and wires the shim to the owner plugin", async () => {
+test("claude-code lowerer owner-qualifies foreign tool bindings and attaches no server for a pure consumer plugin", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");
   const ownerPluginName = "ot";
@@ -71,20 +71,19 @@ test("claude-code lowerer owner-qualifies foreign tool bindings and wires the sh
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  const echoPermission = renderAllowlist("claude-code", ownerPluginName, "ot_echo");
+  const echoPermission = renderPluginAllowlist("claude-code", ownerPluginName, "ot_echo");
+  expect(echoPermission).toBe(`mcp__${pluginServerKey(ownerPluginName)}__echo`);
   expect(agent?.content).toContain(echoPermission);
   expect(agent?.content).not.toContain("mcp__prism-generated-consumer-plugin__ot_echo");
+  expect(agent?.content).not.toContain("mcp__consumer-plugin__");
 
-  // The shim resolves the owner's daemon on demand — no per-owner runtime
-  // resolution (and so no registry) is required at compile time; the
-  // referenced owner plugin is simply named in PRISM_SHIM_PLUGINS.
+  // A pure consumer plugin — one that owns no tools/synthetic bindings of
+  // its own and only references a foreign owner's tools — attaches NO
+  // server entry at all. The foreign tool is resolved at session scope
+  // through the OWNER plugin's own per-plugin server (named above), which
+  // only that owner plugin's bundle ever registers.
   const mcpConfig = findContentOperation(operations, ".mcp.json");
-  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { env?: Record<string, string> }>;
-  };
-  expect(parsed.mcpServers?.[shimServerKey("claude-code")]?.env?.PRISM_SHIM_PLUGINS).toBe(
-    ownerPluginName,
-  );
+  expect(mcpConfig).toBeUndefined();
 
   const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
   expect(bundle).toBeUndefined();

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/grok.js";
+import { SHIM_REGION_OWNER } from "./lowerers/shared.js";
 import { mcpToolNameForBinding } from "./mcp-bundle.js";
 import {
   canonicalBase,
@@ -339,7 +340,9 @@ export default defineTool({
   expect(mcpRegion.content).toContain(`["mcp_servers"."${shimServerKey("grok")}"."env"]`);
   expect(mcpRegion.content).toContain('PRISM_SHIM_PLUGINS = "grok-plugin-fixture"');
   expect(mcpRegion.content).toContain('PRISM_SHIM_HARNESS = "grok"');
-  expect(mcpRegion.content).toContain('PRISM_SHIM_EXPOSURE = "prism-generated-grok-plugin-fixture:grok"');
+  // The shared region is a cross-plugin union: it cannot carry one plugin's
+  // exposure profile (the shim derives the per-owner profile itself).
+  expect(mcpRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
   expect(mcpRegion.content).not.toContain("http");
   expect(mcpRegion.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 
@@ -547,7 +550,9 @@ export default defineTool({
   const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${shimServerKey("grok")}`);
   if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
   expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
-  expect(mcpRegion.plugin).toBe("grok-shim-fixture");
+  // The shared shim region is owned by the reserved cross-plugin owner, not
+  // the compiling plugin — its content is a union across installed plugins.
+  expect(mcpRegion.plugin).toBe(SHIM_REGION_OWNER);
   expect(mcpRegion.content).toBe(
     [
       `["mcp_servers"."${shimServerKey("grok")}"]`,
@@ -557,7 +562,6 @@ export default defineTool({
       `["mcp_servers"."${shimServerKey("grok")}"."env"]`,
       'PRISM_SHIM_PLUGINS = "grok-shim-fixture"',
       'PRISM_SHIM_HARNESS = "grok"',
-      'PRISM_SHIM_EXPOSURE = "prism-generated-grok-shim-fixture:grok"',
     ].join("\n"),
   );
 });

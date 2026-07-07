@@ -44,11 +44,11 @@ export interface LowerOutput {
   /**
    * The compiling plugin's OWN shared-shim contribution, present only on
    * harnesses whose stdio-shim config is one shared region per root
-   * (codex-cli / hermes / cursor — see `SHARED_SHIM_HARNESSES`). The pipeline
-   * persists it into the shim-exposure registry after a successful apply so
-   * later compiles of OTHER plugins can render the full union. Empty arrays
-   * mean "this plugin contributes nothing" (its registry entry is deleted).
-   * Per-plugin-artifact harnesses (claude-code, grok, kimi, …) leave it
+   * (codex-cli / hermes / cursor / grok — see `SHARED_SHIM_HARNESSES`). The
+   * pipeline persists it into the shim-exposure registry after a successful
+   * apply so later compiles of OTHER plugins can render the full union. Empty
+   * arrays mean "this plugin contributes nothing" (its registry entry is
+   * deleted). Per-plugin-artifact harnesses (claude-code, kimi, …) leave it
    * undefined — their per-compile scope is already the right scope.
    */
   readonly shimContribution?: ShimExposureContribution;
@@ -72,7 +72,7 @@ export const SHIM_REGION_OWNER = "prism#shim";
  * generated artifact. These lowerers render the region from the shim
  * exposure union and report `shimContribution`.
  */
-export const SHARED_SHIM_HARNESSES = ["codex-cli", "cursor", "hermes"] as const;
+export const SHARED_SHIM_HARNESSES = ["codex-cli", "cursor", "grok", "hermes"] as const;
 export type SharedShimHarnessId = (typeof SHARED_SHIM_HARNESSES)[number];
 
 export const isSharedShimHarness = (target: HarnessId): target is SharedShimHarnessId =>

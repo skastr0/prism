@@ -36,7 +36,7 @@
   "regions": [
     {
       "commentPrefix": "#",
-      "content": "[\"mcp_servers\".\"prism\"]\ncommand = \"prism\"\nargs = [\"mcp\", \"shim\"]\nenabled = true\n[\"mcp_servers\".\"prism\".\"env\"]\nPRISM_SHIM_PLUGINS = \"canonical-compile-fixture,protocol-core\"\nPRISM_SHIM_HARNESS = \"grok\"\nPRISM_SHIM_EXPOSURE = \"prism-generated-canonical-compile-fixture:grok\"",
+      "content": "[\"mcp_servers\".\"prism\"]\ncommand = \"prism\"\nargs = [\"mcp\", \"shim\"]\nenabled = true\n[\"mcp_servers\".\"prism\".\"env\"]\nPRISM_SHIM_PLUGINS = \"canonical-compile-fixture,protocol-core\"\nPRISM_SHIM_HARNESS = \"grok\"",
       "kind": "marker",
       "regionKey": "grok.mcp.prism",
       "targetPath": "<HARNESS_ROOT>/config.toml"

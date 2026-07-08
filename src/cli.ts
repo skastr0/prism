@@ -72,7 +72,9 @@ import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
-import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary } from "./workflow-store.js";
+import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord } from "./workflow-store.js";
+import { listRegisteredWorkflowStores, registerWorkflowStore } from "./workflow-store-registry.js";
+import { renderWorkflowTraceHuman, workflowSpansToOtlpJson } from "./workflow-tracing.js";
 import {
   buildWorkflowCatalog,
   lookupCatalogRef,
@@ -229,6 +231,14 @@ const writeStdout = (text: string): Promise<void> =>
 
 const defaultWorkflowStorePathForCwd = (): string =>
   defaultWorkflowStorePath(resolvePrismHome(), process.cwd());
+
+// Every store a workflow command touches lands in the machine-global registry,
+// so `runs list --all` can enumerate runs across default and custom stores.
+const resolveWorkflowStorePath = (storeOption: string | undefined): string => {
+  const storePath = expandPath(storeOption ?? defaultWorkflowStorePathForCwd());
+  registerWorkflowStore(resolvePrismHome(), storePath);
+  return storePath;
+};
 
 workflow
   .command("typecheck <file>")
@@ -409,7 +419,7 @@ workflow
   }) => {
     try {
       await runWorkflowMonitor({
-        storePath: options.store ?? defaultWorkflowStorePathForCwd(),
+        storePath: resolveWorkflowStorePath(options.store),
         pollMs: options.pollMs,
         ...(options.failStaleAfterMs !== undefined ? { failStaleAfterMs: options.failStaleAfterMs } : {}),
       });
@@ -482,7 +492,7 @@ workflow
       const workflow = await loadWorkflowFile(file, {
         skipTypecheck: isDetachSpawnParent || isDetachedChild,
       });
-      const storePath = expandPath(options.store ?? defaultWorkflowStorePathForCwd());
+      const storePath = resolveWorkflowStorePath(options.store);
       if (options.detach === true) {
         if (options.runId !== undefined || options.runToken !== undefined) {
           throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
@@ -665,7 +675,7 @@ workflowCache
   }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       const entries = store.listCompletedCache({
         workflow: options.workflow,
         taskId: options.taskId,
@@ -702,7 +712,7 @@ workflowCache
   }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       const entries = store.listCompletedCache({
         workflow: options.workflow,
         taskId: options.taskId,
@@ -727,17 +737,102 @@ workflowRuns
   .description("List workflow runs from the SQLite workflow store")
   .option("--store <path>", "SQLite workflow store path")
   .option("--limit <n>", "Maximum number of runs to return", parsePositiveInteger)
+  .option("--all", "List runs across every registered workflow store on this machine (ignores --store)")
+  .option("--hours <n>", "With --all, only include runs created in the last n hours", parsePositiveInteger)
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before listing")
-  .action(async (options: { readonly store?: string; readonly limit?: number; readonly failStaleAfterMs?: string }) => {
+  .action(async (options: { readonly store?: string; readonly limit?: number; readonly all?: boolean; readonly hours?: number; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      if (options.all === true) {
+        const entries = listRegisteredWorkflowStores(resolvePrismHome());
+        const cutoff = options.hours !== undefined ? Date.now() - options.hours * 3_600_000 : undefined;
+        const runs: Array<WorkflowRunRecord & { readonly storePath: string }> = [];
+        for (const entry of entries) {
+          let crossStore: WorkflowStore | undefined;
+          try {
+            crossStore = await WorkflowStore.open(entry.path);
+            if (options.failStaleAfterMs !== undefined) {
+              crossStore.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+            }
+            for (const run of crossStore.listRuns()) {
+              if (
+                cutoff !== undefined && run.createdAt !== undefined &&
+                Date.parse(`${run.createdAt.replace(" ", "T")}Z`) < cutoff
+              ) continue;
+              runs.push({ ...run, storePath: entry.path });
+            }
+          } finally {
+            crossStore?.close();
+          }
+        }
+        runs.sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""));
+        await writeStdout(`${JSON.stringify({
+          stores: entries.length,
+          runs: options.limit !== undefined ? runs.slice(0, options.limit) : runs,
+        }, null, 2)}\n`);
+        return;
+      }
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
       console.log(JSON.stringify({ runs: store.listRuns().slice(0, options.limit) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs list failed");
+      exitWith(EXIT_CODES.domainFailure);
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("trace <runId>")
+  .description("Render the span tree recorded for one workflow run; --otlp exports it to a collector")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--json", "Emit raw span records as JSON")
+  .option("--min-ms <n>", "Hide finished spans shorter than this many milliseconds", parsePositiveInteger)
+  .option("--otlp <url>", "POST the trace as OTLP/HTTP JSON to a collector traces endpoint (e.g. http://localhost:4318/v1/traces)")
+  .action(async (runId: string, options: { readonly store?: string; readonly json?: boolean; readonly minMs?: number; readonly otlp?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
+      const run = store.getRun(runId);
+      if (run === null) {
+        printCliError(new Error(`workflow run '${runId}' not found in this store`), "Workflow trace failed");
+        exitWith(EXIT_CODES.domainFailure);
+        return;
+      }
+      const spans = store.listSpans(runId);
+      if (options.otlp !== undefined) {
+        const payload = workflowSpansToOtlpJson(spans, {
+          serviceName: "prism-workflow",
+          attributes: { "prism.workflow": run.workflow },
+        });
+        const response = await fetch(options.otlp, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          printCliError(new Error(`collector responded ${response.status} ${response.statusText}`), "OTLP export failed");
+          exitWith(EXIT_CODES.domainFailure);
+          return;
+        }
+        await writeStdout(`${JSON.stringify({ exported: spans.length, endpoint: options.otlp, status: response.status }, null, 2)}\n`);
+        return;
+      }
+      if (options.json === true) {
+        await writeStdout(`${JSON.stringify({
+          runId,
+          workflow: run.workflow,
+          status: run.status,
+          spans: spans.map((span) => ({ ...span, startNs: span.startNs.toString(), endNs: span.endNs?.toString() ?? null })),
+        }, null, 2)}\n`);
+        return;
+      }
+      await writeStdout(`${renderWorkflowTraceHuman(spans, options.minMs !== undefined ? { minDurationMs: options.minMs } : {})}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow trace failed");
       exitWith(EXIT_CODES.domainFailure);
     } finally {
       store?.close();
@@ -752,7 +847,7 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -782,7 +877,7 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string; readonly json?: boolean; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -828,7 +923,7 @@ workflowRuns
   ) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       if (options.follow === true) {
         const started = Date.now();
         let afterSequence = options.afterSequence ?? 0;
@@ -891,7 +986,7 @@ workflowRuns
   ) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       const started = Date.now();
       while (true) {
         if (options.failStaleAfterMs !== undefined) {
@@ -951,7 +1046,7 @@ workflowRuns
     readonly cache?: boolean;
   }) => {
     try {
-      const storePath = expandPath(options.store ?? defaultWorkflowStorePathForCwd());
+      const storePath = resolveWorkflowStorePath(options.store);
       const result = await updateDetachedWorkflowRun({ runId, file, storePath, options });
       console.log(JSON.stringify(result, null, 2));
     } catch (error) {
@@ -985,7 +1080,7 @@ workflowRuns
     readonly cache?: boolean;
   }) => {
     try {
-      const storePath = expandPath(options.store ?? defaultWorkflowStorePathForCwd());
+      const storePath = resolveWorkflowStorePath(options.store);
       const result = await updateDetachedWorkflowRun({ runId, file, storePath, options, allowTerminalPreviousRun: true });
       console.log(JSON.stringify(result, null, 2));
     } catch (error) {
@@ -1001,7 +1096,7 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(expandPath(options.store ?? defaultWorkflowStorePathForCwd()));
+      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
       const stoppedRun = store.stopRunningRun(runId);
       if (stoppedRun !== null) {
         requestWorkflowRunnerTermination(store, stoppedRun, "stop-requested");

@@ -118,9 +118,9 @@ describe("workflow store", () => {
     const store = await WorkflowStore.open(path);
 
     expect(store.listRuns()).toEqual([
-      { runId: "bad-run", workflow: "legacy", status: "failed", finishedAt: expect.any(String) },
-      { runId: "empty-run", workflow: "legacy", status: "unknown", finishedAt: null },
-      { runId: "ok-run", workflow: "legacy", status: "unknown", finishedAt: null },
+      { runId: "bad-run", workflow: "legacy", status: "failed", finishedAt: expect.any(String), createdAt: expect.any(String) },
+      { runId: "empty-run", workflow: "legacy", status: "unknown", finishedAt: null, createdAt: expect.any(String) },
+      { runId: "ok-run", workflow: "legacy", status: "unknown", finishedAt: null, createdAt: expect.any(String) },
     ]);
     const newRunId = store.createRun("legacy");
     expect(store.listRuns().find((run) => run.runId === newRunId)?.status).toBe("running");

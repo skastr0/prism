@@ -3310,7 +3310,7 @@ describe("workflow loader", () => {
       events: Array<{ type: string; payload: unknown }>;
     };
 
-    expect(before.runs).toEqual([{ runId: "stale-run", workflow: "stale-smoke", status: "running", finishedAt: null }]);
+    expect(before.runs).toEqual([{ runId: "stale-run", workflow: "stale-smoke", status: "running", finishedAt: null, createdAt: expect.any(String) }]);
     expect(after.runs.map((run) => ({ runId: run.runId, workflow: run.workflow, status: run.status }))).toEqual([
       { runId: "stale-run", workflow: "stale-smoke", status: "failed" },
     ]);
@@ -3387,7 +3387,7 @@ describe("workflow loader", () => {
       tasks: [],
     });
     expect(afterShow.runs).toEqual([
-      { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
+      { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String), createdAt: expect.any(String) },
     ]);
     expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.failed"]);
   });
@@ -3473,7 +3473,7 @@ describe("workflow loader", () => {
     };
 
     expect(listed.runs).toEqual([
-      { runId: "dead-pid-run", workflow: "dead-pid-smoke", status: "failed", finishedAt: expect.any(String), runnerPid: pid, heartbeatAt: expect.any(String) },
+      { runId: "dead-pid-run", workflow: "dead-pid-smoke", status: "failed", finishedAt: expect.any(String), runnerPid: pid, heartbeatAt: expect.any(String), createdAt: expect.any(String) },
     ]);
     expect(shown.run).toMatchObject({ runId: "dead-pid-run", status: "failed", runnerPid: pid });
     expect(stopped.run).toMatchObject({ runId: "dead-pid-run", status: "failed", runnerPid: pid });

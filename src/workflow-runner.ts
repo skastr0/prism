@@ -1,4 +1,4 @@
-import { Cause, Effect, Either, Exit } from "effect";
+import { Cause, Effect, Either, Exit, Layer, Option } from "effect";
 import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import {
@@ -34,6 +34,11 @@ import {
   type WorkflowRepairLoopContinuationWorkerId,
   type WorkflowStableSession,
 } from "./workflow-session.js";
+import {
+  createWorkflowTraceRecorder,
+  makeWorkflowEffectTracer,
+  type WorkflowTraceRecorder,
+} from "./workflow-tracing.js";
 
 export interface WorkflowTaskExecution {
   readonly output: unknown;
@@ -445,6 +450,8 @@ const runJudgeCriterion = async (input: {
   readonly store: WorkflowStore | undefined;
   readonly runId: string | null;
   readonly useCache: boolean;
+  readonly tracing?: WorkflowTraceRecorder;
+  readonly parentSpanId?: string;
 }): Promise<{ readonly verdict: WorkflowJudgeVerdict; readonly cached: boolean; readonly identity: WorkflowJudgeIdentity; readonly evidence: unknown; readonly taskMetadata: WorkflowJudgeTaskMetadata }> => {
   const taskMetadata = taskJudgeMetadata(input.task);
   const goalContext = { output: input.output as never, metadata: input.metadata, task: taskMetadata };
@@ -501,7 +508,20 @@ const runJudgeCriterion = async (input: {
     cacheKey,
     goal,
   });
-  const verdict = await Effect.runPromise(input.criterion.evaluate(context));
+  const judgeSpan = input.tracing?.startSpan("task.judge", {
+    ...(input.parentSpanId !== undefined ? { parentSpanId: input.parentSpanId } : {}),
+    taskId: input.task.id,
+    attributes: { "judge.criterion": input.criterion.name },
+  });
+  let verdict: WorkflowJudgeVerdict;
+  try {
+    verdict = await Effect.runPromise(input.criterion.evaluate(context));
+  } catch (error) {
+    judgeSpan?.end("error", error);
+    throw error;
+  }
+  judgeSpan?.annotate("judge.verdict", verdict.verdict);
+  judgeSpan?.end("ok");
   input.store?.recordJudge({ identity, verdict, evidence, output: input.output, taskMetadata });
   recordEvent(input.store, input.runId, input.task.id, "task.judge.completed", {
     criterion: input.criterion.name,
@@ -521,6 +541,8 @@ const runFinishCriteria = async (input: {
   readonly store: WorkflowStore | undefined;
   readonly runId: string | null;
   readonly useCache: boolean;
+  readonly tracing?: WorkflowTraceRecorder;
+  readonly parentSpanId?: string;
 }): Promise<WorkflowFinishCriteriaResult> => {
   const judgeRuns: Array<{ readonly criterion: string; readonly verdict: WorkflowJudgeVerdict["verdict"]; readonly cached: boolean; readonly cacheKey: string }> = [];
   for (const criterion of input.task.finish?.criteria ?? []) {
@@ -535,6 +557,8 @@ const runFinishCriteria = async (input: {
           store: input.store,
           runId: input.runId,
           useCache: input.useCache,
+          ...(input.tracing !== undefined ? { tracing: input.tracing } : {}),
+          ...(input.parentSpanId !== undefined ? { parentSpanId: input.parentSpanId } : {}),
         });
         judgeRuns.push({
           criterion: criterion.name,
@@ -711,9 +735,22 @@ const executeWorkflowTask = async (input: {
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly limiter?: TaskExecutionLimiter;
   readonly abortSignal?: AbortSignal;
+  readonly tracing: WorkflowTraceRecorder;
+  readonly parentSpanId?: string;
 }): Promise<WorkflowTaskOutcome> => {
-  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache, mockOutput } = input;
+  const { isLastTask = false, finishRunOnFailure = true, ordinal, task, identity, runId, store, executeTask, useCache, mockOutput, tracing } = input;
   assertRunStillRunning(store, runId);
+  const taskSpan = tracing.startSpan("workflow.task", {
+    ...(input.parentSpanId !== undefined ? { parentSpanId: input.parentSpanId } : {}),
+    taskId: task.id,
+    attributes: {
+      "task.id": task.id,
+      "task.ordinal": ordinal,
+      "agent.plugin": task.agent.plugin,
+      "agent.name": task.agent.name,
+      "task.cache_key": identity.cacheKey,
+    },
+  });
   if (store !== undefined && runId !== null) {
     store.recordRunTaskSnapshot(workflowRunTaskSnapshotForTask({
       runId,
@@ -789,6 +826,11 @@ const executeWorkflowTask = async (input: {
     };
     while (true) {
       assertRunStillRunning(store, runId);
+      const executorSpan = cacheHit ? undefined : tracing.startSpan("task.executor", {
+        parentSpanId: taskSpan.spanId,
+        taskId: task.id,
+        attributes: { "executor.attempt": repairs },
+      });
       try {
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
         const abortMonitor = createRunAbortMonitor(store, runId, task.id, input.abortSignal);
@@ -818,7 +860,15 @@ const executeWorkflowTask = async (input: {
           pendingRepair = undefined;
         }
         if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.completed", { attempt: repairs, ...(metadata ?? {}) });
+        if (executorSpan !== undefined) {
+          for (const key of ["adapter", "model", "nativeAgent", "sessionId"] as const) {
+            const value = metadata?.[key];
+            if (typeof value === "string") executorSpan.annotate(`worker.${key}`, value);
+          }
+          executorSpan.end("ok");
+        }
       } catch (error) {
+        executorSpan?.end("error", error);
         if (error instanceof WorkflowOutputParseError && repairs < decodeRepairs) {
           if (error.metadata !== undefined) {
             metadata = normalizeWorkflowSessionMetadata({ ...workflowContractMetadata, ...error.metadata });
@@ -891,6 +941,8 @@ const executeWorkflowTask = async (input: {
         store,
         runId,
         useCache,
+        tracing,
+        ...(tracing.enabled ? { parentSpanId: taskSpan.spanId } : {}),
       });
       finishJudgeRuns = finish.judgeRuns;
       if (finish.ok) {
@@ -1002,6 +1054,7 @@ const executeWorkflowTask = async (input: {
       metadata: finalMetadata,
       ...(isLastTask ? { finishRunStatus: "completed" as const } : {}),
     });
+    if (repairs > 0) taskSpan.annotate("task.repairs", repairs);
     return { id: task.id, agent: taskAgent(task), output: decodedOutput, cached: cacheHit, status: "completed", metadata: finalMetadata };
   };
 
@@ -1009,13 +1062,23 @@ const executeWorkflowTask = async (input: {
     const result = cacheHit || input.limiter === undefined
       ? await runTaskBoundary()
       : await input.limiter.run(runTaskBoundary);
+    taskSpan.annotate("task.cached", result.cached);
+    taskSpan.annotate("task.status", result.status);
+    taskSpan.end("ok");
     return { result };
   } catch (error) {
     // A user-requested run-level stop is a genuine abort: propagate so the run halts.
-    if (error instanceof WorkflowRunStoppedError) throw error;
+    if (error instanceof WorkflowRunStoppedError) {
+      taskSpan.end("error", error);
+      throw error;
+    }
     // Every other failure (crash, timeout, decode, exhausted repair, escalation) is
     // isolated into a recorded failed result so siblings and downstream tasks keep running.
-    return { result: failedTaskResult(task, cacheHit, error), failure: error };
+    const result = failedTaskResult(task, cacheHit, error);
+    taskSpan.annotate("task.cached", result.cached);
+    taskSpan.annotate("task.status", result.status);
+    taskSpan.end("error", error);
+    return { result, failure: error };
   }
 };
 
@@ -1029,6 +1092,8 @@ const runStaticWorkflow = async (input: {
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly abortSignal?: AbortSignal;
+  readonly tracing: WorkflowTraceRecorder;
+  readonly rootSpanId?: string;
 }): Promise<ReadonlyArray<WorkflowRunTaskResult>> => {
   const tasks: WorkflowRunTaskResult[] = [];
   if (input.workflow.tasks.length === 0 && input.runId !== null) {
@@ -1051,6 +1116,8 @@ const runStaticWorkflow = async (input: {
       runtimeOptions: input.runtimeOptions,
       limiter: input.limiter,
       abortSignal: input.abortSignal,
+      tracing: input.tracing,
+      ...(input.rootSpanId !== undefined ? { parentSpanId: input.rootSpanId } : {}),
     });
     if (outcome.failure !== undefined) throw outcome.failure;
     tasks.push(outcome.result);
@@ -1070,6 +1137,8 @@ const runDynamicWorkflow = async (input: {
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly abortSignal?: AbortSignal;
+  readonly tracing: WorkflowTraceRecorder;
+  readonly rootSpanId?: string;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
   const tasks: Array<WorkflowRunTaskResult | undefined> = [];
   const inFlightTasks: Array<Promise<WorkflowTaskOutcome>> = [];
@@ -1082,7 +1151,10 @@ const runDynamicWorkflow = async (input: {
     if (input.store.getRun(runId)?.status === "running") input.store.finishRun(runId, status);
   };
   const runtime: WorkflowRuntime = {
-    runTask: (task) => Effect.suspend(() => {
+    // The author's current span (if any) becomes the task span's parent, so tasks nest
+    // under author-side Effect.withSpan/Effect.fn structure in the run's trace.
+    runTask: (task) => Effect.flatMap(Effect.option(Effect.currentSpan), (currentSpan) => Effect.suspend(() => {
+      const parentSpanId = Option.isSome(currentSpan) ? currentSpan.value.spanId : input.rootSpanId;
       const taskOrdinal = ordinal++;
       // Record the settled result the moment the task finishes — inside the promise chain,
       // not after an Effect await — so a failed sibling's outcome survives fan-out
@@ -1101,6 +1173,8 @@ const runDynamicWorkflow = async (input: {
         runtimeOptions: input.runtimeOptions,
         limiter: input.limiter,
         abortSignal: input.abortSignal,
+        tracing: input.tracing,
+        ...(parentSpanId !== undefined ? { parentSpanId } : {}),
       }).then((outcome) => {
         tasks[taskOrdinal] = outcome.result;
         return outcome;
@@ -1114,9 +1188,20 @@ const runDynamicWorkflow = async (input: {
         outcome.failure === undefined
           ? Effect.succeed(outcome.result.output as never)
           : Effect.fail(new WorkflowTaskFailure(outcome.failure)));
-    }),
+    })),
   };
-  const exit = await Effect.runPromiseExit(input.workflow.run(runtime));
+  // Provide the run's tracer to the author program so Effect.withSpan / Effect.fn spans
+  // land in the same trace as engine spans, all rooted under the run root span.
+  const program = input.tracing.enabled
+    ? input.workflow.run(runtime).pipe(
+      Effect.withSpan("workflow.program", { attributes: { workflow: input.workflow.name } }),
+      Effect.provide(Layer.setTracer(makeWorkflowEffectTracer(
+        input.tracing,
+        input.rootSpanId !== undefined ? { defaultParentSpanId: input.rootSpanId } : {},
+      ))),
+    )
+    : input.workflow.run(runtime);
+  const exit = await Effect.runPromiseExit(program);
   if (Exit.isSuccess(exit)) {
     await Promise.allSettled(inFlightTasks);
     finishRun("completed");
@@ -1174,11 +1259,49 @@ export const runWorkflow = async (
   }
   const limiter = createTaskLimiter(maxConcurrentTasks);
   const runId = options.store === undefined ? null : options.runId ?? options.store.createRun(workflow.name);
-  if ("run" in workflow) {
-    const result = await runDynamicWorkflow({
-      workflow: workflow as AnyWorkflowDefinition & {
-        readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, WorkflowRuntimeError, never>;
-      },
+  const tracing = createWorkflowTraceRecorder({
+    ...(options.store !== undefined ? { store: options.store } : {}),
+    runId,
+  });
+  const rootSpan = tracing.startSpan("workflow.run", {
+    attributes: {
+      workflow: workflow.name,
+      "workflow.mode": "run" in workflow ? "dynamic" : "static",
+      "workflow.max_concurrent_tasks": maxConcurrentTasks,
+    },
+  });
+  const rootSpanId = tracing.enabled ? rootSpan.spanId : undefined;
+  const annotateRunStatus = (): string | undefined => {
+    const status = runId !== null && options.store !== undefined ? options.store.getRun(runId)?.status : undefined;
+    if (status !== undefined) rootSpan.annotate("run.status", status);
+    return status;
+  };
+  const endRootSpan = (): void => {
+    const status = annotateRunStatus();
+    rootSpan.end(status === "failed" || status === "escalated" ? "error" : "ok");
+  };
+  try {
+    if ("run" in workflow) {
+      const result = await runDynamicWorkflow({
+        workflow: workflow as AnyWorkflowDefinition & {
+          readonly run: (runtime: WorkflowRuntime) => Effect.Effect<unknown, WorkflowRuntimeError, never>;
+        },
+        runId,
+        store: options.store,
+        executeTask: options.executeTask,
+        useCache,
+        mockOutput,
+        limiter,
+        runtimeOptions,
+        abortSignal: options.abortSignal,
+        tracing,
+        ...(rootSpanId !== undefined ? { rootSpanId } : {}),
+      });
+      endRootSpan();
+      return { runId, workflow: workflow.name, tasks: result.tasks, output: result.output };
+    }
+    const tasks = await runStaticWorkflow({
+      workflow,
       runId,
       store: options.store,
       executeTask: options.executeTask,
@@ -1187,9 +1310,14 @@ export const runWorkflow = async (
       limiter,
       runtimeOptions,
       abortSignal: options.abortSignal,
+      tracing,
+      ...(rootSpanId !== undefined ? { rootSpanId } : {}),
     });
-    return { runId, workflow: workflow.name, tasks: result.tasks, output: result.output };
+    endRootSpan();
+    return { runId, workflow: workflow.name, tasks };
+  } catch (error) {
+    annotateRunStatus();
+    rootSpan.end("error", error);
+    throw error;
   }
-  const tasks = await runStaticWorkflow({ workflow, runId, store: options.store, executeTask: options.executeTask, useCache, mockOutput, limiter, runtimeOptions, abortSignal: options.abortSignal });
-  return { runId, workflow: workflow.name, tasks };
 };

@@ -6,6 +6,7 @@ import type { WorkflowJudgeVerdict } from "./workflows.js";
 import type { WorkflowJudgeIdentity, WorkflowRunTaskSnapshot, WorkflowTaskIdentity } from "./workflow-identity.js";
 export { workflowRunTaskSnapshotForTask, workflowTaskIdentity, type WorkflowJudgeIdentity, type WorkflowRunTaskSnapshot, type WorkflowTaskIdentity } from "./workflow-identity.js";
 import { openWorkflowDatabase, type WorkflowDatabase } from "./workflow-runtime.js";
+import type { WorkflowSpanRecord } from "./workflow-tracing.js";
 import { normalizeWorkflowSessionMetadata, workflowStableSessionFromMetadata } from "./workflow-session.js";
 
 export type WorkflowTaskOutputSource = "mock-output";
@@ -193,6 +194,7 @@ export interface WorkflowRunRecord {
   readonly finishedAt: string | null;
   readonly runnerPid?: number;
   readonly heartbeatAt?: string;
+  readonly createdAt?: string;
 }
 
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "escalated" | "unknown";
@@ -290,6 +292,21 @@ interface EventRow {
   readonly type: string;
   readonly payload_json: string;
   readonly created_at: string;
+}
+
+interface SpanRow {
+  readonly run_id: string;
+  readonly trace_id: string;
+  readonly span_id: string;
+  readonly parent_span_id: string | null;
+  readonly task_id: string | null;
+  readonly name: string;
+  readonly kind: string;
+  readonly start_ns: string;
+  readonly end_ns: string | null;
+  readonly status: string;
+  readonly error_message: string | null;
+  readonly attributes_json: string;
 }
 
 interface RunSnapshotRow {
@@ -584,6 +601,25 @@ export class WorkflowStore {
         created_at text not null default (datetime('now')),
         primary key (run_id, ordinal)
       );
+
+      create table if not exists workflow_spans (
+        run_id text not null,
+        trace_id text not null,
+        span_id text primary key,
+        parent_span_id text,
+        task_id text,
+        name text not null,
+        kind text not null default 'internal',
+        start_ns text not null,
+        end_ns text,
+        duration_ms real,
+        status text not null default 'unset',
+        error_message text,
+        attributes_json text not null default '{}',
+        created_at text not null default (datetime('now'))
+      );
+
+      create index if not exists workflow_spans_run_idx on workflow_spans (run_id, start_ns);
     `);
     addColumnIfMissing(db, "alter table workflow_runs add column status text not null default 'unknown'");
     addColumnIfMissing(db, "alter table workflow_runs add column finished_at text");
@@ -1093,6 +1129,73 @@ export class WorkflowStore {
     );
   }
 
+  recordSpanStart(span: WorkflowSpanRecord): void {
+    this.db.query(`
+      insert into workflow_spans (run_id, trace_id, span_id, parent_span_id, task_id, name, kind, start_ns, end_ns, duration_ms, status, error_message, attributes_json)
+      values (?, ?, ?, ?, ?, ?, ?, ?, null, null, ?, null, ?)
+      on conflict (span_id) do nothing
+    `).run(
+      span.runId,
+      span.traceId,
+      span.spanId,
+      span.parentSpanId,
+      span.taskId,
+      span.name,
+      span.kind,
+      span.startNs.toString(),
+      span.status,
+      JSON.stringify(span.attributes),
+    );
+  }
+
+  recordSpanEnd(input: {
+    readonly spanId: string;
+    readonly endNs: bigint;
+    readonly status: "ok" | "error";
+    readonly errorMessage: string | null;
+    readonly attributes: Record<string, unknown>;
+  }): void {
+    this.db.query(`
+      update workflow_spans
+      set end_ns = ?,
+          duration_ms = (cast(? as real) - cast(start_ns as real)) / 1000000.0,
+          status = ?,
+          error_message = ?,
+          attributes_json = ?
+      where span_id = ?
+    `).run(
+      input.endNs.toString(),
+      input.endNs.toString(),
+      input.status,
+      input.errorMessage,
+      JSON.stringify(input.attributes),
+      input.spanId,
+    );
+  }
+
+  listSpans(runId: string): WorkflowSpanRecord[] {
+    const rows = this.db.query<SpanRow, [string]>(`
+      select run_id, trace_id, span_id, parent_span_id, task_id, name, kind, start_ns, end_ns, status, error_message, attributes_json
+      from workflow_spans
+      where run_id = ?
+      order by cast(start_ns as real) asc, span_id asc
+    `).all(runId);
+    return rows.map((row) => ({
+      runId: row.run_id,
+      traceId: row.trace_id,
+      spanId: row.span_id,
+      parentSpanId: row.parent_span_id,
+      taskId: row.task_id,
+      name: row.name,
+      kind: row.kind,
+      startNs: BigInt(row.start_ns),
+      endNs: row.end_ns === null ? null : BigInt(row.end_ns),
+      status: row.status as WorkflowSpanRecord["status"],
+      errorMessage: row.error_message,
+      attributes: JSON.parse(row.attributes_json) as Record<string, unknown>,
+    }));
+  }
+
   listRunEvents(runId: string): WorkflowEventRecord[] {
     this.failDeadPidRuns();
     const rows = this.db.query<EventRow, [string]>(`
@@ -1199,8 +1302,8 @@ export class WorkflowStore {
 
   listRuns(): WorkflowRunRecord[] {
     this.failDeadPidRuns();
-    const rows = this.db.query<RunRow, []>(`
-      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+    const rows = this.db.query<RunRow & { readonly created_at: string }, []>(`
+      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
       from workflow_runs
       order by created_at asc, run_id asc
     `).all();
@@ -1211,6 +1314,7 @@ export class WorkflowStore {
       finishedAt: row.finished_at,
       ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
       ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+      createdAt: row.created_at,
     }));
   }
 

@@ -149,10 +149,11 @@ export const buildGrokArgs = (input: {
   return [
     "--model",
     // Keep in sync with WORKFLOW_HARNESS_DETECTION_SPECS.grok.defaultModel
-    // (workflow-harness-detection.ts) — "grok-build" fails config validation
-    // against Prism-generated agents (PQ-176); this fallback only fires when
-    // buildGrokArgs is called directly without going through model resolution.
-    input.model ?? "grok-composer-2.5-fast",
+    // (workflow-harness-detection.ts); the grok-4.x tools-frontmatter conflict
+    // (PQ-176 class) is handled by the tools-stripped temp agent copy above.
+    // This fallback only fires when buildGrokArgs is called directly without
+    // going through model resolution.
+    input.model ?? "grok-4.5",
     "--agent",
     input.agent,
     "--cwd",
@@ -289,7 +290,7 @@ export const runGrokWorkflowTask = async (
     adapter: "grok-cli",
     nativeAgent: task.agent.name,
     // Keep in sync with buildGrokArgs' own fallback above.
-    model: options.model ?? "grok-composer-2.5-fast",
+    model: options.model ?? "grok-4.5",
     durationMs,
     processTimeoutMs,
     sessionId: sessionId ?? runOutput.sessionId,

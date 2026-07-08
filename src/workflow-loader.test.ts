@@ -3301,10 +3301,10 @@ describe("workflow loader", () => {
     db.close();
 
     const before = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
-      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null; createdAt: string }>;
     };
     const after = await cli(["workflow", "runs", "list", "--store", storeFile, "--fail-stale-after-ms", "1"]) as {
-      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null; createdAt: string }>;
     };
     const events = await cli(["workflow", "runs", "events", "stale-run", "--store", storeFile]) as {
       events: Array<{ type: string; payload: unknown }>;
@@ -3375,7 +3375,7 @@ describe("workflow loader", () => {
       tasks: unknown[];
     };
     const afterShow = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
-      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null }>;
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null; createdAt: string }>;
     };
     const events = await cli(["workflow", "runs", "events", "stale-show-run", "--store", storeFile, "--fail-stale-after-ms", "1"]) as {
       events: Array<{ type: string; payload: unknown }>;
@@ -3460,7 +3460,7 @@ describe("workflow loader", () => {
     store.close();
 
     const listed = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
-      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null; runnerPid?: number; heartbeatAt?: string }>;
+      runs: Array<{ runId: string; workflow: string; status: string; finishedAt: string | null; createdAt: string; runnerPid?: number; heartbeatAt?: string }>;
     };
     const shown = await cli(["workflow", "runs", "show", "dead-pid-run", "--store", storeFile]) as {
       run: { runId: string; status: string; finishedAt: string | null; runnerPid?: number };

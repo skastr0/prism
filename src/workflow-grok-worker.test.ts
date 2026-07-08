@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { buildGrokArgs, parseGrokJsonRunOutput, runGrokWorkflowTask } from "./workflow-grok-worker.js";
+import { buildGrokArgs, parseGrokJsonRunOutput, runGrokWorkflowTask, stripAgentToolsFrontmatter } from "./workflow-grok-worker.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
@@ -34,6 +34,40 @@ const fakeGrokJsonRun = (callsFile: string, sessionId: string): string => [
   `console.log(JSON.stringify({ text: JSON.stringify({ summary: 'ok' }), sessionId: ${JSON.stringify(sessionId)}, stopReason: 'complete' }));`,
   "",
 ].join("\n");
+
+describe("grok agent tools frontmatter strip (grok-4.x session validation)", () => {
+  const generated = [
+    "---",
+    'name: "builder"',
+    'description: "Build specialist"',
+    'model: "grok-composer-2.5-fast"',
+    "tools:",
+    '  - "agent-foundations__git_commit"',
+    '  - "tower__get_board"',
+    "skills:",
+    '  - "atomic-commits"',
+    "---",
+    "",
+    "Body stays.",
+    "",
+  ].join("\n");
+
+  test("removes the tools block and preserves every other frontmatter key and the body", () => {
+    const stripped = stripAgentToolsFrontmatter(generated);
+    expect(stripped).not.toContain("tools:");
+    expect(stripped).not.toContain("agent-foundations__git_commit");
+    expect(stripped).toContain('name: "builder"');
+    expect(stripped).toContain('model: "grok-composer-2.5-fast"');
+    expect(stripped).toContain("skills:");
+    expect(stripped).toContain('  - "atomic-commits"');
+    expect(stripped).toContain("Body stays.");
+  });
+
+  test("leaves agents without a tools block byte-identical", () => {
+    const noTools = generated.replace(/^tools:\n(?:^ {2}- .*\n)+/mu, "");
+    expect(stripAgentToolsFrontmatter(noTools)).toBe(noTools);
+  });
+});
 
 describe("grok worker structured session id", () => {
   test("buildGrokArgs requests the json envelope and uses exact session resume", () => {

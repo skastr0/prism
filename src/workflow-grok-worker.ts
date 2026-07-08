@@ -1,5 +1,5 @@
-import { access } from "node:fs/promises";
-import { homedir } from "node:os";
+import { access, readFile, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
@@ -55,7 +55,26 @@ const pathExists = async (path: string): Promise<boolean> => {
 // repair resumes it with `grok -r <sessionId>`. (Tests redirect by setting HOME.)
 const grokHome = (): string => join(homedir(), ".grok");
 
-const prepareGrokWorkflowRuntime = async (task: AnyWorkflowTask): Promise<GrokWorkflowRuntime> => {
+// Grok 0.2.91 rejects file-loaded agents whose frontmatter carries a `tools:`
+// allowlist when the session model is the grok-4.x family: the allowlist routes
+// agent building through a custom toolset whose run_terminal_cmd defaults
+// (auto_background_on_timeout=true, enabled_background=false) fail grok's own
+// params_constraint validation ("Couldn't create session"). Bare-name agents do
+// NOT resolve to installed plugin agents (grok silently loads its generic
+// identity instead), so the only working form for 4.x is a file agent WITHOUT
+// the `tools:` block. MCP access is unaffected: the worker already passes a
+// blanket `--allow MCPTool`. Composer-family models validate the original file
+// unchanged, so they keep the full allowlist.
+export const stripAgentToolsFrontmatter = (source: string): string =>
+  source.replace(/^tools:\n(?:^ {2}- .*\n)+/mu, "");
+
+const grokModelRejectsToolsFrontmatter = (model: string | undefined): boolean =>
+  model !== undefined && model.startsWith("grok-4");
+
+const prepareGrokWorkflowRuntime = async (
+  task: AnyWorkflowTask,
+  model: string | undefined,
+): Promise<GrokWorkflowRuntime> => {
   const home = grokHome();
   const pluginId = generatedPluginIdForOwner(task.agent.plugin);
   const sourceAgentPath = join(home, "plugins", pluginId, "agents", `${task.agent.name}.md`);
@@ -66,8 +85,14 @@ const prepareGrokWorkflowRuntime = async (task: AnyWorkflowTask): Promise<GrokWo
     GROK_CURSOR_MCPS_ENABLED: "false",
     GROK_CLAUDE_MCPS_ENABLED: "false",
   };
-  const agent = (await pathExists(sourceAgentPath)) ? sourceAgentPath : task.agent.name;
-  return { agent, env };
+  if (!(await pathExists(sourceAgentPath))) return { agent: task.agent.name, env };
+  if (!grokModelRejectsToolsFrontmatter(model)) return { agent: sourceAgentPath, env };
+  const source = await readFile(sourceAgentPath, "utf8");
+  const stripped = stripAgentToolsFrontmatter(source);
+  if (stripped === source) return { agent: sourceAgentPath, env };
+  const strippedPath = join(tmpdir(), `prism-grok-agent-${pluginId}-${task.agent.name}-notools.md`);
+  await writeFile(strippedPath, stripped);
+  return { agent: strippedPath, env };
 };
 
 const assertGrokPermission = (mode: WorkflowPermissionMode): void => {
@@ -224,7 +249,7 @@ export const runGrokWorkflowTask = async (
     // outlier among workflow workers — every other worker (claude, codex,
     // hermes, amp, kimi, antigravity) already defaults to 360_000. Match it.
     ?? 360_000;
-  const runtime = await prepareGrokWorkflowRuntime(task);
+  const runtime = await prepareGrokWorkflowRuntime(task, options.model);
   const args = buildGrokArgs({
     cwd: options.cwd,
     agent: runtime.agent,

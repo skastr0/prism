@@ -1,9 +1,10 @@
 import { stripBundlerPathComments } from "./bundle-normalize.js";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { BundleBuildError } from "../errors.js";
 import { computeContentHash } from "../content-hash.js";
@@ -38,6 +39,16 @@ import {
 import { DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS } from "./mcp-policy.js";
 
 const execFileAsync = promisify(execFile);
+
+const AST_TO_JSON_SCHEMA_SOURCE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../ast-to-json-schema.ts",
+);
+
+const AST_TO_JSON_SCHEMA_SOURCE = readFileSync(AST_TO_JSON_SCHEMA_SOURCE_PATH, "utf8");
+
+const AST_TO_JSON_SCHEMA_RUNTIME_IMPORT =
+  `import { astToJsonSchema as coreAstToJsonSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS } from "./ast-to-json-schema.ts";`;
 
 interface MirrorFile {
   readonly relativePath: string;
@@ -615,65 +626,11 @@ const unsupportedAst = (ast: SchemaAST.AST, detail?: string): never => {
   );
 };
 
-const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema => {
-  switch (ast._tag) {
-    case "StringKeyword":
-      return { type: "string" };
-    case "NumberKeyword":
-      return { type: "number" };
-    case "BooleanKeyword":
-      return { type: "boolean" };
-    case "UnknownKeyword":
-      return { type: "object", additionalProperties: true };
-    case "Literal":
-      // Emit enum with a single value instead of const. Some MCP clients
-      // (including Kimi) do not accept JSON Schema "const" and report
-      // "must be equal to constant". enum: [value] is draft-07 compatible
-      // and universally supported.
-      return { enum: [ast.literal] };
-    case "Union": {
-      const allLiterals = ast.types.every((type) => type._tag === "Literal");
-      if (allLiterals) {
-        return { enum: ast.types.map((type) => (type as SchemaAST.Literal).literal) };
-      }
-      const nonUndefined = ast.types.filter((type) => type._tag !== "UndefinedKeyword");
-      if (nonUndefined.length === 1) return astToJsonSchema(nonUndefined[0]!);
-      unsupportedAst(ast, "union members: " + ast.types.map((type) => type._tag).join(" | "));
-    }
-    case "TupleType": {
-      if (ast.elements.length === 0 && ast.rest.length === 1) {
-        return { type: "array", items: astToJsonSchema(ast.rest[0]!.type) };
-      }
-      unsupportedAst(ast, "tuple elements=" + ast.elements.length + ", rest=" + ast.rest.length);
-    }
-    case "TypeLiteral": {
-      const properties: Record<string, JsonSchema> = {};
-      const required: string[] = [];
-      for (const prop of ast.propertySignatures) {
-        const property = astToJsonSchema(prop.type);
-        const description = extractDescriptionOrTitle(prop.type);
-        if (description) property.description = description;
-        const name = String(prop.name);
-        properties[name] = property;
-        if (!prop.isOptional) required.push(name);
-      }
-      return {
-        type: "object",
-        properties,
-        required,
-        additionalProperties: false,
-      };
-    }
-    case "Refinement":
-      return astToJsonSchema(ast.from);
-    case "Transformation":
-      return astToJsonSchema(ast.from);
-    case "Suspend":
-      return astToJsonSchema(ast.f());
-    default:
-      unsupportedAst(ast);
-  }
-};
+const astToJsonSchema = (ast: SchemaAST.AST): JsonSchema =>
+  coreAstToJsonSchema(ast, {
+    ...MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+    errorPrefix: schemaBridgeName,
+  });
 
 const inputJsonSchemaFromEffectSchema = (schema: Schema.Schema.AnyNoContext): JsonSchema => {
   if (schema.ast._tag !== "TypeLiteral") {
@@ -1555,6 +1512,7 @@ await server.connect(transport);`;
  * it, not just against itself.
  */
 const MCP_SERVER_RUNTIME_SOURCE_SECTIONS: readonly string[] = [
+  AST_TO_JSON_SCHEMA_SOURCE,
   SCHEMA_ANNOTATION_HELPERS,
   TOOL_SURFACE_RUNTIME_TYPES,
   SCHEMA_BRIDGE_RUNTIME,
@@ -1849,6 +1807,7 @@ const renderMcpServerEntry = (options: {
     `import { registerDaemon, cleanupDaemonIfOwner } from ${JSON.stringify(udsRegistryBundleImportPath())};`,
     `import { bindUnixSocketSingleton } from ${JSON.stringify(udsSingletonBundleImportPath())};`,
     imports,
+    AST_TO_JSON_SCHEMA_RUNTIME_IMPORT,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),
     replaceTemplateTokens(MCP_TOOL_FACTORY_RUNTIME, {
@@ -1888,6 +1847,7 @@ const renderMcpStdioServerEntry = (options: {
     `import { StdioServerTransport } from ${JSON.stringify(mcpSdkStdioBundleImportPath())};`,
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     imports,
+    AST_TO_JSON_SCHEMA_RUNTIME_IMPORT,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("mcp-schema-bridge"),
     replaceTemplateTokens(MCP_TOOL_FACTORY_RUNTIME, {
@@ -1921,6 +1881,7 @@ const renderAmpPluginEntry = (options: {
     `import * as z from ${JSON.stringify(zodV4BundleImportPath())};`,
     imports,
     options.setupImports ?? "",
+    AST_TO_JSON_SCHEMA_RUNTIME_IMPORT,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("amp-schema-bridge"),
     renderAmpToolRegistrationRuntime(entries, options.setupSource),
@@ -1947,6 +1908,7 @@ const renderPiExtensionEntry = (options: {
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     imports,
     options.setupImports ?? "",
+    AST_TO_JSON_SCHEMA_RUNTIME_IMPORT,
     TOOL_SURFACE_RUNTIME_TYPES,
     renderSchemaBridgeRuntime("pi-schema-bridge"),
     renderPiExtensionRuntime(entries, options.setupSource),
@@ -1960,6 +1922,11 @@ const writeTempBundleSources = async (options: {
   readonly entrySource: string;
   readonly entryFileName?: string;
 }): Promise<string> => {
+  const astToJsonSchemaSource = AST_TO_JSON_SCHEMA_SOURCE.replace(
+    /from "effect";/,
+    `from ${JSON.stringify(effectBundleImportPath())};`,
+  );
+  await writeFile(join(options.tempRoot, "ast-to-json-schema.ts"), astToJsonSchemaSource);
   for (const mirror of options.mirrors) {
     for (const file of mirror.files) {
       const target = join(options.tempRoot, "plugins", mirror.pluginName, file.relativePath);

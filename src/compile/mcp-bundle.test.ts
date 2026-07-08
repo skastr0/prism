@@ -1317,7 +1317,7 @@ export default defineTool({
         },
       ],
     }),
-  ).rejects.toThrow(/MCP tool 'schema_fixture_inspect'.*unsupported AST tag: BigIntKeyword/);
+  ).rejects.toThrow(/MCP tool 'schema_fixture_inspect'.*BigIntKeyword at field "payload"/);
 });
 
 test("MCP bundle generation rejects non-identical tool-name collisions", async () => {

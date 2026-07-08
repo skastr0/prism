@@ -50,5 +50,13 @@ describe("workflow output JSON Schema", () => {
     expect(tryWorkflowJsonSchemaFromEffectSchema(
       Schema.Literal(1n),
     )).toBeUndefined();
+
+    expect(tryWorkflowJsonSchemaFromEffectSchema(
+      Schema.Struct({ createdAt: Schema.DateFromString }),
+    )).toBeUndefined();
+
+    expect(tryWorkflowJsonSchemaFromEffectSchema(
+      Schema.Struct({ counts: Schema.Record({ key: Schema.String, value: Schema.Number }) }),
+    )).toBeUndefined();
   });
 });

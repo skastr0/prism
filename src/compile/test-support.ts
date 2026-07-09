@@ -289,6 +289,7 @@ export const makeOrbit = (options: OrbitOptions = {}): Orbit =>
       real_world_change: phase.real_world_change,
       cold_pickup_test: phase.cold_pickup_test,
       workflow: phase.workflow,
+      contract: phase.contract,
       body: phase.body,
     })) ?? [],
     orchestrator: undefined,

@@ -217,6 +217,15 @@ export interface OrbitPhaseDefinition {
    */
   readonly workflow?: OrbitPhaseWorkflowDefinition;
   /**
+   * Typed workflow I/O contract for this phase. Serialized to JSON Schema in
+   * the compile manifest for workflow runtimes; unsupported schema constructs
+   * fail the compile.
+   */
+  readonly contract?: {
+    readonly input?: import("effect/Schema").Schema.AnyNoContext;
+    readonly output?: import("effect/Schema").Schema.AnyNoContext;
+  };
+  /**
    * Long-form markdown for this phase. When present, lowerers write it to
    * `references/<phase-name>.md` next to the orbit SKILL.md. Treat this as
    * the full phase download — telos, procrastination shapes, per-agent

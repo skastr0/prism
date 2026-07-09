@@ -2165,6 +2165,37 @@ const normalizePhaseAgents = (
   return { agents };
 };
 
+const normalizeOrbitPhaseContract = (
+  sourcePath: string,
+  contract: OrbitDefinition["phases"][number]["contract"],
+  index: number,
+): NormalizedOrbitPhase["contract"] | undefined | SourceParseError => {
+  if (!contract) return undefined;
+
+  const normalized: {
+    input?: Schema.Schema.AnyNoContext;
+    output?: Schema.Schema.AnyNoContext;
+  } = {};
+  for (const side of ["input", "output"] as const) {
+    const schema = contract[side];
+    if (schema === undefined) continue;
+    if (!isEffectSchema(schema)) {
+      return orbitSourceParseError(
+        sourcePath,
+        `phases[${index}].contract.${side}`,
+        "must be an Effect Schema",
+      );
+    }
+    if (side === "input") {
+      normalized.input = schema;
+    } else {
+      normalized.output = schema;
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+};
+
 const normalizePhaseRequirements = (
   sourcePath: string,
   phase: OrbitDefinition["phases"][number],
@@ -2208,6 +2239,9 @@ const normalizeOrbitPhase = (
   const requires = normalizePhaseRequirements(sourcePath, phase, index);
   if (requires instanceof SourceParseError) return requires;
 
+  const contract = normalizeOrbitPhaseContract(sourcePath, phase.contract, index);
+  if (contract instanceof SourceParseError) return contract;
+
   const singularAgent = phase.agent
     ? normalizePhaseNamedRef(
         sourcePath,
@@ -2234,6 +2268,7 @@ const normalizeOrbitPhase = (
       ? { cold_pickup_test: phase.cold_pickup_test }
       : {}),
     ...(phase.workflow !== undefined ? { workflow: phase.workflow } : {}),
+    ...(contract !== undefined ? { contract } : {}),
     ...(phase.body !== undefined ? { body: phase.body } : {}),
   };
 };

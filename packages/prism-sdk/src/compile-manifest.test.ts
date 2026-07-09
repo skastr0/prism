@@ -95,8 +95,8 @@ const fixtureManifest = (): CompileManifest => withManifestHash({
     "core:committable": { id: "core:committable", ref: "core:committable" },
   },
   orbits: {
-    "forge:delivery-contract": { plugin: "forge", name: "delivery-contract" },
-    "core:experiment": { plugin: "core", name: "experiment" },
+    "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] },
+    "core:experiment": { plugin: "core", name: "experiment", phases: [] },
   },
 });
 
@@ -229,12 +229,12 @@ test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless
   const makeManifest = (orbitOrder: "ab" | "ba", toolOrder: "ab" | "ba"): CompileManifest => {
     const orbits = {
       ab: {
-        "forge:café": { plugin: "forge", name: "café" },
-        "forge:naïve": { plugin: "forge", name: "naïve" },
+        "forge:café": { plugin: "forge", name: "café", phases: [] },
+        "forge:naïve": { plugin: "forge", name: "naïve", phases: [] },
       },
       ba: {
-        "forge:naïve": { plugin: "forge", name: "naïve" },
-        "forge:café": { plugin: "forge", name: "café" },
+        "forge:naïve": { plugin: "forge", name: "naïve", phases: [] },
+        "forge:café": { plugin: "forge", name: "café", phases: [] },
       },
     }[orbitOrder] as CompileManifest["orbits"];
     const tools = {

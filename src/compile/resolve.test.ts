@@ -6,9 +6,14 @@
  */
 
 import { expect, test } from "bun:test";
-import { Cause, Effect, Option } from "effect";
+import { Cause, Effect, Option, Schema } from "effect";
 import type { CompileError } from "./errors.js";
-import { resolveAgent, validateOrbit, instantiateOrbit } from "./resolve.js";
+import {
+  projectOrbitsForCompileManifest,
+  resolveAgent,
+  validateOrbit,
+  instantiateOrbit,
+} from "./resolve.js";
 import {
   addToRegistry,
   makeAgent,
@@ -617,6 +622,82 @@ test("validateOrbit allows orbit_binding for parameterized orbits", async () => 
   });
 
   await runResolve(validateOrbit(registry.orbits.get("delivery")!, registry));
+});
+
+test("validateOrbit fails dangling phase agent refs with orbit phase and ref context", async () => {
+  const registry = makeRegistry();
+  addToRegistry(registry, {
+    agents: [makeAgent({ name: "builder" })],
+    orbits: [
+      makeOrbit({
+        phases: [
+          {
+            name: "Review",
+            agents: ["missing-reviewer"],
+          },
+        ],
+      }),
+    ],
+  });
+
+  const error = assertErrorTag(
+    await failResolve(validateOrbit(registry.orbits.get("delivery")!, registry)),
+    "OrbitValidationError",
+  );
+
+  expect(error.orbitName).toBe("delivery");
+  expect(error.field).toBe("phases[0].agents[0]");
+  expect(error.message).toContain("missing-reviewer");
+});
+
+test("validateOrbit fails unsupported phase contract schemas at compile time", async () => {
+  const registry = makeRegistry();
+  addToRegistry(registry, {
+    agents: [makeAgent({ name: "builder" })],
+    orbits: [
+      makeOrbit({
+        phases: [
+          {
+            name: "Explore",
+            agents: ["builder"],
+            contract: {
+              output: Schema.Struct({
+                value: Schema.Union(Schema.String, Schema.Number),
+              }),
+            },
+          },
+        ],
+      }),
+    ],
+  });
+
+  const error = assertErrorTag(
+    await failResolve(validateOrbit(registry.orbits.get("delivery")!, registry)),
+    "OrbitValidationError",
+  );
+
+  expect(error.field).toBe("phases[0].contract.output");
+  expect(error.message).toContain("workflow output schema");
+});
+
+test("projectOrbitsForCompileManifest fails for dangling agent refs", async () => {
+  const registry = makeRegistry();
+  addToRegistry(registry, {
+    orbits: [
+      makeOrbit({
+        phases: [{ name: "Review", agents: ["ghost"] }],
+      }),
+    ],
+  });
+
+  const error = assertErrorTag(
+    await failResolve(
+      projectOrbitsForCompileManifest([registry.orbits.get("delivery")!], registry),
+    ),
+    "OrbitValidationError",
+  );
+
+  expect(error.message).toContain("ghost");
 });
 
 test("makeResolvedAgent factory produces a valid ResolvedAgent", () => {

@@ -1728,6 +1728,17 @@ export const OrbitPhaseWorkflowSchema = Schema.Struct({
 });
 export type OrbitPhaseWorkflow = typeof OrbitPhaseWorkflowSchema.Type;
 
+export const OrbitPhaseContractSchema = Schema.Struct({
+  input: Schema.optional(Schema.Unknown),
+  output: Schema.optional(Schema.Unknown),
+});
+export type OrbitPhaseContractInput = typeof OrbitPhaseContractSchema.Type;
+
+export type OrbitPhaseContract = {
+  readonly input?: Schema.Schema.AnyNoContext;
+  readonly output?: Schema.Schema.AnyNoContext;
+};
+
 export const OrbitPhaseSchema = Schema.Struct({
   name: Schema.String,
   orbit: Schema.optional(OrbitRefInputSchema),
@@ -1740,6 +1751,7 @@ export const OrbitPhaseSchema = Schema.Struct({
   real_world_change: Schema.optional(Schema.String),
   cold_pickup_test: Schema.optional(Schema.String),
   workflow: Schema.optional(OrbitPhaseWorkflowSchema),
+  contract: Schema.optional(OrbitPhaseContractSchema),
   body: Schema.optional(Schema.String),
 });
 export type OrbitPhase = typeof OrbitPhaseSchema.Type;
@@ -1758,6 +1770,11 @@ export const NormalizedOrbitPhaseTraitRequirementSchema = Schema.Struct({
 export type NormalizedOrbitPhaseTraitRequirement =
   typeof NormalizedOrbitPhaseTraitRequirementSchema.Type;
 
+export const NormalizedOrbitPhaseContractSchema = Schema.Struct({
+  input: Schema.optional(Schema.Any),
+  output: Schema.optional(Schema.Any),
+});
+
 export const NormalizedOrbitPhaseSchema = Schema.Struct({
   name: Schema.String,
   orbit: Schema.optional(Schema.String),
@@ -1770,6 +1787,7 @@ export const NormalizedOrbitPhaseSchema = Schema.Struct({
   real_world_change: Schema.optional(Schema.String),
   cold_pickup_test: Schema.optional(Schema.String),
   workflow: Schema.optional(OrbitPhaseWorkflowSchema),
+  contract: Schema.optional(NormalizedOrbitPhaseContractSchema),
   body: Schema.optional(Schema.String),
 });
 export type NormalizedOrbitPhase = typeof NormalizedOrbitPhaseSchema.Type;

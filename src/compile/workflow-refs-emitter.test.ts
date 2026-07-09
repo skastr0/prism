@@ -290,7 +290,7 @@ describe("workflow refs emitter", () => {
   test("renders literal orbit refs from the compile manifest (deterministic grouped, no sourcePath)", () => {
     // The manifest() builder produces agents only; use explicit build with orbits in base to simulate post-update manifest
     const orbitManifest = buildCompileManifestForTarget({
-      base: { ...emptyCompileManifest(), orbits: { "forge:delivery-contract": { plugin: "forge", name: "delivery-contract" } } } as any,
+      base: { ...emptyCompileManifest(), orbits: { "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] } } },
       registry: registry(),
       target: "grok",
       scope: "project",
@@ -313,8 +313,8 @@ describe("workflow refs emitter", () => {
   test("renders deterministic grouped orbit refs for cross-plugin", () => {
     const crossManifest = buildCompileManifestForTarget({
       base: { ...emptyCompileManifest(), orbits: {
-        "forge:delivery-contract": { plugin: "forge", name: "delivery-contract" },
-        "core:experiment": { plugin: "core", name: "experiment" },
+        "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] },
+        "core:experiment": { plugin: "core", name: "experiment", phases: [] },
       } } as any,
       registry: registry(),
       target: "grok",

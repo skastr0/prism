@@ -4,6 +4,15 @@
  */
 
 import { Effect, Schema } from "effect";
+import type {
+  CompileManifestOrbitPhase,
+  CompileManifestOrbitPhaseContract,
+} from "@skastr0/prism-sdk/compile-manifest";
+import type { CompileManifestOrbitProjectionInput } from "./compile-manifest.js";
+import {
+  workflowJsonSchemaFromEffectSchema,
+  WorkflowOutputSchemaError,
+} from "../workflow-output-schema.js";
 import {
   Agent,
   ClaudeCodeModelTarget,
@@ -1422,6 +1431,7 @@ const instantiatePhaseDetails = (
       : {}),
     ...(nextWorkflow !== undefined ? { workflow: nextWorkflow } : {}),
     ...(nextBody !== undefined ? { body: nextBody } : {}),
+    ...(phase.contract !== undefined ? { contract: phase.contract } : {}),
   };
 };
 
@@ -2271,6 +2281,45 @@ const validatePhaseRequirements = (
     }
   });
 
+const serializePhaseContractSchema = (
+  orbit: Orbit,
+  phaseIndex: number,
+  side: "input" | "output",
+  schema: Schema.Schema.AnyNoContext,
+): Effect.Effect<Record<string, unknown>, CompileError> =>
+  Effect.try({
+    try: () => workflowJsonSchemaFromEffectSchema(schema),
+    catch: (error) => {
+      if (error instanceof WorkflowOutputSchemaError) {
+        return orbitError(
+          orbit,
+          `phases[${phaseIndex}].contract.${side}`,
+          error.message,
+        );
+      }
+      return orbitError(
+        orbit,
+        `phases[${phaseIndex}].contract.${side}`,
+        String(error),
+      );
+    },
+  });
+
+const validatePhaseContractSchemas = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+): Effect.Effect<void, CompileError> =>
+  Effect.gen(function* () {
+    if (!phase.contract) return;
+
+    for (const side of ["input", "output"] as const) {
+      const schema = phase.contract[side];
+      if (!schema) continue;
+      yield* serializePhaseContractSchema(orbit, phaseIndex, side, schema);
+    }
+  });
+
 const validateOrbitPhase = (
   orbit: Orbit,
   phase: OrbitPhase,
@@ -2282,6 +2331,8 @@ const validateOrbitPhase = (
     if (referenceShapeError) {
       return yield* Effect.fail(referenceShapeError);
     }
+
+    yield* validatePhaseContractSchemas(orbit, phase, phaseIndex);
 
     const orbitReference = yield* resolvePhaseOrbitReference(
       orbit,
@@ -2504,4 +2555,101 @@ export const validateOrbit = (
     for (const [index, phase] of orbit.phases.entries()) {
       yield* validateOrbitPhase(orbit, phase, index, registry);
     }
+  });
+
+const projectOrbitPhaseForManifest = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+  registry: PluginRegistry,
+): Effect.Effect<CompileManifestOrbitPhase, CompileError> =>
+  Effect.gen(function* () {
+    const agents: Array<{ plugin: string; name: string }> = [];
+    for (const [agentIndex, agentRef] of phase.agents.entries()) {
+      const capabilities = yield* resolveOrbitAssignedAgent(
+        orbit,
+        phaseIndex,
+        agentIndex,
+        agentRef,
+        registry,
+      );
+      const reg = yield* resolveRefToRegistry(agentRef, registry, orbit.sourcePath);
+      agents.push({ plugin: reg.pluginName, name: capabilities.agent.name });
+    }
+
+    const framing: CompileManifestOrbitPhase["framing"] = {
+      ...(phase.telos !== undefined ? { telos: phase.telos } : {}),
+      ...(phase.workflow?.when !== undefined ? { when: phase.workflow.when } : {}),
+      ...(phase.workflow?.coordination !== undefined
+        ? { coordination: phase.workflow.coordination }
+        : {}),
+      ...(phase.workflow?.escalation !== undefined
+        ? { escalation: phase.workflow.escalation }
+        : {}),
+    };
+
+    let contract: CompileManifestOrbitPhaseContract | undefined;
+    if (phase.contract) {
+      const serialized: {
+        input?: Record<string, unknown>;
+        output?: Record<string, unknown>;
+      } = {};
+      if (phase.contract.input) {
+        serialized.input = yield* serializePhaseContractSchema(
+          orbit,
+          phaseIndex,
+          "input",
+          phase.contract.input,
+        );
+      }
+      if (phase.contract.output) {
+        serialized.output = yield* serializePhaseContractSchema(
+          orbit,
+          phaseIndex,
+          "output",
+          phase.contract.output,
+        );
+      }
+      contract =
+        serialized.input || serialized.output
+          ? serialized
+          : undefined;
+    }
+
+    return {
+      name: phase.name,
+      agents,
+      criteria: [...(phase.workflow?.finish_criteria ?? [])],
+      io: {
+        inputs: [...(phase.workflow?.inputs ?? [])],
+        outputs: [...(phase.workflow?.outputs ?? [])],
+      },
+      framing,
+      ...(phase.notes ? { notes: { ...phase.notes } } : {}),
+      ...(contract ? { contract } : {}),
+    };
+  });
+
+const projectOrbitForManifest = (
+  orbit: Orbit,
+  registry: PluginRegistry,
+): Effect.Effect<CompileManifestOrbitProjectionInput, CompileError> =>
+  Effect.gen(function* () {
+    const phases: CompileManifestOrbitPhase[] = [];
+    for (const [index, phase] of orbit.phases.entries()) {
+      phases.push(yield* projectOrbitPhaseForManifest(orbit, phase, index, registry));
+    }
+    return { name: orbit.name, phases };
+  });
+
+export const projectOrbitsForCompileManifest = (
+  orbits: ReadonlyArray<Orbit>,
+  registry: PluginRegistry,
+): Effect.Effect<ReadonlyArray<CompileManifestOrbitProjectionInput>, CompileError> =>
+  Effect.gen(function* () {
+    const projected: CompileManifestOrbitProjectionInput[] = [];
+    for (const orbit of orbits) {
+      projected.push(yield* projectOrbitForManifest(orbit, registry));
+    }
+    return projected;
   });

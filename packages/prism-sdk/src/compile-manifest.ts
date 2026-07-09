@@ -45,9 +45,49 @@ export const CompileManifestTraitSchema = Schema.Struct({
 });
 export type CompileManifestTrait = typeof CompileManifestTraitSchema.Type;
 
+export const CompileManifestOrbitAgentSchema = Schema.Struct({
+  plugin: Schema.String,
+  name: Schema.String,
+});
+export type CompileManifestOrbitAgent = typeof CompileManifestOrbitAgentSchema.Type;
+
+export const CompileManifestOrbitPhaseIoSchema = Schema.Struct({
+  inputs: Schema.Array(Schema.String),
+  outputs: Schema.Array(Schema.String),
+});
+export type CompileManifestOrbitPhaseIo = typeof CompileManifestOrbitPhaseIoSchema.Type;
+
+export const CompileManifestOrbitPhaseFramingSchema = Schema.Struct({
+  telos: Schema.optional(Schema.String),
+  when: Schema.optional(Schema.String),
+  coordination: Schema.optional(Schema.String),
+  escalation: Schema.optional(Schema.String),
+});
+export type CompileManifestOrbitPhaseFraming = typeof CompileManifestOrbitPhaseFramingSchema.Type;
+
+const JsonSchemaObjectSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+
+export const CompileManifestOrbitPhaseContractSchema = Schema.Struct({
+  input: Schema.optional(JsonSchemaObjectSchema),
+  output: Schema.optional(JsonSchemaObjectSchema),
+});
+export type CompileManifestOrbitPhaseContract = typeof CompileManifestOrbitPhaseContractSchema.Type;
+
+export const CompileManifestOrbitPhaseSchema = Schema.Struct({
+  name: Schema.String,
+  agents: Schema.Array(CompileManifestOrbitAgentSchema),
+  criteria: Schema.Array(Schema.String),
+  io: CompileManifestOrbitPhaseIoSchema,
+  framing: CompileManifestOrbitPhaseFramingSchema,
+  notes: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+  contract: Schema.optional(CompileManifestOrbitPhaseContractSchema),
+});
+export type CompileManifestOrbitPhase = typeof CompileManifestOrbitPhaseSchema.Type;
+
 export const CompileManifestOrbitSchema = Schema.Struct({
   plugin: Schema.String,
   name: Schema.String,
+  phases: Schema.Array(CompileManifestOrbitPhaseSchema),
 });
 export type CompileManifestOrbit = typeof CompileManifestOrbitSchema.Type;
 
@@ -213,6 +253,51 @@ const sortTraits = (traits: ReadonlyArray<CompileManifestTrait>): CompileManifes
       : left.id < right.id ? -1 : 1,
   );
 
+const sortOrbitAgents = (
+  agents: ReadonlyArray<CompileManifestOrbitAgent>,
+): CompileManifestOrbitAgent[] =>
+  [...agents].sort((left, right) =>
+    left.plugin === right.plugin
+      ? compareCodePoint(left.name, right.name)
+      : compareCodePoint(left.plugin, right.plugin),
+  );
+
+const normalizeOrbitPhaseForEncoding = (
+  phase: CompileManifestOrbitPhase,
+): CompileManifestOrbitPhase => ({
+  name: phase.name,
+  agents: sortOrbitAgents(phase.agents),
+  criteria: sortStrings(phase.criteria),
+  io: {
+    inputs: sortStrings(phase.io.inputs),
+    outputs: sortStrings(phase.io.outputs),
+  },
+  framing: stableJsonValue(phase.framing as StableJsonValue) as CompileManifestOrbitPhaseFraming,
+  ...(phase.notes
+    ? { notes: sortRecord(phase.notes, (value) => value) }
+    : {}),
+  ...(phase.contract
+    ? {
+        contract: {
+          ...(phase.contract.input
+            ? { input: stableJsonValue(phase.contract.input as StableJsonValue) as Record<string, unknown> }
+            : {}),
+          ...(phase.contract.output
+            ? { output: stableJsonValue(phase.contract.output as StableJsonValue) as Record<string, unknown> }
+            : {}),
+        },
+      }
+    : {}),
+});
+
+const normalizeOrbitForEncoding = (orbit: CompileManifestOrbit): CompileManifestOrbit => ({
+  plugin: orbit.plugin,
+  name: orbit.name,
+  phases: [...orbit.phases]
+    .sort((left, right) => compareCodePoint(left.name, right.name))
+    .map(normalizeOrbitPhaseForEncoding),
+});
+
 const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifestOrbit[] =>
   [...orbits].sort((left, right) =>
     left.plugin === right.plugin
@@ -297,7 +382,7 @@ export const normalizeCompileManifestForEncoding = (manifest: CompileManifest): 
         },
   ),
   traits: sortRecord(manifest.traits, (trait) => trait),
-  orbits: sortRecord(manifest.orbits, (entry) => entry),
+  orbits: sortRecord(manifest.orbits, normalizeOrbitForEncoding),
   manifestHash: manifest.manifestHash,
 });
 

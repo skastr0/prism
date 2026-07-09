@@ -16,6 +16,7 @@ import {
   type CompileManifestModelspace,
   type CompileManifestSkillspace,
   type CompileManifestOrbit,
+  type CompileManifestOrbitPhase,
   type CompileManifestTrait,
   type CompileManifestCanonicalTool,
   type CompileManifestToolspaceTool,
@@ -383,13 +384,18 @@ const deriveToolsForManifest = (
   return tools;
 };
 
+export interface CompileManifestOrbitProjectionInput {
+  readonly name: string;
+  readonly phases: ReadonlyArray<CompileManifestOrbitPhase>;
+}
+
 const deriveOrbitsForManifest = (options: {
   readonly base: CompileManifest;
   readonly registryPluginName: string;
-  readonly orbits?: ReadonlyArray<{ readonly name: string }>;
+  readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
 }): Record<string, CompileManifestOrbit> => {
-  const orbitsRecord: Record<string, { plugin: string; name: string }> = {
-    ...(options.base as any).orbits ?? {},
+  const orbitsRecord: Record<string, CompileManifestOrbit> = {
+    ...options.base.orbits,
   };
   if (options.orbits !== undefined) {
     for (const key of Object.keys(orbitsRecord)) {
@@ -399,7 +405,11 @@ const deriveOrbitsForManifest = (options: {
     }
     for (const orbit of options.orbits) {
       const id = `${options.registryPluginName}:${orbit.name}`;
-      orbitsRecord[id] = { plugin: options.registryPluginName, name: orbit.name };
+      orbitsRecord[id] = {
+        plugin: options.registryPluginName,
+        name: orbit.name,
+        phases: [...orbit.phases],
+      };
     }
   }
   return orbitsRecord;
@@ -436,8 +446,8 @@ export const buildCompileManifestForTarget = (options: {
   readonly scope: HarnessScope;
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
-  /** When provided, this compile pass is authoritative for the source plugin's orbit identities (from prepareTargetOrbits, non-templates only). Threaded only for orbit-targeting compiles to avoid clearing on other targets. Minimal {name} shape (no sourcePath/phases/body). */
-  readonly orbits?: ReadonlyArray<{ readonly name: string }>;
+  /** When provided, this compile pass is authoritative for the source plugin's orbit phase projections (from prepareTargetOrbits, non-templates only). Threaded only for orbit-targeting compiles to avoid clearing on other targets. */
+  readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
 }): CompileManifest => {
   const agents: Record<string, CompileManifestAgent> = { ...options.base.agents };
   const currentIds = new Set<string>();
@@ -527,7 +537,7 @@ export const updateCompileManifestForTarget = async (options: {
   readonly composed: ReadonlyArray<ComposedAgent>;
   readonly cacheDescriptors: ReadonlyMap<string, AgentCacheDescriptor>;
   /** Forwarded from surfaces.orbits pass in compilePluginForTarget; undefined means non-authoritative for orbits (carry base). */
-  readonly orbits?: ReadonlyArray<{ readonly name: string }>;
+  readonly orbits?: ReadonlyArray<CompileManifestOrbitProjectionInput>;
 }): Promise<void> =>
   withSnapshotLock(options.prismHome, async () => {
     const { manifest } = await readCompileManifest(options.prismHome, options.projectKey);

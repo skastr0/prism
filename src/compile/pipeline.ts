@@ -15,6 +15,7 @@ import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
 import {
   instantiateOrbit,
+  projectOrbitsForCompileManifest,
   resolveAgent,
   resolveOrbitSkillPermissions,
   resolveOrbitToolPermissions,
@@ -1215,6 +1216,9 @@ export const compilePluginForTarget = (
       // projects with a same-named local plugin stomped each other in the old
       // single flat global manifest.
       const projectKey = compileProjectKey(options.projectPath);
+      const orbitProjections = surfaces.orbits
+        ? yield* projectOrbitsForCompileManifest(orbits, registry)
+        : undefined;
       yield* Effect.promise(() =>
         updateCompileManifestForTarget({
           prismHome: context.prismHome,
@@ -1224,7 +1228,7 @@ export const compilePluginForTarget = (
           scope: options.scope,
           composed: composedForLowering,
           cacheDescriptors: agentResult.cacheDescriptors,
-          ...(surfaces.orbits ? { orbits } : {}),
+          ...(orbitProjections ? { orbits: orbitProjections } : {}),
         }),
       );
       if (options.emitWorkflowRefs !== false) {

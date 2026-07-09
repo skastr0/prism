@@ -4,6 +4,7 @@ import { getAllHarnessIds } from "../harnesses.js";
 import { HOOK_CAPABILITIES, type HookControl } from "./hook-capabilities.js";
 import { planHooksForTarget } from "./hook-planning.js";
 import { HookEventSchema, type HookEvent, Hook } from "./sources.js";
+import { hookEvent as publicHookEvent, type HookDefinition } from "../index.js";
 import type { HarnessId } from "../types.js";
 
 // The portable control set each event's result grammar offers — mirrors
@@ -48,6 +49,31 @@ const makeHook = (event: HookEvent, onDegraded?: "fail" | "degrade" | "skip"): H
 
 const droppedControls = (event: HookEvent, supported: ReadonlyArray<HookControl>): HookControl[] =>
   PORTABLE_CONTROLS[event].filter((c) => !supported.includes(c));
+
+// Type-level guard: the public authoring surface must accept every event,
+// including T2. If a T2 event were missing from index.ts's hookEvent/types,
+// this would fail to compile (bun runs it; tsc gates it in CI).
+const _t2AuthoringCompiles: HookDefinition = {
+  name: "guard-stop",
+  event: publicHookEvent.stop,
+  handle: () => Effect.succeed({ decision: "block" as const, message: "keep going" }),
+};
+void _t2AuthoringCompiles;
+
+describe("public hook authoring surface (src/index.ts) matches the schema", () => {
+  test("hookEvent exposes every portable event, T2 included", () => {
+    const schemaEvents = new Set<string>(
+      (HookEventSchema.ast._tag === "Union" ? HookEventSchema.ast.types : []).map((t) =>
+        t._tag === "Literal" ? String(t.literal) : "",
+      ),
+    );
+    const publicValues = new Set<string>(Object.values(publicHookEvent));
+    for (const e of schemaEvents) {
+      expect(publicValues.has(e), `public hookEvent is missing '${e}'`).toBe(true);
+    }
+    expect(publicValues).toEqual(schemaEvents);
+  });
+});
 
 describe("hook conformance — capability table is complete and consistent with the planner", () => {
   test("every harness × event resolves to a plan outcome that matches its capability kind", () => {

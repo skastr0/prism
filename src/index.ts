@@ -374,6 +374,13 @@ export const hookEvent = {
   permissionRequest: "permission.request",
   sessionStart: "session.start",
   sessionEnd: "session.end",
+  toolFailure: "tool.failure",
+  stop: "stop",
+  subagentStart: "subagent.start",
+  subagentStop: "subagent.stop",
+  compactBefore: "compact.before",
+  compactAfter: "compact.after",
+  notification: "notification",
 } as const;
 
 export type HookEvent = (typeof hookEvent)[keyof typeof hookEvent];
@@ -450,13 +457,89 @@ export interface SessionEndHookEventDefinition {
   readonly native?: Record<string, unknown>;
 }
 
+export interface ToolFailureHookEventDefinition {
+  readonly event: typeof hookEvent.toolFailure;
+  readonly target: HookTargetContextDefinition;
+  readonly tool: HookToolContextDefinition & { readonly error: unknown };
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface StopHookEventDefinition {
+  readonly event: typeof hookEvent.stop;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly stopHookActive?: boolean;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface SubagentContextDefinition {
+  readonly id?: string;
+  readonly type?: string;
+}
+
+export interface SubagentStartHookEventDefinition {
+  readonly event: typeof hookEvent.subagentStart;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly subagent?: SubagentContextDefinition;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface SubagentStopHookEventDefinition {
+  readonly event: typeof hookEvent.subagentStop;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly subagent?: SubagentContextDefinition;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface CompactBeforeHookEventDefinition {
+  readonly event: typeof hookEvent.compactBefore;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly trigger?: string;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface CompactAfterHookEventDefinition {
+  readonly event: typeof hookEvent.compactAfter;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly trigger?: string;
+  readonly native?: Record<string, unknown>;
+}
+
+export interface NotificationHookEventDefinition {
+  readonly event: typeof hookEvent.notification;
+  readonly target: HookTargetContextDefinition;
+  readonly cwd?: string;
+  readonly session?: HookSessionContextDefinition;
+  readonly message?: string;
+  readonly kind?: string;
+  readonly native?: Record<string, unknown>;
+}
+
 export type HookEventPayloadDefinition =
   | ToolBeforeHookEventDefinition
   | ToolAfterHookEventDefinition
   | PromptSubmitHookEventDefinition
   | PermissionRequestHookEventDefinition
   | SessionStartHookEventDefinition
-  | SessionEndHookEventDefinition;
+  | SessionEndHookEventDefinition
+  | ToolFailureHookEventDefinition
+  | StopHookEventDefinition
+  | SubagentStartHookEventDefinition
+  | SubagentStopHookEventDefinition
+  | CompactBeforeHookEventDefinition
+  | CompactAfterHookEventDefinition
+  | NotificationHookEventDefinition;
 
 export type HookEventPayloadFor<E extends HookEvent> = Extract<
   HookEventPayloadDefinition,
@@ -467,15 +550,26 @@ export interface ContinueHookResultDefinition {
   readonly decision: "continue";
   readonly systemMessage?: string;
   readonly additionalContext?: string;
+  /** tool.before: replace the tool arguments before execution. */
+  readonly updatedInput?: unknown;
+  /** tool.after: replace the tool result before the model sees it. */
+  readonly updatedOutput?: unknown;
 }
 
 export interface BlockHookResultDefinition {
   readonly decision: "block";
   readonly message: string;
+  readonly systemMessage?: string;
 }
 
 export interface AllowHookResultDefinition {
   readonly decision: "allow";
+  readonly systemMessage?: string;
+  readonly updatedInput?: unknown;
+}
+
+export interface AskHookResultDefinition {
+  readonly decision: "ask";
   readonly systemMessage?: string;
 }
 
@@ -486,13 +580,25 @@ export type ToolBeforeHookResultDefinition =
 export type PermissionRequestHookResultDefinition =
   | ContinueHookResultDefinition
   | AllowHookResultDefinition
+  | AskHookResultDefinition
+  | BlockHookResultDefinition;
+
+/** prompt.submit, stop, subagent.stop, compact.before — continue or block. */
+export type BlockableHookResultDefinition =
+  | ContinueHookResultDefinition
   | BlockHookResultDefinition;
 
 export type HookResultFor<E extends HookEvent> = E extends typeof hookEvent.toolBefore
   ? ToolBeforeHookResultDefinition
   : E extends typeof hookEvent.permissionRequest
     ? PermissionRequestHookResultDefinition
-    : ContinueHookResultDefinition;
+    : E extends
+          | typeof hookEvent.promptSubmit
+          | typeof hookEvent.stop
+          | typeof hookEvent.subagentStop
+          | typeof hookEvent.compactBefore
+      ? BlockableHookResultDefinition
+      : ContinueHookResultDefinition;
 
 export type HookHandlerDefinition<E extends HookEvent> = (
   event: HookEventPayloadFor<E>,
@@ -530,6 +636,7 @@ export interface ToolHookMatchDefinition {
 export type HookMatchDefinition<E extends HookEvent> = E extends
   | typeof hookEvent.toolBefore
   | typeof hookEvent.toolAfter
+  | typeof hookEvent.toolFailure
   | typeof hookEvent.permissionRequest
   ? ToolHookMatchDefinition
   : never;
@@ -540,6 +647,10 @@ export interface HookDefinition<E extends HookEvent = HookEvent> {
   readonly event: E;
   readonly targets?: readonly string[];
   readonly match?: HookMatchDefinition<E>;
+  /** How to lower this hook on a target that cannot deliver every control it
+   * declares: "degrade" (default) omits with a fidelity note, "skip" omits
+   * silently, "fail" makes it a compile error. */
+  readonly onDegraded?: "fail" | "degrade" | "skip";
   readonly handle: HookHandlerDefinition<E>;
 }
 

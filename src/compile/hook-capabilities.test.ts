@@ -37,10 +37,12 @@ describe("hook-capabilities", () => {
   });
 
   test("spot-asserts", () => {
-    // claude-code prompt.submit is unsupported with note containing "S1"
+    // claude-code prompt.submit is native UserPromptSubmit (landed in S1)
     const claudePromptSubmit = HOOK_CAPABILITIES["claude-code"]["prompt.submit"];
-    expect(claudePromptSubmit.kind).toBe("unsupported");
-    expect(claudePromptSubmit.note).toContain("S1");
+    expect(claudePromptSubmit.kind).toBe("native");
+    if (claudePromptSubmit.kind === "native") {
+      expect(claudePromptSubmit.nativeEvent).toBe("UserPromptSubmit");
+    }
 
     // opencode permission.request is native "permission.ask"
     const opencodePermRequest = HOOK_CAPABILITIES["opencode"]["permission.request"];
@@ -56,9 +58,10 @@ describe("hook-capabilities", () => {
       expect(codexSessionEnd.nativeEvent).toBe("Stop");
     }
 
-    // hermes tool.before unsupported with note containing "S3"
-    const hermesToolBefore = HOOK_CAPABILITIES["hermes"]["tool.before"];
-    expect(hermesToolBefore.kind).toBe("unsupported");
-    expect(hermesToolBefore.note).toContain("S3");
+    // openclaw has no hook lowerer and is not in the program sequence: a
+    // permanently-unsupported anchor for the unsupported-with-note pattern.
+    const openclawToolBefore = HOOK_CAPABILITIES["openclaw"]["tool.before"];
+    expect(openclawToolBefore.kind).toBe("unsupported");
+    expect(openclawToolBefore.note).toContain("no hook lowerer");
   });
 });

@@ -313,6 +313,13 @@ const spanLabel = (span: WorkflowSpanRecord): string => {
   if (span.name === "workflow.run" && typeof attributes["workflow"] === "string") {
     parts.push(String(attributes["workflow"]));
   }
+  if (span.name.startsWith("workflow.phase.")) {
+    const orbit = attributes["orbit"];
+    const phase = attributes["phase"];
+    if (typeof orbit === "string" && typeof phase === "string") {
+      parts[0] = `phase ${orbit}:${phase}`;
+    }
+  }
   if (span.name === "workflow.task") {
     parts.push(span.taskId ?? String(attributes["task.id"] ?? ""));
     const plugin = attributes["agent.plugin"];

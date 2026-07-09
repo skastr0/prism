@@ -1,5 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { expandPath } from "./fs.js";
+import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
+import { resolvePrismHome } from "./prism-home.js";
+import { loadGeneratedSurface } from "./workflow-catalog.js";
+import { scanDynamicPhaseAgentWarnings, type WorkflowPhaseAgentWarning } from "./workflow-validate-dynamic.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
 // (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
 // runtime and the file's `from "effect"` rewrite resolve to the binary's
@@ -58,6 +62,8 @@ export interface WorkflowValidationResult extends WorkflowValidationSummary {
   readonly note?: string;
   /** Present only for dynamic workflows: worker ids found by scanning the raw source text. */
   readonly staticWorkers?: ReadonlyArray<WorkflowStaticWorkerReference>;
+  /** Best-effort dynamic-lane warnings when a stamped phase tag and agent disagree. */
+  readonly warnings?: ReadonlyArray<WorkflowPhaseAgentWarning>;
 }
 
 const DYNAMIC_WORKFLOW_NOTE =
@@ -173,11 +179,17 @@ export const validateWorkflowFile = async (
 
   if (summary.dynamic) {
     const source = await readFile(resolved, "utf8");
+    const prismHome = options.prismHome ?? resolvePrismHome();
+    const { key } = deriveProjectKey();
+    const surfaceDir = projectGeneratedRefsDir(prismHome, key);
+    const surface = await loadGeneratedSurface(surfaceDir);
+    const warnings = scanDynamicPhaseAgentWarnings(source, surface);
     return {
       ...summary,
       modelResolution: [],
       staticWorkers: staticallyReferencedWorkers(source),
       note: DYNAMIC_WORKFLOW_NOTE,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 

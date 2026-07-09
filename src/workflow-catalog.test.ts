@@ -42,7 +42,34 @@ const fixture: GeneratedSurface = {
     },
   },
   orbits: {
-    forge: { forge: { plugin: "forge", name: "forge" } },
+    forge: {
+      forge: {
+        plugin: "forge",
+        name: "forge",
+        sequence: ["explore", "build"],
+        phases: {
+          explore: {
+            name: "explore",
+            orbit: "forge",
+            plugin: "forge",
+            agents: { explorer: { plugin: "forge", name: "explorer" } },
+            criteria: ["Surface options", "Name assumption"],
+            io: { inputs: ["goal"], outputs: ["report"] },
+            framing: { telos: "Reduce ambiguity." },
+            contract: { output: {} },
+          },
+          build: {
+            name: "build",
+            orbit: "forge",
+            plugin: "forge",
+            agents: { builder: { plugin: "forge", name: "builder" } },
+            criteria: [],
+            io: { inputs: [], outputs: [] },
+            framing: {},
+          },
+        },
+      },
+    },
   },
   models: {
     "agent-foundations": { "empirical-modelspaces": { "coding-frontier": {} } },
@@ -157,6 +184,7 @@ const catalogWith = (refs: ReadonlyArray<string>): WorkflowCatalog => ({
     {
       namespace: "x",
       orbit: null,
+      orbitDetail: null,
       agents: refs.map((ref) => ({
         ref,
         plugin: "x",
@@ -185,6 +213,7 @@ const catalogWithInstalls = (installs: ReadonlyArray<string>, workers: ReadonlyA
     {
       namespace: "x",
       orbit: null,
+      orbitDetail: null,
       agents: [
         { ref: "agents.x.builder", plugin: "x", name: "builder", description: "", installs, modelByHarness: {} },
       ],
@@ -313,9 +342,15 @@ describe("renderCompactIndexHuman", () => {
 describe("lookupOrbitNamespace", () => {
   const catalog = projectCatalog(fixture);
 
-  test("finds a namespace with full per-agent detail intact", () => {
+  test("finds a namespace with phases and full per-agent detail intact", () => {
     const result = lookupOrbitNamespace(catalog, "forge");
     expect(result.found).toBe(true);
+    expect(result.phases).toHaveLength(2);
+    expect(result.phases[0]).toMatchObject({
+      name: "explore",
+      criteriaCount: 2,
+      hasContract: true,
+    });
     expect(result.namespace?.agents[0]?.ref).toBe("agents.forge.builder");
     expect(result.namespace?.agents[0]?.description).toBe("Builds.");
   });
@@ -343,10 +378,39 @@ describe("lookupCatalogRef", () => {
     });
   });
 
-  test("resolves an orbit ref", () => {
+  test("resolves an orbit ref with phase summaries", () => {
     const result = lookupCatalogRef(catalog, "orbits.forge.forge");
     expect(result.found).toBe(true);
-    expect(result.entity).toEqual({ kind: "orbit", ref: "orbits.forge.forge", plugin: "forge", name: "forge" });
+    expect(result.entity).toMatchObject({
+      kind: "orbit",
+      ref: "orbits.forge.forge",
+      plugin: "forge",
+      name: "forge",
+      sequence: ["explore", "build"],
+    });
+    if (result.entity?.kind === "orbit") {
+      expect(result.entity.phases).toHaveLength(2);
+      expect(result.entity.phases[0]).toMatchObject({
+        name: "explore",
+        criteriaCount: 2,
+        hasContract: true,
+        agents: [{ slot: "explorer", ref: "agents.forge.explorer" }],
+      });
+    }
+  });
+
+  test("resolves a phase ref with full detail", () => {
+    const result = lookupCatalogRef(catalog, "orbits.forge.forge.phases.explore");
+    expect(result.found).toBe(true);
+    expect(result.entity).toMatchObject({
+      kind: "phase",
+      ref: "orbits.forge.forge.phases.explore",
+      name: "explore",
+      criteria: ["Surface options", "Name assumption"],
+      hasInputContract: false,
+      hasOutputContract: true,
+      framing: { telos: "Reduce ambiguity." },
+    });
   });
 
   test("resolves a model-profile ref", () => {

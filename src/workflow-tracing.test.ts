@@ -273,6 +273,20 @@ describe("trace tree rendering", () => {
     expect(tree[0]?.children[0]?.span.spanId).toBe("b");
   });
 
+  test("human render labels workflow.phase spans as orbit:phase", () => {
+    const rendered = renderWorkflowTraceHuman([
+      span({
+        spanId: "a",
+        name: "workflow.phase.forge:build",
+        attributes: { orbit: "forge", phase: "build" },
+        startNs: 0n,
+        endNs: 2_000_000_000n,
+      }),
+    ]);
+    expect(rendered).toContain("phase forge:build");
+    expect(rendered).not.toContain("workflow.phase.forge:build · forge:build");
+  });
+
   test("human render shows durations, statuses, and worker labels", () => {
     const spans = [
       span({ spanId: "a", attributes: { workflow: "demo" }, startNs: 0n, endNs: 65_000_000_000n }),

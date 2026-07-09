@@ -8,7 +8,12 @@ import { shimCommandForCompile } from "../shim-command.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
-import { bindingsOwnedByPlugin } from "../tool-bindings.js";
+import {
+  bindingsOwnedByPlugin,
+  collectBindingNameMap,
+  mcpBindingsForAgentsAndTools,
+  ownerPluginForBinding,
+} from "../tool-bindings.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -19,7 +24,15 @@ import {
   uniqueSorted,
   yamlScalar,
   type LowerOutput,
+  bundleGeneratedHookWrapper,
+  matcherForResolvedToolHook,
+  normalizeBundleSegment,
+  regexEscape,
+  renderPrePostSessionHookWrapperEntry,
 } from "./shared.js";
+import { Effect } from "effect";
+import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
+import type { ResolvedContractBinding } from "../resolve.js";
 
 const TARGET_ID = "hermes" as const;
 
@@ -146,15 +159,111 @@ const planMcpServer = (input: LowerInput): PlannedMcpServer => {
   };
 };
 
+const hermesGeneratedRoot = (target: HermesLowerTarget): string =>
+  join(target.root, "plugins", `prism-generated-${normalizeBundleSegment(target.sourcePluginName)}`);
+
+const hermesNativeHookEvent = (event: Hook["event"]): string => {
+  switch (event) {
+    case "tool.before":
+      return "pre_tool_call";
+    case "tool.after":
+      return "post_tool_call";
+    case "prompt.submit":
+      return "pre_llm_call";
+    case "session.start":
+      return "on_session_start";
+    case "session.end":
+      return "on_session_end";
+    case "subagent.stop":
+      return "subagent_stop";
+    default:
+      throw new Error(`Unsupported event: ${event}`);
+  }
+};
+
+const collectCanonicalToolNames = (
+  sourcePluginName: string,
+  bindings: ReadonlyArray<ResolvedContractBinding>,
+): ReadonlyMap<string, string> =>
+  collectBindingNameMap(bindings, (binding) => {
+    const owner = ownerPluginForBinding(sourcePluginName, binding);
+    return renderPluginAllowlist("hermes", owner, mcpToolNameForBinding(owner, binding));
+  });
+
+const hookMatcher = (
+  nativeEvent: string,
+  resolved: ResolvedHookMatch,
+  canonicalToolNames: ReadonlyMap<string, string>,
+): string | undefined => {
+  if (nativeEvent !== "pre_tool_call" && nativeEvent !== "post_tool_call") {
+    return undefined;
+  }
+  return matcherForResolvedToolHook(resolved, canonicalToolNames);
+};
+
+const renderHermesHookWrapperEntry = (
+  hook: Hook,
+  nativeEvent: string,
+  hookRuntimePath: string,
+  hookSourcePath: string,
+): string => {
+  return renderPrePostSessionHookWrapperEntry({
+    hook,
+    hookRuntimePath,
+    hookSourcePath,
+    harness: TARGET_ID,
+    nativeEvent,
+    cwdExpression: "input?.cwd",
+    fallbackSessionId: TARGET_ID,
+    nativeToolInputExpression: "input?.tool_input",
+    resultHandlingSource: `const writeHookJson = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const output = {};
+if (result.decision === "block") {
+  output.decision = "block";
+  output.reason = result.message || "";
+} else if (${JSON.stringify(hook.event)} === "prompt.submit") {
+  const ctx = result.additionalContext || result.systemMessage;
+  if (ctx) {
+    output.context = ctx;
+  }
+}
+if (Object.keys(output).length > 0) writeHookJson(output);`,
+  });
+};
+
+const bundleHermesHookWrapper = async (hook: Hook, nativeEvent: string): Promise<string> => {
+  return bundleGeneratedHookWrapper({
+    hook,
+    tempPrefix: "prism-hermes-hook-",
+    buildLabel: `Hermes '${hook.name}'`,
+    renderEntry: (currentHook, hookRuntimePath, hookSourcePath) =>
+      renderHermesHookWrapperEntry(currentHook, nativeEvent, hookRuntimePath, hookSourcePath),
+  });
+};
+
+const renderHermesHookYaml = (options: {
+  readonly nativeEvent: string;
+  readonly command: string;
+  readonly matcher?: string;
+  readonly timeout?: number;
+}): string[] => {
+  const lines = [
+    `  ${options.nativeEvent}:`,
+    `    - command: ${yamlScalar(options.command)}`,
+  ];
+  if (options.matcher) {
+    lines.push(`      matcher: ${yamlScalar(options.matcher)}`);
+  }
+  if (options.timeout !== undefined) {
+    lines.push(`      timeout: ${options.timeout}`);
+  }
+  return lines;
+};
+
 const assertHermesLoweringInput = (input: LowerInput): void => {
   if (input.agents.length > 0) {
     throw new Error(
       "Hermes lowerer received agents after target capability validation; this indicates a compiler planning bug.",
-    );
-  }
-  if ((input.hooks?.length ?? 0) > 0) {
-    throw new Error(
-      "Hermes lowerer received hooks after target capability validation; this indicates a compiler planning bug.",
     );
   }
 };
@@ -211,6 +320,54 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       }).join("\n"),
       plugin,
     });
+  }
+
+  const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+  if (hooks.length > 0 && input.registry) {
+    const bindings = mcpBindingsForAgentsAndTools(
+      input.target.sourcePluginName,
+      input.tools,
+      input.agents,
+    );
+    const canonicalToolNames = collectCanonicalToolNames(
+      input.target.sourcePluginName,
+      bindings,
+    );
+
+    for (const hook of hooks) {
+      const nativeEvent = hermesNativeHookEvent(hook.event);
+      const resolved = await Effect.runPromise(
+        resolveHookMatchForTarget(hook, input.registry, "hermes"),
+      );
+
+      const matcher = hookMatcher(nativeEvent, resolved, canonicalToolNames);
+      const wrapperContent = await bundleHermesHookWrapper(hook, nativeEvent);
+
+      const relativePath = join("hooks", `${normalizeBundleSegment(hook.name, "hook")}.mjs`);
+      const wrapperAbsPath = join(hermesGeneratedRoot(input.target), relativePath);
+
+      pushDesiredFile(files, {
+        targetPath: wrapperAbsPath,
+        content: wrapperContent,
+        plugin,
+        mode: 0o755,
+      });
+
+      regions.push({
+        kind: "marker",
+        targetPath: configPath(input.target),
+        regionKey: `hermes.hooks.${hook.name}`,
+        commentPrefix: "#",
+        anchor: "hooks:",
+        content: renderHermesHookYaml({
+          nativeEvent,
+          command: `node ${wrapperAbsPath}`,
+          matcher,
+          timeout: 60,
+        }).join("\n"),
+        plugin,
+      });
+    }
   }
 
   // Each region is per-plugin — no cross-plugin coordination needed.

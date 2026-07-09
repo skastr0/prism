@@ -215,7 +215,6 @@ export const LOWERER_CAPABILITIES = {
     compile: compileSupported({
       agents: "unsupported",
       agentModelBindings: "ignored",
-      hooks: "unsupported",
       skillPermissions: "unsupported",
     }),
     surfaces: {
@@ -233,7 +232,11 @@ export const LOWERER_CAPABILITIES = {
         path: "<prism-home>/runtime/mcp/<plugin>/server.mjs",
         summary: "Canonical tools lower to the canonical PRISM_HOME union MCP server referenced from config.yaml.",
       },
-      hooks: unsupported("Hermes native hooks are not lowered by Prism yet."),
+      hooks: {
+        kind: "config-patch",
+        path: "<hermes-root>/config.yaml#hooks",
+        summary: "Compile patches managed Hermes hook entries and wrapper files.",
+      },
       mcpConfig: {
         kind: "config-patch",
         path: "<hermes-root>/config.yaml#mcp_servers",

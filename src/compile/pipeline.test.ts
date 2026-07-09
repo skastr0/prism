@@ -5329,7 +5329,7 @@ export default defineAgent({
         name: "hermes-hook-demo",
         version: "0.1.0",
         targets: {
-          hooks: ["hermes"],
+          hooks: ["cursor"],
         },
       },
       null,
@@ -5353,7 +5353,7 @@ export default defineHook({
     compilePluginForTarget({
       prismHome: testPrismHome(),
       pluginPath: hookPluginRoot,
-      target: "hermes",
+      target: "cursor",
       scope: "global",
       dryRun: true,
     }),

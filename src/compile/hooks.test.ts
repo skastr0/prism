@@ -245,7 +245,7 @@ test("hook result validation is event-specific and conservative", () => {
   expect(decodeHookResultForEvent("permission.request", { decision: "allow" })._tag)
     .toBe("Right");
   expect(decodeHookResultForEvent("prompt.submit", { decision: "block", message: "No" })._tag)
-    .toBe("Left");
+    .toBe("Right");
   expect(decodeHookResultForEvent("tool.before", { decision: "allow" })._tag)
     .toBe("Left");
   expect(

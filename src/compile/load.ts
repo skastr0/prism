@@ -949,11 +949,16 @@ const normalizeHookMatch = (
   match: { readonly tool?: HookToolMatcherInput } | undefined,
 ): NormalizedHookMatch | SourceParseError => {
   if (!match?.tool) return {};
-  if (event !== "tool.before" && event !== "tool.after" && event !== "permission.request") {
+  if (
+    event !== "tool.before" &&
+    event !== "tool.after" &&
+    event !== "tool.failure" &&
+    event !== "permission.request"
+  ) {
     return new SourceParseError({
       sourcePath,
       kind: "hook",
-      message: `match.tool is only supported for tool.before, tool.after, and permission.request hooks`,
+      message: `match.tool is only supported for tool.before, tool.after, tool.failure, and permission.request hooks`,
     });
   }
 

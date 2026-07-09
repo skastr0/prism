@@ -405,6 +405,44 @@ export default {
   expect(failure.message).toContain("must be an imported schema identifier");
 });
 
+test("hook match.tool is accepted on tool.failure and rejected on non-tool events", async () => {
+  const okRoot = await createTempRoot();
+  await writeManifest(okRoot);
+  await writeText(
+    join(okRoot, "hooks", "failure-audit.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "failure-audit",
+  event: "tool.failure",
+  match: { tool: { kind: "hook-any-tool" } },
+  handle: () => Effect.succeed({ decision: "continue" }),
+};
+`,
+  );
+  const okRegistry = await Effect.runPromise(loadPlugin(okRoot));
+  expect(okRegistry.hooks.get("failure-audit")?.event).toBe("tool.failure");
+
+  const badRoot = await createTempRoot();
+  await writeManifest(badRoot);
+  await writeText(
+    join(badRoot, "hooks", "prompt-audit.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "prompt-audit",
+  event: "prompt.submit",
+  match: { tool: { kind: "hook-any-tool" } },
+  handle: () => Effect.succeed({ decision: "continue" }),
+};
+`,
+  );
+  const exit = await Effect.runPromiseExit(loadPlugin(badRoot));
+  const failure = getFailure(exit);
+  expect(failure.name).toBe("SourceParseError");
+  expect(failure.message).toContain("tool.failure");
+});
+
 test("helper-based and noun-first agent sources produce equivalent normalized objects", async () => {
   const helperRoot = await createTempRoot();
   const nounRoot = await createTempRoot();

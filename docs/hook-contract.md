@@ -178,8 +178,12 @@ to `tool.before`/`tool.after`/`tool.failure`/`permission.request`.
 
 ## 8. Invariants
 
-- Existing plugins and hooks compile byte-identically for currently-supported
-  hook/target pairs (golden tests unchanged).
+- Existing plugins and hooks keep compiling with identical STRUCTURE for
+  currently-supported hook/target pairs. Wrapper BUNDLE_HASH values change
+  whenever `GENERATED_HOOK_RUNTIME` changes (the runtime is bundled into every
+  wrapper), so hash-only golden re-records are expected then — any NON-hash
+  golden diff is a violation. (S0 note: the s0d re-record was verified
+  hash-only; it also absorbed the pre-existing pi golden drift.)
 - Widening only: no removed fields, no renamed events.
 - `sources.ts` schemas are the single source of truth; the runtime bundle
   mirrors them under the parity test.

@@ -38,7 +38,6 @@ import {
   planGeneratedPluginManifest,
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
-  prePostSessionNativeHookEvent,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
@@ -217,7 +216,38 @@ const renderAgentMarkdown = (
   return `${serializeFrontmatter(composeAgentFrontmatter(agent, target))}\n\n${agent.body}${diagnostics}\n`;
 };
 
-const claudeNativeHookEvent = prePostSessionNativeHookEvent;
+const claudeNativeHookEvent = (event: Hook["event"]): string => {
+  switch (event) {
+    case "tool.before":
+      return "PreToolUse";
+    case "tool.after":
+      return "PostToolUse";
+    case "tool.failure":
+      return "PostToolUseFailure";
+    case "prompt.submit":
+      return "UserPromptSubmit";
+    case "permission.request":
+      return "PermissionRequest";
+    case "stop":
+      return "Stop";
+    case "subagent.start":
+      return "SubagentStart";
+    case "subagent.stop":
+      return "SubagentStop";
+    case "compact.before":
+      return "PreCompact";
+    case "compact.after":
+      return "PostCompact";
+    case "notification":
+      return "Notification";
+    case "session.start":
+      return "SessionStart";
+    case "session.end":
+      return "SessionEnd";
+    default:
+      throw new Error(`Unsupported event: ${event}`);
+  }
+};
 
 /**
  * Claude Code's per-agent `tools:` frontmatter is an exclusive allowlist of
@@ -260,7 +290,13 @@ const renderHooksJson = async (
         },
       ],
     };
-    if (registry) {
+    if (
+      registry &&
+      (hook.event === "tool.before" ||
+        hook.event === "tool.after" ||
+        hook.event === "tool.failure" ||
+        hook.event === "permission.request")
+    ) {
       const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, registry, TARGET_ID));
       const matcher = matcherForResolvedToolHook(resolved, canonicalToolNames);
       if (matcher) entry.matcher = matcher;
@@ -275,18 +311,106 @@ const renderHookWrapperEntry = (
   hook: Hook,
   hookRuntimePath: string,
   hookSourcePath: string,
-): string =>
-  renderPrePostSessionHookWrapperEntry({
+): string => {
+  const nativeEvent = claudeNativeHookEvent(hook.event);
+  const supportsAdditionalContext =
+    nativeEvent === "PreToolUse" ||
+    nativeEvent === "PostToolUse" ||
+    nativeEvent === "UserPromptSubmit" ||
+    nativeEvent === "SessionStart" ||
+    nativeEvent === "SubagentStart";
+
+  return renderPrePostSessionHookWrapperEntry({
     hook,
     hookRuntimePath,
     hookSourcePath,
     harness: TARGET_ID,
-    nativeEvent: claudeNativeHookEvent(hook.event),
+    nativeEvent,
     cwdExpression: "input?.cwd ?? input?.workspace?.cwd",
     fallbackSessionId: TARGET_ID,
-    blockDecisionSource: `  console.error(result.message);
-  process.exit(2);`,
+    toolAfterOutputExpression:
+      "input?.tool?.output ?? input?.toolOutput ?? input?.tool_output ?? input?.output",
+    resultHandlingSource: `const writeHookJson = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const output = {};
+if (result.systemMessage) output.systemMessage = result.systemMessage;
+
+if (result.decision === "block") {
+  if (${JSON.stringify(nativeEvent)} === "PreToolUse") {
+    output.hookSpecificOutput = {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: result.message,
+    };
+  } else if (${JSON.stringify(nativeEvent)} === "PermissionRequest") {
+    output.hookSpecificOutput = {
+      hookEventName: "PermissionRequest",
+      decision: {
+        behavior: "deny",
+        message: result.message,
+      },
+    };
+  } else if (
+    ${JSON.stringify(nativeEvent)} === "UserPromptSubmit" ||
+    ${JSON.stringify(nativeEvent)} === "Stop" ||
+    ${JSON.stringify(nativeEvent)} === "SubagentStop" ||
+    ${JSON.stringify(nativeEvent)} === "PreCompact"
+  ) {
+    output.decision = "block";
+    output.reason = result.message;
+  }
+} else if (result.decision === "allow" && ${JSON.stringify(nativeEvent)} === "PermissionRequest") {
+  output.hookSpecificOutput = {
+    hookEventName: "PermissionRequest",
+    decision: {
+      behavior: "allow",
+      ...(result.updatedInput !== undefined ? { updatedInput: result.updatedInput } : {}),
+    },
+  };
+} else if (result.decision === "ask" && ${JSON.stringify(nativeEvent)} === "PermissionRequest") {
+  // ask degrades to continue decision-wise (continue) - Claude's own dialog proceeds; still emit systemMessage if present.
+} else {
+  if (${JSON.stringify(nativeEvent)} === "PreToolUse") {
+    const specific = {};
+    if (result.updatedInput !== undefined) {
+      specific.permissionDecision = "allow";
+      specific.updatedInput = result.updatedInput;
+    }
+    if (result.additionalContext !== undefined) {
+      specific.additionalContext = result.additionalContext;
+    }
+    if (Object.keys(specific).length > 0) {
+      output.hookSpecificOutput = {
+        hookEventName: "PreToolUse",
+        ...specific
+      };
+    }
+  } else if (${JSON.stringify(nativeEvent)} === "PostToolUse") {
+    const specific = {};
+    if (result.updatedOutput !== undefined) {
+      specific.updatedToolOutput = result.updatedOutput;
+    }
+    if (result.additionalContext !== undefined) {
+      specific.additionalContext = result.additionalContext;
+    }
+    if (Object.keys(specific).length > 0) {
+      output.hookSpecificOutput = {
+        hookEventName: "PostToolUse",
+        ...specific
+      };
+    }
+  } else if (${JSON.stringify(supportsAdditionalContext)} && result.additionalContext !== undefined) {
+    output.hookSpecificOutput = {
+      hookEventName: ${JSON.stringify(nativeEvent)},
+      additionalContext: result.additionalContext,
+    };
+  }
+}
+
+if (Object.keys(output).length > 0) {
+  writeHookJson(output);
+}`,
   });
+};
 
 const bundleHookWrapper = async (hook: Hook): Promise<string> => {
   return bundleGeneratedHookWrapper({

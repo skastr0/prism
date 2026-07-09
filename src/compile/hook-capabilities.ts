@@ -29,19 +29,71 @@ export type HookEventSupport =
 
 export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSupport>> = {
   "claude-code": {
-    "tool.before": { kind: "native", nativeEvent: "PreToolUse", controls: ["block"] },
-    "tool.after": { kind: "native", nativeEvent: "PostToolUse", controls: [] },
-    "prompt.submit": { kind: "unsupported", note: "pending S1" },
-    "permission.request": { kind: "unsupported", note: "pending S1" },
-    "session.start": { kind: "native", nativeEvent: "SessionStart", controls: [] },
-    "session.end": { kind: "native", nativeEvent: "SessionEnd", controls: [] },
-    "tool.failure": { kind: "unsupported", note: "pending S1" },
-    stop: { kind: "unsupported", note: "pending S1" },
-    "subagent.start": { kind: "unsupported", note: "pending S1" },
-    "subagent.stop": { kind: "unsupported", note: "pending S1" },
-    "compact.before": { kind: "unsupported", note: "pending S1" },
-    "compact.after": { kind: "unsupported", note: "pending S1" },
-    notification: { kind: "unsupported", note: "pending S1" },
+    "tool.before": {
+      kind: "native",
+      nativeEvent: "PreToolUse",
+      controls: ["block", "updatedInput", "systemMessage", "additionalContext"],
+    },
+    "tool.after": {
+      kind: "native",
+      nativeEvent: "PostToolUse",
+      controls: ["updatedOutput", "systemMessage", "additionalContext"],
+    },
+    "prompt.submit": {
+      kind: "native",
+      nativeEvent: "UserPromptSubmit",
+      controls: ["block", "systemMessage", "additionalContext"],
+    },
+    "permission.request": {
+      kind: "native",
+      nativeEvent: "PermissionRequest",
+      controls: ["block", "ask", "updatedInput", "systemMessage"],
+    },
+    "session.start": {
+      kind: "native",
+      nativeEvent: "SessionStart",
+      controls: ["systemMessage", "additionalContext"],
+    },
+    "session.end": {
+      kind: "native",
+      nativeEvent: "SessionEnd",
+      controls: ["systemMessage"],
+    },
+    "tool.failure": {
+      kind: "native",
+      nativeEvent: "PostToolUseFailure",
+      controls: ["systemMessage"],
+    },
+    stop: {
+      kind: "native",
+      nativeEvent: "Stop",
+      controls: ["block", "systemMessage"],
+    },
+    "subagent.start": {
+      kind: "native",
+      nativeEvent: "SubagentStart",
+      controls: ["systemMessage", "additionalContext"],
+    },
+    "subagent.stop": {
+      kind: "native",
+      nativeEvent: "SubagentStop",
+      controls: ["block", "systemMessage"],
+    },
+    "compact.before": {
+      kind: "native",
+      nativeEvent: "PreCompact",
+      controls: ["block", "systemMessage"],
+    },
+    "compact.after": {
+      kind: "native",
+      nativeEvent: "PostCompact",
+      controls: ["systemMessage"],
+    },
+    notification: {
+      kind: "native",
+      nativeEvent: "Notification",
+      controls: ["systemMessage"],
+    },
   },
   "codex-cli": {
     "tool.before": {

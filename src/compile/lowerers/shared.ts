@@ -171,6 +171,8 @@ export const nativeHookEventName = <Name extends string>(
       return names.sessionStart;
     case "session.end":
       return names.sessionEnd;
+    default:
+      throw new Error(`Unsupported event: ${event}`);
   }
 };
 
@@ -247,6 +249,18 @@ const renderHookWrapperNormalizePayload = (options: {
         session: nativeSession(input),
         native: input,
       };
+    case "tool.failure":
+      return {
+        target,
+        tool: {
+          name: String(nativeToolName(input)),
+          input: nativeToolInput(input),
+          error: input?.tool?.error ?? input?.error ?? input?.toolError ?? input?.tool_error,
+        },
+        cwd,
+        session: nativeSession(input),
+        native: input,
+      };
     case "prompt.submit":
       return { target, cwd, session: nativeSession(input), prompt: String(input?.prompt ?? ""), native: input };
     case "permission.request":
@@ -263,6 +277,44 @@ const renderHookWrapperNormalizePayload = (options: {
       return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, native: input };
     case "session.end":
       return { target, cwd, session: nativeSession(input) ?? { id: ${JSON.stringify(options.fallbackSessionId)} }, reason: ${options.nativeSessionEndReasonExpression ?? "input?.reason"}, native: input };
+    case "stop":
+      return {
+        target,
+        cwd,
+        session: nativeSession(input),
+        stopHookActive: input?.stopHookActive ?? input?.stop_hook_active ?? input?.active,
+        native: input,
+      };
+    case "subagent.start":
+    case "subagent.stop":
+      return {
+        target,
+        cwd,
+        session: nativeSession(input),
+        subagent: input?.subagent ? {
+          id: String(input.subagent.id ?? ""),
+          type: String(input.subagent.type ?? ""),
+        } : undefined,
+        native: input,
+      };
+    case "compact.before":
+    case "compact.after":
+      return {
+        target,
+        cwd,
+        session: nativeSession(input),
+        trigger: input?.trigger !== undefined ? String(input.trigger) : undefined,
+        native: input,
+      };
+    case "notification":
+      return {
+        target,
+        cwd,
+        session: nativeSession(input),
+        message: input?.message !== undefined ? String(input.message) : undefined,
+        kind: input?.kind !== undefined ? String(input.kind) : undefined,
+        native: input,
+      };
   }
 };`;
 

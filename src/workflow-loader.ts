@@ -3,7 +3,11 @@ import { expandPath } from "./fs.js";
 import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 import { resolvePrismHome } from "./prism-home.js";
 import { loadGeneratedSurface } from "./workflow-catalog.js";
-import { scanDynamicPhaseAgentWarnings, type WorkflowPhaseAgentWarning } from "./workflow-validate-dynamic.js";
+import {
+  collectDynamicPhaseAgentFindings,
+  phaseStampedBindingsFromTasks,
+  validatePhaseAgentBindings,
+} from "./workflow-validate-dynamic.js";
 // Importing from load.ts initializes the binary's Effect runtime bridge
 // (globalThis.__prism_effect) as a module side-effect, so the workflow DSL
 // runtime and the file's `from "effect"` rewrite resolve to the binary's
@@ -20,6 +24,7 @@ import {
   workflowSummary,
   type AnyWorkflowDefinition,
   type AnyWorkflowTask,
+  type DynamicWorkflowDefinition,
   type WorkflowTaskModelResolutionSource,
   type WorkflowValidationSummary,
 } from "./workflows.js";
@@ -62,8 +67,6 @@ export interface WorkflowValidationResult extends WorkflowValidationSummary {
   readonly note?: string;
   /** Present only for dynamic workflows: worker ids found by scanning the raw source text. */
   readonly staticWorkers?: ReadonlyArray<WorkflowStaticWorkerReference>;
-  /** Best-effort dynamic-lane warnings when a stamped phase tag and agent disagree. */
-  readonly warnings?: ReadonlyArray<WorkflowPhaseAgentWarning>;
 }
 
 const DYNAMIC_WORKFLOW_NOTE =
@@ -169,6 +172,25 @@ export const loadWorkflowFile = async (
   return candidate;
 };
 
+const throwPhaseAgentFindings = (
+  workflowName: string,
+  findings: ReadonlyArray<{ readonly message: string }>,
+): void => {
+  if (findings.length === 0) return;
+  const detail = findings.map((finding) => `  - ${finding.message}`).join("\n");
+  throw new WorkflowValidationError(
+    `workflow '${workflowName}' failed phase-agent validation for ${findings.length} task(s):\n${detail}`,
+  );
+};
+
+const loadCompiledWorkflowSurface = async (
+  prismHome: string | undefined,
+): Promise<Awaited<ReturnType<typeof loadGeneratedSurface>>> => {
+  const resolvedHome = prismHome ?? resolvePrismHome();
+  const { key } = deriveProjectKey();
+  return loadGeneratedSurface(projectGeneratedRefsDir(resolvedHome, key));
+};
+
 export const validateWorkflowFile = async (
   filePath: string,
   options: { readonly prismHome?: string; readonly skipTypecheck?: boolean } = {},
@@ -176,24 +198,27 @@ export const validateWorkflowFile = async (
   const resolved = expandPath(filePath);
   const workflow = await loadWorkflowFile(resolved, options);
   const summary = workflowSummary(resolved, workflow);
+  const surface = await loadCompiledWorkflowSurface(options.prismHome);
 
   if (summary.dynamic) {
     const source = await readFile(resolved, "utf8");
-    const prismHome = options.prismHome ?? resolvePrismHome();
-    const { key } = deriveProjectKey();
-    const surfaceDir = projectGeneratedRefsDir(prismHome, key);
-    const surface = await loadGeneratedSurface(surfaceDir);
-    const warnings = scanDynamicPhaseAgentWarnings(source, surface);
+    const findings = await collectDynamicPhaseAgentFindings(
+      workflow as DynamicWorkflowDefinition<string>,
+      source,
+      surface,
+    );
+    throwPhaseAgentFindings(summary.name, findings);
     return {
       ...summary,
       modelResolution: [],
       staticWorkers: staticallyReferencedWorkers(source),
       note: DYNAMIC_WORKFLOW_NOTE,
-      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
   const tasks = workflow.tasks as ReadonlyArray<AnyWorkflowTask>;
+  throwPhaseAgentFindings(summary.name, validatePhaseAgentBindings(phaseStampedBindingsFromTasks(tasks), surface));
+
   const modelResolution = tasks.map(resolveTaskModelRow);
   const unresolved = modelResolution.filter((row) => row.error !== undefined);
   if (unresolved.length > 0) {

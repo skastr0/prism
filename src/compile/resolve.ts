@@ -2305,19 +2305,58 @@ const serializePhaseContractSchema = (
     },
   });
 
+const projectedPhaseContractCache = new WeakMap<
+  OrbitPhase,
+  CompileManifestOrbitPhaseContract | null
+>();
+
+const projectPhaseContractForManifest = (
+  orbit: Orbit,
+  phase: OrbitPhase,
+  phaseIndex: number,
+): Effect.Effect<CompileManifestOrbitPhaseContract | undefined, CompileError> =>
+  Effect.gen(function* () {
+    if (!phase.contract) return undefined;
+
+    const cached = projectedPhaseContractCache.get(phase);
+    if (cached !== undefined) {
+      return cached ?? undefined;
+    }
+
+    const serialized: {
+      input?: Record<string, unknown>;
+      output?: Record<string, unknown>;
+    } = {};
+    if (phase.contract.input) {
+      serialized.input = yield* serializePhaseContractSchema(
+        orbit,
+        phaseIndex,
+        "input",
+        phase.contract.input as Schema.Schema.AnyNoContext,
+      );
+    }
+    if (phase.contract.output) {
+      serialized.output = yield* serializePhaseContractSchema(
+        orbit,
+        phaseIndex,
+        "output",
+        phase.contract.output as Schema.Schema.AnyNoContext,
+      );
+    }
+
+    const projected =
+      serialized.input || serialized.output ? serialized : undefined;
+    projectedPhaseContractCache.set(phase, projected ?? null);
+    return projected;
+  });
+
 const validatePhaseContractSchemas = (
   orbit: Orbit,
   phase: OrbitPhase,
   phaseIndex: number,
 ): Effect.Effect<void, CompileError> =>
   Effect.gen(function* () {
-    if (!phase.contract) return;
-
-    for (const side of ["input", "output"] as const) {
-      const schema = phase.contract[side];
-      if (!schema) continue;
-      yield* serializePhaseContractSchema(orbit, phaseIndex, side, schema);
-    }
+    yield* projectPhaseContractForManifest(orbit, phase, phaseIndex);
   });
 
 const validateOrbitPhase = (
@@ -2588,33 +2627,7 @@ const projectOrbitPhaseForManifest = (
         : {}),
     };
 
-    let contract: CompileManifestOrbitPhaseContract | undefined;
-    if (phase.contract) {
-      const serialized: {
-        input?: Record<string, unknown>;
-        output?: Record<string, unknown>;
-      } = {};
-      if (phase.contract.input) {
-        serialized.input = yield* serializePhaseContractSchema(
-          orbit,
-          phaseIndex,
-          "input",
-          phase.contract.input,
-        );
-      }
-      if (phase.contract.output) {
-        serialized.output = yield* serializePhaseContractSchema(
-          orbit,
-          phaseIndex,
-          "output",
-          phase.contract.output,
-        );
-      }
-      contract =
-        serialized.input || serialized.output
-          ? serialized
-          : undefined;
-    }
+    const contract = yield* projectPhaseContractForManifest(orbit, phase, phaseIndex);
 
     return {
       name: phase.name,

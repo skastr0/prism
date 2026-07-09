@@ -1770,10 +1770,7 @@ export const NormalizedOrbitPhaseTraitRequirementSchema = Schema.Struct({
 export type NormalizedOrbitPhaseTraitRequirement =
   typeof NormalizedOrbitPhaseTraitRequirementSchema.Type;
 
-export const NormalizedOrbitPhaseContractSchema = Schema.Struct({
-  input: Schema.optional(Schema.Any),
-  output: Schema.optional(Schema.Any),
-});
+export const NormalizedOrbitPhaseContractSchema = OrbitPhaseContractSchema;
 
 export const NormalizedOrbitPhaseSchema = Schema.Struct({
   name: Schema.String,

@@ -224,6 +224,42 @@ test("empty compile manifest carries a self-consistent hash", () => {
   expect(manifest.tools).toEqual({});
 });
 
+test("orbit phase order is preserved during manifest encoding", () => {
+  const manifest = withManifestHash({
+    ...emptyCompileManifest(),
+    orbits: {
+      "forge:delivery-contract": {
+        plugin: "forge",
+        name: "delivery-contract",
+        phases: [
+          {
+            name: "Zebra phase",
+            agents: [{ plugin: "forge", name: "builder" }],
+            criteria: [],
+            io: { inputs: [], outputs: [] },
+            framing: {},
+          },
+          {
+            name: "Alpha phase",
+            agents: [{ plugin: "forge", name: "reviewer" }],
+            criteria: [],
+            io: { inputs: [], outputs: [] },
+            framing: {},
+          },
+        ],
+      },
+    },
+  });
+
+  const encoded = encodeCompileManifest(manifest);
+  const decoded = decodeCompileManifest(encoded);
+
+  expect(decoded._tag).toBe("Right");
+  if (decoded._tag !== "Right") throw new Error("manifest did not decode");
+  const phases = decoded.right.orbits["forge:delivery-contract"]?.phases;
+  expect(phases?.map((phase) => phase.name)).toEqual(["Zebra phase", "Alpha phase"]);
+});
+
 test("manifest hash is byte-stable for non-ASCII orbit and tool names regardless of insertion order", () => {
   // Non-ASCII names: café (NFC) and naïve (NFC precomposed) — locale sort vs code-point sort differ on some platforms
   const makeManifest = (orbitOrder: "ab" | "ba", toolOrder: "ab" | "ba"): CompileManifest => {

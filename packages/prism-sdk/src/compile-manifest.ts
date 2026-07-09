@@ -293,9 +293,7 @@ const normalizeOrbitPhaseForEncoding = (
 const normalizeOrbitForEncoding = (orbit: CompileManifestOrbit): CompileManifestOrbit => ({
   plugin: orbit.plugin,
   name: orbit.name,
-  phases: [...orbit.phases]
-    .sort((left, right) => compareCodePoint(left.name, right.name))
-    .map(normalizeOrbitPhaseForEncoding),
+  phases: orbit.phases.map(normalizeOrbitPhaseForEncoding),
 });
 
 const sortOrbits = (orbits: ReadonlyArray<CompileManifestOrbit>): CompileManifestOrbit[] =>

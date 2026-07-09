@@ -41,7 +41,6 @@ import {
   planGeneratedPluginManifest,
   planGeneratedPluginSkillWrites,
   planStandardGeneratedPluginOrbitSkillWrites,
-  prePostSessionNativeHookEvent,
   renderPrePostSessionHookWrapperEntry,
   stringArray,
   uniqueSorted,
@@ -226,7 +225,36 @@ const renderAgentMarkdown = (
   return `${serializeFrontmatter(composeAgentFrontmatter(agent, target, namer))}\n\n${agent.body}\n`;
 };
 
-const grokNativeHookEvent = prePostSessionNativeHookEvent;
+const grokNativeHookEvent = (event: Hook["event"]): string => {
+  switch (event) {
+    case "tool.before":
+      return "PreToolUse";
+    case "tool.after":
+      return "PostToolUse";
+    case "session.start":
+      return "SessionStart";
+    case "session.end":
+      return "SessionEnd";
+    case "prompt.submit":
+      return "UserPromptSubmit";
+    case "tool.failure":
+      return "PostToolUseFailure";
+    case "stop":
+      return "Stop";
+    case "subagent.start":
+      return "SubagentStart";
+    case "subagent.stop":
+      return "SubagentStop";
+    case "compact.before":
+      return "PreCompact";
+    case "compact.after":
+      return "PostCompact";
+    case "notification":
+      return "Notification";
+    default:
+      throw new Error(`Unsupported event: ${event}`);
+  }
+};
 
 interface GrokToolNamer {
   readonly name: (ownerPlugin: string, binding: ResolvedContractBinding) => string;
@@ -289,7 +317,12 @@ const renderHooksJson = async (
         },
       ],
     };
-    if (registry) {
+    if (
+      registry &&
+      (hook.event === "tool.before" ||
+        hook.event === "tool.after" ||
+        hook.event === "tool.failure")
+    ) {
       const resolved = await Effect.runPromise(resolveHookMatchForTarget(hook, registry, TARGET_ID));
       const matcher = matcherForResolvedToolHook(resolved, canonicalToolNames);
       if (matcher) entry.matcher = matcher;

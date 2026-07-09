@@ -177,6 +177,48 @@ export default defineHook({
   );
 
   await writeText(
+    join(pluginRoot, "hooks", "prompt-submitted.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "prompt-submitted",
+  description: "Observe prompt submit",
+  event: "prompt.submit",
+  handle: (_event) => Effect.succeed({ decision: "block" as const, message: "blocked prompt" }),
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "subagent-stopped.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "subagent-stopped",
+  description: "Observe subagent stop",
+  event: "subagent.stop",
+  handle: (_event) => Effect.succeed({ decision: "block" as const, message: "blocked subagent" }),
+});
+`,
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "notified.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "notified",
+  description: "Observe notification",
+  event: "notification",
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
+  await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
 import { defineTool } from ${JSON.stringify(prismImportPath)};
@@ -197,9 +239,15 @@ export default defineTool({
   const hook = registry.hooks.get("audit-shell");
   const canonicalHook = registry.hooks.get("audit-echo");
   const sessionEndHook = registry.hooks.get("session-ended");
+  const promptSubmitHook = registry.hooks.get("prompt-submitted");
+  const subagentStopHook = registry.hooks.get("subagent-stopped");
+  const notificationHook = registry.hooks.get("notified");
   if (!hook) throw new Error("expected audit-shell hook");
   if (!canonicalHook) throw new Error("expected audit-echo hook");
   if (!sessionEndHook) throw new Error("expected session-ended hook");
+  if (!promptSubmitHook) throw new Error("expected prompt-submitted hook");
+  if (!subagentStopHook) throw new Error("expected subagent-stopped hook");
+  if (!notificationHook) throw new Error("expected notified hook");
   const echoBinding: ResolvedContractBinding = {
     kind: "permission",
     logicalName: "echo",
@@ -270,7 +318,7 @@ export default defineTool({
     ],
     orbits: [],
     skills: [...registry.skills.values()],
-    hooks: [hook, canonicalHook, sessionEndHook],
+    hooks: [hook, canonicalHook, sessionEndHook, promptSubmitHook, subagentStopHook, notificationHook],
     registry,
     target: {
       scope: "project",
@@ -395,6 +443,41 @@ export default defineTool({
     decision: "deny",
     reason: "blocked",
   });
+
+  expect(hookConfig?.content).toContain('"UserPromptSubmit"');
+  expect(hookConfig?.content).toContain('"SubagentStop"');
+  expect(hookConfig?.content).toContain('"Notification"');
+
+  const promptHookWrapper = findContentOperation(operations, join("hooks", "prompt-submitted.mjs"));
+  expect(promptHookWrapper).toBeDefined();
+  await writeText(promptHookWrapper!.targetPath, promptHookWrapper!.content);
+  const promptRes = await runGeneratedHookWrapper(promptHookWrapper!.targetPath, {
+    prompt: "hello",
+    workspaceRoot: pluginRoot,
+  });
+  expect(promptRes.exitCode).toBe(0);
+  expect(promptRes.stdout.trim()).toBe("");
+
+  const subagentHookWrapper = findContentOperation(operations, join("hooks", "subagent-stopped.mjs"));
+  expect(subagentHookWrapper).toBeDefined();
+  await writeText(subagentHookWrapper!.targetPath, subagentHookWrapper!.content);
+  const subagentRes = await runGeneratedHookWrapper(subagentHookWrapper!.targetPath, {
+    subagent: { id: "123", type: "research" },
+    workspaceRoot: pluginRoot,
+  });
+  expect(subagentRes.exitCode).toBe(0);
+  expect(subagentRes.stdout.trim()).toBe("");
+
+  const notifyHookWrapper = findContentOperation(operations, join("hooks", "notified.mjs"));
+  expect(notifyHookWrapper).toBeDefined();
+  await writeText(notifyHookWrapper!.targetPath, notifyHookWrapper!.content);
+  const notifyRes = await runGeneratedHookWrapper(notifyHookWrapper!.targetPath, {
+    message: "alert",
+    kind: "warning",
+    workspaceRoot: pluginRoot,
+  });
+  expect(notifyRes.exitCode).toBe(0);
+  expect(notifyRes.stdout.trim()).toBe("");
 });
 
 test("grok lowerer preserves frontmatter precedence and omission rules", async () => {

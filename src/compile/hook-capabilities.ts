@@ -269,17 +269,22 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
   "kimi-code": {
     "tool.before": { kind: "native", nativeEvent: "PreToolUse", controls: ["block"] },
     "tool.after": { kind: "native", nativeEvent: "PostToolUse", controls: [] },
-    "prompt.submit": { kind: "unsupported", note: "pending S7 probe" },
+    // Verified from a live kimi config.toml [[hooks]] UserPromptSubmit entry.
+    "prompt.submit": { kind: "native", nativeEvent: "UserPromptSubmit", controls: ["block"] },
     "permission.request": { kind: "unsupported" },
     "session.start": { kind: "native", nativeEvent: "SessionStart", controls: [] },
     "session.end": { kind: "native", nativeEvent: "SessionEnd", controls: [] },
-    "tool.failure": { kind: "unsupported", note: "pending S7" },
-    stop: { kind: "unsupported", note: "pending S7" },
-    "subagent.start": { kind: "unsupported", note: "pending S7" },
-    "subagent.stop": { kind: "unsupported", note: "pending S7" },
-    "compact.before": { kind: "unsupported", note: "pending S7" },
-    "compact.after": { kind: "unsupported", note: "pending S7" },
-    notification: { kind: "unsupported", note: "pending S7" },
+    // kimi-code mirrors Claude Code's [[hooks]] format, but these T2 events
+    // could not be confirmed to fire from the local install (binary opaque,
+    // install docs are bundled-skill content). Honest unsupported over an
+    // unverified native that would silently no-op.
+    "tool.failure": { kind: "unsupported", note: "unverified against kimi's event surface" },
+    stop: { kind: "unsupported", note: "unverified against kimi's event surface" },
+    "subagent.start": { kind: "unsupported", note: "unverified against kimi's event surface" },
+    "subagent.stop": { kind: "unsupported", note: "unverified against kimi's event surface" },
+    "compact.before": { kind: "unsupported", note: "unverified against kimi's event surface" },
+    "compact.after": { kind: "unsupported", note: "unverified against kimi's event surface" },
+    notification: { kind: "unsupported", note: "unverified against kimi's event surface" },
   },
   "amp-code": {
     "tool.before": { kind: "native", nativeEvent: "tool.call", controls: ["block"] },

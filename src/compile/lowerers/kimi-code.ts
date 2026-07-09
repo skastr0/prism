@@ -476,6 +476,10 @@ const kimiNativeHookEvent = (event: Hook["event"]): string =>
   nativeHookEventName(event, {
     toolBefore: "PreToolUse",
     toolAfter: "PostToolUse",
+    // Verified against a live kimi config.toml [[hooks]] entry that fires
+    // UserPromptSubmit. kimi's wrapper is exit-2-block only (no JSON stdout),
+    // so it carries [block] but no systemMessage/additionalContext.
+    promptSubmit: "UserPromptSubmit",
     sessionStart: "SessionStart",
     sessionEnd: "SessionEnd",
   });

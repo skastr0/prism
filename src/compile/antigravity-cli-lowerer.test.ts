@@ -169,21 +169,37 @@ export default defineHook({
 `,
   );
 
+  await writeFile(
+    join(pluginRoot, "hooks", "turn-stop.hook.ts"),
+    `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
+import { defineHook, hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
+
+export default defineHook({
+  name: "turn-stop",
+  description: "Portable stop event co-rides antigravity Stop",
+  event: hookEvent.stop,
+  handle: () => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
   const hook = registry.hooks.get("audit-shell");
   const afterHook = registry.hooks.get("audit-shell-after");
   const startHook = registry.hooks.get("pre-invoke");
   const stopHook = registry.hooks.get("keep-going");
+  const turnStopHook = registry.hooks.get("turn-stop");
   if (!hook) throw new Error("expected audit-shell hook");
   if (!afterHook) throw new Error("expected audit-shell-after hook");
   if (!startHook) throw new Error("expected pre-invoke hook");
   if (!stopHook) throw new Error("expected keep-going hook");
+  if (!turnStopHook) throw new Error("expected turn-stop hook");
 
   const { files: operations } = await planLowering({
     agents: [],
     orbits: [],
     tools: [],
-    hooks: [hook, afterHook, startHook, stopHook],
+    hooks: [hook, afterHook, startHook, stopHook, turnStopHook],
     registry,
     target: {
       scope: "project",
@@ -201,6 +217,8 @@ export default defineHook({
   expect(hookConfig?.content).toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_shell"');
   expect(hookConfig?.content).toContain('node \\"./hooks/audit-shell.mjs\\"');
+  // Portable `stop` co-rides antigravity Stop (grouped alongside session.end).
+  expect(hookConfig?.content).toContain('node \\"./hooks/turn-stop.mjs\\"');
 
   const hookWrapper = findContentOperation(operations, join("hooks", "audit-shell.mjs"));
   expect(hookWrapper?.content).toContain("native payload");

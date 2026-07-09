@@ -231,13 +231,40 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
       controls: [],
       note: "turn stop, not session end",
     },
-    "tool.failure": { kind: "unsupported", note: "pending S6" },
-    stop: { kind: "unsupported", note: "pending S6" },
-    "subagent.start": { kind: "unsupported", note: "pending S6" },
-    "subagent.stop": { kind: "unsupported", note: "pending S6" },
-    "compact.before": { kind: "unsupported", note: "pending S6" },
-    "compact.after": { kind: "unsupported", note: "pending S6" },
-    notification: { kind: "unsupported", note: "pending S6" },
+    // Antigravity has only 4 native hook events: PreToolUse, PostToolUse,
+    // PreInvocation, Stop. `stop` maps to Stop (turn-stop); the rest have no
+    // equivalent. Antigravity's result ceiling is allow/deny/continue — no
+    // systemMessage/additionalContext — so no event carries context controls.
+    "tool.failure": {
+      kind: "unsupported",
+      note: "antigravity has no post-tool-failure event",
+    },
+    stop: {
+      kind: "degraded",
+      nativeEvent: "Stop",
+      controls: [],
+      note: "turn-stop; antigravity result ceiling has no context controls",
+    },
+    "subagent.start": {
+      kind: "unsupported",
+      note: "antigravity has no subagent lifecycle event",
+    },
+    "subagent.stop": {
+      kind: "unsupported",
+      note: "antigravity has no subagent lifecycle event",
+    },
+    "compact.before": {
+      kind: "unsupported",
+      note: "antigravity has no compaction event",
+    },
+    "compact.after": {
+      kind: "unsupported",
+      note: "antigravity has no compaction event",
+    },
+    notification: {
+      kind: "unsupported",
+      note: "antigravity has no notification event",
+    },
   },
   "kimi-code": {
     "tool.before": { kind: "native", nativeEvent: "PreToolUse", controls: ["block"] },

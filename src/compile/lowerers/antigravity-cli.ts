@@ -212,13 +212,19 @@ const matcherForHook = (
   return canonicalToolNames.get(tool.ref) ?? tool.ref;
 };
 
-const antigravityHookEvent = (event: Hook["event"]): string =>
-  nativeHookEventName(event, {
+const antigravityHookEvent = (event: Hook["event"]): string => {
+  // Antigravity's Stop IS the turn-stop event, so portable `stop` maps to it
+  // natively (co-riding with session.end's degraded Stop proxy — multiple
+  // hooks group under one native event). All other T2 events have no
+  // antigravity equivalent and are filtered as unsupported before reaching here.
+  if (event === "stop") return "Stop";
+  return nativeHookEventName(event, {
     toolBefore: "PreToolUse",
     toolAfter: "PostToolUse",
     sessionStart: "PreInvocation",
     sessionEnd: "Stop",
   });
+};
 
 const ANTIGRAVITY_HOOK_TOOL_INPUT_EXPRESSION =
   "input?.toolCall?.args ?? input?.tool?.input ?? input?.toolInput ?? input?.tool_input ?? input?.args ?? input?.arguments ?? {}";

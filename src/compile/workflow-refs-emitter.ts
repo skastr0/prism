@@ -251,7 +251,7 @@ const phaseAgentTypeAlias = (options: {
   const pluginKey = camelKey(options.plugin);
   const orbitKey = camelKey(options.orbitName);
   const phaseKey = camelKey(options.phaseName);
-  const alias = `${pascalKey(options.plugin)}${pascalKey(options.phaseName)}Agent`;
+  const alias = `${pascalKey(options.plugin)}${pascalKey(options.orbitName)}${pascalKey(options.phaseName)}Agent`;
   return `export type ${alias} = typeof orbits.${pluginKey}.${orbitKey}.phases.${phaseKey}.agents[keyof typeof orbits.${pluginKey}.${orbitKey}.phases.${phaseKey}.agents];`;
 };
 

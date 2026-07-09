@@ -440,11 +440,65 @@ describe("workflow refs emitter", () => {
     expect(output).toContain('"build": {');
     expect(output).toContain('"explorer": agents.forge.explorer');
     expect(output).toContain('"codebaseArcheologist": agents.forge.codebaseArcheologist');
-    expect(output).toContain("export type ForgeExploreAgent =");
-    expect(output).toContain("export type ForgeBuildAgent =");
+    expect(output).toContain("export type ForgeForgeExploreAgent =");
+    expect(output).toContain("export type ForgeForgeBuildAgent =");
     expect(output).not.toContain("sourcePath");
     expect(output).not.toContain("kind");
     expect(output).toContain("} as const satisfies Record<string, Record<string, WorkflowOrbit>>");
+  });
+
+  test("per-phase agent type aliases include orbit name to avoid export collisions", () => {
+    const sharedPhaseManifest = buildCompileManifestForTarget({
+      base: {
+        ...emptyCompileManifest(),
+        orbits: {
+          "forge:forge": {
+            plugin: "forge",
+            name: "forge",
+            phases: [
+              {
+                name: "explore",
+                agents: [{ plugin: "forge", name: "explorer" }],
+                criteria: [],
+                io: { inputs: [], outputs: [] },
+                framing: {},
+              },
+            ],
+          },
+          "forge:delivery-contract": {
+            plugin: "forge",
+            name: "delivery-contract",
+            phases: [
+              {
+                name: "explore",
+                agents: [{ plugin: "forge", name: "codebase-archeologist" }],
+                criteria: [],
+                io: { inputs: [], outputs: [] },
+                framing: {},
+              },
+            ],
+          },
+        },
+      },
+      registry: registry(),
+      target: "grok",
+      scope: "project",
+      composed: [composed, explorerComposed],
+      cacheDescriptors: new Map([
+        ["codebase-archeologist", descriptor],
+        ["explorer", explorerDescriptor],
+      ]),
+    });
+
+    const output = renderWorkflowOrbitsModule({ manifest: sharedPhaseManifest });
+
+    expect(output).toContain("export type ForgeForgeExploreAgent =");
+    expect(output).toContain("export type ForgeDeliveryContractExploreAgent =");
+    const forgeAliasCount = (output.match(/export type ForgeForgeExploreAgent =/g) ?? []).length;
+    const deliveryAliasCount = (output.match(/export type ForgeDeliveryContractExploreAgent =/g) ?? []).length;
+    expect(forgeAliasCount).toBe(1);
+    expect(deliveryAliasCount).toBe(1);
+    expect(output).not.toContain("export type ForgeExploreAgent =");
   });
 
   test("phase agent refs share object identity with the agents module", async () => {

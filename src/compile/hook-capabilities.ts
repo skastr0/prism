@@ -185,13 +185,34 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
       controls: ["systemMessage", "additionalContext"],
       note: "idle transition proxy",
     },
-    "tool.failure": { kind: "unsupported", note: "pending S5" },
-    stop: { kind: "unsupported", note: "pending S5" },
-    "subagent.start": { kind: "unsupported", note: "pending S5" },
-    "subagent.stop": { kind: "unsupported", note: "pending S5" },
-    "compact.before": { kind: "unsupported", note: "pending S5" },
-    "compact.after": { kind: "unsupported", note: "pending S5" },
-    notification: { kind: "unsupported", note: "pending S5" },
+    // OpenCode's plugin API is tool/permission/chat-centric — it has no clean
+    // lifecycle hook for these events, and the lowerer wires none. Honest
+    // unsupported rather than a forced mapping onto an unverified bus event.
+    "tool.failure": {
+      kind: "unsupported",
+      note: "no distinct opencode failure event (tool.execute.after carries only a success flag)",
+    },
+    stop: { kind: "unsupported", note: "opencode has no turn-stop plugin hook" },
+    "subagent.start": {
+      kind: "unsupported",
+      note: "opencode has no subagent lifecycle event (tool.execute.* does not fire for subagents)",
+    },
+    "subagent.stop": {
+      kind: "unsupported",
+      note: "opencode has no subagent lifecycle event",
+    },
+    "compact.before": {
+      kind: "unsupported",
+      note: "opencode compaction is not exposed as a blocking/injecting plugin hook",
+    },
+    "compact.after": {
+      kind: "unsupported",
+      note: "opencode compaction is not exposed as a plugin hook",
+    },
+    notification: {
+      kind: "unsupported",
+      note: "opencode has no notification plugin hook (tui.toast is output, not a lifecycle hook)",
+    },
   },
   "antigravity-cli": {
     "tool.before": { kind: "native", nativeEvent: "PreToolUse", controls: ["block"] },

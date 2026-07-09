@@ -224,6 +224,13 @@ const ampNativeHookEvent = (hook: Hook): PlannedAmpHook["nativeEvent"] => {
       );
     case "prompt.submit":
     case "permission.request":
+    case "tool.failure":
+    case "stop":
+    case "subagent.start":
+    case "subagent.stop":
+    case "compact.before":
+    case "compact.after":
+    case "notification":
       throw new Error(
         `Amp does not expose a native ${hook.event} plugin event; cannot lower Prism hook '${hook.name}'.`,
       );

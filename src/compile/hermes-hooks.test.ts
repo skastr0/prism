@@ -177,19 +177,21 @@ export default defineHook({
     });
 
     // Verify config.yaml regions
-    const auditShellRegion = findRegion(lowered.regions, "hermes.hooks.audit-shell");
+    // Regions are keyed per NATIVE EVENT (not per hook) so that multiple hooks
+    // sharing a native event land under one `<event>:` key, never duplicate keys.
+    const auditShellRegion = findRegion(lowered.regions, "hermes.hooks.pre_tool_call");
     expect(auditShellRegion).toBeDefined();
     const auditShellYaml = markerContent(auditShellRegion);
     expect(auditShellYaml).toContain("pre_tool_call:");
     expect(auditShellYaml).toContain("- command: ");
     expect(auditShellYaml).toContain('matcher: "shell.command"');
 
-    const auditSubmitRegion = findRegion(lowered.regions, "hermes.hooks.audit-submit");
+    const auditSubmitRegion = findRegion(lowered.regions, "hermes.hooks.pre_llm_call");
     expect(auditSubmitRegion).toBeDefined();
     const auditSubmitYaml = markerContent(auditSubmitRegion);
     expect(auditSubmitYaml).toContain("pre_llm_call:");
 
-    const sessionEndedRegion = findRegion(lowered.regions, "hermes.hooks.session-ended");
+    const sessionEndedRegion = findRegion(lowered.regions, "hermes.hooks.on_session_end");
     expect(sessionEndedRegion).toBeDefined();
     const sessionEndedYaml = markerContent(sessionEndedRegion);
     expect(sessionEndedYaml).toContain("on_session_end:");
@@ -238,5 +240,50 @@ export default defineHook({
     expect(submitRes.exitCode).toBe(0);
     const submitJson = JSON.parse(submitRes.stdout.trim());
     expect(submitJson).toEqual({ context: "injected-context" });
+  });
+
+  test("two hooks on the same native event share one key (no duplicate YAML keys)", async () => {
+    const tempRoot = await createTempRoot();
+    const pluginRoot = join(tempRoot, "plugin");
+    const hermesRoot = join(tempRoot, "hermes-root");
+    await mkdir(hermesRoot, { recursive: true });
+
+    await writeText(
+      join(pluginRoot, "plugin.json"),
+      JSON.stringify({ name: "hermes-collide", version: "0.1.0", targets: { hooks: ["hermes"] } }, null, 2) + "\n",
+    );
+    for (const name of ["audit-a", "audit-b"]) {
+      await writeText(
+        join(pluginRoot, "hooks", `${name}.hook.ts`),
+        `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+export default defineHook({
+  name: "${name}",
+  event: hookEvent.toolBefore,
+  handle: (event) => Effect.succeed({ decision: "continue" as const }),
+});`,
+      );
+    }
+
+    const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+    const lowered = await planLowering({
+      agents: [], orbits: [], tools: [], skills: [],
+      hooks: [registry.hooks.get("audit-a")!, registry.hooks.get("audit-b")!],
+      registry,
+      target: {
+        scope: "global", root: hermesRoot,
+        sourcePluginName: "hermes-collide", sourcePluginVersion: "0.1.0", sourcePluginPath: pluginRoot,
+      },
+    });
+
+    // Exactly ONE region for pre_tool_call, holding BOTH hooks' commands.
+    const preToolRegions = lowered.regions.filter((r) => r.regionKey === "hermes.hooks.pre_tool_call");
+    expect(preToolRegions).toHaveLength(1);
+    const yaml = markerContent(preToolRegions[0]);
+    expect((yaml.match(/pre_tool_call:/g) ?? []).length).toBe(1);
+    expect((yaml.match(/- command: /g) ?? []).length).toBe(2);
+    // Both wrapper files still emitted per hook.
+    expect(findFile(lowered.files, join("hooks", "audit-a.mjs"))).toBeDefined();
+    expect(findFile(lowered.files, join("hooks", "audit-b.mjs"))).toBeDefined();
   });
 });

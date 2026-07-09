@@ -241,21 +241,29 @@ const bundleHermesHookWrapper = async (hook: Hook, nativeEvent: string): Promise
   });
 };
 
-const renderHermesHookYaml = (options: {
-  readonly nativeEvent: string;
+interface HermesHookEntry {
   readonly command: string;
   readonly matcher?: string;
   readonly timeout?: number;
+}
+
+// One hermes native event maps to a single `<event>:` key holding a LIST of
+// hook entries. Multiple Prism hooks that lower to the same native event
+// (e.g. two tool.before hooks) MUST share one key — separate `<event>:` keys
+// under `hooks:` would be duplicate YAML mapping keys.
+const renderHermesHookYaml = (options: {
+  readonly nativeEvent: string;
+  readonly entries: ReadonlyArray<HermesHookEntry>;
 }): string[] => {
-  const lines = [
-    `  ${options.nativeEvent}:`,
-    `    - command: ${yamlScalar(options.command)}`,
-  ];
-  if (options.matcher) {
-    lines.push(`      matcher: ${yamlScalar(options.matcher)}`);
-  }
-  if (options.timeout !== undefined) {
-    lines.push(`      timeout: ${options.timeout}`);
+  const lines = [`  ${options.nativeEvent}:`];
+  for (const entry of options.entries) {
+    lines.push(`    - command: ${yamlScalar(entry.command)}`);
+    if (entry.matcher) {
+      lines.push(`      matcher: ${yamlScalar(entry.matcher)}`);
+    }
+    if (entry.timeout !== undefined) {
+      lines.push(`      timeout: ${entry.timeout}`);
+    }
   }
   return lines;
 };
@@ -334,12 +342,15 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       bindings,
     );
 
-    for (const hook of hooks) {
+    // Group hooks by native event: one `<event>:` key holds every hook that
+    // lowers to it. Wrapper files stay per-hook (distinct handlers); only the
+    // config-region key is shared, in stable hook-name order for determinism.
+    const entriesByEvent = new Map<string, HermesHookEntry[]>();
+    for (const hook of [...hooks].sort((a, b) => a.name.localeCompare(b.name))) {
       const nativeEvent = hermesNativeHookEvent(hook.event);
       const resolved = await Effect.runPromise(
         resolveHookMatchForTarget(hook, input.registry, "hermes"),
       );
-
       const matcher = hookMatcher(nativeEvent, resolved, canonicalToolNames);
       const wrapperContent = await bundleHermesHookWrapper(hook, nativeEvent);
 
@@ -353,18 +364,21 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
         mode: 0o755,
       });
 
+      const entry: HermesHookEntry = { command: `node ${wrapperAbsPath}`, timeout: 60 };
+      const withMatcher = matcher ? { ...entry, matcher } : entry;
+      const list = entriesByEvent.get(nativeEvent);
+      if (list) list.push(withMatcher);
+      else entriesByEvent.set(nativeEvent, [withMatcher]);
+    }
+
+    for (const [nativeEvent, entries] of [...entriesByEvent].sort(([a], [b]) => a.localeCompare(b))) {
       regions.push({
         kind: "marker",
         targetPath: configPath(input.target),
-        regionKey: `hermes.hooks.${hook.name}`,
+        regionKey: `hermes.hooks.${nativeEvent}`,
         commentPrefix: "#",
         anchor: "hooks:",
-        content: renderHermesHookYaml({
-          nativeEvent,
-          command: `node ${wrapperAbsPath}`,
-          matcher,
-          timeout: 60,
-        }).join("\n"),
+        content: renderHermesHookYaml({ nativeEvent, entries }).join("\n"),
         plugin,
       });
     }

@@ -1163,6 +1163,45 @@ console.log(JSON.stringify(result));
     expect(judgeGoals).toContain("Author criterion runs after the inherited phase contract.");
   });
 
+  test("phase contract criteria fail closed on empty or trivial output", async () => {
+    const explorer = {
+      ...builder,
+      name: "explorer",
+      description: "Exploration specialist",
+    } as const satisfies WorkflowAgentRef;
+
+    const Exploration = Schema.Struct({
+      assumption: Schema.String,
+      options: Schema.Array(Schema.String),
+    });
+
+    const exploreContract = {
+      name: "explore",
+      orbit: "delivery",
+      plugin: "core",
+      agents: { explorer },
+      output: Exploration,
+      criteria: ["Surface at least one option", "Name the core assumption"],
+    } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+
+    const workflow = defineWorkflow({
+      name: "runner-phase-criteria-fail",
+      run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        agent: ctx.agents.explorer,
+        prompt: "Explore.",
+      })),
+    });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async () => ({ assumption: "", options: [] }),
+    });
+
+    expect(result.tasks[0]?.status).toBe("failed");
+    expect(result.tasks[0]?.error).toContain("phase-contract");
+    expect(result.tasks[0]?.error).toContain("empty or trivial");
+  });
+
   test("phase finish inherit:false opts out of contract criteria", async () => {
     const explorer = {
       ...builder,

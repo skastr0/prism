@@ -494,13 +494,30 @@ const composePhaseFramingPreamble = (
   return `## Phase ${contract.orbit}:${contract.name}\n${lines.join("\n")}\n\n${prompt}`;
 };
 
+const isSubstantiveWorkflowValue = (value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length > 0 && value.some(isSubstantiveWorkflowValue);
+  if (typeof value === "object") return Object.values(value).some(isSubstantiveWorkflowValue);
+  return true;
+};
+
 const defaultPhaseJudgeCriterion = <Output>(
   criteria: readonly string[],
 ): WorkflowJudgeFinishCriterion<Output> => ({
   kind: "judge",
   name: "phase-contract",
   goal: criteria.join("\n"),
-  evaluate: () => Effect.succeed({ verdict: "pass" as const }),
+  selectEvidence: ({ output }) => ({ output }),
+  evaluate: (context) =>
+    isSubstantiveWorkflowValue(context.output)
+      ? Effect.succeed({ verdict: "pass" as const })
+      : Effect.succeed({
+          verdict: "fail" as const,
+          feedback: `Phase output is empty or trivial. Satisfy the phase finish criteria:\n${context.goal}`,
+        }),
 });
 
 const mergePhaseTaskFinish = <Output>(
@@ -553,11 +570,7 @@ const createPhaseCtx = <
       phase: phaseOverride ?? phaseKey,
       ...(finish !== undefined ? { finish } : {}),
     } as WorkflowTaskDefinition<string, WorkflowAgentRef, WorkflowOutputSchema>);
-    return Effect.gen(function* () {
-      yield* Effect.annotateCurrentSpan("agent.plugin", rest.agent.plugin);
-      yield* Effect.annotateCurrentSpan("agent.name", rest.agent.name);
-      return yield* runtime.runTask(workflowTask);
-    }) as Effect.Effect<WorkflowTaskOutput<AnyWorkflowTask>, WorkflowRuntimeError>;
+    return runtime.runTask(workflowTask) as Effect.Effect<WorkflowTaskOutput<AnyWorkflowTask>, WorkflowRuntimeError>;
   };
 
   return {

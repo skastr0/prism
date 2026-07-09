@@ -202,8 +202,10 @@ describe("workflow runner tracing", () => {
       expect(phaseSpan?.attributes.orbit).toBe("delivery");
       expect(phaseSpan?.attributes.phase).toBe("explore");
       expect(task?.parentSpanId).toBe(phaseSpan?.spanId ?? "");
-      expect(phaseSpan?.attributes["agent.plugin"]).toBe("forge");
-      expect(phaseSpan?.attributes["agent.name"]).toBe("builder");
+      expect(phaseSpan?.attributes["agent.plugin"]).toBeUndefined();
+      expect(phaseSpan?.attributes["agent.name"]).toBeUndefined();
+      expect(task?.attributes["agent.plugin"]).toBe("forge");
+      expect(task?.attributes["agent.name"]).toBe("builder");
       expect(spans.every((span) => span.traceId === root?.traceId)).toBe(true);
     });
   });

@@ -4,14 +4,17 @@ import {
   decodeTaskOutput,
   defineTask,
   defineWorkflow,
+  phase,
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
   WorkflowModelResolutionError,
+  type PhaseContract,
   type WorkflowAgentRef,
   type WorkflowModelProfileRef,
   type WorkflowPermissionMode,
   type WorkflowTaskWorkerOptions,
   type WorkflowWorkerId,
+  type WorkflowRuntime,
   type WorkflowTaskOutput,
 } from "./workflows.js";
 import { WORKFLOW_HARNESS_IDS, workflowHarnessDefaultModel } from "./workflow-harness-detection.js";
@@ -73,6 +76,17 @@ const PatchReport = Schema.Struct({
   summary: Schema.String,
   filesChanged: Schema.Array(Schema.String),
 });
+
+const Exploration = Schema.Struct({
+  assumption: Schema.String,
+  options: Schema.Array(Schema.String),
+});
+
+const explorer = {
+  ...builder,
+  name: "explorer",
+  description: "Exploration specialist",
+} as const satisfies WorkflowAgentRef;
 
 describe("workflow authoring primitives", () => {
   test("workflow worker id includes antigravity", () => {
@@ -474,6 +488,108 @@ describe("workflow authoring primitives", () => {
     expect(workflow.tasks).toEqual([]);
     expect(await Effect.runPromise(workflow.run({
       runTask: () => Effect.succeed({ summary: "typed", filesChanged: ["src/workflows.ts"] }) as never,
+      phase: () => Effect.die("unused in this test") as never,
     }))).toBe("src/workflows.ts");
   });
 });
+
+describe("workflow phase DSL", () => {
+  const exploreContract = {
+    name: "explore",
+    orbit: "delivery",
+    plugin: "core",
+    agents: { explorer },
+    output: Exploration,
+    framing: { telos: "Reduce ambiguity before build." },
+    criteria: ["Surface at least one option", "Name the core assumption"],
+  } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+
+  const mockRuntime = (
+    runTask: WorkflowRuntime["runTask"],
+  ): WorkflowRuntime => ({
+    runTask,
+    phase: (contract, fn) => phase({ runTask }, contract, fn),
+  });
+
+  test("phase ctx.task defaults output schema to the contract output", async () => {
+    const prompts: string[] = [];
+    const workflow = defineWorkflow({
+      name: "phase-default-output",
+      run: (wf) => phase(wf, exploreContract, (ctx) => Effect.gen(function* () {
+        return yield* ctx.task({
+          id: "scope",
+          agent: ctx.agents.explorer,
+          prompt: "Explore the goal.",
+        });
+      })),
+    });
+
+    const result = await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
+      prompts.push(task.prompt);
+      return { assumption: "typed default", options: ["a"] };
+    }) as never)));
+
+    expect(result).toEqual({ assumption: "typed default", options: ["a"] });
+    expect(prompts[0]).toContain("## Phase delivery:explore");
+    expect(prompts[0]).toContain("Telos: Reduce ambiguity before build.");
+    expect(prompts[0]).toContain("Explore the goal.");
+  });
+
+  test("phase ctx.task allows explicit output overrides", async () => {
+    const workflow = defineWorkflow({
+      name: "phase-output-override",
+      run: (wf) => phase(wf, exploreContract, (ctx) => Effect.gen(function* () {
+        return yield* ctx.task({
+          id: "summarize",
+          agent: ctx.agents.explorer,
+          prompt: "Return a patch report.",
+          output: PatchReport,
+        });
+      })),
+    });
+
+    const result = await Effect.runPromise(workflow.run!(mockRuntime(() =>
+      Effect.succeed({ summary: "override", filesChanged: ["src/workflows.ts"] }) as never,
+    )));
+    expect(result).toEqual({ summary: "override", filesChanged: ["src/workflows.ts"] });
+  });
+
+  test("phase ctx.task injects orbit:phase into dispatched tasks", async () => {
+    let capturedPhase: string | undefined;
+    const workflow = defineWorkflow({
+      name: "phase-annotation",
+      run: (wf) => phase(wf, exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        agent: ctx.agents.explorer,
+        prompt: "go",
+      })),
+    });
+
+    await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
+      capturedPhase = task.phase;
+      return { assumption: "a", options: [] };
+    }) as never)));
+    expect(capturedPhase).toBe("delivery:explore");
+  });
+
+  test("brief:false skips framing preamble injection", async () => {
+    const prompts: string[] = [];
+    const workflow = defineWorkflow({
+      name: "phase-brief",
+      run: (wf) => phase(wf, exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        agent: ctx.agents.explorer,
+        prompt: "Bare prompt only.",
+        brief: false,
+      })),
+    });
+
+    await Effect.runPromise(workflow.run!(mockRuntime((task) => Effect.sync(() => {
+      prompts.push(task.prompt);
+      return { assumption: "a", options: [] };
+    }) as never)));
+    expect(prompts[0]).toBe("Bare prompt only.");
+  });
+});
+
+

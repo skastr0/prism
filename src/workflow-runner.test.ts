@@ -8,7 +8,12 @@ import { WorkflowStore } from "./workflow-store.js";
 import { runWorkflow, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
 import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
-import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
+import {
+  defineTask,
+  defineWorkflow,
+  type PhaseContract,
+  type WorkflowAgentRef,
+} from "./workflows.js";
 
 const builder = {
   kind: "agent-ref",
@@ -1098,6 +1103,102 @@ console.log(JSON.stringify(result));
       else process.env.PRISM_WORKFLOW_GROK_BIN = oldBin;
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("phase contract criteria attach as a default judge criterion", async () => {
+    const explorer = {
+      ...builder,
+      name: "explorer",
+      description: "Exploration specialist",
+    } as const satisfies WorkflowAgentRef;
+
+    const Exploration = Schema.Struct({
+      assumption: Schema.String,
+      options: Schema.Array(Schema.String),
+    });
+
+    const exploreContract = {
+      name: "explore",
+      orbit: "delivery",
+      plugin: "core",
+      agents: { explorer },
+      output: Exploration,
+      criteria: ["Surface at least one option", "Name the core assumption"],
+    } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+
+    const judgeGoals: string[] = [];
+    const workflow = defineWorkflow({
+      name: "runner-phase-criteria",
+      run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        agent: ctx.agents.explorer,
+        prompt: "Explore.",
+        finish: {
+          criteria: [{
+            kind: "judge",
+            name: "author-judge",
+            goal: "Author criterion runs after the inherited phase contract.",
+            evaluate: ({ goal }) => {
+              judgeGoals.push(goal);
+              return Effect.succeed({ verdict: "pass" as const });
+            },
+          }],
+        },
+      })),
+    });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async () => ({ assumption: "bounded", options: ["a"] }),
+    });
+
+    expect(result.tasks[0]?.output).toEqual({ assumption: "bounded", options: ["a"] });
+    expect(result.tasks[0]?.metadata?.finish).toMatchObject({
+      repairs: 0,
+      criteria: ["phase-contract", "author-judge"],
+      judgeRuns: [
+        expect.objectContaining({ criterion: "phase-contract", verdict: "pass", cached: false }),
+        expect.objectContaining({ criterion: "author-judge", verdict: "pass", cached: false }),
+      ],
+    });
+    expect(judgeGoals).toContain("Author criterion runs after the inherited phase contract.");
+  });
+
+  test("phase finish inherit:false opts out of contract criteria", async () => {
+    const explorer = {
+      ...builder,
+      name: "explorer",
+      description: "Exploration specialist",
+    } as const satisfies WorkflowAgentRef;
+
+    const Exploration = Schema.Struct({
+      assumption: Schema.String,
+      options: Schema.Array(Schema.String),
+    });
+
+    const exploreContract = {
+      name: "explore",
+      orbit: "delivery",
+      plugin: "core",
+      agents: { explorer },
+      output: Exploration,
+      criteria: ["Surface at least one option"],
+    } as const satisfies PhaseContract<"explore", { readonly explorer: typeof explorer }, typeof Exploration>;
+
+    const workflow = defineWorkflow({
+      name: "runner-phase-inherit-false",
+      run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
+        id: "scope",
+        agent: ctx.agents.explorer,
+        prompt: "Explore.",
+        finish: { inherit: false },
+      })),
+    });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async () => ({ assumption: "bounded", options: ["a"] }),
+    });
+
+    expect(result.tasks[0]?.metadata?.finish).toBeUndefined();
   });
 
   test("cache-key key sort uses the same code-point comparator as prism-sdk stable-json, not locale ordering", () => {

@@ -9,6 +9,7 @@ import {
   type WorkflowJudgeFinishCriterion,
   type WorkflowJudgeTaskMetadata,
   type WorkflowJudgeVerdict,
+  phase,
   type WorkflowRuntime,
   type WorkflowRuntimeOptions,
   type WorkflowRuntimeError,
@@ -1189,6 +1190,7 @@ const runDynamicWorkflow = async (input: {
           ? Effect.succeed(outcome.result.output as never)
           : Effect.fail(new WorkflowTaskFailure(outcome.failure)));
     })),
+    phase: (contract, fn) => phase(runtime, contract, fn),
   };
   // Provide the run's tracer to the author program so Effect.withSpan / Effect.fn spans
   // land in the same trace as engine spans, all rooted under the run root span.

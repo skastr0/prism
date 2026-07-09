@@ -419,8 +419,190 @@ export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyA
   readonly tasks: Tasks;
 }
 
+export interface PhaseFraming {
+  readonly telos?: string;
+  readonly when?: string;
+  readonly coordination?: string;
+  readonly escalation?: string;
+}
+
+export interface PhaseContract<
+  Name extends string,
+  Agents extends Readonly<Record<string, WorkflowAgentRef>>,
+  Output extends WorkflowOutputSchema,
+> {
+  readonly name: Name;
+  readonly orbit: string;
+  readonly plugin: string;
+  readonly agents: Agents;
+  readonly output: Output;
+  readonly criteria?: readonly string[];
+  readonly framing?: PhaseFraming;
+}
+
+export type PhaseTaskFinishOptions<Output> = WorkflowFinishOptions<Output> & {
+  readonly inherit?: boolean;
+};
+
+export type PhaseTaskDefinition<
+  Id extends string,
+  Agent extends WorkflowAgentRef,
+  Output extends WorkflowOutputSchema = WorkflowOutputSchema,
+> = Omit<WorkflowTaskDefinition<Id, Agent, Output>, "output" | "phase" | "finish"> & {
+  readonly output?: Output;
+  readonly phase?: string;
+  readonly finish?: PhaseTaskFinishOptions<Schema.Schema.Type<Output>>;
+  readonly brief?: boolean;
+};
+
+export type PhaseCtxTask<
+  Agents extends Readonly<Record<string, WorkflowAgentRef>>,
+  DefaultOutput extends WorkflowOutputSchema,
+> = <
+  const Id extends string,
+  const Agent extends Agents[keyof Agents],
+  const TaskOutput extends WorkflowOutputSchema = DefaultOutput,
+>(
+  def: PhaseTaskDefinition<Id, Agent, TaskOutput>,
+) => Effect.Effect<WorkflowTaskOutput<WorkflowTask<Id, Agent, TaskOutput>>, WorkflowRuntimeError>;
+
+export interface PhaseCtx<
+  Name extends string,
+  Agents extends Readonly<Record<string, WorkflowAgentRef>>,
+  DefaultOutput extends WorkflowOutputSchema,
+> {
+  readonly name: Name;
+  readonly orbit: string;
+  readonly plugin: string;
+  readonly agents: Agents;
+  readonly phase: string;
+  readonly task: PhaseCtxTask<Agents, DefaultOutput>;
+}
+
+const composePhaseFramingPreamble = (
+  contract: PhaseContract<string, Readonly<Record<string, WorkflowAgentRef>>, WorkflowOutputSchema>,
+  prompt: string,
+): string => {
+  const framing = contract.framing;
+  if (framing === undefined) return prompt;
+  const lines: string[] = [];
+  if (framing.telos !== undefined) lines.push(`Telos: ${framing.telos}`);
+  if (framing.when !== undefined) lines.push(`When: ${framing.when}`);
+  if (framing.coordination !== undefined) lines.push(`Coordination: ${framing.coordination}`);
+  if (framing.escalation !== undefined) lines.push(`Escalation: ${framing.escalation}`);
+  if (lines.length === 0) return prompt;
+  return `## Phase ${contract.orbit}:${contract.name}\n${lines.join("\n")}\n\n${prompt}`;
+};
+
+const defaultPhaseJudgeCriterion = <Output>(
+  criteria: readonly string[],
+): WorkflowJudgeFinishCriterion<Output> => ({
+  kind: "judge",
+  name: "phase-contract",
+  goal: criteria.join("\n"),
+  evaluate: () => Effect.succeed({ verdict: "pass" as const }),
+});
+
+const mergePhaseTaskFinish = <Output>(
+  contract: PhaseContract<string, Readonly<Record<string, WorkflowAgentRef>>, WorkflowOutputSchema>,
+  authorFinish: PhaseTaskFinishOptions<Output> | undefined,
+): WorkflowFinishOptions<Output> | undefined => {
+  const inherit = authorFinish?.inherit !== false;
+  const { inherit: _inherit, criteria: authorCriteria, ...restFinish } = authorFinish ?? {};
+  const inheritedCriteria =
+    inherit && contract.criteria !== undefined && contract.criteria.length > 0
+      ? [defaultPhaseJudgeCriterion<Output>(contract.criteria)]
+      : [];
+  const mergedCriteria = [...inheritedCriteria, ...(authorCriteria ?? [])];
+  if (mergedCriteria.length === 0 && restFinish.maxRepairs === undefined) return undefined;
+  return {
+    ...restFinish,
+    ...(mergedCriteria.length > 0 ? { criteria: mergedCriteria } : {}),
+  };
+};
+
+const createPhaseCtx = <
+  const Name extends string,
+  const Agents extends Readonly<Record<string, WorkflowAgentRef>>,
+  const Output extends WorkflowOutputSchema,
+>(
+  runtime: Pick<WorkflowRuntime, "runTask">,
+  contract: PhaseContract<Name, Agents, Output>,
+  phaseKey: string,
+): PhaseCtx<Name, Agents, Output> => {
+  const task: PhaseCtxTask<Agents, Output> = (def) => {
+    const {
+      brief,
+      finish: authorFinish,
+      output: outputOverride,
+      phase: phaseOverride,
+      ...rest
+    } = def;
+    const output = (outputOverride ?? contract.output) as WorkflowOutputSchema;
+    const prompt = brief === false
+      ? rest.prompt
+      : composePhaseFramingPreamble(contract, rest.prompt);
+    const finish = mergePhaseTaskFinish(
+      contract,
+      authorFinish as PhaseTaskFinishOptions<unknown> | undefined,
+    );
+    const workflowTask = defineTask({
+      ...rest,
+      prompt,
+      output,
+      phase: phaseOverride ?? phaseKey,
+      ...(finish !== undefined ? { finish } : {}),
+    } as WorkflowTaskDefinition<string, WorkflowAgentRef, WorkflowOutputSchema>);
+    return Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("agent.plugin", rest.agent.plugin);
+      yield* Effect.annotateCurrentSpan("agent.name", rest.agent.name);
+      return yield* runtime.runTask(workflowTask);
+    }) as Effect.Effect<WorkflowTaskOutput<AnyWorkflowTask>, WorkflowRuntimeError>;
+  };
+
+  return {
+    name: contract.name,
+    orbit: contract.orbit,
+    plugin: contract.plugin,
+    agents: contract.agents,
+    phase: phaseKey,
+    task,
+  };
+};
+
+export const phase = <
+  const Name extends string,
+  const Agents extends Readonly<Record<string, WorkflowAgentRef>>,
+  const Output extends WorkflowOutputSchema,
+  Result,
+  Err = WorkflowRuntimeError,
+>(
+  runtime: Pick<WorkflowRuntime, "runTask">,
+  contract: PhaseContract<Name, Agents, Output>,
+  fn: (ctx: PhaseCtx<Name, Agents, Output>) => Effect.Effect<Result, Err, never>,
+): Effect.Effect<Result, Err | WorkflowRuntimeError, never> =>
+  Effect.gen(function* () {
+    const phaseKey = `${contract.orbit}:${contract.name}`;
+    const ctx = createPhaseCtx(runtime, contract, phaseKey);
+    return yield* fn(ctx);
+  }).pipe(
+    Effect.withSpan(`workflow.phase.${contract.orbit}:${contract.name}`, {
+      attributes: { orbit: contract.orbit, phase: contract.name },
+    }),
+  );
+
 export interface WorkflowRuntime {
   runTask: <Task extends AnyWorkflowTask>(task: Task) => Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError>;
+  phase: <
+    const Name extends string,
+    const Agents extends Readonly<Record<string, WorkflowAgentRef>>,
+    const Output extends WorkflowOutputSchema,
+    Result,
+    Err = WorkflowRuntimeError,
+  >(
+    contract: PhaseContract<Name, Agents, Output>,
+    fn: (ctx: PhaseCtx<Name, Agents, Output>) => Effect.Effect<Result, Err, never>,
+  ) => Effect.Effect<Result, Err | WorkflowRuntimeError, never>;
 }
 
 export interface WorkflowRuntimeOptions {

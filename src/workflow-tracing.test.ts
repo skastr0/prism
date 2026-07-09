@@ -6,7 +6,13 @@ import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { WorkflowStore } from "./workflow-store.js";
 import { runWorkflow } from "./workflow-runner.js";
-import { defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowRuntime } from "./workflows.js";
+import {
+  defineTask,
+  defineWorkflow,
+  type PhaseContract,
+  type WorkflowAgentRef,
+  type WorkflowRuntime,
+} from "./workflows.js";
 import {
   buildWorkflowSpanTree,
   createWorkflowTraceRecorder,
@@ -156,6 +162,49 @@ describe("workflow runner tracing", () => {
       expect(task?.status).toBe("error");
       expect(root?.status).toBe("error");
       expect(root?.attributes["run.status"]).toBe("failed");
+    });
+  });
+
+  test("dynamic run: wf.phase spans land in the trace with orbit and phase attributes", async () => {
+    await withStore(async (store) => {
+      const exploreContract = {
+        name: "explore",
+        orbit: "delivery",
+        plugin: "core",
+        agents: { explorer: agent },
+        output: Report,
+        framing: { telos: "Reduce ambiguity." },
+      } as const satisfies PhaseContract<"explore", { readonly explorer: typeof agent }, typeof Report>;
+
+      const workflow = defineWorkflow({
+        name: "trace-phase",
+        run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
+          id: "scope",
+          agent: ctx.agents.explorer,
+          prompt: "Explore.",
+        })),
+      });
+
+      const result = await runWorkflow(workflow, {
+        store,
+        executeTask: async () => ({ summary: "done" }),
+      });
+
+      const spans = store.listSpans(result.runId ?? "");
+      const root = spans.find((span) => span.name === "workflow.run");
+      const program = spans.find((span) => span.name === "workflow.program");
+      const phaseSpan = spans.find((span) => span.name === "workflow.phase.delivery:explore");
+      const task = spans.find((span) => span.name === "workflow.task");
+      expect(root).toBeDefined();
+      expect(program?.parentSpanId).toBe(root?.spanId ?? "");
+      expect(phaseSpan?.parentSpanId).toBe(program?.spanId ?? "");
+      expect(phaseSpan?.status).toBe("ok");
+      expect(phaseSpan?.attributes.orbit).toBe("delivery");
+      expect(phaseSpan?.attributes.phase).toBe("explore");
+      expect(task?.parentSpanId).toBe(phaseSpan?.spanId ?? "");
+      expect(phaseSpan?.attributes["agent.plugin"]).toBe("forge");
+      expect(phaseSpan?.attributes["agent.name"]).toBe("builder");
+      expect(spans.every((span) => span.traceId === root?.traceId)).toBe(true);
     });
   });
 

@@ -36,6 +36,19 @@ describe("hook-capabilities", () => {
     }
   });
 
+  test("no 'pending' placeholder survives — every stage resolved its events", () => {
+    const harnessIds = getAllHarnessIds();
+    const hookEvents = getHookEventsFromSchema();
+    for (const harnessId of harnessIds) {
+      for (const event of hookEvents) {
+        const note = HOOK_CAPABILITIES[harnessId][event].note;
+        if (note) {
+          expect(note.toLowerCase()).not.toContain("pending");
+        }
+      }
+    }
+  });
+
   test("spot-asserts", () => {
     // claude-code prompt.submit is native UserPromptSubmit (landed in S1)
     const claudePromptSubmit = HOOK_CAPABILITIES["claude-code"]["prompt.submit"];

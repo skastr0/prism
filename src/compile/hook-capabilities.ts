@@ -289,17 +289,24 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
   "amp-code": {
     "tool.before": { kind: "native", nativeEvent: "tool.call", controls: ["block"] },
     "tool.after": { kind: "native", nativeEvent: "tool.result", controls: [] },
-    "prompt.submit": { kind: "unsupported" },
-    "permission.request": { kind: "unsupported" },
+    "prompt.submit": {
+      kind: "unsupported",
+      note: "amp agent.start is experimental (inject-only, no block); not lowered",
+    },
+    "permission.request": { kind: "unsupported", note: "amp has no permission-decision plugin API" },
     "session.start": { kind: "native", nativeEvent: "session.start", controls: [] },
-    "session.end": { kind: "unsupported", note: "Amp has no session-end plugin event" },
-    "tool.failure": { kind: "unsupported", note: "pending S8" },
-    stop: { kind: "unsupported", note: "pending S8" },
-    "subagent.start": { kind: "unsupported", note: "pending S8" },
-    "subagent.stop": { kind: "unsupported", note: "pending S8" },
-    "compact.before": { kind: "unsupported", note: "pending S8" },
-    "compact.after": { kind: "unsupported", note: "pending S8" },
-    notification: { kind: "unsupported", note: "pending S8" },
+    "session.end": { kind: "unsupported", note: "amp has no session-end plugin event" },
+    // Amp's plugin API (experimental, WIP) exposes only tool.call, tool.result,
+    // session.start, agent.start, agent.end. None of these T2 events has a
+    // stable amp equivalent; honest unsupported over an unverified mapping onto
+    // the experimental agent.* events.
+    "tool.failure": { kind: "unsupported", note: "no distinct amp failure event (result comes via tool.result)" },
+    stop: { kind: "unsupported", note: "amp has no stable turn-stop event (agent.end is experimental)" },
+    "subagent.start": { kind: "unsupported", note: "amp has no subagent lifecycle event" },
+    "subagent.stop": { kind: "unsupported", note: "amp has no subagent lifecycle event" },
+    "compact.before": { kind: "unsupported", note: "amp has no compaction event" },
+    "compact.after": { kind: "unsupported", note: "amp has no compaction event" },
+    notification: { kind: "unsupported", note: "amp has no notification event" },
   },
   grok: {
     "tool.before": { kind: "native", nativeEvent: "PreToolUse", controls: ["block"] },

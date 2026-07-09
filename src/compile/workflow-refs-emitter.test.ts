@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { createRequire } from "node:module";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Schema } from "effect";
 import { buildCompileManifestForTarget, emptyCompileManifest } from "./compile-manifest.js";
 import type { AgentCacheDescriptor } from "./cache.js";
 import type { ComposedAgent } from "./compose.js";
 import { emptyRegistry } from "./registry.js";
 import { Agent } from "./sources.js";
+import { typescriptBundleImportPath } from "./runtime-deps.js";
 import {
+  jsonSchemaToEffectSchemaSource,
   planWorkflowRefsEmit,
   renderWorkflowAgentsModule,
   renderWorkflowModelsModule,
@@ -13,6 +19,7 @@ import {
   renderWorkflowSkillsModule,
   renderWorkflowTraitsModule,
   renderWorkflowToolsModule,
+  WorkflowOrbitsEmitError,
   workflowAgentsPath,
   workflowModelsPath,
   workflowOrbitsPath,
@@ -22,6 +29,9 @@ import {
   workflowRefsRoot,
   WORKFLOW_REFS_HARNESS,
 } from "./workflow-refs-emitter.js";
+import { buildWorkflowPaths, resolveWorkflowTypeDirs } from "../workflow-tsconfig.js";
+
+const ts = createRequire(import.meta.url)(typescriptBundleImportPath()) as typeof import("typescript");
 
 const registry = () => {
   const registry = emptyRegistry("/tmp/forge", "forge", "1.0.0");
@@ -29,6 +39,16 @@ const registry = () => {
     name: "codebase-archeologist",
     sourcePath: "/tmp/forge/agents/codebase-archeologist.agent.ts",
     description: "Maps legacy strata",
+    identity: "builder",
+    traits: [],
+    access: { tools: [], toolGroups: [], skills: [] },
+    skills: [],
+    targets: {},
+  }));
+  registry.agents.set("explorer", new Agent({
+    name: "explorer",
+    sourcePath: "/tmp/forge/agents/explorer.agent.ts",
+    description: "Explores scope",
     identity: "builder",
     traits: [],
     access: { tools: [], toolGroups: [], skills: [] },
@@ -62,15 +82,136 @@ const composed: ComposedAgent = {
   },
 };
 
+const explorerDescriptor: AgentCacheDescriptor = {
+  key: "explorer-key",
+  sourceHash: "b".repeat(64),
+  contextHash: "context",
+  inputs: [{ plugin: "forge", path: "agents/explorer.agent.ts", contentHash: "b".repeat(64) }],
+};
+
+const explorerComposed: ComposedAgent = {
+  name: "explorer",
+  description: "Explores scope",
+  body: "# explorer",
+  color: undefined,
+  model: { model: "grok-code-fast-1" },
+  targetOverride: {},
+  skills: [],
+  allowedSkills: [],
+  allowedTools: [],
+  toolBindings: [],
+  manifest: {
+    traits: [],
+    modelBindings: {},
+  },
+};
+
 const manifest = () =>
   buildCompileManifestForTarget({
     base: emptyCompileManifest(),
     registry: registry(),
     target: "grok",
     scope: "project",
-    composed: [composed],
-    cacheDescriptors: new Map([["codebase-archeologist", descriptor]]),
+    composed: [composed, explorerComposed],
+    cacheDescriptors: new Map([
+      ["codebase-archeologist", descriptor],
+      ["explorer", explorerDescriptor],
+    ]),
   });
+
+const orbitManifest = () =>
+  buildCompileManifestForTarget({
+    base: {
+      ...emptyCompileManifest(),
+      orbits: {
+        "forge:forge": {
+          plugin: "forge",
+          name: "forge",
+          phases: [
+            {
+              name: "explore",
+              agents: [{ plugin: "forge", name: "explorer" }],
+              criteria: ["Scope is clear"],
+              io: { inputs: ["Goal"], outputs: ["Scope note"] },
+              framing: { telos: "Understand the work" },
+              contract: {
+                output: {
+                  type: "object",
+                  properties: {
+                    summary: { type: "string" },
+                    ok: { type: "boolean" },
+                    mode: { enum: ["pass", "fail"] },
+                    note: { anyOf: [{ type: "string" }, { type: "null" }] },
+                  },
+                  required: ["summary", "ok"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            {
+              name: "build",
+              agents: [{ plugin: "forge", name: "codebase-archeologist" }],
+              criteria: ["Change lands"],
+              io: { inputs: ["Scope note"], outputs: ["Patch report"] },
+              framing: { telos: "Implement the change" },
+            },
+          ],
+        },
+      },
+    },
+    registry: registry(),
+    target: "grok",
+    scope: "project",
+    composed: [composed, explorerComposed],
+    cacheDescriptors: new Map([
+      ["codebase-archeologist", descriptor],
+      ["explorer", explorerDescriptor],
+    ]),
+  });
+
+const typecheckGeneratedRefs = async (options: {
+  readonly agentsSource: string;
+  readonly orbitsSource: string;
+  readonly probeSource: string;
+  readonly expectErrors?: boolean;
+}): Promise<readonly string[]> => {
+  const dir = await mkdtemp(join(process.cwd(), ".tmp-workflow-refs-typecheck-"));
+  await writeFile(join(dir, "agents.ts"), options.agentsSource, "utf8");
+  await writeFile(join(dir, "orbits.ts"), options.orbitsSource, "utf8");
+  await writeFile(join(dir, "probe.ts"), options.probeSource, "utf8");
+
+  const typeDirs = resolveWorkflowTypeDirs();
+  const paths = buildWorkflowPaths({ typeDirs, refsDir: dir });
+  const { options: compilerOptions, errors } = ts.convertCompilerOptionsFromJson(
+    {
+      target: "ESNext",
+      module: "ESNext",
+      moduleResolution: "bundler",
+      strict: true,
+      skipLibCheck: true,
+      noEmit: true,
+      allowImportingTsExtensions: true,
+      paths,
+    },
+    dir,
+  );
+  if (errors.length > 0) {
+    throw new Error(`failed to build compiler options: ${errors.map((e) => e.messageText).join("; ")}`);
+  }
+
+  const host = ts.createCompilerHost(compilerOptions);
+  const program = ts.createProgram([join(dir, "probe.ts")], compilerOptions, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  const messages = diagnostics.map((diagnostic) =>
+    ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+  );
+  if (options.expectErrors) {
+    expect(messages.length).toBeGreaterThan(0);
+  } else {
+    expect(messages).toEqual([]);
+  }
+  return messages;
+};
 
 describe("workflow refs emitter", () => {
   test("renders literal agent refs from the compile manifest", () => {
@@ -287,40 +428,200 @@ describe("workflow refs emitter", () => {
     expect(output).toContain("} as const satisfies Record<string, Record<string, WorkflowTraitRef>>");
   });
 
-  test("renders literal orbit refs from the compile manifest (deterministic grouped, no sourcePath)", () => {
-    // The manifest() builder produces agents only; use explicit build with orbits in base to simulate post-update manifest
-    const orbitManifest = buildCompileManifestForTarget({
-      base: { ...emptyCompileManifest(), orbits: { "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] } } },
-      registry: registry(),
-      target: "grok",
-      scope: "project",
-      composed: [composed],
-      cacheDescriptors: new Map([["codebase-archeologist", descriptor]]),
-    });
-
-    const output = renderWorkflowOrbitsModule({ manifest: orbitManifest });
+  test("renders typed orbit phases with agent cross-imports and sequence order", () => {
+    const output = renderWorkflowOrbitsModule({ manifest: orbitManifest() });
 
     expect(output).toContain("Generated by Prism. Do not edit.");
+    expect(output).toContain('import { agents, type WorkflowAgentRef } from "./agents.ts";');
     expect(output).toContain('"forge": {');
-    expect(output).toContain('"deliveryContract":');
-    expect(output).toContain('"kind":"orbit-ref"');
-    expect(output).toContain('"name":"delivery-contract"');
+    expect(output).toContain('"forge": {');
+    expect(output).toContain('sequence: ["explore","build"] as const');
+    expect(output).toContain('"explore": {');
+    expect(output).toContain('"build": {');
+    expect(output).toContain('"explorer": agents.forge.explorer');
+    expect(output).toContain('"codebaseArcheologist": agents.forge.codebaseArcheologist');
+    expect(output).toContain("export type ForgeExploreAgent =");
+    expect(output).toContain("export type ForgeBuildAgent =");
     expect(output).not.toContain("sourcePath");
-    expect(output).not.toContain("phase");
-    expect(output).toContain('as const satisfies Record<string, Record<string, WorkflowOrbitRef>>');
+    expect(output).not.toContain("kind");
+    expect(output).toContain("} as const satisfies Record<string, Record<string, WorkflowOrbit>>");
   });
 
-  test("renders deterministic grouped orbit refs for cross-plugin", () => {
+  test("phase agent refs share object identity with the agents module", async () => {
+    const manifest = orbitManifest();
+    const agentsSource = renderWorkflowAgentsModule({ manifest });
+    const orbitsSource = renderWorkflowOrbitsModule({ manifest });
+    const dir = await mkdtemp(join(process.cwd(), ".tmp-workflow-refs-identity-"));
+    const agentsPath = join(dir, "agents.ts");
+    const orbitsPath = join(dir, "orbits.ts");
+    const probePath = join(dir, "probe.ts");
+    await writeFile(agentsPath, agentsSource, "utf8");
+    await writeFile(orbitsPath, orbitsSource, "utf8");
+    await writeFile(
+      probePath,
+      [
+        `import { agents } from ${JSON.stringify(agentsPath)};`,
+        `import { orbits } from ${JSON.stringify(orbitsPath)};`,
+        "export const exploreSame =",
+        "  orbits.forge.forge.phases.explore.agents.explorer === agents.forge.explorer;",
+        "export const buildSame =",
+        "  orbits.forge.forge.phases.build.agents.codebaseArcheologist ===",
+        "  agents.forge.codebaseArcheologist;",
+      ].join("\n"),
+      "utf8",
+    );
+    const probe = await import(probePath);
+
+    expect(probe.exploreSame).toBe(true);
+    expect(probe.buildSame).toBe(true);
+  });
+
+  test("missing phase agent is a hard emit error", () => {
+    const base = orbitManifest();
+    const manifest = {
+      ...base,
+      orbits: {
+        ...base.orbits,
+        "forge:forge": {
+          ...base.orbits["forge:forge"]!,
+          phases: base.orbits["forge:forge"]!.phases.map((phase, index) =>
+            index === 0
+              ? { ...phase, agents: [{ plugin: "forge", name: "missing-agent" }] }
+              : phase,
+          ),
+        },
+      },
+    };
+    expect(() => renderWorkflowOrbitsModule({ manifest })).toThrow(WorkflowOrbitsEmitError);
+    try {
+      renderWorkflowOrbitsModule({ manifest });
+      throw new Error("expected emit failure");
+    } catch (error) {
+      expect((error as Error).message).toContain(
+        "phase agent forge:missing-agent is missing from the emitted agents module",
+      );
+    }
+  });
+
+  test("contract codegen round-trips decode for valid payloads and rejects invalid ones", async () => {
+    const schemaSource = jsonSchemaToEffectSchemaSource(
+      {
+        type: "object",
+        properties: {
+          summary: { type: "string" },
+          ok: { type: "boolean" },
+          mode: { enum: ["pass", "fail"] },
+          note: { anyOf: [{ type: "string" }, { type: "null" }] },
+        },
+        required: ["summary", "ok"],
+        additionalProperties: false,
+      },
+      "output",
+    );
+    const { Schema: EffectSchema } = await import("effect");
+    const Output = Function("Schema", `return ${schemaSource}`)(EffectSchema) as Schema.Schema<
+      {
+        readonly summary: string;
+        readonly ok: boolean;
+        readonly mode?: "pass" | "fail";
+        readonly note?: string | null;
+      },
+      unknown
+    >;
+
+    const valid = Schema.decodeUnknownSync(Output)({
+      summary: "ready",
+      ok: true,
+      mode: "pass",
+      note: null,
+    });
+    expect(valid).toEqual({
+      summary: "ready",
+      ok: true,
+      mode: "pass",
+      note: null,
+    });
+    expect(() =>
+      Schema.decodeUnknownSync(Output)({
+        summary: "ready",
+        ok: "nope",
+      }),
+    ).toThrow();
+  });
+
+  test("cross-phase agent assignment does not typecheck", async () => {
+    const manifest = orbitManifest();
+    const agentsSource = renderWorkflowAgentsModule({ manifest });
+    const orbitsSource = renderWorkflowOrbitsModule({ manifest });
+    const probeSource = `
+import { orbits } from "./orbits.ts";
+
+const forge = orbits.forge.forge;
+const _wrongAssignment: typeof forge.phases.explore.agents.explorer =
+  forge.phases.build.agents.codebaseArcheologist;
+void _wrongAssignment;
+`;
+
+    await typecheckGeneratedRefs({
+      agentsSource,
+      orbitsSource,
+      probeSource,
+      expectErrors: true,
+    });
+  });
+
+  test("generated orbits module typechecks with agents cross-import", async () => {
+    const manifest = orbitManifest();
+    const agentsSource = renderWorkflowAgentsModule({ manifest });
+    const orbitsSource = renderWorkflowOrbitsModule({ manifest });
+    const probeSource = `
+import { orbits } from "./orbits.ts";
+
+const forge = orbits.forge.forge;
+const exploreAgent = forge.phases.explore.agents.explorer;
+void exploreAgent;
+`;
+
+    await typecheckGeneratedRefs({
+      agentsSource,
+      orbitsSource,
+      probeSource,
+    });
+  });
+
+  test("renders deterministic grouped orbit namespaces for cross-plugin manifests", () => {
     const crossManifest = buildCompileManifestForTarget({
-      base: { ...emptyCompileManifest(), orbits: {
-        "forge:delivery-contract": { plugin: "forge", name: "delivery-contract", phases: [] },
-        "core:experiment": { plugin: "core", name: "experiment", phases: [] },
-      } } as any,
+      base: {
+        ...emptyCompileManifest(),
+        orbits: {
+          "forge:delivery-contract": {
+            plugin: "forge",
+            name: "delivery-contract",
+            phases: [
+              {
+                name: "Implement change",
+                agents: [{ plugin: "forge", name: "codebase-archeologist" }],
+                criteria: [],
+                io: { inputs: [], outputs: [] },
+                framing: {},
+              },
+            ],
+          },
+          "core:experiment": {
+            plugin: "core",
+            name: "experiment",
+            phases: [],
+          },
+        },
+      },
       registry: registry(),
       target: "grok",
       scope: "project",
-      composed: [composed],
-      cacheDescriptors: new Map([["codebase-archeologist", descriptor]]),
+      composed: [composed, explorerComposed],
+      cacheDescriptors: new Map([
+        ["codebase-archeologist", descriptor],
+        ["explorer", explorerDescriptor],
+      ]),
     });
 
     const output = renderWorkflowOrbitsModule({ manifest: crossManifest });
@@ -330,9 +631,7 @@ describe("workflow refs emitter", () => {
     expect(output).toContain('"experiment":');
     expect(output).toContain('"forge": {');
     expect(output).toContain('"deliveryContract":');
-    expect(output).toContain('kind: "orbit-ref"');
     expect(output).not.toContain("sourcePath");
-    // plugins grouped deterministically (core before forge)
     const coreIdx = output.indexOf('"core"');
     const forgeIdx = output.indexOf('"forge"');
     expect(coreIdx).toBeGreaterThan(-1);
@@ -343,10 +642,10 @@ describe("workflow refs emitter", () => {
     const output = renderWorkflowOrbitsModule({ manifest: emptyCompileManifest() });
 
     expect(output).toContain("Generated by Prism. Do not edit.");
-    expect(output).toContain("export interface WorkflowOrbitRef");
+    expect(output).toContain("export interface WorkflowOrbit");
     expect(output).toContain("export const orbits = {");
     expect(output).not.toContain("sourcePath");
-    expect(output).toContain("} as const satisfies Record<string, Record<string, WorkflowOrbitRef>>");
+    expect(output).toContain("} as const satisfies Record<string, Record<string, WorkflowOrbit>>");
   });
 
   test("renders literal tool and toolspace refs from the compile manifest (deterministic camel keys, cross-plugin, no sourcePath)", () => {

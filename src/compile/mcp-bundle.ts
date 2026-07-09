@@ -1,10 +1,10 @@
 import { stripBundlerPathComments } from "./bundle-normalize.js";
-import { readFileSync } from "node:fs";
+import { getAstToJsonSchemaSource } from "./embedded-runtime-sources.js";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { BundleBuildError } from "../errors.js";
 import { computeContentHash } from "../content-hash.js";
@@ -39,20 +39,6 @@ import {
 import { DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS } from "./mcp-policy.js";
 
 const execFileAsync = promisify(execFile);
-
-declare const AST_TO_JSON_SCHEMA_SOURCE: string | undefined;
-
-const AST_TO_JSON_SCHEMA_SOURCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../ast-to-json-schema.ts",
-);
-
-const getAstToJsonSchemaSource = (): string => {
-  if (typeof AST_TO_JSON_SCHEMA_SOURCE === "string") {
-    return AST_TO_JSON_SCHEMA_SOURCE;
-  }
-  return readFileSync(AST_TO_JSON_SCHEMA_SOURCE_PATH, "utf8");
-};
 
 const AST_TO_JSON_SCHEMA_RUNTIME_IMPORT =
   `import { astToJsonSchema as coreAstToJsonSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS } from "./ast-to-json-schema.ts";`;

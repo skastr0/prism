@@ -356,6 +356,16 @@ test("MCP source writes route through the supervisor", async () => {
   expect(violations).toEqual([]);
 });
 
+test("mcp-bundle does not read ast-to-json-schema from disk at module load", async () => {
+  const content = await readFile(join(SRC_ROOT, "compile/mcp-bundle.ts"), "utf8");
+
+  expect(content).not.toMatch(
+    /(?:const|let|var)\s+\w+\s*=\s*readFileSync\([^)]*ast-to-json-schema/,
+  );
+  expect(content).toContain('from "./embedded-runtime-sources.js"');
+  expect(content).not.toMatch(/\breadFileSync\b/);
+});
+
 test("process.exit is confined to exit helper and generated MCP runtime strings", async () => {
   const allowed = new Set([
     "exit.ts",

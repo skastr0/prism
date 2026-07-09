@@ -40,12 +40,19 @@ import { DEFAULT_MCP_TOOL_CALL_TIMEOUT_MS } from "./mcp-policy.js";
 
 const execFileAsync = promisify(execFile);
 
+declare const AST_TO_JSON_SCHEMA_SOURCE: string | undefined;
+
 const AST_TO_JSON_SCHEMA_SOURCE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   "../ast-to-json-schema.ts",
 );
 
-const AST_TO_JSON_SCHEMA_SOURCE = readFileSync(AST_TO_JSON_SCHEMA_SOURCE_PATH, "utf8");
+const getAstToJsonSchemaSource = (): string => {
+  if (typeof AST_TO_JSON_SCHEMA_SOURCE === "string") {
+    return AST_TO_JSON_SCHEMA_SOURCE;
+  }
+  return readFileSync(AST_TO_JSON_SCHEMA_SOURCE_PATH, "utf8");
+};
 
 const AST_TO_JSON_SCHEMA_RUNTIME_IMPORT =
   `import { astToJsonSchema as coreAstToJsonSchema, MCP_AST_TO_JSON_SCHEMA_OPTIONS } from "./ast-to-json-schema.ts";`;
@@ -1511,8 +1518,8 @@ await server.connect(transport);`;
  * nobody has restarted yet) be checked against the generator that produced
  * it, not just against itself.
  */
-const MCP_SERVER_RUNTIME_SOURCE_SECTIONS: readonly string[] = [
-  AST_TO_JSON_SCHEMA_SOURCE,
+const mcpServerRuntimeSourceSections = (): readonly string[] => [
+  getAstToJsonSchemaSource(),
   SCHEMA_ANNOTATION_HELPERS,
   TOOL_SURFACE_RUNTIME_TYPES,
   SCHEMA_BRIDGE_RUNTIME,
@@ -1536,7 +1543,7 @@ const MCP_SERVER_RUNTIME_SOURCE_SECTIONS: readonly string[] = [
  * of the stdio bundle.
  */
 export const mcpServerRuntimeSourceSha256 = (): string =>
-  computeContentHash(MCP_SERVER_RUNTIME_SOURCE_SECTIONS.join(" "));
+  computeContentHash(mcpServerRuntimeSourceSections().join(" "));
 
 // Bun's bundler rewrites top-level `const` to `var` when merging scopes
 // across bundled modules, so the declaration keyword in a *built* bundle is
@@ -1922,7 +1929,7 @@ const writeTempBundleSources = async (options: {
   readonly entrySource: string;
   readonly entryFileName?: string;
 }): Promise<string> => {
-  const astToJsonSchemaSource = AST_TO_JSON_SCHEMA_SOURCE.replace(
+  const astToJsonSchemaSource = getAstToJsonSchemaSource().replace(
     /from "effect";/,
     `from ${JSON.stringify(effectBundleImportPath())};`,
   );

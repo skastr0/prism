@@ -7,6 +7,7 @@ import {
   WorkflowOutputSchemaError,
   WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
 } from "./ast-to-json-schema.js";
+import { workflowJsonSchemaFromEffectSchema } from "./workflow-output-schema.js";
 
 const expectWorkflowError = (run: () => unknown, construct: string, fieldPath?: string): void => {
   try {
@@ -154,5 +155,30 @@ describe("astToJsonSchema", () => {
       literalRepresentation: "const",
     });
     expect(schema).toEqual({ const: "fixed" });
+  });
+
+  test("workflow and MCP bundle paths share identical converter output", () => {
+    const supportedSubset = Schema.Struct({
+      summary: Schema.String.annotations({ description: "Short result summary" }),
+      count: Schema.Number,
+      ok: Schema.Boolean,
+      tags: Schema.Array(Schema.String),
+      mode: Schema.Literal("pass", "fail"),
+      maybeScore: Schema.optional(Schema.Number),
+      nullableNote: Schema.NullOr(Schema.String),
+    });
+
+    const workflowDirect = jsonSchemaFromEffectSchema(
+      supportedSubset,
+      WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
+    );
+    const workflowWrapped = workflowJsonSchemaFromEffectSchema(supportedSubset);
+    const mcpBundle = jsonSchemaFromEffectSchema(supportedSubset, {
+      ...MCP_AST_TO_JSON_SCHEMA_OPTIONS,
+      errorPrefix: "mcp-schema-bridge",
+    });
+
+    expect(workflowWrapped).toEqual(workflowDirect);
+    expect(mcpBundle).toEqual(workflowDirect);
   });
 });

@@ -15,6 +15,10 @@ const schemaBridgeSource = readFileSync(
   join(repoRoot, "src", "compile", "runtime", "schema-bridge.ts"),
   "utf8",
 );
+const astToJsonSchemaSource = readFileSync(
+  join(repoRoot, "src", "ast-to-json-schema.ts"),
+  "utf8",
+);
 
 export const version = packageJson.version;
 
@@ -31,6 +35,7 @@ export async function compile(target: Target, outfile: string): Promise<void> {
     define: {
       APP_VERSION: JSON.stringify(version),
       SCHEMA_BRIDGE_SOURCE: JSON.stringify(schemaBridgeSource),
+      AST_TO_JSON_SCHEMA_SOURCE: JSON.stringify(astToJsonSchemaSource),
     },
     minify: true,
   });

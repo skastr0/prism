@@ -118,6 +118,13 @@ export const HookEventSchema = Schema.Literal(
   "permission.request",
   "session.start",
   "session.end",
+  "tool.failure",
+  "stop",
+  "subagent.start",
+  "subagent.stop",
+  "compact.before",
+  "compact.after",
+  "notification",
 );
 export type HookEvent = typeof HookEventSchema.Type;
 
@@ -172,6 +179,7 @@ export const HookDefinitionSchema = Schema.Struct({
   targets: Schema.optional(Schema.Array(Schema.String)),
   match: Schema.optional(HookMatchInputSchema),
   handle: Schema.Any,
+  onDegraded: Schema.optional(Schema.Literal("fail", "degrade", "skip")),
 });
 export type HookDefinition = typeof HookDefinitionSchema.Type;
 export const HookSourceSchema = HookDefinitionSchema;
@@ -267,6 +275,92 @@ export const SessionEndEventPayloadSchema = Schema.Struct({
 });
 export type SessionEndEventPayload = typeof SessionEndEventPayloadSchema.Type;
 
+export const ToolFailureEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("tool.failure"),
+  target: HookTargetContextSchema,
+  tool: Schema.extend(
+    HookToolContextSchema,
+    Schema.Struct({
+      error: Schema.Unknown,
+    }),
+  ),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type ToolFailureEventPayload = typeof ToolFailureEventPayloadSchema.Type;
+
+export const StopEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("stop"),
+  target: HookTargetContextSchema,
+  stopHookActive: Schema.optional(Schema.Boolean),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type StopEventPayload = typeof StopEventPayloadSchema.Type;
+
+export const SubagentStartEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("subagent.start"),
+  target: HookTargetContextSchema,
+  subagent: Schema.optional(
+    Schema.Struct({
+      id: Schema.optional(Schema.String),
+      type: Schema.optional(Schema.String),
+    }),
+  ),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type SubagentStartEventPayload = typeof SubagentStartEventPayloadSchema.Type;
+
+export const SubagentStopEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("subagent.stop"),
+  target: HookTargetContextSchema,
+  subagent: Schema.optional(
+    Schema.Struct({
+      id: Schema.optional(Schema.String),
+      type: Schema.optional(Schema.String),
+    }),
+  ),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type SubagentStopEventPayload = typeof SubagentStopEventPayloadSchema.Type;
+
+export const CompactBeforeEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("compact.before"),
+  target: HookTargetContextSchema,
+  trigger: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type CompactBeforeEventPayload = typeof CompactBeforeEventPayloadSchema.Type;
+
+export const CompactAfterEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("compact.after"),
+  target: HookTargetContextSchema,
+  trigger: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type CompactAfterEventPayload = typeof CompactAfterEventPayloadSchema.Type;
+
+export const NotificationEventPayloadSchema = Schema.Struct({
+  event: Schema.Literal("notification"),
+  target: HookTargetContextSchema,
+  message: Schema.optional(Schema.String),
+  kind: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  session: Schema.optional(HookSessionContextSchema),
+  native: Schema.optional(HookNativeContextSchema),
+});
+export type NotificationEventPayload = typeof NotificationEventPayloadSchema.Type;
+
 export const HookEventPayloadSchema = Schema.Union(
   ToolBeforeEventPayloadSchema,
   ToolAfterEventPayloadSchema,
@@ -274,6 +368,13 @@ export const HookEventPayloadSchema = Schema.Union(
   PermissionRequestEventPayloadSchema,
   SessionStartEventPayloadSchema,
   SessionEndEventPayloadSchema,
+  ToolFailureEventPayloadSchema,
+  StopEventPayloadSchema,
+  SubagentStartEventPayloadSchema,
+  SubagentStopEventPayloadSchema,
+  CompactBeforeEventPayloadSchema,
+  CompactAfterEventPayloadSchema,
+  NotificationEventPayloadSchema,
 );
 export type HookEventPayload = typeof HookEventPayloadSchema.Type;
 
@@ -495,6 +596,239 @@ export const NativeSessionEndHookPayloadSchema = Schema.transform(
 );
 export type NativeSessionEndHookPayload = typeof NativeSessionEndHookPayloadSchema.Type;
 
+const NativeToolFailureContextSchema = Schema.Struct({
+  logical: Schema.optional(Schema.String),
+  name: Schema.String,
+  input: Schema.Unknown,
+  error: Schema.Unknown,
+});
+
+export const NativeToolFailureHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    tool: NativeToolFailureContextSchema,
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  ToolFailureEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "tool.failure" as const,
+      target: native.target,
+      tool: {
+        logical: native.tool.logical,
+        nativeName: native.tool.name,
+        input: native.tool.input,
+        error: native.tool.error,
+      },
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      tool: {
+        logical: payload.tool.logical,
+        name: payload.tool.nativeName,
+        input: payload.tool.input,
+        error: payload.tool.error,
+      },
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeToolFailureHookPayload = typeof NativeToolFailureHookPayloadSchema.Type;
+
+export const NativeStopHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    stopHookActive: Schema.optional(Schema.Boolean),
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  StopEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "stop" as const,
+      target: native.target,
+      stopHookActive: native.stopHookActive,
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      stopHookActive: payload.stopHookActive,
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeStopHookPayload = typeof NativeStopHookPayloadSchema.Type;
+
+export const NativeSubagentStartHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    subagent: Schema.optional(
+      Schema.Struct({
+        id: Schema.optional(Schema.String),
+        type: Schema.optional(Schema.String),
+      }),
+    ),
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  SubagentStartEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "subagent.start" as const,
+      target: native.target,
+      subagent: native.subagent,
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      subagent: payload.subagent,
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeSubagentStartHookPayload = typeof NativeSubagentStartHookPayloadSchema.Type;
+
+export const NativeSubagentStopHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    subagent: Schema.optional(
+      Schema.Struct({
+        id: Schema.optional(Schema.String),
+        type: Schema.optional(Schema.String),
+      }),
+    ),
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  SubagentStopEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "subagent.stop" as const,
+      target: native.target,
+      subagent: native.subagent,
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      subagent: payload.subagent,
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeSubagentStopHookPayload = typeof NativeSubagentStopHookPayloadSchema.Type;
+
+export const NativeCompactBeforeHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    trigger: Schema.optional(Schema.String),
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  CompactBeforeEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "compact.before" as const,
+      target: native.target,
+      trigger: native.trigger,
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      trigger: payload.trigger,
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeCompactBeforeHookPayload = typeof NativeCompactBeforeHookPayloadSchema.Type;
+
+export const NativeCompactAfterHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    trigger: Schema.optional(Schema.String),
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  CompactAfterEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "compact.after" as const,
+      target: native.target,
+      trigger: native.trigger,
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      trigger: payload.trigger,
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeCompactAfterHookPayload = typeof NativeCompactAfterHookPayloadSchema.Type;
+
+export const NativeNotificationHookPayloadSchema = Schema.transform(
+  Schema.Struct({
+    target: HookTargetContextSchema,
+    message: Schema.optional(Schema.String),
+    kind: Schema.optional(Schema.String),
+    cwd: Schema.optional(Schema.String),
+    session: Schema.optional(HookSessionContextSchema),
+    native: Schema.optional(HookNativeContextSchema),
+  }),
+  NotificationEventPayloadSchema,
+  {
+    decode: (native) => ({
+      event: "notification" as const,
+      target: native.target,
+      message: native.message,
+      kind: native.kind,
+      cwd: native.cwd,
+      session: native.session,
+      native: native.native,
+    }),
+    encode: (payload) => ({
+      target: payload.target,
+      message: payload.message,
+      kind: payload.kind,
+      cwd: payload.cwd,
+      session: payload.session,
+      native: payload.native,
+    }),
+  },
+);
+export type NativeNotificationHookPayload = typeof NativeNotificationHookPayloadSchema.Type;
+
 export const NativeHookPayloadSchema = Schema.Union(
   NativeToolBeforeHookPayloadSchema,
   NativeToolAfterHookPayloadSchema,
@@ -502,12 +836,28 @@ export const NativeHookPayloadSchema = Schema.Union(
   NativePermissionRequestHookPayloadSchema,
   NativeSessionStartHookPayloadSchema,
   NativeSessionEndHookPayloadSchema,
+  NativeToolFailureHookPayloadSchema,
+  NativeStopHookPayloadSchema,
+  NativeSubagentStartHookPayloadSchema,
+  NativeSubagentStopHookPayloadSchema,
+  NativeCompactBeforeHookPayloadSchema,
+  NativeCompactAfterHookPayloadSchema,
+  NativeNotificationHookPayloadSchema,
 );
 export type NativeHookPayload = typeof NativeHookPayloadSchema.Type;
 
 export const ToolBeforeHookResultSchema = Schema.Union(
-  Schema.Struct({ decision: Schema.Literal("continue") }),
-  Schema.Struct({ decision: Schema.Literal("block"), message: Schema.String }),
+  Schema.Struct({
+    decision: Schema.Literal("continue"),
+    updatedInput: Schema.optional(Schema.Unknown),
+    systemMessage: Schema.optional(Schema.String),
+    additionalContext: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    decision: Schema.Literal("block"),
+    message: Schema.String,
+    systemMessage: Schema.optional(Schema.String),
+  }),
 );
 export type ToolBeforeHookResult = typeof ToolBeforeHookResultSchema.Type;
 
@@ -521,8 +871,17 @@ export type ContinueHookResult = typeof ContinueHookResultSchema.Type;
 export const ObservationalHookResultSchema = ContinueHookResultSchema;
 export type ObservationalHookResult = ContinueHookResult;
 
+export const ToolAfterHookResultSchema = Schema.Struct({
+  decision: Schema.Literal("continue"),
+  updatedOutput: Schema.optional(Schema.Unknown),
+  systemMessage: Schema.optional(Schema.String),
+  additionalContext: Schema.optional(Schema.String),
+});
+export type ToolAfterHookResult = typeof ToolAfterHookResultSchema.Type;
+
 export const PermissionAllowHookResultSchema = Schema.Struct({
   decision: Schema.Literal("allow"),
+  updatedInput: Schema.optional(Schema.Unknown),
   systemMessage: Schema.optional(Schema.String),
 });
 export type PermissionAllowHookResult = typeof PermissionAllowHookResultSchema.Type;
@@ -530,9 +889,46 @@ export type PermissionAllowHookResult = typeof PermissionAllowHookResultSchema.T
 export const PermissionRequestHookResultSchema = Schema.Union(
   ContinueHookResultSchema,
   PermissionAllowHookResultSchema,
-  Schema.Struct({ decision: Schema.Literal("block"), message: Schema.String }),
+  Schema.Struct({
+    decision: Schema.Literal("ask"),
+    systemMessage: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    decision: Schema.Literal("block"),
+    message: Schema.String,
+  }),
 );
 export type PermissionRequestHookResult = typeof PermissionRequestHookResultSchema.Type;
+
+export const StopHookResultSchema = Schema.Union(
+  Schema.Struct({
+    decision: Schema.Literal("continue"),
+    systemMessage: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    decision: Schema.Literal("block"),
+    message: Schema.String,
+  }),
+);
+export type StopHookResult = typeof StopHookResultSchema.Type;
+
+export const BlockableHookResultSchema = Schema.Union(
+  ContinueHookResultSchema,
+  Schema.Struct({
+    decision: Schema.Literal("block"),
+    message: Schema.String,
+  }),
+);
+export type BlockableHookResult = typeof BlockableHookResultSchema.Type;
+
+export const PromptSubmitHookResultSchema = BlockableHookResultSchema;
+export type PromptSubmitHookResult = BlockableHookResult;
+
+export const NotificationHookResultSchema = Schema.Struct({
+  decision: Schema.Literal("continue"),
+  systemMessage: Schema.optional(Schema.String),
+});
+export type NotificationHookResult = typeof NotificationHookResultSchema.Type;
 
 export const HookEventResultSchema = Schema.Union(
   Schema.Struct({
@@ -541,11 +937,15 @@ export const HookEventResultSchema = Schema.Union(
   }),
   Schema.Struct({
     event: Schema.Literal("tool.after"),
+    result: ToolAfterHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("tool.failure"),
     result: ObservationalHookResultSchema,
   }),
   Schema.Struct({
     event: Schema.Literal("prompt.submit"),
-    result: ObservationalHookResultSchema,
+    result: PromptSubmitHookResultSchema,
   }),
   Schema.Struct({
     event: Schema.Literal("permission.request"),
@@ -559,24 +959,76 @@ export const HookEventResultSchema = Schema.Union(
     event: Schema.Literal("session.end"),
     result: ObservationalHookResultSchema,
   }),
+  Schema.Struct({
+    event: Schema.Literal("stop"),
+    result: StopHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("subagent.start"),
+    result: ObservationalHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("subagent.stop"),
+    result: BlockableHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("compact.before"),
+    result: BlockableHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("compact.after"),
+    result: ObservationalHookResultSchema,
+  }),
+  Schema.Struct({
+    event: Schema.Literal("notification"),
+    result: NotificationHookResultSchema,
+  }),
 );
 export type HookEventResult = typeof HookEventResultSchema.Type;
 
 export const HookResultSchema = Schema.Union(
   ToolBeforeHookResultSchema,
+  ToolAfterHookResultSchema,
+  BlockableHookResultSchema,
   PermissionRequestHookResultSchema,
   ObservationalHookResultSchema,
+  StopHookResultSchema,
+  NotificationHookResultSchema,
 );
 export type HookResult = typeof HookResultSchema.Type;
 
 export const hookResultSchemaForEvent = (
   event: HookEvent,
-): Schema.Schema.AnyNoContext =>
-  event === "tool.before"
-    ? ToolBeforeHookResultSchema
-    : event === "permission.request"
-      ? PermissionRequestHookResultSchema
-      : ObservationalHookResultSchema;
+): Schema.Schema.AnyNoContext => {
+  switch (event) {
+    case "tool.before":
+      return ToolBeforeHookResultSchema;
+    case "tool.after":
+      return ToolAfterHookResultSchema;
+    case "tool.failure":
+      return ObservationalHookResultSchema;
+    case "prompt.submit":
+      return PromptSubmitHookResultSchema;
+    case "permission.request":
+      return PermissionRequestHookResultSchema;
+    case "session.start":
+      return ObservationalHookResultSchema;
+    case "session.end":
+      return ObservationalHookResultSchema;
+    case "stop":
+      return StopHookResultSchema;
+    case "subagent.start":
+      return ObservationalHookResultSchema;
+    case "subagent.stop":
+      return BlockableHookResultSchema;
+    case "compact.before":
+      return BlockableHookResultSchema;
+    case "compact.after":
+      return ObservationalHookResultSchema;
+    case "notification":
+      return NotificationHookResultSchema;
+  }
+};
 
 export const decodeHookResultForEvent = (event: HookEvent, result: unknown) =>
   Schema.decodeUnknownEither(hookResultSchemaForEvent(event))(result);
@@ -597,6 +1049,20 @@ export const nativeHookPayloadSchemaForEvent = (
       return NativeSessionStartHookPayloadSchema;
     case "session.end":
       return NativeSessionEndHookPayloadSchema;
+    case "tool.failure":
+      return NativeToolFailureHookPayloadSchema;
+    case "stop":
+      return NativeStopHookPayloadSchema;
+    case "subagent.start":
+      return NativeSubagentStartHookPayloadSchema;
+    case "subagent.stop":
+      return NativeSubagentStopHookPayloadSchema;
+    case "compact.before":
+      return NativeCompactBeforeHookPayloadSchema;
+    case "compact.after":
+      return NativeCompactAfterHookPayloadSchema;
+    case "notification":
+      return NativeNotificationHookPayloadSchema;
   }
 };
 
@@ -611,6 +1077,7 @@ export class Hook extends Schema.Class<Hook>("Hook")({
   targets: Schema.Array(Schema.String),
   match: NormalizedHookMatchSchema,
   handle: Schema.Any,
+  onDegraded: Schema.optional(Schema.Literal("fail", "degrade", "skip")),
 }) {}
 
 export interface RefNormalizationError {

@@ -66,6 +66,13 @@ export const hookEvent = {
   permissionRequest: "permission.request",
   sessionStart: "session.start",
   sessionEnd: "session.end",
+  toolFailure: "tool.failure",
+  stop: "stop",
+  subagentStart: "subagent.start",
+  subagentStop: "subagent.stop",
+  compactBefore: "compact.before",
+  compactAfter: "compact.after",
+  notification: "notification",
 };
 
 export const hookTool = {

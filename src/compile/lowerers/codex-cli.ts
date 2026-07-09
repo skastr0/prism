@@ -243,15 +243,34 @@ const renderRules = async (input: LowerInput): Promise<string | undefined> => {
   return `${chunks.join("\n\n")}\n`;
 };
 
-const codexNativeHookEvent = (event: Hook["event"]): string =>
-  nativeHookEventName(event, {
-    toolBefore: "PreToolUse",
-    toolAfter: "PostToolUse",
-    promptSubmit: "UserPromptSubmit",
-    permissionRequest: "PermissionRequest",
-    sessionStart: "SessionStart",
-    sessionEnd: "Stop",
-  });
+const codexNativeHookEvent = (event: Hook["event"]): string => {
+  switch (event) {
+    case "tool.before":
+      return "PreToolUse";
+    case "tool.after":
+      return "PostToolUse";
+    case "prompt.submit":
+      return "UserPromptSubmit";
+    case "permission.request":
+      return "PermissionRequest";
+    case "session.start":
+      return "SessionStart";
+    case "session.end":
+      return "Stop";
+    case "stop":
+      return "Stop";
+    case "subagent.start":
+      return "SubagentStart";
+    case "subagent.stop":
+      return "SubagentStop";
+    case "compact.before":
+      return "PreCompact";
+    case "compact.after":
+      return "PostCompact";
+    default:
+      throw new Error(`Unsupported event: ${event}`);
+  }
+};
 
 const collectCanonicalToolNames = (
   sourcePluginName: string,
@@ -284,7 +303,8 @@ const renderHookWrapperEntry = (
   const supportsAdditionalContext =
     nativeEvent === "SessionStart" ||
     nativeEvent === "PostToolUse" ||
-    nativeEvent === "UserPromptSubmit";
+    nativeEvent === "UserPromptSubmit" ||
+    nativeEvent === "SubagentStart";
 
   return renderPrePostSessionHookWrapperEntry({
     hook,
@@ -305,21 +325,29 @@ if (${JSON.stringify(supportsAdditionalContext)} && result.additionalContext) {
     additionalContext: result.additionalContext,
   };
 }
-if (${JSON.stringify(hook.event)} === "tool.before" && result.decision === "block") {
-  output.hookSpecificOutput = {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: result.message,
-  };
-}
-if (${JSON.stringify(hook.event)} === "permission.request" && result.decision === "block") {
-  output.hookSpecificOutput = {
-    hookEventName: "PermissionRequest",
-    decision: {
-      behavior: "deny",
-      message: result.message,
-    },
-  };
+if (result.decision === "block") {
+  if (${JSON.stringify(hook.event)} === "tool.before") {
+    output.hookSpecificOutput = {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: result.message,
+    };
+  } else if (${JSON.stringify(hook.event)} === "permission.request") {
+    output.hookSpecificOutput = {
+      hookEventName: "PermissionRequest",
+      decision: {
+        behavior: "deny",
+        message: result.message,
+      },
+    };
+  } else if (
+    ${JSON.stringify(hook.event)} === "stop" ||
+    ${JSON.stringify(hook.event)} === "subagent.stop" ||
+    ${JSON.stringify(hook.event)} === "compact.before"
+  ) {
+    output.decision = "block";
+    output.reason = result.message;
+  }
 }
 if (${JSON.stringify(hook.event)} === "permission.request" && result.decision === "allow") {
   output.hookSpecificOutput = {

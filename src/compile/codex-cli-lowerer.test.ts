@@ -882,3 +882,186 @@ export default defineTool({
   // Should NOT contain http url
   expect(mcpRegion).not.toContain('url = "http');
 });
+
+test("codex-cli lowerer full hook event and wrapper protocol fidelity", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".codex");
+  const pluginRoot = join(root, "codex-full-fidelity-fixture");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify({
+      name: "codex-full-fidelity-fixture",
+      version: "0.1.0",
+      targets: {
+        hooks: ["codex-cli"],
+      },
+    }) + "\n",
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "stop-check.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "stop-check",
+  event: "stop",
+  handle: (_event) => {
+    return Effect.succeed({ decision: "block" as const, message: "stop blocked" });
+  },
+});
+`
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "subagent-stop-check.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "subagent-stop-check",
+  event: "subagent.stop",
+  handle: (_event) => {
+    return Effect.succeed({ decision: "block" as const, message: "subagent stop blocked" });
+  },
+});
+`
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "compact-before-check.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "compact-before-check",
+  event: "compact.before",
+  handle: (_event) => {
+    return Effect.succeed({ decision: "block" as const, message: "compact before blocked" });
+  },
+});
+`
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "subagent-start-check.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "subagent-start-check",
+  event: "subagent.start",
+  handle: (_event) => {
+    return Effect.succeed({ decision: "continue" as const, additionalContext: "subagent-start-ctx" });
+  },
+});
+`
+  );
+
+  await writeText(
+    join(pluginRoot, "hooks", "compact-after-check.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "compact-after-check",
+  event: "compact.after",
+  handle: (_event) => {
+    return Effect.succeed({ decision: "continue" as const, systemMessage: "compact-after-sys" });
+  },
+});
+`
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const stopHook = registry.hooks.get("stop-check");
+  const subagentStopHook = registry.hooks.get("subagent-stop-check");
+  const compactBeforeHook = registry.hooks.get("compact-before-check");
+  const subagentStartHook = registry.hooks.get("subagent-start-check");
+  const compactAfterHook = registry.hooks.get("compact-after-check");
+
+  if (!stopHook || !subagentStopHook || !compactBeforeHook || !subagentStartHook || !compactAfterHook) {
+    throw new Error("expected all hooks to exist");
+  }
+
+  const lowered = await planLowering({
+    agents: [],
+    orbits: [],
+    tools: [],
+    skills: [],
+    hooks: [stopHook, subagentStopHook, compactBeforeHook, subagentStartHook, compactAfterHook],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "codex-full-fidelity-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  // Verify regions
+  const hooksRegion = markerContent(findRegion(lowered.regions, "codex.hooks.codex-full-fidelity-fixture"));
+  expect(hooksRegion).toContain('[["hooks"."Stop"]]');
+  expect(hooksRegion).toContain('[["hooks"."SubagentStop"]]');
+  expect(hooksRegion).toContain('[["hooks"."PreCompact"]]');
+  expect(hooksRegion).toContain('[["hooks"."SubagentStart"]]');
+  expect(hooksRegion).toContain('[["hooks"."PostCompact"]]');
+
+  // Verify stop-check wrapper
+  const stopWrapper = findFile(lowered.files, join("hooks", "stop-check.mjs"));
+  if (!stopWrapper) throw new Error("stop-check wrapper missing");
+  await writeText(stopWrapper.targetPath, stopWrapper.content);
+  const stopBlockedRes = await runGeneratedHookWrapper(stopWrapper.targetPath, {});
+  expect(stopBlockedRes.exitCode).toBe(0);
+  expect(JSON.parse(stopBlockedRes.stdout.trim())).toEqual({
+    decision: "block",
+    reason: "stop blocked",
+  });
+
+  // Verify subagent-stop-check wrapper
+  const subagentStopWrapper = findFile(lowered.files, join("hooks", "subagent-stop-check.mjs"));
+  if (!subagentStopWrapper) throw new Error("subagent-stop-check wrapper missing");
+  await writeText(subagentStopWrapper.targetPath, subagentStopWrapper.content);
+  const subagentStopBlockedRes = await runGeneratedHookWrapper(subagentStopWrapper.targetPath, {});
+  expect(subagentStopBlockedRes.exitCode).toBe(0);
+  expect(JSON.parse(subagentStopBlockedRes.stdout.trim())).toEqual({
+    decision: "block",
+    reason: "subagent stop blocked",
+  });
+
+  // Verify compact-before-check wrapper
+  const compactBeforeWrapper = findFile(lowered.files, join("hooks", "compact-before-check.mjs"));
+  if (!compactBeforeWrapper) throw new Error("compact-before-check wrapper missing");
+  await writeText(compactBeforeWrapper.targetPath, compactBeforeWrapper.content);
+  const compactBeforeBlockedRes = await runGeneratedHookWrapper(compactBeforeWrapper.targetPath, {});
+  expect(compactBeforeBlockedRes.exitCode).toBe(0);
+  expect(JSON.parse(compactBeforeBlockedRes.stdout.trim())).toEqual({
+    decision: "block",
+    reason: "compact before blocked",
+  });
+
+  // Verify subagent-start-check wrapper
+  const subagentStartWrapper = findFile(lowered.files, join("hooks", "subagent-start-check.mjs"));
+  if (!subagentStartWrapper) throw new Error("subagent-start-check wrapper missing");
+  await writeText(subagentStartWrapper.targetPath, subagentStartWrapper.content);
+  const subagentStartRes = await runGeneratedHookWrapper(subagentStartWrapper.targetPath, {});
+  expect(subagentStartRes.exitCode).toBe(0);
+  expect(JSON.parse(subagentStartRes.stdout.trim())).toEqual({
+    hookSpecificOutput: {
+      hookEventName: "SubagentStart",
+      additionalContext: "subagent-start-ctx",
+    },
+  });
+
+  // Verify compact-after-check wrapper
+  const compactAfterWrapper = findFile(lowered.files, join("hooks", "compact-after-check.mjs"));
+  if (!compactAfterWrapper) throw new Error("compact-after-check wrapper missing");
+  await writeText(compactAfterWrapper.targetPath, compactAfterWrapper.content);
+  const compactAfterRes = await runGeneratedHookWrapper(compactAfterWrapper.targetPath, {});
+  expect(compactAfterRes.exitCode).toBe(0);
+  expect(JSON.parse(compactAfterRes.stdout.trim())).toEqual({
+    systemMessage: "compact-after-sys",
+  });
+});

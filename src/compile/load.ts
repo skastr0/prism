@@ -2516,6 +2516,7 @@ const parseHook = (sourcePath: string): Effect.Effect<Hook, CompileError> =>
       targets,
       match,
       handle: parsed.handle,
+      onDegraded: parsed.onDegraded,
     });
   });
 

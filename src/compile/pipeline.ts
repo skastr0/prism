@@ -54,6 +54,7 @@ import {
 import { BlockedTargetError, PluginManifestError } from "../errors.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "./sources.js";
 import type { PluginRegistry } from "./registry.js";
+import { planHooksForTarget, type HookFidelityEntry } from "./hook-planning.js";
 import {
   getCompileTargetCapabilities,
   targetHasGeneratedMcpConfig,
@@ -458,25 +459,6 @@ const assertTargetSupportsAgents = (
   );
 };
 
-const assertTargetSupportsHooks = (
-  target: string,
-  hasTargetedHooks: boolean,
-): Effect.Effect<void, CompileError> => {
-  const capabilities = getCompileTargetCapabilities(target);
-  if (!hasTargetedHooks || capabilities.hooks === "supported") {
-    return Effect.void;
-  }
-
-  return Effect.fail(
-    new UnsupportedTargetCapabilityError({
-      target,
-      capability: "hooks",
-      message:
-        `${target} does not support Prism hook lowering. ` +
-        `Use a native ${target} plugin for hook callbacks or choose a compile target with hook support.`,
-    }),
-  );
-};
 
 const assertTargetSupportsSkillPermissions = (
   target: string,
@@ -1077,7 +1059,6 @@ const prepareLoweringInputs = (
     const registry = yield* loadPlugin(options.pluginPath);
     const surfaces = selectTargetSurfaces(registry, context.targetId, options.scope);
     yield* assertTargetSupportsAgents(options.target, surfaces.agents);
-    yield* assertTargetSupportsHooks(options.target, surfaces.hooks);
 
     const agentResult = yield* composeTargetAgents({
       registry,
@@ -1096,6 +1077,22 @@ const prepareLoweringInputs = (
       orbits,
     });
     const artifacts = selectTargetArtifacts(registry, surfaces, context.targetId);
+    const { accepted, fidelity } = yield* planHooksForTarget(artifacts.hooks, context.targetId);
+
+    for (const entry of fidelity) {
+      if (entry.outcome !== "native") {
+        const droppedPart = entry.droppedControls && entry.droppedControls.length > 0
+          ? ` (dropped: ${entry.droppedControls.join(", ")})`
+          : "";
+        console.log(`hook ${entry.hook} -> ${entry.target}: ${entry.outcome}${droppedPart}`);
+      }
+    }
+
+    const finalArtifacts = {
+      ...artifacts,
+      hooks: [...accepted],
+    };
+
     // Build (and write) the canonical union bundle BEFORE any daemon
     // lifecycle interaction so `prism mcp serve` reads compiled bytes.
     const mcpServer = yield* prepareUnionMcpServer({
@@ -1103,7 +1100,7 @@ const prepareLoweringInputs = (
       context,
       registry,
       agents: composedForLowering,
-      artifacts,
+      artifacts: finalArtifacts,
     });
     return {
       context,
@@ -1112,7 +1109,7 @@ const prepareLoweringInputs = (
       agentResult,
       orbits,
       composedForLowering,
-      artifacts,
+      artifacts: finalArtifacts,
       ...(mcpServer ? { mcpServer } : {}),
     };
   });

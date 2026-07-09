@@ -4735,18 +4735,61 @@ export default defineHook({
 `,
   );
 
+  // Under the default "degrade" policy, the unsupported hook is skipped and compilation succeeds
+  const result = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: pluginRoot,
+      target: "amp-code",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: true,
+    }),
+  );
+  expect(result).toBeDefined();
+
+  // Create a separate plugin root for onDegraded: "fail" to avoid import caching
+  const pluginRootFail = join(root, "amp-session-end-demo-fail");
+  await writeText(
+    join(pluginRootFail, "plugin.json"),
+    `${JSON.stringify(
+      {
+        name: "amp-session-end-demo-fail",
+        version: "0.1.0",
+        targets: {
+          hooks: ["amp-code"],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(pluginRootFail, "hooks", "session-end.hook.ts"),
+    `import { Effect } from ${JSON.stringify(effectImportPath)};
+import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+
+export default defineHook({
+  name: "session-end",
+  event: hookEvent.sessionEnd,
+  onDegraded: "fail",
+  handle: (_event) => Effect.succeed({ decision: "continue" as const }),
+});
+`,
+  );
+
   await expect(
     Effect.runPromise(
       compilePluginForTarget({
         prismHome: testPrismHome(),
-        pluginPath: pluginRoot,
+        pluginPath: pluginRootFail,
         target: "amp-code",
         scope: "project",
         projectPath: projectRoot,
         dryRun: true,
       }),
     ),
-  ).rejects.toThrow("Amp does not expose a native session.end plugin event");
+  ).rejects.toThrow("is unsupported on target 'amp-code'");
 });
 
 test("compilePluginForTarget lowers Hermes skills and canonical tools into MCP config", async () => {

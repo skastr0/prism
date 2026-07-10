@@ -73,6 +73,8 @@ const skillsRoot = (target: DevinLowerTarget): string => join(target.root, "skil
 
 const hooksConfigPath = (target: DevinLowerTarget): string => join(target.root, "hooks.v1.json");
 
+const userConfigPath = (target: DevinLowerTarget): string => join(target.root, "config.json");
+
 const assertDevinLoweringInput = (input: LowerInput): void => {
   if (input.agents.length > 0) {
     throw new Error(
@@ -186,15 +188,12 @@ if (${JSON.stringify(supportsAdditionalContext)} && result.additionalContext) {
 }
 if (result.decision === "block") {
   if (${JSON.stringify(hook.event)} === "tool.before") {
-    // Devin PreToolUse: non-zero exit blocks; also emit Claude-style deny when supported.
-    output.hookSpecificOutput = {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: result.message,
-    };
+    // Devin PreToolUse: non-zero exit blocks (exit 2).
     process.exitCode = 2;
+    output.reason = result.message;
   } else if (${JSON.stringify(hook.event)} === "permission.request") {
-    output.decision = "deny";
+    // Devin PermissionRequest decisions: approve | block
+    output.decision = "block";
     output.reason = result.message;
   } else if (${JSON.stringify(hook.event)} === "stop") {
     output.decision = "block";
@@ -325,12 +324,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
 
   const plannedHooks = await planHooks(input, files);
   if (plannedHooks.length > 0) {
-    // Per-plugin hooks file so multi-plugin compiles do not collide on a
-    // single hooks.v1.json. Devin's documented load path is hooks.v1.json;
-    // we also write that file as the merge of *this* plugin's hooks (PR1).
-    // Operators with multiple Prism plugins targeting Devin should prefer
-    // project-scope single-plugin refresh until a merge law exists.
     const pluginSegment = normalizeBundleSegment(plugin, "plugin");
+    // Always keep a Prism-owned per-plugin inventory of the planned hooks
+    // (not a Devin load path — diagnostic / future merge input).
     pushDesiredFile(files, {
       targetPath: join(
         input.target.root,
@@ -340,11 +336,39 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       content: renderHooksV1Json(input.target.root, plannedHooks),
       plugin,
     });
-    pushDesiredFile(files, {
-      targetPath: hooksConfigPath(input.target),
-      content: renderHooksV1Json(input.target.root, plannedHooks),
-      plugin,
-    });
+
+    if (input.target.scope === "project") {
+      // Project Devin root is `.devin/`; documented load path is hooks.v1.json.
+      // Multi-plugin: second plugin claiming the same whole-file path fails
+      // closed via sync ownership (no silent last-writer-wins).
+      pushDesiredFile(files, {
+        targetPath: hooksConfigPath(input.target),
+        content: renderHooksV1Json(input.target.root, plannedHooks),
+        plugin,
+      });
+    } else {
+      // Global: Devin loads hooks from config.json, not hooks.v1.json.
+      // Use json-array-member so herdr/user entries stay untouched.
+      for (const item of plannedHooks) {
+        const command = `node ${JSON.stringify(join(input.target.root, ...item.relativePath.split("/")))}`;
+        const entry: Record<string, unknown> = {
+          hooks: [{ type: "command", command, timeout: 60 }],
+        };
+        if (item.matcher !== undefined && item.matcher.length > 0) {
+          entry.matcher = item.matcher;
+        }
+        regions.push({
+          kind: "json-array-member",
+          targetPath: userConfigPath(input.target),
+          regionKey: `devin.hooks.${pluginSegment}.${normalizeBundleSegment(item.hook.name, "hook")}`,
+          jsonPath: ["hooks", item.nativeEvent],
+          // Whole-value equality: each Prism entry is unique by command path +
+          // matcher. Foreign members (e.g. herdr) stay untouched.
+          value: entry,
+          plugin,
+        });
+      }
+    }
   }
 
   return { files, regions };

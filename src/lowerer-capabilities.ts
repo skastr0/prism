@@ -692,9 +692,9 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: unsupported("Devin MCP/tools lowering is not managed in PR1."),
       hooks: {
         kind: "direct-file",
-        path: "<devin-root>/hooks.v1.json + hooks/*.mjs",
+        path: "project: hooks.v1.json; global: config.json#hooks json-array-member + hooks/*.mjs",
         summary:
-          "Compile writes Claude-compatible hooks.v1.json plus Prism-owned wrapper scripts under hooks/.",
+          "Project scope writes hooks.v1.json; global scope upserts Prism entries into config.json hooks without whole-file adopt. Wrappers under hooks/.",
       },
       mcpConfig: unsupported(
         "PR1 does not patch config.json mcpServers (user-shared with herdr); MCP deferred.",

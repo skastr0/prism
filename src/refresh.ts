@@ -96,6 +96,7 @@ const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
   "antigravity-cli",
   "claude-code",
   "codex-cli",
+  "devin",
   "grok",
   "hermes",
   "kimi-code",

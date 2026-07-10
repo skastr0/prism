@@ -30,10 +30,9 @@ operator decides vX.Y.Z
 
 Two workflows, one direction, no loops:
 
-- **`ci.yml`** — the merge gate. Runs `bun run verify`, lints the pushed/PR
-  commit range with commitlint, and runs the publish smokes (`smoke:core`,
-  `smoke:npm-cli`). The smokes live here so packaging breakage is caught on the
-  PR, *before* a tag exists.
+- **`ci.yml`** — the merge gate. Runs `bun run verify` and the publish smokes
+  (`smoke:core`, `smoke:npm-cli`). The smokes live here so packaging breakage
+  is caught on the PR, *before* a tag exists.
 - **`npm-publish.yml`** — the publisher. Fires on `v*` tag push (or manual
   dispatch), held behind the `release` environment approval, then publishes the
   six packages in dependency order.
@@ -73,17 +72,11 @@ git push origin v0.3.1        # <- this fires npm-publish.yml
 
 Then approve the `release` environment on the npm-publish run.
 
-## Conventional-commit gate
+## Commit messages
 
-`ci.yml` lints only the *new* commit range (PR `base..head`, or push
-`before..sha`) with commitlint + `@commitlint/config-conventional`, so frozen
-history is never re-litigated — CI never lints pre-tip history. Older commits
-carry no conventional type; the newest pre-gate non-conventional commit is
-`f25a9d3` (`Fix model demand for model-free agent surfaces`), and every commit
-after it is conventional. Pre-gate commits are unreachable by any future PR
-range, so they are permanent, documented exceptions the gate never re-litigates.
-Commit types are hygiene and changelog signal only — they no longer drive
-version bumps.
+Conventional types (`feat`/`fix`/`chore`/…) remain useful hygiene and changelog
+signal, but they are not gated in CI and do not drive version bumps. The
+version is an operator decision (see above).
 
 ## The one-line flip to auto-approve
 

@@ -10,28 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - name: Install
         run: bun install --frozen-lockfile --cpu='*' --os='*'
-      - name: Lint commit messages
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            from="${{ github.event.pull_request.base.sha }}"
-            to="${{ github.event.pull_request.head.sha }}"
-          else
-            from="${{ github.event.before }}"
-            to="${{ github.sha }}"
-          fi
-          # New branch / initial push: `before` is the zero-sha; lint only the tip.
-          if ! git rev-parse --quiet --verify "${from}^{commit}" >/dev/null 2>&1; then
-            from="${to}~1"
-          fi
-          echo "Linting commits ${from}..${to}"
-          bun run check:commits --from "${from}" --to "${to}"
       - name: Verify
         run: bun run verify
 

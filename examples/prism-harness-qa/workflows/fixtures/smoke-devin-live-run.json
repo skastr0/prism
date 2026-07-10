@@ -1,0 +1,98 @@
+{
+  "runId": "acc7961a-c29f-48c5-ba7d-1e33d261bd51",
+  "workflow": "devin-static-dual",
+  "tasks": [
+    {
+      "id": "review-devin-lowerer",
+      "agent": {
+        "plugin": "prism-harness-qa",
+        "name": "qa-tester"
+      },
+      "output": {
+        "slice": "lowerer-hooks",
+        "summary": "The Devin lowerer owns per-plugin generation of `.devin/skills/` artifacts (source-copied skills and generated orbit skills with derived phase references) and a per-plugin `hooks/prism-generated-{plugin}.hooks.v1.json` inventory. For project scope it emits `hooks.v1.json` as a whole file, while for global scope it produces `json-array-member` regions under `config.json` keyed by `devin.hooks.{plugin}.{hook}` so user/herdr entries are preserved. Hook wrappers are compiled to standalone `mjs` command scripts that map Prism hook events to Devin native events (PreToolUse, PostToolUse, UserPromptSubmit, PermissionRequest, SessionStart, SessionEnd, Stop, PostCompaction), tool matchers are derived from canonical tool names or explicit binding names, and `decision` output is normalized to Devin semantics (`approve`/`block`, non-zero exit 2 for blocked PreToolUse). The file honors the PR1 contract: no agents, no MCP wire, no plugins, and never whole-file owns `config.json`.",
+        "findings": [
+          {
+            "severity": "med",
+            "loc": "src/compile/lowerers/devin.ts",
+            "issue": "note"
+          }
+        ],
+        "verdict": "ship",
+        "evidence": [
+          "src/compile/lowerers/devin.ts"
+        ]
+      },
+      "cached": false,
+      "status": "completed",
+      "metadata": {
+        "contractVersion": "v1",
+        "instructionSource": "workflow-worker-json-instruction-v1",
+        "adapter": "devin",
+        "prompted": true,
+        "agentSelection": "prompted-contract",
+        "source": "prism-workflow",
+        "agent": {
+          "plugin": "prism-harness-qa",
+          "name": "qa-tester",
+          "manifestHash": "f6fb3a43b206f20ec1023c3980dae94529cd136b275c2e480f34f0d6d5ab367c"
+        },
+        "model": "swe-1-7",
+        "durationMs": 19575,
+        "processTimeoutMs": 180000,
+        "sessionId": "mesquite-duckling",
+        "finish": {
+          "repairs": 0,
+          "criteria": [],
+          "repairMode": "none"
+        }
+      }
+    },
+    {
+      "id": "review-devin-worker",
+      "agent": {
+        "plugin": "prism-harness-qa",
+        "name": "qa-tester"
+      },
+      "output": {
+        "slice": "workflow-worker",
+        "summary": "The Devin workflow worker orchestrates headless `devin -p` workflow runs for Prism tasks. It maps Prism's `WorkflowPermissionMode` to Devin `--permission-mode` values (`auto`, `accept-edits`, `dangerous`), explicitly rejecting `interactive` and both sandbox variants as unmapped. It writes a prompt file and a YAML agent-config to a temp workspace, invokes `devin -p` with optional `--model`, `--agent-config`, `--prompt-file`, `--export` for ATIF JSON capture, and `-r` for session resume. After exit, it parses the ATIF export, extracts the latest agent/assistant message and `session_id`/`sessionId`, and returns parsed JSON output with `sessionId` and stderr metadata.",
+        "findings": [
+          {
+            "severity": "med",
+            "loc": "src/workflow-devin-worker.ts",
+            "issue": "The `interactive` and both sandbox permission modes are hard-rejected with `WorkflowPermissionError`; while fail-closed is correct, the sandbox error messages are gated on future OS-sandbox semantics and will need revisiting once that capability is proven, so the rejection should be tracked as a pending capability rather than a permanent limitation."
+          }
+        ],
+        "verdict": "ship",
+        "evidence": [
+          "src/workflow-devin-worker.ts"
+        ]
+      },
+      "cached": false,
+      "status": "completed",
+      "metadata": {
+        "contractVersion": "v1",
+        "instructionSource": "workflow-worker-json-instruction-v1",
+        "adapter": "devin",
+        "prompted": true,
+        "agentSelection": "prompted-contract",
+        "source": "prism-workflow",
+        "agent": {
+          "plugin": "prism-harness-qa",
+          "name": "qa-tester",
+          "manifestHash": "f6fb3a43b206f20ec1023c3980dae94529cd136b275c2e480f34f0d6d5ab367c"
+        },
+        "model": "swe-1-7",
+        "durationMs": 23443,
+        "processTimeoutMs": 180000,
+        "sessionId": "efficient-enquiry",
+        "finish": {
+          "repairs": 0,
+          "criteria": [],
+          "repairMode": "none"
+        }
+      }
+    }
+  ]
+}

@@ -18,6 +18,8 @@ export default {
         hermes: { model: "grok-composer-2.5-fast", provider: "xai-oauth" },
         "kimi-code": { model: "kimi-code/kimi-for-coding" },
         opencode: { model: "ollama-cloud/deepseek-v4-flash" },
+        // Cognition SWE-1.7 — preferred Devin model for all Prism tasks.
+        devin: { model: "swe-1-7" },
       },
     },
     explicit: {
@@ -36,6 +38,7 @@ export default {
             { model: "ollama-cloud/glm-5.2" },
           ],
         },
+        devin: { model: "swe-1-7" },
       },
     },
     unavailable: {

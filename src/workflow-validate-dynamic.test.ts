@@ -104,7 +104,7 @@ const exploreContract = {
 } as const;
 
 describe("validatePhaseAgentBindings", () => {
-  test("errors when an explicit phase tag uses an agent outside the phase set", () => {
+  test("warns when an explicit phase tag uses an agent outside the phase set", () => {
     const findings = validatePhaseAgentBindings([
       {
         taskId: "scope",
@@ -118,7 +118,7 @@ describe("validatePhaseAgentBindings", () => {
     expect(findings[0]?.message).toContain("not assigned to that phase");
   });
 
-  test("errors when a stamped phase has an empty compiled agent allowlist", () => {
+  test("warns when a stamped phase has an empty compiled agent allowlist", () => {
     const findings = validatePhaseAgentBindings([
       {
         taskId: "scope",
@@ -166,7 +166,7 @@ describe("probeDynamicWorkflowPhaseTasks", () => {
     ]);
   });
 
-  test("collectDynamicPhaseAgentFindings errors on off-phase agents via probe", async () => {
+  test("collectDynamicPhaseAgentFindings warns on off-phase agents via probe", async () => {
     const workflow = defineWorkflow({
       name: "bad",
       run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({

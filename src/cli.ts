@@ -260,6 +260,11 @@ workflow
   .action(async (file: string, options: { readonly table?: boolean }) => {
     try {
       const summary = await validateWorkflowFile(file);
+      if (summary.warnings !== undefined && summary.warnings.length > 0) {
+        for (const warning of summary.warnings) {
+          console.error(`warning: ${warning.message}`);
+        }
+      }
       if (options.table === true) {
         await writeStdout(`${renderWorkflowModelResolutionTable(summary.modelResolution)}\n`);
       } else {

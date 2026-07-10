@@ -7,6 +7,7 @@ import type { ComposedAgent } from "./compile/compose.js";
 import { planLowering } from "./compile/lowerers/grok.js";
 import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
 import type { DesiredFile } from "./sync/desired.js";
+import { deriveProjectKey, projectGeneratedRefsDir } from "./project-key.js";
 import { validateWorkflowFile, WorkflowLoadError, WorkflowValidationError } from "./workflow-loader.js";
 import { WorkflowStore } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
@@ -577,6 +578,105 @@ describe("workflow loader", () => {
     expect(summary.name).toBe("dynamic-loader-smoke");
     expect(summary.dynamic).toBe(true);
     expect(summary.tasks).toEqual([]);
+  });
+
+  test("validate warns when a dynamic wf.phase task uses an agent outside the compiled phase set", async () => {
+    const root = await createTempRoot();
+    const prismHome = join(root, ".prism-home");
+    const { key } = deriveProjectKey(root);
+    const generatedDir = projectGeneratedRefsDir(prismHome, key);
+    await mkdir(generatedDir, { recursive: true });
+    await writeFile(join(generatedDir, "agents.ts"), [
+      "export const agents = {",
+      "  forge: {",
+      "    explorer: { plugin: 'forge', name: 'explorer', description: 'Explores.' },",
+      "    builder: { plugin: 'forge', name: 'builder', description: 'Builds.' },",
+      "  },",
+      "};",
+    ].join("\n"));
+    await writeFile(join(generatedDir, "orbits.ts"), [
+      "export const orbits = {",
+      "  forge: {",
+      "    forge: {",
+      "      plugin: 'forge',",
+      "      name: 'forge',",
+      "      sequence: ['explore'],",
+      "      phases: {",
+      "        explore: {",
+      "          name: 'explore',",
+      "          orbit: 'forge',",
+      "          plugin: 'forge',",
+      "          agents: { explorer: { plugin: 'forge', name: 'explorer' } },",
+      "          criteria: [],",
+      "          io: { inputs: [], outputs: [] },",
+      "          framing: {},",
+      "        },",
+      "      },",
+      "    },",
+      "  },",
+      "};",
+    ].join("\n"));
+
+    const file = join(root, "phase-warning.workflow.ts");
+    await writeFile(file, `
+import { Effect, Schema } from "effect";
+import { defineWorkflow } from "prism";
+
+const explorer = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "explorer",
+  description: "Explores.",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["claude-code"],
+};
+
+const builder = {
+  kind: "agent-ref" as const,
+  plugin: "forge",
+  name: "builder",
+  description: "Builds.",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["claude-code"],
+};
+
+const exploreContract = {
+  name: "explore",
+  orbit: "forge",
+  plugin: "forge",
+  agents: { explorer },
+  output: Schema.Struct({ summary: Schema.String }),
+  framing: {},
+  criteria: [],
+} as const;
+
+export default defineWorkflow({
+  name: "phase-warning-smoke",
+  run: (wf) => wf.phase(exploreContract, (ctx) => ctx.task({
+    id: "scope",
+    agent: builder,
+    prompt: "go",
+  })),
+});
+`);
+
+    const previousPrismHome = process.env.PRISM_HOME;
+    const previousCwd = process.cwd();
+    process.env.PRISM_HOME = prismHome;
+    try {
+      process.chdir(root);
+      const summary = await validateWorkflowFile(file, { prismHome, skipTypecheck: true });
+      expect(summary.warnings).toHaveLength(1);
+      expect(summary.warnings?.[0]?.taskId).toBe("scope");
+      expect(summary.warnings?.[0]?.phase).toBe("forge:explore");
+      expect(summary.warnings?.[0]?.message).toContain("not assigned to that phase");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousPrismHome === undefined) delete process.env.PRISM_HOME;
+      else process.env.PRISM_HOME = previousPrismHome;
+    }
   });
 
   test("validate emits a worker->model resolution row for every task (WDX-009)", async () => {

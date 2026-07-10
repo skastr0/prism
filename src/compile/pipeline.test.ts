@@ -8133,6 +8133,10 @@ export default defineHook({
       scope: "global",
       root: kimiRoot,
       dryRun: false,
+      // This test asserts Kimi MCP/plugin surfaces, not project workflow-refs.
+      // Orbit→agent projection into the project manifest can fail closed when
+      // agent cache descriptors are absent; keep that path out of this gate.
+      emitWorkflowRefs: false,
     }),
   );
 
@@ -8276,6 +8280,7 @@ export default defineHook({
       scope: "global",
       root: kimiRoot,
       dryRun: false,
+      emitWorkflowRefs: false,
     }),
   );
   expect(warmCompile.operations.filter(
@@ -8325,6 +8330,7 @@ export default defineHook({
       scope: "global",
       root: kimiRoot,
       dryRun: false,
+      emitWorkflowRefs: false,
     }),
   );
   expect(pruneCompile.operations.some((operation) =>

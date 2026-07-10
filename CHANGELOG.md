@@ -2,6 +2,23 @@
 
 All notable changes to Prism will be documented in this file.
 
+## 0.3.5 - 2026-07-10
+
+### Added
+
+- Managed CLI tool surface: `prism tools list|show|invoke|skill` with per-plugin catalogs under `PRISM_HOME/runtime/tools/`.
+- Agent discovery inject modes via `PRISM_TOOLS_CLI_INJECT=skill|rules` (skill file + pointer rules, or full always-on tool inventory).
+- Feature flags `PRISM_TOOLS_CLI_EMIT` and `PRISM_TOOLS_MCP_EMIT` to control catalog/skill emit vs harness MCP stdio config.
+
+### Changed
+
+- Harness MCP stdio-shim emission defaults **off** so agents use the CLI path; set `PRISM_TOOLS_MCP_EMIT=1` to re-enable.
+- MCP JSON Schema bridge unwraps Effect `Refinement` and maps `Schema.Record` (parity with the Zod bridge).
+
+### Fixed
+
+- Tool plugins that used refined or Record fields (e.g. Tower) can compile again under the MCP schema bridge.
+
 ## 0.2.0 - 2026-06-21
 
 ### Added

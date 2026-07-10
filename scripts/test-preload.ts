@@ -32,6 +32,17 @@ const sandboxPrismHome = mkdtempSync(
 );
 process.env.PRISM_HOME = sandboxPrismHome;
 
+// Production defaults: MCP harness emit OFF, CLI tools surface ON.
+// Lowerer/MCP goldens and acceptance suites still assert shim config and
+// predate CLI inject regions — opt them into the legacy MCP surface unless a
+// test overrides explicitly.
+if (process.env.PRISM_TOOLS_MCP_EMIT === undefined) {
+  process.env.PRISM_TOOLS_MCP_EMIT = "1";
+}
+if (process.env.PRISM_TOOLS_CLI_EMIT === undefined) {
+  process.env.PRISM_TOOLS_CLI_EMIT = "0";
+}
+
 const assertSandboxed = (phase: string): void => {
   const resolved = resolve(resolvePrismHome());
   if (resolved === realPrismHome || resolved.startsWith(`${realPrismHome}/`)) {

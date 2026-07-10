@@ -144,6 +144,9 @@ const runShimSmoke = async (options: {
     // package root instead, matching how the npm wrapper passes this same
     // env var (see packages/npm/prism/bin/prism.js).
     PRISM_RUNTIME_DEPS_PACKAGE_ROOT: options.packageRoot,
+    // This gate asserts harness MCP artifacts. Default MCP emit is off (CLI
+    // tools surface); force it on so the shim path stays covered.
+    PRISM_TOOLS_MCP_EMIT: "1",
   };
   const gates: SubGate[] = [];
   const failures: string[] = [];

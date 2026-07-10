@@ -7,6 +7,18 @@ export type AstToJsonSchemaOptions = {
   /** Kimi and some MCP clients reject JSON Schema `const`; `enum` is the safe default. */
   readonly literalRepresentation?: "enum" | "const";
   readonly unknownKeywordSchema?: JsonSchema;
+  /**
+   * When true, peel Effect `Refinement` / `Transformation` wrappers to the
+   * underlying JSON-representable type (same stance as the MCP Zod bridge and
+   * OpenCode schema-bridge). Workflow output schemas keep the default (reject).
+   */
+  readonly unwrapRefinementAndTransformation?: boolean;
+  /**
+   * When true, map Effect `Schema.Record` (TypeLiteral index signatures) to
+   * JSON Schema `{ type: "object", additionalProperties: ... }`. Workflow
+   * output schemas keep the default (reject).
+   */
+  readonly allowIndexSignatures?: boolean;
 };
 
 export class WorkflowOutputSchemaError extends Error {
@@ -128,7 +140,26 @@ const astToJsonSchemaInner = (
     case "TypeLiteral": {
       const typeLiteralAst = ast as SchemaAST.TypeLiteral;
       if (typeLiteralAst.indexSignatures.length > 0) {
-        unsupportedConstruct("Record", fieldPath, options, "index signatures are not supported");
+        if (!options.allowIndexSignatures) {
+          unsupportedConstruct("Record", fieldPath, options, "index signatures are not supported");
+        }
+        // Pure record (Schema.Record): object with open additionalProperties.
+        if (typeLiteralAst.propertySignatures.length === 0) {
+          const index = typeLiteralAst.indexSignatures[0]!;
+          const valuePath = fieldPath.length > 0 ? `${fieldPath}.*` : "*";
+          const valueSchema = astToJsonSchemaInner(index.type, options, valuePath, visiting);
+          // Unknown/any values → free-form object; typed values → additionalProperties schema.
+          const additionalProperties =
+            index.type._tag === "UnknownKeyword" || index.type._tag === "AnyKeyword"
+              ? true
+              : valueSchema;
+          return {
+            type: "object",
+            additionalProperties,
+          };
+        }
+        // Mixed struct + index: fixed props + additionalProperties from first index.
+        // Rare; keep deterministic rather than fail closed for MCP tool surfaces.
       }
       const properties: Record<string, JsonSchema> = {};
       const required: string[] = [];
@@ -141,17 +172,35 @@ const astToJsonSchemaInner = (
         properties[name] = property;
         if (!prop.isOptional) required.push(name);
       }
+      let additionalProperties: boolean | JsonSchema = false;
+      if (typeLiteralAst.indexSignatures.length > 0 && options.allowIndexSignatures) {
+        const index = typeLiteralAst.indexSignatures[0]!;
+        const valuePath = fieldPath.length > 0 ? `${fieldPath}.*` : "*";
+        additionalProperties =
+          index.type._tag === "UnknownKeyword" || index.type._tag === "AnyKeyword"
+            ? true
+            : astToJsonSchemaInner(index.type, options, valuePath, visiting);
+      }
       return {
         type: "object",
         properties,
         required,
-        additionalProperties: false,
+        additionalProperties,
       };
     }
     case "Refinement":
-      return unsupportedConstruct("Refinement", fieldPath, options);
-    case "Transformation":
-      return unsupportedConstruct("Transformation", fieldPath, options);
+    case "Transformation": {
+      if (!options.unwrapRefinementAndTransformation) {
+        return unsupportedConstruct(ast._tag, fieldPath, options);
+      }
+      const unwrapped = astToJsonSchemaInner(ast.from, options, fieldPath, visiting);
+      // Prefer the wrapper's description (brands / filters) over the bare base.
+      const description = extractDescriptionOrTitle(ast) ?? extractDescriptionOrTitle(ast.from);
+      if (description && unwrapped.description === undefined) {
+        return { ...unwrapped, description };
+      }
+      return unwrapped;
+    }
     case "Suspend": {
       if (visiting.has(ast)) {
         unsupportedConstruct("Suspend", fieldPath, options, "non-terminating recursive schema");
@@ -190,4 +239,8 @@ export const MCP_AST_TO_JSON_SCHEMA_OPTIONS = {
   errorPrefix: "mcp-schema-bridge",
   literalRepresentation: "enum",
   unknownKeywordSchema: { type: "object", additionalProperties: true },
+  // Match Zod / schema-bridge: refinements are runtime-only; JSON Schema sees the base type.
+  unwrapRefinementAndTransformation: true,
+  // Schema.Record (payload maps, free-form objects) is common on tool inputs.
+  allowIndexSignatures: true,
 } as const satisfies AstToJsonSchemaOptions;

@@ -39,6 +39,7 @@ import {
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "antigravity-cli" as const;
 const PLUGIN_PREFIX = "prism-generated";
@@ -350,6 +351,7 @@ const planHooks = async (
  * entries (`antigravityMcpToolNameForBinding`).
  */
 const planMcpServers = (input: LowerInput): Record<string, unknown> => {
+  if (!toolsMcpHarnessEmitEnabled()) return {};
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,

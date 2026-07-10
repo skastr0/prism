@@ -56,6 +56,10 @@
     "./mcp/uds-singleton": {
       "types": "./dist/mcp/uds-singleton.d.ts",
       "import": "./dist/mcp/uds-singleton.js"
+    },
+    "./mcp/daemon-resolver": {
+      "types": "./dist/mcp/daemon-resolver.d.ts",
+      "import": "./dist/mcp/daemon-resolver.js"
     }
   },
   "files": [

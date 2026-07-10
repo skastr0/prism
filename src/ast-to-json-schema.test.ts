@@ -88,7 +88,7 @@ describe("astToJsonSchema", () => {
     );
   });
 
-  test("rejects Refinement constructs", () => {
+  test("rejects Refinement constructs under workflow options", () => {
     expectWorkflowError(
       () => jsonSchemaFromEffectSchema(
         Schema.Struct({ label: Schema.NonEmptyString }),
@@ -106,6 +106,36 @@ describe("astToJsonSchema", () => {
       "Refinement",
       "label",
     );
+  });
+
+  test("MCP options unwrap Refinement to base JSON Schema type", () => {
+    const schema = Schema.Struct({
+      project_key: Schema.String.pipe(Schema.minLength(1)),
+      label: Schema.NonEmptyString,
+    });
+    const json = jsonSchemaFromEffectSchema(schema, MCP_AST_TO_JSON_SCHEMA_OPTIONS);
+    expect(json).toMatchObject({
+      type: "object",
+      properties: {
+        project_key: { type: "string" },
+        label: { type: "string" },
+      },
+      required: ["project_key", "label"],
+    });
+  });
+
+  test("MCP options map Schema.Record to additionalProperties object", () => {
+    const schema = Schema.Struct({
+      payload: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+    });
+    const json = jsonSchemaFromEffectSchema(schema, MCP_AST_TO_JSON_SCHEMA_OPTIONS);
+    expect(json).toMatchObject({
+      type: "object",
+      properties: {
+        payload: { type: "object", additionalProperties: true },
+      },
+      required: ["payload"],
+    });
   });
 
   test("rejects Record index signatures", () => {

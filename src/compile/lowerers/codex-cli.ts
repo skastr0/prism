@@ -34,6 +34,7 @@ import {
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "codex-cli" as const;
 
@@ -446,6 +447,8 @@ const planMcpServer = (
       readonly enabledTools: string[];
     }
   | { readonly kind: "none" } => {
+  // CLI tool surface supersedes harness MCP when emit is off (PRISM_TOOLS_MCP_EMIT=0).
+  if (!toolsMcpHarnessEmitEnabled()) return { kind: "none" };
   const sourcePluginName = input.target.sourcePluginName;
   const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
   if (ownedBindings.length === 0) return { kind: "none" };

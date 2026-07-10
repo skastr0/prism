@@ -41,6 +41,7 @@ import {
   yamlScalar,
   type LowerOutput,
 } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "factory-droid" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -305,6 +306,7 @@ const planMcpServer = async (
   // tools or synthetic dispatch bindings) gets a server entry, keyed by its
   // own name and exposing only itself. Consumers referencing foreign owners
   // get no server here — their agents' allowlists name the owner's server.
+  if (!toolsMcpHarnessEmitEnabled()) return;
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,

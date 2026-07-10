@@ -9,7 +9,7 @@ import { Effect, Option } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import { HarnessRoots } from "../services/prism-env.js";
-import { expandPath } from "../fs.js";
+import { exists, expandPath, readFile } from "../fs.js";
 import { deriveProjectKey } from "../project-key.js";
 import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
@@ -98,6 +98,13 @@ import {
 import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { bindingsOwnedByPlugin } from "./tool-bindings.js";
+import { toolsCliEmitEnabled, toolsCliInjectMode } from "../tools-cli/flags.js";
+import {
+  buildToolCliCatalog,
+  readToolCliCatalog,
+  writeToolCliCatalog,
+} from "../tools-cli/catalog.js";
+import { planToolsCliAgentSurface } from "../tools-cli/inject.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -918,6 +925,27 @@ const prepareUnionMcpServer = (options: {
         bundle.stdioContent,
       ),
     );
+
+    // CLI tool surface (skill + catalog). Default on; set PRISM_TOOLS_CLI_EMIT=0 to skip.
+    // Same bindings / daemon bundle — agent-facing path becomes `prism tools invoke`.
+    if (toolsCliEmitEnabled()) {
+      const descriptions = new Map<string, string>();
+      for (const tool of options.artifacts.tools) {
+        if (typeof tool.description === "string" && tool.description.trim().length > 0) {
+          descriptions.set(tool.name, tool.description);
+        }
+      }
+      yield* Effect.promise(() =>
+        writeToolCliCatalog({
+          prismHome: options.context.prismHome,
+          pluginName: options.registry.pluginName,
+          pluginVersion: options.registry.pluginVersion,
+          bindings: unionInputs.bindings,
+          toolDescriptions: descriptions,
+        }),
+      );
+    }
+
     return { serverPath: write.path, serverSha256: write.sha256 };
   });
 
@@ -975,7 +1003,45 @@ const planTargetLowering = (options: {
     // copying the skill's whole source tree) silently drop sibling reference
     // markdown — patch the plan here rather than in the lowerers themselves
     // (see src/compile/skill-reference-files.ts for why).
-    const loweredFiles = await injectSkillReferenceFiles(lowered.files, options.artifacts.skills);
+    let loweredFiles = await injectSkillReferenceFiles(lowered.files, options.artifacts.skills);
+    let loweredRegions = [...lowered.regions];
+
+    // CLI tool agent surface: skill and/or always-on rules (inject mode).
+    // Catalog is normally written during prepareUnionMcpServer; fall back to
+    // building from owned bindings so dry-run / first-pass still plans inject.
+    if (toolsCliEmitEnabled() && options.artifacts.tools.length > 0) {
+      const ownedBindings = bindingsOwnedByPlugin(
+        options.registry.pluginName,
+        options.artifacts.tools,
+        options.agents,
+      );
+      if (ownedBindings.length > 0) {
+        const descriptions = new Map<string, string>();
+        for (const tool of options.artifacts.tools) {
+          if (typeof tool.description === "string" && tool.description.trim().length > 0) {
+            descriptions.set(tool.name, tool.description);
+          }
+        }
+        const catalog =
+          (await readToolCliCatalog(options.prismHome, options.registry.pluginName)) ??
+          buildToolCliCatalog({
+            pluginName: options.registry.pluginName,
+            pluginVersion: options.registry.pluginVersion,
+            bindings: ownedBindings,
+            toolDescriptions: descriptions,
+          });
+        const surface = await planToolsCliAgentSurface({
+          mode: toolsCliInjectMode(),
+          targetId: options.targetId,
+          outputRoot: options.outputRoot,
+          prismHome: options.prismHome,
+          pluginName: options.registry.pluginName,
+          catalog,
+        });
+        loweredFiles = [...loweredFiles, ...surface.files];
+        loweredRegions = [...loweredRegions, ...surface.regions];
+      }
+    }
 
     // Package mode ships the bundle inside the package payload as a desired
     // file (live compiles write the canonical PRISM_HOME bundle instead).
@@ -1000,12 +1066,12 @@ const planTargetLowering = (options: {
             : []),
           ...loweredFiles,
         ],
-        regions: lowered.regions,
+        regions: loweredRegions,
       };
     }
     return {
       files: loweredFiles,
-      regions: lowered.regions,
+      regions: loweredRegions,
     };
   });
 };

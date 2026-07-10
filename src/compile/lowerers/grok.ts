@@ -47,6 +47,7 @@ import {
   yamlScalar,
   type LowerOutput,
 } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "grok" as const;
 
@@ -419,6 +420,7 @@ const renderGrokPerPluginShimServerToml = (owner: string): string => {
  * exposure), so only owner plugins are tracked here.
  */
 const planMcpServerRegion = (input: LowerInput, regions: DesiredRegion[]): void => {
+  if (!toolsMcpHarnessEmitEnabled()) return;
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,

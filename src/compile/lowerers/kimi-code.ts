@@ -43,6 +43,7 @@ import {
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "kimi-code" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -449,8 +450,9 @@ const renderKimiMcpServerEntry = (options: {
  * duplicate it.
  */
 const planMcpServer = (input: LowerInput): ReadonlyMap<string, Record<string, unknown>> => {
-  const sourcePluginName = input.target.sourcePluginName;
   const servers = new Map<string, Record<string, unknown>>();
+  if (!toolsMcpHarnessEmitEnabled()) return servers;
+  const sourcePluginName = input.target.sourcePluginName;
 
   const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
   if (ownedBindings.length === 0) return servers;

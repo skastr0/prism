@@ -44,6 +44,7 @@ import {
   yamlScalar,
   type LowerOutput,
 } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "claude-code" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -462,6 +463,7 @@ const planMcpServer = async (
   // foreign tool by naming the owner's own server key in their allowlist
   // (`claudeMcpPermissionNameForBinding` / `renderPluginAllowlist`), which
   // works at session scope as long as the owner plugin is also enabled.
+  if (!toolsMcpHarnessEmitEnabled()) return;
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,

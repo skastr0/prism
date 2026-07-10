@@ -1301,6 +1301,136 @@ Env vars read (all optional except PRISM_SHIM_PLUGINS):
     await import("./mcp/shim-main.js");
   });
 
+const toolsCommand = program
+  .command("tools")
+  .description(
+    "Stateless Prism tool surface: list/invoke compiled plugin tools via CLI (no harness MCP shims)",
+  );
+
+toolsCommand
+  .command("list")
+  .description("List plugins (or tools) with CLI catalogs under PRISM_HOME")
+  .option("--plugin <name>", "List tools for one plugin only")
+  .option("--json", "Machine-readable JSON", false)
+  .action(async (options: { plugin?: string; json?: boolean }) => {
+    try {
+      const { listToolCliCatalogPlugins, readToolCliCatalog } = await import("./tools-cli/catalog.js");
+      const prismHome = resolvePrismHome();
+      if (options.plugin) {
+        const catalog = await readToolCliCatalog(prismHome, options.plugin);
+        if (!catalog) {
+          console.error(`No CLI tool catalog for plugin '${options.plugin}' under ${prismHome}/runtime/tools`);
+          exitWith(EXIT_CODES.domainFailure);
+        }
+        if (options.json) {
+          console.log(JSON.stringify(catalog, null, 2));
+          return;
+        }
+        for (const tool of catalog.tools) {
+          console.log(`${tool.name}\t${tool.wireName}\t${tool.description}`);
+        }
+        return;
+      }
+      const plugins = await listToolCliCatalogPlugins(prismHome);
+      if (options.json) {
+        console.log(JSON.stringify({ prismHome, plugins }, null, 2));
+        return;
+      }
+      if (plugins.length === 0) {
+        console.log(`(no CLI tool catalogs yet under ${prismHome}/runtime/tools — run prism refresh on a tools plugin)`);
+        return;
+      }
+      for (const name of plugins) {
+        const catalog = await readToolCliCatalog(prismHome, name);
+        console.log(`${name}\t${catalog?.tools.length ?? 0} tools`);
+      }
+    } catch (error) {
+      printCliError(error, "tools list error");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+toolsCommand
+  .command("show <plugin>")
+  .description("Show the CLI catalog for one plugin")
+  .option("--json", "Machine-readable JSON", false)
+  .action(async (plugin: string, options: { json?: boolean }) => {
+    try {
+      const { readToolCliCatalog } = await import("./tools-cli/catalog.js");
+      const catalog = await readToolCliCatalog(resolvePrismHome(), plugin);
+      if (!catalog) {
+        console.error(`No CLI tool catalog for plugin '${plugin}'`);
+        exitWith(EXIT_CODES.domainFailure);
+      }
+      if (options.json) {
+        console.log(JSON.stringify(catalog, null, 2));
+        return;
+      }
+      console.log(`plugin: ${catalog.plugin}`);
+      if (catalog.pluginVersion) console.log(`version: ${catalog.pluginVersion}`);
+      console.log(`generatedAt: ${catalog.generatedAt}`);
+      console.log(`tools (${catalog.tools.length}):`);
+      for (const tool of catalog.tools) {
+        console.log(`  ${tool.name}`);
+        console.log(`    wire: ${tool.wireName}`);
+        console.log(`    ${tool.description}`);
+      }
+    } catch (error) {
+      printCliError(error, "tools show error");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+toolsCommand
+  .command("invoke <plugin> <tool>")
+  .description("Invoke a compiled tool (JSON in/out; lazy-spawns the plugin daemon)")
+  .option("--input <json-or-@file>", "JSON object args, or @path to a JSON file", "{}")
+  .option("--timeout-ms <n>", "Daemon resolve + call timeout", (v) => Number(v), 60_000)
+  .option("--json", "Always print JSON (default)", true)
+  .action(async (plugin: string, tool: string, options: { input?: string; timeoutMs?: number }) => {
+    try {
+      const { invokeToolViaCli, parseToolsCliInput, ToolsCliInvokeError } = await import(
+        "./tools-cli/invoke.js"
+      );
+      const input = await parseToolsCliInput(options.input);
+      const result = await invokeToolViaCli({
+        prismHome: resolvePrismHome(),
+        pluginName: plugin,
+        toolName: tool,
+        input,
+        timeoutMs: options.timeoutMs,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      const { ToolsCliInvokeError } = await import("./tools-cli/invoke.js");
+      if (error instanceof ToolsCliInvokeError) {
+        console.error(JSON.stringify({ error: error.message }, null, 2));
+        exitWith(EXIT_CODES.domainFailure);
+      }
+      printCliError(error, "tools invoke error");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
+toolsCommand
+  .command("skill <plugin>")
+  .description("Print the generated SKILL.md for a plugin's CLI tools")
+  .action(async (plugin: string) => {
+    try {
+      const { prismToolSkillPath } = await import("./tools-cli/paths.js");
+      const { exists, readFile } = await import("./fs.js");
+      const path = prismToolSkillPath(resolvePrismHome(), plugin);
+      if (!(await exists(path))) {
+        console.error(`No tool skill at ${path} — refresh a plugin that targets tools`);
+        exitWith(EXIT_CODES.domainFailure);
+      }
+      console.log(await readFile(path));
+    } catch (error) {
+      printCliError(error, "tools skill error");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    }
+  });
+
 program
   .command("doctor [plugin-path]")
   .description("Diagnose Prism refresh state and harness config health")

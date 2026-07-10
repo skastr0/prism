@@ -674,6 +674,14 @@ const astToZodSchema = (ast: SchemaAST.AST): ZodSchema => {
       unsupportedAst(ast, "tuple elements=" + ast.elements.length + ", rest=" + ast.rest.length);
     }
     case "TypeLiteral": {
+      // Pure Schema.Record → open string-keyed map (JSON Schema additionalProperties).
+      if (ast.propertySignatures.length === 0 && ast.indexSignatures.length > 0) {
+        const index = ast.indexSignatures[0]!;
+        if (index.type._tag === "UnknownKeyword" || index.type._tag === "AnyKeyword") {
+          return z.record(z.string(), z.unknown());
+        }
+        return z.record(z.string(), astToZodSchema(index.type));
+      }
       const properties: Record<string, ZodSchema> = {};
       for (const prop of ast.propertySignatures) {
         const description = extractDescriptionOrTitle(prop.type);
@@ -681,7 +689,16 @@ const astToZodSchema = (ast: SchemaAST.AST): ZodSchema => {
         if (description) property = property.describe(description);
         properties[String(prop.name)] = prop.isOptional ? property.optional() : property;
       }
-      return z.object(properties);
+      let objectSchema = z.object(properties);
+      if (ast.indexSignatures.length > 0) {
+        const index = ast.indexSignatures[0]!;
+        const value =
+          index.type._tag === "UnknownKeyword" || index.type._tag === "AnyKeyword"
+            ? z.unknown()
+            : astToZodSchema(index.type);
+        objectSchema = objectSchema.catchall(value);
+      }
+      return objectSchema;
     }
     case "Refinement":
       return astToZodSchema(ast.from);

@@ -10,6 +10,7 @@ import { shimCommandForCompile } from "../shim-command.js";
 import type { HarnessScope } from "../../types.js";
 import type { DesiredRegion } from "../../sync/desired.js";
 import { type LowerOutput } from "./shared.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "cursor" as const;
 
@@ -94,7 +95,8 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   // compile renders `mcpServers.<pluginServerKey>` iff IT is a real MCP
   // owner — region-owned by this plugin (no cross-plugin union): the sync
   // engine prunes the entry the moment this plugin stops being an owner.
-  if (ownedBindings.length > 0) {
+  // CLI tool surface supersedes harness MCP when PRISM_TOOLS_MCP_EMIT=0.
+  if (toolsMcpHarnessEmitEnabled() && ownedBindings.length > 0) {
     const serverName = pluginServerKey(sourcePluginName);
     regions.push({
       kind: "json-key",

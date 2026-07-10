@@ -33,6 +33,7 @@ import {
 import { Effect } from "effect";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { ResolvedContractBinding } from "../resolve.js";
+import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "hermes" as const;
 
@@ -142,6 +143,7 @@ type PlannedMcpServer =
  * always the plugin's own canonical-tool bindings.
  */
 const planMcpServer = (input: LowerInput): PlannedMcpServer => {
+  if (!toolsMcpHarnessEmitEnabled()) return { kind: "none" };
   const sourcePluginName = input.target.sourcePluginName;
   const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, []);
   if (ownedBindings.length === 0) return { kind: "none" };

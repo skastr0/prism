@@ -28,5 +28,12 @@ export default {
     // trailers; wrapping them is not worth failing an otherwise-valid commit.
     "body-max-line-length": [0, "always"],
     "footer-max-line-length": [0, "always"],
+    // config-conventional forbids sentence/start/pascal/upper case in the
+    // subject. That fights real subjects in this repo: stage labels (S0a,
+    // S1), product names (Devin, OpenCode), and acronyms (MCP, T2). Type +
+    // scope already carry structure; case in the free-form subject is not
+    // a useful gate. A large main push re-lints the whole before..sha range,
+    // so this rule also turns historical stage-work titles into false reds.
+    "subject-case": [0],
   },
 };

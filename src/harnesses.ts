@@ -262,6 +262,30 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
       "CLAUDE.local.md",
     ],
   },
+
+  devin: {
+    id: "devin",
+    name: "Devin CLI",
+    globalConfigPath: "~/.config/devin/",
+    projectConfigPath: ".devin/",
+    rulesFile: "AGENTS.md",
+    rulesDir: null,
+    commandsDir: null,
+    agentsDir: null,
+    toolsDir: null,
+    skillsDir: "skills/",
+    // config.json is user-shared (herdr hooks, model prefs). Prism never
+    // whole-file owns it; PR1 MCP is unsupported and hooks lower as
+    // project/global hooks.v1.json + wrapper files.
+    configFile: "config.json",
+    configFormat: "json",
+    supportsTools: false,
+    supportsCommands: false,
+    supportsAgents: false,
+    supportsSkills: true,
+    supportsMCP: false,
+    alternativeRulesFiles: ["AGENT.md", "CLAUDE.md", "AGENTS.local.md"],
+  },
 };
 
 export function getHarness(id: HarnessId): HarnessConfig {

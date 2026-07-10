@@ -32,6 +32,7 @@ const TARGET_PRESETS = {
     "factory-droid",
     "pi",
     "grok",
+    "devin",
   ],
   "claw-harness": ["openclaw", "hermes"],
 } as const satisfies Record<TargetPresetId, readonly HarnessId[]>;
@@ -47,6 +48,7 @@ const COMPILE_SOURCE_HARNESSES = [
   "factory-droid",
   "pi",
   "kimi-code",
+  "devin",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {

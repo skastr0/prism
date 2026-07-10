@@ -49,6 +49,8 @@ Amp Code is part of the `coding-harness` preset with compile-phase native TypeSc
 
 Cursor is part of the `coding-harness` preset with tools-only compile support. Install-phase rules and skills still write to Cursor's direct file surfaces; command artifacts lower into a generated local Cursor plugin under `<cursor-root>/plugins/local/prism-generated-<source-plugin>/` with `.cursor-plugin/plugin.json` and `commands/` component discovery. Cursor Agent Skills are docs-backed under `.cursor/skills/` and `~/.cursor/skills/`. Compile-phase `tools/*.tool.ts` artifacts lower into Prism's canonical generated MCP bundle under `<PRISM_HOME>/runtime/mcp/<source-plugin>/server.mjs`, and Prism patches one compiler-owned `mcpServers.prism-generated-<source-plugin>` entry in `~/.cursor/mcp.json` globally or `.cursor/mcp.json` for project scope. Generated MCP uses Cursor's Streamable HTTP `url` plus `headers` shape. Prism does not compile Cursor agents, orbits, hooks, or per-agent skill permission visibility yet.
 
+Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete orbit skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage MCP/`mcpServers`, primary agents, or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, optional `--agent-config`, `--export` ATIF session capture, and `-r` resume.
+
 Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
 
 ## Architecture invariants (owner doctrine — binding on all agents working in this repo)
@@ -824,7 +826,7 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `grok`
+- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `grok`, `devin`
 - `claw-harness` → `openclaw`, `hermes`
 
 Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, and Pi remain command targets, but Prism lowers those commands through each harness's generated plugin/package/API surface instead of direct command files. Factory Droid remains included for install-phase commands because Droid exposes `.factory/commands/` files.

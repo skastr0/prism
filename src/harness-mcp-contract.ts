@@ -320,6 +320,17 @@ export const HARNESS_MCP_CONTRACTS = {
     subAgentToolAssignment: "supported",
     perInvocationPermissions: "unsupported",
   }),
+  // Devin has native mcpServers in config.json / project config, but Prism
+  // does not manage that surface in PR1 (user-shared config.json; herdr).
+  // LOWERER_CAPABILITIES.devin.surfaces.mcpConfig + generatedCanonicalTools
+  // are unsupported until a dedicated MCP PR.
+  devin: unsupportedContract(
+    "devin",
+    ["mcp servers reachable", "stdio command spawn"],
+    [
+      "Devin MCP is deferred: PR1 does not patch config.json mcpServers or emit generated tools.",
+    ],
+  ),
 } as const satisfies Record<HarnessId, HarnessMcpContract>;
 
 // ---------------------------------------------------------------------------

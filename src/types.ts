@@ -15,7 +15,8 @@ export type HarnessId =
   | "cursor"
   | "factory-droid"
   | "pi"
-  | "grok";
+  | "grok"
+  | "devin";
 
 export const HARNESS_SCOPES = ["global", "project"] as const;
 export type HarnessScope = (typeof HARNESS_SCOPES)[number];
@@ -265,6 +266,7 @@ export interface UnifiedFrontmatter {
   "factory-droid"?: FactoryDroidFrontmatter;
   pi?: Record<string, unknown>;
   grok?: Record<string, unknown>;
+  devin?: Record<string, unknown>;
 }
 
 // Skill-specific frontmatter (stricter than unified)

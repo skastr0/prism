@@ -162,6 +162,14 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     probeArgs: ["--version"],
     defaultModel: "kimi-code/kimi-for-coding",
   },
+  devin: {
+    harness: "devin",
+    command: "devin",
+    envVar: "PRISM_WORKFLOW_DEVIN_BIN",
+    probeArgs: ["version"],
+    // Prefer Cognition SWE-1.7 for all Devin workflow tasks unless overridden.
+    defaultModel: "swe-1-7",
+  },
   opencode: {
     harness: "opencode",
     command: "opencode",

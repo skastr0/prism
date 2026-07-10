@@ -54,6 +54,7 @@ const workflowWorkerSemanticsVersion = (worker: string | null): string => {
       return "native-agent-v1";
     case "amp-code":
     case "codex-cli":
+    case "devin":
     case "hermes":
     case "kimi-code":
       return "prompt-agent-v1";

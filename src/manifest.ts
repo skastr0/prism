@@ -902,6 +902,7 @@ export function getHarnessFrontmatter(
     "factory-droid",
     "pi",
     "grok",
+    "devin",
   ];
 
   const cleanBase: Record<string, unknown> = {};

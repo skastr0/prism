@@ -39,6 +39,7 @@ import { planLowering as planFactoryDroidLowering } from "./lowerers/factory-dro
 import { planLowering as planPiLowering } from "./lowerers/pi.js";
 import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
 import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
+import { planLowering as planDevinLowering } from "./lowerers/devin.js";
 import { type LowerOutput } from "./lowerers/shared.js";
 import { injectSkillReferenceFiles } from "./skill-reference-files.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "../sync/desired.js";
@@ -247,6 +248,7 @@ const SUPPORTED_TARGETS = [
   "pi",
   "kimi-code",
   "cursor",
+  "devin",
 ] as const;
 
 const getLowerer = (target: string): LowererModule => {
@@ -273,6 +275,8 @@ const getLowerer = (target: string): LowererModule => {
       return { planLowering: planKimiCodeLowering };
     case "cursor":
       return { planLowering: planCursorLowering };
+    case "devin":
+      return { planLowering: planDevinLowering };
     default:
       throw new Error(`unsupported lowerer target '${target}'`);
   }

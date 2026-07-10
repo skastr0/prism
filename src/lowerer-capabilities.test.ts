@@ -49,6 +49,7 @@ test("compile target capabilities are derived from lowerer capability profiles",
       "pi",
       "kimi-code",
       "cursor",
+      "devin",
     ]),
   );
 

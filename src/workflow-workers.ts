@@ -5,6 +5,7 @@ import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
 import { runCodexWorkflowTask } from "./workflow-codex-worker.js";
 import { runGrokWorkflowTask } from "./workflow-grok-worker.js";
 import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
+import { runDevinWorkflowTask } from "./workflow-devin-worker.js";
 import { runKimiWorkflowTask } from "./workflow-kimi-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type {
@@ -145,6 +146,17 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runKimiWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "kimi-code", fallbackModel: options.model }),
+      resolvedPermission: options.resolvedPermission,
+      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
+      abortSignal: options.abortSignal,
+      repair: options.context?.repair,
+    }),
+  },
+  devin: {
+    id: "devin",
+    runTask: (task, options) => runDevinWorkflowTask(task, {
+      cwd: options.cwd,
+      model: resolveWorkflowTaskModel(task, { worker: "devin", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,

@@ -181,7 +181,8 @@ export const capGrokWireName = (name: string, budget: number, guard?: GrokCollis
  * no daemon, no shim, no wire naming — so they are excluded here rather
  * than given a meaningless record entry.
  */
-export type ShimHarnessId = Exclude<HarnessId, "opencode" | "amp-code" | "pi">;
+// `devin` is a compile harness with PR1 MCP unsupported (no shim front yet).
+export type ShimHarnessId = Exclude<HarnessId, "opencode" | "amp-code" | "pi" | "devin">;
 
 export const SHIM_HARNESS_IDS: ReadonlyArray<ShimHarnessId> = [
   "claude-code",

@@ -474,4 +474,68 @@ export const HOOK_CAPABILITIES: Record<HarnessId, Record<HookEvent, HookEventSup
     "compact.after": { kind: "unsupported", note: "no clean hermes shell mapping" },
     notification: { kind: "unsupported", note: "no clean hermes shell mapping" },
   },
+  // Devin CLI 3000.1.27 — Claude-compatible hook event names in hooks.v1.json /
+  // config.hooks. Evidence: bundled docs extensibility/hooks/* + live user config.
+  devin: {
+    "tool.before": {
+      kind: "native",
+      nativeEvent: "PreToolUse",
+      controls: ["block"],
+    },
+    "tool.after": {
+      kind: "native",
+      nativeEvent: "PostToolUse",
+      controls: [],
+    },
+    "prompt.submit": {
+      kind: "native",
+      nativeEvent: "UserPromptSubmit",
+      controls: ["additionalContext"],
+    },
+    "permission.request": {
+      kind: "native",
+      nativeEvent: "PermissionRequest",
+      controls: ["block"],
+    },
+    "session.start": {
+      kind: "native",
+      nativeEvent: "SessionStart",
+      controls: ["additionalContext"],
+    },
+    "session.end": {
+      kind: "native",
+      nativeEvent: "SessionEnd",
+      controls: [],
+    },
+    "tool.failure": {
+      kind: "unsupported",
+      note: "no distinct Devin tool-failure event",
+    },
+    stop: {
+      kind: "native",
+      nativeEvent: "Stop",
+      controls: ["block"],
+    },
+    "subagent.start": {
+      kind: "unsupported",
+      note: "no Devin subagent lifecycle hook event verified",
+    },
+    "subagent.stop": {
+      kind: "unsupported",
+      note: "no Devin subagent lifecycle hook event verified",
+    },
+    "compact.before": {
+      kind: "unsupported",
+      note: "only PostCompaction is documented",
+    },
+    "compact.after": {
+      kind: "native",
+      nativeEvent: "PostCompaction",
+      controls: [],
+    },
+    notification: {
+      kind: "unsupported",
+      note: "no Devin notification hook event",
+    },
+  },
 };

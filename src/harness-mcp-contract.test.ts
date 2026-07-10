@@ -101,11 +101,16 @@ test("grounded facts: allowlist shapes for hermes, codex, claude", () => {
   expect(claude.mcpServersShape).toBe("plugin-bundle-file");
 });
 
-test("unsupported arm: openclaw and pi are marked unsupported, not emulated", () => {
+test("unsupported arm: openclaw, pi, and devin are marked unsupported, not emulated", () => {
   expect(HARNESS_MCP_CONTRACTS.openclaw.mcpSupport).toBe("unsupported");
   expect(HARNESS_MCP_CONTRACTS.pi.mcpSupport).toBe("unsupported");
+  expect(HARNESS_MCP_CONTRACTS.devin.mcpSupport).toBe("unsupported");
   expect(sorted(mcpSupportedHarnessIds())).toEqual(
-    sorted(getAllHarnessIds().filter((id) => id !== "openclaw" && id !== "pi")),
+    sorted(
+      getAllHarnessIds().filter(
+        (id) => id !== "openclaw" && id !== "pi" && id !== "devin",
+      ),
+    ),
   );
 });
 

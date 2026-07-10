@@ -595,6 +595,8 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
       return ["plugins", "skills"];
     case "openclaw":
       return ["skills"];
+    case "devin":
+      return ["skills", "hooks"];
   }
 };
 

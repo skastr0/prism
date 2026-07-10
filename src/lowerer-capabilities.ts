@@ -658,6 +658,59 @@ export const LOWERER_CAPABILITIES = {
       },
     },
   },
+  devin: {
+    harness: "devin",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: {
+      agents: "unsupported",
+      agentModelBindings: "ignored",
+      generatedCanonicalTools: "unsupported",
+      hooks: "supported",
+      skillPermissions: "unsupported",
+    },
+    surfaces: {
+      pluginBundle: unsupported(
+        "Devin plugins are beta (`devin plugins install`); Prism PR1 uses direct skills/hooks files.",
+      ),
+      rules: {
+        kind: "direct-file",
+        path: "<devin-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native AGENTS.md instructions file.",
+      },
+      commands: unsupported(
+        "Devin has no separate command-file surface; model command workflows as skills.",
+      ),
+      agents: unsupported(
+        "Devin has no primary agent picker; subagent AGENT.md files are reserved for a later PR.",
+      ),
+      skills: {
+        kind: "direct-file",
+        path: "<devin-root>/skills/",
+        summary: "Install and compile write Agent Skill folders (global and project .devin/skills).",
+      },
+      generatedTools: unsupported("Devin MCP/tools lowering is not managed in PR1."),
+      hooks: {
+        kind: "direct-file",
+        path: "<devin-root>/hooks.v1.json + hooks/*.mjs",
+        summary:
+          "Compile writes Claude-compatible hooks.v1.json plus Prism-owned wrapper scripts under hooks/.",
+      },
+      mcpConfig: unsupported(
+        "PR1 does not patch config.json mcpServers (user-shared with herdr); MCP deferred.",
+      ),
+      agentConfig: {
+        kind: "direct-file",
+        path: "ephemeral --agent-config for workflow runs",
+        summary:
+          "Workflow worker writes temporary agent-config (system_instructions, allowed_tools); not a durable install surface.",
+      },
+    },
+    notes: [
+      "Never whole-file adopt ~/.config/devin/config.json — herdr hooks and user prefs live there.",
+      "Workflow default model is swe-1-7; headless via `devin -p` + ATIF --export session resume via -r.",
+    ],
+  },
 } as const satisfies Record<HarnessId, LowererCapabilityProfile>;
 
 export const getCompileTargetCapabilities = (

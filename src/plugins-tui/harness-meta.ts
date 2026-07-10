@@ -23,6 +23,7 @@ const MARKS: Record<string, HarnessMark> = {
   "factory-droid": { glyph: "⊕", color: "#f0dc9c", short: "factory" },
   pi: { glyph: "π", color: "#ff58a8", short: "pi" },
   grok: { glyph: "✶", color: "#6288ff", short: "grok" },
+  devin: { glyph: "◎", color: "#38c8a0", short: "devin" },
 };
 
 const FALLBACK: HarnessMark = { glyph: "●", color: "#a59878", short: "?" };

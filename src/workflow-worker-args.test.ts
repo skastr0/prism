@@ -455,6 +455,19 @@ describe("codex-cli permission arg mapping", () => {
     expect(args).not.toContain("--sandbox");
   });
 
+  test("passes the resolved Codex model reasoning variant explicitly", () => {
+    const args = buildCodexArgs({
+      cwd: "/r",
+      model: "gpt-5.6-luna",
+      variant: "high",
+      outputPath: "/tmp/o",
+      prompt: "p",
+      permission: "permissive",
+    });
+    expect(args.slice(args.indexOf("--config"), args.indexOf("--config") + 2))
+      .toEqual(["--config", 'model_reasoning_effort="high"']);
+  });
+
   test("default bypasses approvals and sandbox", () => {
     const args = buildCodexArgs({ cwd: "/r", outputPath: "/tmp/o", prompt: "p" });
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");

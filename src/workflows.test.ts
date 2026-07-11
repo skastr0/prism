@@ -47,7 +47,7 @@ const modelProfile = {
   targets: {
     opencode: { strategy: "any-of", models: [{ model: "crof/kimi-k2.6" }, { model: "fallback/kimi" }] },
     "claude-code": { model: "claude-opus-4-8", effort: "max" },
-    "codex-cli": { model: "gpt-5.1-codex" },
+    "codex-cli": { model: "gpt-5.1-codex", variant: "high" },
     grok: { model: "grok-build-fast" },
     hermes: { model: "openai/gpt-5.1-mini" },
     "kimi-code": { model: "moonshot/kimi-k2" },
@@ -287,6 +287,21 @@ describe("workflow authoring primitives", () => {
     });
 
     expect(() => resolveWorkflowTaskModel(build)).toThrow(WorkflowModelResolutionError);
+  });
+
+  test("preserves harness model variants from model profiles", () => {
+    const profiled = defineTask({
+      id: "profiled",
+      agent: builder,
+      prompt: "Use the profile variant.",
+      output: PatchReport,
+      worker: { worker: "codex-cli", model: modelProfile },
+    });
+    expect(resolveWorkflowTaskModelResolution(profiled)).toEqual({
+      model: "gpt-5.1-codex",
+      variant: "high",
+      source: "task",
+    });
   });
 
   test("rescues an agent modelspace profile with partial harness coverage via the registry default (WDX-009)", () => {
@@ -591,5 +606,3 @@ describe("workflow phase DSL", () => {
     expect(prompts[0]).toBe("Bare prompt only.");
   });
 });
-
-

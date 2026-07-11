@@ -14,6 +14,7 @@ export type CodexWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly variant?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
@@ -73,6 +74,7 @@ const codexPermissionArgs = (mode: WorkflowPermissionMode): ReadonlyArray<string
 export const buildCodexArgs = (input: {
   readonly cwd: string;
   readonly model?: string;
+  readonly variant?: string;
   readonly outputSchemaPath?: string;
   readonly outputPath: string;
   readonly prompt: string;
@@ -84,6 +86,9 @@ export const buildCodexArgs = (input: {
   return [
     "exec",
     ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...(input.variant !== undefined
+      ? ["--config", `model_reasoning_effort=${JSON.stringify(input.variant)}`]
+      : []),
     "--cd",
     input.cwd,
     ...codexPermissionArgs(mode),
@@ -141,6 +146,7 @@ export const runCodexWorkflowTask = async (
   const args = buildCodexArgs({
     cwd: options.cwd,
     model: options.model,
+    variant: options.variant,
     outputSchemaPath,
     outputPath,
     prompt,
@@ -176,6 +182,7 @@ export const runCodexWorkflowTask = async (
       metadata: {
         adapter: "codex-cli",
         model: options.model,
+        modelVariant: options.variant,
         durationMs,
         processTimeoutMs,
         sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId,

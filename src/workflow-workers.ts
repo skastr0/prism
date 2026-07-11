@@ -105,14 +105,21 @@ const workflowWorkerAdapters = {
   },
   "codex-cli": {
     id: "codex-cli",
-    runTask: (task, options) => runCodexWorkflowTask(task, {
-      cwd: options.cwd,
-      model: resolveWorkflowTaskModel(task, { worker: "codex-cli", fallbackModel: options.model }),
-      resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
-      abortSignal: options.abortSignal,
-      repair: options.context?.repair,
-    }),
+    runTask: (task, options) => {
+      const resolution = resolveWorkflowTaskModelResolution(task, {
+        worker: "codex-cli",
+        fallbackModel: options.model,
+      });
+      return runCodexWorkflowTask(task, {
+        cwd: options.cwd,
+        model: resolution?.model,
+        variant: resolution?.variant,
+        resolvedPermission: options.resolvedPermission,
+        processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
+        abortSignal: options.abortSignal,
+        repair: options.context?.repair,
+      });
+    },
   },
   grok: {
     id: "grok",

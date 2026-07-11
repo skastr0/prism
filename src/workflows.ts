@@ -146,19 +146,31 @@ const firstModelString = (target: WorkflowModelTarget | undefined): string | und
 /** First concrete {model, provider?} pair in a modelspace target (direct or ordered-list form). */
 const firstModelChoice = (
   target: WorkflowModelTarget | undefined,
-): { readonly model: string; readonly provider?: string } | undefined => {
+): { readonly model: string; readonly provider?: string; readonly variant?: string } | undefined => {
   if (target === undefined) return undefined;
   const direct = target.model;
   if (typeof direct === "string" && direct.length > 0) {
-    return { model: direct, ...(typeof target.provider === "string" ? { provider: target.provider } : {}) };
+    return {
+      model: direct,
+      ...(typeof target.provider === "string" ? { provider: target.provider } : {}),
+      ...(typeof target.variant === "string" ? { variant: target.variant } : {}),
+    };
   }
   const models = target.models;
   if (Array.isArray(models)) {
     for (const candidate of models) {
       if (typeof candidate === "object" && candidate !== null) {
-        const entry = candidate as { readonly model?: unknown; readonly provider?: unknown };
+        const entry = candidate as {
+          readonly model?: unknown;
+          readonly provider?: unknown;
+          readonly variant?: unknown;
+        };
         if (typeof entry.model === "string" && entry.model.length > 0) {
-          return { model: entry.model, ...(typeof entry.provider === "string" ? { provider: entry.provider } : {}) };
+          return {
+            model: entry.model,
+            ...(typeof entry.provider === "string" ? { provider: entry.provider } : {}),
+            ...(typeof entry.variant === "string" ? { variant: entry.variant } : {}),
+          };
         }
       }
     }
@@ -227,6 +239,8 @@ export interface WorkflowTaskModelResolution {
   readonly model: string;
   /** Harness-side inference provider (e.g. hermes `--provider xai-oauth`), from the modelspace target or harness default. */
   readonly provider?: string;
+  /** Harness-bound model variant, such as Codex reasoning effort. */
+  readonly variant?: string;
   readonly source: WorkflowTaskModelResolutionSource;
 }
 
@@ -280,7 +294,8 @@ export const resolveWorkflowTaskModelResolution = (
     }
     const resolved = resolveModelTargetForPicker(agentTarget);
     const picked = task.worker.modelResolver(resolved);
-    if (typeof picked === "string" && picked.length > 0) return { model: picked, source: "task" };
+    if (typeof picked === "string" && picked.length > 0)
+      return { model: picked, source: "task" };
     throw new WorkflowModelResolutionError(
       `modelResolver for agent ${task.agent.plugin}:${task.agent.name} returned an invalid model string for worker '${worker ?? "<missing>"}'`,
     );
@@ -297,7 +312,9 @@ export const resolveWorkflowTaskModelResolution = (
     );
   }
 
-  return options.fallbackModel !== undefined ? { model: options.fallbackModel, source: "cli-fallback" } : undefined;
+  return options.fallbackModel !== undefined
+    ? { model: options.fallbackModel, source: "cli-fallback" }
+    : undefined;
 };
 
 export const resolveWorkflowTaskModel = (

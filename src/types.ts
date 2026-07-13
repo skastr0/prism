@@ -15,6 +15,7 @@ export type HarnessId =
   | "cursor"
   | "factory-droid"
   | "pi"
+  | "omp"
   | "grok"
   | "devin";
 
@@ -39,6 +40,8 @@ export interface HarnessConfig {
   agentsDir: string | null;
   toolsDir: string | null;
   skillsDir: string | null;
+  // Native extension directory, when the harness exposes one.
+  extensionsDir?: string | null;
 
   // Main config file
   configFile: string | null;
@@ -265,6 +268,7 @@ export interface UnifiedFrontmatter {
   cursor?: CursorFrontmatter;
   "factory-droid"?: FactoryDroidFrontmatter;
   pi?: Record<string, unknown>;
+  omp?: Record<string, unknown>;
   grok?: Record<string, unknown>;
   devin?: Record<string, unknown>;
 }

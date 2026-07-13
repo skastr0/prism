@@ -236,6 +236,27 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsMCP: false,
   },
 
+  omp: {
+    id: "omp",
+    name: "Oh My Pi",
+    globalConfigPath: "~/.omp/agent/",
+    projectConfigPath: ".omp/",
+    rulesFile: null,
+    rulesDir: "rules/",
+    commandsDir: "commands/",
+    agentsDir: "agents/",
+    toolsDir: null,
+    skillsDir: "skills/",
+    extensionsDir: "extensions/",
+    configFile: "config.yml",
+    configFormat: "yaml",
+    supportsTools: true,
+    supportsCommands: true,
+    supportsAgents: true,
+    supportsSkills: true,
+    supportsMCP: true,
+  },
+
   grok: {
     id: "grok",
     name: "Grok Build",

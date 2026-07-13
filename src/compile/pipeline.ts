@@ -37,6 +37,7 @@ import { planLowering as planHermesLowering } from "./lowerers/hermes.js";
 import { planLowering as planGrokLowering } from "./lowerers/grok.js";
 import { planLowering as planFactoryDroidLowering } from "./lowerers/factory-droid.js";
 import { planLowering as planPiLowering } from "./lowerers/pi.js";
+import { planLowering as planOmpLowering } from "./lowerers/omp.js";
 import { planLowering as planKimiCodeLowering } from "./lowerers/kimi-code.js";
 import { planLowering as planCursorLowering } from "./lowerers/cursor.js";
 import { planLowering as planDevinLowering } from "./lowerers/devin.js";
@@ -253,6 +254,7 @@ const SUPPORTED_TARGETS = [
   "grok",
   "factory-droid",
   "pi",
+  "omp",
   "kimi-code",
   "cursor",
   "devin",
@@ -278,6 +280,8 @@ const getLowerer = (target: string): LowererModule => {
       return { planLowering: planFactoryDroidLowering };
     case "pi":
       return { planLowering: planPiLowering };
+    case "omp":
+      return { planLowering: planOmpLowering };
     case "kimi-code":
       return { planLowering: planKimiCodeLowering };
     case "cursor":
@@ -967,6 +971,7 @@ const planTargetLowering = (options: {
     options.targetId !== "amp-code" &&
     options.targetId !== "factory-droid" &&
     options.targetId !== "pi" &&
+    options.targetId !== "omp" &&
     options.targetId !== "kimi-code" &&
     options.targetId !== "cursor"
   ) {

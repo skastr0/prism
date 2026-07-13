@@ -1399,6 +1399,7 @@ test("coding-harness preset includes admitted coding harnesses", () => {
   expect(resolveManifestTargets(["coding-harness"])).toContain("grok");
   expect(resolveManifestTargets(["coding-harness"])).toContain("kimi-code");
   expect(resolveManifestTargets(["coding-harness"])).toContain("pi");
+  expect(resolveManifestTargets(["coding-harness"])).toContain("omp");
   expect(resolveManifestTargets(["coding-harness"])).toContain("cursor");
 });
 

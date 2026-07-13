@@ -901,6 +901,7 @@ export function getHarnessFrontmatter(
     "cursor",
     "factory-droid",
     "pi",
+    "omp",
     "grok",
     "devin",
   ];

@@ -31,6 +31,7 @@ const TARGET_PRESETS = {
     "cursor",
     "factory-droid",
     "pi",
+    "omp",
     "grok",
     "devin",
   ],
@@ -47,14 +48,15 @@ const COMPILE_SOURCE_HARNESSES = [
   "grok",
   "factory-droid",
   "pi",
+  "omp",
   "kimi-code",
   "devin",
 ] as const satisfies ReadonlyArray<HarnessId>;
 
 const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType, readonly HarnessId[]>> = {
-  rules: ["antigravity-cli", "pi", "kimi-code"],
-  commands: ["amp-code", "claude-code", "cursor", "pi", "kimi-code"],
-  skills: ["pi", "kimi-code"],
+  rules: ["antigravity-cli", "pi", "omp", "kimi-code"],
+  commands: ["amp-code", "claude-code", "cursor", "pi", "omp", "kimi-code"],
+  skills: ["pi", "omp", "kimi-code"],
 };
 
 export interface SourceRuntimeRequirements {

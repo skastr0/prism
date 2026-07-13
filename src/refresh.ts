@@ -76,7 +76,7 @@ const FILE_ROUTER_SCOPE_SUFFIX = "#file-router";
 const fileRouterScopePlugin = (pluginName: string): string =>
   `${pluginName}${FILE_ROUTER_SCOPE_SUFFIX}`;
 
-const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli", "pi", "kimi-code"]);
+const COMPILE_MANAGED_RULE_HARNESSES = new Set<HarnessId>(["antigravity-cli", "pi", "omp", "kimi-code"]);
 
 const rulesAreCompileManaged = (harnessId: HarnessId): boolean =>
   COMPILE_MANAGED_RULE_HARNESSES.has(harnessId);
@@ -85,6 +85,7 @@ const COMPILE_MANAGED_COMMAND_HARNESSES = new Set<HarnessId>([
   "amp-code",
   "claude-code",
   "pi",
+  "omp",
   "kimi-code",
 ]);
 
@@ -101,6 +102,7 @@ const COMPILE_COPIES_TARGETED_SKILL_HARNESSES = new Set<HarnessId>([
   "hermes",
   "kimi-code",
   "pi",
+  "omp",
 ]);
 
 const manifestTargetsAnyArtifact = (

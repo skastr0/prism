@@ -591,6 +591,8 @@ const namespaceScanDirs = (harness: HarnessId): string[] => {
       return ["plugins", "skills"];
     case "pi":
       return ["packages", "agents"];
+    case "omp":
+      return ["agents", "skills", "extensions", "commands", "rules"];
     case "amp-code":
       return ["plugins", "skills"];
     case "openclaw":

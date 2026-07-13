@@ -86,6 +86,14 @@ test("grounded facts: opencode has the fullest surface", () => {
   expect(opencode.perInvocationPermissions).toBe("supported");
   expect(opencode.optional.length).toBe(3);
 });
+test("grounded facts: OMP supports MCP without permission-only assignment", () => {
+  const omp = HARNESS_MCP_CONTRACTS.omp;
+  if (!isMcpSupported(omp)) throw new Error("unreachable");
+  expect(omp.mcpServersShape).toBe("single-global-config");
+  expect(omp.toolAllowlist).toBe("unsupported");
+  expect(omp.subAgentToolAssignment).toBe("unsupported");
+  expect(omp.perInvocationPermissions).toBe("unsupported");
+});
 
 test("grounded facts: allowlist shapes for hermes, codex, claude", () => {
   const hermes = HARNESS_MCP_CONTRACTS.hermes;

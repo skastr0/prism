@@ -168,7 +168,7 @@ const unsupportedContract = (
 ): UnsupportedHarnessMcpContract => ({ harness, mcpSupport: "unsupported", missingEssential, notes });
 
 // ---------------------------------------------------------------------------
-// The contract table — all 12 harnesses
+// The contract table — all 13 harnesses
 // ---------------------------------------------------------------------------
 
 export const HARNESS_MCP_CONTRACTS = {
@@ -304,6 +304,15 @@ export const HARNESS_MCP_CONTRACTS = {
   pi: unsupportedContract("pi", ["mcp servers reachable"], [
     "Pi canonical tools use the native extension API; no verified MCP server surface.",
   ]),
+  omp: supported({
+    harness: "omp",
+    // OMP exposes MCP through its global/project config.yml surface.
+    mcpServersShape: "single-global-config",
+    // No verified OMP per-tool allowlist or sub-agent MCP assignment surface.
+    toolAllowlist: "unsupported",
+    subAgentToolAssignment: "unsupported",
+    perInvocationPermissions: "unsupported",
+  }),
   grok: supported({
     harness: "grok",
     // Evidence: `config.toml#mcp_servers` managed stdio-shim region; grok

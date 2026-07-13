@@ -121,6 +121,8 @@ export interface PiExtensionBundleOptions {
   readonly bindings: ReadonlyArray<ResolvedContractBinding>;
   readonly setupImports?: string;
   readonly setupSource?: string;
+  readonly runtimeAgent?: string;
+  readonly harnessLabel?: string;
 }
 
 export interface PiExtensionBundle {
@@ -1616,14 +1618,22 @@ export default function (amp: {
 __PRISM_PLUGIN_SETUP__
 }`;
 
-const PI_EXTENSION_RUNTIME = `const runtimeContext = (ctx?: any, signal?: AbortSignal): ToolRuntimeContext => {
-  const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd();
-  const sessionFile = typeof ctx?.sessionManager?.getSessionFile === "function"
-    ? ctx.sessionManager.getSessionFile()
+const PI_EXTENSION_RUNTIME = `const runtimeRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+
+const runtimeContext = (ctx?: unknown, signal?: AbortSignal): ToolRuntimeContext => {
+  const context = runtimeRecord(ctx);
+  const cwd = typeof context?.cwd === "string" ? context.cwd : process.cwd();
+  const sessionManager = runtimeRecord(context?.sessionManager);
+  const getSessionFile = sessionManager?.getSessionFile;
+  const sessionFile = typeof getSessionFile === "function"
+    ? Reflect.apply(getSessionFile, sessionManager, [])
     : undefined;
   return {
-    sessionID: typeof sessionFile === "string" ? sessionFile : "pi-extension",
-    agent: "pi",
+    sessionID: typeof sessionFile === "string" ? sessionFile : __PRISM_RUNTIME_AGENT__,
+    agent: __PRISM_RUNTIME_AGENT__,
     timestamp: new Date().toISOString(),
     workingDirectory: cwd,
     repoRoot: cwd,
@@ -1634,13 +1644,13 @@ const PI_EXTENSION_RUNTIME = `const runtimeContext = (ctx?: any, signal?: AbortS
 const createToolDefinition = (name: string, surface: ToolSurface) => {
   const inputSchema = surface.Input ?? surface.input;
   const outputSchema = surface.Output ?? surface.output;
-  if (!inputSchema) throw new Error("Pi tool '" + name + "' is missing an Input/input schema");
-  if (!outputSchema) throw new Error("Pi tool '" + name + "' is missing an Output/output schema");
+  if (!inputSchema) throw new Error(__PRISM_HARNESS_LABEL__ + " tool '" + name + "' is missing an Input/input schema");
+  if (!outputSchema) throw new Error(__PRISM_HARNESS_LABEL__ + " tool '" + name + "' is missing an Output/output schema");
   let inputJsonSchema: JsonSchema;
   try {
     inputJsonSchema = inputJsonSchemaFromEffectSchema(inputSchema);
   } catch (error) {
-    throw new Error("Pi tool '" + name + "' has unsupported Input/input schema: " + errorMessage(error));
+    throw new Error(__PRISM_HARNESS_LABEL__ + " tool '" + name + "' has unsupported Input/input schema: " + errorMessage(error));
   }
 
   return {
@@ -1649,7 +1659,13 @@ const createToolDefinition = (name: string, surface: ToolSurface) => {
     description: surface.description ?? "",
     promptSnippet: (surface.description ?? name).slice(0, 240),
     parameters: inputJsonSchema,
-    async execute(_toolCallId: string, rawArgs: Record<string, unknown>, signal?: AbortSignal, _onUpdate?: unknown, ctx?: any) {
+    async execute(
+      _toolCallId: string,
+      rawArgs: Record<string, unknown>,
+      signal?: AbortSignal,
+      _onUpdate?: unknown,
+      ctx?: unknown,
+    ) {
       const input = decodeWithSchema(inputSchema as Schema.Schema<unknown, unknown, never>, rawArgs ?? {});
       const output = await surface.handle(input, runtimeContext(ctx, signal));
       const validatedOutput = decodeWithSchema(outputSchema as Schema.Schema<unknown, unknown, never>, output);
@@ -1665,7 +1681,10 @@ const toolDefinitions = [
 __PRISM_TOOL_ENTRIES__
 ];
 
-export default function (pi: { registerTool(definition: any): unknown; on?: (event: string, handler: any) => unknown }) {
+export default function (pi: {
+  registerTool(definition: unknown): unknown;
+  on?: (event: string, handler: (event: unknown, context: unknown) => unknown) => unknown;
+}) {
   for (const definition of toolDefinitions) {
     pi.registerTool(definition);
   }
@@ -1780,10 +1799,14 @@ const renderAmpToolRegistrationRuntime = (
 const renderPiExtensionRuntime = (
   toolEntries: string,
   setupSource: string | undefined,
+  runtimeAgent: string,
+  harnessLabel: string,
 ): string =>
   replaceTemplateTokens(PI_EXTENSION_RUNTIME, {
     __PRISM_TOOL_ENTRIES__: toolEntries,
     __PRISM_EXTENSION_SETUP__: setupSource ? setupSource.trimEnd().replace(/^/gm, "  ") : "",
+    __PRISM_RUNTIME_AGENT__: JSON.stringify(runtimeAgent),
+    __PRISM_HARNESS_LABEL__: JSON.stringify(harnessLabel),
   });
 
 const renderMcpServerEntry = (options: {
@@ -1904,6 +1927,8 @@ const renderPiExtensionEntry = (options: {
   readonly specs: ReadonlyArray<McpAdapterSpec>;
   readonly setupImports?: string;
   readonly setupSource?: string;
+  readonly runtimeAgent: string;
+  readonly harnessLabel: string;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
@@ -1913,15 +1938,20 @@ const renderPiExtensionEntry = (options: {
 
   return joinGeneratedSections([
     `// GENERATED by prism — do not edit.
-// Pi extension for compiled Prism canonical tool bindings.
+// ${options.harnessLabel} extension for compiled Prism canonical tool bindings.
 // Source plugin: ${options.sourcePluginName} v${options.version}`,
     `import { Schema, SchemaAST } from ${JSON.stringify(effectBundleImportPath())};`,
     imports,
     options.setupImports ?? "",
     AST_TO_JSON_SCHEMA_RUNTIME_IMPORT,
     TOOL_SURFACE_RUNTIME_TYPES,
-    renderSchemaBridgeRuntime("pi-schema-bridge"),
-    renderPiExtensionRuntime(entries, options.setupSource),
+    renderSchemaBridgeRuntime(`${options.runtimeAgent}-schema-bridge`),
+    renderPiExtensionRuntime(
+      entries,
+      options.setupSource,
+      options.runtimeAgent,
+      options.harnessLabel,
+    ),
   ]);
 };
 
@@ -2238,6 +2268,8 @@ export const generatePiExtensionBundle = async (
       specs,
       setupImports: options.setupImports,
       setupSource: options.setupSource,
+      runtimeAgent: options.runtimeAgent ?? "pi",
+      harnessLabel: options.harnessLabel ?? "Pi",
     });
     const entryPath = await writeTempBundleSources({
       tempRoot,

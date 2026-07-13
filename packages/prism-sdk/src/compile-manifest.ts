@@ -24,6 +24,7 @@ export const HarnessIdSchema = Schema.Literal(
   "hermes",
   "kimi-code",
   "opencode",
+  "omp",
   "pi",
 );
 export type HarnessId = typeof HarnessIdSchema.Type;

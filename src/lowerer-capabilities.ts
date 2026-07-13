@@ -609,6 +609,61 @@ export const LOWERER_CAPABILITIES = {
       "Compiled Pi agents use pi-agents markdown discovery: ~/.pi/agents globally and nearest .pi/agents in project scope.",
     ],
   },
+  omp: {
+    harness: "omp",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported({ skillPermissions: "unsupported" }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<omp-root>/extensions/prism-generated-<plugin>/",
+        summary: "Compile emits OMP native extensions under the extensions surface.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<omp-root>/rules/",
+        summary: "Compile writes OMP native rule files.",
+      },
+      commands: {
+        kind: "direct-file",
+        path: "<omp-root>/commands/",
+        summary: "Compile writes OMP native command files.",
+      },
+      agents: {
+        kind: "direct-file",
+        path: "<omp-root>/agents/",
+        summary: "Compile writes OMP native agent files.",
+      },
+      skills: {
+        kind: "direct-file",
+        path: "<omp-root>/skills/",
+        summary: "Compile writes OMP native skill folders.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<omp-root>/extensions/prism-generated-<plugin>/",
+        summary: "Canonical tools lower through OMP's native extension API.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<omp-root>/extensions/prism-generated-<plugin>/",
+        summary: "Hooks lower through OMP's native extension API.",
+      },
+      mcpConfig: unsupported(
+        "Prism-generated OMP tools use the native extension API; no MCP config patch is required.",
+      ),
+      agentConfig: {
+        kind: "direct-file",
+        path: "<omp-root>/agents/",
+        summary: "OMP agent model bindings and settings live in generated agent files.",
+      },
+    },
+    notes: [
+      "OMP is a distinct harness from Pi and uses ~/.omp/agent globally or .omp project-local.",
+      "OMP does not expose a verified per-agent skill permission surface; permission-only skill access fails closed.",
+    ],
+  },
   grok: {
     harness: "grok",
     family: "coding-harness",

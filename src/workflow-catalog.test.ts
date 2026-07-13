@@ -120,6 +120,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
         "grok",
         "hermes",
         "kimi-code",
+        "omp",
         "opencode",
       ].sort(),
     );

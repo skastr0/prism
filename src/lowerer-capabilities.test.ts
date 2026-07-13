@@ -47,6 +47,7 @@ test("compile target capabilities are derived from lowerer capability profiles",
       "grok",
       "factory-droid",
       "pi",
+      "omp",
       "kimi-code",
       "cursor",
       "devin",
@@ -88,6 +89,7 @@ test("agent model-binding demand follows lowerer surfaces", () => {
       "grok",
       "opencode",
       "pi",
+      "omp",
     ]),
   );
 
@@ -160,6 +162,22 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   expect(LOWERER_CAPABILITIES.pi.surfaces.commands.kind).toBe("native-plugin-bundle");
   expect(LOWERER_CAPABILITIES.pi.surfaces.generatedTools.kind).toBe("native-plugin-api");
   expect(LOWERER_CAPABILITIES.pi.surfaces.hooks.kind).toBe("native-plugin-api");
+  expect(LOWERER_CAPABILITIES.omp.compile).toEqual({
+    agents: "supported",
+    agentModelBindings: "consumed",
+    generatedCanonicalTools: "executable",
+    hooks: "supported",
+    skillPermissions: "unsupported",
+  });
+  expect(LOWERER_CAPABILITIES.omp.surfaces.pluginBundle).toMatchObject({
+    kind: "native-plugin-bundle",
+    path: "<omp-root>/extensions/prism-generated-<plugin>/",
+  });
+  expect(LOWERER_CAPABILITIES.omp.surfaces.generatedTools).toMatchObject({
+    kind: "native-plugin-api",
+    path: "<omp-root>/extensions/prism-generated-<plugin>/",
+  });
+  expect(LOWERER_CAPABILITIES.omp.surfaces.mcpConfig.kind).toBe("unsupported");
   expect(LOWERER_CAPABILITIES.hermes.surfaces.generatedTools.kind).toBe(
     "generated-mcp",
   );

@@ -1,5 +1,5 @@
 import { exists, listDir, readFile, writeFile } from "../fs.js";
-import { mcpToolNamesForBindings } from "../compile/mcp-bundle.js";
+import { mcpToolNameForBinding } from "../compile/mcp-bundle.js";
 import type { ResolvedContractBinding } from "../compile/resolve.js";
 import { normalizeBundleSegment } from "../compile/lowerers/shared.js";
 import {
@@ -59,14 +59,12 @@ export const buildToolCliCatalog = (options: {
   readonly toolDescriptions?: ReadonlyMap<string, string>;
   readonly generatedAt?: string;
 }): ToolCliCatalog => {
-  const wireNames = mcpToolNamesForBindings(options.pluginName, options.bindings);
   // Bindings fan out per exposure/agent surface; CLI catalog is one row per tool.
   const byLogical = new Map<string, ToolCliCatalogEntry>();
-  for (let index = 0; index < options.bindings.length; index++) {
-    const binding = options.bindings[index]!;
+  for (const binding of options.bindings) {
     const key = binding.logicalName;
     if (byLogical.has(key)) continue;
-    const wireName = wireNames[index] ?? binding.logicalName;
+    const wireName = mcpToolNameForBinding(options.pluginName, binding);
     byLogical.set(key, {
       name: binding.logicalName,
       wireName,

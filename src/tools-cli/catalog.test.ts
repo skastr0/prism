@@ -60,6 +60,36 @@ describe("tools-cli catalog", () => {
     expect(catalog.tools.map((t) => t.name)).toEqual(["create_glyph", "list_glyphs"]);
   });
 
+  test("buildToolCliCatalog preserves each binding's wire name", () => {
+    const catalog = buildToolCliCatalog({
+      pluginName: "tower",
+      bindings: [
+        {
+          kind: "permission",
+          logicalName: "submit_review_findings",
+          toolPluginName: "tower",
+          toolName: "submit_review_findings",
+          toolSourcePath: "/tmp/tower/tools/submit_review_findings.tool.ts",
+        },
+        {
+          kind: "permission",
+          logicalName: "submit_review",
+          toolPluginName: "tower",
+          toolName: "submit_review",
+          toolSourcePath: "/tmp/tower/tools/submit_review.tool.ts",
+        },
+      ],
+      generatedAt: "2026-07-10T00:00:00.000Z",
+    });
+
+    expect(catalog.tools.find((tool) => tool.name === "submit_review")?.wireName).toBe(
+      "tower_submit_review",
+    );
+    expect(catalog.tools.find((tool) => tool.name === "submit_review_findings")?.wireName).toBe(
+      "tower_submit_review_findings",
+    );
+  });
+
   test("skill markdown documents prism tools invoke", () => {
     const catalog = buildToolCliCatalog({
       pluginName: "tower",

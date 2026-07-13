@@ -8,6 +8,7 @@ import { runHermesWorkflowTask } from "./workflow-hermes-worker.js";
 import { runDevinWorkflowTask } from "./workflow-devin-worker.js";
 import { runKimiWorkflowTask } from "./workflow-kimi-worker.js";
 import { runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
+import { runOmpWorkflowTask } from "./workflow-omp-worker.js";
 import type {
   WorkflowTaskExecution,
   WorkflowTaskExecutionContext,
@@ -180,6 +181,30 @@ const workflowWorkerAdapters = {
       abortSignal: options.abortSignal,
       repair: options.context?.repair,
     }),
+  },
+  omp: {
+    id: "omp",
+    runTask: (task, options) => {
+      const resolution = resolveWorkflowTaskModelResolution(task, {
+        worker: "omp",
+        fallbackModel: options.model,
+      });
+      const model =
+        resolution?.provider !== undefined && !resolution.model.includes("/")
+          ? `${resolution.provider}/${resolution.model}`
+          : resolution?.model;
+      return runOmpWorkflowTask(task, {
+        cwd: options.cwd,
+        model,
+        profile: task.worker?.profile ?? options.profile,
+        thinking: resolution?.variant,
+        resolvedPermission: options.resolvedPermission,
+        restrictedTools: options.restrictedTools,
+        processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
+        abortSignal: options.abortSignal,
+        repair: options.context?.repair,
+      });
+    },
   },
 } as const satisfies WorkflowWorkerAdapterRegistry;
 

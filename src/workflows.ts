@@ -81,7 +81,8 @@ export type WorkflowWorkerId =
   | "grok"
   | "hermes"
   | "kimi-code"
-  | "opencode";
+  | "opencode"
+  | "omp";
 
 export type WorkflowPermissionMode =
   | "legacy"

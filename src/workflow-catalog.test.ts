@@ -117,6 +117,7 @@ describe("WORKFLOW_WORKERS (derived from the workflowWorker capability bit)", ()
         "antigravity-cli",
         "claude-code",
         "codex-cli",
+        "devin",
         "grok",
         "hermes",
         "kimi-code",

@@ -177,6 +177,13 @@ export const WORKFLOW_HARNESS_DETECTION_SPECS: Readonly<Record<WorkflowHarnessId
     probeArgs: ["--version"],
     defaultModel: "synthetic/hf:moonshotai/Kimi-K2.6",
   },
+  omp: {
+    harness: "omp",
+    command: "omp",
+    envVar: "PRISM_WORKFLOW_OMP_BIN",
+    probeArgs: ["--version"],
+    defaultModel: "gpt-5.6-luna",
+  },
 } as const;
 
 const workflowHarnessIdSet = new Set<string>(WORKFLOW_HARNESS_IDS);

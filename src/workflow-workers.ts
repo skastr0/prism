@@ -189,13 +189,10 @@ const workflowWorkerAdapters = {
         worker: "omp",
         fallbackModel: options.model,
       });
-      const model =
-        resolution?.provider !== undefined && !resolution.model.includes("/")
-          ? `${resolution.provider}/${resolution.model}`
-          : resolution?.model;
       return runOmpWorkflowTask(task, {
         cwd: options.cwd,
-        model,
+        model: resolution?.model,
+        provider: resolution?.provider,
         profile: task.worker?.profile ?? options.profile,
         thinking: resolution?.variant,
         resolvedPermission: options.resolvedPermission,

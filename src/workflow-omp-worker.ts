@@ -23,6 +23,7 @@ export type OmpWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly provider?: string;
   readonly profile?: string;
   readonly thinking?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
@@ -68,6 +69,7 @@ export const buildOmpArgs = (input: {
   readonly cwd: string;
   readonly systemPromptPath: string;
   readonly model?: string;
+  readonly provider?: string;
   readonly profile?: string;
   readonly thinking?: string;
   readonly prompt: string;
@@ -95,6 +97,7 @@ export const buildOmpArgs = (input: {
     input.systemPromptPath,
     "--no-title",
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
+    ...(input.provider !== undefined ? ["--provider", input.provider] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.thinking !== undefined ? ["--thinking", input.thinking] : []),
     ...(input.sessionId !== undefined ? ["--resume", input.sessionId] : []),
@@ -205,6 +208,7 @@ export const runOmpWorkflowTask = async (
     cwd: options.cwd,
     systemPromptPath,
     model: options.model,
+    provider: options.provider,
     profile: options.profile,
     thinking: options.thinking,
     prompt,

@@ -438,7 +438,7 @@ const planExtension = async (options: {
     options.files,
     options.desiredRelativePaths,
     options.input.target,
-    "index.js",
+    "index.ts",
     bundle.content,
   );
 };

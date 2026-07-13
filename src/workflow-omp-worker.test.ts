@@ -54,7 +54,8 @@ describe("OMP workflow argv", () => {
     const args = buildOmpArgs({
       cwd: "/repo",
       systemPromptPath: "/repo/.omp/agents/builder.md",
-      model: "openai/gpt-5.6-luna",
+      model: "gpt-5.6-luna",
+      provider: "openai",
       profile: "isolated",
       thinking: "high",
       prompt: "return json",
@@ -69,7 +70,8 @@ describe("OMP workflow argv", () => {
       "--append-system-prompt", "/repo/.omp/agents/builder.md",
       "--no-title",
       "--profile", "isolated",
-      "--model", "openai/gpt-5.6-luna",
+      "--provider", "openai",
+      "--model", "gpt-5.6-luna",
       "--thinking", "high",
       "--resume", "019f-session",
       "--approval-mode", "yolo",
@@ -255,9 +257,13 @@ describe("OMP workflow execution", () => {
         "--profile",
         "isolated",
       ]);
+      expect(argv.slice(argv.indexOf("--provider"), argv.indexOf("--provider") + 2)).toEqual([
+        "--provider",
+        "openai",
+      ]);
       expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual([
         "--model",
-        "openai/gpt-5.6-luna",
+        "gpt-5.6-luna",
       ]);
       expect(argv.slice(argv.indexOf("--thinking"), argv.indexOf("--thinking") + 2)).toEqual([
         "--thinking",

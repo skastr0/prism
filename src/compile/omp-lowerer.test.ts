@@ -117,7 +117,7 @@ test("OMP lowerer emits native agents, skills, and extension without Pi surfaces
       outputRoot,
       "extensions",
       "prism-generated-omp-plugin",
-      "index.js",
+      "index.ts",
     ),
   );
   expect(extension?.content).toContain("omp_plugin_owned");

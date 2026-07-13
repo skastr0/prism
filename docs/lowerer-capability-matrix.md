@@ -26,13 +26,19 @@ patched into a config file.
 
 ## Matrix
 
-All `generated-mcp` surfaces reference ONE canonical union bundle per source
-plugin at `<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` (never inside harness
-roots). Per-harness tool exposure stays client-side: codex `enabled_tools`,
-hermes `tools.include`, kimi `enabledTools`, and a deny-by-default HTTP
-exposure profile header for shared daemon clients without a native filter field
-(Claude Code, Cursor, Antigravity, Factory Droid, Grok). The generated HTTP
-daemon registers only the profile's assigned tools for each MCP session.
+All `generated-mcp` surfaces are per-owning-plugin: each source plugin that
+owns canonical tools gets its own bundle at
+`<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` (never inside harness roots)
+and its own server entry per harness root — never a shared aggregated shim
+across plugins. Harnesses reach it over the stdio-shim transport
+(`command: "prism"`, `args: ["mcp", "shim"]`), with `PRISM_SHIM_PLUGINS`
+scoping the spawned process to that single owner. Per-harness tool exposure
+uses each harness's own mechanism: codex `enabled_tools`, hermes
+`tools.include`, and kimi `enabledTools` filter inside the server's own config
+entry; Claude Code, Antigravity CLI, and Factory Droid allowlist per agent via
+frontmatter tool names scoped to each server; Cursor and Grok have no native
+per-tool filter and expose the owner's full tool set once its server entry
+exists.
 
 | Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -147,9 +153,11 @@ frontmatter documents `tools` but not a per-droid skill allowlist.
 Hermes profile-local MCP is intentionally expressed through the existing root
 override rather than a new target. Hermes profiles are separate Hermes homes, so
 `prism refresh --plugin ./plugin --harness hermes --compile-only --compile-root ~/.hermes/profiles/<name>` writes
-skills and `config.yaml#mcp_servers` into that profile root. `--mcp-root` remains
-the explicit split when a generated HTTP runtime should live outside the profile
-root. See `docs/hermes-profile-mcp.md` for the collision and non-goal contract:
+skills and `config.yaml#mcp_servers` into that profile root. The `config.yaml`
+entry is a stdio-shim `command`/`args`/`env` block; the daemon it spawns is
+content-addressed under the single shared `PRISM_HOME`, so no separate
+per-profile MCP runtime root is needed (the retired `--mcp-root` flag is gone).
+See `docs/hermes-profile-mcp.md` for the collision and non-goal contract:
 Prism does not lower SOUL/personality files, runtime delegation, or native
 Hermes Python plugins as part of profile-local MCP support.
 
@@ -157,7 +165,9 @@ Cursor compile support is tools-only. Cursor's official MCP contract uses
 `~/.cursor/mcp.json` globally and `.cursor/mcp.json` per project, and Cursor CLI
 respects the same file as the IDE. Prism lowers canonical tools into a generated
 MCP server and patches one compiler-owned `mcpServers` entry in that file:
-generated entries use Streamable HTTP `url` plus `headers`. Cursor documents local plugins under
+generated entries use the stdio-shim `command`/`args`/`env` shape
+(`command: "prism"`, `args: ["mcp", "shim"]`, `env` scoping the process to its
+owner plugin) — no `url`, no `headers`. Cursor documents local plugins under
 `~/.cursor/plugins/local/<plugin>` with `.cursor-plugin/plugin.json` and default
 `commands/` component discovery, so Prism installs Cursor command artifacts into
 a generated local plugin bundle instead of direct `~/.cursor/commands/` files.

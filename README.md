@@ -6,6 +6,20 @@ Prism is an experimental plugin distribution system for AI coding harnesses.
 
 Experimental. The package format, generated outputs, and harness adapters may change.
 
+## Tool Surface
+
+Agents reach compiled tools through a managed CLI surface by default: `prism
+tools list|show|invoke|skill`, with per-plugin catalogs under
+`PRISM_HOME/runtime/tools/` and either an injected skill (default) or
+always-on rules for discovery. Set `PRISM_TOOLS_MCP_EMIT=1` to also emit a
+harness MCP config entry. Harnesses that reach Prism tools through a generated
+MCP server (see
+[`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)) do
+so over the stdio-shim transport: the harness spawns `prism mcp shim`, which
+resolves or spawns a content-addressed Unix-domain-socket daemon at
+`PRISM_HOME/runtime/mcp/<plugin>/<hash-prefix>.sock`. Prism no longer emits
+the retired Streamable HTTP MCP transport.
+
 ## Development
 
 ```bash
@@ -33,9 +47,11 @@ bun run check:refresh-idempotency
 ```
 
 The gate runs `refresh --plugins ../prism-plugins --harness codex-cli` twice in
-isolated `HOME`, `PRISM_HOME`, and MCP runtime roots. Streamable HTTP MCP
-plugins are served on temporary loopback ports and stopped before cleanup. The
-gate fails on warm-run stale prunes, config churn, duplicate MCP tables, orphan
+isolated `HOME`, `PRISM_HOME`, and MCP runtime roots. Codex CLI reaches
+generated tools over the stdio-shim transport (a content-addressed UDS daemon
+under `PRISM_HOME`); the gate additionally stops any corpus plugin still
+configured for the retired Streamable HTTP transport before cleanup. The gate
+fails on warm-run stale prunes, config churn, duplicate MCP tables, orphan
 hook blocks, snapshot churn, or backup churn.
 
 ## Lowerer Capabilities

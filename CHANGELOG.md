@@ -2,6 +2,13 @@
 
 All notable changes to Prism will be documented in this file.
 
+Versions are an operator decision, not a derivation — see
+[`docs/release-train.md`](docs/release-train.md). Automatic conventional-commit
+version bumps shipped in `0.3.0`, produced an unreleased `0.4.0` two days
+later, and were deleted in `55800c8` (`refactor(release): delete automatic
+version derivation`); the version was then reset to continue the `0.3.x` patch
+line. `0.4.0` was committed but never tagged or published.
+
 ## 0.3.5 - 2026-07-10
 
 ### Added
@@ -18,6 +25,76 @@ All notable changes to Prism will be documented in this file.
 ### Fixed
 
 - Tool plugins that used refined or Record fields (e.g. Tower) can compile again under the MCP schema bridge.
+
+## 0.3.4 - 2026-07-07
+
+### Added
+
+- Workflow catalog gradual disclosure, run resume, and an orbit JSON filter for workflow listing.
+
+## 0.3.3 - 2026-07-07
+
+### Added
+
+- Per-plugin MCP server topology across all generated-MCP harnesses (Claude Code, Codex CLI, Hermes, Cursor, Antigravity CLI, Kimi Code, Factory Droid, Grok): one MCP server per owning plugin, owned-only tool exposure, no consumer facades.
+- Typed per-harness MCP capability contract (`src/harness-mcp-contract.ts`) and a deterministic per-plugin MCP topology verifier wired into `prism doctor` and the acceptance gate.
+
+### Changed
+
+- Retired the shim-exposure union registry entirely; per-plugin server naming replaces it.
+- Doctor treats a live daemon as servable, not just a bundle on disk, and resolves `PRISM_HOME` through the SDK's own daemon/registry lookups rather than `homedir()`.
+
+### Fixed
+
+- Sync sweeps retired Prism MCP identities and legacy sentinel-owned snapshot entries on every refresh, gated on provenance rather than name alone.
+- Shim command self-stamps the compiling binary so config and shim can no longer version-skew.
+
+## 0.3.2 - 2026-07-07
+
+### Fixed
+
+- Grok registers its stdio-shim MCP entry directly in `config.toml#mcp_servers`; the prior plugin-bundle `.mcp.json` path is never resolved by Grok and was silently inert.
+- Shared shim config regions render as the cross-plugin union instead of last-writer-wins; the shim derives a per-owner exposure profile when `PRISM_SHIM_EXPOSURE` is unset.
+- Hermes workflow worker runs chat in quiet mode so JSON output survives extraction, threads the inference provider through model resolution, and requires the `hf:` model prefix.
+
+### Added
+
+- Per-run HMAC-keyed challenge proof for the `prism-harness-qa` example workflows.
+
+## 0.3.1 - 2026-07-06
+
+### Added
+
+- Canonical MCP wire-naming module (`@skastr0/prism-sdk/mcp/wire-naming`); the shim is harness-aware and dispatches by wire name.
+- All 8 generated-MCP harness lowerers flip to unconditional stdio-shim transport.
+
+### Changed
+
+- Generated MCP is stdio/UDS only: deleted the TCP/SSE transport from the generated MCP bundle, the `mcpRuntimePort` pipeline threading, and the `McpHarnessTransportMode` flag surface. Manual TCP daemon commands are retired; `prism mcp status` and doctor's MCP config validation target the stdio-shim contract.
+- The refresh-idempotency acceptance gate retires the mcp-lifecycle path and migrates to UDS-only.
+
+### Fixed
+
+- Workflow scaffold writes to `~/.prism/workflows`, picks already-installed workers, and drops the implicit `git add`; shipped skill reference files land in compiled output; the Grok default model and its timeout are repaired (PQ-176).
+- Persisted workflow run status now maps to the process exit code (PQ-174).
+
+## 0.3.0 - 2026-07-04
+
+### Added
+
+- UDS-based MCP shim architecture behind a rollout flag: content-addressed Unix-domain-socket paths, a UDS daemon registry, idle-reap lifecycle, singleton + stale-socket recovery, an aggregating shim with exposure filtering, and resolve-or-spawn daemon resolution. Wired for Claude Code, Codex CLI, and Hermes.
+- Published `@skastr0/prism-core` (renamed `@skastr0/prism-sdk` shortly after) as a standalone package with an explicit embeddable-SDK/runtime-boundary contract.
+- `prism plugins` install-inspector TUI.
+- Dynamic-workflow fault isolation and a real per-task runnability gate (WDX-009).
+
+### Changed
+
+- Added a conventional-commit-driven release train; deleted two days later in favor of operator-decided versions (see the Changelog header).
+
+### Fixed
+
+- Grok MCP tool names enforce Grok's 64-char cap structurally (PQ-168); doctor stops doubling the OpenCode bundle path for file-form plugin entries (PQ-167).
+- Migrated local Prism sources to a noun-first naming convention across compile, workflow, and sync modules; isolated Bun-only runtime APIs behind a shared boundary.
 
 ## 0.2.0 - 2026-06-21
 

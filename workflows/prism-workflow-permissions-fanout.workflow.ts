@@ -3,7 +3,7 @@
  *
  * Run from the prism git root:
  *   bun run dev -- workflow validate workflows/prism-workflow-permissions-fanout.workflow.ts
- *   bun run dev -- workflow run workflows/prism-workflow-permissions-fanout.workflow.ts --store /tmp/prism-permissions-fanout.sqlite --no-cache --max-concurrent-tasks 4
+ *   bun run dev -- workflow run workflows/prism-workflow-permissions-fanout.workflow.ts --store /tmp/prism-permissions-fanout.sqlite --max-concurrent-tasks 4
  *
  * Topology:
  *   harness self-research fanout -> mixed fusion console -> single delegated

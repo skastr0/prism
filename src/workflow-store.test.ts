@@ -2755,7 +2755,7 @@ describe("workflow store", () => {
     store.close();
   });
 
-  test("no-cache still records run history without reading or writing the reuse cache", async () => {
+  test("legacy cache-false inputs cannot bypass task reuse", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const workflow = createWorkflow();
@@ -2768,32 +2768,22 @@ describe("workflow store", () => {
         return { summary: "first" };
       },
     });
-    const second = await runWorkflow(workflow, {
+    const legacyOptions = {
       store,
       cache: false,
       executeTask: async () => {
         calls += 1;
         return { summary: "second" };
       },
-    });
+    };
+    const second = await runWorkflow(workflow, legacyOptions);
 
-    expect(calls).toBe(2);
-    expect(second.tasks[0]?.cached).toBe(false);
-    expect(second.tasks[0]?.output).toEqual({ summary: "second" });
-    expect(store.listRunTasks(second.runId!)[0]?.output).toEqual({ summary: "second" });
-    expect(store.listRunEvents(second.runId!).map((event) => event.type).filter((type) => !type.startsWith("task.attempt."))).toEqual([
-      "run.started",
-      "task.started",
-      "task.cache_lookup.skipped",
-      "task.executor.started",
-      "task.executor.completed",
-      "task.decode.started",
-      "task.decode.completed",
-      "task.finish.completed",
-      "task.completed",
-      "run.completed",
-    ]);
-    expect(store.getCompleted(workflowTaskIdentity(workflow.name, workflow.tasks[0]!))?.output).toEqual({ summary: "first" });
+    expect(calls).toBe(1);
+    expect(second.tasks[0]?.cached).toBe(true);
+    expect(second.tasks[0]?.output).toEqual({ summary: "first" });
+    expect(store.listRunTasks(second.runId!)[0]?.output).toEqual({ summary: "first" });
+    expect(store.listRunEvents(second.runId!).map((event) => event.type)).toContain("task.cache_lookup.hit");
+    expect(store.listRunEvents(second.runId!).map((event) => event.type)).not.toContain("task.cache_lookup.skipped");
     store.close();
   });
 

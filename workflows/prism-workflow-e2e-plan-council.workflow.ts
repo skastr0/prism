@@ -3,7 +3,7 @@
  *
  * Run from the prism git root:
  *   prism workflow validate workflows/prism-workflow-e2e-plan-council.workflow.ts
- *   prism workflow run workflows/prism-workflow-e2e-plan-council.workflow.ts --store /tmp/prism-e2e-plan-council.sqlite --no-cache
+ *   prism workflow run workflows/prism-workflow-e2e-plan-council.workflow.ts --store /tmp/prism-e2e-plan-council.sqlite
  *
  * Failed reviewer harnesses are captured as evidence so one auth-gated live
  * route does not prevent the remaining council from producing suggestions.
@@ -151,7 +151,7 @@ const localFusionReview = (lensResults: ReadonlyArray<LensResult>): FusionReview
     regressionTests: completedReports.flatMap((report) => report.testsToAdd),
     acceptanceRunbook: [
       ...completedReports.flatMap((report) => report.runbookNotes),
-      "rerun prism-workflow-e2e-plan-council with --no-cache after harness auth refresh",
+      "rerun prism-workflow-e2e-plan-council after harness auth refresh; completed tasks replay from cache and failed tasks execute again",
     ],
     dissent: lensResults.map((result) =>
       result.status === "completed"

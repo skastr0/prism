@@ -4,7 +4,7 @@
  * Run from the prism git root after each glyph-sized commit or before a
  * risky slice lands:
  *   prism workflow validate workflows/prism-workflow-work-review.workflow.ts
- *   PRISM_WORK_REVIEW_PACKET=/tmp/prism-review-packet.md prism workflow run workflows/prism-workflow-work-review.workflow.ts --store /tmp/prism-work-review.sqlite --no-cache
+ *   PRISM_WORK_REVIEW_PACKET=/tmp/prism-review-packet.md prism workflow run workflows/prism-workflow-work-review.workflow.ts --store /tmp/prism-work-review.sqlite
  *
  * The workflow deliberately captures failed reviewer harnesses as evidence so
  * auth-gated live configs do not hide available Claude/OpenCode findings.

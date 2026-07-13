@@ -98,7 +98,7 @@ test("refresh and plan help use managed backup policy instead of a per-run backu
   }
 });
 
-test("workflow run, update, and resume help expose independent runtime budget controls", async () => {
+test("workflow run, update, and resume expose budgets but no cache bypass", async () => {
   for (const args of [
     ["workflow", "run", "--help"],
     ["workflow", "runs", "update", "--help"],
@@ -115,8 +115,8 @@ test("workflow run, update, and resume help expose independent runtime budget co
     expect(result.stdout).toContain("--task-no-progress-ms");
     expect(result.stdout).toContain("--max-tasks");
     expect(result.stdout).toContain("--max-cost-usd");
-    expect(result.stdout).toContain("--cache");
-    expect(result.stdout).toContain("--no-cache");
+    expect(result.stdout).not.toContain("--cache");
+    expect(result.stdout).not.toContain("--no-cache");
   }
 });
 
@@ -372,11 +372,17 @@ export const workflow = defineWorkflow({
   expect(result.stderr).toContain("Cannot find module 'prism/refs'");
 }, 30_000);
 
-test("workflow runs update help exposes cache control", async () => {
-  const result = await runCli(["workflow", "runs", "update", "--help"], {});
+test("workflow run, update, and resume reject the removed cache bypass flag", async () => {
+  for (const args of [
+    ["workflow", "run", "workflow.ts", "--no-cache"],
+    ["workflow", "runs", "update", "run-1", "workflow.ts", "--no-cache"],
+    ["workflow", "runs", "resume", "run-1", "workflow.ts", "--no-cache"],
+  ]) {
+    const result = await runCli(args, {});
 
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("--no-cache");
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("unknown option '--no-cache'");
+  }
 });
 
 test("workflow runs list applies its limit to newest runs first", async () => {

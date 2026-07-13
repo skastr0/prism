@@ -83,7 +83,6 @@ const workflowOptionsFromSnapshot = (
     worker?: string;
     model?: string;
     maxConcurrentTasks?: number;
-    cache?: boolean;
   } = {};
   if (typeof options?.mockOutput === "string") out.mockOutput = options.mockOutput;
   if (typeof options?.worker === "string") out.worker = options.worker;
@@ -91,7 +90,6 @@ const workflowOptionsFromSnapshot = (
   if (typeof options?.maxConcurrentTasks === "number" && Number.isInteger(options.maxConcurrentTasks)) {
     out.maxConcurrentTasks = options.maxConcurrentTasks;
   }
-  if (typeof options?.cache === "boolean") out.cache = options.cache;
   return out;
 };
 

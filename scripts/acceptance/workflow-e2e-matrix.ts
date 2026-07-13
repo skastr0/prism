@@ -1329,6 +1329,7 @@ const runModelSelectionScenario = async (input: {
   readonly validateOnly: boolean;
   readonly expectedProofFor: (challenge: string) => string;
 }): Promise<ModelSelectionResult> => {
+  const storeNonce = randomBytes(8).toString("hex");
   const refresh = await runCommand([
     process.execPath,
     "run",
@@ -1370,8 +1371,7 @@ const runModelSelectionScenario = async (input: {
       "run",
       join(input.pluginRoot, "workflows", MODEL_SELECTION_WORKFLOW),
       "--store",
-      join(STORE_ROOT, `prism-workflow-e2e-${input.mode}-model-selection-opencode.sqlite`),
-      "--no-cache",
+      join(STORE_ROOT, `prism-workflow-e2e-${input.mode}-model-selection-opencode-${storeNonce}.sqlite`),
     ], input.env);
     invalidRun = await runCommand([
       process.execPath,
@@ -1381,8 +1381,7 @@ const runModelSelectionScenario = async (input: {
       "run",
       join(input.pluginRoot, "workflows", MODEL_SELECTION_INVALID_WORKFLOW),
       "--store",
-      join(STORE_ROOT, `prism-workflow-e2e-${input.mode}-model-selection-invalid-opencode.sqlite`),
-      "--no-cache",
+      join(STORE_ROOT, `prism-workflow-e2e-${input.mode}-model-selection-invalid-opencode-${storeNonce}.sqlite`),
     ], input.env);
   }
 
@@ -1517,7 +1516,7 @@ const main = async (): Promise<void> => {
       let run: CommandResult | undefined;
       let proof: HarnessResult["proof"];
       if (!validateOnly) {
-        const store = join(STORE_ROOT, `prism-workflow-e2e-${mode}-${entry.harness}-${basename(entry.workflow)}.sqlite`);
+        const store = join(STORE_ROOT, `prism-workflow-e2e-${mode}-${entry.harness}-${basename(entry.workflow)}-${proofSecret.slice(0, 16)}.sqlite`);
         run = await runCommand([
           process.execPath,
           "run",
@@ -1527,7 +1526,6 @@ const main = async (): Promise<void> => {
           workflowPath(pluginRoot, entry),
           "--store",
           store,
-          "--no-cache",
         ], env);
         proof = proofFromRun(entry, run, expectedProofFor(entry.challenge));
       }

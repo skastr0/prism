@@ -494,8 +494,6 @@ workflow
   .option("--detach", "Start the workflow in a detached background process and return its run id")
   .addOption(new CommanderOption("--run-id <id>").hideHelp())
   .addOption(new CommanderOption("--run-token <token>").hideHelp())
-  .option("--cache", "Enable workflow task cache lookup and writes")
-  .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (file: string, options: {
     readonly mockOutput?: string;
     readonly worker?: string;
@@ -511,7 +509,6 @@ workflow
     readonly detach?: boolean;
     readonly runId?: string;
     readonly runToken?: string;
-    readonly cache?: boolean;
   }) => {
     let store: WorkflowStore | undefined;
     let heartbeat: NodeJS.Timeout | undefined;
@@ -606,7 +603,6 @@ workflow
         : null;
       const result = await runWorkflow(workflow, {
         store,
-        cache: options.cache !== false,
         mockOutput: outputs !== null,
         maxConcurrentTasks: options.maxConcurrentTasks,
         maxWallMs: options.maxWallMs,
@@ -1099,8 +1095,6 @@ workflowRuns
   .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
   .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
   .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
-  .option("--cache", "Enable workflow task cache lookup and writes")
-  .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
@@ -1113,7 +1107,6 @@ workflowRuns
     readonly taskNoProgressMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
-    readonly cache?: boolean;
   }) => {
     try {
       const storePath = resolveWorkflowStorePath(options.store);
@@ -1142,8 +1135,6 @@ workflowRuns
   .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
   .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
   .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
-  .option("--cache", "Enable workflow task cache lookup and writes")
-  .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
@@ -1156,7 +1147,6 @@ workflowRuns
     readonly taskNoProgressMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
-    readonly cache?: boolean;
   }) => {
     try {
       const storePath = resolveWorkflowStorePath(options.store);

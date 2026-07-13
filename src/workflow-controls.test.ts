@@ -298,7 +298,6 @@ test("workflow budget controls round-trip through snapshots and exact detached c
     taskNoProgressMs: 4_000,
     maxTasks: 7,
     maxCostUsd: 1.25,
-    cache: false,
   } as const;
 
   expect(workflowRunOptionsSnapshot(options)).toEqual(options);
@@ -336,7 +335,6 @@ test("workflow budget controls round-trip through snapshots and exact detached c
     "7",
     "--max-cost-usd",
     "1.25",
-    "--no-cache",
   ]);
 });
 
@@ -477,7 +475,6 @@ export default defineWorkflow({
     const result = JSON.parse(update.stdout) as WorkflowUpdateResult;
     expect(result.update).toMatchObject({
       inheritedOptions: {
-        cache: false,
         maxWallMs: 30_000,
         taskNoProgressMs: 20_000,
         maxTasks: 2,
@@ -490,13 +487,15 @@ export default defineWorkflow({
         maxCostUsd: 0.75,
       },
       effectiveOptions: {
-        cache: false,
         maxWallMs: 40_000,
         taskNoProgressMs: 25_000,
         maxTasks: 3,
         maxCostUsd: 0.75,
       },
     });
+    expect(result.update.inheritedOptions).not.toHaveProperty("cache");
+    expect(result.update.overrideOptions).not.toHaveProperty("cache");
+    expect(result.update.effectiveOptions).not.toHaveProperty("cache");
     expect(await waitForPersistedTerminal(storePath, result.runId)).toBe(true);
 
     let updatedRunnerPid: number | undefined;
@@ -510,7 +509,6 @@ export default defineWorkflow({
       }
       updatedRunnerPid = updatedRun.runnerPid;
       expect(updatedStore.getRunSnapshot(result.runId)?.options).toMatchObject({
-        cache: false,
         mockOutput: mockOutputPath,
         maxConcurrentTasks: 1,
         maxWallMs: 40_000,
@@ -518,6 +516,7 @@ export default defineWorkflow({
         maxTasks: 3,
         maxCostUsd: 0.75,
       });
+      expect(updatedStore.getRunSnapshot(result.runId)?.options).not.toHaveProperty("cache");
     } finally {
       updatedStore.close();
     }
@@ -594,16 +593,13 @@ export default defineWorkflow({
       workflowPath,
       "--store",
       storePath,
-      "--cache",
     ], { PRISM_HOME: join(root, "prism-home") });
     expect(resume.exitCode).toBe(0);
     expect(resume.stderr).toBe("");
     const result = JSON.parse(resume.stdout) as WorkflowUpdateResult;
-    expect(result.update).toMatchObject({
-      inheritedOptions: { cache: false },
-      overrideOptions: { cache: true },
-      effectiveOptions: { cache: true },
-    });
+    expect(result.update.inheritedOptions).not.toHaveProperty("cache");
+    expect(result.update.overrideOptions).not.toHaveProperty("cache");
+    expect(result.update.effectiveOptions).not.toHaveProperty("cache");
     expect(await waitForPersistedTerminal(storePath, result.runId)).toBe(true);
 
     let resumedRunnerPid: number | undefined;
@@ -618,7 +614,6 @@ export default defineWorkflow({
       }
       resumedRunnerPid = resumedRun.runnerPid;
       expect(updatedStore.getRunSnapshot(result.runId)?.options).toMatchObject({
-        cache: true,
         mockOutput: mockOutputPath,
         maxConcurrentTasks: 1,
         maxWallMs: 30_000,
@@ -626,6 +621,7 @@ export default defineWorkflow({
         maxTasks: 2,
         maxCostUsd: 1.25,
       });
+      expect(updatedStore.getRunSnapshot(result.runId)?.options).not.toHaveProperty("cache");
       const events = updatedStore.listRunEvents(result.runId);
       expect(events.some((event) => event.type === "run.updated_from")).toBe(true);
     } finally {

@@ -22,7 +22,6 @@ export interface WorkflowDetachedRunOptions {
   readonly taskNoProgressMs?: number;
   readonly maxTasks?: number;
   readonly maxCostUsd?: number;
-  readonly cache?: boolean;
 }
 
 export interface WorkflowUpdateResult {
@@ -68,7 +67,6 @@ export const workflowRunOptionsSnapshot = (
   ...(options.taskNoProgressMs !== undefined ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
   ...(options.maxTasks !== undefined ? { maxTasks: options.maxTasks } : {}),
   ...(options.maxCostUsd !== undefined ? { maxCostUsd: options.maxCostUsd } : {}),
-  ...(options.cache !== undefined ? { cache: options.cache } : {}),
 });
 
 const workflowDetachedRunOptionsFromSnapshot = (
@@ -88,7 +86,6 @@ const workflowDetachedRunOptionsFromSnapshot = (
   ...(isFinitePositiveInteger(options?.taskNoProgressMs) ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
   ...(isFinitePositiveInteger(options?.maxTasks) ? { maxTasks: options.maxTasks } : {}),
   ...(isFiniteNonNegativeNumber(options?.maxCostUsd) ? { maxCostUsd: options.maxCostUsd } : {}),
-  ...(typeof options?.cache === "boolean" ? { cache: options.cache } : {}),
 });
 
 const mergeWorkflowRunOptions = (
@@ -108,7 +105,6 @@ const mergeWorkflowRunOptions = (
     ...(next.taskNoProgressMs !== undefined ? { taskNoProgressMs: next.taskNoProgressMs } : {}),
     ...(next.maxTasks !== undefined ? { maxTasks: next.maxTasks } : {}),
     ...(next.maxCostUsd !== undefined ? { maxCostUsd: next.maxCostUsd } : {}),
-    ...(next.cache !== undefined ? { cache: next.cache } : {}),
   };
 };
 
@@ -191,7 +187,6 @@ export const workflowDetachedRunArgs = (
   ...(options.taskNoProgressMs !== undefined ? ["--task-no-progress-ms", String(options.taskNoProgressMs)] : []),
   ...(options.maxTasks !== undefined ? ["--max-tasks", String(options.maxTasks)] : []),
   ...(options.maxCostUsd !== undefined ? ["--max-cost-usd", String(options.maxCostUsd)] : []),
-  ...(options.cache === true ? ["--cache"] : options.cache === false ? ["--no-cache"] : []),
 ];
 
 export const startDetachedWorkflowRun = async (

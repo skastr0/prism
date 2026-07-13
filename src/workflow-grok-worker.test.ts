@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { buildGrokArgs, parseGrokJsonRunOutput, runGrokWorkflowTask, stripAgentToolsFrontmatter } from "./workflow-grok-worker.js";
+import {
+  buildGrokArgs,
+  parseGrokJsonRunOutput,
+  runGrokWorkflowTask,
+  sanitizeGrokWorkflowAgentSource,
+  stripAgentSkillsFrontmatter,
+  stripAgentToolsFrontmatter,
+} from "./workflow-grok-worker.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
@@ -35,7 +42,7 @@ const fakeGrokJsonRun = (callsFile: string, sessionId: string): string => [
   "",
 ].join("\n");
 
-describe("grok agent tools frontmatter strip (grok-4.x session validation)", () => {
+describe("grok agent frontmatter sanitize (tools + skills)", () => {
   const generated = [
     "---",
     'name: "builder"',
@@ -46,6 +53,7 @@ describe("grok agent tools frontmatter strip (grok-4.x session validation)", () 
     '  - "tower__get_board"',
     "skills:",
     '  - "atomic-commits"',
+    '  - "ad-creative"',
     "---",
     "",
     "Body stays.",
@@ -67,6 +75,46 @@ describe("grok agent tools frontmatter strip (grok-4.x session validation)", () 
     const noTools = generated.replace(/^tools:\n(?:^ {2}- .*\n)+/mu, "");
     expect(stripAgentToolsFrontmatter(noTools)).toBe(noTools);
   });
+
+  test("removes the skills block (Grok preloads full skill bodies for frontmatter skills)", () => {
+    const stripped = stripAgentSkillsFrontmatter(generated);
+    expect(stripped).not.toContain("skills:");
+    expect(stripped).not.toContain("atomic-commits");
+    expect(stripped).not.toContain("ad-creative");
+    expect(stripped).toContain("tools:");
+    expect(stripped).toContain('name: "builder"');
+    expect(stripped).toContain("Body stays.");
+  });
+
+  test("sanitize strips skills always and tools when requested", () => {
+    const both = sanitizeGrokWorkflowAgentSource(generated, { stripTools: true });
+    expect(both).not.toContain("tools:");
+    expect(both).not.toContain("skills:");
+    expect(both).toContain('name: "builder"');
+    expect(both).toContain("Body stays.");
+
+    const skillsOnly = sanitizeGrokWorkflowAgentSource(generated, { stripTools: false });
+    expect(skillsOnly).toContain("tools:");
+    expect(skillsOnly).not.toContain("skills:");
+  });
+  test("removes inline keys, preserves CRLF, and never strips body text", () => {
+    const source = [
+      "---",
+      "name: builder",
+      "skills: [one, two]",
+      "tools: []",
+      "---",
+      "",
+      "skills:",
+      "  - body-example",
+    ].join("\r\n");
+    const stripped = sanitizeGrokWorkflowAgentSource(source, { stripTools: true });
+    expect(stripped).toContain("name: builder\r\n---");
+    expect(stripped).toContain("\r\nskills:\r\n  - body-example");
+    expect(stripped).not.toContain("skills: [one, two]");
+    expect(stripped).not.toContain("tools: []");
+  });
+
 });
 
 describe("grok worker structured session id", () => {
@@ -112,6 +160,116 @@ describe("grok worker structured session id", () => {
       const argv = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
       expect(argv.slice(argv.indexOf("--output-format"), argv.indexOf("--output-format") + 2)).toEqual(["--output-format", "json"]);
       expect(argv).not.toContain("-r");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("sanitizes a generated agent in a unique temporary file and removes it after execution", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-grok-sanitize-"));
+    const oldHome = process.env.HOME;
+    try {
+      const home = join(root, "home");
+      const agentDir = join(home, ".grok", "plugins", "prism-generated-forge", "agents");
+      const sourceAgent = join(agentDir, "builder.md");
+      const callsFile = join(root, "calls.json");
+      const fakeGrok = join(root, "fake-grok.mjs");
+      await mkdir(agentDir, { recursive: true });
+      await writeFile(sourceAgent, [
+        "---",
+        "name: builder",
+        "skills:",
+        "  - oversized-preloaded-skill",
+        "---",
+        "",
+        "Body stays.",
+      ].join("\n"));
+      await writeFile(fakeGrok, [
+        "#!/usr/bin/env node",
+        "import { readFileSync, writeFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "const agentPath = args[args.indexOf('--agent') + 1];",
+        `writeFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ agentPath, source: readFileSync(agentPath, 'utf8') }));`,
+        "console.log(JSON.stringify({ text: JSON.stringify({ summary: 'ok' }), sessionId: 'grok-session-sanitize' }));",
+      ].join("\n"));
+      await chmod(fakeGrok, 0o755);
+      process.env.HOME = home;
+
+      const result = await runGrokWorkflowTask(task, {
+        cwd: root,
+        bin: fakeGrok,
+        resolvedPermission: "legacy",
+      });
+      const call = JSON.parse(await Bun.file(callsFile).text()) as { agentPath: string; source: string };
+      expect(result.output).toEqual({ summary: "ok" });
+      expect(call.agentPath).not.toBe(sourceAgent);
+      expect(call.source).not.toContain("skills:");
+      expect(call.source).toContain("Body stays.");
+      expect(await Bun.file(call.agentPath).exists()).toBe(false);
+      expect(result.metadata).toMatchObject({
+        adapter: "grok-cli",
+        agentSourceBytes: expect.any(Number),
+        maxAgentBytes: 262_144,
+      });
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an oversized fixed agent context before spawning Grok", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-grok-agent-budget-"));
+    const oldHome = process.env.HOME;
+    try {
+      const home = join(root, "home");
+      const agentDir = join(home, ".grok", "plugins", "prism-generated-forge", "agents");
+      await mkdir(agentDir, { recursive: true });
+      await writeFile(join(agentDir, "builder.md"), `---\nname: builder\n---\n${"x".repeat(100)}`);
+      process.env.HOME = home;
+
+      await expect(runGrokWorkflowTask(task, {
+        cwd: root,
+        bin: "must-not-spawn",
+        resolvedPermission: "legacy",
+        maxAgentBytes: 32,
+      })).rejects.toMatchObject({
+        metadata: {
+          adapter: "grok-cli",
+          stage: "agent-preload",
+          maxAgentBytes: 32,
+        },
+      });
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+
+  test("attributes non-zero harness failures with bounded process evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-grok-failure-"));
+    try {
+      const fakeGrok = join(root, "fake-grok.mjs");
+      await writeFile(fakeGrok, [
+        "#!/usr/bin/env node",
+        "console.error('provider account mismatch');",
+        "process.exit(7);",
+      ].join("\n"));
+      await chmod(fakeGrok, 0o755);
+
+      await expect(runGrokWorkflowTask(task, {
+        cwd: root,
+        bin: fakeGrok,
+        resolvedPermission: "legacy",
+      })).rejects.toMatchObject({
+        metadata: {
+          adapter: "grok-cli",
+          stage: "process",
+          exitCode: 7,
+          stderrExcerpt: "provider account mismatch",
+        },
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

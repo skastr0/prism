@@ -39,25 +39,38 @@ const readRegistryFile = (file: string): ReadonlyArray<WorkflowStoreRegistryEntr
   }
 };
 
+const writeRegistryFile = (
+  file: string,
+  stores: ReadonlyArray<WorkflowStoreRegistryEntry>,
+): void => {
+  mkdirSync(dirname(file), { recursive: true });
+  const next: WorkflowStoreRegistryFile = { version: 1, stores };
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+  renameSync(tmp, file);
+};
+
 export const registerWorkflowStore = (prismHome: string, storePath: string): void => {
   try {
     const file = workflowStoreRegistryPath(prismHome);
-    mkdirSync(dirname(file), { recursive: true });
     const resolved = resolve(storePath);
     const entries = readRegistryFile(file).filter((entry) => entry.path !== resolved);
-    const next: WorkflowStoreRegistryFile = {
-      version: 1,
-      stores: [...entries, { path: resolved, lastOpenedAt: new Date().toISOString() }],
-    };
-    const tmp = `${file}.tmp-${process.pid}`;
-    writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
-    renameSync(tmp, file);
+    writeRegistryFile(file, [...entries, { path: resolved, lastOpenedAt: new Date().toISOString() }]);
   } catch {
     // best-effort by contract
   }
 };
 
-export const listRegisteredWorkflowStores = (prismHome: string): WorkflowStoreRegistryEntry[] =>
-  readRegistryFile(workflowStoreRegistryPath(prismHome))
-    .filter((entry) => existsSync(entry.path))
-    .sort((left, right) => right.lastOpenedAt.localeCompare(left.lastOpenedAt));
+export const listRegisteredWorkflowStores = (prismHome: string): WorkflowStoreRegistryEntry[] => {
+  const file = workflowStoreRegistryPath(prismHome);
+  const entries = readRegistryFile(file);
+  const live = entries.filter((entry) => existsSync(entry.path));
+  if (live.length !== entries.length) {
+    try {
+      writeRegistryFile(file, live);
+    } catch {
+      // best-effort by contract
+    }
+  }
+  return live.sort((left, right) => right.lastOpenedAt.localeCompare(left.lastOpenedAt));
+};

@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { WorkflowRuntimeError } from "./workflow-errors.js";
 import type { GeneratedSurface } from "./workflow-catalog.js";
 import {
   phase,
@@ -6,6 +7,7 @@ import {
   type DynamicWorkflowDefinition,
   type WorkflowAgentRef,
   type WorkflowRuntime,
+  type WorkflowTaskOutput,
 } from "./workflows.js";
 
 export interface WorkflowPhaseAgentFinding {
@@ -16,8 +18,6 @@ export interface WorkflowPhaseAgentFinding {
   readonly message: string;
 }
 
-/** @deprecated Use {@link WorkflowPhaseAgentFinding}. */
-export type WorkflowPhaseAgentWarning = WorkflowPhaseAgentFinding;
 
 export interface PhaseStampedTaskBinding {
   readonly taskId: string | null;
@@ -104,16 +104,19 @@ export const probeDynamicWorkflowPhaseTasks = async (
 ): Promise<ReadonlyArray<PhaseStampedTaskBinding>> => {
   const captured: PhaseStampedTaskBinding[] = [];
   const runtime: WorkflowRuntime = {
-    runTask: (task) => Effect.sync(() => {
-      if (task.phase !== undefined) {
-        captured.push({
-          taskId: task.id,
-          phase: task.phase,
-          agent: bindingAgent(task.agent),
-        });
-      }
-      return {};
-    }) as ReturnType<WorkflowRuntime["runTask"]>,
+    runTask: <Task extends AnyWorkflowTask>(
+      task: Task,
+    ): Effect.Effect<WorkflowTaskOutput<Task>, WorkflowRuntimeError> =>
+      Effect.sync(() => {
+        if (task.phase !== undefined) {
+          captured.push({
+            taskId: task.id,
+            phase: task.phase,
+            agent: bindingAgent(task.agent),
+          });
+        }
+        return {} as WorkflowTaskOutput<Task>;
+      }),
     phase: (contract, fn) => phase(runtime, contract, fn),
   };
   await Effect.runPromiseExit(workflow.run(runtime));
@@ -354,10 +357,3 @@ export const collectDynamicPhaseAgentFindings = async (
   const scanned = scanDynamicPhaseTaskBindings(source, surface);
   return validatePhaseAgentBindings([...probed, ...scanned], surface);
 };
-
-/** @deprecated Use {@link collectDynamicPhaseAgentFindings}. */
-export const scanDynamicPhaseAgentWarnings = (
-  source: string,
-  surface: GeneratedSurface | null,
-): ReadonlyArray<WorkflowPhaseAgentFinding> =>
-  validatePhaseAgentBindings(scanDynamicPhaseTaskBindings(source, surface), surface);

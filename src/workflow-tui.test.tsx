@@ -8,7 +8,7 @@ import { Schema } from "effect";
 import { runWorkflow } from "./workflow-runner.js";
 import { WorkflowStore } from "./workflow-store.js";
 import { defineTask, defineWorkflow, type WorkflowAgentRef } from "./workflows.js";
-import { WorkflowMonitorApp } from "./workflow-tui.js";
+import { destroyWorkflowMonitorAfter, WorkflowMonitorApp } from "./workflow-tui.js";
 
 const Output = Schema.Struct({ summary: Schema.String });
 
@@ -83,4 +83,18 @@ test("workflow monitor renders persisted run task data and refreshes", async () 
       setup.renderer.destroy();
     });
   }
+});
+
+test("workflow monitor timeout destroys the renderer after the configured deadline", async () => {
+  let destroyed = false;
+  const startedAt = Date.now();
+
+  await destroyWorkflowMonitorAfter(5, {
+    destroy: () => {
+      destroyed = true;
+    },
+  });
+
+  expect(destroyed).toBe(true);
+  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(5);
 });

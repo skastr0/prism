@@ -359,7 +359,8 @@ export default defineTool({
   expect(agent?.content).toContain('- "read_file"');
   expect(agent?.content).toContain('- "run_terminal_cmd"');
   expect(agent?.content).toContain('disallowedTools:\n  - "web_fetch"\n  - "web_search"');
-  expect(agent?.content).toContain('skills:\n  - "testing"');
+  // Grok must not emit frontmatter skills (full-body preload poison).
+  expect(agent?.content).not.toContain("\nskills:");
   expect(agent?.content).not.toContain("Prism Claude Plugin Diagnostics");
   expect(agent?.content).not.toContain("mcpServers");
 
@@ -551,8 +552,11 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(precedenceAgent?.content).toContain(
     'disallowedTools:\n  - "web_fetch"\n  - "web_fetch"\n  - "web_search"',
   );
-  expect(precedenceAgent?.content).toContain('skills:\n  - "alpha"\n  - "zeta"');
+  // Skills are intentionally omitted for Grok (preload = full bodies).
+  expect(precedenceAgent?.content).not.toContain("\nskills:");
   expect(precedenceAgent?.content).not.toContain("direct-skill");
+  expect(precedenceAgent?.content).not.toContain('"alpha"');
+  expect(precedenceAgent?.content).not.toContain('"zeta"');
 
   const omissionAgent = findContentOperation(
     operations,

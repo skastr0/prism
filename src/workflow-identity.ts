@@ -1,5 +1,10 @@
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
-import { resolveWorkflowTaskModel, type AnyWorkflowTask, type WorkflowRuntimeOptions } from "./workflows.js";
+import {
+  DEFAULT_WORKFLOW_DECODE_REPAIRS,
+  resolveWorkflowTaskModel,
+  type AnyWorkflowTask,
+  type WorkflowRuntimeOptions,
+} from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
 export interface WorkflowTaskIdentity {
@@ -44,7 +49,7 @@ export interface WorkflowRunTaskSnapshot {
   readonly createdAt: string;
 }
 
-const WORKFLOW_TASK_IDENTITY_VERSION = 2;
+const WORKFLOW_TASK_IDENTITY_VERSION = 3;
 
 const workflowWorkerSemanticsVersion = (worker: string | null): string => {
   switch (worker) {
@@ -91,6 +96,7 @@ export const workflowTaskIdentity = (
       outputSchema: ((task.output as { readonly ast?: unknown }).ast ?? null) as StableJsonValue,
       finish: {
         maxRepairs: task.finish?.maxRepairs ?? 0,
+        maxDecodeRepairs: task.finish?.maxDecodeRepairs ?? DEFAULT_WORKFLOW_DECODE_REPAIRS,
         criteria: task.finish?.criteria?.map((criterion) => ({
           kind: criterion.kind ?? "deterministic",
           name: criterion.name,

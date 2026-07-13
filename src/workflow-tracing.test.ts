@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -379,8 +379,14 @@ describe("workflow store registry", () => {
       const entries = listRegisteredWorkflowStores(home);
       expect(entries).toHaveLength(1);
       expect(entries[0]?.path).toBe(storePath);
+      expect(JSON.parse(await readFile(workflowStoreRegistryPath(home), "utf8"))).toMatchObject({
+        stores: [expect.objectContaining({ path: storePath })],
+      });
       await rm(storeRoot, { recursive: true, force: true });
       expect(listRegisteredWorkflowStores(home)).toHaveLength(0);
+      expect(JSON.parse(await readFile(workflowStoreRegistryPath(home), "utf8"))).toMatchObject({
+        stores: [],
+      });
     } finally {
       await rm(home, { recursive: true, force: true });
     }

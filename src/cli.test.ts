@@ -11,6 +11,7 @@ import { writePrismMcpServerBundle } from "./compile/mcp-runtime-path.js";
 import { bindingFromToolSource } from "./compile/tool-bindings.js";
 import { cleanupPrismMcpProcessesUnder } from "./testing/mcp-process-cleanup.js";
 import { deriveProjectKey } from "./project-key.js";
+import { WorkflowStore } from "./workflow-store.js";
 
 const tempRoots: string[] = [];
 const repoRoot = process.cwd();
@@ -97,21 +98,56 @@ test("refresh and plan help use managed backup policy instead of a per-run backu
   }
 });
 
-test("workflow run help exposes the runtime task concurrency limit", async () => {
-  const result = await runCli(["workflow", "run", "--help"], {});
+test("workflow run, update, and resume help expose independent runtime budget controls", async () => {
+  for (const args of [
+    ["workflow", "run", "--help"],
+    ["workflow", "runs", "update", "--help"],
+    ["workflow", "runs", "resume", "--help"],
+  ]) {
+    const result = await runCli(args, {});
 
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("--max-concurrent-tasks");
-  expect(result.stdout).toContain("Maximum concurrent workflow task executions");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("--max-concurrent-tasks");
+    expect(result.stdout).toContain("Maximum concurrent workflow task executions");
+    expect(result.stdout).toContain("--task-timeout-ms");
+    expect(result.stdout).toContain("Default per-task process timeout");
+    expect(result.stdout).toContain("--max-wall-ms");
+    expect(result.stdout).toContain("--task-no-progress-ms");
+    expect(result.stdout).toContain("--max-tasks");
+    expect(result.stdout).toContain("--max-cost-usd");
+    expect(result.stdout).toContain("--cache");
+    expect(result.stdout).toContain("--no-cache");
+  }
 });
 
-test("workflow monitor help exposes store and polling options", async () => {
-  const result = await runCli(["workflow", "monitor", "--help"], {});
+test("workflow budget flags reject non-positive integer limits and non-finite or negative cost", async () => {
+  for (const [flag, value, message] of [
+    ["--max-wall-ms", "0", "must be a positive integer"],
+    ["--task-no-progress-ms", "1.5", "must be a positive integer"],
+    ["--max-tasks", "Infinity", "must be a positive integer"],
+    ["--max-cost-usd", "-0.01", "must be a finite non-negative number"],
+    ["--max-cost-usd", "Infinity", "must be a finite non-negative number"],
+    ["--max-cost-usd", "", "must be a finite non-negative number"],
+  ] as const) {
+    const result = await runCli(["workflow", "run", "unused.workflow.ts", flag, value], {});
 
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain("--store");
-  expect(result.stdout).toContain("--poll-ms");
-  expect(result.stdout).toContain("--fail-stale-after-ms");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(message);
+  }
+});
+
+test("workflow monitor help exposes deterministic timeout controls", async () => {
+  const help = await runCli(["workflow", "monitor", "--help"], {});
+
+  expect(help.exitCode).toBe(0);
+  expect(help.stdout).toContain("--store");
+  expect(help.stdout).toContain("--poll-ms");
+  expect(help.stdout).toContain("--fail-stale-after-ms");
+  expect(help.stdout).toContain("--timeout-ms");
+
+  const invalid = await runCli(["workflow", "monitor", "--timeout-ms", "0"], {});
+  expect(invalid.exitCode).not.toBe(0);
+  expect(invalid.stderr).toContain("must be a positive integer");
 });
 
 test("workflow scaffold writes to ~/.prism/workflows by default and never instructs git add (PQ-176)", async () => {
@@ -341,6 +377,21 @@ test("workflow runs update help exposes cache control", async () => {
 
   expect(result.exitCode).toBe(0);
   expect(result.stdout).toContain("--no-cache");
+});
+
+test("workflow runs list applies its limit to newest runs first", async () => {
+  const root = await createTempRoot();
+  const storePath = join(root, "workflows.sqlite");
+  const store = await WorkflowStore.open(storePath);
+  store.createRun("older", "a-older-run");
+  store.createRun("newer", "z-newer-run");
+  store.close();
+
+  const result = await runCli(["workflow", "runs", "list", "--store", storePath, "--limit", "1"], {});
+
+  expect(result.exitCode).toBe(0);
+  const listed = JSON.parse(result.stdout) as { runs: Array<{ runId: string }> };
+  expect(listed.runs.map((run) => run.runId)).toEqual(["z-newer-run"]);
 });
 
 test("workflow default store lives under PRISM_HOME, not the current project", async () => {

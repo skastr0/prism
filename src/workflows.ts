@@ -375,8 +375,16 @@ export type WorkflowFinishCriterion<Output> =
   | WorkflowDeterministicFinishCriterion<Output>
   | WorkflowJudgeFinishCriterion<Output>;
 
+export const DEFAULT_WORKFLOW_DECODE_REPAIRS = 2;
+
 export interface WorkflowFinishOptions<Output> {
+  /** Maximum repairs requested by deterministic or judge finish criteria. Defaults to zero. */
   readonly maxRepairs?: number;
+  /**
+   * Maximum repairs after JSON parse or output schema decode failures.
+   * Defaults to DEFAULT_WORKFLOW_DECODE_REPAIRS.
+   */
+  readonly maxDecodeRepairs?: number;
   readonly criteria?: ReadonlyArray<WorkflowFinishCriterion<Output>>;
 }
 
@@ -550,7 +558,11 @@ const mergePhaseTaskFinish = <Output>(
       ? [defaultPhaseJudgeCriterion<Output>(contract.criteria)]
       : [];
   const mergedCriteria = [...inheritedCriteria, ...(authorCriteria ?? [])];
-  if (mergedCriteria.length === 0 && restFinish.maxRepairs === undefined) return undefined;
+  if (
+    mergedCriteria.length === 0 &&
+    restFinish.maxRepairs === undefined &&
+    restFinish.maxDecodeRepairs === undefined
+  ) return undefined;
   return {
     ...restFinish,
     ...(mergedCriteria.length > 0 ? { criteria: mergedCriteria } : {}),

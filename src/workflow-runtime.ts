@@ -48,6 +48,7 @@ export const spawnWorkflowProcess = (options: WorkflowSpawnOptions): WorkflowSpa
     cmd: [...options.cmd],
     cwd: options.cwd,
     env: options.env,
+    ...(options.detached !== undefined ? { detached: options.detached } : {}),
     stdin: options.stdin,
     stdout: options.stdout,
     stderr: options.stderr,

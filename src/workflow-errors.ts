@@ -1,3 +1,40 @@
+export class WorkflowRunTimeoutError extends Error {
+  override readonly name = "WorkflowRunTimeoutError";
+  constructor(readonly limitMs: number) {
+    super(`workflow exceeded maxWallMs of ${limitMs}ms`);
+  }
+}
+
+export class WorkflowTaskNoProgressError extends Error {
+  override readonly name = "WorkflowTaskNoProgressError";
+  constructor(
+    readonly taskId: string,
+    readonly limitMs: number,
+  ) {
+    super(`workflow task ${taskId} made no progress for ${limitMs}ms`);
+  }
+}
+
+export class WorkflowFanoutExceededError extends Error {
+  override readonly name = "WorkflowFanoutExceededError";
+  constructor(
+    readonly limit: number,
+    readonly observed: number,
+  ) {
+    super(`workflow live task dispatch ${observed} exceeds maxTasks ${limit}`);
+  }
+}
+
+export class WorkflowCostExceededError extends Error {
+  override readonly name = "WorkflowCostExceededError";
+  constructor(
+    readonly limitUsd: number,
+    readonly observedUsd: number,
+  ) {
+    super(`workflow cost ${observedUsd} USD exceeds maxCostUsd ${limitUsd} USD`);
+  }
+}
+
 /** Errors surfaced by {@link WorkflowRuntime.runTask} and dynamic workflow runs. */
 export class WorkflowTaskDecodeError extends Error {
   override readonly name = "WorkflowTaskDecodeError";
@@ -54,4 +91,8 @@ export type WorkflowRuntimeError =
   | WorkflowTaskDecodeError
   | WorkflowTaskEscalatedError
   | WorkflowRunStoppedError
+  | WorkflowRunTimeoutError
+  | WorkflowTaskNoProgressError
+  | WorkflowFanoutExceededError
+  | WorkflowCostExceededError
   | Error;

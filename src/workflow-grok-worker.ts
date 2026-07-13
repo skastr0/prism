@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
@@ -17,17 +17,28 @@ export type GrokWorkflowWorkerOptions = {
   readonly effort?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
+  readonly maxAgentBytes?: number;
   readonly abortSignal?: AbortSignal;
 } & WorkflowTaskRepairLoopOption<"grok">;
 
 export class WorkflowWorkerError extends Error {
   override readonly name = "WorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 interface GrokWorkflowRuntime {
   readonly agent: string;
   readonly env: Record<string, string>;
+  readonly temporaryRoot?: string;
+  readonly agentSourceBytes?: number;
 }
+const DEFAULT_GROK_MAX_AGENT_BYTES = 256 * 1024;
+
 
 const GROK_AUTH_OUTPUT_PATTERN = /(^|\n)\s*(?:To sign in, open this URL in your browser:|Waiting for authorization\.{3}|You are not authenticated\.?|(?:error:\s*)?[^{}\n]*requires login[^{}\n]*)/iu;
 const GROK_AUTH_PROMPT_PATTERNS = [
@@ -53,20 +64,43 @@ const pathExists = async (path: string): Promise<boolean> => {
 // Hardcode it to ~/.grok: the home grok itself defaults to and where `prism sync` installs
 // the generated plugin, so the session written on the first attempt still exists when a
 // repair resumes it with `grok -r <sessionId>`. (Tests redirect by setting HOME.)
-const grokHome = (): string => join(homedir(), ".grok");
+const grokHome = (): string => join(process.env.HOME ?? homedir(), ".grok");
 
 // Grok 0.2.91 rejects file-loaded agents whose frontmatter carries a `tools:`
-// allowlist when the session model is the grok-4.x family: the allowlist routes
-// agent building through a custom toolset whose run_terminal_cmd defaults
-// (auto_background_on_timeout=true, enabled_background=false) fail grok's own
-// params_constraint validation ("Couldn't create session"). Bare-name agents do
-// NOT resolve to installed plugin agents (grok silently loads its generic
-// identity instead), so the only working form for 4.x is a file agent WITHOUT
-// the `tools:` block. MCP access is unaffected: the worker already passes a
-// blanket `--allow MCPTool`. Composer-family models validate the original file
-// unchanged, so they keep the full allowlist.
+// allowlist when the session model is the grok-4.x family. Grok non-interactive
+// sessions also preload every frontmatter skill body into fixed context. Remove
+// only those top-level frontmatter keys; body text and unrelated YAML stay byte-
+// identical.
+const stripAgentFrontmatterKey = (source: string, key: "skills" | "tools"): string => {
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const lines = source.split(newline);
+  if (lines[0] !== "---") return source;
+  const closing = lines.indexOf("---", 1);
+  if (closing < 0) return source;
+  const start = lines.findIndex((line, index) => index > 0 && index < closing && line.startsWith(`${key}:`));
+  if (start < 0) return source;
+  let end = start + 1;
+  while (end < closing && (/^[ \t]/u.test(lines[end] ?? "") || (lines[end] ?? "").length === 0)) {
+    end += 1;
+  }
+  lines.splice(start, end - start);
+  return lines.join(newline);
+};
+
 export const stripAgentToolsFrontmatter = (source: string): string =>
-  source.replace(/^tools:\n(?:^ {2}- .*\n)+/mu, "");
+  stripAgentFrontmatterKey(source, "tools");
+
+export const stripAgentSkillsFrontmatter = (source: string): string =>
+  stripAgentFrontmatterKey(source, "skills");
+
+export const sanitizeGrokWorkflowAgentSource = (
+  source: string,
+  options: { readonly stripTools: boolean },
+): string => {
+  let next = stripAgentSkillsFrontmatter(source);
+  if (options.stripTools) next = stripAgentToolsFrontmatter(next);
+  return next;
+};
 
 const grokModelRejectsToolsFrontmatter = (model: string | undefined): boolean =>
   model !== undefined && model.startsWith("grok-4");
@@ -74,6 +108,7 @@ const grokModelRejectsToolsFrontmatter = (model: string | undefined): boolean =>
 const prepareGrokWorkflowRuntime = async (
   task: AnyWorkflowTask,
   model: string | undefined,
+  maxAgentBytes: number,
 ): Promise<GrokWorkflowRuntime> => {
   const home = grokHome();
   const pluginId = generatedPluginIdForOwner(task.agent.plugin);
@@ -86,13 +121,31 @@ const prepareGrokWorkflowRuntime = async (
     GROK_CLAUDE_MCPS_ENABLED: "false",
   };
   if (!(await pathExists(sourceAgentPath))) return { agent: task.agent.name, env };
-  if (!grokModelRejectsToolsFrontmatter(model)) return { agent: sourceAgentPath, env };
   const source = await readFile(sourceAgentPath, "utf8");
-  const stripped = stripAgentToolsFrontmatter(source);
-  if (stripped === source) return { agent: sourceAgentPath, env };
-  const strippedPath = join(tmpdir(), `prism-grok-agent-${pluginId}-${task.agent.name}-notools.md`);
-  await writeFile(strippedPath, stripped);
-  return { agent: strippedPath, env };
+  const stripTools = grokModelRejectsToolsFrontmatter(model);
+  const sanitized = sanitizeGrokWorkflowAgentSource(source, { stripTools });
+  const agentSourceBytes = new TextEncoder().encode(sanitized).byteLength;
+  if (agentSourceBytes > maxAgentBytes) {
+    throw new WorkflowWorkerError(
+      `Grok workflow agent ${task.agent.plugin}.${task.agent.name} is ${agentSourceBytes} bytes after preload sanitization; maximum is ${maxAgentBytes}. Reduce the compiled agent body or set PRISM_WORKFLOW_GROK_MAX_AGENT_BYTES to an explicit larger positive integer.`,
+      {
+        adapter: "grok-cli",
+        stage: "agent-preload",
+        agentSourceBytes,
+        maxAgentBytes,
+      },
+    );
+  }
+  if (sanitized === source) return { agent: sourceAgentPath, env, agentSourceBytes };
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "prism-grok-agent-"));
+  const sanitizedPath = join(temporaryRoot, "agent.md");
+  try {
+    await writeFile(sanitizedPath, sanitized);
+    return { agent: sanitizedPath, env, temporaryRoot, agentSourceBytes };
+  } catch (error) {
+    await rm(temporaryRoot, { recursive: true, force: true });
+    throw error;
+  }
 };
 
 const assertGrokPermission = (mode: WorkflowPermissionMode): void => {
@@ -250,7 +303,12 @@ export const runGrokWorkflowTask = async (
     // outlier among workflow workers — every other worker (claude, codex,
     // hermes, amp, kimi, antigravity) already defaults to 360_000. Match it.
     ?? 360_000;
-  const runtime = await prepareGrokWorkflowRuntime(task, options.model);
+  const maxAgentBytes = options.maxAgentBytes
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_MAX_AGENT_BYTES)
+    ?? DEFAULT_GROK_MAX_AGENT_BYTES;
+  const startedAt = Date.now();
+  const runtime = await prepareGrokWorkflowRuntime(task, options.model, maxAgentBytes);
+  try {
   const args = buildGrokArgs({
     cwd: options.cwd,
     agent: runtime.agent,
@@ -270,31 +328,58 @@ export const runGrokWorkflowTask = async (
     env: runtime.env,
     earlyExitPatterns: GROK_AUTH_PROMPT_PATTERNS,
   });
-  if (aborted) {
-    throw new WorkflowWorkerError("grok was aborted by Prism workflow stop");
-  }
-  if (earlyExit === "xai-oauth-device-login") {
-    throw new WorkflowWorkerError("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
-  }
-  if (timedOut) {
-    throw new WorkflowWorkerError(`grok exceeded Prism process timeout after ${processTimeoutMs}ms`);
-  }
-  if (exitCode !== 0 && isGrokAuthOutput(`${stdout}\n${stderr}`)) {
-    throw new WorkflowWorkerError("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
-  }
-  if (exitCode !== 0) {
-    throw new WorkflowWorkerError(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
-  }
-  const runOutput = parseGrokJsonRunOutput(stdout);
-  const metadata = {
+  const processMetadata = {
     adapter: "grok-cli",
     nativeAgent: task.agent.name,
-    // Keep in sync with buildGrokArgs' own fallback above.
     model: options.model ?? "grok-4.5",
     durationMs,
     processTimeoutMs,
-    sessionId: sessionId ?? runOutput.sessionId,
+    sessionId,
+    agentSourceBytes: runtime.agentSourceBytes,
+    maxAgentBytes,
+    exitCode,
+    timedOut,
+    aborted,
+    ...(earlyExit !== undefined ? { earlyExit } : {}),
     ...summarizeWorkflowWorkerStderr(stderr),
+  };
+  const processFailure = (message: string): WorkflowWorkerError =>
+    new WorkflowWorkerError(message, {
+      ...processMetadata,
+      stage: "process",
+      ...(stdout.trim().length > 0 ? { outputExcerpt: stdout.trim().slice(-512) } : {}),
+    });
+  if (aborted) {
+    throw processFailure("grok was aborted by Prism workflow stop");
+  }
+  if (earlyExit === "xai-oauth-device-login") {
+    throw processFailure("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
+  }
+  if (timedOut) {
+    throw processFailure(`grok exceeded Prism process timeout after ${processTimeoutMs}ms`);
+  }
+  if (exitCode !== 0 && isGrokAuthOutput(`${stdout}\n${stderr}`)) {
+    throw processFailure("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
+  }
+  if (exitCode !== 0) {
+    throw processFailure(`grok exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+  }
+  let runOutput: GrokJsonRunOutput;
+  try {
+    runOutput = parseGrokJsonRunOutput(stdout);
+  } catch (error) {
+    if (error instanceof WorkflowWorkerError) {
+      throw new WorkflowWorkerError(error.message, {
+        ...processMetadata,
+        stage: "output-envelope",
+        ...(stdout.trim().length > 0 ? { outputExcerpt: stdout.trim().slice(-512) } : {}),
+      });
+    }
+    throw error;
+  }
+  const metadata = {
+    ...processMetadata,
+    sessionId: sessionId ?? runOutput.sessionId,
   };
   let output: unknown;
   try {
@@ -309,6 +394,26 @@ export const runGrokWorkflowTask = async (
     output,
     metadata,
   };
+  } catch (error) {
+    if (error instanceof WorkflowOutputParseError) throw error;
+    if (error instanceof WorkflowWorkerError && error.metadata !== undefined) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new WorkflowWorkerError(message, {
+      adapter: "grok-cli",
+      nativeAgent: task.agent.name,
+      model: options.model ?? "grok-4.5",
+      durationMs: Date.now() - startedAt,
+      processTimeoutMs,
+      sessionId,
+      agentSourceBytes: runtime.agentSourceBytes,
+      maxAgentBytes,
+      stage: "process-setup",
+    });
+  } finally {
+    if (runtime.temporaryRoot !== undefined) {
+      await rm(runtime.temporaryRoot, { recursive: true, force: true });
+    }
+  }
 };
 
 export { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError } from "./workflow-worker-contract.js";

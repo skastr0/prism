@@ -1,6 +1,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
+import { setTimeout as delay } from "node:timers/promises";
 import { exitWith } from "./exit.js";
 import { expandPath } from "./fs.js";
 import { resolvePrismHome } from "./prism-home.js";
@@ -25,6 +26,7 @@ export interface WorkflowMonitorOptions {
   readonly storePath?: string;
   readonly pollMs?: number;
   readonly failStaleAfterMs?: number;
+  readonly timeoutMs?: number;
 }
 
 const emptyState: WorkflowMonitorState = { runs: [], selectedRun: null };
@@ -89,7 +91,7 @@ const workflowOptionsFromSnapshot = (
   if (typeof options?.maxConcurrentTasks === "number" && Number.isInteger(options.maxConcurrentTasks)) {
     out.maxConcurrentTasks = options.maxConcurrentTasks;
   }
-  if (options?.cache === false) out.cache = false;
+  if (typeof options?.cache === "boolean") out.cache = options.cache;
   return out;
 };
 
@@ -396,7 +398,7 @@ export function WorkflowMonitorApp({
           void (async () => {
             const store = await WorkflowStore.open(storePath);
             try {
-              stopWorkflowRun(store, run.run.runId, "stop-requested");
+              await stopWorkflowRun(store, run.run.runId, "stop-requested");
             } finally {
               store.close();
             }
@@ -472,6 +474,14 @@ export function WorkflowMonitorApp({
   );
 }
 
+export const destroyWorkflowMonitorAfter = async (
+  timeoutMs: number,
+  renderer: { readonly destroy: () => void },
+): Promise<void> => {
+  await delay(timeoutMs);
+  renderer.destroy();
+};
+
 export const runWorkflowMonitor = async (options: WorkflowMonitorOptions = {}): Promise<void> => {
   const renderer = await createCliRenderer({
     exitOnCtrlC: true,
@@ -484,4 +494,7 @@ export const runWorkflowMonitor = async (options: WorkflowMonitorOptions = {}): 
       failStaleAfterMs={options.failStaleAfterMs}
     />,
   );
+  if (options.timeoutMs !== undefined) {
+    await destroyWorkflowMonitorAfter(options.timeoutMs, renderer);
+  }
 };

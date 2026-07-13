@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import { stableJsonStringify, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
 import { ensureDir } from "./fs.js";
 import { deriveProjectKey } from "./project-key.js";
 import type { WorkflowJudgeVerdict } from "./workflows.js";
@@ -8,6 +9,14 @@ export { workflowRunTaskSnapshotForTask, workflowTaskIdentity, type WorkflowJudg
 import { openWorkflowDatabase, type WorkflowDatabase } from "./workflow-runtime.js";
 import type { WorkflowSpanRecord } from "./workflow-tracing.js";
 import { normalizeWorkflowSessionMetadata, workflowStableSessionFromMetadata } from "./workflow-session.js";
+import {
+  addWorkflowReuse,
+  addWorkflowUsage,
+  emptyWorkflowUsageTotals,
+  workflowUsageFromMetadata,
+  type WorkflowUsage,
+  type WorkflowUsageTotals,
+} from "./workflow-usage.js";
 
 export type WorkflowTaskOutputSource = "mock-output";
 
@@ -58,7 +67,7 @@ export interface WorkflowRunTaskRecord {
   readonly metadata?: Record<string, unknown>;
 }
 
-export type WorkflowRunTaskProgressStatus = "running" | "completed" | "failed" | "escalated";
+export type WorkflowRunTaskProgressStatus = "running" | "completed" | "failed" | "escalated" | "stopped" | "crashed";
 
 export type WorkflowRunTaskCacheLookup = "hit" | "miss" | "skipped";
 
@@ -102,6 +111,7 @@ export interface WorkflowRunTaskCompactSummary {
   readonly externalSessionPointer: string | null;
   readonly lastEventType?: string;
   readonly lastEventAt?: string;
+  readonly attempts: ReadonlyArray<WorkflowTaskAttemptRecord>;
 }
 
 export interface WorkflowRunSnapshot {
@@ -163,6 +173,7 @@ export interface WorkflowRunCompactSummary {
     readonly repairs: number;
     readonly status: WorkflowRunStatus;
     readonly durationMs: number | null;
+    readonly usage: WorkflowUsageTotals;
   };
   readonly tasks: WorkflowRunTaskCompactSummary[];
 }
@@ -187,17 +198,85 @@ interface WorkflowRunTaskCompactAccumulator extends WorkflowRunTaskCompactSummar
   readonly orderIndex?: number;
 }
 
+export type WorkflowRunCompletedCause = {
+  readonly kind: "completed";
+};
+
+export type WorkflowRunTaskFailureCause = {
+  readonly kind: "task-failed" | "task-escalated";
+  readonly taskId: string;
+  readonly ordinal: number;
+  readonly attempt: number;
+  readonly errorName: string;
+  readonly message: string;
+};
+
+export type WorkflowRunFailureCause = {
+  readonly kind: "workflow-failed";
+  readonly errorName: string;
+  readonly message: string;
+};
+
+export type WorkflowRunStoppedCause = {
+  readonly kind: "stopped";
+  readonly reason: string;
+  readonly signal?: string;
+};
+
+export type WorkflowRunCrashedCause = {
+  readonly kind: "crashed";
+  readonly reason: string;
+  readonly runnerPid?: number;
+  readonly heartbeatAt?: string;
+};
+export type WorkflowRunTimeoutCause = {
+  readonly kind: "workflow-timeout";
+  readonly limitMs: number;
+};
+
+export type WorkflowRunFanoutExceededCause = {
+  readonly kind: "workflow-fanout-exceeded";
+  readonly limit: number;
+  readonly observed: number;
+};
+
+export type WorkflowRunCostExceededCause = {
+  readonly kind: "workflow-cost-exceeded";
+  readonly limitUsd: number;
+  readonly observedUsd: number;
+};
+
+
+export type WorkflowRunTerminalCause =
+  | WorkflowRunCompletedCause
+  | WorkflowRunTaskFailureCause
+  | WorkflowRunFailureCause
+  | WorkflowRunStoppedCause
+  | WorkflowRunCrashedCause
+  | WorkflowRunTimeoutCause
+  | WorkflowRunFanoutExceededCause
+  | WorkflowRunCostExceededCause;
+
 export interface WorkflowRunRecord {
   readonly runId: string;
   readonly workflow: string;
   readonly status: WorkflowRunStatus;
+  readonly terminalCause: WorkflowRunTerminalCause | null;
   readonly finishedAt: string | null;
   readonly runnerPid?: number;
   readonly heartbeatAt?: string;
   readonly createdAt?: string;
+  readonly usage: WorkflowUsageTotals;
 }
 
-export type WorkflowRunStatus = "running" | "completed" | "failed" | "escalated" | "unknown";
+export type WorkflowRunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "escalated"
+  | "stopped"
+  | "crashed"
+  | "unknown";
 
 /**
  * A run's persisted status can read "completed" while carrying isolated task failures: the
@@ -221,6 +300,48 @@ export interface WorkflowEventRecord {
   readonly type: string;
   readonly payload: unknown;
   readonly createdAt: string;
+}
+export type WorkflowTaskAttemptStatus = "running" | "completed" | "failed" | "stopped" | "crashed";
+
+export type WorkflowTaskAttemptFailureKind = "executor" | "decode" | "finish" | "stopped" | "crashed";
+
+export interface WorkflowTaskAttemptFailure {
+  readonly kind: WorkflowTaskAttemptFailureKind;
+  readonly message: string;
+}
+
+export interface WorkflowTaskAttemptStartedInput {
+  readonly runId: string;
+  readonly ordinal: number;
+  readonly attempt: number;
+  readonly taskId: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface WorkflowTaskAttemptFinishedInput {
+  readonly runId: string;
+  readonly ordinal: number;
+  readonly attempt: number;
+  readonly status: Exclude<WorkflowTaskAttemptStatus, "running">;
+  readonly metadata?: Record<string, unknown>;
+  readonly failure?: WorkflowTaskAttemptFailure;
+}
+
+export interface WorkflowTaskAttemptRecord {
+  readonly runId: string;
+  readonly ordinal: number;
+  readonly attempt: number;
+  readonly taskId: string;
+  readonly status: WorkflowTaskAttemptStatus;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+  readonly adapter?: string;
+  readonly model?: string;
+  readonly nativeAgent?: string;
+  readonly sessionId?: string;
+  readonly failure?: WorkflowTaskAttemptFailure;
+  readonly usage?: WorkflowUsage;
+  readonly metadata?: Record<string, unknown>;
 }
 
 interface TaskRecordRow {
@@ -275,8 +396,32 @@ interface RunRow {
   readonly finished_at: string | null;
   readonly runner_pid: number | null;
   readonly heartbeat_at: string | null;
+  readonly terminal_cause_json: string | null;
+  readonly usage_agent_runs: number;
+  readonly usage_reused: number;
+  readonly usage_tokens_in: number;
+  readonly usage_tokens_out: number;
+  readonly usage_cost_usd: number;
+  readonly usage_duration_ms: number;
 }
 
+interface TaskAttemptRow {
+  readonly run_id: string;
+  readonly ordinal: number;
+  readonly attempt: number;
+  readonly task_id: string;
+  readonly status: WorkflowTaskAttemptStatus;
+  readonly started_at: string;
+  readonly finished_at: string | null;
+  readonly adapter: string | null;
+  readonly model: string | null;
+  readonly native_agent: string | null;
+  readonly session_id: string | null;
+  readonly failure_kind: WorkflowTaskAttemptFailureKind | null;
+  readonly failure_message: string | null;
+  readonly metadata_json: string | null;
+  readonly usage_json: string | null;
+}
 interface StaleRunRow extends RunRow {
   readonly created_at: string;
 }
@@ -342,6 +487,10 @@ export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process
 export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
+export const WORKFLOW_STORE_SCHEMA_VERSION = 3;
+
+const WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES = 64 * 1024;
+
 const sqliteDateTime = (date: Date): string =>
   date.toISOString().slice(0, 19).replace("T", " ");
 
@@ -371,6 +520,133 @@ const objectPayload = (payload: unknown): Record<string, unknown> | null =>
   typeof payload === "object" && payload !== null && !Array.isArray(payload)
     ? payload as Record<string, unknown>
     : null;
+const serializeAttemptMetadata = (
+  metadata: Record<string, unknown> | undefined,
+): {
+  readonly metadata: Record<string, unknown> | undefined;
+  readonly json: string | null;
+  readonly adapter: string | null;
+  readonly model: string | null;
+  readonly nativeAgent: string | null;
+  readonly sessionId: string | null;
+} => {
+  const normalized = normalizeWorkflowSessionMetadata(metadata);
+  if (normalized === undefined) {
+    return {
+      metadata: undefined,
+      json: null,
+      adapter: null,
+      model: null,
+      nativeAgent: null,
+      sessionId: null,
+    };
+  }
+  const json = stableJsonStringify(normalized as unknown as StableJsonValue);
+  if (Buffer.byteLength(json, "utf8") > WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES) {
+    throw new Error(
+      `Workflow task attempt metadata exceeds ${WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES} bytes`,
+    );
+  }
+  const stableSession = workflowStableSessionFromMetadata(normalized);
+  return {
+    metadata: normalized,
+    json,
+    adapter: stableSession?.adapter ?? stringMetadata(normalized, "adapter"),
+    model: stringMetadata(normalized, "model"),
+    nativeAgent: stringMetadata(normalized, "nativeAgent"),
+    sessionId: stableSession?.sessionId ?? externalSessionPointer(normalized),
+  };
+};
+
+const terminalCauseForStatus = (
+  status: Exclude<WorkflowRunStatus, "running" | "unknown">,
+  cause: WorkflowRunTerminalCause | undefined,
+): WorkflowRunTerminalCause => {
+  const resolved = cause ?? (status === "completed" ? { kind: "completed" as const } : undefined);
+  if (resolved === undefined) {
+    throw new Error(`Workflow run status ${status} requires a terminal cause`);
+  }
+  const valid = (
+    (status === "completed" && resolved.kind === "completed")
+    || (status === "failed" && (
+      resolved.kind === "task-failed"
+      || resolved.kind === "workflow-failed"
+      || resolved.kind === "workflow-timeout"
+      || resolved.kind === "workflow-fanout-exceeded"
+      || resolved.kind === "workflow-cost-exceeded"
+    ))
+    || (status === "escalated" && resolved.kind === "task-escalated")
+    || (status === "stopped" && resolved.kind === "stopped")
+    || (status === "crashed" && resolved.kind === "crashed")
+  );
+  if (!valid) {
+    throw new Error(`Workflow run status ${status} is incompatible with terminal cause ${resolved.kind}`);
+  }
+  return resolved;
+};
+
+const taskAttemptFailureMessageFromRunCause = (cause: WorkflowRunTerminalCause): string => {
+  switch (cause.kind) {
+    case "task-failed":
+    case "task-escalated":
+    case "workflow-failed":
+      return cause.message;
+    case "workflow-timeout":
+      return `workflow exceeded maxWallMs of ${cause.limitMs}ms`;
+    case "workflow-fanout-exceeded":
+      return `workflow live task dispatch ${cause.observed} exceeds maxTasks ${cause.limit}`;
+    case "workflow-cost-exceeded":
+      return `workflow cost ${cause.observedUsd} USD exceeds maxCostUsd ${cause.limitUsd} USD`;
+    default:
+      return cause.kind;
+  }
+};
+
+const taskAttemptTerminalFromRun = (
+  status: Exclude<WorkflowRunStatus, "running" | "unknown">,
+  cause: WorkflowRunTerminalCause,
+): {
+  readonly status: Exclude<WorkflowTaskAttemptStatus, "running">;
+  readonly failure: WorkflowTaskAttemptFailure | null;
+} => {
+  if (status === "completed") return { status: "completed", failure: null };
+  if (status === "stopped") {
+    return { status: "stopped", failure: { kind: "stopped", message: cause.kind === "stopped" ? cause.reason : cause.kind } };
+  }
+  if (status === "crashed") {
+    return { status: "crashed", failure: { kind: "crashed", message: cause.kind === "crashed" ? cause.reason : cause.kind } };
+  }
+  return {
+    status: "failed",
+    failure: {
+      kind: "executor",
+      message: taskAttemptFailureMessageFromRunCause(cause),
+    },
+  };
+};
+
+const workflowUsageTotalsFromRow = (row: RunRow): WorkflowUsageTotals => ({
+  agentRuns: row.usage_agent_runs,
+  reused: row.usage_reused,
+  tokensIn: row.usage_tokens_in,
+  tokensOut: row.usage_tokens_out,
+  costUsd: row.usage_cost_usd,
+  durationMs: row.usage_duration_ms,
+});
+
+const runRecordFromRow = (row: RunRow & { readonly created_at?: string }): WorkflowRunRecord => ({
+  runId: row.run_id,
+  workflow: row.workflow,
+  status: row.status,
+  terminalCause: row.terminal_cause_json === null
+    ? null
+    : JSON.parse(row.terminal_cause_json) as WorkflowRunTerminalCause,
+  finishedAt: row.finished_at,
+  ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+  ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+  ...(row.created_at !== undefined ? { createdAt: row.created_at } : {}),
+  usage: workflowUsageTotalsFromRow(row),
+});
 
 const stringMetadata = (metadata: Record<string, unknown> | undefined, key: string): string | null => {
   const value = metadata?.[key];
@@ -395,15 +671,25 @@ const objectMetadata = (value: unknown): Record<string, unknown> | undefined =>
     : undefined;
 
 const repairModeMetadata = (metadata: Record<string, unknown> | undefined): string | null => {
-  const finish = objectMetadata(metadata?.finish);
-  const repairMode = finish?.repairMode;
-  return typeof repairMode === "string" ? repairMode : null;
+  const finishMode = objectMetadata(metadata?.finish)?.repairMode;
+  if (typeof finishMode === "string") return finishMode;
+  const executionMode = objectMetadata(metadata?.repairExecution)?.mode;
+  return typeof executionMode === "string" ? executionMode : null;
 };
+
+const nonNegativeInteger = (value: unknown): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 
 const repairCountMetadata = (metadata: Record<string, unknown> | undefined): number | null => {
   const finish = objectMetadata(metadata?.finish);
-  const repairs = finish?.repairs;
-  return typeof repairs === "number" && Number.isInteger(repairs) && repairs >= 0 ? repairs : null;
+  const decodeRepairs = nonNegativeInteger(finish?.decodeRepairs);
+  const finishRepairs = nonNegativeInteger(finish?.finishRepairs);
+  if (decodeRepairs !== null || finishRepairs !== null) {
+    return (decodeRepairs ?? 0) + (finishRepairs ?? 0);
+  }
+  const legacyRepairs = nonNegativeInteger(finish?.repairs);
+  if (legacyRepairs !== null) return legacyRepairs;
+  return nonNegativeInteger(objectMetadata(metadata?.repairExecution)?.attempt);
 };
 
 const eventRepairMode = (payload: Record<string, unknown> | null): string | null => {
@@ -495,13 +781,13 @@ const enableConcurrentWorkflowAccess = (db: WorkflowDatabase): void => {
   }
 };
 
-export class WorkflowStore {
-  constructor(private readonly db: WorkflowDatabase) {}
+const readWorkflowStoreSchemaVersion = (db: WorkflowDatabase): number => {
+  const row = db.query<{ readonly user_version: number }, []>("pragma user_version;").get();
+  return row?.user_version ?? 0;
+};
 
-  static async open(path: string): Promise<WorkflowStore> {
-    await ensureDir(dirname(path));
-    const db = openWorkflowDatabase(path);
-    enableConcurrentWorkflowAccess(db);
+const migrateWorkflowStoreToVersion1 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
     db.exec(`
       create table if not exists workflow_task_records (
         workflow text not null,
@@ -642,7 +928,174 @@ export class WorkflowStore {
             and workflow_run_tasks.status = 'failed'
         );
     `);
-    return new WorkflowStore(db);
+    db.exec("pragma user_version = 1;");
+  })();
+};
+const migrateWorkflowStoreToVersion2 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    addColumnIfMissing(db, "alter table workflow_runs add column terminal_cause_json text");
+    db.exec(`
+      create table if not exists workflow_task_attempts (
+        run_id text not null,
+        ordinal integer not null,
+        attempt integer not null,
+        task_id text not null,
+        status text not null check (status in ('running', 'completed', 'failed', 'stopped', 'crashed')),
+        started_at text not null default (datetime('now')),
+        finished_at text,
+        adapter text,
+        model text,
+        native_agent text,
+        session_id text,
+        failure_kind text check (failure_kind is null or failure_kind in ('executor', 'decode', 'finish', 'stopped', 'crashed')),
+        failure_message text,
+        metadata_json text,
+        primary key (run_id, ordinal, attempt)
+      );
+      create index if not exists workflow_task_attempts_run_idx
+        on workflow_task_attempts (run_id, ordinal, attempt);
+    `);
+    db.exec("pragma user_version = 2;");
+  })();
+};
+
+const migrateWorkflowStoreToVersion3 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    addColumnIfMissing(db, "alter table workflow_runs add column usage_agent_runs integer not null default 0");
+    addColumnIfMissing(db, "alter table workflow_runs add column usage_reused integer not null default 0");
+    addColumnIfMissing(db, "alter table workflow_runs add column usage_tokens_in real not null default 0");
+    addColumnIfMissing(db, "alter table workflow_runs add column usage_tokens_out real not null default 0");
+    addColumnIfMissing(db, "alter table workflow_runs add column usage_cost_usd real not null default 0");
+    addColumnIfMissing(db, "alter table workflow_runs add column usage_duration_ms real not null default 0");
+    addColumnIfMissing(db, "alter table workflow_task_attempts add column usage_json text");
+
+    const totalsByRun = new Map<string, WorkflowUsageTotals>();
+    const runs = db.query<{ readonly run_id: string }, []>("select run_id from workflow_runs").all();
+    for (const run of runs) totalsByRun.set(run.run_id, emptyWorkflowUsageTotals());
+
+    const attempts = db.query<{
+      readonly run_id: string;
+      readonly ordinal: number;
+      readonly attempt: number;
+      readonly metadata_json: string | null;
+    }, []>(`
+      select run_id, ordinal, attempt, metadata_json
+      from workflow_task_attempts
+      where status != 'running'
+    `).all();
+    for (const attempt of attempts) {
+      const metadata = attempt.metadata_json === null
+        ? undefined
+        : JSON.parse(attempt.metadata_json) as Record<string, unknown>;
+      const usage = workflowUsageFromMetadata(metadata);
+      db.query(`
+        update workflow_task_attempts
+        set usage_json = ?
+        where run_id = ? and ordinal = ? and attempt = ?
+      `).run(
+        stableJsonStringify(usage as unknown as StableJsonValue),
+        attempt.run_id,
+        attempt.ordinal,
+        attempt.attempt,
+      );
+      const current = totalsByRun.get(attempt.run_id);
+      if (current !== undefined) totalsByRun.set(attempt.run_id, addWorkflowUsage(current, usage));
+    }
+
+    const cachedTasks = db.query<{ readonly run_id: string }, []>(`
+      select run_id from workflow_run_tasks where cached = 1
+    `).all();
+    for (const task of cachedTasks) {
+      const current = totalsByRun.get(task.run_id);
+      if (current !== undefined) totalsByRun.set(task.run_id, addWorkflowReuse(current));
+    }
+
+    const updateRun = db.query(`
+      update workflow_runs
+      set usage_agent_runs = ?,
+          usage_reused = ?,
+          usage_tokens_in = ?,
+          usage_tokens_out = ?,
+          usage_cost_usd = ?,
+          usage_duration_ms = ?
+      where run_id = ?
+    `);
+    for (const [runId, totals] of totalsByRun) {
+      updateRun.run(
+        totals.agentRuns,
+        totals.reused,
+        totals.tokensIn,
+        totals.tokensOut,
+        totals.costUsd,
+        totals.durationMs,
+        runId,
+      );
+    }
+    db.exec(`pragma user_version = ${WORKFLOW_STORE_SCHEMA_VERSION};`);
+  })();
+};
+
+export class WorkflowStore {
+  constructor(private readonly db: WorkflowDatabase) {}
+  private updateRunUsageInCurrentTransaction(
+    runId: string,
+    update: (current: WorkflowUsageTotals) => WorkflowUsageTotals,
+  ): void {
+    const row = this.db.query<RunRow, [string]>(`
+      select run_id, workflow, status, terminal_cause_json, finished_at,
+             runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+             usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
+      from workflow_runs
+      where run_id = ?
+    `).get(runId);
+    if (row === null) throw new Error(`Workflow run ${runId} does not exist`);
+    const usage = update(workflowUsageTotalsFromRow(row));
+    this.db.query(`
+      update workflow_runs
+      set usage_agent_runs = ?,
+          usage_reused = ?,
+          usage_tokens_in = ?,
+          usage_tokens_out = ?,
+          usage_cost_usd = ?,
+          usage_duration_ms = ?
+      where run_id = ?
+    `).run(
+      usage.agentRuns,
+      usage.reused,
+      usage.tokensIn,
+      usage.tokensOut,
+      usage.costUsd,
+      usage.durationMs,
+      runId,
+    );
+  }
+
+
+  static async open(path: string): Promise<WorkflowStore> {
+    await ensureDir(dirname(path));
+    const db = openWorkflowDatabase(path);
+    try {
+      const schemaVersion = readWorkflowStoreSchemaVersion(db);
+      if (schemaVersion > WORKFLOW_STORE_SCHEMA_VERSION) {
+        throw new Error(
+          `Workflow store schema version ${schemaVersion} is newer than supported version ${WORKFLOW_STORE_SCHEMA_VERSION}. Upgrade Prism before opening ${path}.`,
+        );
+      }
+      enableConcurrentWorkflowAccess(db);
+      if (schemaVersion === 0) {
+        migrateWorkflowStoreToVersion1(db);
+      }
+      if (schemaVersion <= 1) {
+        migrateWorkflowStoreToVersion2(db);
+      }
+      if (schemaVersion <= 2) {
+        migrateWorkflowStoreToVersion3(db);
+      }
+      return new WorkflowStore(db);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   }
 
   close(): void {
@@ -975,75 +1428,325 @@ export class WorkflowStore {
     `).run(runId);
   }
 
-  finishRun(runId: string, status: Exclude<WorkflowRunStatus, "running" | "unknown">): void {
-    const updated = this.db.query<{ readonly run_id: string }, [WorkflowRunStatus, string]>(`
+  recordTaskAttemptStarted(input: WorkflowTaskAttemptStartedInput): void {
+    if (!Number.isInteger(input.ordinal) || input.ordinal < 0) {
+      throw new Error("Workflow task attempt ordinal must be a non-negative integer");
+    }
+    if (!Number.isInteger(input.attempt) || input.attempt < 1) {
+      throw new Error("Workflow task attempt number must be a positive integer");
+    }
+    if (input.taskId.trim().length === 0) {
+      throw new Error("Workflow task attempt taskId must not be empty");
+    }
+    const metadata = serializeAttemptMetadata(input.metadata);
+    this.db.transaction(() => {
+      const run = this.db.query<{ readonly status: WorkflowRunStatus }, [string]>(
+        "select status from workflow_runs where run_id = ?",
+      ).get(input.runId);
+      if (run === null) {
+        throw new Error(`Workflow run ${input.runId} does not exist`);
+      }
+      if (run.status !== "running") {
+        throw new Error(`Cannot start task attempt for terminal workflow run ${input.runId}`);
+      }
+      const latest = this.db.query<{
+        readonly attempt: number;
+        readonly task_id: string;
+        readonly status: WorkflowTaskAttemptStatus;
+      }, [string, number]>(`
+        select attempt, task_id, status
+        from workflow_task_attempts
+        where run_id = ? and ordinal = ?
+        order by attempt desc
+        limit 1
+      `).get(input.runId, input.ordinal);
+      const expectedAttempt = (latest?.attempt ?? 0) + 1;
+      if (input.attempt !== expectedAttempt) {
+        throw new Error(
+          `Workflow task attempt ${input.runId}/${input.ordinal}/${input.attempt} is not monotonic; expected ${expectedAttempt}`,
+        );
+      }
+      if (latest?.status === "running") {
+        throw new Error(
+          `Workflow task attempt ${input.runId}/${input.ordinal}/${latest.attempt} is still running`,
+        );
+      }
+      if (latest !== null && latest.task_id !== input.taskId) {
+        throw new Error(
+          `Workflow task attempt ordinal ${input.ordinal} belongs to task ${latest.task_id}, not ${input.taskId}`,
+        );
+      }
+      this.db.query(`
+        insert into workflow_task_attempts (
+          run_id, ordinal, attempt, task_id, status,
+          adapter, model, native_agent, session_id, metadata_json
+        ) values (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)
+      `).run(
+        input.runId,
+        input.ordinal,
+        input.attempt,
+        input.taskId,
+        metadata.adapter,
+        metadata.model,
+        metadata.nativeAgent,
+        metadata.sessionId,
+        metadata.json,
+      );
+      this.recordEvent({
+        runId: input.runId,
+        taskId: input.taskId,
+        type: "task.attempt.started",
+        payload: { ordinal: input.ordinal, attempt: input.attempt },
+      });
+    })();
+  }
+
+  recordTaskAttemptFinished(input: WorkflowTaskAttemptFinishedInput): void {
+    const requiresFailure = input.status !== "completed";
+    if (requiresFailure !== (input.failure !== undefined)) {
+      throw new Error(
+        input.status === "completed"
+          ? "Completed workflow task attempts must not include a failure"
+          : `${input.status} workflow task attempts require a failure`,
+      );
+    }
+    const metadata = serializeAttemptMetadata(input.metadata);
+    this.db.transaction(() => {
+      const row = this.db.query<TaskAttemptRow, [
+        WorkflowTaskAttemptFinishedInput["status"],
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        WorkflowTaskAttemptFailureKind | null,
+        string | null,
+        number,
+        string | null,
+        string,
+        number,
+        number,
+      ]>(`
+        update workflow_task_attempts
+        set status = ?,
+            finished_at = datetime('now'),
+            adapter = coalesce(?, adapter),
+            model = coalesce(?, model),
+            native_agent = coalesce(?, native_agent),
+            session_id = coalesce(?, session_id),
+            failure_kind = ?,
+            failure_message = ?,
+            metadata_json = case when ? = 1 then ? else metadata_json end
+        where run_id = ? and ordinal = ? and attempt = ? and status = 'running'
+        returning run_id, ordinal, attempt, task_id, status, started_at, finished_at,
+                  adapter, model, native_agent, session_id, failure_kind,
+                  failure_message, metadata_json, usage_json
+      `).get(
+        input.status,
+        metadata.adapter,
+        metadata.model,
+        metadata.nativeAgent,
+        metadata.sessionId,
+        input.failure?.kind ?? null,
+        input.failure?.message ?? null,
+        input.metadata === undefined ? 0 : 1,
+        metadata.json,
+        input.runId,
+        input.ordinal,
+        input.attempt,
+      );
+      if (row === null) {
+        throw new Error(
+          `Workflow task attempt ${input.runId}/${input.ordinal}/${input.attempt} does not exist or is already terminal`,
+        );
+      }
+      const finishedMetadata = row.metadata_json === null
+        ? undefined
+        : JSON.parse(row.metadata_json) as Record<string, unknown>;
+      const usage = workflowUsageFromMetadata(finishedMetadata);
+      this.db.query(`
+        update workflow_task_attempts
+        set usage_json = ?
+        where run_id = ? and ordinal = ? and attempt = ?
+      `).run(
+        stableJsonStringify(usage as unknown as StableJsonValue),
+        input.runId,
+        input.ordinal,
+        input.attempt,
+      );
+      this.updateRunUsageInCurrentTransaction(input.runId, (current) => addWorkflowUsage(current, usage));
+      this.recordEvent({
+        runId: input.runId,
+        taskId: row.task_id,
+        type: `task.attempt.${input.status}`,
+        payload: {
+          ordinal: input.ordinal,
+          attempt: input.attempt,
+          ...(input.failure !== undefined ? { failure: input.failure } : {}),
+        },
+      });
+    })();
+  }
+
+  listRunTaskAttempts(runId: string): WorkflowTaskAttemptRecord[] {
+    this.failDeadPidRuns();
+    const rows = this.db.query<TaskAttemptRow, [string]>(`
+      select run_id, ordinal, attempt, task_id, status, started_at, finished_at,
+             adapter, model, native_agent, session_id, failure_kind,
+             failure_message, metadata_json, usage_json
+      from workflow_task_attempts
+      where run_id = ?
+      order by ordinal asc, attempt asc
+    `).all(runId);
+    return rows.map((row) => ({
+      runId: row.run_id,
+      ordinal: row.ordinal,
+      attempt: row.attempt,
+      taskId: row.task_id,
+      status: row.status,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+      ...(row.adapter !== null ? { adapter: row.adapter } : {}),
+      ...(row.model !== null ? { model: row.model } : {}),
+      ...(row.native_agent !== null ? { nativeAgent: row.native_agent } : {}),
+      ...(row.session_id !== null ? { sessionId: row.session_id } : {}),
+      ...(row.failure_kind !== null && row.failure_message !== null
+        ? { failure: { kind: row.failure_kind, message: row.failure_message } }
+        : {}),
+      ...(row.usage_json !== null
+        ? { usage: JSON.parse(row.usage_json) as WorkflowUsage }
+        : {}),
+      ...(row.metadata_json !== null
+        ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> }
+        : {}),
+    }));
+  }
+
+  private finishRunInCurrentTransaction(
+    runId: string,
+    status: Exclude<WorkflowRunStatus, "running" | "unknown">,
+    terminalCause: WorkflowRunTerminalCause,
+  ): RunRow | null {
+    const terminalCauseJson = stableJsonStringify(terminalCause as unknown as StableJsonValue);
+    const updated = this.db.query<RunRow, [WorkflowRunStatus, string, string]>(`
       update workflow_runs
-      set status = ?, finished_at = datetime('now')
+      set status = ?, terminal_cause_json = ?, finished_at = datetime('now')
       where run_id = ? and status = 'running'
-      returning run_id
-    `).get(status, runId);
-    if (updated != null) {
-      this.recordEvent({ runId, type: `run.${status}`, payload: {} });
+      returning run_id, workflow, status, terminal_cause_json, finished_at,
+                runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+                usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
+    `).get(status, terminalCauseJson, runId);
+    if (updated === null) return null;
+
+    const attemptTerminal = taskAttemptTerminalFromRun(status, terminalCause);
+    const reconciled = this.db.query<TaskAttemptRow, [
+      Exclude<WorkflowTaskAttemptStatus, "running">,
+      WorkflowTaskAttemptFailureKind | null,
+      string | null,
+      string,
+    ]>(`
+      update workflow_task_attempts
+      set status = ?,
+          finished_at = datetime('now'),
+          failure_kind = ?,
+          failure_message = ?
+      where run_id = ? and status = 'running'
+      returning run_id, ordinal, attempt, task_id, status, started_at, finished_at,
+                adapter, model, native_agent, session_id, failure_kind,
+                failure_message, metadata_json, usage_json
+    `).all(
+      attemptTerminal.status,
+      attemptTerminal.failure?.kind ?? null,
+      attemptTerminal.failure?.message ?? null,
+      runId,
+    );
+    for (const attempt of reconciled) {
+      const metadata = attempt.metadata_json === null
+        ? undefined
+        : JSON.parse(attempt.metadata_json) as Record<string, unknown>;
+      const usage = workflowUsageFromMetadata(metadata);
+      this.db.query(`
+        update workflow_task_attempts
+        set usage_json = ?
+        where run_id = ? and ordinal = ? and attempt = ?
+      `).run(
+        stableJsonStringify(usage as unknown as StableJsonValue),
+        runId,
+        attempt.ordinal,
+        attempt.attempt,
+      );
+      this.updateRunUsageInCurrentTransaction(runId, (current) => addWorkflowUsage(current, usage));
+      this.recordEvent({
+        runId,
+        taskId: attempt.task_id,
+        type: `task.attempt.${attemptTerminal.status}`,
+        payload: {
+          ordinal: attempt.ordinal,
+          attempt: attempt.attempt,
+          reconciled: true,
+          ...(attemptTerminal.failure !== null ? { failure: attemptTerminal.failure } : {}),
+        },
+      });
+    }
+    this.recordEvent({ runId, type: `run.${status}`, payload: terminalCause });
+    return this.db.query<RunRow, [string]>(`
+      select run_id, workflow, status, terminal_cause_json, finished_at,
+             runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+             usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
+      from workflow_runs
+      where run_id = ?
+    `).get(runId);
+  }
+
+  finishRun(
+    runId: string,
+    status: Exclude<WorkflowRunStatus, "running" | "unknown">,
+    terminalCause?: WorkflowRunTerminalCause,
+  ): void {
+    const cause = terminalCauseForStatus(status, terminalCause);
+    const updated = this.db.transaction(() =>
+      this.finishRunInCurrentTransaction(runId, status, cause)
+    )();
+    if (updated === null) {
+      throw new Error(`Workflow run ${runId} does not exist or is already terminal`);
     }
   }
 
   stopRun(runId: string, reason: string = "stop-requested"): WorkflowRunRecord | null {
     this.failDeadPidRuns();
     const stop = this.db.transaction(() => {
-      const stopped = this.db.query<RunRow, [string]>(`
-        update workflow_runs
-        set status = 'failed', finished_at = datetime('now')
-        where run_id = ? and status = 'running'
-        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
-      `).get(runId);
-      if (stopped != null) {
-        this.recordEvent({ runId, type: "run.stop_requested", payload: { reason } });
-        this.recordEvent({ runId, type: "run.failed", payload: { reason } });
-        return stopped;
-      }
-      return this.db.query<RunRow, [string]>(`
-        select run_id, workflow, status, finished_at
-             , runner_pid, heartbeat_at
+      const current = this.db.query<RunRow, [string]>(`
+        select run_id, workflow, status, terminal_cause_json, finished_at,
+               runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+               usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
         from workflow_runs
         where run_id = ?
       `).get(runId);
+      if (current === null || current.status !== "running") return current;
+      const cause: WorkflowRunStoppedCause = { kind: "stopped", reason };
+      this.recordEvent({ runId, type: "run.stop_requested", payload: cause });
+      return this.finishRunInCurrentTransaction(runId, "stopped", cause);
     });
     const row = stop();
-    if (row == null) return null;
-    return {
-      runId: row.run_id,
-      workflow: row.workflow,
-      status: row.status,
-      finishedAt: row.finished_at,
-      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-    };
+    return row === null ? null : runRecordFromRow(row);
   }
 
   stopRunningRun(runId: string, reason: string = "stop-requested"): WorkflowRunRecord | null {
     this.failDeadPidRuns();
     const stop = this.db.transaction(() => {
-      const row = this.db.query<RunRow, [string]>(`
-        update workflow_runs
-        set status = 'failed', finished_at = datetime('now')
-        where run_id = ? and status = 'running'
-        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+      const current = this.db.query<RunRow, [string]>(`
+        select run_id, workflow, status, terminal_cause_json, finished_at,
+               runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+               usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
+        from workflow_runs
+        where run_id = ?
       `).get(runId);
-      if (row == null) return null;
-      this.recordEvent({ runId, type: "run.stop_requested", payload: { reason } });
-      this.recordEvent({ runId, type: "run.failed", payload: { reason } });
-      return row;
+      if (current === null || current.status !== "running") return null;
+      const cause: WorkflowRunStoppedCause = { kind: "stopped", reason };
+      this.recordEvent({ runId, type: "run.stop_requested", payload: cause });
+      return this.finishRunInCurrentTransaction(runId, "stopped", cause);
     });
     const row = stop();
-    if (row == null) return null;
-    return {
-      runId: row.run_id,
-      workflow: row.workflow,
-      status: row.status,
-      finishedAt: row.finished_at,
-      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-    };
+    return row === null ? null : runRecordFromRow(row);
   }
 
   restartRunningRun(input: {
@@ -1056,16 +1759,21 @@ export class WorkflowStore {
   }): WorkflowRunRecord | null {
     this.failDeadPidRuns();
     const restart = this.db.transaction(() => {
-      const row = this.db.query<RunRow, [string]>(`
-        update workflow_runs
-        set status = 'failed', finished_at = datetime('now')
-        where run_id = ? and status = 'running'
-        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+      const current = this.db.query<RunRow, [string]>(`
+        select run_id, workflow, status, terminal_cause_json, finished_at,
+               runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+               usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
+        from workflow_runs
+        where run_id = ?
       `).get(input.previousRunId);
-      if (row == null) return null;
-      const reason = input.reason ?? "update-requested";
-      this.recordEvent({ runId: input.previousRunId, type: "run.stop_requested", payload: { reason } });
-      this.recordEvent({ runId: input.previousRunId, type: "run.failed", payload: { reason } });
+      if (current === null || current.status !== "running") return null;
+      const cause: WorkflowRunStoppedCause = {
+        kind: "stopped",
+        reason: input.reason ?? "update-requested",
+      };
+      this.recordEvent({ runId: input.previousRunId, type: "run.stop_requested", payload: cause });
+      const row = this.finishRunInCurrentTransaction(input.previousRunId, "stopped", cause);
+      if (row === null) return null;
       this.createRun(input.nextWorkflow, input.nextRunId);
       this.recordEvent({
         runId: input.nextRunId,
@@ -1076,33 +1784,19 @@ export class WorkflowStore {
       return row;
     });
     const row = restart();
-    if (row == null) return null;
-    return {
-      runId: row.run_id,
-      workflow: row.workflow,
-      status: row.status,
-      finishedAt: row.finished_at,
-      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-    };
+    return row === null ? null : runRecordFromRow(row);
   }
 
   getRun(runId: string): WorkflowRunRecord | null {
     this.failDeadPidRuns();
     const row = this.db.query<RunRow, [string]>(`
-      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at
+      select run_id, workflow, status, terminal_cause_json, finished_at,
+             runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+             usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms
       from workflow_runs
       where run_id = ?
     `).get(runId);
-    if (row == null) return null;
-    return {
-      runId: row.run_id,
-      workflow: row.workflow,
-      status: row.status,
-      finishedAt: row.finished_at,
-      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-    };
+    return row === null ? null : runRecordFromRow(row);
   }
 
   recordEvent(input: {
@@ -1216,43 +1910,38 @@ export class WorkflowStore {
 
   failDeadPidRuns(): WorkflowRunRecord[] {
     const candidates = this.db.query<StaleRunRow, []>(`
-      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
+      select run_id, workflow, status, terminal_cause_json, finished_at,
+             runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+             usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms,
+             created_at
       from workflow_runs
       where status = 'running'
         and runner_pid is not null
     `).all();
     const dead = candidates.filter((row) => row.runner_pid !== null && !processIsAlive(row.runner_pid));
     if (dead.length === 0) return [];
-    const fail = this.db.transaction(() => {
-      const failed: WorkflowRunRecord[] = [];
+    return this.db.transaction(() => {
+      const crashed: WorkflowRunRecord[] = [];
       for (const row of dead) {
-        const updated = this.db.query<RunRow, [string]>(`
-          update workflow_runs
-          set status = 'failed', finished_at = datetime('now')
-          where run_id = ? and status = 'running'
-          returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at
-        `).get(row.run_id);
-        if (updated === null) continue;
-        const payload = {
+        const cause: WorkflowRunCrashedCause = {
+          kind: "crashed",
           reason: "dead-runner-pid",
-          runnerPid: row.runner_pid,
-          createdAt: row.created_at,
+          ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
           ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
         };
-        this.recordEvent({ runId: row.run_id, type: "run.stale_dead_pid", payload });
-        this.recordEvent({ runId: row.run_id, type: "run.failed", payload });
-        failed.push({
-          runId: updated.run_id,
-          workflow: updated.workflow,
-          status: "failed",
-          finishedAt: updated.finished_at,
-          ...(updated.runner_pid !== null ? { runnerPid: updated.runner_pid } : {}),
-          ...(updated.heartbeat_at !== null ? { heartbeatAt: updated.heartbeat_at } : {}),
+        this.recordEvent({
+          runId: row.run_id,
+          type: "run.stale_dead_pid",
+          payload: {
+            ...cause,
+            createdAt: row.created_at,
+          },
         });
+        const updated = this.finishRunInCurrentTransaction(row.run_id, "crashed", cause);
+        if (updated !== null) crashed.push(runRecordFromRow(updated));
       }
-      return failed;
-    });
-    return fail();
+      return crashed;
+    })();
   }
 
   failStaleRuns(olderThanMs: number, now: Date = new Date()): WorkflowRunRecord[] {
@@ -1260,62 +1949,53 @@ export class WorkflowStore {
       throw new Error("olderThanMs must be a positive number");
     }
     const staleBefore = sqliteDateTime(new Date(now.getTime() - olderThanMs));
-    const fail = this.db.transaction(() => {
-      const updated = this.db.query<StaleRunRow, [string]>(`
-        update workflow_runs
-        set status = 'failed', finished_at = datetime('now')
+    return this.db.transaction(() => {
+      const candidates = this.db.query<StaleRunRow, [string]>(`
+        select run_id, workflow, status, terminal_cause_json, finished_at,
+               runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+               usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms,
+               created_at
+        from workflow_runs
         where status = 'running'
           and datetime(coalesce(heartbeat_at, created_at)) < datetime(?)
-        returning run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
+        order by created_at asc, run_id asc
       `).all(staleBefore);
-      for (const row of updated) {
-        const payload = {
+      const crashed: WorkflowRunRecord[] = [];
+      for (const row of candidates) {
+        const cause: WorkflowRunCrashedCause = {
+          kind: "crashed",
           reason: "stale-running-run",
-          staleAfterMs: olderThanMs,
-          staleBefore,
-          createdAt: row.created_at,
+          ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
           ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
         };
         this.recordEvent({
           runId: row.run_id,
           type: "run.stale_reconciled",
-          payload,
+          payload: {
+            ...cause,
+            staleAfterMs: olderThanMs,
+            staleBefore,
+            createdAt: row.created_at,
+          },
         });
-        this.recordEvent({
-          runId: row.run_id,
-          type: "run.failed",
-          payload,
-        });
+        const updated = this.finishRunInCurrentTransaction(row.run_id, "crashed", cause);
+        if (updated !== null) crashed.push(runRecordFromRow(updated));
       }
-      return updated;
-    });
-    const failedRuns = fail();
-    return failedRuns.map((row) => ({
-      runId: row.run_id,
-      workflow: row.workflow,
-      status: "failed" as const,
-      finishedAt: row.finished_at,
-      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-    }));
+      return crashed;
+    })();
   }
 
   listRuns(): WorkflowRunRecord[] {
     this.failDeadPidRuns();
     const rows = this.db.query<RunRow & { readonly created_at: string }, []>(`
-      select run_id, workflow, status, finished_at, runner_pid, heartbeat_at, created_at
+      select run_id, workflow, status, terminal_cause_json, finished_at,
+             runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+             usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms,
+             created_at
       from workflow_runs
       order by created_at asc, run_id asc
     `).all();
-    return rows.map((row) => ({
-      runId: row.run_id,
-      workflow: row.workflow,
-      status: row.status,
-      finishedAt: row.finished_at,
-      ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-      ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-      createdAt: row.created_at,
-    }));
+    return rows.map(runRecordFromRow);
   }
 
   recordRunTask(input: {
@@ -1330,6 +2010,12 @@ export class WorkflowStore {
     readonly finishRunStatus?: Exclude<WorkflowRunStatus, "running" | "unknown">;
   }): void {
     const insert = () => {
+      const run = this.db.query<{ readonly status: WorkflowRunStatus }, [string]>(`
+        select status from workflow_runs where run_id = ?
+      `).get(input.runId);
+      if (run?.status !== "running") {
+        throw new Error(`Workflow run ${input.runId} does not exist or is already terminal`);
+      }
       this.db.query(`
         insert into workflow_run_tasks (
           run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
@@ -1350,6 +2036,9 @@ export class WorkflowStore {
         JSON.stringify(input.output),
         input.metadata === undefined ? null : JSON.stringify(input.metadata),
       );
+      if (input.cached) {
+        this.updateRunUsageInCurrentTransaction(input.runId, addWorkflowReuse);
+      }
       this.recordEvent({
         runId: input.runId,
         taskId: input.identity.taskId,
@@ -1361,13 +2050,13 @@ export class WorkflowStore {
         },
       });
       if (input.finishRunStatus !== undefined) {
-        this.finishRun(input.runId, input.finishRunStatus);
+        const cause = terminalCauseForStatus(input.finishRunStatus, undefined);
+        const updated = this.finishRunInCurrentTransaction(input.runId, input.finishRunStatus, cause);
+        if (updated === null) {
+          throw new Error(`Workflow run ${input.runId} does not exist or is already terminal`);
+        }
       }
     };
-    if (input.finishRunStatus === undefined) {
-      insert();
-      return;
-    }
     this.db.transaction(insert)();
   }
 
@@ -1425,6 +2114,7 @@ export class WorkflowStore {
 
     for (const event of this.listRunEvents(runId)) {
       if (event.taskId === null) continue;
+      if (event.type.startsWith("task.attempt.")) continue;
       const taskId = event.taskId;
       const payload = objectPayload(event.payload);
       const key = eventTaskKey(taskId, rowKeysByTaskId);
@@ -1458,6 +2148,22 @@ export class WorkflowStore {
         if (payload !== null && typeof payload.cacheKey === "string") patch.cacheKey = payload.cacheKey;
       }
       upsert(key, taskId, patch);
+    }
+
+    const attemptsByTask = new Map<string, WorkflowTaskAttemptRecord[]>();
+    for (const attempt of this.listRunTaskAttempts(runId)) {
+      const key = taskRecordKey(attempt);
+      const attempts = [...(attemptsByTask.get(key) ?? []), attempt];
+      attemptsByTask.set(key, attempts);
+      const existing = summaries.get(key);
+      upsert(key, attempt.taskId, {
+        ordinal: attempt.ordinal,
+        status: existing !== undefined && existing.status !== "running"
+          ? existing.status
+          : attempt.status,
+        cached: false,
+        repairs: Math.max(0, attempts.length - 1),
+      });
     }
 
     return Array.from(summaries.values());
@@ -1496,6 +2202,7 @@ export class WorkflowStore {
         execution: patch.execution ?? existing?.execution ?? "unknown",
         evidenceSource: patch.evidenceSource ?? existing?.evidenceSource ?? "unknown",
         cached: patch.cached ?? existing?.cached ?? null,
+        attempts: patch.attempts ?? existing?.attempts ?? [],
         repairCount: patch.repairCount ?? repairCountMetadata(metadata) ?? existing?.repairCount ?? 0,
         workerAdapter: stringMetadata(metadata, "adapter") ?? patch.workerAdapter ?? existing?.workerAdapter ?? null,
         model: stringMetadata(metadata, "model") ?? patch.model ?? existing?.model ?? null,
@@ -1534,9 +2241,16 @@ export class WorkflowStore {
     let runStartedAt: string | undefined;
     let runFinishedAt: string | undefined;
     for (const event of events) {
+      if (event.type.startsWith("task.attempt.")) continue;
       if (event.taskId === null) {
         if (event.type === "run.started") runStartedAt = event.createdAt;
-        if (event.type === "run.completed" || event.type === "run.failed" || event.type === "run.escalated") {
+        if (
+          event.type === "run.completed"
+          || event.type === "run.failed"
+          || event.type === "run.escalated"
+          || event.type === "run.stopped"
+          || event.type === "run.crashed"
+        ) {
           runFinishedAt = event.createdAt;
         }
         continue;
@@ -1609,6 +2323,40 @@ export class WorkflowStore {
       upsert(key, taskId, patch);
     }
 
+    const attemptsByTask = new Map<string, WorkflowTaskAttemptRecord[]>();
+    for (const attempt of this.listRunTaskAttempts(runId)) {
+      const key = taskRecordKey(attempt);
+      attemptsByTask.set(key, [...(attemptsByTask.get(key) ?? []), attempt]);
+    }
+    for (const [key, attempts] of attemptsByTask) {
+      const latest = attempts.at(-1)!;
+      const latestFinished = attempts.findLast((attempt) => attempt.status !== "running");
+      const existing = summaries.get(key);
+      const durationMs = numberMetadata(latestFinished?.metadata, "durationMs")
+        ?? attempts.reduce<number | null>((total, attempt) => {
+          const duration = elapsedMs(attempt.startedAt, attempt.finishedAt ?? undefined);
+          return duration === null ? total : (total ?? 0) + duration;
+        }, null);
+      upsert(key, latest.taskId, {
+        ordinal: latest.ordinal,
+        status: existing !== undefined && existing.status !== "running"
+          ? existing.status
+          : latest.status,
+        execution: "fresh",
+        evidenceSource: "this-run",
+        cached: false,
+        attempts,
+        repairCount: Math.max(0, attempts.length - 1),
+        workerAdapter: latest.adapter ?? null,
+        model: latest.model ?? null,
+        nativeAgent: latest.nativeAgent ?? null,
+        externalSessionPointer: latest.sessionId ?? null,
+        metadata: latest.metadata,
+        repairMode: repairModeMetadata(latest.metadata),
+        durationMs,
+      });
+    }
+
     const tasks = Array.from(summaries.values()).sort((left, right) => {
       const leftOrder = left.firstEventSequence ?? Number.MAX_SAFE_INTEGER;
       const rightOrder = right.firstEventSequence ?? Number.MAX_SAFE_INTEGER;
@@ -1637,6 +2385,7 @@ export class WorkflowStore {
         repairs: tasks.reduce((total, task) => total + task.repairCount, 0),
         status: run.status,
         durationMs,
+        usage: run.usage,
       },
       tasks,
     };
@@ -1653,6 +2402,7 @@ export class WorkflowStore {
           repairs: 0,
           status: run.status,
           durationMs: null,
+          usage: run.usage,
         };
         const snapshot = this.getRunSnapshot(run.runId);
         return {

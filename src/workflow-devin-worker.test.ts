@@ -1,10 +1,51 @@
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
 import {
   buildDevinArgs,
+  DevinWorkflowWorkerError,
   isDevinAuthOutput,
   mapDevinPermissionMode,
+  runDevinWorkflowTask,
 } from "./workflow-devin-worker.js";
+import { DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES } from "./workflow-worker-metadata.js";
 import { WorkflowPermissionError } from "./workflow-permissions.js";
+
+const failureTask = {
+  kind: "workflow-task" as const,
+  id: "devin-nonzero-exit",
+  agent: {
+    kind: "agent-ref" as const,
+    plugin: "test",
+    name: "agent",
+    description: "test agent",
+    sourceHash: "a".repeat(64),
+    manifestHash: "a".repeat(64),
+    installs: ["devin"],
+  },
+  prompt: "Return JSON",
+  output: Schema.Struct({ ok: Schema.Boolean }),
+};
+
+const captureDevinFailure = async (
+  bin: string,
+  cwd: string,
+): Promise<DevinWorkflowWorkerError> => {
+  try {
+    await runDevinWorkflowTask(failureTask, {
+      cwd,
+      bin,
+      resolvedPermission: "permissive",
+      processTimeoutMs: 5_000,
+    });
+  } catch (error) {
+    expect(error).toBeInstanceOf(DevinWorkflowWorkerError);
+    return error as DevinWorkflowWorkerError;
+  }
+  throw new Error("expected Devin worker failure");
+};
 
 describe("workflow-devin-worker", () => {
   test("maps permission modes to Devin CLI flags", () => {
@@ -49,5 +90,66 @@ describe("workflow-devin-worker", () => {
   test("detects auth-required output", () => {
     expect(isDevinAuthOutput("error: not authenticated — run `devin auth login`")).toBe(true);
     expect(isDevinAuthOutput("pong")).toBe(false);
+  });
+
+  test("renders a bounded stderr excerpt for nonzero exits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
+    try {
+      const fakeDevin = join(root, "fake-devin.mjs");
+      await writeFile(
+        fakeDevin,
+        [
+          "#!/usr/bin/env node",
+          "import { writeSync } from 'node:fs';",
+          "writeSync(1, 'stdout-fallback-should-not-win\\n');",
+          "writeSync(2, `unbounded-stderr-prefix:${'x'.repeat(5_000)}:actual-stderr-tail\\n`);",
+          "process.exitCode = 7;",
+          "",
+        ].join("\n"),
+      );
+      await chmod(fakeDevin, 0o755);
+
+      const error = await captureDevinFailure(fakeDevin, root);
+      const message = error.message;
+      expect(message).toContain("actual-stderr-tail");
+      expect(message).not.toContain("[object Object]");
+      expect(message).not.toContain("unbounded-stderr-prefix");
+      expect(message).not.toContain("stdout-fallback-should-not-win");
+      expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(
+        Buffer.byteLength("devin exited with 7: ", "utf8") +
+          DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("uses a bounded stdout excerpt when stderr is empty", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
+    try {
+      const fakeDevin = join(root, "fake-devin.mjs");
+      await writeFile(
+        fakeDevin,
+        [
+          "#!/usr/bin/env node",
+          "import { writeSync } from 'node:fs';",
+          "writeSync(1, `unbounded-stdout-prefix:${'y'.repeat(5_000)}:actual-stdout-tail\\n`);",
+          "process.exitCode = 9;",
+          "",
+        ].join("\n"),
+      );
+      await chmod(fakeDevin, 0o755);
+
+      const error = await captureDevinFailure(fakeDevin, root);
+      const message = error.message;
+      expect(message).toContain("actual-stdout-tail");
+      expect(message).not.toContain("unbounded-stdout-prefix");
+      expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(
+        Buffer.byteLength("devin exited with 9: ", "utf8") +
+          DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

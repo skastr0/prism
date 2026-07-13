@@ -1,4 +1,5 @@
-import { spawnWorkflowProcess } from "./workflow-runtime.js";
+import { currentCliCommand } from "./workflow-cli-command.js";
+import { encodeWorkflowProcessGuardRequest } from "./workflow-process-guard.js";
 
 export interface WorkflowWorkerProcessOptions {
   readonly command: string;
@@ -40,18 +41,35 @@ export const runWorkflowWorkerProcess = async (
   options: WorkflowWorkerProcessOptions,
 ): Promise<WorkflowWorkerProcessResult> => {
   const started = Date.now();
-  const child = spawnWorkflowProcess({
-    cmd: [options.command, ...options.args],
+  const guard = Bun.spawn({
+    cmd: [
+      ...currentCliCommand(),
+      "__workflow-process-guard",
+      ...encodeWorkflowProcessGuardRequest({
+        cwd: options.cwd,
+        command: options.command,
+        args: options.args,
+      }),
+    ],
     cwd: options.cwd,
-    env: options.env === undefined ? undefined : { ...process.env, ...options.env },
-    stdin: "ignore",
+    env: options.env === undefined ? process.env : { ...process.env, ...options.env },
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
   let timedOut = false;
   let aborted = false;
   let earlyExit: string | undefined;
-  const kill = () => child.kill("SIGKILL");
+  let leaseClosed = false;
+  const closeLease = (): void => {
+    if (leaseClosed) return;
+    leaseClosed = true;
+    try {
+      guard.stdin.end();
+    } catch {
+      guard.kill("SIGTERM");
+    }
+  };
   let observedOutput = "";
   const observeOutput = (text: string): void => {
     if (earlyExit !== undefined || options.earlyExitPatterns === undefined || text.length === 0) return;
@@ -59,7 +77,7 @@ export const runWorkflowWorkerProcess = async (
     const matched = options.earlyExitPatterns.find((candidate) => candidate.pattern.test(observedOutput));
     if (matched === undefined) return;
     earlyExit = matched.name;
-    kill();
+    closeLease();
   };
   const readStream = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
     const reader = stream.getReader();
@@ -77,9 +95,9 @@ export const runWorkflowWorkerProcess = async (
     observeOutput(tail);
     return output;
   };
-  const onAbort = () => {
+  const onAbort = (): void => {
     aborted = true;
-    kill();
+    closeLease();
   };
   if (options.abortSignal?.aborted === true) {
     onAbort();
@@ -90,25 +108,35 @@ export const runWorkflowWorkerProcess = async (
     ? undefined
     : setTimeout(() => {
       timedOut = true;
-      kill();
+      closeLease();
     }, options.processTimeoutMs);
+  const exit = guard.exited;
+  const stdout = readStream(guard.stdout).catch((error: unknown) => {
+    closeLease();
+    throw error;
+  });
+  const stderr = readStream(guard.stderr).catch((error: unknown) => {
+    closeLease();
+    throw error;
+  });
   try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      readStream(child.stdout),
-      readStream(child.stderr),
-    ]);
+    const [exitCode, stdoutText, stderrText] = await Promise.all([exit, stdout, stderr]);
     return {
       exitCode,
-      stdout,
-      stderr,
+      stdout: stdoutText,
+      stderr: stderrText,
       durationMs: Date.now() - started,
       timedOut,
       aborted,
       ...(earlyExit !== undefined ? { earlyExit } : {}),
     };
+  } catch (error) {
+    closeLease();
+    await Promise.allSettled([exit, stdout, stderr]);
+    throw error;
   } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
+    closeLease();
+    clearTimeout(timeout);
     options.abortSignal?.removeEventListener("abort", onAbort);
   }
 };

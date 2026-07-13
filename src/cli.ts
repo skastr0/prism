@@ -97,14 +97,23 @@ import { runPluginsTui } from "./plugins-tui/index.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
-  requestWorkflowRunnerTermination,
   startDetachedWorkflowRun,
+  stopWorkflowRun,
   updateDetachedWorkflowRun,
   workflowRunOptionsSnapshot,
 } from "./workflow-controls.js";
 import type { WorkflowPermissionMode } from "./workflows.js";
+import { decodeWorkflowProcessGuardRequest, runWorkflowProcessGuard } from "./workflow-process-guard.js";
 
 declare const APP_VERSION: string | undefined;
+
+type WorkflowRunnerTerminationSignal = "SIGTERM" | "SIGINT" | "SIGHUP";
+
+const WORKFLOW_RUNNER_TERMINATION_SIGNALS: ReadonlyArray<WorkflowRunnerTerminationSignal> = [
+  "SIGTERM",
+  "SIGINT",
+  "SIGHUP",
+];
 
 const program = new Command();
 const prismVersion =
@@ -122,6 +131,15 @@ program
   .description("Internal Prism MCP server launcher")
   .action(async (bundlePath: string) => {
     await import(pathToFileURL(resolve(bundlePath)).href);
+  });
+
+program
+  .command("__workflow-process-guard <cwd> <command> [args...]", { hidden: true })
+  .description("Internal workflow subprocess ownership guard")
+  .action(async (cwd: string, command: string, args: ReadonlyArray<string>) => {
+    process.exitCode = await runWorkflowProcessGuard(
+      decodeWorkflowProcessGuardRequest(cwd, command, args),
+    );
   });
 
 class CliUsageError extends Error {
@@ -220,6 +238,14 @@ const parseIntegerAtLeast = (value: string, minimum: number, message: string): n
 const parsePositiveInteger = (value: string): number =>
   parseIntegerAtLeast(value, 1, "must be a positive integer");
 
+const parseFiniteNonNegative = (value: string): number => {
+  const parsed = Number(value);
+  if (value.trim().length === 0 || !Number.isFinite(parsed) || parsed < 0) {
+    throw new InvalidArgumentError("must be a finite non-negative number");
+  }
+  return parsed;
+};
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Await full delivery to stdout before the action resolves, so large output
@@ -260,11 +286,6 @@ workflow
   .action(async (file: string, options: { readonly table?: boolean }) => {
     try {
       const summary = await validateWorkflowFile(file);
-      if (summary.warnings !== undefined && summary.warnings.length > 0) {
-        for (const warning of summary.warnings) {
-          console.error(`warning: ${warning.message}`);
-        }
-      }
       if (options.table === true) {
         await writeStdout(`${renderWorkflowModelResolutionTable(summary.modelResolution)}\n`);
       } else {
@@ -417,16 +438,19 @@ workflow
   .option("--store <path>", "SQLite workflow store path")
   .option("--poll-ms <ms>", "Auto-refresh interval", parsePositiveInteger, 500)
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed while monitoring", parsePositiveInteger)
+  .option("--timeout-ms <ms>", "Close the monitor after this many milliseconds", parsePositiveInteger)
   .action(async (_workflowFile: string | undefined, options: {
     readonly store?: string;
     readonly pollMs: number;
     readonly failStaleAfterMs?: number;
+    readonly timeoutMs?: number;
   }) => {
     try {
       await runWorkflowMonitor({
         storePath: resolveWorkflowStorePath(options.store),
         pollMs: options.pollMs,
         ...(options.failStaleAfterMs !== undefined ? { failStaleAfterMs: options.failStaleAfterMs } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       });
     } catch (error) {
       printCliError(error, "Workflow monitor failed");
@@ -462,10 +486,15 @@ workflow
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
+  .option("--max-wall-ms <ms>", "Maximum workflow wall time in milliseconds", parsePositiveInteger)
+  .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
+  .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
+  .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
   .addOption(new CommanderOption("--run-id <id>").hideHelp())
   .addOption(new CommanderOption("--run-token <token>").hideHelp())
+  .option("--cache", "Enable workflow task cache lookup and writes")
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (file: string, options: {
     readonly mockOutput?: string;
@@ -474,6 +503,10 @@ workflow
     readonly permission?: string;
     readonly maxConcurrentTasks?: number;
     readonly taskTimeoutMs?: number;
+    readonly maxWallMs?: number;
+    readonly taskNoProgressMs?: number;
+    readonly maxTasks?: number;
+    readonly maxCostUsd?: number;
     readonly store?: string;
     readonly detach?: boolean;
     readonly runId?: string;
@@ -481,10 +514,11 @@ workflow
     readonly cache?: boolean;
   }) => {
     let store: WorkflowStore | undefined;
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let heartbeat: NodeJS.Timeout | undefined;
     let executionRunId: string | undefined;
     let terminationController: AbortController | undefined;
-    let terminationHandler: (() => void) | undefined;
+    let terminationHandlers: Partial<Record<WorkflowRunnerTerminationSignal, () => void>> | undefined;
+    let requestedExitCode: ExitCode | undefined;
     try {
       // Typecheck gating for detached runs: the user-facing foreground command
       // is the typecheck moat. The detached background child is spawned by
@@ -514,10 +548,13 @@ workflow
           options: workflowRunOptionsSnapshot(options),
         });
         store.setRunHandoffToken(runId, token);
-        store.close();
-        store = undefined;
-        startDetachedWorkflowRun(file, { ...options, permission: options.permission }, { runId, storePath, token });
-        console.log(JSON.stringify({ runId, workflow: workflow.name, status: "running", detached: true }, null, 2));
+        const startedRun = await startDetachedWorkflowRun(
+          store,
+          file,
+          { ...options, permission: options.permission },
+          { runId, storePath, token },
+        );
+        console.log(JSON.stringify({ runId, workflow: workflow.name, status: startedRun.status, detached: true }, null, 2));
         return;
       }
       if (
@@ -541,17 +578,21 @@ workflow
         options: workflowRunOptionsSnapshot(options),
       });
       terminationController = new AbortController();
-      terminationHandler = () => {
-        terminationController?.abort();
-        if (store !== undefined && executionRunId !== undefined) {
-          store.recordEvent({
-            runId: executionRunId,
-            type: "runner.termination_signal.received",
-            payload: { signal: "SIGTERM" },
-          });
-        }
-      };
-      process.once("SIGTERM", terminationHandler);
+      terminationHandlers = {};
+      for (const signal of WORKFLOW_RUNNER_TERMINATION_SIGNALS) {
+        const handler = (): void => {
+          terminationController?.abort(signal);
+          if (store !== undefined && executionRunId !== undefined) {
+            store.recordEvent({
+              runId: executionRunId,
+              type: "runner.termination_signal.received",
+              payload: { signal },
+            });
+          }
+        };
+        terminationHandlers[signal] = handler;
+        process.once(signal, handler);
+      }
       store.markRunRunnerStarted(executionRunId, process.pid);
       heartbeat = setInterval(() => store?.heartbeatRun(executionRunId!), 2_000);
       const outputs = options.mockOutput
@@ -568,6 +609,10 @@ workflow
         cache: options.cache !== false,
         mockOutput: outputs !== null,
         maxConcurrentTasks: options.maxConcurrentTasks,
+        maxWallMs: options.maxWallMs,
+        taskNoProgressMs: options.taskNoProgressMs,
+        maxTasks: options.maxTasks,
+        maxCostUsd: options.maxCostUsd,
         runId: executionRunId,
         abortSignal: terminationController.signal,
         runtimeOptions: {
@@ -590,19 +635,30 @@ workflow
       // so a caller's `$?` reflects the real outcome instead of always reading 0.
       const finalRunStatus = store.getRun(executionRunId!)?.status ?? "unknown";
       if (!isWorkflowRunOutcomeSuccessful(finalRunStatus, result.tasks.map((task) => task.status))) {
-        exitWith(EXIT_CODES.domainFailure);
+        requestedExitCode = EXIT_CODES.domainFailure;
       }
     } catch (error) {
       if (store !== undefined && executionRunId !== undefined && store.getRun(executionRunId)?.status === "running") {
-        store.finishRun(executionRunId, "failed");
+        const failure = error instanceof Error ? error : new Error(String(error));
+        store.finishRun(executionRunId, "failed", {
+          kind: "workflow-failed",
+          errorName: failure.name,
+          message: failure.message,
+        });
       }
       printCliError(error, "Workflow run failed");
-      exitWith(EXIT_CODES.domainFailure);
+      requestedExitCode = EXIT_CODES.domainFailure;
     } finally {
-      if (heartbeat !== undefined) clearInterval(heartbeat);
-      if (terminationHandler !== undefined) process.off("SIGTERM", terminationHandler);
+      clearInterval(heartbeat);
+      if (terminationHandlers !== undefined) {
+        for (const signal of WORKFLOW_RUNNER_TERMINATION_SIGNALS) {
+          const handler = terminationHandlers[signal];
+          if (handler !== undefined) process.off(signal, handler);
+        }
+      }
       store?.close();
     }
+    if (requestedExitCode !== undefined) exitWith(requestedExitCode);
   });
 
 const workflowRuns = workflow
@@ -781,7 +837,7 @@ workflowRuns
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
-      console.log(JSON.stringify({ runs: store.listRuns().slice(0, options.limit) }, null, 2));
+      console.log(JSON.stringify({ runs: store.listRuns().reverse().slice(0, options.limit) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs list failed");
       exitWith(EXIT_CODES.domainFailure);
@@ -1039,6 +1095,11 @@ workflowRuns
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
+  .option("--max-wall-ms <ms>", "Maximum workflow wall time in milliseconds", parsePositiveInteger)
+  .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
+  .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
+  .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
+  .option("--cache", "Enable workflow task cache lookup and writes")
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
@@ -1048,6 +1109,10 @@ workflowRuns
     readonly permission?: string;
     readonly maxConcurrentTasks?: number;
     readonly taskTimeoutMs?: number;
+    readonly maxWallMs?: number;
+    readonly taskNoProgressMs?: number;
+    readonly maxTasks?: number;
+    readonly maxCostUsd?: number;
     readonly cache?: boolean;
   }) => {
     try {
@@ -1073,6 +1138,11 @@ workflowRuns
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
   .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
   .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
+  .option("--max-wall-ms <ms>", "Maximum workflow wall time in milliseconds", parsePositiveInteger)
+  .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
+  .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
+  .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
+  .option("--cache", "Enable workflow task cache lookup and writes")
   .option("--no-cache", "Disable workflow task cache lookup and writes")
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
@@ -1082,6 +1152,10 @@ workflowRuns
     readonly permission?: string;
     readonly maxConcurrentTasks?: number;
     readonly taskTimeoutMs?: number;
+    readonly maxWallMs?: number;
+    readonly taskNoProgressMs?: number;
+    readonly maxTasks?: number;
+    readonly maxCostUsd?: number;
     readonly cache?: boolean;
   }) => {
     try {
@@ -1102,13 +1176,7 @@ workflowRuns
     let store: WorkflowStore | undefined;
     try {
       store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
-      const stoppedRun = store.stopRunningRun(runId);
-      if (stoppedRun !== null) {
-        requestWorkflowRunnerTermination(store, stoppedRun, "stop-requested");
-        console.log(JSON.stringify({ run: stoppedRun }, null, 2));
-        return;
-      }
-      const run = store.getRun(runId);
+      const run = await stopWorkflowRun(store, runId);
       if (run === null) {
         throw new CliUsageError(`workflow run not found: ${runId}`);
       }

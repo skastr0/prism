@@ -39,7 +39,11 @@ const workflowTestEnv = (overrides: Record<string, string> = {}): Record<string,
   return { ...env, ...overrides };
 };
 
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+};
 
 const contractMetadata = {
   contractVersion: WORKFLOW_WORKER_JSON_CONTRACT_VERSION,
@@ -55,6 +59,15 @@ const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 5_000): Pr
   throw new Error("timed out waiting for condition");
 };
 
+const pollFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (await predicate()) return true;
+    await delay(20);
+  } while (Date.now() < deadline);
+  return predicate();
+};
+
 const deadPid = async (): Promise<number> => {
   const processHandle = Bun.spawn({ cmd: ["sh", "-c", "sleep 30"] });
   const pid = processHandle.pid;
@@ -62,6 +75,17 @@ const deadPid = async (): Promise<number> => {
   await processHandle.exited;
   return pid;
 };
+
+const isPidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+    throw error;
+  }
+};
+
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -580,7 +604,7 @@ describe("workflow loader", () => {
     expect(summary.tasks).toEqual([]);
   });
 
-  test("validate warns when a dynamic wf.phase task uses an agent outside the compiled phase set", async () => {
+  test("validate rejects a dynamic task outside the compiled phase-agent graph", async () => {
     const root = await createTempRoot();
     const prismHome = join(root, ".prism-home");
     const { key } = deriveProjectKey(root);
@@ -666,12 +690,14 @@ export default defineWorkflow({
     const previousCwd = process.cwd();
     process.env.PRISM_HOME = prismHome;
     try {
-      process.chdir(root);
-      const summary = await validateWorkflowFile(file, { prismHome, skipTypecheck: true });
-      expect(summary.warnings).toHaveLength(1);
-      expect(summary.warnings?.[0]?.taskId).toBe("scope");
-      expect(summary.warnings?.[0]?.phase).toBe("forge:explore");
-      expect(summary.warnings?.[0]?.message).toContain("not assigned to that phase");
+      await expect(
+        validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root }),
+      ).rejects.toThrow(
+        "workflow 'phase-warning-smoke' failed phase-agent graph validation for 1 task binding(s)",
+      );
+      await expect(
+        validateWorkflowFile(file, { prismHome, skipTypecheck: true, cwd: root }),
+      ).rejects.toThrow("task 'scope' is stamped phase 'forge:explore' but agent 'forge:builder' is not assigned");
     } finally {
       process.chdir(previousCwd);
       if (previousPrismHome === undefined) delete process.env.PRISM_HOME;
@@ -702,7 +728,7 @@ export default defineWorkflow({
 
     await expect(validateWorkflowFile(file)).rejects.toThrow(WorkflowValidationError);
     await expect(validateWorkflowFile(file)).rejects.toThrow(
-      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, kimi-code, opencode/,
+      /unsupported workflow worker 'not-a-real-worker'\. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, devin, grok, hermes, kimi-code, omp, opencode/,
     );
   });
 
@@ -910,7 +936,7 @@ export default defineWorkflow({
     ]);
 
     expect(stderr).toBe("");
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
     const result = JSON.parse(stdout) as {
       output: { reviewerStatus: string; fusion: { reviewerStatus: string; verdict: string } };
       tasks: Array<{ id: string; cached: boolean; status: string; error?: string; output: unknown }>;
@@ -1151,7 +1177,7 @@ export default defineWorkflow({
     expect(second.tasks[0]?.cached).toBe(true);
     expect(second.tasks[0]?.output.summary).toBe("from grok");
     expect(calls.trim().split("\n").map((line) => JSON.parse(line) as { agent: string; model: string })).toEqual([
-      { agent: "builder", model: "grok-build" },
+      { agent: "builder", model: "grok-4.5" },
     ]);
   });
 
@@ -1409,7 +1435,7 @@ export default defineWorkflow({
     ]);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, grok, hermes, kimi-code, opencode");
+    expect(stderr).toContain("unsupported workflow worker 'not-real'. Supported workers: amp-code, antigravity-cli, claude-code, codex-cli, devin, grok, hermes, kimi-code, omp, opencode");
   });
 
   test("CLI runs a workflow through the Antigravity worker adapter", async () => {
@@ -1423,6 +1449,7 @@ export default defineWorkflow({
       "#!/usr/bin/env node",
       "import { appendFileSync } from 'node:fs';",
       "const args = process.argv.slice(2);",
+      "if (args.includes('--help')) { console.log('--add-dir --print --model --log-file --conversation --print-timeout --sandbox --dangerously-skip-permissions'); process.exit(0); }",
       "const modelIndex = args.indexOf('--model');",
       "const logIndex = args.indexOf('--log-file');",
       "const printIndex = args.indexOf('--print');",
@@ -2945,17 +2972,29 @@ export default defineWorkflow({
     ]);
   });
 
-  test("CLI detaches a workflow run and leaves it inspectable by run id", async () => {
+  test("CLI detach responds only after the live runner has persisted readiness", async () => {
     const root = await createTempRoot();
     const file = join(root, "workflow.ts");
     const storeFile = join(root, "workflows.sqlite");
     const callsFile = join(root, "detached-grok-calls.txt");
+    const releaseFile = join(root, "release-detached-worker");
+    const childStartedFile = join(root, "detached-child-started");
+    const readinessReleaseFile = join(root, "release-detached-readiness");
     const fakeGrok = join(root, "fake-grok.mjs");
-    await writeFile(file, workflowSource("default", { worker: "grok" }));
+    await writeFile(file, [
+      "import { existsSync, writeFileSync } from 'node:fs';",
+      "import { setTimeout as readinessDelay } from 'node:timers/promises';",
+      "if (process.env.PRISM_WORKFLOW_DETACHED_CHILD === '1') {",
+      `  writeFileSync(${JSON.stringify(childStartedFile)}, 'started');`,
+      `  while (!existsSync(${JSON.stringify(readinessReleaseFile)})) await readinessDelay(20);`,
+      "}",
+      workflowSource("default", { worker: "grok" }),
+    ].join("\n"));
     await writeFile(fakeGrok, [
       "#!/usr/bin/env node",
-      "import { appendFileSync } from 'node:fs';",
-      "await new Promise((resolve) => setTimeout(resolve, 1200));",
+      "import { appendFileSync, existsSync } from 'node:fs';",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      `while (!existsSync(${JSON.stringify(releaseFile)})) await delay(20);`,
       `appendFileSync(${JSON.stringify(callsFile)}, 'called\\n');`,
       "console.log(JSON.stringify({ summary: 'detached' }));",
       "",
@@ -2979,28 +3018,77 @@ export default defineWorkflow({
       return JSON.parse(stdout) as unknown;
     };
 
-    const runResult = await cli([
-      "workflow",
-      "run",
-      file,
-      "--detach",
-      "--store",
-      storeFile,
-    ]) as { runId: string; workflow: string; status: string; detached: boolean };
-    expect(await Bun.file(callsFile).exists()).toBe(false);
-    expect(runResult).toEqual({
-      runId: expect.any(String),
-      workflow: "loader-smoke",
-      status: "running",
-      detached: true,
+    const detachProcess = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--detach",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: workflowTestEnv({ HOME: join(root, "home"), PRISM_WORKFLOW_GROK_BIN: fakeGrok }),
+      stdout: "pipe",
+      stderr: "pipe",
     });
-
-    await waitFor(async () => {
-      const listResult = await cli(["workflow", "runs", "list", "--store", storeFile]) as {
-        runs: Array<{ runId: string; status: string }>;
-      };
-      return listResult.runs.find((run) => run.runId === runResult.runId)?.status === "completed";
-    });
+    await waitFor(async () => Bun.file(childStartedFile).exists());
+    const respondedBeforeReadiness = await pollFor(() => detachProcess.exitCode !== null, 500);
+    await writeFile(readinessReleaseFile, "release");
+    const [detachExitCode, detachStdout, detachStderr] = await Promise.all([
+      detachProcess.exited,
+      new Response(detachProcess.stdout).text(),
+      new Response(detachProcess.stderr).text(),
+    ]);
+    expect(detachExitCode).toBe(0);
+    expect(detachStderr).toBe("");
+    const runResult = JSON.parse(detachStdout) as {
+      runId: string;
+      workflow: string;
+      status: string;
+      detached: boolean;
+    };
+    try {
+      const readinessStore = await WorkflowStore.open(storeFile);
+      const readyRun = readinessStore.getRun(runResult.runId);
+      const readinessEvents = readinessStore.listRunEvents(runResult.runId);
+      readinessStore.close();
+      const readyRunnerPid = readyRun?.runnerPid;
+      if (
+        typeof readyRunnerPid !== "number" ||
+        !Number.isSafeInteger(readyRunnerPid) ||
+        readyRunnerPid <= 0
+      ) {
+        throw new Error(`detached readiness persisted an invalid runner pid: ${String(readyRunnerPid)}`);
+      }
+      expect(readyRun).toMatchObject({
+        status: "running",
+        heartbeatAt: expect.any(String),
+      });
+      expect(isPidAlive(readyRunnerPid)).toBe(true);
+      expect(readinessEvents).toContainEqual(expect.objectContaining({
+        type: "runner.started",
+        payload: { runnerPid: readyRunnerPid },
+      }));
+      expect(await Bun.file(callsFile).exists()).toBe(false);
+      expect(runResult).toEqual({
+        runId: expect.any(String),
+        workflow: "loader-smoke",
+        status: "running",
+        detached: true,
+      });
+    } finally {
+      await writeFile(releaseFile, "release");
+      await waitFor(async () => {
+        const cleanupStore = await WorkflowStore.open(storeFile);
+        const status = cleanupStore.getRun(runResult.runId)?.status;
+        cleanupStore.close();
+        return status === "completed" || status === "failed";
+      });
+    }
 
     const showResult = await cli(["workflow", "runs", "show", runResult.runId, "--store", storeFile]) as {
       run: { runnerPid?: number; heartbeatAt?: string };
@@ -3016,6 +3104,63 @@ export default defineWorkflow({
     expect(eventsResult.events.map((event) => event.type)).toContain("runner.started");
     expect(eventsResult.events.map((event) => event.type).at(-1)).toBe("run.completed");
     expect((await Bun.file(callsFile).text()).trim()).toBe("called");
+    expect(respondedBeforeReadiness).toBe(false);
+  });
+
+  test("CLI fails closed when a detached child exits before publishing readiness", async () => {
+    const root = await createTempRoot();
+    const file = join(root, "startup-failure.workflow.ts");
+    const storeFile = join(root, "workflows.sqlite");
+    await writeFile(file, [
+      "if (process.env.PRISM_WORKFLOW_DETACHED_CHILD === '1') process.exit(23);",
+      workflowSource(),
+    ].join("\n"));
+
+    const processHandle = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "run",
+        join(process.cwd(), "src", "cli.ts"),
+        "workflow",
+        "run",
+        file,
+        "--detach",
+        "--store",
+        storeFile,
+      ],
+      cwd: root,
+      env: workflowTestEnv({ HOME: join(root, "home") }),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("exited before readiness");
+    const store = await WorkflowStore.open(storeFile);
+    const runs = store.listRuns();
+    const failedRun = runs[0];
+    const events = failedRun === undefined ? [] : store.listRunEvents(failedRun.runId);
+    store.close();
+    expect(runs).toHaveLength(1);
+    expect(failedRun).toMatchObject({
+      workflow: "loader-smoke",
+      status: "crashed",
+      terminalCause: { kind: "crashed", reason: "runner-start-failed", runnerPid: expect.any(Number) },
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "runner.start_failed",
+      payload: expect.objectContaining({ cause: expect.any(String) }),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.crashed",
+      payload: expect.objectContaining({ kind: "crashed", reason: "runner-start-failed" }),
+    }));
   });
 
   test("CLI rejects user supplied workflow run ids", async () => {
@@ -3317,10 +3462,12 @@ export default defineWorkflow({
       "task.cache_lookup.started",
       "task.cache_lookup.miss",
       "task.executor.started",
+      "task.attempt.started",
       "task.executor.completed",
       "task.decode.started",
       "task.decode.completed",
       "task.finish.completed",
+      "task.attempt.completed",
       "task.cache_write.completed",
       "task.completed",
       "run.completed",
@@ -3410,17 +3557,18 @@ export default defineWorkflow({
       events: Array<{ type: string; payload: unknown }>;
     };
 
-    expect(before.runs).toEqual([{ runId: "stale-run", workflow: "stale-smoke", status: "running", finishedAt: null, createdAt: expect.any(String) }]);
+    expect(before.runs).toMatchObject([{ runId: "stale-run", workflow: "stale-smoke", status: "running", finishedAt: null, terminalCause: null, createdAt: expect.any(String) }]);
     expect(after.runs.map((run) => ({ runId: run.runId, workflow: run.workflow, status: run.status }))).toEqual([
-      { runId: "stale-run", workflow: "stale-smoke", status: "failed" },
+      { runId: "stale-run", workflow: "stale-smoke", status: "crashed" },
     ]);
     expect(typeof after.runs[0]?.finishedAt).toBe("string");
-    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.failed"]);
-    expect(events.events.at(-1)?.payload).toMatchObject({
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.crashed"]);
+    expect(events.events.find((event) => event.type === "run.stale_reconciled")?.payload).toMatchObject({
       reason: "stale-running-run",
       staleAfterMs: 1,
       createdAt: "2026-01-01 00:00:00",
     });
+    expect(events.events.at(-1)?.payload).toMatchObject({ kind: "crashed", reason: "stale-running-run" });
   });
 
   test("CLI can reconcile stale running workflow runs while showing details and events", async () => {
@@ -3481,21 +3629,27 @@ export default defineWorkflow({
       events: Array<{ type: string; payload: unknown }>;
     };
 
-    expect(show).toEqual({
-      run: { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String) },
+    expect(show).toMatchObject({
+      run: {
+        runId: "stale-show-run",
+        workflow: "stale-smoke",
+        status: "crashed",
+        terminalCause: expect.objectContaining({ kind: "crashed", reason: "stale-running-run" }),
+        finishedAt: expect.any(String),
+      },
       taskSummary: [],
       tasks: [],
     });
-    expect(afterShow.runs).toEqual([
-      { runId: "stale-show-run", workflow: "stale-smoke", status: "failed", finishedAt: expect.any(String), createdAt: expect.any(String) },
+    expect(afterShow.runs).toMatchObject([
+      { runId: "stale-show-run", workflow: "stale-smoke", status: "crashed", finishedAt: expect.any(String), createdAt: expect.any(String) },
     ]);
-    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.failed"]);
+    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stale_reconciled", "run.crashed"]);
   });
 
   test("CLI can stop a running workflow run cooperatively", async () => {
     const root = await createTempRoot();
     const storeFile = join(root, "workflows.sqlite");
-    const cli = async (args: string[]) => {
+    const cli = async (args: string[], expectedExitCode = 0) => {
       const processHandle = Bun.spawn({
         cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
         cwd: process.cwd(),
@@ -3508,7 +3662,7 @@ export default defineWorkflow({
         new Response(processHandle.stderr).text(),
       ]);
       expect(stderr).toBe("");
-      expect(exitCode).toBe(0);
+      expect(exitCode).toBe(expectedExitCode);
       return JSON.parse(stdout) as unknown;
     };
 
@@ -3519,7 +3673,7 @@ export default defineWorkflow({
     const stopped = await cli(["workflow", "runs", "stop", "stop-run", "--store", storeFile]) as {
       run: { runId: string; workflow: string; status: string; finishedAt: string | null };
     };
-    const waited = await cli(["workflow", "runs", "wait", "stop-run", "--store", storeFile, "--timeout-ms", "1000"]) as {
+    const waited = await cli(["workflow", "runs", "wait", "stop-run", "--store", storeFile, "--timeout-ms", "1000"], 1) as {
       run: { runId: string; status: string };
       tasks: unknown[];
     };
@@ -3527,11 +3681,20 @@ export default defineWorkflow({
       events: Array<{ type: string; payload: unknown }>;
     };
 
-    expect(stopped.run).toMatchObject({ runId: "stop-run", workflow: "stop-smoke", status: "failed" });
+    expect(stopped.run).toMatchObject({ runId: "stop-run", workflow: "stop-smoke", status: "stopped" });
     expect(typeof stopped.run.finishedAt).toBe("string");
-    expect(waited).toMatchObject({ run: { runId: "stop-run", status: "failed" }, tasks: [] });
-    expect(events.events.map((event) => event.type)).toEqual(["run.started", "run.stop_requested", "run.failed"]);
-    expect(events.events.at(-1)?.payload).toEqual({ reason: "stop-requested" });
+    expect(waited).toMatchObject({ run: { runId: "stop-run", status: "stopped" }, tasks: [] });
+    expect(events.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "run.stop_requested",
+      "run.stopped",
+      "runner.termination_requested",
+      "runner.termination_confirmed",
+    ]);
+    expect(events.events.find((event) => event.type === "run.stopped")?.payload).toMatchObject({
+      kind: "stopped",
+      reason: "stop-requested",
+    });
   });
 
   test("CLI run inspection heals dead detached runner pids without the stale flag", async () => {
@@ -3572,16 +3735,16 @@ export default defineWorkflow({
       run: { runId: string; status: string; finishedAt: string | null; runnerPid?: number };
     };
 
-    expect(listed.runs).toEqual([
-      { runId: "dead-pid-run", workflow: "dead-pid-smoke", status: "failed", finishedAt: expect.any(String), runnerPid: pid, heartbeatAt: expect.any(String), createdAt: expect.any(String) },
+    expect(listed.runs).toMatchObject([
+      { runId: "dead-pid-run", workflow: "dead-pid-smoke", status: "crashed", finishedAt: expect.any(String), runnerPid: pid, heartbeatAt: expect.any(String), createdAt: expect.any(String) },
     ]);
-    expect(shown.run).toMatchObject({ runId: "dead-pid-run", status: "failed", runnerPid: pid });
-    expect(stopped.run).toMatchObject({ runId: "dead-pid-run", status: "failed", runnerPid: pid });
+    expect(shown.run).toMatchObject({ runId: "dead-pid-run", status: "crashed", runnerPid: pid });
+    expect(stopped.run).toMatchObject({ runId: "dead-pid-run", status: "crashed", runnerPid: pid });
     expect(events.events.map((event) => event.type)).toEqual([
       "run.started",
       "runner.started",
       "run.stale_dead_pid",
-      "run.failed",
+      "run.crashed",
     ]);
     expect(events.events.at(-1)?.payload).toMatchObject({ reason: "dead-runner-pid", runnerPid: pid });
   });
@@ -3601,7 +3764,7 @@ export default defineWorkflow({
       "",
     ].join("\n"));
     await chmod(fakeGrok, 0o755);
-    const cli = async (args: string[]) => {
+    const cli = async (args: string[], expectedExitCode = 0) => {
       const processHandle = Bun.spawn({
         cmd: [process.execPath, "run", join(process.cwd(), "src", "cli.ts"), ...args],
         cwd: root,
@@ -3615,7 +3778,7 @@ export default defineWorkflow({
         new Response(processHandle.stderr).text(),
       ]);
       expect(stderr).toBe("");
-      expect(exitCode).toBe(0);
+      expect(exitCode).toBe(expectedExitCode);
       return JSON.parse(stdout) as unknown;
     };
 
@@ -3624,12 +3787,6 @@ export default defineWorkflow({
     const stopped = await cli(["workflow", "runs", "stop", detached.runId, "--store", storeFile]) as {
       run: { runId: string; status: string };
     };
-    await waitFor(async () => {
-      const shown = await cli(["workflow", "runs", "show", detached.runId, "--store", storeFile]) as {
-        tasks: Array<{ status: string }>;
-      };
-      return shown.tasks[0]?.status === "failed";
-    }, 5_000);
     const waited = await cli([
       "workflow",
       "runs",
@@ -3641,7 +3798,7 @@ export default defineWorkflow({
       "5000",
       "--interval-ms",
       "50",
-    ]) as {
+    ], 1) as {
       run: { runId: string; status: string };
       tasks: Array<{
         runId: string;
@@ -3655,20 +3812,17 @@ export default defineWorkflow({
       }>;
     };
 
-    expect(stopped.run).toMatchObject({ runId: detached.runId, status: "failed" });
-    expect(waited.run).toMatchObject({ runId: detached.runId, status: "failed" });
-    expect(waited.tasks).toEqual([
-      {
-        runId: detached.runId,
-        taskId: "build",
-        cacheKey: "workflow-loader-build",
-        status: "failed",
-        cached: false,
-        agent: { plugin: "forge", name: "builder" },
-        output: { error: "grok was aborted by Prism workflow stop" },
-        metadata: contractMetadata,
-      },
-    ]);
+    expect(stopped.run).toMatchObject({
+      runId: detached.runId,
+      status: "stopped",
+      terminalCause: { kind: "stopped", reason: "stop-requested" },
+    });
+    expect(waited.run).toMatchObject({
+      runId: detached.runId,
+      status: "stopped",
+      terminalCause: { kind: "stopped", reason: "stop-requested" },
+    });
+    expect(waited.tasks).toEqual([]);
     const events = await cli(["workflow", "runs", "events", detached.runId, "--store", storeFile]) as {
       events: Array<{ type: string; taskId: string | null; payload: unknown }>;
     };
@@ -3679,6 +3833,16 @@ export default defineWorkflow({
       type: "task.abort_monitor_triggered",
       payload: expect.objectContaining({ reason: expect.stringMatching(/^(run-not-running|runner-termination-signal)$/) }),
     }));
+    const persisted = await WorkflowStore.open(storeFile);
+    const attempts = persisted.listRunTaskAttempts(detached.runId);
+    persisted.close();
+    expect(attempts).toMatchObject([
+      {
+        taskId: "build",
+        status: "stopped",
+        failure: { kind: "stopped", message: "stop-requested" },
+      },
+    ]);
   });
 
   test("CLI update restarts a running workflow and does not reuse mock-sourced cache", async () => {
@@ -3758,8 +3922,8 @@ export default defineWorkflow({
       events: Array<{ type: string; payload: unknown }>;
     };
 
-    expect(update.previousRun).toMatchObject({ runId: oldRun.runId, status: "failed" });
-    expect(update.update).toEqual({ previousRunId: oldRun.runId, mode: "restart-with-cache" });
+    expect(update.previousRun).toMatchObject({ runId: oldRun.runId, status: "stopped" });
+    expect(update.update).toMatchObject({ previousRunId: oldRun.runId, mode: "restart-with-cache" });
     expect(waited.run).toMatchObject({ runId: update.runId, status: "completed" });
     // Real (non-mock) run does not reuse mock-sourced cache; it calls the real worker
     expect(waited.tasks).toMatchObject([
@@ -3767,7 +3931,18 @@ export default defineWorkflow({
     ]);
     expect(oldEvents.events).toContainEqual(expect.objectContaining({
       type: "run.stop_requested",
-      payload: { reason: "update-requested" },
+      payload: expect.objectContaining({ kind: "stopped", reason: "update-requested" }),
+    }));
+    expect(oldEvents.events).toContainEqual(expect.objectContaining({
+      type: "task.attempt.stopped",
+      payload: expect.objectContaining({
+        reconciled: true,
+        failure: { kind: "stopped", message: "update-requested" },
+      }),
+    }));
+    expect(oldEvents.events).toContainEqual(expect.objectContaining({
+      type: "run.stopped",
+      payload: expect.objectContaining({ kind: "stopped", reason: "update-requested" }),
     }));
     expect(oldEvents.events).toContainEqual(expect.objectContaining({
       type: "runner.termination_requested",
@@ -3889,7 +4064,7 @@ export default defineWorkflow({
     const failed = await cli(["workflow", "runs", "wait", "failed-run", "--store", storeFile, "--timeout-ms", "100"]);
     const running = await cli(["workflow", "runs", "wait", "running-run", "--store", storeFile, "--timeout-ms", "50", "--interval-ms", "10"]);
 
-    expect(failed.exitCode).toBe(0);
+    expect(failed.exitCode).toBe(1);
     expect(failed.stderr).toBe("");
     expect((JSON.parse(failed.stdout) as { run: { status: string }; tasks: unknown[] }).run.status).toBe("failed");
     expect(running.exitCode).toBe(1);

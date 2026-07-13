@@ -208,9 +208,12 @@ export const runDevinWorkflowTask = async (
       throw new DevinWorkflowWorkerError(devinAuthErrorMessage);
     }
     if (exitCode !== 0) {
-      throw new DevinWorkflowWorkerError(
-        `devin exited with ${exitCode}: ${summarizeWorkflowWorkerStderr(stderr) || stdout.trim()}`,
-      );
+      const stderrMetadata = summarizeWorkflowWorkerStderr(stderr);
+      const errorExcerpt =
+        stderrMetadata.stderrExcerpt ??
+        summarizeWorkflowWorkerStderr(stdout).stderrExcerpt ??
+        "";
+      throw new DevinWorkflowWorkerError(`devin exited with ${exitCode}: ${errorExcerpt}`);
     }
 
     let exportJson: unknown | undefined;

@@ -214,7 +214,11 @@ const composeAgentFrontmatter = (
     top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
     tools: composeGrokTools(agent, target, override, namer),
     disallowedTools: composeGrokDisallowedTools(override),
-    skills: uniqueSorted(agent.allowedSkills),
+    // Never emit skills into Grok agent frontmatter. Grok non-interactive sessions
+    // preload FULL skill bodies for every frontmatter skill entry (2026-07-11:
+    // 115 skills → ~353k fixed tokens → compaction doom). Empty array is omitted
+    // by serializeFrontmatter. Runtime skill discovery is unaffected.
+    skills: [],
   };
 };
 

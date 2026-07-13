@@ -4,6 +4,7 @@ export interface WorkflowBunSpawnOptions {
   readonly cmd: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: Record<string, string | undefined>;
+  readonly detached?: boolean;
   readonly stdin: "ignore";
   readonly stdout: "ignore" | "pipe";
   readonly stderr: "ignore" | "pipe";

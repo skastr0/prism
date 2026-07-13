@@ -4,7 +4,7 @@ A unified plugin distribution system for AI coding harnesses.
 
 ## What is this?
 
-`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Kimi Code, Amp Code, Grok Build, Factory Droid, and Pi, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
+`prism` solves the problem of managing configurations, rules, commands, agents, and skills across multiple AI coding assistants. Instead of manually maintaining separate configurations for Claude Code, OpenCode, OpenClaw, Hermes Agent, Cursor, Codex CLI, Antigravity CLI, Kimi Code, Amp Code, Grok Build, Factory Droid, Pi, and Oh My Pi, you define your artifacts once in a unified format and distribute them to all targeted harnesses automatically.
 
 ## What it does
 
@@ -30,6 +30,7 @@ A unified plugin distribution system for AI coding harnesses.
 | Cursor | `~/.cursor/.cursorrules` | generated local plugin `commands/` | - | `~/.cursor/skills/` + generated MCP |
 | Factory Droid | `~/.factory/AGENTS.md` | `~/.factory/commands/` | generated plugin `droids/` | `~/.factory/skills/` |
 | Pi | generated package extension context | generated package `prompts/` | pi-agents markdown discovery | generated package `skills/` |
+| Oh My Pi | native extension context | `~/.omp/agent/commands/` | native agent discovery | `~/.omp/agent/skills/` |
 
 OpenClaw v1 is still skills-only. Shared skill files plus matching `harness/openclaw/skills/...` overlay files install into `~/.openclaw/skills/`. It does not manage rules, `openclaw.json`, commands, custom agents, or additional workspace bootstrap files.
 
@@ -52,6 +53,8 @@ Cursor is part of the `coding-harness` preset with tools-only compile support. I
 Devin CLI is part of the `coding-harness` preset. Install-phase rules append to `~/.config/devin/AGENTS.md` (project: root/project `AGENTS.md` via Devin's native discovery). Shared skills install into `~/.config/devin/skills/` or project `.devin/skills/`. Compile-phase concrete orbit skills lower as skills; hooks lower to Claude-compatible `hooks.v1.json` plus Prism-owned wrapper scripts under `hooks/`. Prism does **not** whole-file own `~/.config/devin/config.json` (user prefs and herdr hooks live there). PR1 does not manage MCP/`mcpServers`, primary agents, or `devin plugins install`. Workflow worker runs `devin -p` with `--model` (default `swe-1-7`), `--permission-mode`, optional `--agent-config`, `--export` ATIF session capture, and `-r` resume.
 
 Pi is part of the `coding-harness` preset with compile-phase package support plus pi-agents markdown discovery. Prism writes compiled agents to `~/.pi/agents/<name>.md` for global scope and `.pi/agents/<name>.md` for project scope, emits one generated local Pi package under `<pi-settings-root>/packages/prism-generated-<source-plugin>/`, patches `<pi-settings-root>/settings.json -> packages`, bundles targeted skills and concrete orbit skills into package `skills/`, lowers commands as Pi prompt templates in package `prompts/`, injects rules/context through a generated extension, registers canonical tools through Pi's `registerTool` extension API, and runs Prism hooks through Pi extension events plus generated hook wrappers.
+
+Oh My Pi (`omp`) is a distinct `coding-harness` target, not an alias for Pi. Global outputs live under `~/.omp/agent/`; project outputs live under `<project>/.omp/`. Prism writes rules, commands, compiled agents, managed skills, and concrete orbit skills to OMP's native discovery paths, and emits canonical tools plus hook wrappers through one generated TypeScript extension under `extensions/prism-generated-<source-plugin>/`. Workflow tasks invoke OMP scripting mode with `--mode json`, inject the compiled agent through `--append-system-prompt`, preserve harness-bound provider/model/thinking fields, map Prism permissions to OMP approval/tool flags, and resume only the exact captured OMP session during structured-output repair.
 
 ## Architecture invariants (owner doctrine — binding on all agents working in this repo)
 
@@ -599,11 +602,11 @@ Canonical example:
     "agent-core": "../agent-core"
   },
   "targets": {
-    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
-    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
-    "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code", "cursor"],
-    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"],
-    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "kimi-code"]
+    "agents": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
+    "orbits": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
+    "tools": ["opencode", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code", "cursor"],
+    "toolspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"],
+    "modelspaces": ["opencode", "claude-code", "antigravity-cli", "grok", "factory-droid", "pi", "omp", "kimi-code"]
   }
 }
 ```
@@ -612,7 +615,7 @@ Notes:
 
 - compile-phase targets are `agents`, `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks`
 - `orbits`, `tools`, `toolspaces`, `modelspaces`, `skillspaces`, and `hooks` name source-language artifact families, not fake harness directories
-- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Antigravity CLI, Kimi Code, Grok, Factory Droid, and Pi; tools-only plugins may target Hermes or Cursor for generated MCP exposure
+- agents that bind canonical tools should target only harnesses with both an agent surface and executable generated-tool support, such as OpenCode, Antigravity CLI, Kimi Code, Grok, Factory Droid, Pi, and OMP; tools-only plugins may target Hermes or Cursor for generated MCP exposure
 
 ### CLI
 
@@ -637,6 +640,9 @@ prism refresh ./my-plugin --harness factory-droid
 
 # Refresh Pi agents, prompt templates, hooks, and canonical tools into generated Pi surfaces
 prism refresh ./my-plugin --harness pi
+
+# Refresh OMP agents, commands, skills, hooks, and canonical tools into native OMP surfaces
+prism refresh ./my-plugin --harness omp
 
 # Refresh Kimi role skills, plugin MCP, and hooks into generated Kimi surfaces
 prism refresh ./my-plugin --harness kimi-code
@@ -738,6 +744,16 @@ prism plan ./my-plugin --harness claude-code
 - Emits hook wrappers under package `hooks/` and wires them to Pi extension events
 - Does not emit MCP config because generated Pi tools use native extension APIs rather than MCP
 
+#### Oh My Pi
+
+- Writes compiled agents to `<omp-root>/agents/<name>.md`, with global root `~/.omp/agent` and project root `<project>/.omp`
+- Writes install-phase commands to `<omp-root>/commands/` and targeted managed skills plus concrete orbit instances to `<omp-root>/skills/`
+- Injects targeted rules/context through the generated extension `extensions/prism-generated-<source-plugin>/index.ts`
+- Emits canonical `tools/*.tool.ts` through the same generated OMP extension using the native `registerTool` API
+- Emits hook wrappers under the generated extension's `hooks/` directory and wires supported Prism hook events to OMP extension events
+- Does not emit MCP config because generated OMP tools use native extension APIs
+- Keeps OMP ownership, state, and prune identity separate from the Pi target
+
 Compile is **idempotent**: re-running with unchanged sources produces no writes.
 
 Orbit source artifacts are source-language constructs. For the current supported targets, concrete orbit instances lower into harness-intelligible skills at `skills/<orbit-name>/SKILL.md`; prism does not emit generic target-side `orbits/` folders. A future harness may add a native orbit surface, but that would be a target-specific capability rather than the default output shape.
@@ -826,10 +842,10 @@ Install targeting lives in `plugin.json` and nowhere else.
 
 ### Preset groups
 
-- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `grok`, `devin`
+- `coding-harness` → `claude-code`, `opencode`, `codex-cli`, `antigravity-cli`, `kimi-code`, `amp-code`, `cursor`, `factory-droid`, `pi`, `omp`, `grok`, `devin`
 - `claw-harness` → `openclaw`, `hermes`
 
-Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, and Pi remain command targets, but Prism lowers those commands through each harness's generated plugin/package/API surface instead of direct command files. Factory Droid remains included for install-phase commands because Droid exposes `.factory/commands/` files.
+Preset expansion is artifact-aware. For example, `coding-harness` includes Grok for rules, skills, and supported compile surfaces, but not install-phase commands because Grok commands are not managed by Prism. Claude Code, Cursor, Amp Code, Kimi Code, Pi, and OMP remain command targets, but Prism lowers those commands through each harness's generated plugin, package, API, or native command surface instead of treating every target as a direct markdown-copy destination. Factory Droid remains included for install-phase commands because Droid exposes `.factory/commands/` files.
 
 ### Rules to remember
 
@@ -1063,7 +1079,7 @@ prism refresh ./test-plugin --all
 
 Skills extend agent capabilities with specialized knowledge, workflows, and tools. They transform agents from general-purpose into specialized assistants with procedural knowledge.
 
-**Supported by:** Claude Code (native), OpenCode (native), OpenClaw (skills root with shared files plus matching `harness/openclaw` overlays), Hermes (skills root with shared files plus matching `harness/hermes` overlays)
+**Supported by:** Claude Code (native), OpenCode (native), Oh My Pi (native), OpenClaw (skills root with shared files plus matching `harness/openclaw` overlays), Hermes (skills root with shared files plus matching `harness/hermes` overlays)
 
 ### Skill Structure
 

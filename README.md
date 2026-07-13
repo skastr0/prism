@@ -45,7 +45,7 @@ surface Prism uses for that harness. The typed contract lives in
 `src/lowerer-capabilities.ts` and the human-readable matrix lives in
 [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md).
 Keep the matrix synced to official harness docs when changing generated bundle
-targets such as Antigravity CLI, Kimi Code, Factory Droid, and Pi.
+targets such as Antigravity CLI, Kimi Code, Factory Droid, Pi, and Oh My Pi.
 
 ## Source Contracts
 

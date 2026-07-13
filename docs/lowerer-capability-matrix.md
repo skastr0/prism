@@ -1,6 +1,6 @@
 # Lowerer Capability Matrix
 
-Checked: 2026-06-17
+Checked: 2026-07-13
 
 Prism keeps two related contracts separate:
 
@@ -16,7 +16,7 @@ patched into a config file.
 
 | Kind | Meaning |
 | --- | --- |
-| `native-plugin-api` | Prism emits code for a harness runtime plugin API, such as OpenCode or Amp TypeScript plugins. |
+| `native-plugin-api` | Prism emits code for a harness runtime plugin API, such as OpenCode, Amp, or OMP TypeScript plugins. |
 | `native-plugin-bundle` | Prism emits the product's plugin package layout, such as Claude Code, Antigravity, Grok, or Factory plugin bundles. |
 | `generated-mcp` | Prism emits a generated MCP server for canonical tools. |
 | `markdown-file` | Prism emits generated markdown files consumed directly by the harness. |
@@ -47,6 +47,7 @@ daemon registers only the profile's assigned tools for each MCP session.
 | Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
 | Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
+| Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none |
 | Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via `config.toml#mcp_servers` region | plugin hooks | `config.toml#mcp_servers` |
 | Devin CLI | unsupported (plugins beta deferred) | unsupported (subagent AGENT.md later) | direct skills | unsupported (PR1) | project `hooks.v1.json` / global `config.json#hooks` members | none (never whole-file `config.json`) |
 
@@ -123,6 +124,14 @@ orbit skills, prompt-template commands, context injection, hooks, and canonical
 tools into that package. Compiled agents lower to the pi-agents markdown discovery
 surface: `~/.pi/agents/<name>.md` globally and `.pi/agents/<name>.md` for project
 scope.
+
+Oh My Pi is a separate target from Pi. Prism uses `~/.omp/agent/` globally and
+`<project>/.omp/` for project scope, writes rules, commands, agents, and skills
+to OMP's native discovery directories, and emits one generated TypeScript
+extension per source plugin under `extensions/prism-generated-<plugin>/`.
+Canonical tools call OMP's native `registerTool` API; supported hooks run through
+the same extension and generated wrappers. No MCP config or Pi package/settings
+surface is shared between the two targets.
 
 Factory Droid compile output follows the documented plugin layout: only
 `.factory-plugin/plugin.json` lives under `.factory-plugin/`, while generated

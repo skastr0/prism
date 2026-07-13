@@ -65,7 +65,7 @@ Runtime code starts from the public type catalog (`10`), AgentRun ledger spec
 (`08`), and fingerprint/ref contract (`12`). Fake-worker replay proves those
 contracts before any real provider adapter enters the runtime.
 
-Implementation checkpoint (2026-06-13): the repo now has a single-package
+Implementation checkpoint (2026-07-13): the repo now has a single-package
 runtime wedge rather than the full `@skastr0/prism-workflow` package boundary.
 It includes typed Effect-first workflow authoring primitives, module validation,
 dynamic workflow bodies, SQLite task cache/run history/events, terminal statuses,
@@ -73,10 +73,10 @@ detached runs, `runs list/show/events/wait/stop`, stale-run reconciliation,
 bounded task concurrency, mock-output execution, typed decoded outputs, finish
 criteria with bounded repair prompts, cooperative stop plus active child-process
 abort, and shared subprocess hygiene for CLI workers. Worker adapters exist for
-Grok, Codex, OpenCode, Amp, Claude Code, Antigravity, and Hermes. Native agent
-binding is live only where the harness has a proven selector: OpenCode, Grok,
-and Claude Code. Codex, Amp, Antigravity, and Hermes remain prompt-identity or
-declared-worker lanes until their selector/profile semantics are proven.
+Amp, Antigravity, Claude, Codex, Devin, Grok, Hermes, Kimi, OpenCode, and OMP.
+Native agent binding is live only where a harness has a proven selector.
+OMP instead injects the compiled agent prompt into scripting mode and preserves
+the exact captured session for structured-output repair.
 
 This is intentionally short of the full AgentRun ledger in `08`; treat it as the
 dogfood wedge, not as the final ledger shape. Live proof exists for: a Survey

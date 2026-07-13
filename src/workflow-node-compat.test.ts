@@ -20,15 +20,28 @@ const runNodeBundle = async (
   const outdir = join(root, "dist");
   await writeFile(entry, source);
 
-  const build = await Bun.build({
-    entrypoints: [entry],
-    outdir,
-    target: "node",
-    format: "esm",
+  const build = Bun.spawn({
+    cmd: [
+      process.execPath,
+      "build",
+      entry,
+      "--outdir",
+      outdir,
+      "--target",
+      "node",
+      "--format",
+      "esm",
+    ],
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  if (!build.success) {
-    throw new Error(build.logs.map((log) => log.message).join("\n"));
-  }
+  const [buildExitCode, buildStdout, buildStderr] = await Promise.all([
+    build.exited,
+    new Response(build.stdout).text(),
+    new Response(build.stderr).text(),
+  ]);
+  expect(buildExitCode, `${buildStdout}\n${buildStderr}`.trim()).toBe(0);
 
   const child = Bun.spawn(["node", join(outdir, "entry.js")], {
     cwd: root,

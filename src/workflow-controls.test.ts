@@ -4,9 +4,13 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  startDetachedWorkflowRun,
   updateDetachedWorkflowRun,
   workflowDetachedRunArgs,
   workflowRunOptionsSnapshot,
+  workflowRunnerLogDir,
+  workflowRunnerLogPath,
+  workflowRunnerLogPathIfPresent,
   type WorkflowUpdateResult,
 } from "./workflow-controls.js";
 import { WorkflowStore } from "./workflow-store.js";
@@ -907,3 +911,68 @@ test("update starts the replacement worker only after the old process group is a
     await rm(root, { recursive: true, force: true });
   }
 }, 15_000);
+
+
+// --- OBS-003: detached-runner crash-evidence capture ---------------------
+
+/** Polls for content to land in a file — the runner log is written by an
+ * independently-scheduled child process, so it arrives asynchronously. */
+const waitForFileContent = async (
+  path: string,
+  predicate: (content: string) => boolean,
+  timeoutMs = 15_000,
+): Promise<string> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await Bun.file(path).exists()) {
+      const content = await Bun.file(path).text();
+      if (predicate(content)) return content;
+    }
+    await delay(25);
+  }
+  throw new Error(`timed out waiting for expected content in ${path}`);
+};
+
+test("workflowRunnerLogPath is deterministic from runId + storePath and lives beside the store (OBS-003)", () => {
+  const storePath = join("some", "project", "workflows.sqlite");
+  expect(workflowRunnerLogDir(storePath)).toBe(join(process.cwd(), "some", "project", "runner-logs"));
+  expect(workflowRunnerLogPath(storePath, "abc-123")).toBe(
+    join(process.cwd(), "some", "project", "runner-logs", "abc-123.log"),
+  );
+});
+
+test("workflowRunnerLogPathIfPresent is silent for foreground runs and missing files (OBS-003)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "prism-runner-log-presence-"));
+  try {
+    const storePath = join(root, "workflows.sqlite");
+    expect(workflowRunnerLogPathIfPresent(storePath, { runId: "r1" })).toBeUndefined();
+    expect(workflowRunnerLogPathIfPresent(storePath, { runId: "r1", runnerPid: 4242 })).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a detached runner's pre-readiness failure output lands in the runner log (OBS-003)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "prism-workflow-crash-evidence-"));
+  try {
+    const storePath = join(root, "workflows.sqlite");
+    const store = await WorkflowStore.open(storePath);
+    try {
+      const runId = store.createRun("crash-evidence");
+      const missingWorkflow = join(root, "does-not-exist.workflow.ts");
+      // The child CLI fails while loading the workflow file; whatever it manages
+      // to print is the only evidence of WHY — the capture file must hold it.
+      await startDetachedWorkflowRun(store, missingWorkflow, {}, { runId, storePath, token: "tok" }).catch(
+        () => undefined,
+      );
+      const logPath = workflowRunnerLogPath(storePath, runId);
+      const content = await waitForFileContent(logPath, (c) => c.trim().length > 0);
+      expect(content.trim().length).toBeGreaterThan(0);
+      expect(workflowRunnerLogPathIfPresent(storePath, { runId, runnerPid: 4242 })).toBe(logPath);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);

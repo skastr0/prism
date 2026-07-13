@@ -6,8 +6,9 @@ export interface WorkflowBunSpawnOptions {
   readonly env?: Record<string, string | undefined>;
   readonly detached?: boolean;
   readonly stdin: "ignore";
-  readonly stdout: "ignore" | "pipe";
-  readonly stderr: "ignore" | "pipe";
+  /** A `number` redirects to that open file descriptor (e.g. a log file opened before spawn). */
+  readonly stdout: "ignore" | "pipe" | number;
+  readonly stderr: "ignore" | "pipe" | number;
 }
 
 export interface WorkflowBunSpawnedProcess {

@@ -721,6 +721,81 @@ export const workflow = defineWorkflow({
   expect(missing.stderr).toContain("workflow run not found: missing-run");
 }, 30_000);
 
+test("workflow runs show/summary surface the detached runner's captured log path (OBS-003)", async () => {
+  const root = await createTempRoot();
+  const workflowPath = join(root, "runner-log.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+  const storePath = join(root, "workflows.sqlite");
+
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+export const workflow = defineWorkflow({
+  name: "runner-log-smoke",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    cacheKey: "runner-log-build",
+  })] as const,
+});
+`);
+  await writeFile(mockOutputPath, JSON.stringify({ build: { summary: "ok" } }));
+
+  const detached = await runCli([
+    "workflow", "run", workflowPath,
+    "--store", storePath,
+    "--mock-output", mockOutputPath,
+    "--detach",
+  ], {});
+  expect(detached.exitCode).toBe(0);
+  const { runId } = JSON.parse(detached.stdout) as { runId: string };
+
+  const waited = await runCli(["workflow", "runs", "wait", runId, "--store", storePath], {});
+  expect(waited.exitCode).toBe(0);
+
+  const show = await runCli(["workflow", "runs", "show", runId, "--store", storePath], {});
+  expect(show.exitCode).toBe(0);
+  const showData = JSON.parse(show.stdout) as { run: { runnerPid?: number }; runnerLogPath?: string };
+  expect(showData.run.runnerPid).toEqual(expect.any(Number));
+  expect(typeof showData.runnerLogPath).toBe("string");
+  expect(await Bun.file(showData.runnerLogPath as string).exists()).toBe(true);
+
+  const summaryJson = await runCli(["workflow", "runs", "summary", runId, "--store", storePath, "--json"], {});
+  expect(summaryJson.exitCode).toBe(0);
+  const summaryData = JSON.parse(summaryJson.stdout) as { runnerLogPath?: string };
+  expect(summaryData.runnerLogPath).toBe(showData.runnerLogPath);
+
+  const summaryText = await runCli(["workflow", "runs", "summary", runId, "--store", storePath], {});
+  expect(summaryText.exitCode).toBe(0);
+  expect(summaryText.stdout).toContain(`Runner log: ${showData.runnerLogPath}`);
+
+  // Foreground (non-detached) runs never spawn a runner process, so no path should be surfaced.
+  const foreground = await runCli([
+    "workflow", "run", workflowPath,
+    "--store", storePath,
+    "--mock-output", mockOutputPath,
+  ], {});
+  expect(foreground.exitCode).toBe(0);
+  const { runId: foregroundRunId } = JSON.parse(foreground.stdout) as { runId: string };
+  const foregroundShow = await runCli(["workflow", "runs", "show", foregroundRunId, "--store", storePath], {});
+  expect(foregroundShow.exitCode).toBe(0);
+  const foregroundShowData = JSON.parse(foregroundShow.stdout) as { runnerLogPath?: string };
+  expect(foregroundShowData.runnerLogPath).toBeUndefined();
+}, 30_000);
+
 type JsonObject = Record<string, unknown>;
 
 type LintRule = {

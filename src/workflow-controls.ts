@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expandPath } from "./fs.js";
 import { loadWorkflowFile } from "./workflow-loader.js";
 import { currentCliCommand } from "./workflow-cli-command.js";
@@ -108,6 +110,36 @@ const mergeWorkflowRunOptions = (
   };
 };
 
+/**
+ * Directory holding per-run detached-runner stdout/stderr capture files, kept
+ * as a sibling of the SQLite store so it travels with `--store`.
+ */
+export const workflowRunnerLogDir = (storePath: string): string =>
+  join(dirname(expandPath(storePath)), "runner-logs");
+
+/**
+ * Deterministic capture-file path for one run's detached runner. Derivable
+ * from runId + storePath alone, with no store lookup required to find it —
+ * including for a runner that died before writing its first ledger row.
+ */
+export const workflowRunnerLogPath = (storePath: string, runId: string): string =>
+  join(workflowRunnerLogDir(storePath), `${runId}.log`);
+
+/**
+ * The capture-file path, but only when it is meaningful to surface: the run
+ * actually had a detached runner (`runnerPid` set) and a file exists on disk.
+ * Foreground runs, and runs recorded before this capture existed, get
+ * `undefined` — silence, not a dangling path to nothing.
+ */
+export const workflowRunnerLogPathIfPresent = (
+  storePath: string,
+  run: { readonly runId: string; readonly runnerPid?: number },
+): string | undefined => {
+  if (run.runnerPid === undefined) return undefined;
+  const path = workflowRunnerLogPath(storePath, run.runId);
+  return existsSync(path) ? path : undefined;
+};
+
 export const requestWorkflowRunnerTermination = async (
   store: WorkflowStore,
   run: { readonly runId: string; readonly runnerPid?: number },
@@ -197,6 +229,16 @@ export const startDetachedWorkflowRun = async (
 ): Promise<WorkflowRunRecord> => {
   const args = workflowDetachedRunArgs(file, options, run);
 
+  // Opened BEFORE spawn and redirected in-place (not "ignore"): if the detached
+  // runner dies before its first sqlite write (bad flags, module resolution
+  // failure, env problem), this file is the only evidence that survives. Both
+  // streams share one fd — a run-scoped crash-evidence channel, not a log
+  // firehose. The parent's fd copy is closed right after spawn; the child
+  // keeps its own duplicated reference to the same open file.
+  const logPath = workflowRunnerLogPath(run.storePath, run.runId);
+  mkdirSync(dirname(logPath), { recursive: true });
+  const logFd = openSync(logPath, "a");
+
   let child: WorkflowSpawnedProcess;
   try {
     child = spawnWorkflowProcess({
@@ -205,17 +247,19 @@ export const startDetachedWorkflowRun = async (
       env: { ...process.env, PRISM_WORKFLOW_DETACHED_CHILD: "1", PRISM_WORKFLOW_DETACHED_RUN_ID: run.runId },
       detached: true,
       stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
+      stdout: logFd,
+      stderr: logFd,
     });
   } catch (error) {
     store.recordEvent({
       runId: run.runId,
       type: "runner.start_failed",
-      payload: { cause: errorMessage(error) },
+      payload: { cause: errorMessage(error), runnerLog: logPath },
     });
     store.finishRun(run.runId, "crashed", { kind: "crashed", reason: "runner-start-failed" });
     throw error;
+  } finally {
+    closeSync(logFd);
   }
 
   try {

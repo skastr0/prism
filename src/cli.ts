@@ -101,6 +101,7 @@ import {
   stopWorkflowRun,
   updateDetachedWorkflowRun,
   workflowRunOptionsSnapshot,
+  workflowRunnerLogPathIfPresent,
 } from "./workflow-controls.js";
 import type { WorkflowPermissionMode } from "./workflows.js";
 import { decodeWorkflowProcessGuardRequest, runWorkflowProcessGuard } from "./workflow-process-guard.js";
@@ -684,13 +685,14 @@ const formatWorkflowEvidenceSource = (source: WorkflowRunCompactSummary["tasks"]
   }
 };
 
-const formatWorkflowRunCompactSummary = (summary: WorkflowRunCompactSummary): string => {
+const formatWorkflowRunCompactSummary = (summary: WorkflowRunCompactSummary, runnerLogPath?: string): string => {
   const lines = [
     `Workflow run ${summary.run.runId} (${summary.run.workflow})`,
     summary.disclaimer,
     `Status: ${summary.totals.status}`,
     `Duration: ${formatWorkflowDuration(summary.totals.durationMs)}`,
     `Tasks: total ${summary.totals.totalTasks}, fresh executions ${summary.totals.freshExecutions}, cache hits ${summary.totals.cacheHits}, repairs ${summary.totals.repairs}`,
+    ...(runnerLogPath !== undefined ? [`Runner log: ${runnerLogPath}`] : []),
   ];
   for (const task of summary.tasks) {
     const details = [
@@ -904,7 +906,8 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
+      const storePath = resolveWorkflowStorePath(options.store);
+      store = await WorkflowStore.open(storePath);
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -912,8 +915,10 @@ workflowRuns
       if (run === null) {
         throw new CliUsageError(`workflow run not found: ${runId}`);
       }
+      const runnerLogPath = workflowRunnerLogPathIfPresent(storePath, run);
       console.log(JSON.stringify({
         run,
+        ...(runnerLogPath !== undefined ? { runnerLogPath } : {}),
         taskSummary: store.summarizeRunTasks(runId).map(withoutOrdinal),
         tasks: store.listRunTasks(runId).map(withoutOrdinal),
       }, null, 2));
@@ -934,7 +939,8 @@ workflowRuns
   .action(async (runId: string, options: { readonly store?: string; readonly json?: boolean; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
+      const storePath = resolveWorkflowStorePath(options.store);
+      store = await WorkflowStore.open(storePath);
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -942,10 +948,11 @@ workflowRuns
       if (summary === null) {
         throw new CliUsageError(`workflow run not found: ${runId}`);
       }
+      const runnerLogPath = workflowRunnerLogPathIfPresent(storePath, summary.run);
       if (options.json === true) {
-        console.log(JSON.stringify({ summary }, null, 2));
+        console.log(JSON.stringify({ summary, ...(runnerLogPath !== undefined ? { runnerLogPath } : {}) }, null, 2));
       } else {
-        process.stdout.write(formatWorkflowRunCompactSummary(summary));
+        process.stdout.write(formatWorkflowRunCompactSummary(summary, runnerLogPath));
       }
     } catch (error) {
       printCliError(error, "Workflow runs summary failed");

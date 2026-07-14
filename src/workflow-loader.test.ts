@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test as bunTest } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test as bunTest } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -89,6 +89,32 @@ const isPidAlive = (pid: number): boolean => {
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+// WFE-008: this file spawns the real CLI (`workflow run`/`runs *`) dozens of
+// times, and every one of those commands registers its store path into
+// `<PRISM_HOME>/state/workflow-store-registry.json` (src/cli.ts's
+// resolveWorkflowStorePath) regardless of whether `--store` was explicit.
+// Without a sandboxed PRISM_HOME, that writes real tmp-store entries into the
+// developer's actual `~/.prism` registry. Override PRISM_HOME for the whole
+// file so every spawned CLI process — whether it builds its env via
+// `workflowTestEnv(...)`, a raw `{ ...process.env, ... }` spread, or no `env`
+// override at all (full inheritance) — lands in one disposable sandbox home
+// instead. A test that needs its own PRISM_HOME still wins: overrides applied
+// after this module default take precedence.
+let sandboxPrismHome: string;
+let previousPrismHomeEnv: string | undefined;
+
+beforeAll(async () => {
+  sandboxPrismHome = await mkdtemp(join(tmpdir(), "prism-workflow-loader-home-"));
+  previousPrismHomeEnv = process.env.PRISM_HOME;
+  process.env.PRISM_HOME = sandboxPrismHome;
+});
+
+afterAll(async () => {
+  if (previousPrismHomeEnv === undefined) delete process.env.PRISM_HOME;
+  else process.env.PRISM_HOME = previousPrismHomeEnv;
+  await rm(sandboxPrismHome, { recursive: true, force: true });
 });
 
 const workflowSource = (

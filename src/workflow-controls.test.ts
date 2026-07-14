@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +16,26 @@ import {
 import { WorkflowStore } from "./workflow-store.js";
 
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
+
+// WFE-008: several tests here spawn the real CLI without setting PRISM_HOME,
+// so `workflow run`/`runs stop`/`runs update` register their tmp store paths
+// into the developer's real `~/.prism` registry (src/cli.ts's
+// resolveWorkflowStorePath runs on every store touch). Sandbox PRISM_HOME for
+// the whole file; a test that passes its own PRISM_HOME override still wins.
+let sandboxPrismHome: string;
+let previousPrismHomeEnv: string | undefined;
+
+beforeAll(async () => {
+  sandboxPrismHome = await mkdtemp(join(tmpdir(), "prism-workflow-controls-home-"));
+  previousPrismHomeEnv = process.env.PRISM_HOME;
+  process.env.PRISM_HOME = sandboxPrismHome;
+});
+
+afterAll(async () => {
+  if (previousPrismHomeEnv === undefined) delete process.env.PRISM_HOME;
+  else process.env.PRISM_HOME = previousPrismHomeEnv;
+  await rm(sandboxPrismHome, { recursive: true, force: true });
+});
 
 interface WorkerTreeMarker {
   readonly workerPid: number;

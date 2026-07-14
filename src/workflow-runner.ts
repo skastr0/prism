@@ -39,6 +39,7 @@ import type {
   WorkflowTaskAttemptStatus,
 } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
+import { parsePositiveInteger } from "./workflow-worker-process.js";
 import {
   normalizeWorkflowSessionMetadata,
   workflowAdapterFromMetadata,
@@ -187,6 +188,14 @@ const assertWorkflowRepairBudget = (
 const assertWorkflowTaskRepairBudgets = (task: AnyWorkflowTask): void => {
   assertWorkflowRepairBudget("maxRepairs", task.finish?.maxRepairs);
   assertWorkflowRepairBudget("maxDecodeRepairs", task.finish?.maxDecodeRepairs);
+  const retryMaxAttempts = task.worker?.retry?.maxAttempts;
+  if (retryMaxAttempts !== undefined && (!Number.isFinite(retryMaxAttempts) || !Number.isInteger(retryMaxAttempts) || retryMaxAttempts < 1)) {
+    throw new RangeError("worker.retry.maxAttempts must be a finite positive integer");
+  }
+  const retryBackoffMs = task.worker?.retry?.backoffMs;
+  if (retryBackoffMs !== undefined && (!Number.isFinite(retryBackoffMs) || !Number.isInteger(retryBackoffMs) || retryBackoffMs < 0)) {
+    throw new RangeError("worker.retry.backoffMs must be a finite non-negative integer");
+  }
 };
 
 const assertFinitePositiveInteger = (name: string, value: number | undefined): void => {
@@ -982,6 +991,63 @@ const awaitRunScoped = async <A>(
   }
 };
 
+// WFE-009: one shared executor-level retry mechanism, generalized from the shipped `agy`
+// adapter's own retry (7ea1e27) so every worker gets the same transient-failure recovery
+// without per-adapter duplication. Defaults mirror `agy`'s waitForAgyBackoff shape: 1 retry
+// (2 attempts total), fixed 2000ms backoff capped by the remaining process-timeout deadline.
+const DEFAULT_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS = 2;
+const DEFAULT_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS = 2_000;
+// Every worker adapter defaults its own processTimeoutMs to 360_000ms when unset; the runner
+// has no visibility into an adapter-specific env override, so this mirrors that shared
+// default purely to bound the retry backoff, not to enforce a timeout itself.
+const DEFAULT_WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_MS = 360_000;
+
+type WorkflowExecutorFailureClass = "transient" | "terminal";
+
+// Every worker adapter throws these two message shapes verbatim for process-level timeout
+// and non-zero exit (see workflow-{codex,opencode,claude,grok,kimi,amp,hermes,devin,omp}-worker.ts).
+// Anything else — WorkflowPermissionError, model-resolution errors, adapter-specific config/parse
+// errors — does not match and stays terminal by construction; no denylist needed.
+const WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_PATTERN = /\bexceeded Prism process timeout after \d+ms\b/u;
+const WORKFLOW_EXECUTOR_NONZERO_EXIT_PATTERN = /\bexited with -?\d+:/u;
+
+const classifyWorkflowExecutorFailure = (error: unknown): WorkflowExecutorFailureClass => {
+  if (error instanceof WorkflowTaskNoProgressError) return "transient";
+  if (!(error instanceof Error)) return "terminal";
+  if (WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_PATTERN.test(error.message)) return "transient";
+  if (WORKFLOW_EXECUTOR_NONZERO_EXIT_PATTERN.test(error.message)) return "transient";
+  return "terminal";
+};
+
+const resolveWorkflowExecutorRetryMaxAttempts = (task: AnyWorkflowTask): number =>
+  task.worker?.retry?.maxAttempts
+  ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS)
+  ?? DEFAULT_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS;
+
+const resolveWorkflowExecutorRetryBackoffMs = (task: AnyWorkflowTask): number =>
+  task.worker?.retry?.backoffMs
+  ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS)
+  ?? DEFAULT_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS;
+
+const waitForWorkflowExecutorRetryBackoff = async (input: {
+  readonly delayMs: number;
+  readonly abortSignal: AbortSignal;
+}): Promise<void> => {
+  if (input.delayMs <= 0) return;
+  if (input.abortSignal.aborted) throw input.abortSignal.reason;
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(input.abortSignal.reason);
+    };
+    const timer = setTimeout(() => {
+      input.abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, input.delayMs);
+    input.abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+};
+
 const executeWorkflowTask = async (input: {
   readonly ordinal: number;
   readonly task: AnyWorkflowTask;
@@ -1037,6 +1103,14 @@ const executeWorkflowTask = async (input: {
     // repair stays gated on the author-declared finish budget.
     const maxDecodeRepairs = cacheHit ? 0 : task.finish?.maxDecodeRepairs ?? DEFAULT_WORKFLOW_DECODE_REPAIRS;
     const maxFinishRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
+    // WFE-009: executor-level transient-failure retry budget. `maxAttempts` counts total
+    // attempts, so the retry count is one less; the deadline anchors to this boundary's
+    // start so backoff never outruns the task's own process-timeout budget.
+    const executorRetryMaxRetries = cacheHit ? 0 : Math.max(0, resolveWorkflowExecutorRetryMaxAttempts(task) - 1);
+    const executorRetryBackoffMs = resolveWorkflowExecutorRetryBackoffMs(task);
+    const executorRetryDeadlineAt = Date.now()
+      + (task.worker?.processTimeoutMs ?? DEFAULT_WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_MS);
+    let executorRetries = 0;
     let attemptTask = task;
     let repairs = 0;
     let decodeRepairs = 0;
@@ -1262,6 +1336,35 @@ const executeWorkflowTask = async (input: {
           const repairPrompt = parseRepairPrompt(parseError);
           beginRepair("output-json-parse", repairPrompt);
           continue;
+        }
+        // WFE-009: retry classified-transient executor failures (process/idle timeout,
+        // unclassified non-zero exit) in place, before falling through to the terminal path.
+        // Cancellation-barrier outcomes (stopped/crashed) and config/load errors never match
+        // and always fall through unchanged. The antigravity-cli adapter already retries
+        // internally (waitForAgyBackoff) — exempt it here so failure classes are never
+        // retried twice by two mechanisms.
+        if (
+          parseError === undefined
+          && executorRetries < executorRetryMaxRetries
+          && input.cancellation.attemptInterruption() === undefined
+          && metadata?.adapter !== "antigravity-cli"
+          && classifyWorkflowExecutorFailure(error) === "transient"
+        ) {
+          const remainingMs = executorRetryDeadlineAt - Date.now();
+          if (remainingMs > 0) {
+            finishFailedAttempt("executor", error);
+            repairs += 1;
+            executorRetries += 1;
+            const backoffMs = Math.min(executorRetryBackoffMs, remainingMs);
+            recordEvent(store, runId, task.id, "task.executor.retrying", {
+              attempt: repairs,
+              executorRetries,
+              backoffMs,
+              error: errorMessage(error),
+            });
+            await waitForWorkflowExecutorRetryBackoff({ delayMs: backoffMs, abortSignal: input.cancellation.signal });
+            continue;
+          }
         }
         const interrupted = finishInterruptedAttempt(error);
         if (!interrupted) finishFailedAttempt(parseError !== undefined ? "decode" : "executor", error);

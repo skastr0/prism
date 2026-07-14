@@ -1002,7 +1002,16 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-progress-budget-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      // WFE-009: pin to a single attempt — idle timeout is a classified-transient executor
+      // failure and would otherwise be retried once by the new default budget, doubling
+      // progressReports/elapsed time and breaking this test's attempt-count assertions.
+      const task = defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build.",
+        output: PatchReport,
+        worker: { retry: { maxAttempts: 1 } },
+      });
       const workflow = defineWorkflow({ name: "task-progress-budget", tasks: [task] as const });
       const runId = store.createRun(workflow.name);
       let progressReports = 0;
@@ -1594,7 +1603,13 @@ console.log(JSON.stringify(result));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
       const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
-      const [a, b, c] = [leaf("a"), leaf("b"), leaf("c")];
+      // WFE-009: pin b to a single attempt — this test asserts fault isolation on the first
+      // hard failure, not the new executor-retry budget (a separate, dedicated test below).
+      const [a, b, c] = [
+        leaf("a"),
+        defineTask({ id: "b", agent: builder, prompt: "Run b.", output: PatchReport, worker: { retry: { maxAttempts: 1 } } }),
+        leaf("c"),
+      ];
       const fusion = defineTask({ id: "fusion", agent: reviewer, prompt: "Fuse the leaves.", output: ReviewReport });
       const workflow = defineWorkflow({
         name: "fault-isolation-crash-fanout",
@@ -1697,7 +1712,15 @@ console.log(JSON.stringify(result));
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-obs-006-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
-      const build = defineTask({ id: "build", agent: builder, prompt: "Build the slice.", output: PatchReport });
+      // WFE-009: pin to a single attempt — this test asserts OBS-006 forensics carry-through
+      // on the first hard failure, not the new executor-retry budget.
+      const build = defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build the slice.",
+        output: PatchReport,
+        worker: { retry: { maxAttempts: 1 } },
+      });
       const workflow = defineWorkflow({ name: "runner-obs-006-failure-metadata", tasks: [build] as const });
 
       await expect(runWorkflow(workflow, {
@@ -1733,7 +1756,12 @@ console.log(JSON.stringify(result));
       }
     }
     const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
-    const [a, b] = [leaf("a"), leaf("b")];
+    // WFE-009: pin b to a single attempt — this test asserts OBS-006 forensics carry-through
+    // on the first hard failure, not the new executor-retry budget.
+    const [a, b] = [
+      leaf("a"),
+      defineTask({ id: "b", agent: builder, prompt: "Run b.", output: PatchReport, worker: { retry: { maxAttempts: 1 } } }),
+    ];
     const workflow = defineWorkflow({
       name: "runner-obs-006-isolated-failure-metadata",
       run: (wf) => Effect.gen(function* () {
@@ -1762,6 +1790,296 @@ console.log(JSON.stringify(result));
       adapter: "grok-cli",
       stderrExcerpt: "session lost",
       sessionId: "grok-isolated-sess",
+    });
+  });
+
+  describe("executor-level transient-failure retry (WFE-009)", () => {
+    test("retries a classified-transient non-zero-exit failure once before succeeding", async () => {
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-exit-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build.",
+          output: PatchReport,
+          worker: { retry: { backoffMs: 1 } },
+        });
+        const workflow = defineWorkflow({ name: "executor-retry-exit-success", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+
+        const result = await runWorkflow(workflow, {
+          runId,
+          store,
+          executeTask: async () => {
+            calls += 1;
+            if (calls === 1) throw new Error("codex exited with 1: transient blip");
+            return { summary: "built" };
+          },
+        });
+
+        expect(calls).toBe(2);
+        expect(result.tasks[0]).toMatchObject({ status: "completed", output: { summary: "built" } });
+        const attempts = store.listRunTaskAttempts(runId);
+        expect(attempts).toHaveLength(2);
+        expect(attempts[0]).toMatchObject({ attempt: 1, status: "failed", failure: { kind: "executor" } });
+        expect(attempts[1]).toMatchObject({ attempt: 2, status: "completed" });
+        expect(attempts[1]?.failure).toBeUndefined();
+        const retryEvent = store.listRunEvents(runId).find((event) => event.type === "task.executor.retrying");
+        expect(retryEvent?.payload).toMatchObject({ attempt: 1, executorRetries: 1 });
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("retries a task-local idle timeout once before succeeding", async () => {
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-idle-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build.",
+          output: PatchReport,
+          worker: { retry: { backoffMs: 1 } },
+        });
+        const workflow = defineWorkflow({ name: "executor-retry-idle-success", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+
+        const result = await runWorkflow(workflow, {
+          runId,
+          store,
+          taskNoProgressMs: 25,
+          executeTask: async (_task, context) => {
+            calls += 1;
+            if (calls === 1) {
+              // Never reports progress; the per-attempt idle-timeout controller aborts after 25ms.
+              return await new Promise<never>(() => undefined);
+            }
+            context?.reportProgress?.();
+            return { summary: "built" };
+          },
+        });
+
+        expect(calls).toBe(2);
+        expect(result.tasks[0]).toMatchObject({ status: "completed", output: { summary: "built" } });
+        const attempts = store.listRunTaskAttempts(runId);
+        expect(attempts).toHaveLength(2);
+        expect(attempts[0]).toMatchObject({
+          attempt: 1,
+          status: "failed",
+          failure: { kind: "executor", message: "workflow task build made no progress for 25ms" },
+        });
+        expect(attempts[1]).toMatchObject({ attempt: 2, status: "completed" });
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("does not retry a non-retryable (config/load-shaped) executor failure — immediate terminal", async () => {
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-terminal-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+        const workflow = defineWorkflow({ name: "executor-retry-non-retryable", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+
+        await expect(runWorkflow(workflow, {
+          runId,
+          store,
+          executeTask: async () => {
+            calls += 1;
+            throw new Error("agy is incompatible with Prism workflows; missing required flags: --model");
+          },
+        })).rejects.toThrow("agy is incompatible with Prism workflows");
+
+        expect(calls).toBe(1);
+        const attempts = store.listRunTaskAttempts(runId);
+        expect(attempts).toHaveLength(1);
+        expect(attempts[0]).toMatchObject({ attempt: 1, status: "failed", failure: { kind: "executor" } });
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("exempts the antigravity-cli adapter from the generic retry (it already retries internally)", async () => {
+      // Mind the agy adapter's own retry state machine: dedupe, don't double-retry. agy's
+      // failure metadata always carries adapter: "antigravity-cli"; the generic executor
+      // retry must recognize that and defer entirely to agy's own waitForAgyBackoff.
+      class FakeAdapterError extends Error {
+        readonly metadata: Record<string, unknown>;
+        constructor(message: string, metadata: Record<string, unknown>) {
+          super(message);
+          this.metadata = metadata;
+        }
+      }
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-agy-exempt-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+        const workflow = defineWorkflow({ name: "executor-retry-agy-exempt", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+
+        await expect(runWorkflow(workflow, {
+          runId,
+          store,
+          executeTask: async () => {
+            calls += 1;
+            throw new FakeAdapterError("agy exited with 1: print mode failed", { adapter: "antigravity-cli" });
+          },
+        })).rejects.toThrow("agy exited with 1: print mode failed");
+
+        expect(calls).toBe(1);
+        expect(store.listRunTaskAttempts(runId)).toHaveLength(1);
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("exhausts the executor retry budget and fails terminal after the configured attempts", async () => {
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-exhaustion-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build.",
+          output: PatchReport,
+          worker: { retry: { maxAttempts: 3, backoffMs: 1 } },
+        });
+        const workflow = defineWorkflow({ name: "executor-retry-budget-exhaustion", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+
+        await expect(runWorkflow(workflow, {
+          runId,
+          store,
+          executeTask: async () => {
+            calls += 1;
+            throw new Error(`codex exited with 1: blip ${calls}`);
+          },
+        })).rejects.toThrow("codex exited with 1: blip 3");
+
+        expect(calls).toBe(3);
+        const attempts = store.listRunTaskAttempts(runId);
+        expect(attempts.map((attempt) => attempt.status)).toEqual(["failed", "failed", "failed"]);
+        expect(store.getRun(runId)).toMatchObject({
+          status: "failed",
+          terminalCause: { kind: "task-failed", taskId: "build", attempt: 3 },
+        });
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("caps executor retry backoff by the remaining process-timeout deadline", async () => {
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-deadline-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build.",
+          output: PatchReport,
+          worker: { processTimeoutMs: 200, retry: { backoffMs: 10_000 } },
+        });
+        const workflow = defineWorkflow({ name: "executor-retry-backoff-capped", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+        const startedAt = Date.now();
+
+        const result = await runWorkflow(workflow, {
+          runId,
+          store,
+          executeTask: async () => {
+            calls += 1;
+            if (calls === 1) throw new Error("codex exited with 1: transient blip");
+            return { summary: "built" };
+          },
+        });
+
+        const elapsedMs = Date.now() - startedAt;
+        expect(calls).toBe(2);
+        expect(result.tasks[0]?.status).toBe("completed");
+        // The configured 10s backoff must never be honored in full — it is capped by the
+        // task's own 200ms process-timeout deadline, not the fixed backoffMs.
+        expect(elapsedMs).toBeLessThan(3_000);
+        const retryEvent = store.listRunEvents(runId).find((event) => event.type === "task.executor.retrying");
+        expect(retryEvent).toBeDefined();
+        expect((retryEvent!.payload as { readonly backoffMs: number }).backoffMs).toBeLessThanOrEqual(200);
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("preserves only the LAST attempt's forensics across an exhausted executor retry (WFE-009 x OBS-006)", async () => {
+      class FakeAdapterError extends Error {
+        readonly metadata: Record<string, unknown>;
+        constructor(message: string, metadata: Record<string, unknown>) {
+          super(message);
+          this.metadata = metadata;
+        }
+      }
+      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-forensics-"));
+      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+      try {
+        const build = defineTask({
+          id: "build",
+          agent: builder,
+          prompt: "Build.",
+          output: PatchReport,
+          worker: { retry: { backoffMs: 1 } },
+        });
+        const workflow = defineWorkflow({ name: "executor-retry-forensics", tasks: [build] as const });
+        const runId = store.createRun(workflow.name);
+        let calls = 0;
+
+        await expect(runWorkflow(workflow, {
+          runId,
+          store,
+          executeTask: async () => {
+            calls += 1;
+            if (calls === 1) {
+              throw new FakeAdapterError("codex exited with 1: first blip", {
+                adapter: "codex-cli",
+                sessionId: "sess-attempt-1",
+                stderrExcerpt: "first blip",
+              });
+            }
+            throw new FakeAdapterError("codex exited with 1: second blip", {
+              adapter: "codex-cli",
+              sessionId: "sess-attempt-2",
+              stderrExcerpt: "second blip",
+            });
+          },
+        })).rejects.toThrow("codex exited with 1: second blip");
+
+        expect(calls).toBe(2);
+        const persistedTask = store.listRunTasks(runId).find((row) => row.taskId === "build");
+        expect(persistedTask?.metadata).toMatchObject({ sessionId: "sess-attempt-2", stderrExcerpt: "second blip" });
+
+        const failedEvent = store.listRunEvents(runId).find((event) => event.type === "task.executor.failed");
+        expect(failedEvent?.payload).toMatchObject({ sessionId: "sess-attempt-2", stderrExcerpt: "second blip" });
+
+        const attempts = store.listRunTaskAttempts(runId);
+        expect(attempts.map((attempt) => ({ attempt: attempt.attempt, status: attempt.status, sessionId: attempt.sessionId }))).toEqual([
+          { attempt: 1, status: "failed", sessionId: "sess-attempt-1" },
+          { attempt: 2, status: "failed", sessionId: "sess-attempt-2" },
+        ]);
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 

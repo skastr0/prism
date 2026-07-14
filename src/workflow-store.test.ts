@@ -2487,12 +2487,15 @@ describe("workflow store", () => {
     // produced no output, so the run must be 'failed' — never read as a success by orchestrators.
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    // WFE-009: pin to a single attempt — this test asserts the terminal-cause attempt number
+    // on the first hard failure, not the new executor-retry budget.
     const build = defineTask({
       id: "build",
       agent: builder,
       prompt: "Build the slice.",
       output: Output,
       finish: { maxRepairs: 0 },
+      worker: { retry: { maxAttempts: 1 } },
     });
     const workflow = defineWorkflow({
       name: "dynamic-unhandled-task-failure-smoke",

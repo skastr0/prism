@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
@@ -23,7 +24,8 @@ import {
   type SnapshotManifest,
 } from "./state/snapshot.js";
 import { gcSnapshots, snapshotDir } from "./state/store.js";
-import { parseRegionRef } from "./sync/plan.js";
+import { runBackupsSummary, type RunBackupsSummary } from "./state/run-backups.js";
+import { MISSING_OWNED_FILE_SELF_HEALS, parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
   readManifest,
@@ -49,6 +51,16 @@ import {
   workflowHarnessIdsForHarnesses,
   type WorkflowHarnessDetection,
 } from "./workflow-harness-detection.js";
+import {
+  cleanupLaunchdResidueEntry,
+  collectLaunchdResidueEntries,
+} from "./doctor/launchd-residue.js";
+import {
+  collectOrphanedMcpEntries,
+  isSharedConfigHarnessId,
+  pruneOrphanedMcpEntry,
+  type OrphanedMcpEntry,
+} from "./doctor/orphaned-mcp-entries.js";
 
 export type DoctorSeverity = "error" | "warning" | "info";
 
@@ -61,7 +73,8 @@ export type DoctorFindingFamily =
   | "region.integrity"
   | "mcp.health"
   | "determinism.selfcheck"
-  | "topology.invariant";
+  | "topology.invariant"
+  | "launchd.residue";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -85,6 +98,15 @@ export interface DoctorReport {
   readonly workflowHarnesses?: ReadonlyArray<WorkflowHarnessDetection>;
   readonly findings: ReadonlyArray<DoctorFinding>;
   readonly refresh?: RefreshResult;
+  /**
+   * PQ-159: read-only run-backup retention visibility (count/size/oldest
+   * age). Deliberately NOT a `DoctorFinding` -- it is never actionable
+   * (retention itself is enforced during refresh, not by doctor), so it
+   * must not affect `doctorExitCode`'s clean/dirty determination. Same
+   * out-of-band-metadata pattern as `workflowHarnesses` above. Omitted
+   * when there are no run backups at all.
+   */
+  readonly backupRetention?: RunBackupsSummary;
 }
 
 export interface DoctorOptions {
@@ -225,8 +247,13 @@ const validateOwnedSnapshotEntry = async (
   entry: SnapshotEntry,
 ): Promise<DoctorFinding[]> => {
   if (!(await exists(entry.targetPath))) {
+    // Severity derives from the sync plan classifier (PQ-157, one
+    // classifier): plan.ts's planOwnedFile recreates a still-desired missing
+    // file (`create`) and planSync silently drops a no-longer-desired one —
+    // neither path is ever `blocked`, so this is always a refresh-heals
+    // state, never a hard error.
     return [finding({
-      severity: "error",
+      severity: MISSING_OWNED_FILE_SELF_HEALS ? "warning" : "error",
       family: "snapshot.disk-drift",
       code: "snapshot.owned-missing",
       message: `Prism-owned file recorded in snapshot is missing: ${entry.targetPath}`,
@@ -568,6 +595,75 @@ const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => 
   return findings;
 };
 
+/**
+ * `launchd.residue` -- retired launchd-era `com.prism.mcp.*` LaunchAgents
+ * (OBS-002, `doctor/launchd-residue.ts`). Scoped to the exact conditions
+ * `src/mcp/lifecycle.ts`'s deleted `launchAgentEligible` used before this
+ * scheme was retired (real `~/.prism` home, darwin only) -- every doctor
+ * test uses a sandboxed `prismHome`, so this gate keeps every existing and
+ * future doctor test from ever reaching real `launchctl`/`~/Library/
+ * LaunchAgents`; only a real production invocation against the real home
+ * reaches `collectLaunchdResidueEntries`'s default (real) deps.
+ */
+const isLaunchdResidueEligible = (prismHome: string): boolean =>
+  process.platform === "darwin" && resolve(expandPath(prismHome)) === resolve(join(homedir(), ".prism"));
+
+const detectLaunchdResidue = async (prismHome: string): Promise<DoctorFinding[]> => {
+  if (!isLaunchdResidueEligible(prismHome)) return [];
+  const entries = await collectLaunchdResidueEntries();
+  const findings: DoctorFinding[] = [];
+  for (const entry of entries) {
+    findings.push(finding({
+      severity: "error",
+      family: "launchd.residue",
+      code: "launchd.orphaned-service",
+      message: `Retired launchd-era Prism MCP service is still ${entry.loaded ? "loaded in launchctl" : "registered on disk"}: ${entry.label}`,
+      ...(entry.plistPath ? { path: entry.plistPath } : {}),
+      fix: "gc",
+      data: { label: entry.label, loaded: entry.loaded, plistExists: entry.plistExists },
+    }));
+    if (entry.missingProgramPaths.length > 0) {
+      findings.push(finding({
+        severity: "error",
+        family: "launchd.residue",
+        code: "launchd.dead-bundle-respawn",
+        message: `Retired launchd service '${entry.label}' is respawning against a deleted bundle: ${entry.missingProgramPaths.join(", ")}`,
+        ...(entry.plistPath ? { path: entry.plistPath } : {}),
+        fix: "gc",
+        data: {
+          label: entry.label,
+          missingProgramPaths: entry.missingProgramPaths,
+          ...(entry.errLogSize !== undefined ? { errLogSize: entry.errLogSize } : {}),
+        },
+      }));
+    }
+  }
+  return findings;
+};
+
+const runLaunchdResidueFix = async (prismHome: string): Promise<DoctorFinding[]> => {
+  if (!isLaunchdResidueEligible(prismHome)) return [];
+  const entries = await collectLaunchdResidueEntries();
+  const findings: DoctorFinding[] = [];
+  for (const entry of entries) {
+    const result = await cleanupLaunchdResidueEntry(entry);
+    findings.push(finding({
+      severity: "info",
+      family: "launchd.residue",
+      code: "launchd.residue-dropped",
+      message: `Booted out and removed retired launchd-era Prism MCP residue: ${result.label}`,
+      ...(result.plistPath ? { path: result.plistPath } : {}),
+      data: {
+        label: result.label,
+        removedPlist: result.removedPlist,
+        removedErrLog: result.removedErrLog,
+        removedOutLog: result.removedOutLog,
+      },
+    }));
+  }
+  return findings;
+};
+
 const namespaceStrayCandidate = (relativePath: string): boolean =>
   relativePath.includes("prism-generated-") || relativePath.includes("prism_generated_");
 
@@ -669,6 +765,87 @@ const detectNamespaceStrays = async (options: {
     }
   }
 
+  return findings;
+};
+
+/**
+ * `namespace.stray`'s structured-entry sibling (PQ-172,
+ * `doctor/orphaned-mcp-entries.ts`): every prism-fingerprinted MCP server
+ * entry a shared harness config carries that the current snapshot's tracked
+ * regionKeys do not claim, across every requested shared-config harness
+ * (codex-cli/grok/hermes/cursor).
+ */
+const collectAllOrphanedMcpEntries = async (options: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<OrphanedMcpEntry[]> => {
+  const snapshots = await readAllSnapshots(options.prismHome);
+  const orphans: OrphanedMcpEntry[] = [];
+
+  for (const harnessId of options.harnesses) {
+    if (!isSharedConfigHarnessId(harnessId)) continue;
+    for (const root of rootsForHarness(harnessId, options.scope, options.projectPath, options.roots)) {
+      if (!(await exists(root))) continue;
+      const ownedRegionKeys = new Set<string>();
+      for (const snapshot of snapshots) {
+        const manifest = snapshot.manifest;
+        if (!manifest || manifest.harness !== harnessId || resolve(manifest.root) !== resolve(root)) continue;
+        for (const entry of manifest.entries) {
+          if (entry.mode === "region" && entry.regionKey !== undefined) ownedRegionKeys.add(entry.regionKey);
+        }
+      }
+      orphans.push(...(await collectOrphanedMcpEntries(harnessId, root, ownedRegionKeys)));
+    }
+  }
+
+  return orphans;
+};
+
+const detectOrphanedMcpEntries = async (options: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<DoctorFinding[]> => {
+  const orphans = await collectAllOrphanedMcpEntries(options);
+  return orphans.map((orphan) => finding({
+    severity: "warning",
+    family: "namespace.stray",
+    code: "namespace.unowned-mcp-entry",
+    message: `Prism-fingerprinted MCP entry '${orphan.serverKey}' in ${orphan.configPath} is outside every owned patch region`,
+    harness: orphan.harness,
+    path: orphan.configPath,
+    fix: "gc",
+    data: { serverKey: orphan.serverKey, regionKey: orphan.regionKey },
+  }));
+};
+
+const runOrphanedMcpEntryFix = async (options: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<DoctorFinding[]> => {
+  const orphans = await collectAllOrphanedMcpEntries(options);
+  const findings: DoctorFinding[] = [];
+  for (const orphan of orphans) {
+    const result = await pruneOrphanedMcpEntry(orphan);
+    if (!result.pruned) continue;
+    findings.push(finding({
+      severity: "info",
+      family: "namespace.stray",
+      code: "namespace.mcp-entry-pruned",
+      message: `Pruned orphaned Prism-fingerprinted MCP entry '${result.serverKey}' from ${result.configPath}`,
+      harness: result.harness,
+      path: result.configPath,
+      data: { serverKey: result.serverKey },
+    }));
+  }
   return findings;
 };
 
@@ -2270,6 +2447,16 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
 
   if (options.fix) {
     findings.push(...(await runSnapshotGcFix(options.prismHome)));
+    findings.push(...(await runLaunchdResidueFix(options.prismHome)));
+    findings.push(
+      ...(await runOrphanedMcpEntryFix({
+        prismHome: options.prismHome,
+        harnesses: options.harnesses,
+        scope: options.scope,
+        ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+        roots: options.roots,
+      })),
+    );
   }
 
   for (const harness of options.harnesses) {
@@ -2320,11 +2507,24 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       roots: options.roots,
     })),
   );
+  findings.push(...(await detectLaunchdResidue(options.prismHome)));
+  findings.push(
+    ...(await detectOrphanedMcpEntries({
+      prismHome: options.prismHome,
+      harnesses: options.harnesses,
+      scope: options.scope,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
+    })),
+  );
 
   const pluginInspection = await inspectPlugin(options);
   findings.push(...pluginInspection.findings);
   refresh = pluginInspection.refresh;
   fixFailed = fixFailed || pluginInspection.fixFailed;
+
+  // PQ-159: read-only visibility, never a finding (see DoctorReport.backupRetention doc).
+  const backupRetention = await runBackupsSummary(options.prismHome);
 
   return {
     schema: "prism.doctor.report.v1",
@@ -2334,6 +2534,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
     ...(workflowHarnesses.length > 0 ? { workflowHarnesses } : {}),
     findings,
     ...(refresh ? { refresh } : {}),
+    ...(backupRetention.count > 0 ? { backupRetention } : {}),
   };
 };
 
@@ -2344,15 +2545,28 @@ export const doctorExitCode = (report: DoctorReport): ExitCode => {
   return report.findings.length === 0 ? EXIT_CODES.success : EXIT_CODES.domainFailure;
 };
 
+/** PQ-159: human-readable render of `DoctorReport.backupRetention`. */
+const formatBackupRetentionLine = (summary: RunBackupsSummary): string => {
+  const megabytes = (summary.totalBytes / (1024 * 1024)).toFixed(1);
+  const ageDays =
+    summary.oldestAgeMs === undefined
+      ? undefined
+      : Math.floor(summary.oldestAgeMs / (24 * 60 * 60 * 1000));
+  return `INFO backup.retention ${summary.count} run backups kept (${megabytes} MB${ageDays === undefined ? "" : `, oldest ${ageDays}d`})`;
+};
+
 export const formatDoctorReport = (report: DoctorReport): string => {
   const lines: string[] = [];
   if (report.findings.length === 0) {
-    return report.fix ? "doctor: clean after fix" : "doctor: clean";
+    lines.push(report.fix ? "doctor: clean after fix" : "doctor: clean");
+    if (report.backupRetention) lines.push(formatBackupRetentionLine(report.backupRetention));
+    return lines.join("\n");
   }
   for (const item of report.findings) {
     const location = [item.harness, item.path].filter(Boolean).join(" ");
     lines.push(`${item.severity.toUpperCase()} ${item.family}/${item.code}${location ? ` ${location}` : ""}`);
     lines.push(`  ${item.message}`);
   }
+  if (report.backupRetention) lines.push(formatBackupRetentionLine(report.backupRetention));
   return lines.join("\n");
 };

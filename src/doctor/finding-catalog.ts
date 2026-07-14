@@ -251,9 +251,9 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
   {
     family: "snapshot.disk-drift",
     code: "snapshot.owned-missing",
-    severity: "error",
+    severity: "warning",
     fix: "refresh",
-    description: "Prism-owned file recorded in snapshot is missing.",
+    description: "Prism-owned file recorded in snapshot is missing (PQ-157: refresh always heals this — recreate if still desired, drop if not).",
   },
   {
     family: "snapshot.disk-drift",
@@ -305,6 +305,19 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "warning",
     fix: "manual",
     description: "Prism-looking path is not recorded in the snapshot.",
+  },
+  {
+    family: "namespace.stray",
+    code: "namespace.unowned-mcp-entry",
+    severity: "warning",
+    fix: "gc",
+    description: "A prism-fingerprinted MCP server entry in a shared harness config is outside every owned patch region.",
+  },
+  {
+    family: "namespace.stray",
+    code: "namespace.mcp-entry-pruned",
+    severity: "info",
+    description: "Pruned an orphaned prism-fingerprinted MCP entry from a shared harness config (only emitted during --fix).",
   },
 
   // region.integrity
@@ -525,6 +538,28 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "error",
     fix: "manual",
     description: "[F] A prism-looking server carries a dead HTTP url transport (Prism is stdio-only).",
+  },
+
+  // launchd.residue
+  {
+    family: "launchd.residue",
+    code: "launchd.orphaned-service",
+    severity: "error",
+    fix: "gc",
+    description: "A retired launchd-era com.prism.mcp.* service is still loaded and/or its plist survives on disk.",
+  },
+  {
+    family: "launchd.residue",
+    code: "launchd.dead-bundle-respawn",
+    severity: "error",
+    fix: "gc",
+    description: "A retired launchd service is respawning against a deleted MCP server bundle path.",
+  },
+  {
+    family: "launchd.residue",
+    code: "launchd.residue-dropped",
+    severity: "info",
+    description: "Booted out and removed retired launchd-era Prism MCP residue (only emitted during --fix).",
   },
 ] as const;
 

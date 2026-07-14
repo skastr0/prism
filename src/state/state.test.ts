@@ -11,7 +11,7 @@ import {
 } from "./snapshot.js";
 import { commitSnapshot, gcSnapshots, readSnapshot, snapshotPath } from "./store.js";
 import { SnapshotLockHeldError, lockPath, withSnapshotLock } from "./lock.js";
-import { backupOnceForRun, pruneRunBackups } from "./run-backups.js";
+import { backupOnceForRun, pruneRunBackups, runBackupsSummary } from "./run-backups.js";
 
 let home: string;
 let root: string;
@@ -352,5 +352,37 @@ describe("run backups", () => {
     expect(backupPath).toStartWith(join(home, "backups", "20260610T0001-aaaa"));
     // Outside-root targets do not mirror the relative path; they hash to a 16-char hex fragment.
     expect(backupPath!.split("/").pop()).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  // PQ-159: doctor's backup-retention visibility line reads this summary.
+  test("runBackupsSummary reports zero for an empty/absent backups dir", async () => {
+    expect(await runBackupsSummary(home)).toEqual({ count: 0, totalBytes: 0 });
+  });
+
+  test("runBackupsSummary counts runs, sums bytes, and ages the oldest run id", async () => {
+    const target = join(root, "config.toml");
+    await nodeWriteFile(target, "0123456789"); // 10 bytes
+
+    await backupOnceForRun({ prismHome: home, runId: "20260610T000000-aaaaaa", root, targetPath: target });
+    await nodeWriteFile(target, "abcdefghijklmnopqrst"); // 20 bytes, different run
+    await backupOnceForRun({ prismHome: home, runId: "20260611T000000-bbbbbb", root, targetPath: target });
+
+    const now = new Date("2026-06-13T00:00:00Z");
+    const summary = await runBackupsSummary(home, now);
+    expect(summary.count).toBe(2);
+    expect(summary.totalBytes).toBe(30);
+    expect(summary.oldestRunId).toBe("20260610T000000-aaaaaa");
+    expect(summary.oldestAgeMs).toBe(3 * 24 * 60 * 60 * 1000); // 3 days
+  });
+
+  test("runBackupsSummary omits oldestAgeMs when the run id does not parse as a timestamp", async () => {
+    const target = join(root, "config.toml");
+    await nodeWriteFile(target, "x");
+    await backupOnceForRun({ prismHome: home, runId: "not-a-timestamp-run-id", root, targetPath: target });
+
+    const summary = await runBackupsSummary(home);
+    expect(summary.count).toBe(1);
+    expect(summary.oldestRunId).toBe("not-a-timestamp-run-id");
+    expect(summary.oldestAgeMs).toBeUndefined();
   });
 });

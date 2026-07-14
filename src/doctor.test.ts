@@ -2,11 +2,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { doctorExitCode, pluginIsServable, runDoctor } from "./doctor.js";
+import { doctorExitCode, formatDoctorReport, pluginIsServable, runDoctor } from "./doctor.js";
 import { EXIT_CODES } from "./exit.js";
 import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
+import { listDirRecursive, readFile } from "./fs.js";
+import { refreshPlugin } from "./refresh.js";
+import { backupOnceForRun } from "./state/run-backups.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { pluginDaemonLogPath } from "@skastr0/prism-sdk/mcp/daemon-resolver";
@@ -58,6 +61,37 @@ test("doctor exit code is success for a clean report", async () => {
 
   expect(report.findings).toEqual([]);
   expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
+});
+
+// PQ-159: doctor surfaces run-backup retention as read-only visibility --
+// count/size/oldest age -- never as a DoctorFinding, so it never flips exit
+// code on an otherwise clean, healthy world.
+test("doctor reports backup retention visibility without affecting exit code or findings (PQ-159)", async () => {
+  const prismHome = join(root, "prism-home");
+
+  const cleanReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(cleanReport.backupRetention).toBeUndefined();
+  expect(formatDoctorReport(cleanReport)).toBe("doctor: clean");
+
+  const target = join(root, "config.toml");
+  await writeText(target, "x");
+  await backupOnceForRun({ prismHome, runId: "20260610T000000-aaaaaa", root, targetPath: target });
+
+  const dirtyWorldReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(dirtyWorldReport.findings).toEqual([]);
+  expect(dirtyWorldReport.backupRetention).toMatchObject({ count: 1, oldestRunId: "20260610T000000-aaaaaa" });
+  expect(doctorExitCode(dirtyWorldReport)).toBe(EXIT_CODES.success);
+  expect(formatDoctorReport(dirtyWorldReport)).toContain("INFO backup.retention 1 run backups kept");
 });
 
 test("doctor includes shared workflow harness detection data without creating findings", async () => {
@@ -434,6 +468,170 @@ test("doctor --fix drops stale snapshot entries for missing owned files", async 
   expect(report.findings.map((finding) => finding.code)).toContain("snapshot.stale-entry-dropped");
   const read = await import("./state/store.js").then((m) => m.readSnapshot({ prismHome, harness: "opencode", root: harnessRoot }));
   expect(read.manifest.entries.map((entry) => entry.targetPath)).toEqual([livePath]);
+});
+
+// PQ-157: doctor derives severity from the sync plan classifier (one
+// classifier) instead of maintaining an independent judgment. A missing
+// owned file is always self-healing per plan.ts's own rules (planOwnedFile
+// recreates it if still desired; planSync silently drops the entry if not),
+// so the finding must report <=warning with a refresh heal hint, and the
+// dirty -> refresh -> clean cycle must actually converge.
+test("doctor reports a still-desired missing owned file as <=warning with a refresh heal hint, and refresh heals it (PQ-157)", async () => {
+  const prismHome = join(root, "prism-home");
+  const pluginRoot = join(root, "plugins", "recreate-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify({ name: "recreate-demo", version: "0.1.0", targets: { commands: ["opencode"] } }, null, 2),
+  );
+  await writeText(join(pluginRoot, "commands", "review.md"), "managed command\n");
+
+  const firstRefresh = await refreshPlugin({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    prismHome,
+    overwrite: false,
+    dryRun: false,
+  });
+  expect(firstRefresh.success).toBe(true);
+
+  const commandPath = join(process.env.HOME!, ".config", "opencode", "commands", "review.md");
+  expect(await Bun.file(commandPath).exists()).toBe(true);
+
+  // Simulate the drift HLT-002/PQ-157 target: the owned file vanishes from
+  // disk while the plugin still desires it (e.g. a stray external delete).
+  await rm(commandPath);
+
+  const beforeFiles = (await listDirRecursive(root)).sort();
+  const beforeHashes = new Map(
+    await Promise.all(beforeFiles.map(async (relative) => [relative, computeContentHash(await readFile(join(root, relative)))] as const)),
+  );
+
+  const dirtyReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  const missingFinding = dirtyReport.findings.find((finding) => finding.code === "snapshot.owned-missing");
+  expect(missingFinding).toBeDefined();
+  expect(missingFinding!.severity).toBe("warning");
+  expect(missingFinding!.fix).toBe("refresh");
+
+  // A read-only doctor run must never write to disk.
+  const afterFiles = (await listDirRecursive(root)).sort();
+  expect(afterFiles).toEqual(beforeFiles);
+  for (const relative of afterFiles) {
+    expect(computeContentHash(await readFile(join(root, relative)))).toBe(beforeHashes.get(relative)!);
+  }
+
+  const secondRefresh = await refreshPlugin({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    prismHome,
+    overwrite: false,
+    dryRun: false,
+  });
+  expect(secondRefresh.success).toBe(true);
+  expect(await Bun.file(commandPath).exists()).toBe(true);
+
+  const cleanReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(cleanReport.findings.map((finding) => finding.code)).not.toContain("snapshot.owned-missing");
+});
+
+// HLT-002: an install root deleted from disk entirely (not one file within
+// it -- e.g. a project directory removed) must reconcile through the
+// existing `doctor --fix` flow. `--fix` is the explicit operator
+// confirmation; `snapshot.dead-root-dropped` is the non-silent receipt of
+// what was removed. Two independent dead roots (the vouch + antigravity-cli
+// scenario from the glyph) reconcile in the same pass and the result is
+// idempotent -- rerunning --fix on an already-clean world never re-flags.
+test("doctor --fix reconciles multiple deleted install roots end-to-end: flag, resolve, stay clean (HLT-002)", async () => {
+  const prismHome = join(root, "prism-home");
+  const vouchRoot = join(root, "vouch-project", ".claude");
+  const antigravityRoot = join(root, "antigravity-home");
+
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "opencode",
+      root: vouchRoot,
+      entries: [
+        {
+          targetPath: join(vouchRoot, "commands", "review.md"),
+          contentHash: computeContentHash("vouch\n"),
+          mode: "owned",
+          plugin: "vouch-demo",
+        },
+      ],
+    },
+  });
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "codex-cli",
+      root: antigravityRoot,
+      entries: [
+        {
+          targetPath: join(antigravityRoot, "skills", "demo.md"),
+          contentHash: computeContentHash("antigravity\n"),
+          mode: "owned",
+          plugin: "antigravity-demo",
+        },
+      ],
+    },
+  });
+
+  // Neither root ever exists on disk in this test -- simulating a
+  // project/home deleted after Prism installed into it.
+  const dirtyReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  const dirtyCodes = dirtyReport.findings.map((finding) => finding.code);
+  expect(dirtyCodes.filter((code) => code === "snapshot.dead-root")).toHaveLength(2);
+  // A dead root reports once per manifest, never once per owned file it
+  // used to carry (that would be the PQ-157 flood this test guards against).
+  expect(dirtyCodes).not.toContain("snapshot.owned-missing");
+
+  const fixReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+  const droppedRoots = fixReport.findings
+    .filter((finding) => finding.code === "snapshot.dead-root-dropped")
+    .map((finding) => finding.root)
+    .sort();
+  expect(droppedRoots).toEqual([antigravityRoot, vouchRoot].sort());
+  expect(await Bun.file(snapshotPath(prismHome, vouchRoot)).exists()).toBe(false);
+  expect(await Bun.file(snapshotPath(prismHome, antigravityRoot)).exists()).toBe(false);
+
+  const cleanReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(cleanReport.findings).toEqual([]);
+
+  // Idempotent: reconciling an already-clean world never re-flags or errors.
+  const rerunReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+  expect(rerunReport.findings).toEqual([]);
 });
 
 test("doctor --fix drops stale snapshot region entries for missing marker fences", async () => {

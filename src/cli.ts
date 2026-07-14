@@ -1508,7 +1508,11 @@ program
     "global",
   )
   .option("-p, --project <path>", "Project root when checking project scope")
-  .option("--fix", "Converge fixable refresh findings", false)
+  .option(
+    "--fix",
+    "Converge fixable refresh findings, and reconcile snapshot state for deleted install roots/files (gated on this flag, never silent -- see snapshot.dead-root-dropped/snapshot.stale-entry-dropped)",
+    false,
+  )
   .option("--json", "Print a machine-readable JSON report", false)
   .option(
     "--plugins <directory>",

@@ -135,6 +135,29 @@ describe("sync engine — owned files", () => {
     expect(await readFile(prunedDrifted.backups[0]!)).toBe("user touched\n");
   });
 
+  // PQ-157 (one classifier): doctor's `snapshot.owned-missing` severity is
+  // derived from these two facts, pinned here so a future change to either
+  // path forces the doctor severity constant (MISSING_OWNED_FILE_SELF_HEALS
+  // in this file) to be revisited rather than silently drifting apart.
+  test("still-desired missing owned file reclassifies as create, never blocked (PQ-157)", async () => {
+    await refresh(desired("v1\n"));
+    await rm(skillPath());
+    const recreated = await refresh(desired("v1\n"));
+    expect(kinds(recreated)).toEqual(["create"]);
+    expect(recreated.blocked).toEqual([]);
+    expect(await readFile(skillPath())).toBe("v1\n");
+  });
+
+  test("no-longer-desired AND already-missing owned file silently drops the entry -- no op needed (PQ-157)", async () => {
+    await refresh(desired("v1\n"));
+    await rm(skillPath());
+    const dropped = await refresh(desiredWith({ files: [] }));
+    expect(dropped.ops).toEqual([]);
+    expect(dropped.blocked).toEqual([]);
+    const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
+    expect(snapshot.manifest.entries).toEqual([]);
+  });
+
   test("crash convergence: deleting the manifest re-converges without errors", async () => {
     await refresh(desired("v1\n"));
     await rm(snapshotPath(home, root));

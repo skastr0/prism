@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { refreshPlugin } from "./refresh.js";
 import { withPrismSandbox } from "./testing/prism-sandbox.js";
+import { DEFAULT_KEPT_RUN_BACKUPS, runBackupsDir } from "./state/run-backups.js";
 
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -263,6 +264,54 @@ test("refresh lowers Cursor markdown commands into a local command plugin", asyn
         "review.md",
       ),
     );
+  });
+});
+
+// PQ-159: pruneRunBackups was previously only ever called from tests -- a
+// real refresh never reaped `<PRISM_HOME>/backups`, so it grew forever
+// (426 dirs / 14M observed). Prove the production apply path (refreshPlugin)
+// actually reaps it, and that a dry-run preview never touches disk.
+test("a real (non-dry-run) refresh reaps run-backup retention to the default cap (PQ-159)", async () => {
+  await withPrismSandbox(async ({ prismHome, roots }) => {
+    const pluginRoot = await createPlugin(prismHome, "backup-demo", {
+      targets: { rules: ["codex-cli"] },
+    });
+    await writeText(join(pluginRoot, "rules", "global", "style.md"), "# Style\n\nv1\n");
+
+    // Seed a pile of prior run-backup dirs, well over the cap, standing in
+    // for accumulated history from many past refreshes.
+    const backupsDir = runBackupsDir(prismHome);
+    const seededCount = DEFAULT_KEPT_RUN_BACKUPS + 10;
+    for (let i = 0; i < seededCount; i++) {
+      const runId = `20200${String(1 + Math.floor(i / 28)).padStart(2, "0")}${String(1 + (i % 28)).padStart(2, "0")}T000000-${String(i).padStart(6, "0")}`;
+      await mkdir(join(backupsDir, runId, "deadbeefdeadbeef"), { recursive: true });
+      await writeText(join(backupsDir, runId, "deadbeefdeadbeef", "file.md"), "old\n");
+    }
+    const dirEntries = async (): Promise<number> => (await readdir(backupsDir)).length;
+    expect(await dirEntries()).toBe(seededCount);
+
+    // A dry-run preview must never prune (or write anything at all).
+    await refreshPlugin({
+      pluginPath: pluginRoot,
+      harnesses: ["codex-cli"],
+      prismHome,
+      overwrite: false,
+      dryRun: true,
+      roots,
+    });
+    expect(await dirEntries()).toBe(seededCount);
+
+    const result = await refreshPlugin({
+      pluginPath: pluginRoot,
+      harnesses: ["codex-cli"],
+      prismHome,
+      overwrite: false,
+      dryRun: false,
+      roots,
+    });
+    expect(result.success).toBe(true);
+
+    expect(await dirEntries()).toBeLessThanOrEqual(DEFAULT_KEPT_RUN_BACKUPS);
   });
 });
 

@@ -1,13 +1,15 @@
 import { describe, expect, it, afterEach } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   DaemonResolveError,
   pluginBundlePath,
+  pluginDaemonLogPath,
   pluginRuntimeDir,
   resolveOrSpawnDaemon,
+  tryPluginDaemonLogPath,
 } from "./daemon-resolver";
 import { udsPathFor } from "./uds-path";
 import type { RegistryEntry, RegistryResult } from "./uds-registry";
@@ -57,6 +59,29 @@ describe("pluginRuntimeDir / pluginBundlePath", () => {
     expect(pluginBundlePath("my-plugin", prismHome)).toBe(
       "/custom/prism-home/runtime/mcp/my-plugin/server.mjs",
     );
+  });
+});
+
+describe("pluginDaemonLogPath / tryPluginDaemonLogPath", () => {
+  it("derives from pluginRuntimeDir, next to the bundle and socket (OBS-001)", () => {
+    expect(pluginDaemonLogPath("my-plugin")).toBe(join(pluginRuntimeDir("my-plugin"), "daemon.log"));
+  });
+
+  it("threads an explicit prismHome through, same as pluginBundlePath", () => {
+    const prismHome = "/custom/prism-home";
+    expect(pluginDaemonLogPath("my-plugin", prismHome)).toBe(
+      "/custom/prism-home/runtime/mcp/my-plugin/daemon.log",
+    );
+  });
+
+  it("tryPluginDaemonLogPath matches pluginDaemonLogPath for a valid plugin/prismHome", () => {
+    const prismHome = "/custom/prism-home";
+    expect(tryPluginDaemonLogPath("my-plugin", prismHome)).toBe(pluginDaemonLogPath("my-plugin", prismHome));
+  });
+
+  it("tryPluginDaemonLogPath degrades to undefined instead of throwing for an invalid plugin name", () => {
+    expect(() => pluginDaemonLogPath("not a valid plugin name!")).toThrow();
+    expect(tryPluginDaemonLogPath("not a valid plugin name!", undefined)).toBeUndefined();
   });
 });
 
@@ -253,5 +278,79 @@ describe("resolveOrSpawnDaemon", () => {
         },
       }),
     ).rejects.toBeInstanceOf(DaemonResolveError);
+  });
+
+  it("mentions the daemon log path in the timeout error (OBS-001 discoverability)", async () => {
+    const dir = await makeTempDir();
+    const bundlePath = join(dir, "server.mjs");
+    await writeBundle(bundlePath, "console.log('v1');");
+    // Short prismHome + short plugin name: `pluginDaemonLogPath` routes
+    // through the real `udsPathFor` (see its doc comment) and so is bound
+    // by its 100-byte sun_path assertion even though this hint is just a
+    // log file path -- same constraint the "honors options.prismHome" test
+    // above works around.
+    const prismHome = await mkdtemp(join(tmpdir(), "ph"));
+    tempDirs.push(prismHome);
+    const plugin = "q";
+
+    let caught: unknown;
+    try {
+      await resolveOrSpawnDaemon({
+        plugin,
+        prismHome,
+        spawnTimeoutMs: 120,
+        pollIntervalMs: 20,
+        bundlePathFor: () => bundlePath,
+        udsPathFor: () => join(dir, "never-bound.sock"),
+        getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "absent" }),
+        spawnDaemon: () => {
+          // Never registers -- simulates a daemon that fails to start.
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(DaemonResolveError);
+    expect((caught as DaemonResolveError).message).toContain(pluginDaemonLogPath(plugin, prismHome));
+  });
+
+  it("redirects a real spawned daemon's stdout+stderr into its per-plugin log file (OBS-001)", async () => {
+    // Short prismHome + short plugin name -- same sun_path-length reason as
+    // the test above; `defaultSpawnDaemon` derives the log path via
+    // `pluginDaemonLogPath` -> `pluginRuntimeDir`, which is still subject to
+    // that assertion even though a log file itself has no such OS limit.
+    const prismHome = await mkdtemp(join(tmpdir(), "ph"));
+    tempDirs.push(prismHome);
+    const plugin = "p";
+
+    const scriptDir = await makeTempDir();
+    const scriptPath = join(scriptDir, "fake-daemon.mjs");
+    await writeFile(
+      scriptPath,
+      "console.log('obs-001-stdout-marker');\nconsole.error('obs-001-stderr-marker');\n",
+    );
+
+    // `spawnDaemon` is deliberately NOT overridden here -- this is the one
+    // test in this suite that exercises the real `defaultSpawnDaemon`, the
+    // only code path that wires the log sink. The daemon never registers
+    // (getDaemon always reports absent), so resolution times out; that is
+    // expected and irrelevant to what this test checks.
+    await expect(
+      resolveOrSpawnDaemon({
+        plugin,
+        prismHome,
+        spawnTimeoutMs: 2000,
+        pollIntervalMs: 20,
+        bundlePathFor: () => scriptPath,
+        udsPathFor: () => join(scriptDir, "never-bound.sock"),
+        getDaemon: async (): Promise<RegistryResult<RegistryEntry>> => ({ kind: "absent" }),
+      }),
+    ).rejects.toBeInstanceOf(DaemonResolveError);
+
+    const logPath = pluginDaemonLogPath(plugin, prismHome);
+    const content = await readFile(logPath, "utf8");
+    expect(content).toContain("obs-001-stdout-marker");
+    expect(content).toContain("obs-001-stderr-marker");
   });
 });

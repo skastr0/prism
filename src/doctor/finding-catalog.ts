@@ -306,6 +306,20 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     fix: "manual",
     description: "Prism-looking path is not recorded in the snapshot.",
   },
+  {
+    family: "namespace.stray",
+    code: "namespace.unowned-mcp-entry",
+    severity: "warning",
+    fix: "gc",
+    description: "A prism-fingerprinted MCP server entry in a shared harness config is outside every owned patch region.",
+  },
+  {
+    family: "namespace.stray",
+    code: "namespace.mcp-entry-pruned",
+    severity: "info",
+    description: "Pruned an orphaned prism-fingerprinted MCP entry from a shared harness config (only emitted during --fix).",
+  },
+
   // region.integrity
   {
     family: "region.integrity",

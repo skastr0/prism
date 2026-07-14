@@ -269,7 +269,12 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated-";
 // collapses to this shape so the assertions are format-agnostic.
 // ---------------------------------------------------------------------------
 
-interface NormalizedServerEntry {
+/**
+ * Exported for `doctor/orphaned-mcp-entries.ts` (PQ-172), which reuses this
+ * reader unmodified to scan every entry a shared MCP config carries,
+ * regardless of marker-fence ownership -- see that module's doc.
+ */
+export interface NormalizedServerEntry {
   readonly configPath: string;
   readonly serverKey: string;
   readonly command?: string;
@@ -278,6 +283,8 @@ interface NormalizedServerEntry {
   /** Populated only when this harness's allowlist lives inside the server's own entry. */
   readonly allowlist?: readonly string[];
   readonly url?: string;
+  /** Populated only for structural JSON/TOML entries (cursor/codex-cli/grok, via `normalizeStructuredEntry`); the retired HTTP-era bearer entry's header block carries `X-Prism-Mcp-Exposure` (see `sync/legacy-prism-entries.ts`). Undefined for hermes's hand-rolled YAML reader and for every current stdio-shim entry. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -317,6 +324,7 @@ const normalizeStructuredEntry = (
         ? stringArray(record[allowlistField])
         : undefined,
     url: typeof record.url === "string" ? record.url : undefined,
+    headers: stringEnv(record.headers),
   };
 };
 
@@ -450,7 +458,14 @@ const readHermesServerEntries = async (configPath: string): Promise<NormalizedSe
 // Collect every normalized server entry a harness root exposes.
 // ---------------------------------------------------------------------------
 
-const collectHarnessServerEntries = async (
+/**
+ * Exported for `doctor/orphaned-mcp-entries.ts` (PQ-172): every entry a
+ * harness's shared MCP config carries, structurally, regardless of whether
+ * it happens to sit inside a marker fence -- the fence comments are
+ * transparent to this reader (see the hermes-yaml block above), which is
+ * exactly the property PQ-172 needs to see an unfenced retired-scheme entry.
+ */
+export const collectHarnessServerEntries = async (
   harness: ShimHarnessId,
   root: string,
 ): Promise<NormalizedServerEntry[]> => {

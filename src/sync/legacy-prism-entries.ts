@@ -115,8 +115,12 @@ const LEGACY_GENERATED_PREFIX = "prism-generated-";
  * — so a name-shape match is only ever a *candidate*; the caller
  * (`sweepJsonServerMap`) additionally requires positive content provenance
  * and desired-keys exclusion before removing anything.
+ *
+ * Exported for `doctor/orphaned-mcp-entries.ts` (PQ-172), which reuses this
+ * exact predicate (never a duplicate reimplementation) for its own,
+ * snapshot-driven exclusion set instead of a live compile's desired regions.
  */
-const isLegacyPrismServerKeyName = (key: string): boolean =>
+export const isLegacyPrismServerKeyName = (key: string): boolean =>
   key === "prism-mcp-shim" ||
   key.startsWith(LEGACY_GENERATED_PREFIX) ||
   BARE_AGGREGATED_TOOL_NAMESPACE.test(key);
@@ -138,8 +142,11 @@ const isLegacyPrismServerKeyName = (key: string): boolean =>
  * no header, and no reason to independently reinvent Prism's exact
  * command/args pair — so it is never mistaken for a legacy Prism entry
  * regardless of what its key happens to be named.
+ *
+ * Exported for `doctor/orphaned-mcp-entries.ts` (PQ-172) — same rationale as
+ * `isLegacyPrismServerKeyName` above.
  */
-const hasLegacyPrismProvenance = (entry: unknown): boolean => {
+export const hasLegacyPrismProvenance = (entry: unknown): boolean => {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
   const record = entry as Record<string, unknown>;
   const headers = record.headers;

@@ -54,6 +54,12 @@ import {
   cleanupLaunchdResidueEntry,
   collectLaunchdResidueEntries,
 } from "./doctor/launchd-residue.js";
+import {
+  collectOrphanedMcpEntries,
+  isSharedConfigHarnessId,
+  pruneOrphanedMcpEntry,
+  type OrphanedMcpEntry,
+} from "./doctor/orphaned-mcp-entries.js";
 
 export type DoctorSeverity = "error" | "warning" | "info";
 
@@ -744,6 +750,87 @@ const detectNamespaceStrays = async (options: {
     }
   }
 
+  return findings;
+};
+
+/**
+ * `namespace.stray`'s structured-entry sibling (PQ-172,
+ * `doctor/orphaned-mcp-entries.ts`): every prism-fingerprinted MCP server
+ * entry a shared harness config carries that the current snapshot's tracked
+ * regionKeys do not claim, across every requested shared-config harness
+ * (codex-cli/grok/hermes/cursor).
+ */
+const collectAllOrphanedMcpEntries = async (options: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<OrphanedMcpEntry[]> => {
+  const snapshots = await readAllSnapshots(options.prismHome);
+  const orphans: OrphanedMcpEntry[] = [];
+
+  for (const harnessId of options.harnesses) {
+    if (!isSharedConfigHarnessId(harnessId)) continue;
+    for (const root of rootsForHarness(harnessId, options.scope, options.projectPath, options.roots)) {
+      if (!(await exists(root))) continue;
+      const ownedRegionKeys = new Set<string>();
+      for (const snapshot of snapshots) {
+        const manifest = snapshot.manifest;
+        if (!manifest || manifest.harness !== harnessId || resolve(manifest.root) !== resolve(root)) continue;
+        for (const entry of manifest.entries) {
+          if (entry.mode === "region" && entry.regionKey !== undefined) ownedRegionKeys.add(entry.regionKey);
+        }
+      }
+      orphans.push(...(await collectOrphanedMcpEntries(harnessId, root, ownedRegionKeys)));
+    }
+  }
+
+  return orphans;
+};
+
+const detectOrphanedMcpEntries = async (options: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<DoctorFinding[]> => {
+  const orphans = await collectAllOrphanedMcpEntries(options);
+  return orphans.map((orphan) => finding({
+    severity: "warning",
+    family: "namespace.stray",
+    code: "namespace.unowned-mcp-entry",
+    message: `Prism-fingerprinted MCP entry '${orphan.serverKey}' in ${orphan.configPath} is outside every owned patch region`,
+    harness: orphan.harness,
+    path: orphan.configPath,
+    fix: "gc",
+    data: { serverKey: orphan.serverKey, regionKey: orphan.regionKey },
+  }));
+};
+
+const runOrphanedMcpEntryFix = async (options: {
+  readonly prismHome: string;
+  readonly harnesses: ReadonlyArray<HarnessId>;
+  readonly scope: HarnessScope;
+  readonly projectPath?: string;
+  readonly roots?: HarnessRootsEnv;
+}): Promise<DoctorFinding[]> => {
+  const orphans = await collectAllOrphanedMcpEntries(options);
+  const findings: DoctorFinding[] = [];
+  for (const orphan of orphans) {
+    const result = await pruneOrphanedMcpEntry(orphan);
+    if (!result.pruned) continue;
+    findings.push(finding({
+      severity: "info",
+      family: "namespace.stray",
+      code: "namespace.mcp-entry-pruned",
+      message: `Pruned orphaned Prism-fingerprinted MCP entry '${result.serverKey}' from ${result.configPath}`,
+      harness: result.harness,
+      path: result.configPath,
+      data: { serverKey: result.serverKey },
+    }));
+  }
   return findings;
 };
 
@@ -2343,6 +2430,15 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
   if (options.fix) {
     findings.push(...(await runSnapshotGcFix(options.prismHome)));
     findings.push(...(await runLaunchdResidueFix(options.prismHome)));
+    findings.push(
+      ...(await runOrphanedMcpEntryFix({
+        prismHome: options.prismHome,
+        harnesses: options.harnesses,
+        scope: options.scope,
+        ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+        roots: options.roots,
+      })),
+    );
   }
 
   for (const harness of options.harnesses) {
@@ -2394,6 +2490,15 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
     })),
   );
   findings.push(...(await detectLaunchdResidue(options.prismHome)));
+  findings.push(
+    ...(await detectOrphanedMcpEntries({
+      prismHome: options.prismHome,
+      harnesses: options.harnesses,
+      scope: options.scope,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+      roots: options.roots,
+    })),
+  );
 
   const pluginInspection = await inspectPlugin(options);
   findings.push(...pluginInspection.findings);

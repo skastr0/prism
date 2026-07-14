@@ -190,7 +190,6 @@ test("owner-targeting gate succeeds when owner targets the consumer harness", as
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }).pipe(Effect.provide(testLayers(sandbox))),
   );
 
@@ -216,7 +215,6 @@ test("owner-targeting gate fails when owner does not target the consumer harness
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }).pipe(Effect.provide(testLayers(sandbox))),
   );
 
@@ -306,7 +304,6 @@ test("cross-plugin canonical tool call round-trip", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      mcpLifecycle: "serve",
     }).pipe(Effect.provide(testLayers(sandbox))),
   );
   expect(ownerResult.failures).toHaveLength(0);
@@ -320,7 +317,6 @@ test("cross-plugin canonical tool call round-trip", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }).pipe(Effect.provide(testLayers(sandbox))),
   );
   expect(consumerResult.failures).toHaveLength(0);
@@ -362,7 +358,6 @@ test("orbit tool_permissions reject unsupported bind field", async () => {
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }).pipe(Effect.provide(testLayers(sandbox))),
   );
 

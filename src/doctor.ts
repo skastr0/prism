@@ -2222,7 +2222,6 @@ const validateDeterminismSelfcheck = async (options: {
       projectPath: options.projectPath,
       prismHome: options.prismHome,
       dryRun: true,
-      mcpLifecycle: "serve",
     });
     const provisioned = options.roots
       ? program.pipe(Effect.provide(Layer.succeed(HarnessRoots, options.roots)))
@@ -2346,7 +2345,6 @@ const runCompileFixes = async (options: DoctorOptions): Promise<{
       projectPath: options.projectPath,
       prismHome: options.prismHome,
       dryRun: false,
-      mcpLifecycle: "serve",
     });
     const provisioned = options.roots
       ? program.pipe(Effect.provide(Layer.succeed(HarnessRoots, options.roots)))

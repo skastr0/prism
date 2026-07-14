@@ -1904,34 +1904,6 @@ test("commands return usage exit code for invalid scope values", async () => {
   expect(result.stderr).toContain("Invalid scope 'banana'");
 });
 
-test("refresh --dry-run and plan reject an explicit --mcp-lifecycle serve as a typed usage conflict (PQ-171)", async () => {
-  // A preview (`--dry-run`, or `plan` which is always a dry run) combined
-  // with an explicit request for a live MCP daemon ("serve") is rejected
-  // before any plugin I/O — same usage-error shape as the `--scope banana`
-  // case above, fired by option normalization, not manifest loading.
-  for (
-    const args of [
-      ["refresh", "--plugin", ".", "--harness", "opencode", "--dry-run", "--mcp-lifecycle", "serve"],
-      ["plan", "--plugin", ".", "--harness", "opencode", "--mcp-lifecycle", "serve"],
-    ]
-  ) {
-    const result = await runCli(args, {});
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain("--dry-run");
-    expect(result.stderr).toContain("--mcp-lifecycle serve");
-  }
-
-  // "none" and "verify" name non-mutating intents and stay compatible with a
-  // dry run — only the explicit mutating-sounding "serve" is rejected.
-  for (const mode of ["none", "verify"]) {
-    const result = await runCli(
-      ["plan", "--plugin", ".", "--harness", "opencode", "--mcp-lifecycle", mode],
-      {},
-    );
-    expect(result.stderr).not.toContain("conflicts with --mcp-lifecycle serve");
-  }
-}, 20_000); // 4 CLI spawns; default 5s timeout is tight under load.
-
 test("refresh compiles Antigravity rules into a generated plugin bundle", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "antigravity-rules-plugin");

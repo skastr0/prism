@@ -100,7 +100,6 @@ test("computeCorpusParamsHash changes when the harness set, scope, project, or r
   const base = {
     harnesses: ["opencode", "claude-code"] as const,
     scope: "global" as const,
-    mcpLifecycle: "none",
     overwrite: false,
     compileOnly: false,
     resolvedRoots: { opencode: "/home/.config/opencode", "claude-code": "/home/.claude" },

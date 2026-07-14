@@ -286,7 +286,6 @@ export const runCompileForHarness = async (options: {
   readonly projectPath?: string;
   readonly prismHome: string;
   readonly root: string;
-  readonly mcpLifecycle?: "none" | "verify" | "serve";
 }): Promise<CompileResult> => {
   const program = compilePluginForTarget({
     pluginPath: options.pluginPath,
@@ -296,7 +295,6 @@ export const runCompileForHarness = async (options: {
     root: options.root,
     prismHome: options.prismHome,
     dryRun: false,
-    mcpLifecycle: options.mcpLifecycle ?? "none",
   });
 
   return Effect.runPromise(
@@ -354,7 +352,6 @@ export const runMatrixRow = async (options: {
           projectPath: options.fixture.projectPath,
           prismHome: sandbox.prismHome,
           root: compileRoot(harnessId),
-          mcpLifecycle: "none",
         }),
       ),
     );

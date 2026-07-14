@@ -127,7 +127,6 @@ export default defineAgent({
       scope: "project",
       projectPath: projectRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }),
   );
 
@@ -210,7 +209,6 @@ test("codex per-plugin shim regions stay independent across plugin compiles", as
         scope: "project",
         projectPath: projectRoot,
         dryRun,
-        mcpLifecycle: "none",
       }),
     );
 
@@ -308,7 +306,6 @@ test("grok per-plugin shim regions stay independent across plugin compiles, and 
         scope: "project",
         projectPath: projectRoot,
         dryRun: false,
-        mcpLifecycle: "none",
       }),
     );
 
@@ -397,14 +394,14 @@ test("grok per-plugin shim regions stay independent across plugin compiles, and 
 
 // ---------------------------------------------------------------------------
 // PQ-171: a scoped --compile-root must never mutate the shared, live MCP
-// daemon registry, regardless of --mcp-lifecycle. Since the UDS/stdio-shim
-// migration (WS6) retired compile-time daemon spawn/stop/restart entirely,
-// this now holds unconditionally -- proven here rather than left "true by
-// luck" the way the pre-WS6 incident (a scratch --compile-root run that
-// restarted a live daemon) found it.
+// daemon registry. Since the UDS/stdio-shim migration (WS6) retired
+// compile-time daemon spawn/stop/restart entirely (removing the
+// --mcp-lifecycle flag itself, REV-003), this now holds unconditionally --
+// proven here rather than left "true by luck" the way the pre-WS6 incident
+// (a scratch --compile-root run that restarted a live daemon) found it.
 // ---------------------------------------------------------------------------
 
-test("a scoped --compile-root compile with mcpLifecycle serve never registers or touches a live daemon (PQ-171)", async () => {
+test("a scoped --compile-root compile never registers or touches a live daemon (PQ-171)", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const compileRoot = join(root, "scratch-compile-root");
@@ -421,7 +418,6 @@ test("a scoped --compile-root compile with mcpLifecycle serve never registers or
       scope: "global",
       root: compileRoot,
       dryRun: false,
-      mcpLifecycle: "serve",
     }),
   );
 
@@ -434,7 +430,7 @@ test("a scoped --compile-root compile with mcpLifecycle serve never registers or
   expect(await getDaemon("lifecycle-scope-plugin", prismHome)).toEqual({ kind: "absent" });
 });
 
-test("--dry-run compile with mcpLifecycle serve writes nothing at all, registry or bundle (PQ-171)", async () => {
+test("--dry-run compile writes nothing at all, registry or bundle (PQ-171)", async () => {
   const root = await createTempRoot();
   const prismHome = join(root, "prism-home");
   const compileRoot = join(root, "scratch-compile-root");
@@ -449,13 +445,11 @@ test("--dry-run compile with mcpLifecycle serve writes nothing at all, registry 
       scope: "global",
       root: compileRoot,
       dryRun: true,
-      mcpLifecycle: "serve",
     }),
   );
 
   // A genuinely side-effect-free plan: neither the generated bundle nor a
-  // daemon registration exists after a dry-run, no matter what
-  // --mcp-lifecycle asked for.
+  // daemon registration exists after a dry-run.
   expect(await exists(prismMcpServerPath(prismHome, "lifecycle-dryrun-plugin"))).toBe(false);
   expect(await getDaemon("lifecycle-dryrun-plugin", prismHome)).toEqual({ kind: "absent" });
 });

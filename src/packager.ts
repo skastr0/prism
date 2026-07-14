@@ -12,10 +12,7 @@ import {
 import { renderPrismCause } from "./errors.js";
 import { readManifest } from "./manifest.js";
 import { normalizeGeneratedPluginName } from "./compile/generated-plugin.js";
-import {
-  planPluginForTarget,
-  type CompileMcpLifecycleMode,
-} from "./compile/pipeline.js";
+import { planPluginForTarget } from "./compile/pipeline.js";
 import type { DesiredFile, DesiredRegion } from "./sync/desired.js";
 import { readPrismProjectConfig } from "./project-config.js";
 import type { HarnessId, HarnessScope } from "./types.js";
@@ -413,7 +410,6 @@ export const packagePluginForTarget = async (
       // the package payload); the plan root doubles as an inert home.
       prismHome: plannedPaths.planRoot,
       dryRun: true,
-      mcpLifecycle: "none" satisfies CompileMcpLifecycleMode,
       packageMode: true,
     }),
   );

@@ -77,8 +77,6 @@ const compileArgs = (pluginDir: string, rootDir: string): string[] => [
   "--compile-only",
   "--compile-root",
   rootDir,
-  "--mcp-lifecycle",
-  "none",
 ];
 
 const setupSandbox = async (

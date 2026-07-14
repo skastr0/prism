@@ -132,8 +132,6 @@ const main = async (): Promise<void> => {
       "--compile-only",
       "--compile-root",
       rootDir,
-      "--mcp-lifecycle",
-      "none",
     ];
 
     const run1 = await run(compileArgs, { env });

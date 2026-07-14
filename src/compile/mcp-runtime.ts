@@ -69,10 +69,6 @@ const runtimeConfigForTarget = (
 export const resolveMcpRuntime = (
   registry: PluginRegistry | undefined,
   targetId: HarnessId,
-  options: {
-    readonly requirePort?: boolean;
-    readonly resolvedPort?: number;
-  } = {},
 ): ResolvedMcpRuntime => {
   const configured = registry ? runtimeConfigForTarget(registry, targetId) : undefined;
   const configuredTransport = (configured as { readonly transport?: unknown } | undefined)?.transport;
@@ -84,8 +80,7 @@ export const resolveMcpRuntime = (
   const transport: McpRuntimeTransport = "streamable-http";
   const host = stringValue(configured?.host) ?? DEFAULT_HTTP_HOST;
   const configuredPort = numberValue(configured?.port);
-  const resolvedPort = numberValue(options.resolvedPort);
-  const port = configuredPort ?? resolvedPort;
+  const port = configuredPort;
   const connectTimeoutMs = positiveIntegerConfigValue(
     configured?.connectTimeoutMs,
     targetId,
@@ -103,16 +98,6 @@ export const resolveMcpRuntime = (
     );
   }
   if (configured?.port !== undefined && configuredPort === undefined) {
-    throw new Error(
-      `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
-    );
-  }
-  if (options.resolvedPort !== undefined && resolvedPort === undefined) {
-    throw new Error(
-      `Streamable HTTP MCP transport for target '${targetId}' requires the resolved MCP runtime port to be an integer from 1 to 65535.`,
-    );
-  }
-  if (options.requirePort === true && (port === undefined || port <= 0 || port > 65535)) {
     throw new Error(
       `Streamable HTTP MCP transport for target '${targetId}' requires plugin.json runtime.mcp.${targetId}.port to be an integer from 1 to 65535.`,
     );

@@ -18,7 +18,6 @@ import {
   BlockedTargetError,
   BundleBuildError,
   isPrismError,
-  McpBundleMissingError,
   PathConflictError,
   PluginManifestError,
   PRISM_ERROR_TAGS,
@@ -99,10 +98,6 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
   new BundleBuildError({
     bundleKind: "MCP server",
     diagnostics: "error: could not resolve './missing.js'",
-  }),
-  new McpBundleMissingError({
-    pluginName: "demo",
-    bundlePath: "/tmp/prism-home/runtime/mcp/demo/server.mjs",
   }),
   new BlockedTargetError({
     targetPath: "/tmp/root/.codex/agents/builder.md",

@@ -146,8 +146,6 @@ export default defineAgent({
       "--compile-root",
       codexRoot,
       "--compile-only",
-      "--mcp-lifecycle",
-      "none",
     ],
     env,
   );

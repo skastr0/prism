@@ -83,7 +83,6 @@ import { sha256Hex } from "../mcp/runtime-metadata.js";
 import {
   generatedMcpServerName,
   mcpExposureProfileForTarget,
-  resolveMcpRuntime,
 } from "./mcp-runtime.js";
 import {
   prismMcpServerPath,
@@ -172,24 +171,11 @@ export interface CompileOptions {
   /** Prism home directory, threaded from the CLI edge (no env fallback). */
   readonly prismHome: string;
   readonly dryRun: boolean;
-  /**
-   * Historical MCP daemon-lifecycle hint (PQ-171). Accepted and threaded
-   * through for CLI/API compatibility, but read nowhere in this pipeline:
-   * since the UDS/stdio-shim migration (WS6, `src/mcp/lifecycle.ts`) compile
-   * never spawns, stops, or restarts a daemon — the shim resolves-or-spawns
-   * lazily, keyed only by `(prismHome, pluginName)`, at harness-invocation
-   * time. `--compile-root` therefore has nothing lifecycle-shaped left to
-   * scope: every value of this field is equally a no-op, for every root.
-   */
-  readonly mcpLifecycle?: CompileMcpLifecycleMode;
   readonly packageMode?: boolean;
   readonly emitWorkflowRefs?: boolean;
   /** Optional per-op progress listener (fires only on real apply, not dry-run). */
   readonly onOp?: SyncOpListener;
 }
-
-/** See `CompileOptions.mcpLifecycle` — currently inert for every value. */
-export type CompileMcpLifecycleMode = "none" | "verify" | "serve";
 
 export interface CompileResult {
   readonly target: string;
@@ -1179,8 +1165,9 @@ const prepareLoweringInputs = (
       hooks: [...accepted],
     };
 
-    // Build (and write) the canonical union bundle BEFORE any daemon
-    // lifecycle interaction so `prism mcp serve` reads compiled bytes.
+    // Build (and write) the canonical union bundle now, so that a later
+    // resolve-or-spawn by the stdio shim (or `prism mcp status`) always
+    // reads fully-compiled bytes from disk, never a partial write.
     const mcpServer = yield* prepareUnionMcpServer({
       compileOptions: options,
       context,

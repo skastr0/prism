@@ -126,7 +126,6 @@ export interface CorpusParamsInput {
   readonly scope: HarnessScope;
   readonly projectPath?: string;
   readonly compileRoot?: string;
-  readonly mcpLifecycle: string;
   readonly overwrite: boolean;
   readonly compileOnly: boolean;
   /** Resolved absolute root directory per requested harness (global or project). */
@@ -145,7 +144,6 @@ export const computeCorpusParamsHash = (input: CorpusParamsInput): string =>
     scope: input.scope,
     projectPath: input.projectPath ?? null,
     compileRoot: input.compileRoot ?? null,
-    mcpLifecycle: input.mcpLifecycle,
     overwrite: input.overwrite,
     compileOnly: input.compileOnly,
     resolvedRoots: input.resolvedRoots,

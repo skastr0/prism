@@ -1,10 +1,10 @@
 /**
  * Acceptance gate: matrix-mcp-disabled (TS-012).
  *
- * Verifies that compile-phase harnesses requiring a Streamable HTTP MCP daemon
- * fail closed when `--mcp-lifecycle none` is used. This keeps daemon lifecycle
- * out of the idempotency matrix (owned by TS-005/TS-006) while documenting the
- * debt surface.
+ * Verifies that compile-phase harnesses requiring a Streamable HTTP MCP
+ * runtime fail closed when no port has been resolved for it. This keeps
+ * daemon lifecycle out of the idempotency matrix (owned by TS-005/TS-006)
+ * while documenting the debt surface.
  *
  * Each row is a harness × compile attempt. The gate exits 0 when every harness
  * fails for the expected MCP-lifecycle reason; run-all.ts registers the rows as
@@ -55,7 +55,6 @@ const runRow = async (harnessId: HarnessId): Promise<Row> => {
         scope: "global",
         prismHome: sandbox.prismHome,
         dryRun: false,
-        mcpLifecycle: "none",
       }).pipe(
         Effect.provide(
           HarnessRootsTest({

@@ -16,7 +16,6 @@
 import { join } from "node:path";
 import { Effect } from "effect";
 import {
-  type CompileMcpLifecycleMode,
   type CompileResult,
   compilePluginForTarget,
 } from "./compile/pipeline.js";
@@ -109,8 +108,6 @@ export interface PlanAllOptions {
   readonly prismHome?: string;
   /** `true` = inspect (no writes); `false` = real refresh. */
   readonly dryRun: boolean;
-  /** Compile-phase MCP lifecycle. Defaults to `none` (safe for inspection). */
-  readonly mcpLifecycle?: CompileMcpLifecycleMode;
   /** Per-op progress listener; fires only when `dryRun` is false. */
   readonly onOp?: SyncOpListener;
   /** Optional harness-root resolver (file-router leg); for sandboxed runs/tests. */
@@ -128,7 +125,6 @@ export interface PlanAllOptions {
 export const planAllForPlugin = async (options: PlanAllOptions): Promise<PluginPlan> => {
   const pluginPath = expandPath(options.pluginPath);
   const prismHome = options.prismHome ?? resolvePrismHome();
-  const mcpLifecycle = options.mcpLifecycle ?? "none";
   const candidates = options.harnesses;
 
   // ── Compile leg: per compile-targeted harness, surveyed independently. ──
@@ -143,7 +139,6 @@ export const planAllForPlugin = async (options: PlanAllOptions): Promise<PluginP
         ...(options.projectPath ? { projectPath: options.projectPath } : {}),
         prismHome,
         dryRun: options.dryRun,
-        mcpLifecycle,
         ...(options.onOp ? { onOp: options.onOp } : {}),
       }),
     );

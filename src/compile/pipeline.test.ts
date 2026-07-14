@@ -5124,7 +5124,6 @@ test("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ig
       scope: "global",
       root: hermesRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }),
   );
   expect(result.operations.length).toBeGreaterThan(0);
@@ -5170,7 +5169,6 @@ test("compilePluginForTarget accepts omitted HTTP MCP ports when no tools bind",
       scope: "global",
       root: hermesRoot,
       dryRun: false,
-      mcpLifecycle: "none",
       emitWorkflowRefs: false,
     }),
   );
@@ -8504,7 +8502,6 @@ export default defineAgent({
       scope: "global",
       root: factoryRoot,
       dryRun: false,
-      mcpLifecycle: "serve",
     }),
   );
 
@@ -8516,7 +8513,6 @@ export default defineAgent({
       scope: "global",
       root: factoryRoot,
       dryRun: false,
-      mcpLifecycle: "none",
     }),
   );
 

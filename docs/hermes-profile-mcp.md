@@ -85,9 +85,10 @@ That split lets multiple Hermes profiles point at the same Prism-managed
 runtime when the generated tool surface is identical.
 
 The CLI root flags are intentionally not interchangeable. In `prism refresh`,
-`--compile-root` means the Hermes profile/config root. In
-`prism mcp serve/status/stop/restart`, lifecycle flags manage only the
-Prism-generated daemon, not the Hermes profile config.
+`--compile-root` means the Hermes profile/config root. `prism mcp status`
+(read-only; `serve`/`stop`/`restart` are retired -- the stdio shim
+resolves-or-spawns and idle-reaps the Prism-generated daemon lazily) observes
+only that daemon, never the Hermes profile config.
 
 ## Ownership, Pruning, and Idempotency
 

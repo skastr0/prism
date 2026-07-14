@@ -138,7 +138,7 @@ This SDK contract is distinct from the related board items named in the originat
 
 - PQ-115 is workflow-internal tool SDK work: tools callable inside workflow execution. This ADR defines the embeddable package and outer execution API. The existing workflow DSL already models tasks, finish criteria, and runtime execution boundaries (`src/workflows.ts:297`, `src/workflows.ts:371`, `src/workflow-runner.ts:1045`).
 - PQ-146 is the CLI npm release channel. This ADR keeps `@skastr0/prism` as the CLI binary package (`packages/npm/prism/package.json:2`, `packages/npm/prism/package.json:26`, `packages/npm/prism/package.json:29`) and adds a separate SDK package.
-- PQ-147 is the prism-workflows projection/plugin track. Existing workflow distribution notes treat prism-workflows-related ideas as building on the workflow toolchain (`docs/workflows/15-toolchain-and-distribution.md:185`, `docs/workflows/15-toolchain-and-distribution.md:186`), while this ADR defines the embeddable SDK package and execution API.
+- PQ-147 is the prism-workflows projection/plugin track. Existing workflow distribution notes (captured to Tower; the design-doc source has since been retired) treat prism-workflows-related ideas as building on the workflow toolchain, while this ADR defines the embeddable SDK package and execution API.
 
 The PQ identifiers above are board-routing labels from the request, not package names or source identifiers.
 

@@ -386,6 +386,16 @@ test("workflow run, update, and resume reject the removed cache bypass flag", as
   }
 });
 
+test("checked-in example workflows do not recommend the removed --no-cache flag", async () => {
+  for (const relativePath of [
+    "examples/prism-harness-qa/workflows/mcp-council.workflow.ts",
+    "examples/prism-harness-qa/workflows/smoke-devin.workflow.ts",
+  ]) {
+    const source = await readFile(join(repoRoot, relativePath), "utf8");
+    expect(source).not.toContain("--no-cache");
+  }
+});
+
 test("workflow runs list applies its limit to newest runs first", async () => {
   const root = await createTempRoot();
   const storePath = join(root, "workflows.sqlite");

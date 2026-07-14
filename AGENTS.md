@@ -1043,7 +1043,7 @@ You are a code review specialist...
 
 ### Workflow Architecture Boundary
 
-Before changing Prism workflows, read `docs/workflows/14-architecture-boundaries.md`.
+Normative guardrail for changes to Prism workflows:
 
 - Workflows consume installed/compiled Prism truth: compile manifests, installed harness artifacts, snapshots, and generated refs.
 - Compiler/install is the only layer that reads plugin source, resolves dependencies, composes traits, and lowers artifacts.

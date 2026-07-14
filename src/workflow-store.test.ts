@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
@@ -121,6 +121,28 @@ describe("workflow store", () => {
     const reopenedDb = new Database(path);
     expect(readUserVersion(reopenedDb)).toBe(WORKFLOW_STORE_SCHEMA_VERSION);
     reopenedDb.close();
+  });
+
+  test("close() checkpoints the WAL instead of leaving it to grow unbounded (WFE-008)", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+    const walPath = `${path}-wal`;
+    const store = await WorkflowStore.open(path);
+    store.createRun("checkpoint-smoke");
+
+    // journal_mode=WAL means the write above landed in the -wal file, not the
+    // main db file — the WAL has content to checkpoint.
+    const walSizeBeforeClose = (await stat(walPath)).size;
+    expect(walSizeBeforeClose).toBeGreaterThan(0);
+
+    store.close();
+
+    // PASSIVE checkpoints every frame it can without contention (this store
+    // is the only connection, so nothing blocks it) into the main file, and
+    // SQLite's own last-connection-closing cleanup truncates the now-fully-
+    // checkpointed WAL back to zero length — the "no orphan WAL" contract.
+    const walSizeAfterClose = (await stat(walPath)).size;
+    expect(walSizeAfterClose).toBe(0);
   });
 
   test("migrates v1 runs and task data through v3 without synthesizing execution evidence", async () => {

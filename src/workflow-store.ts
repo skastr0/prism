@@ -1101,7 +1101,26 @@ export class WorkflowStore {
     }
   }
 
+  // WFE-008: `enableConcurrentWorkflowAccess` puts the store in WAL mode, but
+  // nothing repo-wide ever ran `wal_checkpoint` — relying on SQLite's implicit
+  // last-connection checkpoint left an orphan WAL file to grow unbounded
+  // across runs (observed 3.7MB WAL over a 76KB db). PASSIVE checkpoints
+  // every frame it can without waiting on (or blocking) any other reader or
+  // writer, so a store closed while a *different* process still holds the
+  // same file open (the detached runner + this test process pattern in
+  // workflow-controls.test.ts) never stalls that other connection. TRUNCATE
+  // was tried first and reverted: it can block a concurrent writer past its
+  // busy_timeout, which then fails the *other* process's own query with
+  // "database is locked" — a real regression this file's tests caught. A
+  // checkpoint is still a no-op (never throws) when the store isn't in WAL
+  // mode. Best-effort: a checkpoint that cannot complete must never block
+  // the store from closing.
   close(): void {
+    try {
+      this.db.exec("pragma wal_checkpoint(passive);");
+    } catch {
+      // best-effort by contract — see comment above
+    }
     this.db.close();
   }
 

@@ -1643,7 +1643,21 @@ const planOwnerGeneratedRuntimePlugins = async (
         adapters: planAdaptersForBindings(pluginName, owner.bindings),
         serverBindings: owner.bindings,
         hookRegistrations: [],
-        plugin: input.target.sourcePluginName,
+        // Attribute this owner-mirror bundle to its true owner (pluginName),
+        // never to the consumer whose compile happened to trigger it
+        // (PQ-162). The content is a pure projection of the owner's own
+        // tools/ directory (bindingsFromPluginToolFiles reads straight off
+        // disk, unfiltered by which consumer references what), so every
+        // consumer that depends on this owner — and the owner's own
+        // compile, if it targets OpenCode too — converges on identical
+        // bytes at this exact path. Attributing it to the consumer instead
+        // (as before) meant N different consumers of the same owner each
+        // recorded themselves as sole owner of that owner's bundle, so a
+        // real multi-consumer corpus (prism-plugins) hit PQ-162's
+        // cross-plugin conflict guard on every such fan-in — a false
+        // positive on a legitimately shared, convergent artifact, not the
+        // genuine two-different-authors collision the law targets.
+        plugin: pluginName,
       })),
     );
   }

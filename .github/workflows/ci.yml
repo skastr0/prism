@@ -33,3 +33,48 @@ jobs:
         run: bun run smoke:core
       - name: Smoke npm CLI packages
         run: bun run smoke:npm-cli
+
+  # Full `bun test` suite, separate from `verify` (which only runs the
+  # narrower check:mcp-suites slice) so this job's runtime and pass/fail
+  # state are isolated from verify's. Every `bun test` invocation is already
+  # hygiene-guarded: bunfig.toml's [test] preload (scripts/test-preload.ts)
+  # sandboxes PRISM_HOME into a mkdtemp before any test module loads and
+  # hard-fails if it ever resolves to the real `~/.prism` — the standalone
+  # sha256-snapshot wrapper this replaced was removed in 213f8a3 as
+  # redundant. src/cli.test.ts is excluded: 3 of its Hermes MCP tests assert
+  # the retired HTTP transport and are known-red pre-existing debt (tracked
+  # in REV-003), unrelated to any single PR — same carve-out verify already
+  # makes by never including cli.test.ts in check:mcp-suites.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install
+        run: bun install --frozen-lockfile --cpu='*' --os='*'
+      - name: Guarded test suite
+        run: bun run test:ci
+
+  # Executable acceptance gates (scripts/acceptance/*.ts), distinct from the
+  # bun:test suite above. PRISM_ACCEPTANCE_SKIP reports the three gates that
+  # need the private `~/Projects/prism-plugins` sibling checkout as blocked
+  # rather than crashing this job on a prerequisite this runner structurally
+  # lacks — see acceptance-nightly.yml for the credentialed run that
+  # exercises them for real.
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install
+        run: bun install --frozen-lockfile --cpu='*' --os='*'
+      - name: Build core
+        run: bun run build:core
+      - name: Acceptance gates
+        env:
+          PRISM_ACCEPTANCE_SKIP: idempotency-git,crash-convergence,orbit-workflows
+        run: bun run acceptance:all

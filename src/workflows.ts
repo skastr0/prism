@@ -95,12 +95,25 @@ export type WorkflowPermissionMode =
 
 export type AntigravityWorkflowPermissionMode = Extract<WorkflowPermissionMode, "legacy" | "permissive" | "full-access">;
 
+/**
+ * Per-task override for the executor-level transient-failure retry (WFE-009). Only
+ * classified-transient executor failures (process/idle timeout, unclassified non-zero
+ * exit) are retried; config/load errors and cancellation-barrier outcomes never are.
+ * `maxAttempts` counts total attempts (default 2, i.e. one retry) — the same convention
+ * as the shipped `agy` adapter's own `maxAttempts` option.
+ */
+export interface WorkflowTaskWorkerRetryOptions {
+  readonly maxAttempts?: number;
+  readonly backoffMs?: number;
+}
+
 type WorkflowTaskWorkerOptionsBase = {
   readonly model?: string | WorkflowModelProfileRef;
   readonly modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   readonly profile?: string;
   readonly restrictedTools?: ReadonlyArray<string>;
   readonly processTimeoutMs?: number;
+  readonly retry?: WorkflowTaskWorkerRetryOptions;
 };
 
 export type WorkflowTaskWorkerOptions =

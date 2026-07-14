@@ -1,6 +1,48 @@
 # ADR: Embeddable Prism SDK Contract
 
-Status: proposed, awaiting operator approval.
+Status: ratified as amended 2026-07-13.
+
+## Amendment (2026-07-13)
+
+Ratified with one correction to the Decision below: the published
+three-package orchestration model this ADR proposed (`@skastr0/prism` CLI ->
+a new `@skastr0/prism-sdk` workflow-execution middle layer ->
+`@skastr0/prism-core`) is **rejected**. It did not ship that way and will
+not.
+
+What shipped instead, per commit `dbfa9f8` ("refactor(sdk): rename
+`@skastr0/prism-core` to `@skastr0/prism-sdk`", 2026-07-05): `@skastr0/prism-core`
+was renamed in place to `@skastr0/prism-sdk`. The name this ADR reserved for
+a new workflow-authoring/execution package was consumed by the existing
+contracts package instead — same exports (`compile-manifest`, `refs`,
+`snapshot`, `stable-json`, `mcp/*`; `packages/prism-sdk/package.json`), new
+name only, now at 0.3.5. There is no third package.
+
+The shipped reality is **two** published packages:
+
+- `@skastr0/prism` — the binary CLI (unchanged).
+- `@skastr0/prism-sdk` — contracts, codecs, refs, manifest, and MCP plumbing
+  (the renamed `prism-core`). It carries no workflow-authoring or execution
+  exports: `defineWorkflow`, `defineTask`, and `runWorkflow` do not appear
+  anywhere in `packages/prism-sdk/src`.
+
+The workflow engine this ADR's Decision and v0 Export Surface sections
+describe publishing stays exactly where it already lived: private, in the
+CLI workspace root (`src/index.ts`, `src/workflows.ts`,
+`src/workflow-runner.ts`). CLI-as-single-runtime is a locked prior decision
+(`docs/workflows/15-toolchain-and-distribution.md:44`: "The Prism binary is
+the single runtime and the entire toolchain") that a published middle layer
+would have eroded had this ADR shipped as originally decided.
+
+The Decision, Versioning, and v0 Export Surface sections below describe the
+originally proposed three-package model and are kept for historical record;
+they are **superseded** by this amendment, not current architecture.
+SDK-003 through SDK-005's internal-boundary hardening (runtime portability
+seams, workflow-loader/execution-graph separation, harness detection) stands
+regardless — none of that work depended on the engine being a separately
+published package. SDK-006, which gated the SDK package/release artifact
+this ADR proposed, is superseded/moot: the `@skastr0/prism-sdk` name it
+targeted already shipped, attached to SDK-002's contracts package instead.
 
 ## Context
 
@@ -18,7 +60,7 @@ The direct worker implementations exist for the ten current workflow workers: Am
 
 The current code also separates in-memory execution from CLI file-loading: the CLI imports loader, runner, store, and worker registry modules separately (`src/cli.ts:77`, `src/cli.ts:78`, `src/cli.ts:79`, `src/cli.ts:90`), and the loader owns TypeScript/import-rewrite, Prism-home, project-keyed refs, and freshness concerns (`src/workflow-loader.ts:8`, `src/workflow-loader.ts:13`, `src/workflow-loader.ts:14`, `src/workflow-loader.ts:16`, `src/workflow-loader.ts:17`, `src/workflow-loader.ts:128`, `src/workflow-loader.ts:141`).
 
-## Decision
+## Decision (as originally proposed — superseded, see Amendment above)
 
 Create a new published package named `@skastr0/prism-sdk`.
 
@@ -34,7 +76,7 @@ The dependency direction is:
 
 There is no reverse dependency and no lateral duplication. The CLI consumes the SDK for shared workflow and worker execution logic. Shared logic needed by both CLI and embedders moves into the SDK package. CLI-specific file and presentation behavior stays in the CLI.
 
-## Versioning
+## Versioning (as originally proposed — superseded, see Amendment above)
 
 `@skastr0/prism-sdk`, `@skastr0/prism`, and `@skastr0/prism-core` ship from one repository release train, but they are separate artifacts with separate public contracts. The SDK follows semver for its exported TypeScript/JavaScript API. The CLI follows semver for command behavior and binary packaging. `@skastr0/prism-core` remains the stable lower-level contract package consumed by the SDK.
 
@@ -44,7 +86,7 @@ For v0, publish the SDK at the same version number as the corresponding Prism re
 
 The v0 SDK root is Node-importable, but not every operation is Node-executable. In-memory authoring types and `runWorkflow` can be imported by Node consumers that provide their own executor. Bun-backed operations such as executable discovery, process spawning, and persistent workflow storage fail closed with `WorkflowBunRuntimeUnavailableError` when called outside Bun (`src/workflow-node-compat.test.ts:51`, `src/workflow-node-compat.test.ts:72`, `src/workflow-node-compat.test.ts:91`). Claiming full Node execution parity before replacing those runtime calls with an adapter layer would overstate the current implementation. `@skastr0/prism-core` remains Node-compatible independently because its package declares Node engines and has no Prism CLI dependency (`packages/prism-core/package.json:54`, `packages/prism-core/README.md:12`).
 
-## v0 Export Surface
+## v0 Export Surface (as originally proposed — superseded, see Amendment above)
 
 ### In
 
@@ -106,8 +148,8 @@ The PQ identifiers above are board-routing labels from the request, not package 
 - SDK-003 owns runtime portability seams. Acceptance: public SDK import graph excludes `workflow-store`, `workflow-runtime`, loader/toolchain modules, `typescript`, and `bun:*`; Node-bundled public imports succeed; Bun-only calls throw `WorkflowBunRuntimeUnavailableError`.
 - SDK-004 owns workflow-loader/SDK execution graph separation. Acceptance: in-memory SDK usage runs from outside a Prism project without loader/project-key/tsconfig imports, while CLI file-loading remains covered separately.
 - SDK-005 owns harness detection. Acceptance: startup-safe detection resolves executables without spawning, optional verification probes have explicit timeout/broken statuses, unsupported harness ids throw a named error, and Bun-runtime absence is not misclassified as a broken harness.
-- SDK-006 owns the SDK package/release artifact. It must not move to done until SDK-001 is approved and SDK-002..005 review findings are closed. Its release gate is a clean install of the packed SDK package in a throwaway project, Node import smoke for the public root, Bun execution smoke for Bun-only helpers, `npm pack --dry-run --json` contents review, and registry verification after protected publish.
+- SDK-006 owns the SDK package/release artifact **as originally proposed — superseded/moot per the Amendment above.** The `@skastr0/prism-sdk` name it targeted already shipped, attached to SDK-002's contracts package; there is no separate workflow-execution SDK package left to release.
 
 ## Downstream Gate
 
-No SDK release/package-close work should move to done until an operator records approval for this ADR on the work item. Implementation commits may exist while the ADR is under review, but SDK-006 remains gated on that approval plus closed review findings for SDK-002..005.
+This ADR is ratified as amended (2026-07-13); the operator-approval gate is satisfied, and SDK-002 through SDK-005's internal-boundary hardening proceeds on that basis. SDK-006 does not proceed as originally scoped — it is superseded/moot per the Amendment above.

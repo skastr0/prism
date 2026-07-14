@@ -1,6 +1,6 @@
 # Lowerer Capability Matrix
 
-Checked: 2026-07-13
+Checked: 2026-07-14
 
 Prism keeps two related contracts separate:
 
@@ -24,6 +24,14 @@ patched into a config file.
 | `config-patch` | Prism patches a harness config file and owns only the generated block/table/section. |
 | `unsupported` | Prism intentionally does not manage the surface. |
 
+## Verification Tiers
+
+| Tier | Meaning |
+| --- | --- |
+| `live-proven` | A registered worker adapter dispatched the harness live and a smoke fixture passed end to end. |
+| `compile-verified` | The lowerer compiles and is maintained, but no live worker dispatch has been run against the harness. |
+| `unsupported` | Prism intentionally does not manage the surface (reuses the Surface Kind of the same name). |
+
 ## Matrix
 
 All `generated-mcp` surfaces are per-owning-plugin: each source plugin that
@@ -40,22 +48,29 @@ frontmatter tool names scoped to each server; Cursor and Grok have no native
 per-tool filter and expose the owner's full tool set once its server entry
 exists.
 
-| Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches |
-| --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle |
-| OpenCode | `native-plugin-api` | root markdown | root skills | native plugin tools | native plugin hooks | `opencode.json` agent/plugin entries |
-| OpenClaw | unsupported | unsupported | direct skills | unsupported | unsupported | none |
-| Hermes Agent | unsupported | unsupported | root/profile skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` |
-| Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` |
-| Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` |
-| Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` |
-| Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none |
-| Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` |
-| Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle |
-| Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` |
-| Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none |
-| Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via `config.toml#mcp_servers` region | plugin hooks | `config.toml#mcp_servers` |
-| Devin CLI | unsupported (plugins beta deferred) | unsupported (subagent AGENT.md later) | direct skills | unsupported (PR1) | project `hooks.v1.json` / global `config.json#hooks` members | none (never whole-file `config.json`) |
+| Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches | Verification tier |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle | `live-proven` |
+| OpenCode | `native-plugin-api` | root markdown | root skills | native plugin tools | native plugin hooks | `opencode.json` agent/plugin entries | `live-proven` |
+| OpenClaw | unsupported | unsupported | direct skills | unsupported | unsupported | none | `unsupported` |
+| Hermes Agent | unsupported | unsupported | root/profile skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` | `live-proven` |
+| Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` | `live-proven` |
+| Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` | `live-proven` (live dispatch verified, smoke fixture pending) |
+| Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
+| Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
+| Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` | `compile-verified` |
+| Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle | `compile-verified` |
+| Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
+| Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none | `live-proven` (live dispatch verified, smoke fixture pending) |
+| Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via `config.toml#mcp_servers` region | plugin hooks | `config.toml#mcp_servers` | `live-proven` |
+| Devin CLI | unsupported (plugins beta deferred) | unsupported (subagent AGENT.md later) | direct skills | unsupported (PR1) | project `hooks.v1.json` / global `config.json#hooks` members | none (never whole-file `config.json`) | `live-proven` |
+
+Cursor and Factory Droid are closed at `compile-verified` outright, not pending a
+future live worker: both lowerers are finished and maintained, no
+`workflow-cursor-worker.ts` or `workflow-factory-droid-worker.ts` was ever
+attempted in git history, and the workflow roadmap's ten named dispatch
+targets do not include them. Building live workers for either would be an
+unrequested detour, not a gap to close.
 
 Gemini CLI is not a supported target. Antigravity CLI is the replacement target.
 Active Antigravity outputs still live under Antigravity's official

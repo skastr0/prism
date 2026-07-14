@@ -366,9 +366,12 @@ const listGeneratedBundleDirs = async (bundleRoot: string): Promise<string[]> =>
 // ---- Hermes's hand-rolled YAML (no YAML parser dependency in this codebase
 // — see src/doctor.ts's identical justification for its own copy of this
 // grammar-scoped reader; this is a fresh implementation for this module's
-// independence, not an import of doctor.ts's private helpers). Reads back
-// exactly the fixed-indentation grammar `renderHermesOwnerMcpServerYaml`
-// (src/compile/lowerers/hermes.ts) writes. ----
+// independence, not an import of doctor.ts's private helpers). Reads the
+// mapping/list grammar `renderHermesOwnerMcpServerYaml`
+// (src/compile/lowerers/hermes.ts) emits -- list-valued keys (`args:`,
+// `include:`) are read shape-tolerant (see `yamlSequenceItems`) since Hermes
+// itself re-serializes the file and does not preserve the lowerer's literal
+// indentation. ----
 
 const yamlIndent = (line: string): number => line.length - line.trimStart().length;
 
@@ -415,10 +418,32 @@ const yamlScalarValue = (lines: readonly string[], indent: number, key: string):
   return value.length > 0 ? yamlUnquote(value) : undefined;
 };
 
-const yamlListItems = (lines: readonly string[], indent: number): string[] =>
-  lines
-    .filter((line) => yamlIndent(line) === indent && line.trim().startsWith("- "))
-    .map((line) => yamlUnquote(line.trim().slice(2).trim()));
+/**
+ * Sequence items following `${key}:` at `indent`. YAML block sequences may
+ * sit flush with their key (`args:\n    - mcp`) or indented one level past
+ * it (`args:\n      - mcp`) -- both are the same document to any real YAML
+ * parser. Confirmed live on this machine: Hermes itself re-serializes its
+ * own `config.yaml` on write and normalizes list items to the same column as
+ * `args:`/`include:`, not one level deeper, which is the shape
+ * `renderHermesOwnerMcpServerYaml` (`src/compile/lowerers/hermes.ts`)
+ * literally emits before Hermes ever touches the file. `yamlChildBlock` +
+ * the old `yamlListItems` required the item indent to be strictly deeper
+ * than the key, so they read a real, valid `args: [mcp, shim]` in the
+ * flush-column shape as `[]`. This reader accepts either shape.
+ */
+const yamlSequenceItems = (lines: readonly string[], indent: number, key: string): string[] => {
+  const keyIndex = lines.findIndex((line) => yamlIndent(line) === indent && line.trim() === `${key}:`);
+  if (keyIndex === -1) return [];
+  const items: string[] = [];
+  for (let index = keyIndex + 1; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.trim().length === 0 || line.trim().startsWith("#")) continue;
+    if (yamlIndent(line) < indent) break;
+    if (!line.trim().startsWith("- ")) break;
+    items.push(yamlUnquote(line.trim().slice(2).trim()));
+  }
+  return items;
+};
 
 /** Every `key: <scalar value>` entry at `indent` (bare `key:` lines with no inline value, e.g. a nested mapping's own header, are not scalars and are skipped). */
 const yamlScalarMapping = (lines: readonly string[], indent: number): Record<string, string> => {
@@ -445,10 +470,10 @@ const readHermesServerEntries = async (configPath: string): Promise<NormalizedSe
     const serverBlock = yamlChildBlock(mcpServersBlock, 2, serverKey);
     const command = yamlScalarValue(serverBlock, 4, "command");
     const url = yamlScalarValue(serverBlock, 4, "url");
-    const args = yamlListItems(yamlChildBlock(serverBlock, 4, "args"), 6);
+    const args = yamlSequenceItems(serverBlock, 4, "args");
     const env = yamlScalarMapping(yamlChildBlock(serverBlock, 4, "env"), 6);
     const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
-    const allowlist = yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8);
+    const allowlist = yamlSequenceItems(toolsBlock, 6, "include");
     entries.push({ configPath, serverKey, command, args, env, allowlist, url });
   }
   return entries;

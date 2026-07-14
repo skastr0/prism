@@ -22,6 +22,7 @@ import {
   makeAgent,
   makeOrbit,
   makeRegistry,
+  makeTool,
 } from "./test-support.js";
 
 let home: string;
@@ -196,6 +197,35 @@ describe("compile manifest writer", () => {
     expect(manifest.modelspaces["forge:models"]?.profilesData?.unreferenced).toEqual({
       opencode: { model: "unreferenced-opencode" },
     });
+  });
+
+  test("projects a declared tool authority class into the manifest (PQ-075)", () => {
+    const reg = registry();
+    addToRegistry(reg, {
+      tools: [
+        makeTool({ name: "run_shell", authority: "mutatesExternalState" }),
+        makeTool({ name: "read_file" }), // undeclared — migration default
+      ],
+    });
+
+    const manifest = buildCompileManifestForTarget({
+      base: emptyCompileManifest(),
+      registry: reg,
+      target: "opencode",
+      scope: "project",
+      composed: [agent("builder", "a".repeat(64), ["run_shell", "read_file"])],
+      cacheDescriptors: new Map([["builder", descriptorFor("builder", "a".repeat(64))]]),
+    });
+
+    expect(manifest.tools?.["forge:run_shell"]).toEqual({
+      plugin: "forge",
+      name: "run_shell",
+      authority: "mutatesExternalState",
+    });
+    // undeclared tools omit the field entirely rather than fabricate a
+    // default — the field stays absent until a tool source opts in.
+    expect(manifest.tools?.["forge:read_file"]).toEqual({ plugin: "forge", name: "read_file" });
+    expect(JSON.stringify(manifest.tools?.["forge:read_file"])).not.toContain("authority");
   });
 
   test("commit/read round-trips deterministically and corrupt files quarantine", async () => {

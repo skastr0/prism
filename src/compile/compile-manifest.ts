@@ -341,6 +341,7 @@ const deriveTraitsForManifest = (
 
 const deriveToolsForManifest = (
   agents: Readonly<Record<string, CompileManifestAgent>>,
+  registries: ReadonlyMap<string, PluginRegistry>,
 ): Record<string, CompileManifestCanonicalTool | CompileManifestToolspaceTool> => {
   const toolAccum: Record<
     string,
@@ -375,9 +376,15 @@ const deriveToolsForManifest = (
         name: acc.name,
       };
     } else if (acc.name) {
+      // PQ-075: project the declared side-effect authority, when the
+      // source registry declares one. Undeclared tools omit the field
+      // (default-then-require migration — see ToolAuthoritySchema) so
+      // existing plugins that predate this field are unaffected.
+      const authority = registries.get(acc.plugin)?.tools.get(acc.name)?.authority;
       tools[key] = {
         plugin: acc.plugin,
         name: acc.name,
+        ...(authority ? { authority } : {}),
       };
     }
   }
@@ -500,7 +507,7 @@ export const buildCompileManifestForTarget = (options: {
 
   const traits = deriveTraitsForManifest(agents);
 
-  const tools = deriveToolsForManifest(agents);
+  const tools = deriveToolsForManifest(agents, collectPluginRegistries(options.registry));
 
   const orbits = deriveOrbitsForManifest({
     base: options.base,

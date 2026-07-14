@@ -15,7 +15,9 @@
  */
 
 import { Schema } from "effect";
+import { ToolAuthoritySchema, type ToolAuthority } from "@skastr0/prism-sdk/compile-manifest";
 
+export type { ToolAuthority };
 export const TargetId = Schema.String;
 export type TargetId = typeof TargetId.Type;
 
@@ -1454,6 +1456,10 @@ export const CanonicalToolSchema = Schema.Struct({
   output: Schema.Unknown,
   slots: Schema.optional(Schema.Record({ key: Schema.String, value: ToolSlotSchema })),
   handle: Schema.Any,
+  // PQ-075: side-effect authority (readOnly | mutatesExternalState |
+  // mutatesHarnessConfig | startsDaemon | requiresHumanApproval). Optional
+  // during the default-then-require migration — see ToolAuthoritySchema.
+  authority: Schema.optional(ToolAuthoritySchema),
 });
 export type CanonicalToolInput = typeof CanonicalToolSchema.Type;
 export const ToolSourceSchema = CanonicalToolSchema;
@@ -1467,6 +1473,7 @@ export class CanonicalTool extends Schema.Class<CanonicalTool>("CanonicalTool")(
   output: Schema.Unknown,
   slots: Schema.Record({ key: Schema.String, value: ToolSlotSchema }),
   handle: Schema.Any,
+  authority: Schema.optional(ToolAuthoritySchema),
 }) {}
 
 // ---------------------------------------------------------------------------

@@ -2758,6 +2758,7 @@ const parseCanonicalTool = (sourcePath: string): Effect.Effect<CanonicalTool, Co
       output: parsed.output,
       slots: parsed.slots ?? {},
       handle: parsed.handle,
+      authority: parsed.authority,
     });
   });
 

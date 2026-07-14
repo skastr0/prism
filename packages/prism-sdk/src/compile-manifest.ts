@@ -93,9 +93,27 @@ export const CompileManifestOrbitSchema = Schema.Struct({
 });
 export type CompileManifestOrbit = typeof CompileManifestOrbitSchema.Type;
 
+/**
+ * Side-effect authority class for a canonical tool (PQ-075). Migration is
+ * default-then-require: declaration is optional today (undeclared tools omit
+ * the field, both in tool source and in this manifest projection, so no
+ * existing plugin corpus is broken by adding this type); a follow-on glyph
+ * makes declaration mandatory (hard error, per AGENTS invariant 6) once
+ * enforcement (preset fail-closed gating, dry-run surfacing) lands.
+ */
+export const ToolAuthoritySchema = Schema.Literal(
+  "readOnly",
+  "mutatesExternalState",
+  "mutatesHarnessConfig",
+  "startsDaemon",
+  "requiresHumanApproval",
+);
+export type ToolAuthority = typeof ToolAuthoritySchema.Type;
+
 export const CompileManifestCanonicalToolSchema = Schema.Struct({
   plugin: Schema.String,
   name: Schema.String,
+  authority: Schema.optional(ToolAuthoritySchema),
 });
 export type CompileManifestCanonicalTool = typeof CompileManifestCanonicalToolSchema.Type;
 

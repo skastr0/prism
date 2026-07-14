@@ -11,6 +11,14 @@
  *   - a gate script that crashes or prints no parseable summary is gate
  *     infrastructure breakage -> exit 1.
  *
+ * `PRISM_ACCEPTANCE_SKIP` (comma-separated gate names, e.g.
+ * "idempotency-git,crash-convergence") reports a gate as blocked WITHOUT
+ * spawning it — for gates whose prerequisites this environment structurally
+ * lacks (the `~/Projects/prism-plugins` sibling checkout; an installed,
+ * authenticated real harness CLI). CI's PR-blocking job sets this for the
+ * gates that need either; local/nightly runs leave it unset and every gate
+ * runs for real, unchanged from today.
+ *
  * Progress goes to stderr; stdout carries ONLY the final JSON summary.
  *
  * Usage: bun scripts/acceptance/run-all.ts
@@ -55,6 +63,34 @@ interface ParsedSummary {
   readonly gates?: unknown;
 }
 
+export const parseSkipList = (raw: string | undefined): ReadonlySet<string> =>
+  new Set(
+    (raw ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0),
+  );
+
+/**
+ * `expected` is always reported as `null` here, regardless of the gate's
+ * normal declared expectation — a skipped gate proves nothing either way,
+ * and `main`'s regression/trackedDebt filters only special-case `pass`
+ * against a non-null `expected`; feeding through `entry.expected` for a
+ * "PASS"-expected gate would make its `pass: null` count as a regression
+ * (`expected === "PASS" && pass !== true`), defeating the whole point of
+ * skipping. The gate's normal expectation still appears in `blocked` for a
+ * human reader.
+ */
+export const blockedSkipRow = (name: string, normallyExpected: "PASS" | "FAIL" | null): GateRow => ({
+  gate: name,
+  pass: null,
+  expected: null,
+  blocked:
+    `skipped via PRISM_ACCEPTANCE_SKIP (normally expected ${normallyExpected ?? "no fixed expectation"}) — ` +
+    "needs a prerequisite this environment lacks (the ~/Projects/prism-plugins sibling checkout, or an " +
+    "installed and authenticated real harness CLI); run locally to exercise this gate for real",
+});
+
 /** The gate scripts print human progress lines first and a pretty-printed JSON summary last. */
 const parseTrailingJson = (stdout: string): ParsedSummary | undefined => {
   const text = stdout.trimEnd();
@@ -96,8 +132,14 @@ const rowsFromSummary = (
   ];
 };
 
+const SKIPPED_GATES = parseSkipList(process.env.PRISM_ACCEPTANCE_SKIP);
+
 const runGateScript = async (entry: GateScript): Promise<GateRow[]> => {
   const name = entry.script.replace(/\.ts$/u, "");
+  if (SKIPPED_GATES.has(name)) {
+    console.error(`[run-all] skipping ${entry.script} (PRISM_ACCEPTANCE_SKIP)`);
+    return [blockedSkipRow(name, entry.expected)];
+  }
   console.error(`[run-all] running ${entry.script} ...`);
   const proc = Bun.spawn({
     cmd: ["bun", join(ACCEPTANCE_DIR, entry.script), ...(entry.args ?? [])],
@@ -131,16 +173,34 @@ const runGateScript = async (entry: GateScript): Promise<GateRow[]> => {
   return rowsFromSummary(summary, name, entry.expected);
 };
 
+/**
+ * Exit contract per the header comment: a `pass: null` row (blocked, incl.
+ * a `PRISM_ACCEPTANCE_SKIP` skip) never affects `regressions`/`trackedDebt`
+ * because both filters require a non-null `expected` from the row itself —
+ * which is exactly why `blockedSkipRow` always reports `expected: null`
+ * rather than passing through the gate's normal expectation.
+ */
+export const summarizeGates = (
+  rows: ReadonlyArray<GateRow>,
+): {
+  readonly regressions: ReadonlyArray<GateRow>;
+  readonly trackedDebt: ReadonlyArray<GateRow>;
+  readonly flipCandidates: ReadonlyArray<GateRow>;
+  readonly blocked: ReadonlyArray<GateRow>;
+} => ({
+  regressions: rows.filter((row) => row.expected === "PASS" && row.pass !== true),
+  trackedDebt: rows.filter((row) => row.expected === "FAIL" && row.pass === false),
+  flipCandidates: rows.filter((row) => row.expected === "FAIL" && row.pass === true),
+  blocked: rows.filter((row) => row.pass === null),
+});
+
 const main = async (): Promise<void> => {
   const rows: GateRow[] = [];
   for (const entry of GATE_SCRIPTS) {
     rows.push(...(await runGateScript(entry)));
   }
 
-  const regressions = rows.filter((row) => row.expected === "PASS" && row.pass !== true);
-  const trackedDebt = rows.filter((row) => row.expected === "FAIL" && row.pass === false);
-  const flipCandidates = rows.filter((row) => row.expected === "FAIL" && row.pass === true);
-  const blocked = rows.filter((row) => row.pass === null);
+  const { regressions, trackedDebt, flipCandidates, blocked } = summarizeGates(rows);
 
   const summary = {
     schema: "prism.acceptance.run-all.v1",
@@ -165,4 +225,6 @@ const main = async (): Promise<void> => {
   process.exitCode = regressions.length === 0 ? 0 : 1;
 };
 
-await main();
+if (import.meta.main) {
+  await main();
+}

@@ -1,0 +1,53 @@
+name: Acceptance (full, nightly)
+
+# Runs every acceptance gate for real, including the three that ci.yml's
+# `acceptance` job reports as blocked via PRISM_ACCEPTANCE_SKIP:
+# idempotency-git, crash-convergence, and orbit-workflows. Each needs a real
+# `~/Projects/prism-plugins` sibling checkout (the private first-party plugin
+# corpus) — idempotency-git/crash-convergence for its `atomic-commits` fixture
+# plugin, orbit-workflows for the full corpus. This runner checks out that
+# repo as a true sibling directory next to `prism`, matching each gate's own
+# `resolve(homedir(), "Projects", "prism-plugins")` / `resolve(REPO_ROOT, "..",
+# "prism-plugins")` resolution.
+#
+# Requires a repo secret: PRISM_PLUGINS_DEPLOY_KEY — an SSH deploy key
+# (read-only is sufficient) granted on skastr0/prism-plugins. Add it under
+# Settings -> Secrets and variables -> Actions before this workflow can pass;
+# until then every run fails at the "Checkout prism-plugins" step, not
+# silently.
+on:
+  schedule:
+    - cron: "17 6 * * *" # 06:17 UTC daily
+  workflow_dispatch:
+
+jobs:
+  acceptance-full:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout prism-plugins
+        uses: actions/checkout@v6
+        with:
+          repository: skastr0/prism-plugins
+          ssh-key: ${{ secrets.PRISM_PLUGINS_DEPLOY_KEY }}
+          path: prism-plugins
+
+      - name: Checkout prism
+        uses: actions/checkout@v6
+        with:
+          path: prism
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install
+        working-directory: prism
+        run: bun install --frozen-lockfile --cpu='*' --os='*'
+
+      - name: Build core
+        working-directory: prism
+        run: bun run build:core
+
+      - name: Acceptance gates (unskipped)
+        working-directory: prism
+        run: bun run acceptance:all

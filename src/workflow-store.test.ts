@@ -93,6 +93,7 @@ describe("workflow store", () => {
     const root = await createTempRoot();
     const path = join(root, "workflows.sqlite");
     const store = await WorkflowStore.open(path);
+    expect(store.schemaNotice).toBeNull();
     store.close();
 
     const db = new Database(path);
@@ -178,11 +179,24 @@ describe("workflow store", () => {
       expect.objectContaining({ taskId: "build", output: { summary: "preserved" } }),
     ]);
     expect(store.listRunTaskAttempts("v1-run")).toEqual([]);
+    // Soft-divergence surfacing (WFE-007): a pre-existing store opened below the binary's
+    // current schema version reports the migration it just applied.
+    expect(store.schemaNotice).toEqual({
+      severity: "info",
+      openedVersion: 1,
+      currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+      message: `Workflow store at ${path} was schema version 1; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
+    });
     store.close();
 
     const inspected = new Database(path);
     expect(readUserVersion(inspected)).toBe(WORKFLOW_STORE_SCHEMA_VERSION);
     inspected.close();
+
+    // Once migrated, the store is at the current version — no further notice on reopen.
+    const reopened = await WorkflowStore.open(path);
+    expect(reopened.schemaNotice).toBeNull();
+    reopened.close();
   });
 
   test("migrates v2 attempt spend and cache reuse to canonical v3 usage totals idempotently", async () => {
@@ -285,6 +299,12 @@ describe("workflow store", () => {
       { tokensIn: 4, tokensOut: 6, costUsd: 0.6, durationMs: 200, costReporting: "full" },
     ]);
     expect(store.compactRunSummary("v2-run")?.totals.usage).toEqual(expectedUsage);
+    expect(store.schemaNotice).toEqual({
+      severity: "info",
+      openedVersion: 2,
+      currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+      message: `Workflow store at ${path} was schema version 2; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
+    });
     store.close();
 
     const inspected = new Database(path);
@@ -299,6 +319,7 @@ describe("workflow store", () => {
       { tokensIn: 10, tokensOut: 2, costUsd: 0.4, durationMs: 100, costReporting: "full" },
       { tokensIn: 4, tokensOut: 6, costUsd: 0.6, durationMs: 200, costReporting: "full" },
     ]);
+    expect(reopened.schemaNotice).toBeNull();
     reopened.close();
   });
 
@@ -340,6 +361,14 @@ describe("workflow store", () => {
 
     const store = await WorkflowStore.open(path);
 
+    // Pre-existing file, never stamped with a user_version — schemaVersion reads as 0, and
+    // migrating a pre-existing store still counts as soft divergence (WFE-007).
+    expect(store.schemaNotice).toEqual({
+      severity: "info",
+      openedVersion: 0,
+      currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+      message: `Workflow store at ${path} was schema version 0; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
+    });
     expect(store.listRuns()).toEqual([
       expect.objectContaining({ runId: "bad-run", workflow: "legacy", status: "failed", terminalCause: null, finishedAt: expect.any(String), createdAt: expect.any(String) }),
       expect.objectContaining({ runId: "empty-run", workflow: "legacy", status: "unknown", terminalCause: null, finishedAt: null, createdAt: expect.any(String) }),
@@ -363,6 +392,7 @@ describe("workflow store", () => {
     migratedDb.close();
 
     const reopened = await WorkflowStore.open(path);
+    expect(reopened.schemaNotice).toBeNull();
     expect(reopened.listRuns()).toEqual(migratedRuns);
     expect(reopened.listRunTasks("ok-run")).toEqual([
       expect.objectContaining({

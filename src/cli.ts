@@ -73,7 +73,7 @@ import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, paddedTableColumns, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
-import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord } from "./workflow-store.js";
+import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord, type WorkflowStoreSchemaNotice } from "./workflow-store.js";
 import {
   listRegisteredWorkflowStores,
   registerWorkflowStore,
@@ -847,13 +847,18 @@ const collectWorkflowRunsAcrossRegisteredStores = async (options: {
 }): Promise<{
   readonly entries: ReadonlyArray<WorkflowStoreRegistryEntry>;
   readonly runs: ReadonlyArray<WorkflowRunRecord & { readonly storePath: string }>;
+  readonly schemaNotices: ReadonlyArray<WorkflowStoreSchemaNotice & { readonly storePath: string }>;
 }> => {
   const entries = listRegisteredWorkflowStores(resolvePrismHome());
   const runs: Array<WorkflowRunRecord & { readonly storePath: string }> = [];
+  const schemaNotices: Array<WorkflowStoreSchemaNotice & { readonly storePath: string }> = [];
   for (const entry of entries) {
     let crossStore: WorkflowStore | undefined;
     try {
       crossStore = await WorkflowStore.open(entry.path);
+      if (crossStore.schemaNotice !== null) {
+        schemaNotices.push({ ...crossStore.schemaNotice, storePath: entry.path });
+      }
       if (options.failStaleAfterMs !== undefined) {
         crossStore.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -866,7 +871,7 @@ const collectWorkflowRunsAcrossRegisteredStores = async (options: {
       crossStore?.close();
     }
   }
-  return { entries, runs };
+  return { entries, runs, schemaNotices };
 };
 
 // Newest-first by createdAt, using plain code-point comparison (not localeCompare, which is
@@ -948,7 +953,7 @@ workflowRuns
     try {
       const cutoffMs = resolveRunsCutoffMs(options);
       if (options.all === true) {
-        const { entries, runs: rawRuns } = await collectWorkflowRunsAcrossRegisteredStores({
+        const { entries, runs: rawRuns, schemaNotices } = await collectWorkflowRunsAcrossRegisteredStores({
           cutoffMs,
           failStaleAfterMs: options.failStaleAfterMs,
         });
@@ -958,10 +963,12 @@ workflowRuns
         await writeStdout(`${JSON.stringify({
           stores: entries.length,
           runs: options.limit !== undefined ? runs.slice(0, options.limit) : runs,
+          ...(schemaNotices.length > 0 ? { storeSchemaNotices: schemaNotices } : {}),
         }, null, 2)}\n`);
         return;
       }
-      store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
+      const storePath = resolveWorkflowStorePath(options.store);
+      store = await WorkflowStore.open(storePath);
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -973,7 +980,10 @@ workflowRuns
         })
         .reverse()
         .map((run) => ({ ...run, cause: workflowRunCauseTag(run) }));
-      console.log(JSON.stringify({ runs: runs.slice(0, options.limit) }, null, 2));
+      console.log(JSON.stringify({
+        runs: runs.slice(0, options.limit),
+        ...(store.schemaNotice !== null ? { storeSchemaNotice: store.schemaNotice } : {}),
+      }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs list failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
@@ -1111,6 +1121,7 @@ workflowRuns
         ...(runnerLogPath !== undefined ? { runnerLogPath } : {}),
         taskSummary: store.summarizeRunTasks(runId).map(withoutOrdinal),
         tasks: store.listRunTasks(runId).map(withoutOrdinal),
+        ...(store.schemaNotice !== null ? { storeSchemaNotice: store.schemaNotice } : {}),
       }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs show failed");

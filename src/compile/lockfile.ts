@@ -37,6 +37,15 @@ export interface PrismLock {
 
 const LOCKFILE_NAME = "prism.lock";
 
+// PQ-071 compatibility note: widening `collectSourcePaths` below to also hash
+// `registry.tools` / `registry.hooks` is additive -- `LockfileSource` /
+// `LockfileEntry` / `PrismLock` keep their existing shape, so a lockfile
+// written before this fix still parses. It is simply stale (missing any
+// tool/hook entries), and the hash comparison in `writeLockfile` already
+// treats a stale `sources` list as a mismatch against the freshly computed
+// one, so the next non-dry-run compile silently regenerates it. No
+// `version` bump, and no separate migration path, is needed.
+
 const comparableLockShape = (lock: PrismLock | Omit<PrismLock, "generatedAt">) => ({
   version: lock.version,
   root: lock.root,
@@ -64,6 +73,13 @@ const collectRegistries = (root: PluginRegistry): ReadonlyArray<PluginRegistry> 
   return ordered;
 };
 
+// Trait-materialized synthetic tool contracts (see `materializeTraitTools` in
+// protocol-tools.ts) are intentionally not hashed as their own source below.
+// Their generated content is fully determined by the canonical tool they wrap
+// (`registry.tools`, included below) and the owning trait's slot-filling
+// attachment (`registry.traits`, already included) -- both already change
+// this hash when their source changes, so the derived contract is covered
+// without a separate lockfile entry.
 const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => {
   const paths = [
     ...registry.identities.values(),
@@ -73,6 +89,8 @@ const collectSourcePaths = (registry: PluginRegistry): ReadonlyArray<string> => 
     ...registry.skillspaces.values(),
     ...registry.skills.values(),
     ...registry.traits.values(),
+    ...registry.tools.values(),
+    ...registry.hooks.values(),
     ...registry.orbits.values(),
     ...registry.agents.values(),
   ].map((source) => source.sourcePath);

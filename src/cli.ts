@@ -47,6 +47,13 @@ import {
   type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
+import {
+  computeCorpusHash,
+  computeCorpusParamsHash,
+  matchesCorpusMemo,
+  readCorpusMemo,
+  writeCorpusMemo,
+} from "./compile/corpus-memo.js";
 import { topologicallySortedPlugins } from "./plugin-order.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
 import {
@@ -2453,6 +2460,32 @@ async function runRefreshDirectoryCommand(
   const { validPlugins, invalidPlugins } = await loadPluginManifests(pluginPaths);
   if (!options.json) printRefreshDirectoryManifestResults(validPlugins, invalidPlugins);
 
+  // PQ-090: skip the whole per-plugin desired-tree rebuild when this exact
+  // corpus + harness/scope/project selection already converged last time.
+  // See src/compile/corpus-memo.ts for the measurement and the tradeoff.
+  const memoEligible = corpusMemoAttemptEligible(mode, options, validPlugins, invalidPlugins);
+  const prismHome = resolvePrismHome();
+  const memoKey = memoEligible
+    ? await resolveCorpusMemoKey(options, harnesses, validPlugins)
+    : null;
+
+  if (memoKey && !options.clean) {
+    const memo = await readCorpusMemo(prismHome, expandedDir);
+    if (matchesCorpusMemo(memo, memoKey.corpusHash, memoKey.paramsHash)) {
+      await printCorpusMemoHit({
+        mode,
+        options,
+        pluginPaths,
+        validPlugins,
+        invalidPlugins,
+        harnesses,
+        prismHome,
+        corpusHash: memoKey.corpusHash,
+      });
+      return;
+    }
+  }
+
   const { results, workflowRefsReport } = await refreshValidPlugins(validPlugins, {
     harnesses,
     scope: options.scope,
@@ -2466,6 +2499,18 @@ async function runRefreshDirectoryCommand(
     clean: options.clean,
     json: options.json,
   });
+
+  if (
+    memoKey &&
+    results.every((result) => result.success) &&
+    !workflowRefsReportHasFailures(workflowRefsReport)
+  ) {
+    await writeCorpusMemo(prismHome, expandedDir, {
+      corpusHash: memoKey.corpusHash,
+      paramsHash: memoKey.paramsHash,
+      pluginCount: validPlugins.length,
+    });
+  }
 
   if (options.json) {
     console.log(JSON.stringify({
@@ -2505,6 +2550,139 @@ async function runRefreshDirectoryCommand(
       ? "\n✅ All plugin plans completed successfully!"
       : "\n✅ All plugin refreshes completed successfully!",
   );
+}
+
+/**
+ * PQ-090 corpus-hash memo eligibility. The memo only ever applies to a real
+ * `refresh --plugins` invocation (never `plan`, which must always show a
+ * live diff, and never `--dry-run`, which is explicitly a preview) over a
+ * fully valid corpus (a broken manifest means there's nothing safe to
+ * memoize).
+ */
+function corpusMemoAttemptEligible(
+  mode: RefreshMode,
+  options: NormalizedRefreshOptions,
+  validPlugins: ReadonlyArray<LoadedPlugin>,
+  invalidPlugins: ReadonlyArray<InvalidPluginManifest>,
+): boolean {
+  return (
+    mode === "refresh" &&
+    !options.dryRun &&
+    invalidPlugins.length === 0 &&
+    validPlugins.length > 0
+  );
+}
+
+async function resolveCorpusMemoKey(
+  options: NormalizedRefreshOptions,
+  harnesses: HarnessId[],
+  validPlugins: ReadonlyArray<LoadedPlugin>,
+): Promise<{ readonly corpusHash: string; readonly paramsHash: string }> {
+  const resolvedRoots = Object.fromEntries(
+    harnesses.map((harnessId) => [
+      harnessId,
+      resolveHarnessRoot(getHarness(harnessId), options.scope, options.project),
+    ]),
+  );
+
+  const corpusHash = await computeCorpusHash({
+    pluginPaths: validPlugins.map((plugin) => plugin.pluginPath),
+    prismVersion,
+  });
+  const paramsHash = computeCorpusParamsHash({
+    harnesses,
+    scope: options.scope,
+    projectPath: options.project,
+    compileRoot: options.compileRoot,
+    mcpLifecycle: options.mcpLifecycle,
+    overwrite: options.overwrite,
+    compileOnly: options.compileOnly,
+    resolvedRoots,
+  });
+
+  return { corpusHash, paramsHash };
+}
+
+function hadCompileTargetsForHarnesses(
+  validPlugins: ReadonlyArray<LoadedPlugin>,
+  harnesses: ReadonlyArray<HarnessId>,
+): boolean {
+  return validPlugins.some(({ manifest }) =>
+    harnesses.some((harnessId) => manifestHasCompileTargets(manifest, harnessId)),
+  );
+}
+
+/**
+ * Replays a converged corpus-hash memo hit: every plugin is known (by
+ * corpus-hash proof, not re-derivation) to be exactly as the last fully
+ * successful refresh left it, so the per-plugin load/resolve/lower/diff
+ * loop is skipped entirely. This intentionally does not fabricate granular
+ * per-file operations for a run that never happened -- callers get an
+ * honest, clearly-flagged `corpusMemo` marker instead of a full replay of
+ * file-level detail (see corpus-memo.ts for the tradeoff this accepts).
+ */
+async function printCorpusMemoHit(input: {
+  readonly mode: RefreshMode;
+  readonly options: NormalizedRefreshOptions;
+  readonly pluginPaths: string[];
+  readonly validPlugins: LoadedPlugin[];
+  readonly invalidPlugins: InvalidPluginManifest[];
+  readonly harnesses: HarnessId[];
+  readonly prismHome: string;
+  readonly corpusHash: string;
+}): Promise<void> {
+  const { mode, options, pluginPaths, validPlugins, invalidPlugins, harnesses, prismHome, corpusHash } = input;
+
+  const results: PluginRefreshResult[] = validPlugins.map((plugin) => ({
+    pluginPath: plugin.pluginPath,
+    name: plugin.manifest.name,
+    success: true,
+    reports: [],
+    compileResults: [],
+    errors: [],
+    backups: [],
+  }));
+
+  const workflowRefsReport = hadCompileTargetsForHarnesses(validPlugins, harnesses)
+    ? await syncWorkflowRefsForProject({
+      prismHome,
+      ...(options.project ? { projectPath: options.project } : {}),
+    })
+    : null;
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      schema: "prism.plan.collection.v1",
+      mode,
+      plugins: results.map((result) => pluginResultJsonEnvelope(mode, result)),
+      ...(workflowRefsReport ? { workflowRefs: workflowRefsJsonEnvelope(workflowRefsReport) } : {}),
+      invalidPlugins: [],
+      corpusMemo: { hit: true, corpusHash, pluginCount: validPlugins.length },
+    }, null, 2));
+    if (workflowRefsReportHasFailures(workflowRefsReport)) {
+      exitWith(EXIT_CODES.domainFailure);
+    }
+    return;
+  }
+
+  console.log(
+    `\n⚡ Corpus unchanged since last converged refresh (memo hit, hash ${corpusHash.slice(0, 12)}) — skipped ${validPlugins.length} plugin refresh(es).`,
+  );
+  if (workflowRefsReport) printWorkflowRefsReport(workflowRefsReport, "   ");
+
+  const hasFailures = printRefreshDirectorySummary({
+    pluginPaths,
+    validPlugins,
+    invalidPlugins,
+    results,
+  });
+
+  if (hasFailures || workflowRefsReportHasFailures(workflowRefsReport)) {
+    console.log(`\n⚠️  Some plugins failed validation, compile, or refresh`);
+    exitWith(EXIT_CODES.domainFailure);
+  }
+
+  console.log("\n✅ All plugin refreshes completed successfully!");
 }
 
 function printRefreshDirectoryDiscovery(

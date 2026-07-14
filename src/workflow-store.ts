@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { stableJsonStringify, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
+import { stableJsonHash, stableJsonStringify, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
 import { ensureDir } from "./fs.js";
 import { deriveProjectKey } from "./project-key.js";
 import type { WorkflowJudgeVerdict } from "./workflows.js";
@@ -487,7 +487,36 @@ export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process
 export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
-export const WORKFLOW_STORE_SCHEMA_VERSION = 3;
+export const WORKFLOW_STORE_SCHEMA_VERSION = 4;
+
+/**
+ * AR-001: the task-cache resource identity used to key `workflow_task_records`
+ * is a GLOBAL content-addressed id — `(scopeKey, stableKey, semanticHash)` —
+ * decoupled from the producing workflow, mirroring the `agent_runs` ledger
+ * design (docs/workflows/08-agentrun-ledger-spec.md, captured then deleted at
+ * 794f151; `git show ccc32a1:docs/workflows/08-agentrun-ledger-spec.md`).
+ * `scopeKey` is a fixed namespace constant for now — external caller-chosen
+ * scoping, `agent-run://` addressing, lineage, and world_refs are AR-002+
+ * (out of scope here). `stableKey` folds `(taskId, cacheKey)` and
+ * `semanticHash` folds `(promptHash, agentManifestHash)`, so identical
+ * agent+prompt+schema+harness+model content yields the same resource id
+ * regardless of which workflow produced it, while every dimension the old
+ * 5-column primary key ANDed together still participates in the new one —
+ * no existing per-workflow cache hit stops hitting.
+ */
+const WORKFLOW_TASK_CACHE_SCOPE_KEY = "workflow-task-cache-v1";
+
+interface WorkflowTaskResourceKey {
+  readonly scopeKey: string;
+  readonly stableKey: string;
+  readonly semanticHash: string;
+}
+
+const workflowTaskResourceKey = (identity: WorkflowTaskIdentity): WorkflowTaskResourceKey => ({
+  scopeKey: WORKFLOW_TASK_CACHE_SCOPE_KEY,
+  stableKey: stableJsonHash({ taskId: identity.taskId, cacheKey: identity.cacheKey }),
+  semanticHash: stableJsonHash({ promptHash: identity.promptHash, agentManifestHash: identity.agentManifestHash }),
+});
 
 const WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES = 64 * 1024;
 
@@ -1034,6 +1063,126 @@ const migrateWorkflowStoreToVersion3 = (db: WorkflowDatabase): void => {
         runId,
       );
     }
+    db.exec("pragma user_version = 3;");
+  })();
+};
+
+interface LegacyWorkflowTaskRecordRow {
+  readonly workflow: string;
+  readonly task_id: string;
+  readonly cache_key: string;
+  readonly prompt_hash: string;
+  readonly agent_manifest_hash: string;
+  readonly agent_plugin: string;
+  readonly agent_name: string;
+  readonly status: string;
+  readonly output_json: string;
+  readonly metadata_json: string | null;
+  readonly output_source: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+/**
+ * AR-001: migrate `workflow_task_records` from the workflow-scoped primary
+ * key `(workflow, task_id, cache_key, prompt_hash, agent_manifest_hash)` to
+ * the global content-addressed `(scope_key, stable_key, semantic_hash)` — see
+ * `workflowTaskResourceKey` above. SQLite cannot alter a primary key in
+ * place, so this rebuilds the table and replays every existing row through
+ * the same resource-key derivation the runtime now uses, applying the exact
+ * mock-output-override upsert rule `recordCompleted` applies at runtime (see
+ * below) so a legacy dataset that already contains two rows which collide
+ * under the new global key resolves identically to two live writers racing
+ * on the same key today. Some pre-v1-complete ledgers (and hand-built test
+ * fixtures that stamp `user_version` directly) never created
+ * `workflow_task_records` at all, so the source table is optional — its
+ * absence just means there is nothing to replay.
+ */
+const migrateWorkflowStoreToVersion4 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    const legacyTableExists = db.query<{ readonly name: string }, []>(`
+      select name from sqlite_master where type = 'table' and name = 'workflow_task_records'
+    `).get() !== null;
+    const legacyRows = legacyTableExists
+      ? db.query<LegacyWorkflowTaskRecordRow, []>(`
+          select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
+                 agent_plugin, agent_name, status, output_json, metadata_json, output_source, created_at, updated_at
+          from workflow_task_records
+          order by created_at asc, rowid asc
+        `).all()
+      : [];
+
+    db.exec(`
+      create table workflow_task_records_ar001_v4 (
+        scope_key text not null,
+        stable_key text not null,
+        semantic_hash text not null,
+        workflow text not null,
+        task_id text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        status text not null,
+        output_json text not null,
+        metadata_json text,
+        output_source text,
+        created_at text not null default (datetime('now')),
+        updated_at text not null default (datetime('now')),
+        primary key (scope_key, stable_key, semantic_hash)
+      );
+    `);
+
+    const insert = db.query(`
+      insert into workflow_task_records_ar001_v4 (
+        scope_key, stable_key, semantic_hash, workflow, task_id, cache_key,
+        prompt_hash, agent_manifest_hash, agent_plugin, agent_name, status,
+        output_json, metadata_json, output_source, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(scope_key, stable_key, semantic_hash)
+      do update set
+        agent_plugin = excluded.agent_plugin,
+        agent_name = excluded.agent_name,
+        status = excluded.status,
+        output_json = excluded.output_json,
+        metadata_json = excluded.metadata_json,
+        output_source = excluded.output_source,
+        updated_at = excluded.updated_at
+      where workflow_task_records_ar001_v4.output_source = 'mock-output'
+        and excluded.output_source is null
+    `);
+
+    for (const row of legacyRows) {
+      const key = workflowTaskResourceKey({
+        workflow: row.workflow,
+        taskId: row.task_id,
+        cacheKey: row.cache_key,
+        promptHash: row.prompt_hash,
+        agentManifestHash: row.agent_manifest_hash,
+      });
+      insert.run(
+        key.scopeKey,
+        key.stableKey,
+        key.semanticHash,
+        row.workflow,
+        row.task_id,
+        row.cache_key,
+        row.prompt_hash,
+        row.agent_manifest_hash,
+        row.agent_plugin,
+        row.agent_name,
+        row.status,
+        row.output_json,
+        row.metadata_json,
+        row.output_source,
+        row.created_at,
+        row.updated_at,
+      );
+    }
+
+    db.exec("drop table if exists workflow_task_records;");
+    db.exec("alter table workflow_task_records_ar001_v4 rename to workflow_task_records;");
     db.exec(`pragma user_version = ${WORKFLOW_STORE_SCHEMA_VERSION};`);
   })();
 };
@@ -1094,6 +1243,9 @@ export class WorkflowStore {
       if (schemaVersion <= 2) {
         migrateWorkflowStoreToVersion3(db);
       }
+      if (schemaVersion <= 3) {
+        migrateWorkflowStoreToVersion4(db);
+      }
       return new WorkflowStore(db);
     } catch (error) {
       db.close();
@@ -1107,23 +1259,20 @@ export class WorkflowStore {
 
   getCompleted(identity: WorkflowTaskIdentity, options: { readonly allowMockSourced?: boolean } = {}): CompletedWorkflowTaskRecord | null {
     const allowMockSourced = options.allowMockSourced === true;
-    const row = this.db.query<TaskRecordRow, [string, string, string, string, string]>(`
+    const key = workflowTaskResourceKey(identity);
+    const row = this.db.query<TaskRecordRow, [string, string, string]>(`
       select workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
              agent_plugin, agent_name, status, output_json, metadata_json, output_source, created_at, updated_at
       from workflow_task_records
-      where workflow = ?
-        and task_id = ?
-        and cache_key = ?
-        and prompt_hash = ?
-        and agent_manifest_hash = ?
+      where scope_key = ?
+        and stable_key = ?
+        and semantic_hash = ?
         and status = 'completed'
         ${allowMockSourced ? "" : "and (output_source is null or output_source != 'mock-output')"}
     `).get(
-      identity.workflow,
-      identity.taskId,
-      identity.cacheKey,
-      identity.promptHash,
-      identity.agentManifestHash,
+      key.scopeKey,
+      key.stableKey,
+      key.semanticHash,
     );
     if (!row) return null;
     return {
@@ -2477,12 +2626,13 @@ export class WorkflowStore {
     readonly outputSource?: WorkflowTaskOutputSource;
   }): void {
     const metadata = normalizeWorkflowSessionMetadata(input.metadata);
+    const key = workflowTaskResourceKey(input.identity);
     this.db.query(`
       insert into workflow_task_records (
-        workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
+        scope_key, stable_key, semantic_hash, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
         agent_plugin, agent_name, status, output_json, metadata_json, output_source, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, datetime('now'))
-      on conflict(workflow, task_id, cache_key, prompt_hash, agent_manifest_hash)
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, datetime('now'))
+      on conflict(scope_key, stable_key, semantic_hash)
       do update set
         agent_plugin = excluded.agent_plugin,
         agent_name = excluded.agent_name,
@@ -2494,6 +2644,9 @@ export class WorkflowStore {
       where workflow_task_records.output_source = 'mock-output'
         and excluded.output_source is null
     `).run(
+      key.scopeKey,
+      key.stableKey,
+      key.semanticHash,
       input.identity.workflow,
       input.identity.taskId,
       input.identity.cacheKey,

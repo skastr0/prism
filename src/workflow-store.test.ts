@@ -379,6 +379,91 @@ describe("workflow store", () => {
     reopenedDb.close();
   });
 
+  test("migrates a pre-AR-001 v3 task-cache fixture to the global content-addressed schema cleanly", async () => {
+    const root = await createTempRoot();
+    const path = join(root, "workflows.sqlite");
+    const db = new Database(path);
+    db.exec(`
+      create table workflow_runs (
+        run_id text primary key,
+        workflow text not null,
+        status text not null default 'running',
+        finished_at text,
+        handoff_token text,
+        runner_pid integer,
+        heartbeat_at text,
+        terminal_cause_json text,
+        usage_agent_runs integer not null default 0,
+        usage_reused integer not null default 0,
+        usage_tokens_in real not null default 0,
+        usage_tokens_out real not null default 0,
+        usage_cost_usd real not null default 0,
+        usage_duration_ms real not null default 0,
+        created_at text not null default (datetime('now'))
+      );
+      create table workflow_task_records (
+        workflow text not null,
+        task_id text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        status text not null,
+        output_json text not null,
+        metadata_json text,
+        output_source text,
+        created_at text not null default (datetime('now')),
+        updated_at text not null default (datetime('now')),
+        primary key (workflow, task_id, cache_key, prompt_hash, agent_manifest_hash)
+      );
+      insert into workflow_task_records (
+        workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
+        agent_plugin, agent_name, status, output_json
+      ) values (
+        'legacy-v3-workflow', 'build', 'builder-cache', '${"a".repeat(64)}', '${"b".repeat(64)}',
+        'forge', 'builder', 'completed', '{"summary":"pre-migration"}'
+      );
+      pragma user_version = 3;
+    `);
+    db.close();
+
+    const legacyIdentity = {
+      workflow: "legacy-v3-workflow",
+      taskId: "build",
+      cacheKey: "builder-cache",
+      promptHash: "a".repeat(64),
+      agentManifestHash: "b".repeat(64),
+    };
+
+    const store = await WorkflowStore.open(path);
+    expect(store.getCompleted(legacyIdentity)).toMatchObject({ output: { summary: "pre-migration" } });
+    expect(store.listCompletedCache()).toEqual([
+      expect.objectContaining({ identity: legacyIdentity, output: { summary: "pre-migration" } }),
+    ]);
+    store.close();
+
+    const migratedDb = new Database(path);
+    expect(readUserVersion(migratedDb)).toBe(WORKFLOW_STORE_SCHEMA_VERSION);
+    const columns = migratedDb.query<{ readonly name: string }, []>("pragma table_info(workflow_task_records);").all()
+      .map((column) => column.name);
+    expect(columns).toEqual(expect.arrayContaining(["scope_key", "stable_key", "semantic_hash"]));
+    const resourceKeyRow = migratedDb.query<{
+      readonly scope_key: string;
+      readonly stable_key: string;
+      readonly semantic_hash: string;
+    }, []>("select scope_key, stable_key, semantic_hash from workflow_task_records").get();
+    expect(resourceKeyRow?.scope_key).toBeTruthy();
+    expect(resourceKeyRow?.stable_key).toBeTruthy();
+    expect(resourceKeyRow?.semantic_hash).toBeTruthy();
+    migratedDb.close();
+
+    const reopened = await WorkflowStore.open(path);
+    expect(reopened.getCompleted(legacyIdentity)).toMatchObject({ output: { summary: "pre-migration" } });
+    expect(readUserVersion(new Database(path))).toBe(WORKFLOW_STORE_SCHEMA_VERSION);
+    reopened.close();
+  });
+
   test("does not backfill active running runs with caught failed task rows", async () => {
     const root = await createTempRoot();
     const path = join(root, "workflows.sqlite");
@@ -1513,6 +1598,77 @@ describe("workflow store", () => {
       agentManifestHash: identity.agentManifestHash,
     }).map((entry) => entry.metadata)).toEqual([contractMetadata]);
     expect(store.listCompletedCache({ cacheKey: "missing-cache" })).toEqual([]);
+    store.close();
+  });
+
+  test("AR-001 regression: an unchanged workflow still hits its own prior cache entry by identity", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const workflow = createWorkflow();
+    const task = workflow.tasks[0]!;
+    const identity = workflowTaskIdentity(workflow.name, task);
+
+    store.recordCompleted({
+      identity,
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
+      output: { summary: "first run" },
+      metadata: contractMetadata,
+    });
+
+    // Recomputing identity for the exact same workflow/task a second time
+    // (as a fresh `runWorkflow` invocation would) must still resolve to the
+    // same stored row — the workflow-scoped lookup path is unchanged.
+    const secondLookupIdentity = workflowTaskIdentity(workflow.name, task);
+    expect(secondLookupIdentity).toEqual(identity);
+    expect(store.getCompleted(secondLookupIdentity)).toMatchObject({ output: { summary: "first run" } });
+    store.close();
+  });
+
+  test("AR-001 golden vector: same agent+prompt+schema+harness+model yields the same resource id across different workflow files", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const task = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build the slice.",
+      output: Output,
+      cacheKey: "builder-cache",
+      worker: { worker: "grok", model: "grok-build" },
+    });
+    const workflowA = defineWorkflow({ name: "workflow-file-a", tasks: [task] as const });
+    const workflowB = defineWorkflow({ name: "workflow-file-b", tasks: [task] as const });
+    const identityA = workflowTaskIdentity(workflowA.name, task);
+    const identityB = workflowTaskIdentity(workflowB.name, task);
+
+    // The old workflow-scoped identity differs across the two workflow files...
+    expect(identityA.workflow).not.toBe(identityB.workflow);
+    expect(identityA).not.toEqual(identityB);
+    // ...while the semantic content (agent+prompt+schema+harness+model) is identical.
+    expect(identityA.promptHash).toBe(identityB.promptHash);
+    expect(identityA.agentManifestHash).toBe(identityB.agentManifestHash);
+
+    store.recordCompleted({
+      identity: identityA,
+      agent: { plugin: task.agent.plugin, name: task.agent.name },
+      output: { summary: "produced by workflow-file-a" },
+      metadata: contractMetadata,
+    });
+
+    // workflow-file-b never wrote this resource, yet its own identity resolves
+    // to the SAME global content-addressed row: a completed run is now a
+    // free-standing resource reusable across workflow files, decoupled from
+    // the workflow that produced it.
+    expect(store.getCompleted(identityB)).toMatchObject({
+      output: { summary: "produced by workflow-file-a" },
+      metadata: contractMetadata,
+    });
+
+    // A third workflow whose task differs only by prompt text must NOT
+    // collide — the global id is content-addressed, not workflow-name-addressed.
+    const differentTask = defineTask({ ...task, prompt: "Build a different slice." });
+    const workflowC = defineWorkflow({ name: "workflow-file-c", tasks: [differentTask] as const });
+    expect(store.getCompleted(workflowTaskIdentity(workflowC.name, differentTask))).toBeNull();
+
     store.close();
   });
 

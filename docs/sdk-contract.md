@@ -84,7 +84,7 @@ For v0, publish the SDK at the same version number as the corresponding Prism re
 
 ## Runtime Support
 
-The v0 SDK root is Node-importable, but not every operation is Node-executable. In-memory authoring types and `runWorkflow` can be imported by Node consumers that provide their own executor. Bun-backed operations such as executable discovery, process spawning, and persistent workflow storage fail closed with `WorkflowBunRuntimeUnavailableError` when called outside Bun (`src/workflow-node-compat.test.ts:51`, `src/workflow-node-compat.test.ts:72`, `src/workflow-node-compat.test.ts:91`). Claiming full Node execution parity before replacing those runtime calls with an adapter layer would overstate the current implementation. `@skastr0/prism-core` remains Node-compatible independently because its package declares Node engines and has no Prism CLI dependency (`packages/prism-core/package.json:54`, `packages/prism-core/README.md:12`).
+The v0 SDK root is Node-importable, but not every operation is Node-executable. In-memory authoring types and `runWorkflow` can be imported by Node consumers that provide their own executor. Bun-backed operations such as executable discovery, process spawning, and persistent workflow storage fail closed with `WorkflowBunRuntimeUnavailableError` when called outside Bun (`src/workflow-node-compat.test.ts:51`, `src/workflow-node-compat.test.ts:72`, `src/workflow-node-compat.test.ts:91`). Claiming full Node execution parity before replacing those runtime calls with an adapter layer would overstate the current implementation. `@skastr0/prism-sdk` (the renamed `prism-core`) remains Node-compatible independently because its package declares Node engines and has no Prism CLI dependency (`packages/prism-sdk/package.json:74`, `packages/prism-sdk/README.md:12`).
 
 ## v0 Export Surface (as originally proposed — superseded, see Amendment above)
 
@@ -144,7 +144,7 @@ The PQ identifiers above are board-routing labels from the request, not package 
 
 ## Downstream Execution Contract
 
-- SDK-002 (`@skastr0/prism-core`) owns the lower-level package artifact. Acceptance: `bun run build:core`, `npm pack --dry-run --workspace packages/prism-core`, packed-tarball install/import smoke for every exported subpath, CI `verify` builds core before root typecheck, and the protected publish workflow includes `packages/prism-core`.
+- SDK-002 (`@skastr0/prism-sdk`, renamed from `prism-core`) owns the lower-level package artifact. Acceptance: `bun run build:core`, `npm pack --dry-run --workspace packages/prism-sdk`, packed-tarball install/import smoke for every exported subpath, CI `verify` builds core before root typecheck, and the protected publish workflow includes `packages/prism-sdk`.
 - SDK-003 owns runtime portability seams. Acceptance: public SDK import graph excludes `workflow-store`, `workflow-runtime`, loader/toolchain modules, `typescript`, and `bun:*`; Node-bundled public imports succeed; Bun-only calls throw `WorkflowBunRuntimeUnavailableError`.
 - SDK-004 owns workflow-loader/SDK execution graph separation. Acceptance: in-memory SDK usage runs from outside a Prism project without loader/project-key/tsconfig imports, while CLI file-loading remains covered separately.
 - SDK-005 owns harness detection. Acceptance: startup-safe detection resolves executables without spawning, optional verification probes have explicit timeout/broken statuses, unsupported harness ids throw a named error, and Bun-runtime absence is not misclassified as a broken harness.

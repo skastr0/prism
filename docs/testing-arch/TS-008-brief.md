@@ -3,10 +3,10 @@
 ## Core design questions
 
 1. **What does "snapshot format migration" mean when only version 1 exists?**  
-   `packages/prism-core/src/snapshot.ts` already declares a "versioned union" and promises forward migration in code, but the union has only one member. TS-008 must decide whether to build the migration seam now (an identity function for v1 plus a rejection path for unknown versions) or to defer it until a second version is designed.
+   `packages/prism-sdk/src/snapshot.ts` already declares a "versioned union" and promises forward migration in code, but the union has only one member. TS-008 must decide whether to build the migration seam now (an identity function for v1 plus a rejection path for unknown versions) or to defer it until a second version is designed.
 
 2. **Where does migration belong?**  
-   The decode boundary is in `prism-core`, while persistence is in `src/state/store.ts`. Migration could live in either layer. The question is whether `store.ts` should see only the latest shape, or whether it should own the "read old → write new" transformation.
+   The decode boundary is in `prism-sdk` (renamed from prism-core), while persistence is in `src/state/store.ts`. Migration could live in either layer. The question is whether `store.ts` should see only the latest shape, or whether it should own the "read old → write new" transformation.
 
 3. **What is the boundary between state-store tests and sync-engine tests?**  
    `src/sync/sync.test.ts` already covers owned/shared regions, degraded ownership, crash convergence, prune scoping, and backup-on-drift. TS-008 must avoid turning the state store tests into a second sync-engine test suite.
@@ -20,12 +20,12 @@
 ## Recommended approach
 
 1. **Build the migration seam now, even though only v1 exists.**
-   - Add `migrateSnapshotManifest(unknown) → Either<ParseError, SnapshotManifest>` in `packages/prism-core/src/snapshot.ts`.
+   - Add `migrateSnapshotManifest(unknown) → Either<ParseError, SnapshotManifest>` in `packages/prism-sdk/src/snapshot.ts`.
    - Keep it as the identity for v1 today; reserve a shape for v2→v1 when that version is designed.
    - Wire it into `readSnapshot` and `gcSnapshots` so the store never sees non-latest shapes.
    - This honors the existing comment in `snapshot.ts` and makes the tests meaningful instead of testing a phantom migration.
 
-2. **Keep migration in `prism-core`, not `store.ts`.**
+2. **Keep migration in `prism-sdk` (renamed from prism-core), not `store.ts`.**
    - Migration is a pure, fs-free shape transform; it belongs next to the schema.
    - `store.ts` should remain a dumb persistence layer: decode → migrate → quarantine on Left.
 
@@ -59,7 +59,7 @@
 
 ## Concrete first file or function to create/modify
 
-**First change:** Create `packages/prism-core/src/snapshot.test.ts` and add `migrateSnapshotManifest` to `packages/prism-core/src/snapshot.ts`.
+**First change:** Create `packages/prism-sdk/src/snapshot.test.ts` and add `migrateSnapshotManifest` to `packages/prism-sdk/src/snapshot.ts`.
 
 - The function starts as a thin wrapper around the existing v1 decode: `unknown → Either<ParseError, SnapshotManifest>`.
 - The new test file proves v1 encode→decode round-trip, wrong/missing version → Left, and sorted determinism.

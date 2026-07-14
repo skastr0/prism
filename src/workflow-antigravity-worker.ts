@@ -181,7 +181,11 @@ const preflightAgyCommand = async (input: {
     throw error;
   }
 };
-const AGY_PRINT_TIMEOUT_PATTERN = /(?:^|\n)Error:\s*timed out waiting for response\s*$/iu;
+// Both wordings observed live: agy in the wild emits "Error: timeout waiting
+// for response" (dominant Jul-9 failure class, WFE-005) while older builds and
+// our own failure message use "timed out". The sentinel must match both or the
+// retry path never fires.
+const AGY_PRINT_TIMEOUT_PATTERN = /(?:^|\n)Error:\s*(?:timed out|timeout) waiting for response\s*$/iu;
 
 export const detectAgyPrintTimeout = (stdout: string, stderr: string): boolean =>
   AGY_PRINT_TIMEOUT_PATTERN.test(stdout.trim()) || AGY_PRINT_TIMEOUT_PATTERN.test(stderr.trim());

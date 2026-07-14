@@ -40,6 +40,19 @@ describe("detectAgyPrintTimeout", () => {
     expect(detectAgyPrintTimeout("Error: timed out waiting for response", "stderr warning after stdout")).toBe(true);
     expect(detectAgyPrintTimeout("stdout warning before stderr", "Error: timed out waiting for response")).toBe(true);
   });
+
+  // Live-observed wording (WFE-005): agy in the wild emits "timeout" (no "-ed",
+  // no space), not the "timed out" wording above. Both must match so the retry
+  // path fires — this exact string was the dominant Jul-9 failure class.
+  test("matches the live-observed 'timeout waiting for response' wording", () => {
+    expect(detectAgyPrintTimeout("notice\nError: timeout waiting for response\n", "")).toBe(true);
+    expect(detectAgyPrintTimeout("", "Error: timeout waiting for response")).toBe(true);
+    expect(detectAgyPrintTimeout("ERROR: Timeout Waiting For Response", "")).toBe(true);
+  });
+
+  test("does not match the live wording when it is not at the end", () => {
+    expect(detectAgyPrintTimeout("Error: timeout waiting for response\nmore text", "")).toBe(false);
+  });
 });
 
 describe("buildAgyArgs", () => {

@@ -12,6 +12,7 @@ import {
 } from "./workflow-devin-worker.js";
 import { DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES } from "./workflow-worker-metadata.js";
 import { WorkflowPermissionError } from "./workflow-permissions.js";
+import type { StableSessionId } from "./workflow-session.js";
 
 const failureTask = {
   kind: "workflow-task" as const,
@@ -148,6 +149,96 @@ describe("workflow-devin-worker", () => {
         Buffer.byteLength("devin exited with 9: ", "utf8") +
           DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES,
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("non-zero exit attaches adapter + stderr excerpt to the thrown error (OBS-006)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
+    try {
+      const fakeDevin = join(root, "fake-devin.mjs");
+      await writeFile(
+        fakeDevin,
+        [
+          "#!/usr/bin/env node",
+          "console.error('devin: session quota exceeded');",
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+      );
+      await chmod(fakeDevin, 0o755);
+
+      const error = await captureDevinFailure(fakeDevin, root);
+      expect(error.metadata?.adapter).toBe("devin");
+      expect(error.metadata?.stderrExcerpt).toContain("devin: session quota exceeded");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("captures the session id from a partial ATIF export before a non-zero exit (OBS-006)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
+    try {
+      const fakeDevin = join(root, "fake-devin.mjs");
+      await writeFile(
+        fakeDevin,
+        [
+          "#!/usr/bin/env node",
+          "import { writeFileSync } from 'node:fs';",
+          "const args = process.argv.slice(2);",
+          "const exportIndex = args.indexOf('--export');",
+          "writeFileSync(args[exportIndex + 1], JSON.stringify({ session_id: 'devin-partial-session', steps: [] }));",
+          "console.error('devin: crashed mid-turn');",
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+      );
+      await chmod(fakeDevin, 0o755);
+
+      const error = await captureDevinFailure(fakeDevin, root);
+      expect(error.metadata?.adapter).toBe("devin");
+      expect(error.metadata?.sessionId).toBe("devin-partial-session");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the known continuation session id when no ATIF export was written (OBS-006)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-devin-worker-test-"));
+    try {
+      const fakeDevin = join(root, "fake-devin.mjs");
+      await writeFile(
+        fakeDevin,
+        [
+          "#!/usr/bin/env node",
+          "console.error('devin: internal error');",
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+      );
+      await chmod(fakeDevin, 0o755);
+
+      const failure = await runDevinWorkflowTask(failureTask, {
+        cwd: root,
+        bin: fakeDevin,
+        resolvedPermission: "permissive",
+        processTimeoutMs: 5_000,
+        repair: {
+          mode: "native-continuation",
+          continuation: { adapter: "devin", sessionId: "prior-session-id" as StableSessionId },
+          attempt: 1,
+          criterion: "output-json-parse",
+          repairPrompt: "Return valid JSON.",
+        },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(DevinWorkflowWorkerError);
+      const metadata = (failure as DevinWorkflowWorkerError).metadata;
+      expect(metadata?.sessionId).toBe("prior-session-id");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

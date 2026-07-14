@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
@@ -23,6 +23,12 @@ const defaultKimiCodeHome = (): string =>
 
 export class KimiWorkflowWorkerError extends Error {
   override readonly name = "KimiWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 const KIMI_AUTH_OUTPUT_PATTERN =
@@ -163,22 +169,49 @@ export const runKimiWorkflowTask = async (
     earlyExitPatterns: KIMI_AUTH_PROMPT_PATTERNS,
   });
   if (aborted) {
-    throw new KimiWorkflowWorkerError("kimi-code was aborted by Prism workflow stop");
+    throw new KimiWorkflowWorkerError(
+      "kimi-code was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
+    );
   }
   if (earlyExit === "kimi-oauth-login-required") {
-    throw new KimiWorkflowWorkerError(kimiAuthErrorMessage);
+    throw new KimiWorkflowWorkerError(
+      kimiAuthErrorMessage,
+      workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
+    );
   }
   if (timedOut) {
-    throw new KimiWorkflowWorkerError(`kimi-code exceeded Prism process timeout after ${processTimeoutMs}ms`);
+    throw new KimiWorkflowWorkerError(
+      `kimi-code exceeded Prism process timeout after ${processTimeoutMs}ms`,
+      workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
+    );
   }
   if (exitCode !== 0 && isKimiAuthOutput(`${stdout}\n${stderr}`)) {
-    throw new KimiWorkflowWorkerError(kimiAuthErrorMessage);
+    throw new KimiWorkflowWorkerError(
+      kimiAuthErrorMessage,
+      workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
+    );
   }
   if (exitCode !== 0) {
-    throw new KimiWorkflowWorkerError(`kimi-code exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+    throw new KimiWorkflowWorkerError(
+      `kimi-code exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
+    );
+  }
+  let kimiText: string;
+  try {
+    kimiText = parseKimiStreamJsonOutput(stdout);
+  } catch (error) {
+    if (error instanceof KimiWorkflowWorkerError) {
+      throw new KimiWorkflowWorkerError(
+        error.message,
+        workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
+      );
+    }
+    throw error;
   }
   return {
-    output: parseWorkflowWorkerJsonOutput(parseKimiStreamJsonOutput(stdout)),
+    output: parseWorkflowWorkerJsonOutput(kimiText),
     metadata: {
       adapter: "kimi-code",
       prompted: true,

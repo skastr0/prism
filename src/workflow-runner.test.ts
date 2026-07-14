@@ -1672,6 +1672,99 @@ console.log(JSON.stringify(result));
     expect(["a", "c", "fusion"].map((id) => byId.get(id)?.status)).toEqual(["completed", "completed", "completed"]);
   });
 
+  test("carries a worker adapter's failure metadata into the event and the persisted store row (OBS-006)", async () => {
+    // Before OBS-006, a hard executor failure discarded everything the adapter attached to its
+    // error (stderrExcerpt/stderrTruncated/sessionId/adapter) down to bare contract metadata —
+    // in both the task.executor.failed event and the persisted workflow_run_tasks row. Every
+    // worker adapter's custom Error now carries this on a `metadata` property; assert the
+    // runner actually reads it back out in both places.
+    class FakeAdapterError extends Error {
+      readonly metadata: Record<string, unknown>;
+      constructor(message: string, metadata: Record<string, unknown>) {
+        super(message);
+        this.metadata = metadata;
+      }
+    }
+    const failureMetadata = {
+      adapter: "codex-cli",
+      stderrBytes: 11,
+      stderrSha256: "deadbeef",
+      stderrExcerpt: "boom detail",
+      stderrTruncated: false,
+      sessionId: "sess-obs-006",
+    };
+
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-obs-006-"));
+    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+    try {
+      const build = defineTask({ id: "build", agent: builder, prompt: "Build the slice.", output: PatchReport });
+      const workflow = defineWorkflow({ name: "runner-obs-006-failure-metadata", tasks: [build] as const });
+
+      await expect(runWorkflow(workflow, {
+        store,
+        executeTask: async () => {
+          throw new FakeAdapterError("codex exited with 1: boom detail", failureMetadata);
+        },
+      })).rejects.toThrow("codex exited with 1: boom detail");
+
+      const runId = store.listRuns()[0]?.runId;
+      expect(runId).toBeDefined();
+
+      const persistedTask = store.listRunTasks(runId!).find((row) => row.taskId === "build");
+      expect(persistedTask?.metadata).toMatchObject(failureMetadata);
+
+      const failedEvent = store.listRunEvents(runId!).find((event) => event.type === "task.executor.failed");
+      expect(failedEvent?.payload).toMatchObject(failureMetadata);
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("carries a worker adapter's failure metadata into an isolated fan-out result's metadata (OBS-006)", async () => {
+    // The dynamic/isolated path (Effect.either(wf.runTask(...))) settles a failed task into
+    // WorkflowRunTaskResult via failedTaskResult — a second, separate call site from the one
+    // above that also used to drop error.metadata down to bare contract metadata.
+    class FakeAdapterError extends Error {
+      readonly metadata: Record<string, unknown>;
+      constructor(message: string, metadata: Record<string, unknown>) {
+        super(message);
+        this.metadata = metadata;
+      }
+    }
+    const leaf = (id: string) => defineTask({ id, agent: builder, prompt: `Run ${id}.`, output: PatchReport });
+    const [a, b] = [leaf("a"), leaf("b")];
+    const workflow = defineWorkflow({
+      name: "runner-obs-006-isolated-failure-metadata",
+      run: (wf) => Effect.gen(function* () {
+        const outcomes = yield* Effect.all([a, b].map((task) => Effect.either(wf.runTask(task))), { concurrency: "unbounded" });
+        return { leaves: outcomes.map((outcome) => Either.isRight(outcome) ? "ok" : "failed") };
+      }),
+    });
+
+    const result = await runWorkflow(workflow, {
+      executeTask: async (task) => {
+        if (task.id === "b") {
+          throw new FakeAdapterError("grok exited with 1: session lost", {
+            adapter: "grok-cli",
+            stderrExcerpt: "session lost",
+            sessionId: "grok-isolated-sess",
+          });
+        }
+        return { summary: "ok" };
+      },
+    });
+
+    expect(result.output).toEqual({ leaves: ["ok", "failed"] });
+    const failed = result.tasks.find((task) => task.id === "b");
+    expect(failed?.status).toBe("failed");
+    expect(failed?.metadata).toMatchObject({
+      adapter: "grok-cli",
+      stderrExcerpt: "session lost",
+      sessionId: "grok-isolated-sess",
+    });
+  });
+
   test("awaits forked task fibers so a failed fork does not orphan its result or the run", async () => {
     // Effect.fork fan-out: both forked fibers are joined and their results recorded — the
     // failing fork is isolated, not orphaned, and the run completes.

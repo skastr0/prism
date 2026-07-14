@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
@@ -20,6 +20,12 @@ export type AmpWorkflowWorkerOptions = {
 
 export class AmpWorkflowWorkerError extends Error {
   override readonly name = "AmpWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 export type AmpWorkflowMode = "deep" | "rush";
@@ -188,13 +194,22 @@ export const runAmpWorkflowTask = async (
     abortSignal: options.abortSignal,
   }).finally(() => permissionSettings.cleanup());
   if (aborted) {
-    throw new AmpWorkflowWorkerError("amp was aborted by Prism workflow stop");
+    throw new AmpWorkflowWorkerError(
+      "amp was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
+    );
   }
   if (timedOut) {
-    throw new AmpWorkflowWorkerError(`amp exceeded Prism process timeout after ${processTimeoutMs}ms`);
+    throw new AmpWorkflowWorkerError(
+      `amp exceeded Prism process timeout after ${processTimeoutMs}ms`,
+      workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
+    );
   }
   if (exitCode !== 0) {
-    throw new AmpWorkflowWorkerError(`amp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+    throw new AmpWorkflowWorkerError(
+      `amp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
+    );
   }
   const outputText = parseAmpStreamJsonResult(stdout) ?? stdout;
   return {

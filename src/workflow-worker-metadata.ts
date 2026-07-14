@@ -40,3 +40,24 @@ export const summarizeWorkflowWorkerStderr = (
     stderrTruncated: true,
   };
 };
+
+/**
+ * Forensics attached to a worker adapter's thrown error on the failure path (OBS-006).
+ * On success, every adapter already returns `{ adapter, ..., sessionId, ...stderr summary }`
+ * as its `WorkflowTaskExecution.metadata`. On failure, that same shape was previously
+ * discarded entirely — the runner persisted only `{contractVersion, instructionSource}` —
+ * so a failed task could not be joined to its harness session or its stderr tail. Adapters
+ * attach this to their custom Error's `metadata` property at each failure throw site; the
+ * runner merges `error.metadata` into both the `task.executor.failed` event and the
+ * persisted task record.
+ */
+export const workflowWorkerFailureMetadata = (input: {
+  readonly adapter: string;
+  readonly stderr: string;
+  readonly sessionId?: string;
+  readonly maxExcerptBytes?: number;
+}): Record<string, unknown> => ({
+  adapter: input.adapter,
+  ...summarizeWorkflowWorkerStderr(input.stderr, input.maxExcerptBytes),
+  ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+});

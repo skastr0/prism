@@ -5,7 +5,7 @@ import {
   parseWorkflowWorkerJsonOutput,
   workflowWorkerJsonInstruction,
 } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import {
   parsePositiveInteger,
   runWorkflowWorkerProcess,
@@ -34,6 +34,12 @@ export type OmpWorkflowWorkerOptions = {
 
 export class OmpWorkflowWorkerError extends Error {
   override readonly name = "OmpWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 const assertOmpPermission = (mode: WorkflowPermissionMode): void => {
@@ -226,16 +232,21 @@ export const runOmpWorkflowTask = async (
       abortSignal: options.abortSignal,
     });
   if (aborted) {
-    throw new OmpWorkflowWorkerError("omp was aborted by Prism workflow stop");
+    throw new OmpWorkflowWorkerError(
+      "omp was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "omp-cli", stderr, sessionId: parseOmpJsonStream(stdout).sessionId ?? sessionId }),
+    );
   }
   if (timedOut) {
     throw new OmpWorkflowWorkerError(
       `omp exceeded Prism process timeout after ${processTimeoutMs}ms`,
+      workflowWorkerFailureMetadata({ adapter: "omp-cli", stderr, sessionId: parseOmpJsonStream(stdout).sessionId ?? sessionId }),
     );
   }
   if (exitCode !== 0) {
     throw new OmpWorkflowWorkerError(
       `omp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "omp-cli", stderr, sessionId: parseOmpJsonStream(stdout).sessionId ?? sessionId }),
     );
   }
 

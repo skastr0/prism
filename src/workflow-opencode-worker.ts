@@ -1,6 +1,6 @@
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
@@ -16,6 +16,12 @@ export type OpenCodeWorkflowWorkerOptions = {
 
 export class OpenCodeWorkflowWorkerError extends Error {
   override readonly name = "OpenCodeWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 const assertOpenCodePermission = (mode: WorkflowPermissionMode): void => {
@@ -153,13 +159,22 @@ export const runOpenCodeWorkflowTask = async (
     abortSignal: options.abortSignal,
   });
   if (aborted) {
-    throw new OpenCodeWorkflowWorkerError("opencode was aborted by Prism workflow stop");
+    throw new OpenCodeWorkflowWorkerError(
+      "opencode was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "opencode-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
+    );
   }
   if (timedOut) {
-    throw new OpenCodeWorkflowWorkerError(`opencode exceeded Prism process timeout after ${processTimeoutMs}ms`);
+    throw new OpenCodeWorkflowWorkerError(
+      `opencode exceeded Prism process timeout after ${processTimeoutMs}ms`,
+      workflowWorkerFailureMetadata({ adapter: "opencode-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
+    );
   }
   if (exitCode !== 0) {
-    throw new OpenCodeWorkflowWorkerError(`opencode exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+    throw new OpenCodeWorkflowWorkerError(
+      `opencode exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "opencode-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
+    );
   }
 
   const stream = parseOpenCodeJsonStream(stdout);

@@ -14,6 +14,14 @@ How a decided version becomes a published set of npm packages. The version is
   refactors, even large ones — is a **patch** (`0.3.x`).
 - A **minor** bump is an explicit operator call, reserved for a genuine
   feature-set milestone. Nothing cuts one on its own.
+- The one CI-enforced exception: `check:workflow-store-schema-version` (wired
+  into `bun run verify` and `ci.yml`) fails the build if
+  `WORKFLOW_STORE_SCHEMA_VERSION` (`src/workflow-store.ts`) changed since the
+  merge-base with `main` and `package.json`'s `version` did not move with it.
+  This is the guard for the exact WFE-007 failure mode — a schema change and
+  a version bump silently drifting apart across many commits until two
+  same-numbered builds write incompatible stores. It does not pick the
+  number; it only refuses to let the schema move alone.
 
 ## The flow
 

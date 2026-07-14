@@ -8,7 +8,8 @@ import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismOxlintPluginJs } from "./init-templates.js";
 import { cleanupPrismMcpProcessesUnder } from "./testing/mcp-process-cleanup.js";
 import { deriveProjectKey } from "./project-key.js";
-import { WorkflowStore } from "./workflow-store.js";
+import { WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore } from "./workflow-store.js";
+import { registerWorkflowStore } from "./workflow-store-registry.js";
 
 const tempRoots: string[] = [];
 const repoRoot = process.cwd();
@@ -445,6 +446,133 @@ test("workflow runs list --since filters by cutoff, surfaces a cause column, and
   expect(badSince.exitCode).toBe(2);
   expect(badSince.stderr).toContain("--since must be an ISO date/time");
 }, 30_000);
+
+// Builds a store file pinned at schema v1 (matching the migration fixtures in
+// workflow-store.test.ts), for exercising the WFE-007 soft-divergence notice from the CLI edge.
+const createLegacyV1Store = (storePath: string, runId: string): void => {
+  const db = new Database(storePath);
+  db.exec(`
+    create table workflow_runs (
+      run_id text primary key,
+      workflow text not null,
+      status text not null default 'running',
+      finished_at text,
+      handoff_token text,
+      runner_pid integer,
+      heartbeat_at text,
+      created_at text not null default (datetime('now'))
+    );
+    create table workflow_run_tasks (
+      run_id text not null,
+      ordinal integer not null,
+      workflow text not null,
+      task_id text not null,
+      cache_key text not null,
+      prompt_hash text not null,
+      agent_manifest_hash text not null,
+      agent_plugin text not null,
+      agent_name text not null,
+      status text not null,
+      cached integer not null,
+      output_json text not null,
+      metadata_json text,
+      created_at text not null default (datetime('now')),
+      primary key (run_id, ordinal)
+    );
+    create table workflow_events (
+      run_id text not null,
+      sequence integer not null,
+      task_id text,
+      type text not null,
+      payload_json text not null,
+      created_at text not null default (datetime('now')),
+      primary key (run_id, sequence)
+    );
+    insert into workflow_runs (run_id, workflow, status, finished_at)
+    values ('${runId}', 'legacy-workflow', 'completed', '2026-01-01 00:00:00');
+    pragma user_version = 1;
+  `);
+  db.close();
+};
+
+test("workflow runs list surfaces a soft-divergence notice when the store schema is older than the binary (WFE-007)", async () => {
+  const root = await createTempRoot();
+  const storePath = join(root, "workflows.sqlite");
+  createLegacyV1Store(storePath, "legacy-run");
+
+  const first = await runCli(["workflow", "runs", "list", "--store", storePath], {});
+  expect(first.exitCode).toBe(0);
+  const firstListed = JSON.parse(first.stdout) as {
+    runs: Array<{ runId: string }>;
+    storeSchemaNotice?: { severity: string; openedVersion: number; currentVersion: number; message: string };
+  };
+  expect(firstListed.runs.map((run) => run.runId)).toEqual(["legacy-run"]);
+  expect(firstListed.storeSchemaNotice).toEqual({
+    severity: "info",
+    openedVersion: 1,
+    currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+    message: expect.stringContaining("schema version 1"),
+  });
+
+  // The store is now at the current schema — a later read carries no notice.
+  const second = await runCli(["workflow", "runs", "list", "--store", storePath], {});
+  expect(second.exitCode).toBe(0);
+  const secondListed = JSON.parse(second.stdout) as { storeSchemaNotice?: unknown };
+  expect(secondListed.storeSchemaNotice).toBeUndefined();
+});
+
+test("workflow runs show surfaces a soft-divergence notice when the store schema is older than the binary (WFE-007)", async () => {
+  const root = await createTempRoot();
+  const storePath = join(root, "workflows.sqlite");
+  createLegacyV1Store(storePath, "legacy-show-run");
+
+  const show = await runCli(["workflow", "runs", "show", "legacy-show-run", "--store", storePath], {});
+  expect(show.exitCode).toBe(0);
+  const shown = JSON.parse(show.stdout) as {
+    run: { runId: string };
+    storeSchemaNotice?: { severity: string; openedVersion: number; currentVersion: number; message: string };
+  };
+  expect(shown.run.runId).toBe("legacy-show-run");
+  expect(shown.storeSchemaNotice).toEqual({
+    severity: "info",
+    openedVersion: 1,
+    currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+    message: expect.stringContaining("schema version 1"),
+  });
+});
+
+test("workflow runs list --all aggregates per-store soft-divergence notices (WFE-007)", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const legacyStorePath = join(root, "legacy.sqlite");
+  const currentStorePath = join(root, "current.sqlite");
+  createLegacyV1Store(legacyStorePath, "legacy-all-run");
+  const currentStore = await WorkflowStore.open(currentStorePath);
+  currentStore.createRun("current-workflow", "current-run");
+  currentStore.close();
+
+  // Registers both store paths without opening either — so the first real open of the legacy
+  // store happens inside `runs list --all` itself, and the notice it produces is observable.
+  registerWorkflowStore(prismHome, legacyStorePath);
+  registerWorkflowStore(prismHome, currentStorePath);
+
+  const all = await runCli(["workflow", "runs", "list", "--all"], { PRISM_HOME: prismHome });
+  expect(all.exitCode).toBe(0);
+  const listed = JSON.parse(all.stdout) as {
+    runs: Array<{ runId: string }>;
+    storeSchemaNotices?: Array<{ severity: string; openedVersion: number; currentVersion: number; message: string; storePath: string }>;
+  };
+  expect(listed.runs.map((run) => run.runId).sort()).toEqual(["current-run", "legacy-all-run"]);
+  expect(listed.storeSchemaNotices).toEqual([
+    {
+      severity: "info",
+      openedVersion: 1,
+      currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+      message: expect.stringContaining("schema version 1"),
+      storePath: legacyStorePath,
+    },
+  ]);
+});
 
 test("workflow runs show resolves a run across the store registry without --store (routing defect, repro run 07cedd42-57d2)", async () => {
   const root = await createTempRoot();

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { stableJsonStringify, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
-import { ensureDir } from "./fs.js";
+import { ensureDir, exists } from "./fs.js";
 import { deriveProjectKey } from "./project-key.js";
 import type { WorkflowJudgeVerdict } from "./workflows.js";
 import type { WorkflowJudgeIdentity, WorkflowRunTaskSnapshot, WorkflowTaskIdentity } from "./workflow-identity.js";
@@ -488,6 +488,21 @@ export const defaultWorkflowStorePath = (prismHome: string, cwd: string = proces
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
 export const WORKFLOW_STORE_SCHEMA_VERSION = 3;
+
+/**
+ * Surfaces the one-time soft-divergence direction (WFE-007): a pre-existing store opened at a
+ * schema version older than the binary's `WORKFLOW_STORE_SCHEMA_VERSION` migrates in place inside
+ * `WorkflowStore.open`, silently by design, but callers reporting on the store (`runs list`,
+ * `runs show`) surface that a migration just ran. The other direction — a store newer than this
+ * binary supports — is not migratable and is already a hard error in `open`. Never populated for
+ * a brand-new store (nothing to diverge from).
+ */
+export interface WorkflowStoreSchemaNotice {
+  readonly severity: "info";
+  readonly openedVersion: number;
+  readonly currentVersion: number;
+  readonly message: string;
+}
 
 const WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES = 64 * 1024;
 
@@ -1039,7 +1054,10 @@ const migrateWorkflowStoreToVersion3 = (db: WorkflowDatabase): void => {
 };
 
 export class WorkflowStore {
-  constructor(private readonly db: WorkflowDatabase) {}
+  constructor(
+    private readonly db: WorkflowDatabase,
+    readonly schemaNotice: WorkflowStoreSchemaNotice | null = null,
+  ) {}
   private updateRunUsageInCurrentTransaction(
     runId: string,
     update: (current: WorkflowUsageTotals) => WorkflowUsageTotals,
@@ -1076,6 +1094,7 @@ export class WorkflowStore {
 
   static async open(path: string): Promise<WorkflowStore> {
     await ensureDir(dirname(path));
+    const preexisting = await exists(path);
     const db = openWorkflowDatabase(path);
     try {
       const schemaVersion = readWorkflowStoreSchemaVersion(db);
@@ -1094,7 +1113,15 @@ export class WorkflowStore {
       if (schemaVersion <= 2) {
         migrateWorkflowStoreToVersion3(db);
       }
-      return new WorkflowStore(db);
+      const schemaNotice: WorkflowStoreSchemaNotice | null = preexisting && schemaVersion < WORKFLOW_STORE_SCHEMA_VERSION
+        ? {
+            severity: "info",
+            openedVersion: schemaVersion,
+            currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+            message: `Workflow store at ${path} was schema version ${schemaVersion}; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
+          }
+        : null;
+      return new WorkflowStore(db, schemaNotice);
     } catch (error) {
       db.close();
       throw error;

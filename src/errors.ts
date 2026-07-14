@@ -138,6 +138,29 @@ export class BlockedTargetError extends Schema.TaggedError<BlockedTargetError>()
 }
 
 // ---------------------------------------------------------------------------
+// PathConflictError — the plan-time same-path conflict guard (PQ-156).
+// Prism's one-writer model requires exactly one owner per target path: two
+// different plugins claiming the same owned-file path, or an owned-file
+// claim colliding with a shared-region claim on the same path, is a
+// contract breach (AGENTS.md invariant 2: merge-or-crash). This fails
+// closed at plan time — the point the ambiguity is born — instead of
+// letting the sync engine apply whichever write happens to land last.
+// ---------------------------------------------------------------------------
+
+export class PathConflictError extends Schema.TaggedError<PathConflictError>()(
+  "PathConflictError",
+  {
+    targetPath: Schema.String,
+    firstPlugin: Schema.String,
+    secondPlugin: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Two plugins target the same path '${this.targetPath}': '${this.firstPlugin}' and '${this.secondPlugin}'`;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The union
 // ---------------------------------------------------------------------------
 
@@ -150,7 +173,8 @@ export type PrismError =
   | PrismConfigError
   | BundleBuildError
   | McpBundleMissingError
-  | BlockedTargetError;
+  | BlockedTargetError
+  | PathConflictError;
 
 export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "SourceParseError",
@@ -170,6 +194,7 @@ export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "BundleBuildError",
   "McpBundleMissingError",
   "BlockedTargetError",
+  "PathConflictError",
 ]);
 
 export const isPrismError = (value: unknown): value is PrismError =>
@@ -227,6 +252,12 @@ export const describePrismError = (error: PrismError): PrismErrorRender => {
         headline: error.message,
         detail: [`plugin: ${error.plugin}`],
         hint: error.hint,
+        path: error.targetPath,
+      };
+    case "PathConflictError":
+      return {
+        headline: error.message,
+        hint: "give one plugin sole ownership of this path — rename the other plugin's output or drop its claim — then re-run",
         path: error.targetPath,
       };
     case "SourceParseError":

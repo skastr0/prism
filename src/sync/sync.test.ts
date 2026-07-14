@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { exists, readFile } from "../fs.js";
 import { computeContentHash } from "../content-hash.js";
+import { PathConflictError } from "../errors.js";
 import { commitSnapshot, readSnapshot, snapshotPath } from "../state/store.js";
 import type { DesiredRoot } from "./desired.js";
 import { planSync } from "./plan.js";
@@ -159,6 +160,73 @@ describe("sync engine — owned files", () => {
     expect(await readFile(other)).toBe("ok\n");
     const snapshot = await readSnapshot({ prismHome: home, harness: "codex-cli", root });
     expect(snapshot.manifest.entries.map((entry) => entry.targetPath)).toEqual([other]);
+  });
+});
+
+describe("sync engine — same-path conflict guard (PQ-156)", () => {
+  const conflictPath = () => join(root, "agents", "reviewer.md");
+
+  test("two plugins claiming the same owned target path fail closed, naming both", async () => {
+    const conflicting = desiredWith({
+      files: [
+        { targetPath: conflictPath(), content: "from booth\n", plugin: "booth" },
+        { targetPath: conflictPath(), content: "from quasar\n", plugin: "quasar" },
+      ],
+    });
+
+    try {
+      await refresh(conflicting);
+      throw new Error("expected a PathConflictError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PathConflictError);
+      if (!(error instanceof PathConflictError)) throw error;
+      expect(error.targetPath).toBe(conflictPath());
+      expect(error.firstPlugin).toBe("booth");
+      expect(error.secondPlugin).toBe("quasar");
+    }
+    // The guard fires before any op is planned or applied — nothing lands.
+    expect(await exists(conflictPath())).toBe(false);
+  });
+
+  test("the same plugin re-emitting the same owned path twice is not a conflict", async () => {
+    const report = await refresh(
+      desiredWith({
+        files: [
+          { targetPath: conflictPath(), content: "v1\n", plugin: "booth" },
+          { targetPath: conflictPath(), content: "v1\n", plugin: "booth" },
+        ],
+      }),
+    );
+    expect(report.failures).toEqual([]);
+    expect(await readFile(conflictPath())).toBe("v1\n");
+  });
+
+  test("an owned-file path colliding with a region's target path fails closed, naming both", async () => {
+    const sharedPath = join(root, "config.toml");
+
+    try {
+      await refresh(
+        desiredWith({
+          files: [{ targetPath: sharedPath, content: "whole file\n", plugin: "booth" }],
+          regions: [{
+            kind: "marker" as const,
+            targetPath: sharedPath,
+            regionKey: "quasar:fragment",
+            commentPrefix: "#",
+            content: "fragment",
+            plugin: "quasar",
+          }],
+        }),
+      );
+      throw new Error("expected a PathConflictError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PathConflictError);
+      if (!(error instanceof PathConflictError)) throw error;
+      expect(error.targetPath).toBe(sharedPath);
+      expect(error.firstPlugin).toBe("booth");
+      expect(error.secondPlugin).toBe("quasar");
+    }
+    expect(await exists(sharedPath)).toBe(false);
   });
 });
 

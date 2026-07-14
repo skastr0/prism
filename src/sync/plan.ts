@@ -21,6 +21,7 @@
 
 import { stat } from "node:fs/promises";
 import { computeContentHash, computeMcpHttpConfigContentHash } from "../content-hash.js";
+import { PathConflictError } from "../errors.js";
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
@@ -473,6 +474,48 @@ const planSharedRegions = async (options: {
   return { ops, materializedRegionKeys };
 };
 
+/**
+ * Plan-time same-path conflict guard (PQ-156). Prism's one-writer model
+ * requires exactly one owner per target path: (a) two different plugins
+ * cannot both claim the same owned-file target path, and (b) an owned-file
+ * claim cannot collide with a shared-region claim on the same path — a
+ * whole-file write and a fragment patch can never be reconciled. Fails
+ * closed, no merge attempt: this makes the invalid state unrepresentable at
+ * the point the desired root is handed to the sync engine, rather than
+ * letting whichever write happens to land first at apply time win silently
+ * (AGENTS.md invariant 2: merge-or-crash, declared per kind).
+ *
+ * A single plugin re-emitting the same owned path twice (e.g. an idempotent
+ * lowerer call) is not a conflict. Multiple regions sharing one target path
+ * is the designed co-ownership shape and is untouched here — only an owned
+ * file colliding with anything else at its exact path is invalid.
+ */
+const assertNoPathConflicts = (desired: DesiredRoot): void => {
+  const ownedPathPlugin = new Map<string, string>();
+  for (const file of desired.files) {
+    const owner = ownedPathPlugin.get(file.targetPath);
+    if (owner === undefined) {
+      ownedPathPlugin.set(file.targetPath, file.plugin);
+    } else if (owner !== file.plugin) {
+      throw new PathConflictError({
+        targetPath: file.targetPath,
+        firstPlugin: owner,
+        secondPlugin: file.plugin,
+      });
+    }
+  }
+  for (const region of desired.regions) {
+    const owner = ownedPathPlugin.get(region.targetPath);
+    if (owner !== undefined) {
+      throw new PathConflictError({
+        targetPath: region.targetPath,
+        firstPlugin: owner,
+        secondPlugin: region.plugin,
+      });
+    }
+  }
+};
+
 export const planSync = async (options: {
   readonly desired: DesiredRoot;
   readonly snapshot: SnapshotManifest;
@@ -486,6 +529,7 @@ export const planSync = async (options: {
    */
   readonly scopePlugins?: ReadonlySet<string>;
 }): Promise<SyncPlan> => {
+  assertNoPathConflicts(options.desired);
   const degradedOwnership = options.degradedOwnership ?? false;
   const inScope = (plugin: string): boolean =>
     options.scopePlugins === undefined || options.scopePlugins.has(plugin);

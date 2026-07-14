@@ -1140,6 +1140,7 @@ export default {
 
 const createExternalSyntheticOnlyFixture = async (): Promise<{
   pluginRoot: string;
+  protocolRoot: string;
   projectRoot: string;
 }> => {
   const root = await createTempRoot();
@@ -1273,7 +1274,7 @@ export default {
 `,
   );
 
-  return { pluginRoot, projectRoot };
+  return { pluginRoot, protocolRoot, projectRoot };
 };
 
 afterEach(async () => {
@@ -3938,6 +3939,22 @@ test("compilePluginForTarget lowers OpenCode prompt and permission hooks through
 
 test("compilePluginForTarget lowers executable canonical tools for opencode", async () => {
   const { pluginRoot, projectRoot } = await createCanonicalLanguageFixture();
+  const protocolRoot = join(pluginRoot, "deps", "protocol-core");
+
+  // Per-plugin one-writer scheme: the owner (protocol-core) is the sole
+  // producer of its own OpenCode bundle. Compile it explicitly first, the
+  // same way the claude-code precedent below does — the consumer no longer
+  // re-materializes it (src/compile/lowerers/opencode.ts).
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: protocolRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
   const opencode = await Effect.runPromise(
     compilePluginForTarget({
@@ -6732,7 +6749,22 @@ export default {
 });
 
 test("external permission-only consumers do not emit empty generated plugin shells", async () => {
-  const { pluginRoot, projectRoot } = await createExternalPermissionOnlyFixture();
+  const { pluginRoot, protocolRoot, projectRoot } = await createExternalPermissionOnlyFixture();
+
+  // Per-plugin one-writer scheme: the owner (protocol-core) is the sole
+  // producer of its own OpenCode bundle — compile it explicitly first (see
+  // "tools-only plugins emit the complete owner runtime plugin" above). The
+  // consumer no longer re-materializes it.
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: protocolRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
   await Effect.runPromise(
     compilePluginForTarget({
@@ -6915,8 +6947,186 @@ test("tools-only plugins emit the complete owner runtime plugin", async () => {
   expect(opencodeConfig.plugin).not.toContain("prism-generated-protocol-core");
 });
 
+const createSharedOwnerFixture = async (): Promise<{
+  ownerRoot: string;
+  consumerARoot: string;
+  consumerBRoot: string;
+  projectRoot: string;
+}> => {
+  const root = await createTempRoot();
+  const ownerRoot = join(root, "shared-owner");
+  const consumerARoot = join(root, "consumer-a");
+  const consumerBRoot = join(root, "consumer-b");
+  const projectRoot = join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+
+  await writeText(
+    join(ownerRoot, "plugin.json"),
+    `${JSON.stringify(
+      { name: "shared-owner", version: "0.1.0", targets: { tools: ["opencode"] } },
+      null,
+      2,
+    )}\n`,
+  );
+  await writeText(
+    join(ownerRoot, "tools", "acknowledge.tool.ts"),
+    `import { Schema } from ${JSON.stringify(effectImportPath)};
+
+export default {
+  name: "acknowledge",
+  description: "Acknowledge a request",
+  input: Schema.Struct({ summary: Schema.String }),
+  output: Schema.Struct({ acknowledged: Schema.Boolean }),
+  async handle() {
+    return { acknowledged: true };
+  },
+};
+`,
+  );
+
+  const writeConsumer = async (consumerRoot: string, name: string): Promise<void> => {
+    await writeText(
+      join(consumerRoot, "plugin.json"),
+      `${JSON.stringify(
+        {
+          name,
+          version: "0.1.0",
+          deps: { "shared-owner": "../shared-owner" },
+          targets: { agents: ["opencode"] },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeText(
+      join(consumerRoot, "identities", "worker.identity.md"),
+      `---\ndescription: Worker identity\n---\n\n# Worker\n`,
+    );
+    await writeText(
+      join(consumerRoot, "traits", "ack-capable.trait.ts"),
+      `
+export default {
+  name: "ack-capable",
+  description: "Can acknowledge via the shared owner tool",
+  tools: { acknowledge: { ref: "shared-owner:acknowledge" } },
+  require: { tools: ["acknowledge"] },
+};
+`,
+    );
+    await writeText(
+      join(consumerRoot, "agents", "worker.agent.ts"),
+      `
+export default {
+  name: "worker",
+  description: "Worker agent",
+  identity: "worker",
+  traits: ["ack-capable"],
+};
+`,
+    );
+  };
+
+  await writeConsumer(consumerARoot, "consumer-a");
+  await writeConsumer(consumerBRoot, "consumer-b");
+
+  return { ownerRoot, consumerARoot, consumerBRoot, projectRoot };
+};
+
+test("two independent consumers of the same foreign owner never conflict and never duplicate the owner's OpenCode bundle", async () => {
+  const { ownerRoot, consumerARoot, consumerBRoot, projectRoot } =
+    await createSharedOwnerFixture();
+
+  const ownerBundlePath = join(
+    projectRoot,
+    ".opencode",
+    "plugins",
+    "prism-generated-shared-owner",
+    "dist",
+    "server.mjs",
+  );
+
+  // Neither consumer's own compile may materialize the owner's bundle file —
+  // that would be exactly the per-consumer re-emission that collided across
+  // a real multi-plugin corpus (src/compile/lowerers/opencode.ts).
+  const consumerA = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: consumerARoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  expect(consumerA.failures).toHaveLength(0);
+  expect(
+    consumerA.operations.some((operation) => operation.targetPath === ownerBundlePath),
+  ).toBe(false);
+  expect(await pathExists(ownerBundlePath)).toBe(false);
+
+  // A second, independent consumer of the same owner must not conflict with
+  // the first (no PathConflictError) and must likewise emit nothing at the
+  // owner's path.
+  const consumerB = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: consumerBRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  expect(consumerB.failures).toHaveLength(0);
+  expect(
+    consumerB.operations.some((operation) => operation.targetPath === ownerBundlePath),
+  ).toBe(false);
+  expect(await pathExists(ownerBundlePath)).toBe(false);
+
+  // Both consumers still wire the owner's canonical wire name into their own
+  // opencode.json (allowlist/plugin-array reference), just without a file.
+  const opencodeConfig = JSON.parse(
+    await readFile(join(projectRoot, ".opencode", "opencode.json"), "utf8"),
+  ) as { permission?: Record<string, string>; plugin?: string[] };
+  expect(opencodeConfig.permission).toMatchObject({ "shared_owner_*": "deny" });
+  expect(opencodeConfig.plugin).toContain(
+    generatedPluginEntry(projectRoot, "prism-generated-shared-owner"),
+  );
+
+  // The owner's OWN compile is the sole producer of its bundle.
+  const owner = await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: ownerRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
+  expect(owner.failures).toHaveLength(0);
+  expect(await pathExists(ownerBundlePath)).toBe(true);
+  const ownerBundle = await readFile(ownerBundlePath, "utf8");
+  expect(ownerBundle).toContain("shared_owner_acknowledge");
+});
+
 test("external synthetic wrappers keep the owner runtime dependency without exposing the base tool", async () => {
-  const { pluginRoot, projectRoot } = await createExternalSyntheticOnlyFixture();
+  const { pluginRoot, protocolRoot, projectRoot } = await createExternalSyntheticOnlyFixture();
+
+  // Per-plugin one-writer scheme: the owner (protocol-core) is the sole
+  // producer of its own OpenCode bundle — compile it explicitly first. The
+  // consumer's synthetic wrapper still references the owner's wire name but
+  // no longer re-materializes its bundle.
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome: testPrismHome(),
+      pluginPath: protocolRoot,
+      target: "opencode",
+      scope: "project",
+      projectPath: projectRoot,
+      dryRun: false,
+    }),
+  );
 
   await Effect.runPromise(
     compilePluginForTarget({
@@ -6991,13 +7201,19 @@ test("external synthetic wrappers keep the owner runtime dependency without expo
     "external_synthetic_consumer_*": "deny",
     "protocol_core_*": "deny",
   });
-  expect(opencodeConfig.plugin).toEqual([
+  // Membership, not order: the owner (protocol-core) is now compiled first
+  // per the per-plugin one-writer scheme, so its array entry lands before
+  // the consumer's — insertion order was never a real contract here.
+  expect(opencodeConfig.plugin).toHaveLength(2);
+  expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(
       projectRoot,
       "prism-generated-external-synthetic-consumer",
     ),
+  );
+  expect(opencodeConfig.plugin).toContain(
     generatedPluginEntry(projectRoot, "prism-generated-protocol-core"),
-  ]);
+  );
 });
 
 test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin bundle", async () => {

@@ -1619,49 +1619,44 @@ const planSourceGeneratedRuntimePlugin = async (
   return [];
 };
 
-const planOwnerGeneratedRuntimePlugins = async (
-  input: LowerInput,
+/**
+ * Under the per-plugin one-writer scheme, a consumer that only *references*
+ * a foreign owner's canonical tool must never re-materialize that owner's
+ * OpenCode bundle file itself — this is the same "consumer emits no server"
+ * law the claude-code, kimi-code, and antigravity-cli lowerers already
+ * enforce (see e.g. kimi-code.ts's `planMcpServer`: "a consumer ... gets NO
+ * server entry here: the foreign owner's own compile carries its own
+ * server"). The owner's own compile (whenever it targets OpenCode) is the
+ * sole producer of `prism-generated-<owner>/dist/server.mjs`.
+ *
+ * A prior version of this function (PQ-162) had every consumer independently
+ * re-bundle that same owner file, on the theory that the projection is a
+ * pure, deterministic function of the owner's own `tools/` directory and so
+ * every consumer (and the owner's own compile) converges on identical bytes
+ * at the identical path. That theory holds only within a single, static
+ * dependency snapshot: any environment drift between the moment one
+ * consumer's compile ran and the moment another plugin's compile (or the
+ * owner's own) ran — e.g. a bumped `effect` version baked into the bundle —
+ * produces byte-different content attributed to the same path, which
+ * `assertNoForeignOwnerConflicts` (src/sync/plan.ts) correctly refuses to
+ * silently last-writer-wins. A real multi-consumer, multi-day corpus
+ * (prism-plugins) hit exactly this: N consumers of the same owner each
+ * re-emitted a "converged" bundle that, in practice, drifted, wedging every
+ * subsequent refresh behind a PathConflictError. Emitting nothing here
+ * removes the redundant producer instead of trying to keep it convergent.
+ *
+ * The consumer still needs its own `plugin.<id>` array entry and
+ * `permission."<ns>_*"` deny key (`planGeneratedPluginConfigRegions`) so its
+ * own agents can allowlist the owner's wire-name tools — that bookkeeping is
+ * preserved via `rememberDesiredGeneratedPlugin`. Only the file is dropped.
+ */
+const rememberOwnerGeneratedRuntimePlugins = (
   runtime: OpenCodeRuntimeContext,
   state: GeneratedRuntimePluginState,
-  importPluginRoots: ReadonlyMap<string, string>,
-): Promise<DesiredFile[]> => {
-  const files: DesiredFile[] = [];
-  for (const [pluginName, owner] of runtime.ownerPlugins) {
+): void => {
+  for (const pluginName of runtime.ownerPlugins.keys()) {
     rememberDesiredGeneratedPlugin(state, pluginName);
-    const ownerMirror = await planRuntimePluginMirrors(
-      pluginName,
-      owner.pluginRoot,
-      owner.bindings,
-    );
-    files.push(
-      ...(await planGeneratedPluginFiles({
-        root: generatedPluginRootForName(input.target, pluginName),
-        pluginId: generatedPluginIdForName(pluginName),
-        runtimeToolNamespace: pluginName,
-        mirrors: [ownerMirror],
-        importPluginRoots,
-        adapters: planAdaptersForBindings(pluginName, owner.bindings),
-        serverBindings: owner.bindings,
-        hookRegistrations: [],
-        // Attribute this owner-mirror bundle to its true owner (pluginName),
-        // never to the consumer whose compile happened to trigger it
-        // (PQ-162). The content is a pure projection of the owner's own
-        // tools/ directory (bindingsFromPluginToolFiles reads straight off
-        // disk, unfiltered by which consumer references what), so every
-        // consumer that depends on this owner — and the owner's own
-        // compile, if it targets OpenCode too — converges on identical
-        // bytes at this exact path. Attributing it to the consumer instead
-        // (as before) meant N different consumers of the same owner each
-        // recorded themselves as sole owner of that owner's bundle, so a
-        // real multi-consumer corpus (prism-plugins) hit PQ-162's
-        // cross-plugin conflict guard on every such fan-in — a false
-        // positive on a legitimately shared, convergent artifact, not the
-        // genuine two-different-authors collision the law targets.
-        plugin: pluginName,
-      })),
-    );
   }
-  return files;
 };
 
 const planGeneratedRuntimePlugins = async (
@@ -1709,15 +1704,14 @@ const planGeneratedRuntimePlugins = async (
     sourceCanonicalMirror,
   );
 
-  return [
-    ...(await planSourceGeneratedRuntimePlugin(input, runtime, state, {
-      mirrors,
-      sourceCanonicalMirror,
-      importPluginRoots,
-      sourceRuntimeBindings,
-    })),
-    ...(await planOwnerGeneratedRuntimePlugins(input, runtime, state, importPluginRoots)),
-  ];
+  rememberOwnerGeneratedRuntimePlugins(runtime, state);
+
+  return planSourceGeneratedRuntimePlugin(input, runtime, state, {
+    mirrors,
+    sourceCanonicalMirror,
+    importPluginRoots,
+    sourceRuntimeBindings,
+  });
 };
 
 const planGeneratedPluginConfigRegions = (

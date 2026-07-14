@@ -2,13 +2,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { doctorExitCode, pluginIsServable, runDoctor } from "./doctor.js";
+import { doctorExitCode, formatDoctorReport, pluginIsServable, runDoctor } from "./doctor.js";
 import { EXIT_CODES } from "./exit.js";
 import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { listDirRecursive, readFile } from "./fs.js";
 import { refreshPlugin } from "./refresh.js";
+import { backupOnceForRun } from "./state/run-backups.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
@@ -58,6 +59,37 @@ test("doctor exit code is success for a clean report", async () => {
 
   expect(report.findings).toEqual([]);
   expect(doctorExitCode(report)).toBe(EXIT_CODES.success);
+});
+
+// PQ-159: doctor surfaces run-backup retention as read-only visibility --
+// count/size/oldest age -- never as a DoctorFinding, so it never flips exit
+// code on an otherwise clean, healthy world.
+test("doctor reports backup retention visibility without affecting exit code or findings (PQ-159)", async () => {
+  const prismHome = join(root, "prism-home");
+
+  const cleanReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(cleanReport.backupRetention).toBeUndefined();
+  expect(formatDoctorReport(cleanReport)).toBe("doctor: clean");
+
+  const target = join(root, "config.toml");
+  await writeText(target, "x");
+  await backupOnceForRun({ prismHome, runId: "20260610T000000-aaaaaa", root, targetPath: target });
+
+  const dirtyWorldReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(dirtyWorldReport.findings).toEqual([]);
+  expect(dirtyWorldReport.backupRetention).toMatchObject({ count: 1, oldestRunId: "20260610T000000-aaaaaa" });
+  expect(doctorExitCode(dirtyWorldReport)).toBe(EXIT_CODES.success);
+  expect(formatDoctorReport(dirtyWorldReport)).toContain("INFO backup.retention 1 run backups kept");
 });
 
 test("doctor includes shared workflow harness detection data without creating findings", async () => {

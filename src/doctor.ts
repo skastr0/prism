@@ -24,6 +24,7 @@ import {
   type SnapshotManifest,
 } from "./state/snapshot.js";
 import { gcSnapshots, snapshotDir } from "./state/store.js";
+import { runBackupsSummary, type RunBackupsSummary } from "./state/run-backups.js";
 import { MISSING_OWNED_FILE_SELF_HEALS, parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
@@ -97,6 +98,15 @@ export interface DoctorReport {
   readonly workflowHarnesses?: ReadonlyArray<WorkflowHarnessDetection>;
   readonly findings: ReadonlyArray<DoctorFinding>;
   readonly refresh?: RefreshResult;
+  /**
+   * PQ-159: read-only run-backup retention visibility (count/size/oldest
+   * age). Deliberately NOT a `DoctorFinding` -- it is never actionable
+   * (retention itself is enforced during refresh, not by doctor), so it
+   * must not affect `doctorExitCode`'s clean/dirty determination. Same
+   * out-of-band-metadata pattern as `workflowHarnesses` above. Omitted
+   * when there are no run backups at all.
+   */
+  readonly backupRetention?: RunBackupsSummary;
 }
 
 export interface DoctorOptions {
@@ -2510,6 +2520,9 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
   refresh = pluginInspection.refresh;
   fixFailed = fixFailed || pluginInspection.fixFailed;
 
+  // PQ-159: read-only visibility, never a finding (see DoctorReport.backupRetention doc).
+  const backupRetention = await runBackupsSummary(options.prismHome);
+
   return {
     schema: "prism.doctor.report.v1",
     ...(options.pluginPath ? { pluginPath: options.pluginPath } : {}),
@@ -2518,6 +2531,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
     ...(workflowHarnesses.length > 0 ? { workflowHarnesses } : {}),
     findings,
     ...(refresh ? { refresh } : {}),
+    ...(backupRetention.count > 0 ? { backupRetention } : {}),
   };
 };
 
@@ -2528,15 +2542,28 @@ export const doctorExitCode = (report: DoctorReport): ExitCode => {
   return report.findings.length === 0 ? EXIT_CODES.success : EXIT_CODES.domainFailure;
 };
 
+/** PQ-159: human-readable render of `DoctorReport.backupRetention`. */
+const formatBackupRetentionLine = (summary: RunBackupsSummary): string => {
+  const megabytes = (summary.totalBytes / (1024 * 1024)).toFixed(1);
+  const ageDays =
+    summary.oldestAgeMs === undefined
+      ? undefined
+      : Math.floor(summary.oldestAgeMs / (24 * 60 * 60 * 1000));
+  return `INFO backup.retention ${summary.count} run backups kept (${megabytes} MB${ageDays === undefined ? "" : `, oldest ${ageDays}d`})`;
+};
+
 export const formatDoctorReport = (report: DoctorReport): string => {
   const lines: string[] = [];
   if (report.findings.length === 0) {
-    return report.fix ? "doctor: clean after fix" : "doctor: clean";
+    lines.push(report.fix ? "doctor: clean after fix" : "doctor: clean");
+    if (report.backupRetention) lines.push(formatBackupRetentionLine(report.backupRetention));
+    return lines.join("\n");
   }
   for (const item of report.findings) {
     const location = [item.harness, item.path].filter(Boolean).join(" ");
     lines.push(`${item.severity.toUpperCase()} ${item.family}/${item.code}${location ? ` ${location}` : ""}`);
     lines.push(`  ${item.message}`);
   }
+  if (report.backupRetention) lines.push(formatBackupRetentionLine(report.backupRetention));
   return lines.join("\n");
 };

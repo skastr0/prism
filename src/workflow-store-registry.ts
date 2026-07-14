@@ -79,3 +79,35 @@ export const listRegisteredWorkflowStores = (prismHome: string): WorkflowStoreRe
   }
   return live.sort((left, right) => right.lastOpenedAt.localeCompare(left.lastOpenedAt));
 };
+
+/**
+ * Read-only peek at registry entries whose backing store file is gone,
+ * without mutating the registry file (WFE-008 `doctor` residue reporting —
+ * distinct from `listRegisteredWorkflowStores`, which prunes as a read-time
+ * side effect). Provenance is `existsSync` against the exact registered
+ * path — the only claim this module is entitled to make (AGENTS.md rule 7:
+ * never adopt/reap anything it cannot deterministically prove is its own).
+ */
+export const deadWorkflowStoreRegistryEntries = (
+  prismHome: string,
+): ReadonlyArray<WorkflowStoreRegistryEntry> =>
+  readRegistryFile(workflowStoreRegistryPath(prismHome)).filter((entry) => !existsSync(entry.path));
+
+/**
+ * Explicit GC entry point for `prism doctor --fix`: drops every registry
+ * entry whose store file no longer exists and reports what was dropped, so
+ * a real machine's already-accumulated tmp-store residue (WFE-008) can be
+ * cleaned deliberately instead of only shrinking incidentally the next time
+ * some other workflow command happens to touch the registry.
+ */
+export const pruneDeadWorkflowStoreRegistryEntries = (
+  prismHome: string,
+): ReadonlyArray<WorkflowStoreRegistryEntry> => {
+  const file = workflowStoreRegistryPath(prismHome);
+  const entries = readRegistryFile(file);
+  const dead = entries.filter((entry) => !existsSync(entry.path));
+  if (dead.length > 0) {
+    writeRegistryFile(file, entries.filter((entry) => existsSync(entry.path)));
+  }
+  return dead;
+};

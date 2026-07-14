@@ -61,6 +61,10 @@ import {
   pruneOrphanedMcpEntry,
   type OrphanedMcpEntry,
 } from "./doctor/orphaned-mcp-entries.js";
+import {
+  deadWorkflowStoreRegistryEntries,
+  pruneDeadWorkflowStoreRegistryEntries,
+} from "./workflow-store-registry.js";
 
 export type DoctorSeverity = "error" | "warning" | "info";
 
@@ -74,7 +78,8 @@ export type DoctorFindingFamily =
   | "mcp.health"
   | "determinism.selfcheck"
   | "topology.invariant"
-  | "launchd.residue";
+  | "launchd.residue"
+  | "workflow.store-registry";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -663,6 +668,35 @@ const runLaunchdResidueFix = async (prismHome: string): Promise<DoctorFinding[]>
   }
   return findings;
 };
+
+/**
+ * `workflow.store-registry` -- WFE-008: `<prismHome>/state/
+ * workflow-store-registry.json` is otherwise append-only, so every tmp
+ * store a test or a scratch run ever opened accumulates forever. Detection
+ * is read-only (matches every other `detect*` in this file); the fix drops
+ * exactly the entries whose backing file no longer exists — the only claim
+ * `workflow-store-registry.ts` is entitled to make (AGENTS.md rule 7).
+ */
+const detectWorkflowStoreRegistryResidue = async (prismHome: string): Promise<DoctorFinding[]> =>
+  deadWorkflowStoreRegistryEntries(prismHome).map((entry) => finding({
+    severity: "info",
+    family: "workflow.store-registry",
+    code: "workflow.store-registry.stale-entry",
+    message: `Workflow store registry references a store that no longer exists: ${entry.path}`,
+    path: entry.path,
+    fix: "gc",
+    data: { lastOpenedAt: entry.lastOpenedAt },
+  }));
+
+const runWorkflowStoreRegistryGcFix = async (prismHome: string): Promise<DoctorFinding[]> =>
+  pruneDeadWorkflowStoreRegistryEntries(prismHome).map((entry) => finding({
+    severity: "info",
+    family: "workflow.store-registry",
+    code: "workflow.store-registry.stale-entry-dropped",
+    message: `Dropped workflow store registry entry for missing store: ${entry.path}`,
+    path: entry.path,
+    data: { lastOpenedAt: entry.lastOpenedAt },
+  }));
 
 const namespaceStrayCandidate = (relativePath: string): boolean =>
   relativePath.includes("prism-generated-") || relativePath.includes("prism_generated_");
@@ -2448,6 +2482,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
   if (options.fix) {
     findings.push(...(await runSnapshotGcFix(options.prismHome)));
     findings.push(...(await runLaunchdResidueFix(options.prismHome)));
+    findings.push(...(await runWorkflowStoreRegistryGcFix(options.prismHome)));
     findings.push(
       ...(await runOrphanedMcpEntryFix({
         prismHome: options.prismHome,
@@ -2508,6 +2543,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
     })),
   );
   findings.push(...(await detectLaunchdResidue(options.prismHome)));
+  findings.push(...(await detectWorkflowStoreRegistryResidue(options.prismHome)));
   findings.push(
     ...(await detectOrphanedMcpEntries({
       prismHome: options.prismHome,

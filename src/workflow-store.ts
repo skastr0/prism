@@ -789,6 +789,9 @@ const readWorkflowStoreSchemaVersion = (db: WorkflowDatabase): number => {
 const migrateWorkflowStoreToVersion1 = (db: WorkflowDatabase): void => {
   db.transaction(() => {
     db.exec(`
+      -- cache_key ANDs with prompt_hash in the primary key below (never a
+      -- substitute for it) — see the authoring discipline documented on
+      -- WorkflowTaskIdentity in workflow-identity.ts.
       create table if not exists workflow_task_records (
         workflow text not null,
         task_id text not null,

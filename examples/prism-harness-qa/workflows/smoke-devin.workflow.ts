@@ -16,8 +16,11 @@
  * Run from the prism git root:
  *   prism-dev workflow validate examples/prism-harness-qa/workflows/smoke-devin.workflow.ts
  *   prism-dev workflow run examples/prism-harness-qa/workflows/smoke-devin.workflow.ts \
- *     --permission full-access --task-timeout-ms 300000 --no-cache \
+ *     --permission full-access --task-timeout-ms 300000 \
  *     --max-concurrent-tasks 1 --store /tmp/devin-smoke.sqlite
+ *
+ * Cache is mandatory — there is no cache-bypass flag; point `--store` at a
+ * fresh path for a clean re-run instead.
  */
 import { Schema } from "effect";
 import { defineTask, defineWorkflow } from "prism";

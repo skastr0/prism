@@ -7,6 +7,18 @@ import {
 } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 
+/**
+ * `cacheKey` and `promptHash` AND together in the cache primary key
+ * (workflow-store.ts) — `cacheKey` never substitutes for `promptHash`, and
+ * there is no override/terminal-marker mechanism to make a stale prompt hash
+ * replay anyway. `promptHash` hashes the literal rendered `task.prompt`
+ * string, so interpolating volatile upstream text (judge prose, logs, whole
+ * objects) into a downstream prompt guarantees resume misses by construction.
+ * Authoring discipline: interpolate only narrow, stable upstream fields —
+ * ids, hashes, short enums (e.g. `build.commitSha`) — never freeform upstream
+ * text. There is no `--no-cache` bypass (removed; cache is mandatory) — the
+ * sanctioned no-reuse path is a fresh `--store`.
+ */
 export interface WorkflowTaskIdentity {
   readonly workflow: string;
   readonly taskId: string;

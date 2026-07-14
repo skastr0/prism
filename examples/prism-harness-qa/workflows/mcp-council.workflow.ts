@@ -22,7 +22,10 @@
  *
  * Run from the prism git root:
  *   prism workflow validate examples/prism-harness-qa/workflows/mcp-council.workflow.ts
- *   prism workflow run examples/prism-harness-qa/workflows/mcp-council.workflow.ts --store /tmp/mcp-council.sqlite --no-cache
+ *   prism workflow run examples/prism-harness-qa/workflows/mcp-council.workflow.ts --store /tmp/mcp-council.sqlite
+ *
+ * Cache is mandatory — there is no cache-bypass flag; point `--store` at a
+ * fresh path for a clean re-run instead.
  */
 import { Effect, Either, Schema } from "effect";
 import {

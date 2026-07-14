@@ -306,7 +306,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     fix: "manual",
     description: "Prism-looking path is not recorded in the snapshot.",
   },
-
   // region.integrity
   {
     family: "region.integrity",
@@ -525,6 +524,28 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "error",
     fix: "manual",
     description: "[F] A prism-looking server carries a dead HTTP url transport (Prism is stdio-only).",
+  },
+
+  // launchd.residue
+  {
+    family: "launchd.residue",
+    code: "launchd.orphaned-service",
+    severity: "error",
+    fix: "gc",
+    description: "A retired launchd-era com.prism.mcp.* service is still loaded and/or its plist survives on disk.",
+  },
+  {
+    family: "launchd.residue",
+    code: "launchd.dead-bundle-respawn",
+    severity: "error",
+    fix: "gc",
+    description: "A retired launchd service is respawning against a deleted MCP server bundle path.",
+  },
+  {
+    family: "launchd.residue",
+    code: "launchd.residue-dropped",
+    severity: "info",
+    description: "Booted out and removed retired launchd-era Prism MCP residue (only emitted during --fix).",
   },
 ] as const;
 

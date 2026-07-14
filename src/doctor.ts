@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { Effect, Layer } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
@@ -49,6 +50,10 @@ import {
   workflowHarnessIdsForHarnesses,
   type WorkflowHarnessDetection,
 } from "./workflow-harness-detection.js";
+import {
+  cleanupLaunchdResidueEntry,
+  collectLaunchdResidueEntries,
+} from "./doctor/launchd-residue.js";
 
 export type DoctorSeverity = "error" | "warning" | "info";
 
@@ -61,7 +66,8 @@ export type DoctorFindingFamily =
   | "region.integrity"
   | "mcp.health"
   | "determinism.selfcheck"
-  | "topology.invariant";
+  | "topology.invariant"
+  | "launchd.residue";
 
 export interface DoctorFinding {
   readonly schema: "prism.doctor.finding.v1";
@@ -565,6 +571,75 @@ const runSnapshotGcFix = async (prismHome: string): Promise<DoctorFinding[]> => 
     root: dropped.root,
     path: dropped.targetPath,
   })));
+  return findings;
+};
+
+/**
+ * `launchd.residue` -- retired launchd-era `com.prism.mcp.*` LaunchAgents
+ * (OBS-002, `doctor/launchd-residue.ts`). Scoped to the exact conditions
+ * `src/mcp/lifecycle.ts`'s deleted `launchAgentEligible` used before this
+ * scheme was retired (real `~/.prism` home, darwin only) -- every doctor
+ * test uses a sandboxed `prismHome`, so this gate keeps every existing and
+ * future doctor test from ever reaching real `launchctl`/`~/Library/
+ * LaunchAgents`; only a real production invocation against the real home
+ * reaches `collectLaunchdResidueEntries`'s default (real) deps.
+ */
+const isLaunchdResidueEligible = (prismHome: string): boolean =>
+  process.platform === "darwin" && resolve(expandPath(prismHome)) === resolve(join(homedir(), ".prism"));
+
+const detectLaunchdResidue = async (prismHome: string): Promise<DoctorFinding[]> => {
+  if (!isLaunchdResidueEligible(prismHome)) return [];
+  const entries = await collectLaunchdResidueEntries();
+  const findings: DoctorFinding[] = [];
+  for (const entry of entries) {
+    findings.push(finding({
+      severity: "error",
+      family: "launchd.residue",
+      code: "launchd.orphaned-service",
+      message: `Retired launchd-era Prism MCP service is still ${entry.loaded ? "loaded in launchctl" : "registered on disk"}: ${entry.label}`,
+      ...(entry.plistPath ? { path: entry.plistPath } : {}),
+      fix: "gc",
+      data: { label: entry.label, loaded: entry.loaded, plistExists: entry.plistExists },
+    }));
+    if (entry.missingProgramPaths.length > 0) {
+      findings.push(finding({
+        severity: "error",
+        family: "launchd.residue",
+        code: "launchd.dead-bundle-respawn",
+        message: `Retired launchd service '${entry.label}' is respawning against a deleted bundle: ${entry.missingProgramPaths.join(", ")}`,
+        ...(entry.plistPath ? { path: entry.plistPath } : {}),
+        fix: "gc",
+        data: {
+          label: entry.label,
+          missingProgramPaths: entry.missingProgramPaths,
+          ...(entry.errLogSize !== undefined ? { errLogSize: entry.errLogSize } : {}),
+        },
+      }));
+    }
+  }
+  return findings;
+};
+
+const runLaunchdResidueFix = async (prismHome: string): Promise<DoctorFinding[]> => {
+  if (!isLaunchdResidueEligible(prismHome)) return [];
+  const entries = await collectLaunchdResidueEntries();
+  const findings: DoctorFinding[] = [];
+  for (const entry of entries) {
+    const result = await cleanupLaunchdResidueEntry(entry);
+    findings.push(finding({
+      severity: "info",
+      family: "launchd.residue",
+      code: "launchd.residue-dropped",
+      message: `Booted out and removed retired launchd-era Prism MCP residue: ${result.label}`,
+      ...(result.plistPath ? { path: result.plistPath } : {}),
+      data: {
+        label: result.label,
+        removedPlist: result.removedPlist,
+        removedErrLog: result.removedErrLog,
+        removedOutLog: result.removedOutLog,
+      },
+    }));
+  }
   return findings;
 };
 
@@ -2267,6 +2342,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
 
   if (options.fix) {
     findings.push(...(await runSnapshotGcFix(options.prismHome)));
+    findings.push(...(await runLaunchdResidueFix(options.prismHome)));
   }
 
   for (const harness of options.harnesses) {
@@ -2317,6 +2393,7 @@ export const runDoctor = async (options: DoctorOptions): Promise<DoctorReport> =
       roots: options.roots,
     })),
   );
+  findings.push(...(await detectLaunchdResidue(options.prismHome)));
 
   const pluginInspection = await inspectPlugin(options);
   findings.push(...pluginInspection.findings);

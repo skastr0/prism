@@ -22,6 +22,7 @@ import {
   Trait,
   type NormalizedOrbitPhase,
   type NormalizedTraitBinding,
+  type ToolAuthority,
 } from "./sources.js";
 
 export interface RegistryOptions {
@@ -126,6 +127,7 @@ export interface ToolOptions {
   readonly output?: unknown;
   readonly slots?: Record<string, { kind: "schema"; description?: string }>;
   readonly handle?: (...args: Array<unknown>) => unknown;
+  readonly authority?: ToolAuthority;
 }
 
 export const makeTool = (options: ToolOptions = {}): CanonicalTool =>
@@ -137,6 +139,7 @@ export const makeTool = (options: ToolOptions = {}): CanonicalTool =>
     output: options.output ?? Schema.Struct({ acknowledged: Schema.Boolean }),
     slots: options.slots ?? {},
     handle: options.handle ?? (async () => ({ acknowledged: true })),
+    authority: options.authority,
   });
 
 export interface ToolspaceOptions {

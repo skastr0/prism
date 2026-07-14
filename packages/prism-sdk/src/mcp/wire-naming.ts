@@ -182,7 +182,8 @@ export const capGrokWireName = (name: string, budget: number, guard?: GrokCollis
  * than given a meaningless record entry.
  */
 // `devin` is a compile harness with PR1 MCP unsupported (no shim front yet).
-export type ShimHarnessId = Exclude<HarnessId, "opencode" | "amp-code" | "pi" | "devin">;
+// `omp` consumes MCP through its native provider/extension loading, not a shim config.
+export type ShimHarnessId = Exclude<HarnessId, "opencode" | "amp-code" | "pi" | "devin" | "omp">;
 
 export const SHIM_HARNESS_IDS: ReadonlyArray<ShimHarnessId> = [
   "claude-code",

@@ -509,6 +509,97 @@ test("doctor reports a still-desired missing owned file as <=warning with a refr
   expect(cleanReport.findings.map((finding) => finding.code)).not.toContain("snapshot.owned-missing");
 });
 
+// HLT-002: an install root deleted from disk entirely (not one file within
+// it -- e.g. a project directory removed) must reconcile through the
+// existing `doctor --fix` flow. `--fix` is the explicit operator
+// confirmation; `snapshot.dead-root-dropped` is the non-silent receipt of
+// what was removed. Two independent dead roots (the vouch + antigravity-cli
+// scenario from the glyph) reconcile in the same pass and the result is
+// idempotent -- rerunning --fix on an already-clean world never re-flags.
+test("doctor --fix reconciles multiple deleted install roots end-to-end: flag, resolve, stay clean (HLT-002)", async () => {
+  const prismHome = join(root, "prism-home");
+  const vouchRoot = join(root, "vouch-project", ".claude");
+  const antigravityRoot = join(root, "antigravity-home");
+
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "opencode",
+      root: vouchRoot,
+      entries: [
+        {
+          targetPath: join(vouchRoot, "commands", "review.md"),
+          contentHash: computeContentHash("vouch\n"),
+          mode: "owned",
+          plugin: "vouch-demo",
+        },
+      ],
+    },
+  });
+  await commitSnapshot({
+    prismHome,
+    manifest: {
+      version: 1,
+      harness: "codex-cli",
+      root: antigravityRoot,
+      entries: [
+        {
+          targetPath: join(antigravityRoot, "skills", "demo.md"),
+          contentHash: computeContentHash("antigravity\n"),
+          mode: "owned",
+          plugin: "antigravity-demo",
+        },
+      ],
+    },
+  });
+
+  // Neither root ever exists on disk in this test -- simulating a
+  // project/home deleted after Prism installed into it.
+  const dirtyReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  const dirtyCodes = dirtyReport.findings.map((finding) => finding.code);
+  expect(dirtyCodes.filter((code) => code === "snapshot.dead-root")).toHaveLength(2);
+  // A dead root reports once per manifest, never once per owned file it
+  // used to carry (that would be the PQ-157 flood this test guards against).
+  expect(dirtyCodes).not.toContain("snapshot.owned-missing");
+
+  const fixReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+  const droppedRoots = fixReport.findings
+    .filter((finding) => finding.code === "snapshot.dead-root-dropped")
+    .map((finding) => finding.root)
+    .sort();
+  expect(droppedRoots).toEqual([antigravityRoot, vouchRoot].sort());
+  expect(await Bun.file(snapshotPath(prismHome, vouchRoot)).exists()).toBe(false);
+  expect(await Bun.file(snapshotPath(prismHome, antigravityRoot)).exists()).toBe(false);
+
+  const cleanReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(cleanReport.findings).toEqual([]);
+
+  // Idempotent: reconciling an already-clean world never re-flags or errors.
+  const rerunReport = await runDoctor({
+    harnesses: ["opencode", "codex-cli"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+  expect(rerunReport.findings).toEqual([]);
+});
+
 test("doctor --fix drops stale snapshot region entries for missing marker fences", async () => {
   const prismHome = join(root, "prism-home");
   const harnessRoot = join(process.env.HOME!, ".codex");

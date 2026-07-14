@@ -54,7 +54,12 @@ export const registerWorkflowStore = (prismHome: string, storePath: string): voi
   try {
     const file = workflowStoreRegistryPath(prismHome);
     const resolved = resolve(storePath);
-    const entries = readRegistryFile(file).filter((entry) => entry.path !== resolved);
+    // Prune dead paths here too, not only in listRegisteredWorkflowStores's
+    // read path — the file is otherwise append-only and every tmp store a
+    // test or a scratch run ever touched accumulates forever (WFE-008).
+    const entries = readRegistryFile(file).filter(
+      (entry) => entry.path !== resolved && existsSync(entry.path),
+    );
     writeRegistryFile(file, [...entries, { path: resolved, lastOpenedAt: new Date().toISOString() }]);
   } catch {
     // best-effort by contract

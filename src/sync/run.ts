@@ -1,10 +1,37 @@
+import { Effect, Layer } from "effect";
 import { BlockedTargetError } from "../errors.js";
-import { readSnapshot } from "../state/store.js";
+import { PrismHome } from "../services/prism-env.js";
+import { SnapshotStore, SnapshotStoreLive } from "../services/snapshot-store.js";
 import { withSnapshotLock } from "../state/lock.js";
 import { DEFAULT_KEPT_RUN_BACKUPS, pruneRunBackups } from "../state/run-backups.js";
 import type { DesiredRoot } from "./desired.js";
 import { applySync, type SyncOpListener, type SyncReport } from "./apply.js";
 import { planSync } from "./plan.js";
+
+/**
+ * PQ-089: the one wired consumer proving the SnapshotStore seam end-to-end.
+ * `syncDesiredRoot` keeps its plain-`Promise` external signature (existing
+ * callers pass a raw `prismHome` string, unchanged); internally the snapshot
+ * read now flows through the `SnapshotStore` Effect service instead of
+ * calling `readSnapshot` directly. `SnapshotStoreLive` is a pure delegation
+ * to src/state/store.ts, so behavior is unchanged -- this only moves where
+ * the call is made from, not what it does.
+ */
+const readSnapshotViaService = (options: {
+  readonly prismHome: string;
+  readonly harness: string;
+  readonly root: string;
+}) => {
+  const layer = SnapshotStoreLive.pipe(
+    Layer.provide(Layer.succeed(PrismHome, { home: options.prismHome })),
+  );
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* SnapshotStore;
+      return yield* store.read({ harness: options.harness, root: options.root });
+    }).pipe(Effect.provide(layer)),
+  );
+};
 
 export const syncDesiredRoot = (options: {
   readonly prismHome: string;
@@ -15,7 +42,7 @@ export const syncDesiredRoot = (options: {
   readonly onOp?: SyncOpListener;
 }): Promise<SyncReport> => {
   const plan = async () => {
-    const snapshot = await readSnapshot({
+    const snapshot = await readSnapshotViaService({
       prismHome: options.prismHome,
       harness: options.desired.harness,
       root: options.desired.root,

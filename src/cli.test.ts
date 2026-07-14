@@ -1617,7 +1617,7 @@ test("bare refresh/plan default to detected-installed harnesses (fake HOME, matc
     // to the equivalent explicit `--harness <detected list>` run.
     expect(bare.stdout).toBe(`Detected installed harnesses: opencode\n${explicit.stdout}`);
   }
-});
+}, 20_000); // 4 CLI spawns (refresh x2, plan x2); default 5s timeout is tight under load.
 
 test("bare invocation fails with a helpful error when no harness is installed (never silent, never --all)", async () => {
   const root = await createTempRoot();

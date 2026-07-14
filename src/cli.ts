@@ -180,9 +180,8 @@ program
   .option("--compile-root <path>", "Override compile output root")
   .option(
     "--mcp-lifecycle <mode>",
-    "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
+    "MCP daemon-lifecycle hint (none|verify|serve) — currently a no-op; compile never drives daemon lifecycle. Rejected as 'serve' combined with --dry-run.",
     parseMcpLifecycleMode,
-    "serve"
   )
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -216,9 +215,8 @@ program
   .option("--json", "Print a machine-readable JSON envelope", false)
   .option(
     "--mcp-lifecycle <mode>",
-    "Generated HTTP MCP lifecycle behavior during compile (none|verify|serve)",
+    "MCP daemon-lifecycle hint (none|verify|serve) — currently a no-op; compile never drives daemon lifecycle. Rejected as 'serve' since `plan` is always a dry run.",
     parseMcpLifecycleMode,
-    "serve"
   )
   .action(async (pluginPath: string | undefined, options) => {
     try {
@@ -2135,19 +2133,44 @@ async function loadRefreshCommandContext(
   return { pluginPath, manifest, harnesses, options };
 }
 
+// `--dry-run` (or `plan`, which is always a dry run) promises a
+// side-effect-free preview; an explicit `--mcp-lifecycle serve` requests the
+// opposite (a live daemon). Rather than silently resolve the contradiction
+// by letting the (now-inert) lifecycle value do nothing, reject it as a
+// usage error — the incoherent combination becomes unrepresentable instead
+// of a state the runtime quietly polices (PQ-171). `none`/`verify` name
+// non-mutating intents and stay compatible with a dry run.
+function assertDryRunLifecycleCompatible(
+  mcpLifecycle: CompileMcpLifecycleMode | undefined,
+  dryRun: boolean,
+): void {
+  if (dryRun && mcpLifecycle === "serve") {
+    throw new CliUsageError(
+      "--dry-run (plan is always a dry run) conflicts with --mcp-lifecycle serve — " +
+        "a preview cannot also request a live MCP daemon. Pass --mcp-lifecycle none or verify, or drop --dry-run.",
+    );
+  }
+}
+
 function normalizeRefreshCommandOptions(
   options: RefreshCommandOptions,
   mode: RefreshMode,
 ): NormalizedRefreshOptions {
+  const dryRun = mode === "plan" || options.dryRun === true;
+  assertDryRunLifecycleCompatible(options.mcpLifecycle, dryRun);
   return {
     ...options,
     scope: options.scope ?? "global",
     overwrite: options.overwrite ?? false,
-    dryRun: mode === "plan" || options.dryRun === true,
+    dryRun,
     json: options.json ?? false,
     compileOnly: options.compileOnly ?? false,
     clean: options.clean ?? false,
-    mcpLifecycle: options.mcpLifecycle ?? "serve",
+    // Compile never drives MCP daemon lifecycle either way (see
+    // CompileOptions.mcpLifecycle) — "serve" stays the real-apply default
+    // for back-compat; a dry run defaults to the honest "none" instead of
+    // silently inheriting a mutating-sounding default it can never act on.
+    mcpLifecycle: options.mcpLifecycle ?? (dryRun ? "none" : "serve"),
   };
 }
 

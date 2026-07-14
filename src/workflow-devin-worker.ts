@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
@@ -20,6 +20,12 @@ export type DevinWorkflowWorkerOptions = {
 
 export class DevinWorkflowWorkerError extends Error {
   override readonly name = "DevinWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 const DEVIN_AUTH_OUTPUT_PATTERN =
@@ -139,6 +145,22 @@ const sessionIdFromAtif = (exportJson: unknown): string | undefined => {
   return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
 };
 
+// Best-effort session id capture on a failure path (OBS-006): devin may have written a
+// partial ATIF export before crashing, or this attempt may already be resuming a known
+// session (the repair-loop continuation id). Never throws — an unreadable/absent export
+// just falls back to whatever session id the caller already knew, if any.
+const bestEffortDevinSessionId = async (
+  path: string,
+  fallback: string | undefined,
+): Promise<string | undefined> => {
+  try {
+    const exportJson = JSON.parse(await readFile(path, "utf8")) as unknown;
+    return sessionIdFromAtif(exportJson) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 export const runDevinWorkflowTask = async (
   task: AnyWorkflowTask,
   options: DevinWorkflowWorkerOptions,
@@ -194,18 +216,36 @@ export const runDevinWorkflowTask = async (
       });
 
     if (aborted) {
-      throw new DevinWorkflowWorkerError("devin was aborted by Prism workflow stop");
+      throw new DevinWorkflowWorkerError(
+        "devin was aborted by Prism workflow stop",
+        workflowWorkerFailureMetadata({
+          adapter: "devin",
+          stderr,
+          sessionId: await bestEffortDevinSessionId(exportPath, sessionId),
+        }),
+      );
     }
     if (earlyExit === "devin-auth-login-required") {
-      throw new DevinWorkflowWorkerError(devinAuthErrorMessage);
+      throw new DevinWorkflowWorkerError(
+        devinAuthErrorMessage,
+        workflowWorkerFailureMetadata({ adapter: "devin", stderr, sessionId }),
+      );
     }
     if (timedOut) {
       throw new DevinWorkflowWorkerError(
         `devin exceeded Prism process timeout after ${processTimeoutMs}ms`,
+        workflowWorkerFailureMetadata({
+          adapter: "devin",
+          stderr,
+          sessionId: await bestEffortDevinSessionId(exportPath, sessionId),
+        }),
       );
     }
     if (exitCode !== 0 && isDevinAuthOutput(`${stdout}\n${stderr}`)) {
-      throw new DevinWorkflowWorkerError(devinAuthErrorMessage);
+      throw new DevinWorkflowWorkerError(
+        devinAuthErrorMessage,
+        workflowWorkerFailureMetadata({ adapter: "devin", stderr, sessionId }),
+      );
     }
     if (exitCode !== 0) {
       const stderrMetadata = summarizeWorkflowWorkerStderr(stderr);
@@ -213,7 +253,14 @@ export const runDevinWorkflowTask = async (
         stderrMetadata.stderrExcerpt ??
         summarizeWorkflowWorkerStderr(stdout).stderrExcerpt ??
         "";
-      throw new DevinWorkflowWorkerError(`devin exited with ${exitCode}: ${errorExcerpt}`);
+      throw new DevinWorkflowWorkerError(
+        `devin exited with ${exitCode}: ${errorExcerpt}`,
+        workflowWorkerFailureMetadata({
+          adapter: "devin",
+          stderr,
+          sessionId: await bestEffortDevinSessionId(exportPath, sessionId),
+        }),
+      );
     }
 
     let exportJson: unknown | undefined;
@@ -224,10 +271,16 @@ export const runDevinWorkflowTask = async (
     } catch (error) {
       const fallbackText = stdout.trim();
       if (fallbackText.length === 0) {
+        const failureMetadata = workflowWorkerFailureMetadata({
+          adapter: "devin",
+          stderr,
+          sessionId: (exportJson !== undefined ? sessionIdFromAtif(exportJson) : undefined) ?? sessionId,
+        });
         throw error instanceof DevinWorkflowWorkerError
-          ? error
+          ? new DevinWorkflowWorkerError(error.message, failureMetadata)
           : new DevinWorkflowWorkerError(
               "devin finished without a readable ATIF export or stdout text",
+              failureMetadata,
             );
       }
       agentText = fallbackText;

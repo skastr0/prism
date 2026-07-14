@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema } from "./workflow-output-schema.js";
@@ -22,6 +22,12 @@ export type CodexWorkflowWorkerOptions = {
 
 export class CodexWorkflowWorkerError extends Error {
   override readonly name = "CodexWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 const assertCodexPermission = (mode: WorkflowPermissionMode): void => {
@@ -166,16 +172,28 @@ export const runCodexWorkflowTask = async (
       abortSignal: options.abortSignal,
     });
     if (aborted) {
-      throw new CodexWorkflowWorkerError("codex was aborted by Prism workflow stop");
+      throw new CodexWorkflowWorkerError(
+        "codex was aborted by Prism workflow stop",
+        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+      );
     }
     if (timedOut) {
-      throw new CodexWorkflowWorkerError(`codex exceeded Prism process timeout after ${processTimeoutMs}ms`);
+      throw new CodexWorkflowWorkerError(
+        `codex exceeded Prism process timeout after ${processTimeoutMs}ms`,
+        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+      );
     }
     if (exitCode !== 0) {
-      throw new CodexWorkflowWorkerError(`codex exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+      throw new CodexWorkflowWorkerError(
+        `codex exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+      );
     }
     const outputText = await readFile(outputPath, "utf8").catch((cause) => {
-      throw new CodexWorkflowWorkerError(`codex did not write --output-last-message: ${cause instanceof Error ? cause.message : String(cause)}`);
+      throw new CodexWorkflowWorkerError(
+        `codex did not write --output-last-message: ${cause instanceof Error ? cause.message : String(cause)}`,
+        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+      );
     });
     return {
       output: parseWorkflowWorkerJsonOutput(outputText),

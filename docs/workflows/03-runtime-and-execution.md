@@ -68,6 +68,54 @@ current task records should be treated as durable evidence for the dogfood
 wedge, not as the full resource model with refs, lineage, attempts, and
 cross-scope locks.
 
+### Joining a failed task to its harness session id (OBS-006)
+
+The dogfood store's `workflow_run_tasks` table (`src/workflow-store.ts`) has no
+dedicated session-id column — `metadata_json` carries `adapter`, `sessionId`,
+`stderrExcerpt`, `stderrTruncated`, `stderrBytes`, and `stderrSha256` as JSON
+keys, for both completed and failed rows. Every worker adapter attaches this
+to its failure error's `metadata` property, and the runner merges it into both
+the persisted row and the `task.executor.failed` event the same way it already
+merges an adapter's metadata on the completion path. Query it with SQLite's
+`json_extract`:
+
+```sql
+-- One failed task row, forensics pulled out of metadata_json.
+select
+  run_id,
+  task_id,
+  agent_plugin,
+  agent_name,
+  json_extract(metadata_json, '$.adapter')         as adapter,
+  json_extract(metadata_json, '$.sessionId')       as harness_session_id,
+  json_extract(metadata_json, '$.stderrExcerpt')   as stderr_excerpt,
+  json_extract(metadata_json, '$.stderrTruncated') as stderr_truncated,
+  created_at
+from workflow_run_tasks
+where status = 'failed'
+order by created_at desc;
+
+-- Same join, widened to every task.executor.failed event for that task (the event
+-- payload carries the identical metadata keys, recorded at the moment of failure —
+-- useful when a task retried through repair before landing on its final row).
+select
+  t.run_id,
+  t.task_id,
+  json_extract(t.metadata_json, '$.sessionId') as harness_session_id,
+  e.type,
+  json_extract(e.payload_json, '$.stderrExcerpt') as event_stderr_excerpt,
+  e.created_at as failed_at
+from workflow_run_tasks t
+join workflow_events e
+  on e.run_id = t.run_id and e.task_id = t.task_id and e.type = 'task.executor.failed'
+where t.status = 'failed'
+order by e.created_at desc;
+```
+
+Once `harness_session_id` and `adapter` are known, join against the harness's own
+transcript store (e.g. a quasar-ingested session) to recover the full worker
+transcript for a task that never returned a decodable result.
+
 ```
 ~/.prism/workflows/<project-key>/
   workflow-ledger.sqlite   # AgentRun/resources/runs/events index

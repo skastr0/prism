@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WorkflowOutputParseError } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import type { WorkflowAgentRef } from "./workflows.js";
 
 const builder = {
@@ -37,6 +37,39 @@ describe("workflow worker metadata", () => {
     expect(metadata.stderrExcerpt).toEndWith(" café tail");
     expect(Buffer.byteLength(metadata.stderrExcerpt ?? "", "utf8")).toBeLessThanOrEqual(16);
     expect(metadata.stderrTruncated).toBe(true);
+  });
+});
+
+describe("workflowWorkerFailureMetadata (OBS-006)", () => {
+  test("carries adapter + stderr summary + sessionId when all are known", () => {
+    const metadata = workflowWorkerFailureMetadata({
+      adapter: "codex-cli",
+      stderr: "fatal: account mismatch",
+      sessionId: "sess-123",
+    });
+
+    expect(metadata).toEqual({
+      adapter: "codex-cli",
+      stderrBytes: 23,
+      stderrSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      stderrExcerpt: "fatal: account mismatch",
+      stderrTruncated: false,
+      sessionId: "sess-123",
+    });
+  });
+
+  test("omits sessionId when it could not be obtained", () => {
+    const metadata = workflowWorkerFailureMetadata({ adapter: "grok-cli", stderr: "boom" });
+
+    expect(metadata).not.toHaveProperty("sessionId");
+    expect(metadata.adapter).toBe("grok-cli");
+    expect(metadata.stderrExcerpt).toBe("boom");
+  });
+
+  test("still reports the adapter when stderr is empty", () => {
+    const metadata = workflowWorkerFailureMetadata({ adapter: "hermes", stderr: "   " });
+
+    expect(metadata).toEqual({ adapter: "hermes" });
   });
 });
 

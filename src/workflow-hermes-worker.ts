@@ -1,6 +1,6 @@
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
@@ -18,6 +18,12 @@ export type HermesWorkflowWorkerOptions = {
 
 export class HermesWorkflowWorkerError extends Error {
   override readonly name = "HermesWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
 
 const hermesSessionId = (stderr: string): string | undefined => {
@@ -115,13 +121,22 @@ export const runHermesWorkflowTask = async (
     abortSignal: options.abortSignal,
   });
   if (aborted) {
-    throw new HermesWorkflowWorkerError("hermes was aborted by Prism workflow stop");
+    throw new HermesWorkflowWorkerError(
+      "hermes was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "hermes", stderr, sessionId: hermesSessionId(stderr) ?? resumeSessionId }),
+    );
   }
   if (timedOut) {
-    throw new HermesWorkflowWorkerError(`hermes exceeded Prism process timeout after ${processTimeoutMs}ms`);
+    throw new HermesWorkflowWorkerError(
+      `hermes exceeded Prism process timeout after ${processTimeoutMs}ms`,
+      workflowWorkerFailureMetadata({ adapter: "hermes", stderr, sessionId: hermesSessionId(stderr) ?? resumeSessionId }),
+    );
   }
   if (exitCode !== 0) {
-    throw new HermesWorkflowWorkerError(`hermes exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+    throw new HermesWorkflowWorkerError(
+      `hermes exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "hermes", stderr, sessionId: hermesSessionId(stderr) ?? resumeSessionId }),
+    );
   }
   return {
     output: parseWorkflowWorkerJsonOutput(stdout),

@@ -546,7 +546,12 @@ const failedTaskResult = (
     cached,
     status: error instanceof WorkflowTaskEscalatedError ? "escalated" : "failed",
     error: message,
-    metadata: workflowContractMetadata,
+    // OBS-006: reads whatever forensics the adapter attached to error.metadata (stderr
+    // excerpt, harness session id, ...) the same way the persisted-task-record path already
+    // does via normalizedAttemptMetadata — this is the isolated/dynamic-fanout result path
+    // (e.g. Effect.either(wf.runTask(...))), a separate call site that previously fell back
+    // to bare contract metadata regardless of what the adapter knew about the failure.
+    metadata: normalizedAttemptMetadata(undefined, error),
   };
 };
 
@@ -1263,7 +1268,14 @@ const executeWorkflowTask = async (input: {
         const output: Record<string, unknown> = { error: errorMessage(error) };
         const rawText = (error as { readonly rawText?: unknown } | null | undefined)?.rawText;
         if (rawText !== undefined) output.rawText = rawText;
-        recordEvent(store, runId, task.id, "task.executor.failed", { attempt: repairs, ...output });
+        // OBS-006: a hard executor failure (aborted, timed out, non-zero exit, unparseable
+        // output, ...) previously discarded everything the adapter knew about the failure —
+        // the stderr excerpt/hash and the harness session id captured on the success path —
+        // down to bare contract metadata, in the event payload. `metadata` above is already
+        // merged with error.metadata (normalizedAttemptMetadata at the top of this catch);
+        // carry it into the event too so a failed task can be joined to its harness session
+        // and stderr tail from the event stream, not only from the persisted row.
+        recordEvent(store, runId, task.id, "task.executor.failed", { attempt: repairs, ...output, ...(metadata ?? {}) });
         recordRunTaskIfPersisted({
           store,
           runId,

@@ -302,3 +302,70 @@ describe("OMP workflow execution", () => {
     }
   });
 });
+
+describe("runOmpWorkflowTask failure metadata (OBS-006)", () => {
+  test("non-zero exit attaches adapter + stderr excerpt to the thrown error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-omp-fail-"));
+    try {
+      const projectAgent = join(root, ".omp", "agents", "builder.md");
+      await writeText(projectAgent, "project compiled agent\n");
+      const fakeOmp = join(root, "fake-omp-fail.mjs");
+      await writeFile(fakeOmp, [
+        "#!/usr/bin/env node",
+        "console.error('omp: provider rejected the request');",
+        "process.exit(1);",
+        "",
+      ].join("\n"));
+      await chmod(fakeOmp, 0o755);
+
+      const failure = await runOmpWorkflowTask(task, {
+        cwd: root,
+        bin: fakeOmp,
+        resolvedPermission: "legacy",
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(OmpWorkflowWorkerError);
+      const metadata = (failure as OmpWorkflowWorkerError).metadata;
+      expect(metadata?.adapter).toBe("omp-cli");
+      expect(metadata?.stderrExcerpt).toContain("omp: provider rejected the request");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("captures the session id from a partial event stream before a non-zero exit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-omp-fail-"));
+    try {
+      const projectAgent = join(root, ".omp", "agents", "builder.md");
+      await writeText(projectAgent, "project compiled agent\n");
+      const fakeOmp = join(root, "fake-omp-partial-fail.mjs");
+      await writeFile(fakeOmp, [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ type: 'session', id: 'omp-partial-session' }) + '\\n');",
+        "console.error('omp: crashed mid-turn');",
+        "process.exit(1);",
+        "",
+      ].join("\n"));
+      await chmod(fakeOmp, 0o755);
+
+      const failure = await runOmpWorkflowTask(task, {
+        cwd: root,
+        bin: fakeOmp,
+        resolvedPermission: "legacy",
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(OmpWorkflowWorkerError);
+      const metadata = (failure as OmpWorkflowWorkerError).metadata;
+      expect(metadata?.adapter).toBe("omp-cli");
+      expect(metadata?.sessionId).toBe("omp-partial-session");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

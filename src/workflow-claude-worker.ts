@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
 import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema, type WorkflowJsonSchema } from "./workflow-output-schema.js";
 import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import { stableSessionIdFromJsonLines } from "./workflow-session.js";
 
 export type ClaudeWorkflowWorkerOptions = {
   readonly cwd: string;
@@ -22,7 +23,20 @@ export type ClaudeWorkflowWorkerOptions = {
 
 export class ClaudeWorkflowWorkerError extends Error {
   override readonly name = "ClaudeWorkflowWorkerError";
+  readonly metadata?: Record<string, unknown>;
+
+  constructor(message: string, metadata?: Record<string, unknown>) {
+    super(message);
+    if (metadata !== undefined) this.metadata = metadata;
+  }
 }
+
+// Best-effort session id capture on a failure path (OBS-006): claude's stream-json format
+// emits a system/init event carrying session_id before the final result event, so even a
+// stream that failed partway through (non-zero exit, timeout) may have printed one. Falls
+// back to the known repair-loop continuation id, if any.
+const claudeFailureSessionId = (stdout: string, fallback: string | undefined): string | undefined =>
+  stableSessionIdFromJsonLines(stdout, ["session_id"]) ?? fallback;
 
 export interface ClaudeGeneratedPluginDiscovery {
   readonly pluginDir?: string;
@@ -265,16 +279,37 @@ export const runClaudeWorkflowTask = async (
     abortSignal: options.abortSignal,
   });
   if (aborted) {
-    throw new ClaudeWorkflowWorkerError("claude was aborted by Prism workflow stop");
+    throw new ClaudeWorkflowWorkerError(
+      "claude was aborted by Prism workflow stop",
+      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+    );
   }
   if (timedOut) {
-    throw new ClaudeWorkflowWorkerError(`claude exceeded Prism process timeout after ${processTimeoutMs}ms`);
+    throw new ClaudeWorkflowWorkerError(
+      `claude exceeded Prism process timeout after ${processTimeoutMs}ms`,
+      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+    );
   }
   if (exitCode !== 0) {
-    throw new ClaudeWorkflowWorkerError(`claude exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`);
+    throw new ClaudeWorkflowWorkerError(
+      `claude exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
+      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+    );
   }
 
-  const { envelope, toolCallNames } = parseClaudeStream(stdout);
+  let claudeStream: ClaudeStreamSummary;
+  try {
+    claudeStream = parseClaudeStream(stdout);
+  } catch (error) {
+    if (error instanceof ClaudeWorkflowWorkerError) {
+      throw new ClaudeWorkflowWorkerError(
+        error.message,
+        workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+      );
+    }
+    throw error;
+  }
+  const { envelope, toolCallNames } = claudeStream;
   const unexpectedMcpToolCalls = unexpectedClaudeMcpToolCalls(
     toolCallNames,
     generatedPlugin.allowedTools,
@@ -283,10 +318,14 @@ export const runClaudeWorkflowTask = async (
   if (unexpectedMcpToolCalls.length > 0) {
     throw new ClaudeWorkflowWorkerError(
       `claude called MCP tools outside generated agent allow-list: ${unexpectedMcpToolCalls.join(", ")}`,
+      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: envelope.session_id ?? resumeSessionId }),
     );
   }
   if (envelope.is_error !== undefined && envelope.is_error !== false) {
-    throw new ClaudeWorkflowWorkerError(`claude returned an error: ${typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result)}`);
+    throw new ClaudeWorkflowWorkerError(
+      `claude returned an error: ${typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result)}`,
+      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: envelope.session_id ?? resumeSessionId }),
+    );
   }
   return {
     output: claudeEnvelopeOutput(envelope),

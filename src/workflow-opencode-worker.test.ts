@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Schema } from "effect";
-import { buildOpenCodeArgs, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
+import { buildOpenCodeArgs, OpenCodeWorkflowWorkerError, runOpenCodeWorkflowTask } from "./workflow-opencode-worker.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 import type { StableSessionId } from "./workflow-session.js";
 import type { WorkflowAgentRef } from "./workflows.js";
@@ -128,6 +128,69 @@ describe("opencode worker session id", () => {
 
       expect(result.output).toEqual({ summary: "plain" });
       expect(result.metadata?.sessionId).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runOpenCodeWorkflowTask failure metadata (OBS-006)", () => {
+  const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> =>
+    promise.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+  test("non-zero exit attaches adapter + stderr excerpt to the thrown error", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-opencode-fail-"));
+    try {
+      const fakeOpenCode = join(root, "fake-opencode-fail.mjs");
+      await writeFile(fakeOpenCode, [
+        "#!/usr/bin/env node",
+        "console.error('opencode: provider rejected the request');",
+        "process.exit(1);",
+        "",
+      ].join("\n"));
+      await chmod(fakeOpenCode, 0o755);
+
+      const failure = await rejectionOf(runOpenCodeWorkflowTask(task, {
+        cwd: root,
+        bin: fakeOpenCode,
+        resolvedPermission: "legacy",
+      }));
+
+      expect(failure).toBeInstanceOf(OpenCodeWorkflowWorkerError);
+      const metadata = (failure as OpenCodeWorkflowWorkerError).metadata;
+      expect(metadata?.adapter).toBe("opencode-cli");
+      expect(metadata?.stderrExcerpt).toContain("opencode: provider rejected the request");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("captures the session id from a partial event stream before a non-zero exit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-opencode-fail-"));
+    try {
+      const fakeOpenCode = join(root, "fake-opencode-partial-fail.mjs");
+      await writeFile(fakeOpenCode, [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ type: 'step_start', sessionID: 'ses_PARTIAL', part: {} }) + '\\n');",
+        "console.error('opencode: crashed mid-turn');",
+        "process.exit(1);",
+        "",
+      ].join("\n"));
+      await chmod(fakeOpenCode, 0o755);
+
+      const failure = await rejectionOf(runOpenCodeWorkflowTask(task, {
+        cwd: root,
+        bin: fakeOpenCode,
+        resolvedPermission: "legacy",
+      }));
+
+      expect(failure).toBeInstanceOf(OpenCodeWorkflowWorkerError);
+      const metadata = (failure as OpenCodeWorkflowWorkerError).metadata;
+      expect(metadata?.adapter).toBe("opencode-cli");
+      expect(metadata?.sessionId).toBe("ses_PARTIAL");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1561,6 +1561,109 @@ test("doctor returns usage exit code for invalid invocation", async () => {
   expect(result.stderr).toContain("Project-local scope requires --project <path>");
 });
 
+test("bare doctor defaults to detected-installed harnesses and prints the detection as the first line", async () => {
+  const root = await createTempRoot();
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+
+  // Only claude-code and codex-cli have a global config root on this fake
+  // HOME; every other supported harness's root is absent.
+  await mkdir(join(homeRoot, ".claude"), { recursive: true });
+  await mkdir(join(homeRoot, ".codex"), { recursive: true });
+  await mkdir(prismHome, { recursive: true });
+
+  const result = await runCli(["doctor"], { HOME: homeRoot, PRISM_HOME: prismHome });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.split("\n")[0]).toBe("Detected installed harnesses: claude-code, codex-cli");
+});
+
+test("bare refresh/plan default to detected-installed harnesses (fake HOME, matches --harness <detected>)", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "detected-default-plugin");
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+  const rulePath = join(pluginRoot, "rules", "global", "standards.md");
+
+  // Only opencode's global config root exists, so detection must resolve to
+  // exactly ["opencode"] regardless of the other 13 supported harnesses.
+  await mkdir(join(pluginRoot, "rules", "global"), { recursive: true });
+  await mkdir(join(homeRoot, ".config", "opencode"), { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify(
+      { name: "detected-default-plugin", version: "0.1.0", targets: { rules: ["opencode"] } },
+      null,
+      2,
+    ),
+  );
+  await writeFile(rulePath, "Always prefer the detected-installed default.\n");
+
+  const env = { HOME: homeRoot, PRISM_HOME: prismHome };
+  for (const command of ["refresh", "plan"]) {
+    // `plan` has no --dry-run flag (it is always a dry run); `refresh` needs
+    // it explicitly so this test never writes into the fake HOME.
+    const modeArgs = command === "refresh" ? ["--dry-run"] : [];
+    const bare = await runCli([command, "--plugin", pluginRoot, ...modeArgs], env);
+    const explicit = await runCli(
+      [command, "--plugin", pluginRoot, "--harness", "opencode", ...modeArgs],
+      env,
+    );
+
+    expect(bare.exitCode).toBe(0);
+    expect(explicit.exitCode).toBe(0);
+    // The only difference bare-run introduces is the detected-harnesses
+    // header as the first printed line — everything after it is byte-identical
+    // to the equivalent explicit `--harness <detected list>` run.
+    expect(bare.stdout).toBe(`Detected installed harnesses: opencode\n${explicit.stdout}`);
+  }
+});
+
+test("bare invocation fails with a helpful error when no harness is installed (never silent, never --all)", async () => {
+  const root = await createTempRoot();
+  const homeRoot = join(root, "home");
+  const prismHome = join(root, "prism-home");
+
+  // Fresh HOME: no supported harness has a config root on disk.
+  await mkdir(homeRoot, { recursive: true });
+  await mkdir(prismHome, { recursive: true });
+
+  const env = { HOME: homeRoot, PRISM_HOME: prismHome };
+  const doctorResult = await runCli(["doctor"], env);
+
+  expect(doctorResult.exitCode).toBe(2);
+  expect(doctorResult.stderr).toContain(
+    "No installed harnesses detected (checked the global config root for every supported harness).",
+  );
+  expect(doctorResult.stderr).toContain("Please specify --harness <ids> or --all.");
+  // Never a silent no-op and never a silent fall-through to --all: no
+  // harness-scoped output should have been produced.
+  expect(doctorResult.stdout).toBe("");
+});
+
+test("package keeps requiring explicit --harness or --all even when harnesses are installed", async () => {
+  const root = await createTempRoot();
+  const pluginRoot = join(root, "package-strict-plugin");
+  const homeRoot = join(root, "home");
+
+  // A harness root is present (would resolve as a non-empty detected set for
+  // refresh/plan/doctor), proving package's carve-out is verb-gated, not a
+  // side effect of an empty machine.
+  await mkdir(homeRoot, { recursive: true });
+  await mkdir(join(homeRoot, ".claude"), { recursive: true });
+  await mkdir(pluginRoot, { recursive: true });
+  await writeFile(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify({ name: "package-strict-plugin", version: "0.1.0", targets: {} }, null, 2),
+  );
+
+  const result = await runCli(["package", pluginRoot], { HOME: homeRoot });
+
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr).toContain("Please specify --harness <ids> or --all");
+  expect(result.stdout).not.toContain("Detected installed harnesses");
+});
+
 test("commands return usage exit code for invalid scope values", async () => {
   const result = await runCli(
     ["plan", "--plugin", ".", "--harness", "opencode", "--scope", "banana"],

@@ -38,6 +38,7 @@ import type {
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import {
   compilePluginForTarget,
   formatOperations,
@@ -1251,7 +1252,7 @@ program
       assertProjectPathForProjectScope(options.scope, options.project);
       const expanded = expandPath(pluginPath);
       const manifest = await readManifest(expanded);
-      const requested = resolveRequestedHarnesses(options);
+      const requested = resolveRequestedHarnesses(options, { allowInstalledDefault: false });
       const harnesses = requested.filter((harnessId) =>
         manifestHasCompileTargets(manifest, harnessId)
       );
@@ -1519,7 +1520,7 @@ program
       assertProjectPathForProjectScope(options.scope, options.project);
       const report = await runDoctor({
         ...(pluginPath ? { pluginPath } : {}),
-        harnesses: resolveRequestedHarnesses(options),
+        harnesses: resolveRequestedHarnesses(options, { allowInstalledDefault: true }),
         scope: options.scope,
         ...(options.project ? { projectPath: options.project } : {}),
         prismHome: resolvePrismHome(),
@@ -1879,7 +1880,7 @@ async function loadRefreshCommandContext(
   options: NormalizedRefreshOptions,
   mode: RefreshMode,
 ): Promise<RefreshCommandContext> {
-  const harnesses = resolveRequestedHarnesses(options);
+  const harnesses = resolveRequestedHarnesses(options, { allowInstalledDefault: true });
   const manifest = await readManifest(pluginPath);
 
   if (!options.json) {
@@ -2171,7 +2172,7 @@ async function runRefreshDirectoryCommand(
   directory: string,
   options: NormalizedRefreshOptions,
 ): Promise<void> {
-  const harnesses = resolveRequestedHarnesses(options);
+  const harnesses = resolveRequestedHarnesses(options, { allowInstalledDefault: true });
   const expandedDir = expandPath(directory);
 
   await requireRefreshDirectory(expandedDir);
@@ -2579,10 +2580,36 @@ function printInvalidManifestSummary(
   }
 }
 
-function resolveRequestedHarnesses(options: {
-  all?: boolean;
-  harness?: string;
-}): HarnessId[] {
+/**
+ * A harness counts as installed iff its global config root exists on disk —
+ * the same root path each lowerer targets (`resolveHarnessRoot(..., "global")`).
+ * Detection is machine-wide and scope-independent: it answers "is this
+ * harness present on this machine", not "what scope did this invocation ask
+ * to write to" (PQ-158).
+ */
+function detectInstalledHarnessIds(): HarnessId[] {
+  return getAllHarnessIds().filter((id) => {
+    const root = resolveHarnessRoot(getHarness(id), "global");
+    return root !== null && existsSync(root);
+  });
+}
+
+/**
+ * Shared harness selection for refresh/plan/doctor/package. `--harness` and
+ * `--all` are explicit overrides and stay byte-identical across every caller.
+ * `allowInstalledDefault` gates the bare-invocation fallback to
+ * detected-installed harnesses (PQ-158): refresh/plan/doctor opt in, package
+ * does not — packaging targets a named distribution set, not whatever
+ * happens to be installed on this machine.
+ */
+function resolveRequestedHarnesses(
+  options: {
+    all?: boolean;
+    harness?: string;
+    json?: boolean;
+  },
+  config: { allowInstalledDefault: boolean },
+): HarnessId[] {
   if (options.all) {
     return getAllHarnessIds();
   }
@@ -2602,6 +2629,21 @@ function resolveRequestedHarnesses(options: {
     }
 
     return harnesses as HarnessId[];
+  }
+
+  if (config.allowInstalledDefault) {
+    const detected = detectInstalledHarnessIds();
+    if (detected.length === 0) {
+      console.error(
+        "No installed harnesses detected (checked the global config root for every supported harness).",
+      );
+      console.error("Please specify --harness <ids> or --all.");
+      exitWith(EXIT_CODES.usage);
+    }
+    if (!options.json) {
+      console.log(`Detected installed harnesses: ${detected.join(", ")}`);
+    }
+    return detected;
   }
 
   console.error("Please specify --harness <ids> or --all");

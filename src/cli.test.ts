@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -399,6 +400,180 @@ test("workflow runs list applies its limit to newest runs first", async () => {
   const listed = JSON.parse(result.stdout) as { runs: Array<{ runId: string }> };
   expect(listed.runs.map((run) => run.runId)).toEqual(["z-newer-run"]);
 });
+
+const toSqliteDateTime = (date: Date): string => date.toISOString().slice(0, 19).replace("T", " ");
+
+test("workflow runs list --since filters by cutoff, surfaces a cause column, and rejects --hours+--since (OBS-007)", async () => {
+  const root = await createTempRoot();
+  const storePath = join(root, "workflows.sqlite");
+  const store = await WorkflowStore.open(storePath);
+  store.createRun("old-workflow", "old-run");
+  const failId = store.createRun("new-workflow", "new-run");
+  store.finishRun(failId, "failed", { kind: "workflow-failed", errorName: "Error", message: "boom" });
+  store.close();
+
+  const now = new Date();
+  const db = new Database(storePath);
+  db.query("update workflow_runs set created_at = ? where run_id = ?")
+    .run(toSqliteDateTime(new Date(now.getTime() - 10 * 24 * 3_600_000)), "old-run");
+  db.query("update workflow_runs set created_at = ? where run_id = ?")
+    .run(toSqliteDateTime(new Date(now.getTime() - 60_000)), "new-run");
+  db.close();
+
+  const unfiltered = await runCli(["workflow", "runs", "list", "--store", storePath], {});
+  expect(unfiltered.exitCode).toBe(0);
+  const unfilteredListed = JSON.parse(unfiltered.stdout) as {
+    runs: Array<{ runId: string; cause: string | null }>;
+  };
+  expect(unfilteredListed.runs.map((run) => run.runId)).toEqual(["new-run", "old-run"]);
+  expect(unfilteredListed.runs).toEqual([
+    expect.objectContaining({ runId: "new-run", cause: "workflow-failed" }),
+    expect.objectContaining({ runId: "old-run", cause: null }),
+  ]);
+
+  const sinceRelative = await runCli(["workflow", "runs", "list", "--store", storePath, "--since", "24h"], {});
+  expect(sinceRelative.exitCode).toBe(0);
+  const sinceRelativeListed = JSON.parse(sinceRelative.stdout) as { runs: Array<{ runId: string }> };
+  expect(sinceRelativeListed.runs.map((run) => run.runId)).toEqual(["new-run"]);
+
+  const sinceIso = await runCli([
+    "workflow", "runs", "list", "--store", storePath,
+    "--since", toSqliteDateTime(new Date(now.getTime() - 5 * 24 * 3_600_000)),
+  ], {});
+  expect(sinceIso.exitCode).toBe(0);
+  const sinceIsoListed = JSON.parse(sinceIso.stdout) as { runs: Array<{ runId: string }> };
+  expect(sinceIsoListed.runs.map((run) => run.runId)).toEqual(["new-run"]);
+
+  const conflicting = await runCli(
+    ["workflow", "runs", "list", "--store", storePath, "--hours", "1", "--since", "24h"],
+    {},
+  );
+  expect(conflicting.exitCode).toBe(2);
+  expect(conflicting.stderr).toContain("--hours and --since are mutually exclusive");
+
+  const badSince = await runCli(["workflow", "runs", "list", "--store", storePath, "--since", "not-a-date"], {});
+  expect(badSince.exitCode).toBe(2);
+  expect(badSince.stderr).toContain("--since must be an ISO date/time");
+}, 30_000);
+
+test("workflow runs show resolves a run across the store registry without --store (routing defect, repro run 07cedd42-57d2)", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const projectA = join(root, "project-a");
+  const projectB = join(root, "project-b");
+  await mkdir(projectA, { recursive: true });
+  await mkdir(projectB, { recursive: true });
+
+  const workflowPath = join(root, "cross-store.workflow.ts");
+  const mockOutputPath = join(root, "mock-output.json");
+  await writeFile(workflowPath, `
+import { Schema } from "effect";
+import { defineTask, defineWorkflow } from "${prismImportPath}";
+
+const agent = {
+  kind: "agent-ref",
+  plugin: "forge",
+  name: "builder",
+  description: "Build specialist",
+  sourceHash: "${"a".repeat(64)}",
+  manifestHash: "${"b".repeat(64)}",
+  installs: ["grok"],
+} as const;
+
+export const workflow = defineWorkflow({
+  name: "cross-store-smoke",
+  tasks: [defineTask({
+    id: "build",
+    agent,
+    prompt: "Return a summary.",
+    output: Schema.Struct({ summary: Schema.String }),
+    cacheKey: "cross-store-build",
+  })] as const,
+});
+`);
+  await writeFile(mockOutputPath, JSON.stringify({ build: { summary: "ok" } }));
+
+  // Registers project A's own default store in the shared registry.
+  const runA = await runCli(
+    ["workflow", "run", workflowPath, "--mock-output", mockOutputPath],
+    { PRISM_HOME: prismHome },
+    { cwd: projectA },
+  );
+  expect(runA.exitCode).toBe(0);
+
+  // The run under test lands in project B's default store — a different store than A's.
+  const runB = await runCli(
+    ["workflow", "run", workflowPath, "--mock-output", mockOutputPath],
+    { PRISM_HOME: prismHome },
+    { cwd: projectB },
+  );
+  expect(runB.exitCode).toBe(0);
+  const { runId } = JSON.parse(runB.stdout) as { runId: string };
+
+  // Looked up from project A's cwd, with no --store: before the fix this errored "workflow run
+  // not found" because only project A's default store was ever consulted.
+  const show = await runCli(
+    ["workflow", "runs", "show", runId],
+    { PRISM_HOME: prismHome },
+    { cwd: projectA },
+  );
+  expect(show.exitCode).toBe(0);
+  const showData = JSON.parse(show.stdout) as { run: { runId: string; workflow: string } };
+  expect(showData.run).toMatchObject({ runId, workflow: "cross-store-smoke" });
+
+  // An explicit --store is still honored as given (no scanning) and still 404s cleanly for a
+  // run that isn't in that specific store.
+  const explicitMiss = await runCli(
+    ["workflow", "runs", "show", runId, "--store", join(prismHome, "workflows", deriveProjectKey(projectA).key, "workflows.sqlite")],
+    { PRISM_HOME: prismHome },
+  );
+  expect(explicitMiss.exitCode).toBe(2);
+  expect(explicitMiss.stderr).toContain(`workflow run not found: ${runId}`);
+}, 30_000);
+
+test("workflow runs summary --all reports a workflow x status x cause rollup across stores (OBS-007)", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const storeAPath = join(root, "store-a.sqlite");
+  const storeBPath = join(root, "store-b.sqlite");
+
+  const storeA = await WorkflowStore.open(storeAPath);
+  storeA.createRun("wf-one", "ok-run");
+  const failRunId = storeA.createRun("wf-one", "fail-run");
+  storeA.finishRun(failRunId, "failed", { kind: "workflow-failed", errorName: "Error", message: "boom" });
+  storeA.close();
+
+  const storeB = await WorkflowStore.open(storeBPath);
+  const failRunId2 = storeB.createRun("wf-two", "fail-run-2");
+  storeB.finishRun(failRunId2, "failed", { kind: "workflow-failed", errorName: "Error", message: "boom2" });
+  storeB.close();
+
+  // Registers both stores in the (isolated, PRISM_HOME-scoped) registry.
+  expect((await runCli(["workflow", "runs", "list", "--store", storeAPath], { PRISM_HOME: prismHome })).exitCode).toBe(0);
+  expect((await runCli(["workflow", "runs", "list", "--store", storeBPath], { PRISM_HOME: prismHome })).exitCode).toBe(0);
+
+  const json = await runCli(["workflow", "runs", "summary", "--all", "--json"], { PRISM_HOME: prismHome });
+  expect(json.exitCode).toBe(0);
+  const data = JSON.parse(json.stdout) as {
+    totals: { runs: number; stores: number };
+    rollup: Array<{ workflow: string; status: string; cause: string | null; count: number }>;
+  };
+  expect(data.totals).toEqual({ runs: 3, stores: 2 });
+  expect(data.rollup).toEqual(expect.arrayContaining([
+    expect.objectContaining({ workflow: "wf-one", status: "running", cause: null, count: 1 }),
+    expect.objectContaining({ workflow: "wf-one", status: "failed", cause: "workflow-failed", count: 1 }),
+    expect.objectContaining({ workflow: "wf-two", status: "failed", cause: "workflow-failed", count: 1 }),
+  ]));
+
+  const text = await runCli(["workflow", "runs", "summary", "--all"], { PRISM_HOME: prismHome });
+  expect(text.exitCode).toBe(0);
+  expect(text.stdout).toContain("Workflow runs rollup: 3 runs across 2 stores");
+  expect(text.stdout).toContain("workflow-failed");
+
+  const usageError = await runCli(["workflow", "runs", "summary", "some-run-id", "--all"], { PRISM_HOME: prismHome });
+  expect(usageError.exitCode).toBe(2);
+  expect(usageError.stderr).toContain("--all does not take a runId");
+}, 30_000);
 
 test("workflow default store lives under PRISM_HOME, not the current project", async () => {
   const root = await createTempRoot();

@@ -129,7 +129,7 @@ factory-droid, pi, cursor, openclaw):
 
 ## 5. Degradation policy + fidelity report
 
-`defineHook` gains `onDegraded?: "fail" | "degrade" | "skip"` (default
+`HookSource` gains `onDegraded?: "fail" | "degrade" | "skip"` (default
 `"degrade"`).
 
 Planning semantics per hook × target (new module
@@ -171,8 +171,9 @@ the decode logic of `sources.ts` in generated JS. S0 must:
 
 ## 7. Authoring surface
 
-`defineHook({ name, description?, event, targets?, match?, onDegraded?,
-handle })` — `event` accepts the 13 portable literals. `match.tool`
+A plain object satisfying `HookSource` — `{ name, description?, event,
+targets?, match?, onDegraded?, handle }` — `event` accepts the 13 portable
+literals. `match.tool`
 (any/toolspace-tool/toolspace-group/canonical-tool) is unchanged and applies
 to `tool.before`/`tool.after`/`tool.failure`/`permission.request`.
 

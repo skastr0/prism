@@ -84,21 +84,20 @@ test("antigravity-cli lowerer emits executable hook wrappers with Antigravity ou
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(PRISM_IMPORT)};
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: { shell: { targets: { "antigravity-cli": { name: "run_shell" } } } },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
@@ -112,31 +111,31 @@ export default defineHook({
       ? { decision: "block" as const, message: "blocked" }
       : { decision: "continue" as const },
   ),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell-after.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(PRISM_IMPORT)};
 
-export default defineHook({
+export default {
   name: "audit-shell-after",
   description: "Audit shell command responses",
   event: hookEvent.toolAfter,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.output?.ok && event.cwd === ${JSON.stringify(pluginRoot)} && event.session?.id === "session-2" && event.native?.stepIdx === 5 && event.native?.error === "" ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "pre-invoke.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { defineHook, hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
 
-export default defineHook({
+export default {
   name: "pre-invoke",
   description: "Validate Antigravity invocation metadata",
   event: hookEvent.sessionStart,
@@ -145,16 +144,16 @@ export default defineHook({
       && event.native?.initialNumSteps === 10
     ? Effect.succeed({ decision: "continue" as const })
     : Effect.fail(new Error("missing invocation payload")),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "keep-going.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { defineHook, hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
 
-export default defineHook({
+export default {
   name: "keep-going",
   description: "Keep the agent loop alive",
   event: hookEvent.sessionEnd,
@@ -165,21 +164,21 @@ export default defineHook({
       && event.native?.error === "none"
     ? Effect.succeed({ decision: "continue" as const })
     : Effect.fail(new Error("missing stop payload")),
-});
+};
 `,
   );
 
   await writeFile(
     join(pluginRoot, "hooks", "turn-stop.hook.ts"),
     `import { Effect } from ${JSON.stringify(EFFECT_IMPORT)};
-import { defineHook, hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
+import { hookEvent } from ${JSON.stringify(PRISM_IMPORT)};
 
-export default defineHook({
+export default {
   name: "turn-stop",
   description: "Portable stop event co-rides antigravity Stop",
   event: hookEvent.stop,
   handle: () => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
@@ -330,9 +329,8 @@ test("antigravity-cli lowerer emits an aggregated stdio-shim MCP entry for self-
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(EFFECT_IMPORT)};
-import { defineTool } from ${JSON.stringify(PRISM_IMPORT)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo via the stdio shim",
   input: Schema.Struct({ message: Schema.String }),
@@ -340,7 +338,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 

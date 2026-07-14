@@ -8,8 +8,7 @@ import { join } from "node:path";
  * Each rule greps every source file under src/ and fails the suite if the
  * relic identifier reappears outside its allowlisted files. Future
  * workstreams append rules here as deletions complete — e.g. marker-gated
- * skill-pruning relics in WS5, and the `define*` transitional wrappers once
- * the plugin corpus no longer imports them.
+ * skill-pruning relics in WS5.
  */
 interface TombstoneRule {
   /** Matched against file contents. */
@@ -95,6 +94,16 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     allowedFiles: new Set([GATE_FILE]),
     reason:
       "deleted in WS7 — direct artifacts now lower to DesiredRoot and sync through src/sync/apply.ts",
+  },
+  {
+    pattern: /\bdefine(Agent|Trait|Orbit|Tool|Toolspace|Modelspace|Skillspace|Hook)\(/,
+    allowedFiles: new Set([GATE_FILE]),
+    reason:
+      "deleted in PQ-087 — the define* identity wrappers are gone; plugin sources export a plain " +
+      "object satisfying the matching *Source type directly (AgentSource, TraitSource, OrbitSource, " +
+      "ToolSource, ToolspaceSource, ModelspaceSource, SkillspaceSource, HookSource). This gate matches " +
+      "only the call form (trailing paren) so it does not flag unrelated string comparisons against " +
+      "the bare relic name (e.g. import-specifier filtering) or prose describing the deletion.",
   },
 ];
 

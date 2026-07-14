@@ -236,9 +236,8 @@ const createHermesHttpToolPlugin = async (options?: {
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo through Hermes MCP.",
   input: Schema.Struct({ message: Schema.String }),
@@ -246,7 +245,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 
@@ -589,57 +588,55 @@ const createAntigravityPluginFixture = async (): Promise<{
   await writeText(join(pluginRoot, "rules", "project", "project-context.md"), `# Project context\n\nKeep plugin-local project guidance.\n`);
   await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
   await writeText(join(pluginRoot, "identities", "worker.identity.md"), `---\ndescription: Worker identity\n---\n\n# Worker\n\nUse the plugin bundle.\n`);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { read_repo: { targets: { "antigravity-cli": { name: "read_file" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed work",
   input: Schema.Struct({ summary: Schema.String }),
   output: Schema.Struct({ acknowledged: Schema.Boolean }),
   async handle(input, context) { return { acknowledged: true }; },
-});
+};
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit work through the typed Antigravity plugin tool.",
   access: { tools: [toolRef("workspace", "read_repo")] },
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `);
-  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Antigravity plugin worker",
   identity: "worker",
   traits: ["submittable"],
   skills: [skillRef("testing")],
-});
+};
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery",
   description: "Deliver work through Antigravity",
   phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-read",
   description: "Audit read calls",
   event: hookEvent.toolBefore,
@@ -649,12 +646,12 @@ export default defineHook({
       ? { decision: "block" as const, message: "read-blocked" }
       : { decision: "continue" as const },
   ),
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
@@ -664,7 +661,7 @@ export default defineHook({
       ? { decision: "block" as const, message: "canonical-blocked" }
       : { decision: "continue" as const },
   ),
-});
+};
 `);
 
   return { pluginRoot, projectRoot };
@@ -697,9 +694,8 @@ const createStandaloneToolFixture = async (): Promise<{
   await writeText(
     join(pluginRoot, "tools", "echo-message.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo-message",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -707,7 +703,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -745,54 +741,51 @@ const createCodexProjectFixture = async (): Promise<{
   await writeText(join(pluginRoot, "rules", "global", "context.md"), `# Codex context\n\nUse project-local Codex guidance.\n`);
   await writeText(join(pluginRoot, "skills", "testing", "SKILL.md"), `---\nname: testing\ndescription: Testing guidance\n---\n\n# Testing\n`);
   await writeText(join(pluginRoot, "identities", "reviewer.identity.md"), `---\ndescription: Reviewer identity\n---\n\n# Reviewer\n\nReview through Codex.\n`);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { shell: { targets: { "codex-cli": { name: "shell.command" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed work",
   input: Schema.Struct({ summary: Schema.String }),
   output: Schema.Struct({ acknowledged: Schema.Boolean }),
   async handle(_input, _context) { return { acknowledged: true }; },
-});
+};
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `
+export default {
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit through the generated Codex MCP tool.",
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `);
-  await writeText(join(pluginRoot, "agents", "reviewer.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "agents", "reviewer.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "reviewer",
   description: "Codex project reviewer",
   identity: "reviewer",
   traits: ["submittable"],
   skills: [skillRef("testing")],
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `);
 
   return { pluginRoot, projectRoot };
@@ -826,79 +819,77 @@ const createOpenCodeHookFixture = async (options?: {
       2,
     )}\n`,
   );
-  await writeText(join(pluginRoot, "toolspaces", "core.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "core.toolspace.ts"), `
+export default {
   name: "core",
   tools: { shell: { targets: { opencode: { name: "bash" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-before.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-before",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("core", "shell")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-after.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-after",
   event: hookEvent.toolAfter,
   match: { tool: hookTool.tool(toolRef("core", "shell")) },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "ignored for observational hooks" }),
-});
+};
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed work",
   input: Schema.Struct({ summary: Schema.String }),
   output: Schema.Struct({ acknowledged: Schema.Boolean }),
   async handle(_input, _context) { return { acknowledged: true }; },
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-submit",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("submit_work") },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `);
   if (options?.sessionHook) {
     await writeText(join(pluginRoot, "hooks", "session-start.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-start",
   event: hookEvent.sessionStart,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `);
     await writeText(join(pluginRoot, "hooks", "session-end.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `);
   }
   if (options?.promptAndPermissionHooks) {
     await writeText(join(pluginRoot, "hooks", "prompt-context.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-context",
   event: hookEvent.promptSubmit,
   handle: (event) => Effect.succeed({
@@ -906,12 +897,12 @@ export default defineHook({
     additionalContext: "prompt:" + event.prompt,
     systemMessage: "system:" + event.target.harness,
   }),
-});
+};
 `);
     await writeText(join(pluginRoot, "hooks", "permission-guard.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "permission-guard",
   event: hookEvent.permissionRequest,
   match: { tool: hookTool.any() },
@@ -920,7 +911,7 @@ export default defineHook({
       ? { decision: "block" as const, message: "permission-blocked" }
       : { decision: "continue" as const },
   ),
-});
+};
 `);
   }
 
@@ -978,10 +969,9 @@ const createToolsOnlyRuntimeDepImportFixture = async (
   await writeText(
     join(pluginRoot, "tools", "record_signal.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 import { normalizeOrbitMessage } from "../deps/orbit-core/tools/shared/orbit-server-client.ts";
 
-export default defineTool({
+export default {
   name: "record_signal",
   description: "Record a signal",
   input: Schema.Struct({ message: Schema.String }),
@@ -989,7 +979,7 @@ export default defineTool({
   async handle(input) {
     return { message: normalizeOrbitMessage(input.message) };
   },
-});
+};
 `,
   );
 
@@ -1053,9 +1043,8 @@ Use the protocol tool.
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from "prism";
-
-export default defineTrait({
+    `
+export default {
   name: "submittable",
   description: "Can submit externally",
   tools: {
@@ -1066,19 +1055,18 @@ export default defineTrait({
   require: {
     tools: ["submit_work"],
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "prism";
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Permission-only consumer worker",
   identity: "worker",
   traits: ["submittable"],
-});
+};
 `,
   );
   await writeText(
@@ -1093,10 +1081,9 @@ export const SharedInput = Schema.Struct({
   await writeText(
     join(protocolRoot, "tools", "external-submit.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool } from "prism";
 import { SharedInput } from "../schemas/shared.ts";
 
-export default defineTool({
+export default {
   name: "external-submit",
   description: "Submit completed work through an external protocol plugin",
   input: SharedInput,
@@ -1106,15 +1093,14 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
   await writeText(
     join(protocolRoot, "tools", "unreferenced.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool } from "prism";
 
-export default defineTool({
+export default {
   name: "unreferenced",
   description: "Should not be mirrored",
   input: Schema.Struct({}),
@@ -1122,7 +1108,7 @@ export default defineTool({
   async handle(input, context) {
     return {};
   },
-});
+};
 `,
   );
   await writeText(
@@ -1215,9 +1201,8 @@ export const WorkerDetails = Schema.Struct({
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from "prism";
-
-export default defineTrait({
+    `
+export default {
   name: "submittable",
   description: "Can submit externally through a typed wrapper",
   tools: {
@@ -1228,15 +1213,15 @@ export default defineTrait({
   require: {
     tools: ["submit_work"],
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { bindTrait, defineAgent } from "prism";
+    `import { bindTrait } from "prism";
 import { WorkerDetails } from "../schemas/worker-details.ts";
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Synthetic external worker",
   identity: "worker",
@@ -1251,7 +1236,7 @@ export default defineAgent({
       },
     }),
   ],
-});
+};
 `,
   );
   await writeText(
@@ -1266,10 +1251,10 @@ export const SharedInput = Schema.Struct({
   await writeText(
     join(protocolRoot, "tools", "external-submit.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool, schemaSlot } from "prism";
+import { schemaSlot } from "prism";
 import { SharedInput } from "../schemas/shared.ts";
 
-export default defineTool({
+export default {
   name: "external-submit",
   description: "Submit completed work through an external protocol plugin",
   input: SharedInput,
@@ -1284,7 +1269,7 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
 
@@ -1369,9 +1354,8 @@ test("readManifest treats skillspaces as compile artifacts", async () => {
   );
   await writeText(
     join(pluginRoot, "skillspaces", "core.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
-
-export default defineSkillspace({
+    `
+export default {
   name: "core",
   skills: {
     testing: {
@@ -1380,7 +1364,7 @@ export default defineSkillspace({
       },
     },
   },
-});
+};
 `,
   );
 
@@ -1578,9 +1562,8 @@ test("opencode model pools distribute same-profile agents by stable peer order",
 
   await writeText(
     join(pluginRoot, "modelspaces", "reviewers.modelspace.ts"),
-    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineModelspace({
+    `
+export default {
   name: "reviewers",
   profiles: {
     "verification-throughput": {
@@ -1597,7 +1580,7 @@ export default defineModelspace({
       },
     },
   },
-});
+};
 `,
   );
 
@@ -1617,14 +1600,14 @@ You verify work.
     const suffix = String(index).padStart(2, "0");
     await writeText(
       join(pluginRoot, "agents", `reviewer-${suffix}.agent.ts`),
-      `import { defineAgent, modelProfileRef } from ${JSON.stringify(prismImportPath)};
+      `import { modelProfileRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "reviewer-${suffix}",
   description: "Reviewer ${suffix}",
   identity: "reviewer",
   model: modelProfileRef("reviewers", "verification-throughput"),
-});
+};
 `,
     );
   }
@@ -1683,9 +1666,8 @@ test("amp agents do not demand modelspace target cells because the surface is mo
 
   await writeText(
     join(pluginRoot, "modelspaces", "models.modelspace.ts"),
-    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineModelspace({
+    `
+export default {
   name: "models",
   profiles: {
     default: {
@@ -1694,7 +1676,7 @@ export default defineModelspace({
       },
     },
   },
-});
+};
 `,
   );
 
@@ -1712,14 +1694,14 @@ You work through Amp role-skill guidance.
 
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, modelProfileRef } from ${JSON.stringify(prismImportPath)};
+    `import { modelProfileRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   model: modelProfileRef("models", "default"),
-});
+};
 `,
   );
 
@@ -2290,9 +2272,9 @@ test("orbit validation fails when assigned agents do not satisfy requirements", 
 
 test("loadPlugin normalizes orbit phase references requirements and metadata", async () => {
   const pluginRoot = await createOrbitLoadFixture(
-    `import { agentRef, defineOrbit, orbitRef, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, orbitRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "phase-normalization",
   description: "Phase normalization parser fixture",
   phases: [
@@ -2328,7 +2310,7 @@ export default defineOrbit({
       agent: agentRef("reviewer"),
     },
   ],
-});
+};
 `,
   );
 
@@ -2647,9 +2629,9 @@ test("orbit-wide tool_permissions materialize on every phase agent", async () =>
   // wide-granted tool.
   await writeText(
     join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery-contract",
   description: "Wide-grant variant",
   phases: [
@@ -2667,7 +2649,7 @@ export default defineOrbit({
   tool_permissions: [
     { ref: "protocol-core:create_glyph", as: "create_glyph" },
   ],
-});
+};
 `,
   );
 
@@ -2720,16 +2702,15 @@ test("orbit parser rejects the obsolete tool_permissions shape with agents", asy
 
   await writeText(
     join(pluginRoot, "orbits", "obsolete.orbit.ts"),
-    `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
-
-export default defineOrbit({
+    `
+export default {
   name: "obsolete",
   description: "Uses the deprecated tool_permissions shape with agents",
   phases: [],
   tool_permissions: [
     { agents: ["builder"], tools: ["protocol-core:create_glyph"] },
   ],
-});
+};
 `,
   );
 
@@ -3362,9 +3343,8 @@ test("union MCP bundle keeps per-harness exposure deny-by-default", async () => 
   await writeText(
     join(coreRoot, "tools", "agent-only.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "agent-only",
   description: "Bound only through the codex agent",
   input: Schema.Struct({ value: Schema.String }),
@@ -3372,19 +3352,18 @@ export default defineTool({
   async handle(input) {
     return { value: input.value };
   },
-});
+};
 `,
   );
   await writeText(
     join(coreRoot, "traits", "agent-bound.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "agent-bound",
   description: "Grants the agent-only tool",
   tools: { agent_only: { ref: "agent-only" } },
   require: { tools: ["agent_only"] },
-});
+};
 `,
   );
 
@@ -3403,9 +3382,8 @@ export default defineTrait({
   await writeText(
     join(pluginRoot, "tools", "shared.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "shared",
   description: "Exposed on both harnesses",
   input: Schema.Struct({ value: Schema.String }),
@@ -3413,7 +3391,7 @@ export default defineTool({
   async handle(input) {
     return { value: input.value };
   },
-});
+};
 `,
   );
   await writeText(
@@ -3422,14 +3400,13 @@ export default defineTool({
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Codex worker",
   identity: "worker",
   traits: ["core:agent-bound"],
-});
+};
 `,
   );
 
@@ -3744,9 +3721,8 @@ test("compilePluginForTarget leaves Cursor skills to install while lowering tool
   await writeText(
     join(pluginRoot, "tools", "echo-message.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo-message",
   description: "Echo through Cursor MCP.",
   input: Schema.Struct({ message: Schema.String }),
@@ -3754,7 +3730,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -4147,9 +4123,8 @@ test("compilePluginForTarget lowers executable canonical tools for Amp plugins",
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message through Amp.",
   input: Schema.Struct({
@@ -4159,7 +4134,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 
@@ -4237,22 +4212,20 @@ test("compilePluginForTarget lowers Amp tools and hooks through one native plugi
   );
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: {
     echo: { targets: { "amp-code": { name: "amp_hook_demo_echo" } } },
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message through Amp hooks.",
   input: Schema.Struct({
@@ -4262,15 +4235,15 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "hooks", "audit-before.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-before",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.any() },
@@ -4282,32 +4255,32 @@ export default defineHook({
       ? { decision: "block" as const, message: \`blocked \${event.tool.nativeName}\` }
       : { decision: "continue" as const },
   ),
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "hooks", "session-start.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-start",
   event: hookEvent.sessionStart,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "hooks", "audit-after.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-after",
   event: hookEvent.toolAfter,
   match: { tool: hookTool.tool(toolRef("workspace", "echo")) },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
@@ -4417,26 +4390,26 @@ test("compilePluginForTarget lowers hook-only Amp plugins without tool registrat
   await writeText(
     join(pluginRoot, "hooks", "audit-before.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-before",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.any() },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "hooks", "session-start.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-start",
   event: hookEvent.sessionStart,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
@@ -4726,13 +4699,13 @@ test("compilePluginForTarget rejects Amp session-end hooks because Amp has no na
   await writeText(
     join(pluginRoot, "hooks", "session-end.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
@@ -4768,14 +4741,14 @@ export default defineHook({
   await writeText(
     join(pluginRootFail, "hooks", "session-end.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-end",
   event: hookEvent.sessionEnd,
   onDegraded: "fail",
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
@@ -4819,9 +4792,8 @@ test("compilePluginForTarget lowers Hermes skills and canonical tools into MCP c
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message through Hermes MCP.",
   input: Schema.Struct({
@@ -4831,7 +4803,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 
@@ -4923,9 +4895,8 @@ test("compilePluginForTarget ignores legacy Hermes HTTP runtime config and still
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo through Hermes Streamable HTTP MCP.",
   input: Schema.Struct({ message: Schema.String }),
@@ -4933,7 +4904,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 
@@ -5243,9 +5214,8 @@ test("compilePluginForTarget accepts Hermes with non-loopback HTTP host (ignored
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo through Hermes Streamable HTTP MCP.",
   input: Schema.Struct({ message: Schema.String }),
@@ -5253,7 +5223,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 
@@ -5299,13 +5269,12 @@ description: Worker identity
   );
   await writeText(
     join(agentPluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Hermes worker",
   identity: "worker",
-});
+};
 `,
   );
 
@@ -5340,13 +5309,13 @@ export default defineAgent({
   await writeText(
     join(hookPluginRoot, "hooks", "session-start.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-start",
   event: hookEvent.sessionStart,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
@@ -5674,29 +5643,27 @@ test("plain skill strings fail closed in agent and trait source fields", async (
     {
       label: "agent.skills",
       expectedKind: "agent",
-      agentSource: `import { defineAgent } from "prism";
-
-export default defineAgent({
+      agentSource: `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   skills: ["testing"],
-});
+};
 `,
     },
     {
       label: "agent.access.skills",
       expectedKind: "agent",
-      agentSource: `import { defineAgent } from "prism";
-
-export default defineAgent({
+      agentSource: `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   access: {
     skills: ["testing"],
   },
-});
+};
 `,
     },
     {
@@ -5704,15 +5671,14 @@ export default defineAgent({
       expectedKind: "trait",
       expectedMessage:
         "access.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
-      traitSource: `import { defineTrait } from "prism";
-
-export default defineTrait({
+      traitSource: `
+export default {
   name: "skillful",
   description: "Skill access",
   access: {
     skills: ["testing"],
   },
-});
+};
 `,
     },
     {
@@ -5720,15 +5686,14 @@ export default defineTrait({
       expectedKind: "trait",
       expectedMessage:
         "inject.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
-      traitSource: `import { defineTrait } from "prism";
-
-export default defineTrait({
+      traitSource: `
+export default {
   name: "skillful",
   description: "Skill injection",
   inject: {
     skills: ["testing"],
   },
-});
+};
 `,
     },
     {
@@ -5736,15 +5701,14 @@ export default defineTrait({
       expectedKind: "trait",
       expectedMessage:
         "require.skills[0]: plain skill strings are not allowed; use skillRef(...) for managed plugin skills or skillspaceRef(...) for harness-native skills",
-      traitSource: `import { defineTrait } from "prism";
-
-export default defineTrait({
+      traitSource: `
+export default {
   name: "skillful",
   description: "Skill requirement",
   require: {
     skills: ["testing"],
   },
-});
+};
 `,
     },
   ];
@@ -5784,14 +5748,13 @@ description: Worker identity
     await writeText(
       join(pluginRoot, "agents", "worker.agent.ts"),
       item.agentSource ??
-        `import { defineAgent } from "prism";
-
-export default defineAgent({
+        `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   traits: ["skillful"],
-});
+};
 `,
     );
 
@@ -5839,15 +5802,14 @@ test("trait parser rejects empty canonical tool refs with exact diagnostic", asy
   const traitPath = join(pluginRoot, "traits", "reviewable.trait.ts");
   await writeText(
     traitPath,
-    `import { defineTrait } from "prism";
-
-export default defineTrait({
+    `
+export default {
   name: "reviewable",
   description: "Review capability",
   tools: {
     submit_review: { ref: "   " },
   },
-});
+};
 `,
   );
 
@@ -5906,14 +5868,14 @@ description: Contract guidance
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "prism";
+    `import { skillRef } from "prism";
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   skills: [skillRef("contracts")],
-});
+};
 `,
   );
 
@@ -5969,9 +5931,8 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from "prism";
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: {
     read: {
@@ -5980,21 +5941,21 @@ export default defineToolspace({
       },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, toolRef } from "prism";
+    `import { toolRef } from "prism";
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   access: {
     tools: [toolRef("workspace", "read")],
   },
-});
+};
 `,
   );
 
@@ -6050,22 +6011,21 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "external.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef } from "prism";
 
-export default defineTrait({
+export default {
   name: "external",
   description: "Uses an external skill",
   access: {
     skills: [skillspaceRef("external-skills", "copy-engineering")],
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
-
-export default defineSkillspace({
+    `
+export default {
   name: "external-skills",
   skills: {
     "copy-engineering": {
@@ -6074,19 +6034,18 @@ export default defineSkillspace({
       },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "prism";
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   traits: ["external"],
-});
+};
 `,
   );
 
@@ -6141,22 +6100,21 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "external.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef } from "prism";
 
-export default defineTrait({
+export default {
   name: "external",
   description: "Uses an external skill",
   access: {
     skills: [skillspaceRef("external-skills", "testing")],
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
-
-export default defineSkillspace({
+    `
+export default {
   name: "external-skills",
   skills: {
     testing: {
@@ -6165,19 +6123,18 @@ export default defineSkillspace({
       },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "prism";
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   traits: ["external"],
-});
+};
 `,
   );
 
@@ -6232,22 +6189,21 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "external.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef } from "prism";
 
-export default defineTrait({
+export default {
   name: "external",
   description: "Uses an external skill",
   access: {
     skills: [skillspaceRef("external-skills", "testing")],
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
-
-export default defineSkillspace({
+    `
+export default {
   name: "external-skills",
   skills: {
     testing: {
@@ -6256,19 +6212,18 @@ export default defineSkillspace({
       },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "prism";
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   traits: ["external"],
-});
+};
 `,
   );
 
@@ -6527,14 +6482,14 @@ description: Domain worker identity
   for (const family of traitFamilies) {
     await writeText(
       join(pluginRoot, "agents", `${family.agent}.agent.ts`),
-      `import { bindTrait, defineAgent } from "prism";
+      `import { bindTrait } from "prism";
 
-export default defineAgent({
+export default {
   name: ${JSON.stringify(family.agent)},
   description: ${JSON.stringify(`Uses ${family.trait} skill permissions`)},
   identity: "worker",
   traits: [bindTrait(${JSON.stringify(`agent-core:${family.trait}`)})],
-});
+};
 `,
     );
   }
@@ -6607,22 +6562,21 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "traits", "testing-enabled.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef } from "prism";
 
-export default defineTrait({
+export default {
   name: "testing-enabled",
   description: "Can use test methodology",
   access: {
     skills: [skillspaceRef("external-skills", "testing")],
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
-
-export default defineSkillspace({
+    `
+export default {
   name: "external-skills",
   skills: {
     testing: {
@@ -6631,7 +6585,7 @@ export default defineSkillspace({
       },
     },
   },
-});
+};
 `,
   );
   await writeText(
@@ -6646,15 +6600,15 @@ description: Contract guidance
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from "prism";
+    `import { skillRef } from "prism";
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker with direct and permission-only skills",
   identity: "worker",
   traits: ["testing-enabled"],
   skills: [skillRef("contracts")],
-});
+};
 `,
   );
 
@@ -6722,22 +6676,21 @@ description: Worker identity
   );
   await writeText(
     join(missingPluginRoot, "traits", "testing-enabled.trait.ts"),
-    `import { defineTrait, skillspaceRef } from "prism";
+    `import { skillspaceRef } from "prism";
 
-export default defineTrait({
+export default {
   name: "testing-enabled",
   description: "References a missing method skill",
   access: {
     skills: [skillspaceRef("external-skills", "missing-method")],
   },
-});
+};
 `,
   );
   await writeText(
     join(missingPluginRoot, "skillspaces", "external-skills.skillspace.ts"),
-    `import { defineSkillspace } from "prism";
-
-export default defineSkillspace({
+    `
+export default {
   name: "external-skills",
   skills: {
     testing: {
@@ -6746,19 +6699,18 @@ export default defineSkillspace({
       },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(missingPluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from "prism";
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Worker with a missing skill permission",
   identity: "worker",
   traits: ["testing-enabled"],
-});
+};
 `,
   );
 
@@ -7150,9 +7102,8 @@ description: Testing guidance
   await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed Grok work",
   input: Schema.Struct({ summary: Schema.String }),
@@ -7160,27 +7111,26 @@ export default defineTool({
   async handle(input) {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit completed work through the generated Grok MCP tool.",
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+    `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Grok worker",
   identity: "worker",
@@ -7193,7 +7143,7 @@ export default defineAgent({
       disallowedTools: ["web_fetch"],
     },
   },
-});
+};
 `,
   );
 
@@ -7290,19 +7240,17 @@ description: Testing guidance
 # Testing
 `,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { read_repo: { targets: { "factory-droid": { name: "Read" } } } },
-});
+};
 `);
   await writeText(
     join(pluginRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed Factory work",
   input: Schema.Struct({ summary: Schema.String }),
@@ -7310,28 +7258,28 @@ export default defineTool({
   async handle(input) {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit completed work through the generated Factory MCP tool.",
   access: { tools: [toolRef("workspace", "read_repo")] },
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+    `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Factory worker",
   identity: "worker",
@@ -7343,38 +7291,38 @@ export default defineAgent({
       tools: ["Read"],
     },
   },
-});
+};
 `,
   );
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery",
   description: "Deliver work through Factory Droid",
   phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-read",
   description: "Audit Factory read calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("submit_work") },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
-});
+};
 `);
 
   const factory = await Effect.runPromise(
@@ -7572,17 +7520,15 @@ description: Worker identity
 Use Pi package surfaces.
 `,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { read_repo: { targets: { pi: { name: "read" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed Pi work",
   input: Schema.Struct({ summary: Schema.String }),
@@ -7590,58 +7536,58 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: input.summary.length > 0 && context.agent === "pi" };
   },
-});
+};
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit work through the typed Pi extension tool.",
   access: { tools: [toolRef("workspace", "read_repo")] },
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `);
-  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Pi package worker",
   identity: "worker",
   traits: ["submittable"],
   skills: [skillRef("testing")],
-});
+};
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery",
   description: "Deliver work through Pi",
   phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-read",
   description: "Audit read calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("submit_work") },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
-});
+};
 `);
 
   const compiled = await Effect.runPromise(
@@ -7974,14 +7920,13 @@ test("compilePluginForTarget lowers Pi package surfaces in global scope with an 
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Pi global worker",
   identity: "worker",
   traits: [],
-});
+};
 `,
   );
   await writeText(
@@ -8055,17 +8000,15 @@ description: Worker identity
 
 Use Kimi plugin surfaces.
 `);
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { read_repo: { targets: { "kimi-code": { name: "Read" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "tools", "submit-work.tool.ts"), `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit work",
   input: Schema.Struct({ summary: Schema.String }),
@@ -8073,58 +8016,58 @@ export default defineTool({
   async handle(input) {
     return { acknowledged: input.summary.length > 0 };
   },
-});
+};
 `);
-  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { defineTrait, toolRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "traits", "submittable.trait.ts"), `import { toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineTrait({
+export default {
   name: "submittable",
   description: "Can submit work",
   instructions: "Submit work through the typed Kimi MCP tool.",
   access: { tools: [toolRef("workspace", "read_repo")] },
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `);
-  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { defineAgent, skillRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "agents", "worker.agent.ts"), `import { skillRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Kimi plugin worker",
   identity: "worker",
   traits: ["submittable"],
   skills: [skillRef("testing")],
-});
+};
 `);
-  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+  await writeText(join(pluginRoot, "orbits", "delivery.orbit.ts"), `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery",
   description: "Deliver work through Kimi",
   phases: [{ name: "Build", agents: [agentRef("worker")], requires: [{ all: [traitRef("submittable")] }] }],
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-read.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-read",
   description: "Audit reads",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "read_repo")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-submit.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-submit",
   description: "Audit canonical submit calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("submit_work") },
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "canonical-blocked" }),
-});
+};
 `);
 
   const compiled = await Effect.runPromise(
@@ -8417,9 +8360,8 @@ test("compilePluginForTarget keeps Factory agent dependency tools owner-owned", 
   await writeText(
     join(coreRoot, "tools", "submit-work.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit-work",
   description: "Submit completed Factory work",
   input: Schema.Struct({ summary: Schema.String }),
@@ -8427,19 +8369,18 @@ export default defineTool({
   async handle(input) {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
   await writeText(
     join(coreRoot, "traits", "submittable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "submittable",
   description: "Can submit work",
   tools: { submit_work: { ref: "submit-work" } },
   require: { tools: ["submit_work"] },
-});
+};
 `,
   );
 
@@ -8480,9 +8421,8 @@ description: Worker identity
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Factory worker",
   identity: "worker",
@@ -8492,7 +8432,7 @@ export default defineAgent({
       model: "inherit",
     },
   },
-});
+};
 `,
   );
 
@@ -8575,14 +8515,13 @@ test("compilePluginForTarget prunes stale Factory plugin bundle for template-onl
   );
   await writeText(
     join(pluginRoot, "orbits", "template.orbit.ts"),
-    `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
-
-export default defineOrbit({
+    `
+export default {
   name: "template",
   description: "Template-only Factory orbit.",
   parameters: [{ name: "topic" }],
   phases: [{ name: "Work on \${topic}" }],
-});
+};
 `,
   );
   const staleTarget = join(generatedRoot, "droids", "stale.md");
@@ -8651,13 +8590,12 @@ test("compilePluginForTarget keeps plugin skills out of Factory orbit-only bundl
   );
   await writeText(
     join(pluginRoot, "orbits", "delivery.orbit.ts"),
-    `import { defineOrbit } from ${JSON.stringify(prismImportPath)};
-
-export default defineOrbit({
+    `
+export default {
   name: "delivery",
   description: "Concrete Factory orbit.",
   phases: [{ name: "Deliver" }],
-});
+};
 `,
   );
 
@@ -8813,9 +8751,8 @@ test("compilePluginForTarget fails when targeted agents bind tools not targeted 
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo input",
   input: Schema.Struct({ text: Schema.String }),
@@ -8823,32 +8760,30 @@ export default defineTool({
   async handle(input) {
     return input;
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "traits", "echoer.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "echoer",
   tools: {
     echo: { ref: "echo" },
   },
   require: { tools: ["echo"] },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "worker.agent.ts"),
-    `import { defineAgent } from ${JSON.stringify(prismImportPath)};
-
-export default defineAgent({
+    `
+export default {
   name: "worker",
   description: "Worker",
   identity: "worker",
   traits: ["echoer"],
-});
+};
 `,
   );
 
@@ -8922,9 +8857,9 @@ test("derived orbit skill deduplicates tools across orchestrator and phase grant
   // not double-render the tool.
   await writeText(
     join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery-contract",
   description: "Dedup tool variant",
   phases: [
@@ -8946,7 +8881,7 @@ export default defineOrbit({
   tool_permissions: [
     { ref: "protocol-core:create_glyph", as: "create_glyph_wide" },
   ],
-});
+};
 `,
   );
 
@@ -9414,9 +9349,9 @@ test("orbit body declared in TS source flows into the generated orbit skill", as
 
   await writeText(
     join(pluginRoot, "orbits", "delivery-contract.orbit.ts"),
-    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery-contract",
   description: "Orbit body propagation check",
   phases: [
@@ -9427,7 +9362,7 @@ export default defineOrbit({
     },
   ],
   body: ${JSON.stringify(declaredBody)},
-});
+};
 `,
   );
 
@@ -9738,9 +9673,9 @@ test("derived orbit skill renders parametric stub for parameterized orbit templa
 
   await writeText(
     join(pluginRoot, "orbits", "parametric-template.orbit.ts"),
-    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "parametric-template",
   description: "A parametric orbit template; remains uninstantiated.",
   parameters: [{ name: "audience" }],
@@ -9751,7 +9686,7 @@ export default defineOrbit({
       requires: [{ all: [traitRef("committable"), traitRef("self-assessing")] }],
     },
   ],
-});
+};
 `,
   );
 

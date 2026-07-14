@@ -58,9 +58,9 @@ const createHookFixture = async (): Promise<string> => {
 
   await writeText(
     join(pluginRoot, "toolspaces", "core.toolspace.ts"),
-    `import { defineToolspace, toolRef } from "prism";
+    `import { toolRef } from "prism";
 
-export default defineToolspace({
+export default {
   name: "core",
   tools: {
     shell: {
@@ -80,16 +80,16 @@ export default defineToolspace({
       tools: [toolRef("core", "shell"), toolRef("core", "read")],
     },
   },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from "effect";
-import { defineHook, hookEvent, hookTool, toolGroupRef } from "prism";
+import { hookEvent, hookTool, toolGroupRef } from "prism";
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell-adjacent tool calls",
   event: hookEvent.toolBefore,
@@ -97,14 +97,14 @@ export default defineHook({
     tool: hookTool.group(toolGroupRef("core", "readonly_shell")),
   },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   return pluginRoot;
 };
 
-test("hooks/*.hook.ts load through defineHook and normalize toolspace matchers", async () => {
+test("hooks/*.hook.ts load as plain HookSource objects and normalize toolspace matchers", async () => {
   const pluginRoot = await createHookFixture();
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
@@ -316,14 +316,14 @@ test("hook V1 fails closed for agent-bound authoring attempts", async () => {
   await writeText(
     join(pluginRoot, "hooks", "agent-bound.hook.ts"),
     `import { Effect } from "effect";
-import { defineHook, hookEvent } from "prism";
+import { hookEvent } from "prism";
 
-export default defineHook({
+export default {
   name: "agent-bound",
   event: hookEvent.sessionStart,
   agents: ["builder"],
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 

@@ -419,7 +419,7 @@ const writeProviderTool = async (
       `import { Schema } from ${JSON.stringify(effectImportPath)};`,
       `import { defineTool${options.slotted ? ", schemaSlot" : ""} } from ${JSON.stringify(prismImportPath)};`,
       ``,
-      `export default defineTool({`,
+      `export default {`,
       `  name: ${JSON.stringify(name)},`,
       `  description: "Fixture provider tool '${name}'",`,
       `  input: Schema.Struct({ summary: Schema.String }),`,
@@ -434,7 +434,7 @@ const writeProviderTool = async (
       `  async handle(input, context) {`,
       `    return { acknowledged: true };`,
       `  },`,
-      `});`,
+      `};`,
       ``,
     ]
       .filter((line) => line.length > 0)
@@ -482,16 +482,16 @@ test("owner detection recognizes a dispatch-only owner (zero canonical tools, on
     await writeText(
       join(dispatcherPath, "traits", "dispatchable.trait.ts"),
       [
-        `import { defineTrait } from ${JSON.stringify(prismImportPath)};`,
         ``,
-        `export default defineTrait({`,
+        ``,
+        `export default {`,
         `  name: "dispatchable",`,
         `  description: "Can submit dispatcher-specific work",`,
         `  tools: {`,
         `    submit_work: { ref: "provider:submit_work" },`,
         `  },`,
         `  require: { tools: ["submit_work"] },`,
-        `});`,
+        `};`,
         ``,
       ].join("\n"),
     );
@@ -502,17 +502,17 @@ test("owner detection recognizes a dispatch-only owner (zero canonical tools, on
     await writeText(
       join(dispatcherPath, "agents", "builder.agent.ts"),
       [
-        `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};`,
+        `import { bindTrait } from ${JSON.stringify(prismImportPath)};`,
         `import { Details } from "../schemas/details.ts";`,
         ``,
-        `export default defineAgent({`,
+        `export default {`,
         `  name: "builder",`,
         `  description: "Dispatcher builder agent",`,
         `  identity: "builder",`,
         `  traits: [`,
         `    bindTrait("dispatchable", { tools: { submit_work: { slots: { details: Details } } } }),`,
         `  ],`,
-        `});`,
+        `};`,
         ``,
       ].join("\n"),
     );
@@ -584,30 +584,30 @@ test("owner detection keeps a true consumer (foreign tool referenced, no slots f
     await writeText(
       join(consumerPath, "traits", "usable.trait.ts"),
       [
-        `import { defineTrait } from ${JSON.stringify(prismImportPath)};`,
         ``,
-        `export default defineTrait({`,
+        ``,
+        `export default {`,
         `  name: "usable",`,
         `  description: "Can use the provider's helper tool",`,
         `  tools: {`,
         `    helper_tool: { ref: "provider2:helper_tool" },`,
         `  },`,
         `  require: { tools: ["helper_tool"] },`,
-        `});`,
+        `};`,
         ``,
       ].join("\n"),
     );
     await writeText(
       join(consumerPath, "agents", "user.agent.ts"),
       [
-        `import { defineAgent } from ${JSON.stringify(prismImportPath)};`,
         ``,
-        `export default defineAgent({`,
+        ``,
+        `export default {`,
         `  name: "user",`,
         `  description: "Consumer agent referencing a foreign tool, no slots filled",`,
         `  identity: "user",`,
         `  traits: ["usable"],`,
-        `});`,
+        `};`,
         ``,
       ].join("\n"),
     );

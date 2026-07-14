@@ -5,9 +5,11 @@ import { join } from "node:path";
 
 /**
  * Minimal in-memory authoring runtime that stubs the `prism` module for
- * plugin source files. It provides the typed-ref helpers and definition
- * builders used by `.agent.ts`, `.orbit.ts`, `.trait.ts`, `.tool.ts`,
- * `.toolspace.ts`, `.modelspace.ts`, `.skillspace.ts`, and `.hook.ts` files.
+ * plugin source files. It provides the typed-ref helpers used by
+ * `.agent.ts`, `.orbit.ts`, `.trait.ts`, `.tool.ts`, `.toolspace.ts`,
+ * `.modelspace.ts`, `.skillspace.ts`, and `.hook.ts` files, which export
+ * a plain object satisfying the matching `*Source` type — there is no
+ * define* wrapper call to stub.
  *
  * The real semantic validation happens later in the compiler; this runtime
  * only needs to return plain data structures so that source modules can be
@@ -49,15 +51,6 @@ export const bindTrait = (trait, options = {}) => ({
   trait,
   ...(options.tools ? { tools: options.tools } : {}),
 });
-
-export const defineAgent = (agent) => agent;
-export const defineTrait = (trait) => trait;
-export const defineOrbit = (orbit) => orbit;
-export const defineTool = (tool) => tool;
-export const defineToolspace = (toolspace) => toolspace;
-export const defineModelspace = (modelspace) => modelspace;
-export const defineSkillspace = (skillspace) => skillspace;
-export const defineHook = (hook) => hook;
 
 export const hookEvent = {
   toolBefore: "tool.before",

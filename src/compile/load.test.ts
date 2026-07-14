@@ -460,10 +460,10 @@ export const VerdictSchema = Schema.Struct({ summary: Schema.String });
 
   await writeText(
     join(helperRoot, "agents", "builder.agent.ts"),
-    `import { defineAgent, bindTrait, modelProfileRef, skillspaceRef, toolGroupRef, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { bindTrait, modelProfileRef, skillspaceRef, toolGroupRef, toolRef } from ${JSON.stringify(prismImportPath)};
 import { VerdictSchema } from "../schemas";
 
-export default defineAgent({
+export default {
   name: "builder",
   description: "Builds scoped changes.",
   identity: "builder",
@@ -477,7 +477,7 @@ export default defineAgent({
     skills: [skillspaceRef("global", "testing")],
   },
   targets: { opencode: { mode: "primary" } },
-});
+};
 `,
   );
   await writeText(
@@ -519,22 +519,20 @@ test("helper-based and noun-first non-agent source families produce equivalent n
 
   await writeText(
     join(helperRoot, "traits", "reviewable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "reviewable",
   description: "Can review work.",
   instructions: ["Review the implementation."],
   tools: { submit_review: { ref: "submit_review" } },
-});
+};
 `,
   );
   await writeText(
     join(helperRoot, "tools", "submit_review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit_review",
   description: "Submit review findings.",
   input: Schema.Struct({ summary: Schema.String }),
@@ -542,14 +540,14 @@ export default defineTool({
   async handle() {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
   await writeText(
     join(helperRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace, toolRef } from ${JSON.stringify(prismImportPath)};
+    `import { toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineToolspace({
+export default {
   name: "workspace",
   description: "Workspace tool bindings.",
   tools: {
@@ -564,14 +562,13 @@ export default defineToolspace({
       tools: [toolRef("workspace", "run_shell")],
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(helperRoot, "modelspaces", "models.modelspace.ts"),
-    `import { defineModelspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineModelspace({
+    `
+export default {
   name: "models",
   description: "Model bindings.",
   profiles: {
@@ -580,14 +577,13 @@ export default defineModelspace({
       targets: { opencode: { model: "openai/gpt-5" } },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(helperRoot, "skillspaces", "global.skillspace.ts"),
-    `import { defineSkillspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineSkillspace({
+    `
+export default {
   name: "global",
   description: "Global skills.",
   skills: {
@@ -596,14 +592,14 @@ export default defineSkillspace({
       targets: { opencode: { name: "testing" } },
     },
   },
-});
+};
 `,
   );
   await writeText(
     join(helperRoot, "orbits", "delivery.orbit.ts"),
-    `import { agentRef, defineOrbit, traitRef } from ${JSON.stringify(prismImportPath)};
+    `import { agentRef, traitRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "delivery",
   description: "Delivery orbit.",
   phases: [{
@@ -611,19 +607,19 @@ export default defineOrbit({
     agents: [agentRef("builder")],
     requires: [{ all: [traitRef("reviewable")] }],
   }],
-});
+};
 `,
   );
   await writeText(
     join(helperRoot, "hooks", "session-start.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-start",
   event: hookEvent.sessionStart,
   handle: () => Effect.succeed({ decision: "continue" }),
-});
+};
 `,
   );
 

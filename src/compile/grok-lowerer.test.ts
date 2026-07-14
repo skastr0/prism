@@ -123,107 +123,102 @@ test("grok lowerer emits a plugin bundle with agents, skills, HTTP MCP, and hook
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: { shell: { targets: { "grok": { name: "run_terminal_cmd" } } } },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-echo.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-echo",
   description: "Audit canonical echo calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("echo") },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "session-ended.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-ended",
   description: "Observe session end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "prompt-submitted.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-submitted",
   description: "Observe prompt submit",
   event: "prompt.submit",
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "blocked prompt" }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "subagent-stopped.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "subagent-stopped",
   description: "Observe subagent stop",
   event: "subagent.stop",
   handle: (_event) => Effect.succeed({ decision: "block" as const, message: "blocked subagent" }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "notified.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "notified",
   description: "Observe notification",
   event: "notification",
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -231,7 +226,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -595,9 +590,8 @@ test("grok lowerer emits a per-owner-plugin stdio-shim MCP entry for self-owned 
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo via the stdio shim",
   input: Schema.Struct({ message: Schema.String }),
@@ -605,7 +599,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -659,22 +653,21 @@ test("grok lowerer fails closed when hook matcher has no Grok target mapping", a
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({ name: "invalid-grok-hook-fixture", version: "0.1.0", targets: { toolspaces: ["grok"], hooks: ["grok"] } }, null, 2)}\n`,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { shell: { targets: { opencode: { name: "bash" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `);
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));

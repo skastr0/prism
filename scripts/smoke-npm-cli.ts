@@ -176,9 +176,8 @@ const createCanonicalToolFixture = async (pluginRoot: string, mcpPort: number): 
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from "effect";
-import { defineTool } from "prism";
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a smoke-test message.",
   input: Schema.Struct({ message: Schema.String }),
@@ -186,7 +185,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 };

@@ -150,6 +150,20 @@ const getCalleeName = (node) => {
   return undefined;
 };
 
+const unwrapExpression = (node) => {
+  let current = node;
+  while (
+    current &&
+    (current.type === "TSSatisfiesExpression" ||
+      current.type === "TSAsExpression" ||
+      current.type === "TSNonNullExpression" ||
+      current.type === "ParenthesizedExpression")
+  ) {
+    current = current.expression;
+  }
+  return current;
+};
+
 const reportInlineSlotSchemas = (context, callNode) => {
   if (getCalleeName(callNode.callee) !== "bindTrait") {
     return;
@@ -177,11 +191,7 @@ const reportInlineSlotSchemas = (context, callNode) => {
   }
 };
 
-const reportTraitContractOverrides = (context, callNode) => {
-  if (getCalleeName(callNode.callee) !== "defineTrait") {
-    return;
-  }
-  const definition = callNode.arguments?.[0];
+const reportTraitContractOverrides = (context, definition) => {
   if (!definition || definition.type !== "ObjectExpression") {
     return;
   }
@@ -242,8 +252,8 @@ const noTraitToolContractOverrides = {
       return {};
     }
     return {
-      CallExpression(node) {
-        reportTraitContractOverrides(context, node);
+      ExportDefaultDeclaration(node) {
+        reportTraitContractOverrides(context, unwrapExpression(node.declaration));
       },
     };
   },

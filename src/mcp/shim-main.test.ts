@@ -104,9 +104,8 @@ const spawnFixtureDaemon = async (options: {
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo fixture tool for ${options.pluginName}.",
   input: Schema.Struct({ message: Schema.String }),
@@ -114,7 +113,7 @@ export default defineTool({
   async handle(input) {
     return { ${options.outputField}: input.message };
   },
-});
+};
 `,
   );
 

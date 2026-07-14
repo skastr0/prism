@@ -106,65 +106,63 @@ test("claude-code lowerer emits a plugin bundle with agents, skills, MCP, and ho
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: { shell: { targets: { "claude-code": { name: "Bash" } } } },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-echo.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-echo",
   description: "Audit canonical echo calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("echo") },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "session-ended.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-ended",
   description: "Observe session end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -172,7 +170,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -346,9 +344,8 @@ test("claude-code lowerer emits one per-plugin stdio-shim MCP entry keyed by the
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo over the shim",
   input: Schema.Struct({ message: Schema.String }),
@@ -356,7 +353,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -429,22 +426,21 @@ test("claude-code lowerer fails closed when hook matcher has no Claude target ma
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify({ name: "invalid-claude-hook-fixture", version: "0.1.0", targets: { toolspaces: ["claude-code"], hooks: ["claude-code"] } }, null, 2)}\n`,
   );
-  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+  await writeText(join(pluginRoot, "toolspaces", "workspace.toolspace.ts"), `
+export default {
   name: "workspace",
   tools: { shell: { targets: { opencode: { name: "bash" } } } },
-});
+};
 `);
   await writeText(join(pluginRoot, "hooks", "audit-shell.hook.ts"), `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `);
 
   const registry = await Effect.runPromise(loadPlugin(pluginRoot));
@@ -488,9 +484,8 @@ test("claude-code lowerer full hook event and wrapper protocol fidelity", async 
   await writeText(
     join(pluginRoot, "hooks", "prompt-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-check",
   event: "prompt.submit",
   handle: (event) => {
@@ -503,16 +498,15 @@ export default defineHook({
       systemMessage: "prompt-ok",
     });
   },
-});
+};
 `
   );
 
   await writeText(
     join(pluginRoot, "hooks", "perm-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "perm-check",
   event: "permission.request",
   handle: (event) => {
@@ -528,22 +522,21 @@ export default defineHook({
     }
     return Effect.succeed({ decision: "continue" as const });
   },
-});
+};
 `
   );
 
   await writeText(
     join(pluginRoot, "hooks", "stop-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "stop-check",
   event: "stop",
   handle: (_event) => {
     return Effect.succeed({ decision: "block" as const, message: "stop blocked" });
   },
-});
+};
 `
   );
 

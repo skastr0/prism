@@ -25,9 +25,11 @@
  */
 
 import { spawn } from "node:child_process";
+import { closeSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { prepareDaemonLogSink } from "./daemon-log.js";
 import { udsPathFor as udsPathForDefault } from "./uds-path.js";
 import { getDaemon as getDaemonDefault, type RegistryEntry, type RegistryResult } from "./uds-registry.js";
 import { probeSocketLiveness as probeSocketLivenessDefault, type ProbeResult } from "./uds-singleton.js";
@@ -75,6 +77,44 @@ export const pluginRuntimeDir = (plugin: string, prismHome?: string): string =>
 export const pluginBundlePath = (plugin: string, prismHome?: string): string =>
   join(pluginRuntimeDir(plugin, prismHome), "server.mjs");
 
+/**
+ * `<prismHome>/runtime/mcp/<plugin>/daemon.log` -- the append-only,
+ * size-capped file a freshly spawned daemon's stdout+stderr is redirected to
+ * (OBS-001; see `daemon-log.ts`'s `prepareDaemonLogSink`). Lives next to the
+ * compiled bundle and the daemon's own socket/registry files
+ * (`pluginRuntimeDir`), so "where does this plugin's daemon log live" is
+ * answered the same deterministic way as "where is its bundle" -- one
+ * directory, derived once.
+ *
+ * This piggybacks on `pluginRuntimeDir`, which in turn derives from
+ * `udsPathFor` and so inherits that function's plugin-name/length
+ * validation even though a log file path itself carries no such OS
+ * constraint (only an actual `bind()`ed socket path is bound by
+ * `sockaddr_un.sun_path`). That's intentional: the log necessarily lives in
+ * the same directory as the socket this plugin would bind, so if the socket
+ * path fits, the log path's directory always fits too -- and if it
+ * wouldn't, `resolveOrSpawnDaemon` already fails earlier building the real
+ * socket path, before any daemon is spawned for this hint to describe.
+ */
+export const pluginDaemonLogPath = (plugin: string, prismHome?: string): string =>
+  join(pluginRuntimeDir(plugin, prismHome), "daemon.log");
+
+/**
+ * `pluginDaemonLogPath`, but never throws -- for call sites where the log
+ * path is a cosmetic hint (enriching a timeout error message, an `mcp
+ * status` line) rather than the thing actually being spawned or read into.
+ * A plugin/prismHome combination that cannot produce a valid UDS-shaped path
+ * (see `pluginDaemonLogPath`'s doc comment) degrades to "no hint" instead of
+ * replacing the real error or status with an unrelated one.
+ */
+export const tryPluginDaemonLogPath = (plugin: string, prismHome: string | undefined): string | undefined => {
+  try {
+    return pluginDaemonLogPath(plugin, prismHome);
+  } catch {
+    return undefined;
+  }
+};
+
 const sha256Hex = (content: Buffer | string): string => createHash("sha256").update(content).digest("hex");
 
 export type GetDaemonFn = (plugin: string) => Promise<RegistryResult<RegistryEntry>>;
@@ -89,6 +129,10 @@ export interface SpawnDaemonOptions {
   readonly bundlePath: string;
   readonly udsPath: string;
   readonly bundleHash: string;
+  /** See `ResolveOrSpawnOptions.prismHome`. Threaded through so the default
+   * spawn can locate this plugin's log file (`pluginDaemonLogPath`) the same
+   * way it locates everything else -- never re-derived independently. */
+  readonly prismHome?: string;
 }
 
 export type SpawnDaemonFn = (options: SpawnDaemonOptions) => void;
@@ -97,12 +141,26 @@ export type SpawnDaemonFn = (options: SpawnDaemonOptions) => void;
  * Spawns `bun <bundle>` detached (so it outlives this process) with the UDS
  * + registry identity env the bundle's own runtime reads at startup (see
  * `PRISM_MCP_UDS_PATH` / `PRISM_MCP_REGISTRY_PLUGIN_NAME` /
- * `PRISM_MCP_REGISTRY_BUNDLE_HASH` in `MCP_SDK_HTTP_RUNTIME`). Never waits
- * on the child and never lets a spawn-level error (e.g. `bun` missing from
- * PATH) throw unhandled -- resolution simply times out and reports a typed
+ * `PRISM_MCP_REGISTRY_BUNDLE_HASH` in `MCP_SDK_HTTP_RUNTIME`). Redirects the
+ * child's stdout+stderr to its per-plugin, size-capped log file
+ * (`pluginDaemonLogPath`, OBS-001) instead of the prior `stdio: "ignore"` --
+ * every diagnostic the compiled bundle's runtime emits (idle-reap,
+ * double-bind, registry errors, the "listening on unix:..." line) is now
+ * readable after the fact. Never waits on the child and never lets a
+ * spawn-level error -- `bun` missing from PATH, or the log sink itself
+ * failing to open (e.g. a read-only `prismHome`; logging is best-effort) --
+ * throw unhandled: resolution simply times out and reports a typed
  * `DaemonResolveError` instead.
  */
-const defaultSpawnDaemon: SpawnDaemonFn = ({ plugin, bundlePath, udsPath, bundleHash }) => {
+const defaultSpawnDaemon: SpawnDaemonFn = ({ plugin, bundlePath, udsPath, bundleHash, prismHome }) => {
+  let logFd: number | undefined;
+  try {
+    logFd = prepareDaemonLogSink(pluginDaemonLogPath(plugin, prismHome));
+  } catch {
+    // Best-effort: a log-sink failure must never block the daemon spawn
+    // itself -- fall back to the pre-OBS-001 behavior (discarded stdio).
+  }
+
   const child = spawn("bun", [bundlePath], {
     cwd: dirname(bundlePath),
     env: {
@@ -112,8 +170,24 @@ const defaultSpawnDaemon: SpawnDaemonFn = ({ plugin, bundlePath, udsPath, bundle
       PRISM_MCP_REGISTRY_BUNDLE_HASH: bundleHash,
     },
     detached: true,
-    stdio: "ignore",
+    // Same fd for both slots: the child's stdout/stderr descriptors are
+    // both duplicated from this one open file description and so share its
+    // file offset, interleaving correctly (same mechanism as shell's
+    // `2>&1`).
+    stdio: logFd === undefined ? "ignore" : ["ignore", logFd, logFd],
   });
+  if (logFd !== undefined) {
+    // `spawn` duplicates the fd into the child synchronously before
+    // returning; closing our own copy here avoids leaking one fd per
+    // respawn in a long-lived caller (the stdio shim resolves-or-spawns
+    // repeatedly over its process lifetime). The child keeps writing
+    // through its own copy either way.
+    try {
+      closeSync(logFd);
+    } catch {
+      // Non-fatal.
+    }
+  }
   child.on("error", () => undefined);
   child.unref();
 };
@@ -165,12 +239,13 @@ const isBundleStale = async (options: {
 const waitForLiveEntry = async (options: {
   readonly plugin: string;
   readonly udsPath: string;
+  readonly prismHome: string | undefined;
   readonly getDaemon: GetDaemonFn;
   readonly probeSocketLiveness: ProbeSocketLivenessFn;
   readonly spawnTimeoutMs: number;
   readonly pollIntervalMs: number;
 }): Promise<RegistryEntry> => {
-  const { plugin, udsPath, getDaemon, probeSocketLiveness, spawnTimeoutMs, pollIntervalMs } = options;
+  const { plugin, udsPath, prismHome, getDaemon, probeSocketLiveness, spawnTimeoutMs, pollIntervalMs } = options;
   const deadline = Date.now() + spawnTimeoutMs;
 
   while (true) {
@@ -181,9 +256,14 @@ const waitForLiveEntry = async (options: {
     }
 
     if (Date.now() >= deadline) {
+      // Points the operator at the same log file `defaultSpawnDaemon` wrote
+      // to (OBS-001) -- a spawn that never came live is exactly the case a
+      // human needs to read the daemon's own diagnostics for.
+      const logPath = tryPluginDaemonLogPath(plugin, prismHome);
+      const logHint = logPath ? ` (see ${logPath} for daemon diagnostics)` : "";
       throw new DaemonResolveError(
         plugin,
-        `spawned daemon did not become live at ${udsPath} within ${spawnTimeoutMs}ms`,
+        `spawned daemon did not become live at ${udsPath} within ${spawnTimeoutMs}ms${logHint}`,
       );
     }
     await delay(pollIntervalMs);
@@ -253,7 +333,15 @@ export const resolveOrSpawnDaemon = async (options: ResolveOrSpawnOptions): Prom
   }
 
   const udsPath = buildUdsPath(plugin, currentHash);
-  spawnDaemon({ plugin, bundlePath, udsPath, bundleHash: currentHash });
+  spawnDaemon({ plugin, bundlePath, udsPath, bundleHash: currentHash, prismHome: options.prismHome });
 
-  return waitForLiveEntry({ plugin, udsPath, getDaemon, probeSocketLiveness, spawnTimeoutMs, pollIntervalMs });
+  return waitForLiveEntry({
+    plugin,
+    udsPath,
+    prismHome: options.prismHome,
+    getDaemon,
+    probeSocketLiveness,
+    spawnTimeoutMs,
+    pollIntervalMs,
+  });
 };

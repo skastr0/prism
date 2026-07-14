@@ -9,6 +9,8 @@ import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
+import { pluginDaemonLogPath } from "@skastr0/prism-sdk/mcp/daemon-resolver";
+import { registerDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
 import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
 
 let root: string;
@@ -891,4 +893,52 @@ test("pluginIsServable: no bundle and a registered-but-dead daemon is genuinely 
     probeSocketLiveness: async () => "stale",
   });
   expect(servable).toBe(false);
+});
+
+test("doctor's mcp.health finding for an unhealthy daemon points at the daemon's log file (OBS-001)", async () => {
+  const pluginRoot = join(root, "mcp-health-plugin");
+  // Short, dedicated prismHome (not the shared root-nested convention used
+  // elsewhere in this file): this is the one doctor test that reaches the
+  // real `pluginDaemonLogPath` -> `udsPathFor`, which asserts a 100-byte
+  // sun_path budget (see daemon-resolver.test.ts) that the shared `root`'s
+  // long mkdtemp prefix plus "/prism-home" would blow before the plugin
+  // name is even counted.
+  const prismHome = await mkdtemp(join(tmpdir(), "ph"));
+  const pluginName = "m";
+
+  try {
+    await writeText(
+      join(pluginRoot, "plugin.json"),
+      `${JSON.stringify({
+        name: pluginName,
+        version: "0.1.0",
+        targets: { tools: ["hermes"] },
+      }, null, 2)}\n`,
+    );
+
+    // A registered daemon whose socket is never bound classifies as
+    // "stale-pid" (lifecycle.ts's classifyStatus) -- the cheapest way to
+    // force a non-running/non-stopped finding without compiling a real
+    // bundle.
+    await registerDaemon(
+      pluginName,
+      { pid: 999999, sock: join(prismHome, "never-bound.sock"), bundleHash: "deadbeef", startedAt: 0, lastUsed: 0 },
+      prismHome,
+    );
+
+    const report = await runDoctor({
+      pluginPath: pluginRoot,
+      harnesses: ["hermes"],
+      scope: "global",
+      prismHome,
+      fix: false,
+    });
+
+    const mcpHealthFindings = report.findings.filter((f) => f.family === "mcp.health");
+    expect(mcpHealthFindings).toHaveLength(1);
+    expect(mcpHealthFindings[0]?.code).toBe("mcp.stale-pid");
+    expect(mcpHealthFindings[0]?.data?.logPath).toBe(pluginDaemonLogPath(pluginName, prismHome));
+  } finally {
+    await rm(prismHome, { recursive: true, force: true }).catch(() => undefined);
+  }
 });

@@ -11,6 +11,7 @@ import { mcpServerRuntimeSourceSha256 } from "../compile/mcp-bundle.js";
 import { generatedMcpServerName } from "../compile/mcp-runtime.js";
 import { prismMcpRuntimeDir, prismMcpServerPath } from "../compile/mcp-runtime-path.js";
 import { computeFileSha256, parseMcpRuntimeHealth, type McpRuntimeHealth } from "./runtime-metadata.js";
+import { tryPluginDaemonLogPath } from "@skastr0/prism-sdk/mcp/daemon-resolver";
 import { getDaemon, type RegistryEntry } from "@skastr0/prism-sdk/mcp/uds-registry";
 import { probeSocketLiveness } from "@skastr0/prism-sdk/mcp/uds-singleton";
 
@@ -47,6 +48,10 @@ export interface McpRuntimeDescriptor {
   readonly prismHome: string;
   readonly serverName: string;
   readonly serverPath: string;
+  /** Where a spawned daemon's stdout+stderr lands (OBS-001). Absent when the
+   * plugin name cannot produce a valid UDS-shaped path -- see
+   * `tryPluginDaemonLogPath`. */
+  readonly logPath?: string;
 }
 
 export interface McpStatusResult {
@@ -88,6 +93,7 @@ const descriptorForRegistry = (options: {
   prismHome: options.prismHome,
   serverName: generatedMcpServerName(options.registry.pluginName),
   serverPath: prismMcpServerPath(options.prismHome, options.registry.pluginName),
+  logPath: tryPluginDaemonLogPath(options.registry.pluginName, options.prismHome),
 });
 
 const resolveDescriptor = async (
@@ -220,6 +226,7 @@ export const listMcpStatuses = async (
       prismHome,
       serverName: generatedMcpServerName(pluginName),
       serverPath: join(mcpRoot, pluginName, "server.mjs"),
+      logPath: tryPluginDaemonLogPath(pluginName, prismHome),
     };
     statuses.push(await classifyStatus(descriptor));
   }
@@ -232,5 +239,6 @@ export const formatMcpStatus = (status: McpStatusResult): string => {
   const reasons = status.staleReasons.length > 0
     ? ` reasons=${status.staleReasons.join(",")}`
     : "";
-  return `${status.state.padEnd(15)} ${status.descriptor.serverName}${pid}${sock}${reasons} - ${status.detail}`;
+  const log = status.descriptor.logPath ? ` log=${status.descriptor.logPath}` : "";
+  return `${status.state.padEnd(15)} ${status.descriptor.serverName}${pid}${sock}${reasons}${log} - ${status.detail}`;
 };

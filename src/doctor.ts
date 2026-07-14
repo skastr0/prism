@@ -1967,6 +1967,9 @@ const validateMcpHealth = async (options: {
         data: {
           serverName: status.descriptor.serverName,
           staleReasons: status.staleReasons,
+          // Where to read this daemon's own diagnostics (OBS-001
+          // acceptance: doctor must be able to point at the log path).
+          ...(status.descriptor.logPath ? { logPath: status.descriptor.logPath } : {}),
         },
       }));
     } catch (error) {

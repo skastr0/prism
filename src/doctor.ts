@@ -1967,11 +1967,6 @@ const yamlScalarValue = (lines: ReadonlyArray<string>, indent: number, key: stri
   return value.length > 0 ? yamlUnquote(value) : undefined;
 };
 
-const yamlListItems = (lines: ReadonlyArray<string>, indent: number): string[] =>
-  lines
-    .filter((line) => indentOf(line) === indent && line.trim().startsWith("- "))
-    .map((line) => yamlUnquote(line.trim().slice(2).trim()));
-
 const yamlChildBlock = (
   lines: ReadonlyArray<string>,
   indent: number,
@@ -1982,13 +1977,37 @@ const yamlChildBlock = (
 };
 
 /**
- * Hermes writes its MCP server config as hand-rolled YAML text (see
- * `renderHermesStdioShimMcpServerYaml` in `src/compile/lowerers/hermes.ts`)
- * -- there is no YAML parser dependency anywhere in this codebase, and
- * adding one solely to read back a handful of mechanically-generated lines
- * is not worth it. This reads the exact same fixed-indentation grammar the
- * lowerer writes, rather than parsing YAML in general.
+ * Sequence items following `${key}:` at `indent`. YAML block sequences may
+ * sit flush with their key (`args:\n    - mcp`) or indented one level past
+ * it (`args:\n      - mcp`) -- both are the same document to any real YAML
+ * parser. Confirmed live on this machine: Hermes itself re-serializes its
+ * own `config.yaml` on write and normalizes list items to the same column as
+ * `args:`/`include:`, not one level deeper, which is the shape
+ * `renderHermesOwnerMcpServerYaml` (`src/compile/lowerers/hermes.ts`)
+ * literally emits before Hermes ever touches the file. `yamlChildBlock`'s
+ * sibling-block reader requires the item indent to be strictly deeper than
+ * the key, so it read a real, valid `args: [mcp, shim]` in the flush-column
+ * shape as `[]` -- turning a healthy live config into a false
+ * `config.mcp-shim-args-invalid` finding. This reader accepts either shape.
  */
+const yamlSequenceItems = (
+  lines: ReadonlyArray<string>,
+  indent: number,
+  key: string,
+): string[] => {
+  const keyIndex = lines.findIndex((line) => indentOf(line) === indent && line.trim() === `${key}:`);
+  if (keyIndex === -1) return [];
+  const items: string[] = [];
+  for (let index = keyIndex + 1; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.trim().length === 0 || line.trim().startsWith("#")) continue;
+    if (indentOf(line) < indent) break;
+    if (!line.trim().startsWith("- ")) break;
+    items.push(yamlUnquote(line.trim().slice(2).trim()));
+  }
+  return items;
+};
+
 /** Every top-level `<key>:` mapping name directly under `mcp_servers:` (indent 2). */
 const yamlChildKeyNames = (lines: ReadonlyArray<string>, indent: number): string[] => {
   const names: string[] = [];
@@ -2015,12 +2034,11 @@ const validateHermesConfigReferences = async (
     if (serverBlock.length === 0) continue;
     const envBlock = yamlChildBlock(serverBlock, 4, "env");
     const toolsBlock = yamlChildBlock(serverBlock, 4, "tools");
-    const allowlist = yamlChildBlock(toolsBlock, 6, "include").length > 0
-      ? yamlListItems(yamlChildBlock(toolsBlock, 6, "include"), 8)
-      : undefined;
+    const includeItems = yamlSequenceItems(toolsBlock, 6, "include");
+    const allowlist = includeItems.length > 0 ? includeItems : undefined;
     servers[serverKey] = {
       command: yamlScalarValue(serverBlock, 4, "command"),
-      args: yamlListItems(yamlChildBlock(serverBlock, 4, "args"), 6),
+      args: yamlSequenceItems(serverBlock, 4, "args"),
       env: {
         PRISM_SHIM_HARNESS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_HARNESS"),
         PRISM_SHIM_PLUGINS: yamlScalarValue(envBlock, 6, "PRISM_SHIM_PLUGINS"),

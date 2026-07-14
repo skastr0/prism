@@ -16,6 +16,20 @@ import { pluginDaemonLogPath } from "@skastr0/prism-sdk/mcp/daemon-resolver";
 import { registerDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
 import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
 import { listRegisteredWorkflowStores, registerWorkflowStore } from "./workflow-store-registry.js";
+import { planLowering as planHermesLowering } from "./compile/lowerers/hermes.js";
+import { CanonicalTool } from "./compile/sources.js";
+import { applyMarkerRegion } from "./sync/regions.js";
+
+const fixtureCanonicalTool = (pluginRoot: string, toolName: string): CanonicalTool =>
+  new CanonicalTool({
+    name: toolName,
+    sourcePath: join(pluginRoot, "tools", `${toolName}.tool.ts`),
+    description: `${toolName} fixture tool`,
+    input: {},
+    output: {},
+    slots: {},
+    handle: () => ({}),
+  });
 
 let root: string;
 let originalHome: string | undefined;
@@ -990,6 +1004,88 @@ test("doctor reports zero findings for a correctly-generated stdio-shim MCP conf
 
   const mcpShimFindings = report.findings.filter((f) => f.code.startsWith("config.mcp-shim-"));
   expect(mcpShimFindings).toEqual([]);
+});
+
+// One-writer-contract regression (WFE-006): the hermes lowerer's literal
+// rendered text is fed straight into doctor's hermes YAML reader below, so
+// writer and validator are pinned against the SAME real output — never a
+// hand-typed approximation of it that could silently drift from the real
+// renderer (see the fixture above, which is exactly such a hand-typed
+// approximation and would not have caught this).
+test("doctor accepts hermes's own lowerer render output verbatim (marker-fenced)", async () => {
+  const prismHome = join(root, "prism-home");
+  await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
+  const pluginRoot = join(root, "plugin-source", "demo");
+  const planned = await planHermesLowering({
+    agents: [],
+    orbits: [],
+    tools: [fixtureCanonicalTool(pluginRoot, "search")],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "global",
+      root: join(process.env.HOME!, ".hermes"),
+      sourcePluginName: "demo",
+      sourcePluginVersion: "0.1.0",
+    },
+  });
+  const serverKey = pluginServerKey("demo");
+  const region = planned.regions.find(
+    (candidate) => candidate.regionKey === `hermes.mcp.${serverKey}` && candidate.kind === "marker",
+  );
+  if (!region || region.kind !== "marker") throw new Error("expected hermes mcp marker region");
+
+  const configPath = join(process.env.HOME!, ".hermes", "config.yaml");
+  const outcome = applyMarkerRegion("mcp_servers:\n", region);
+  await writeText(configPath, outcome.content);
+
+  const report = await runDoctor({ harnesses: ["hermes"], scope: "global", prismHome, fix: false });
+  expect(report.findings.filter((f) => f.code.startsWith("config.mcp-shim-"))).toEqual([]);
+});
+
+// Real-world regression pin (WFE-006, grounded against the live
+// `~/.hermes/config.yaml` on this machine 2026-07-14): Hermes re-serializes
+// its own config on write and (a) drops the marker-fence comments, (b)
+// normalizes block-sequence items (`args:`, `tools.include:`) flush with
+// their key instead of one level deeper. Both are valid YAML to any real
+// parser; this pins doctor's hermes reader against exactly that shape,
+// derived from the SAME lowerer output as the test above (never hand-typed).
+test("doctor accepts hermes's own render output after Hermes re-serializes it (unfenced, flush-indented)", async () => {
+  const prismHome = join(root, "prism-home");
+  await writeText(prismMcpServerPath(prismHome, "demo"), "search\n");
+  const pluginRoot = join(root, "plugin-source", "demo");
+  const planned = await planHermesLowering({
+    agents: [],
+    orbits: [],
+    tools: [fixtureCanonicalTool(pluginRoot, "search")],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "global",
+      root: join(process.env.HOME!, ".hermes"),
+      sourcePluginName: "demo",
+      sourcePluginVersion: "0.1.0",
+    },
+  });
+  const serverKey = pluginServerKey("demo");
+  const region = planned.regions.find(
+    (candidate) => candidate.regionKey === `hermes.mcp.${serverKey}` && candidate.kind === "marker",
+  );
+  if (!region || region.kind !== "marker") throw new Error("expected hermes mcp marker region");
+
+  // Simulate Hermes's own re-serialization: dedent every block-sequence
+  // item by one level (flush with its key) and drop the fence entirely —
+  // exactly the transform observed on the live file, no fence survives it.
+  const reserialized = region.content
+    .split("\n")
+    .map((line) => (/^(\s{2,})- /.test(line) ? line.slice(2) : line))
+    .join("\n");
+
+  const configPath = join(process.env.HOME!, ".hermes", "config.yaml");
+  await writeText(configPath, `mcp_servers:\n${reserialized}\n`);
+
+  const report = await runDoctor({ harnesses: ["hermes"], scope: "global", prismHome, fix: false });
+  expect(report.findings.filter((f) => f.code.startsWith("config.mcp-shim-"))).toEqual([]);
 });
 
 test("doctor accepts an OpenCode plugin entry that already targets the bundle file (PQ-167)", async () => {

@@ -7220,7 +7220,8 @@ export default defineAgent({
   expect(agent).toContain('model: "grok-build"');
   expect(agent).toContain('- "read_file"');
   expect(agent).toContain('disallowedTools:\n  - "web_fetch"');
-  expect(agent).toContain('skills:\n  - "testing"');
+  // Grok must not emit frontmatter skills (full-body preload poison, 7ea1e27).
+  expect(agent).not.toContain("\nskills:");
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
   // Shim registration lands in <grok-root>/config.toml (the only MCP source
   // grok resolves for installed plugins), never in a bundle-level .mcp.json,

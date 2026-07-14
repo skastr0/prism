@@ -331,8 +331,6 @@ const main = async (): Promise<void> => {
           "--compile-only",
           "--compile-root",
           hermesRoot,
-          "--mcp-lifecycle",
-          "serve",
         ],
         { cwd: appRoot, env: mcpEnv },
       );

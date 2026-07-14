@@ -295,8 +295,6 @@ const main = async (): Promise<void> => {
       "--harness",
       "codex-cli",
       "--no-validate",
-      "--mcp-lifecycle",
-      "serve",
     ];
 
     await run("Cold refresh over plugin corpus", command, { env });

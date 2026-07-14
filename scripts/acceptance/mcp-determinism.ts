@@ -205,8 +205,6 @@ const main = async (): Promise<void> => {
     "--compile-only",
     "--compile-root",
     rootDir,
-    "--mcp-lifecycle",
-    "serve",
   ];
 
   const compile = async (

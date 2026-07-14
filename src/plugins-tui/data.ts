@@ -81,7 +81,6 @@ export const loadPluginPlan = async (options: {
     scope: options.scope,
     ...(options.projectPath ? { projectPath: options.projectPath } : {}),
     dryRun: true,
-    mcpLifecycle: "none",
   });
 };
 
@@ -166,7 +165,6 @@ export const applyRefresh = async (options: {
   manifest: PluginManifest;
   scope: HarnessScope;
   projectPath?: string;
-  mcpLifecycle?: "none" | "verify" | "serve";
   onOp?: SyncOpListener;
 }): Promise<PluginPlan> => {
   return planAllForPlugin({
@@ -176,7 +174,6 @@ export const applyRefresh = async (options: {
     scope: options.scope,
     ...(options.projectPath ? { projectPath: options.projectPath } : {}),
     dryRun: false,
-    mcpLifecycle: options.mcpLifecycle ?? "serve",
     ...(options.onOp ? { onOp: options.onOp } : {}),
   });
 };

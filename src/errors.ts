@@ -96,28 +96,6 @@ export class BundleBuildError extends Schema.TaggedError<BundleBuildError>()(
 }
 
 // ---------------------------------------------------------------------------
-// McpBundleMissingError — the MCP daemon lifecycle consumes (never builds)
-// the canonical compiled bundle at PRISM_HOME/runtime/mcp/<plugin>/server.mjs.
-// Serving without a compiled bundle is a typed, hinted failure.
-// ---------------------------------------------------------------------------
-
-export class McpBundleMissingError extends Schema.TaggedError<McpBundleMissingError>()(
-  "McpBundleMissingError",
-  {
-    pluginName: Schema.String,
-    bundlePath: Schema.String,
-  },
-) {
-  get hint(): string {
-    return `refresh the plugin first (prism refresh --plugin <plugin-path> --harness <id>) so the canonical MCP bundle exists, then retry`;
-  }
-
-  override get message(): string {
-    return `Compiled MCP server bundle for plugin '${this.pluginName}' is missing: ${this.bundlePath}`;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // BlockedTargetError — the sync engine's only guarded case: first-time
 // placement over a foreign file whose bytes differ. Never thrown mid-batch;
 // the compile result lists these (collect, don't abort) and the CLI edge
@@ -172,7 +150,6 @@ export type PrismError =
   | CompileError
   | PrismConfigError
   | BundleBuildError
-  | McpBundleMissingError
   | BlockedTargetError
   | PathConflictError;
 
@@ -192,7 +169,6 @@ export const PRISM_ERROR_TAGS: ReadonlySet<string> = new Set([
   "PluginManifestError",
   "PrismConfigError",
   "BundleBuildError",
-  "McpBundleMissingError",
   "BlockedTargetError",
   "PathConflictError",
 ]);
@@ -240,12 +216,6 @@ export const describePrismError = (error: PrismError): PrismErrorRender => {
           .map((line) => line.trim())
           .filter((line) => line.length > 0),
         hint: "fix the reported bundler diagnostics in the plugin source, then re-run",
-      };
-    case "McpBundleMissingError":
-      return {
-        headline: error.message,
-        hint: error.hint,
-        path: error.bundlePath,
       };
     case "BlockedTargetError":
       return {

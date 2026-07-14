@@ -166,7 +166,6 @@ const main = async (): Promise<void> => {
         root: join(outputRootBase, plugin),
         prismHome,
         dryRun: true,
-        mcpLifecycle: "none",
       }),
     );
 

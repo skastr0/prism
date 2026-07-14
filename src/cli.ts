@@ -44,7 +44,6 @@ import {
   formatOperations,
   syncWorkflowRefsForProject,
   type CompileResult,
-  type CompileMcpLifecycleMode,
 } from "./compile/pipeline.js";
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import {
@@ -185,11 +184,6 @@ program
   .option("--compile-only", "Only run compile-phase lowering")
   .option("--clean", "Clear compile cache before compiling", false)
   .option("--compile-root <path>", "Override compile output root")
-  .option(
-    "--mcp-lifecycle <mode>",
-    "MCP daemon-lifecycle hint (none|verify|serve) — currently a no-op; compile never drives daemon lifecycle. Rejected as 'serve' combined with --dry-run.",
-    parseMcpLifecycleMode,
-  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       await runRefreshCommand("refresh", pluginPath, options);
@@ -220,11 +214,6 @@ program
   .option("--clean", "Plan compile cache cleanup")
   .option("--compile-root <path>", "Override compile output root")
   .option("--json", "Print a machine-readable JSON envelope", false)
-  .option(
-    "--mcp-lifecycle <mode>",
-    "MCP daemon-lifecycle hint (none|verify|serve) — currently a no-op; compile never drives daemon lifecycle. Rejected as 'serve' since `plan` is always a dry run.",
-    parseMcpLifecycleMode,
-  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       await runRefreshCommand("plan", pluginPath, options);
@@ -1963,7 +1952,6 @@ type RefreshCommandOptions = {
   compileOnly?: boolean;
   clean?: boolean;
   compileRoot?: string;
-  mcpLifecycle?: CompileMcpLifecycleMode;
 };
 
 type NormalizedRefreshOptions = {
@@ -1980,7 +1968,6 @@ type NormalizedRefreshOptions = {
   compileOnly: boolean;
   clean: boolean;
   compileRoot?: string;
-  mcpLifecycle: CompileMcpLifecycleMode;
 };
 
 type RefreshCommandContext = LoadedPlugin & {
@@ -2023,7 +2010,6 @@ type DirectoryRefreshOptions = {
   scope: HarnessScope;
   projectPath?: string;
   compileRoot?: string;
-  mcpLifecycle: CompileMcpLifecycleMode;
   validate?: boolean;
   dryRun: boolean;
   overwrite: boolean;
@@ -2085,7 +2071,6 @@ async function runRefreshSingleCommand(
     scope: context.options.scope,
     projectPath: context.options.project,
     compileRoot: context.options.compileRoot,
-    mcpLifecycle: context.options.mcpLifecycle,
     clean: context.options.clean,
     dryRun: context.options.dryRun,
     quiet: context.options.json,
@@ -2151,31 +2136,11 @@ async function loadRefreshCommandContext(
   return { pluginPath, manifest, harnesses, options };
 }
 
-// `--dry-run` (or `plan`, which is always a dry run) promises a
-// side-effect-free preview; an explicit `--mcp-lifecycle serve` requests the
-// opposite (a live daemon). Rather than silently resolve the contradiction
-// by letting the (now-inert) lifecycle value do nothing, reject it as a
-// usage error — the incoherent combination becomes unrepresentable instead
-// of a state the runtime quietly polices (PQ-171). `none`/`verify` name
-// non-mutating intents and stay compatible with a dry run.
-function assertDryRunLifecycleCompatible(
-  mcpLifecycle: CompileMcpLifecycleMode | undefined,
-  dryRun: boolean,
-): void {
-  if (dryRun && mcpLifecycle === "serve") {
-    throw new CliUsageError(
-      "--dry-run (plan is always a dry run) conflicts with --mcp-lifecycle serve — " +
-        "a preview cannot also request a live MCP daemon. Pass --mcp-lifecycle none or verify, or drop --dry-run.",
-    );
-  }
-}
-
 function normalizeRefreshCommandOptions(
   options: RefreshCommandOptions,
   mode: RefreshMode,
 ): NormalizedRefreshOptions {
   const dryRun = mode === "plan" || options.dryRun === true;
-  assertDryRunLifecycleCompatible(options.mcpLifecycle, dryRun);
   return {
     ...options,
     scope: options.scope ?? "global",
@@ -2184,11 +2149,6 @@ function normalizeRefreshCommandOptions(
     json: options.json ?? false,
     compileOnly: options.compileOnly ?? false,
     clean: options.clean ?? false,
-    // Compile never drives MCP daemon lifecycle either way (see
-    // CompileOptions.mcpLifecycle) — "serve" stays the real-apply default
-    // for back-compat; a dry run defaults to the honest "none" instead of
-    // silently inheriting a mutating-sounding default it can never act on.
-    mcpLifecycle: options.mcpLifecycle ?? (dryRun ? "none" : "serve"),
   };
 }
 
@@ -2502,7 +2462,6 @@ async function runRefreshDirectoryCommand(
     scope: options.scope,
     projectPath: options.project,
     compileRoot: options.compileRoot,
-    mcpLifecycle: options.mcpLifecycle,
     validate: options.validate,
     dryRun: options.dryRun,
     overwrite: options.overwrite,
@@ -2605,7 +2564,6 @@ async function resolveCorpusMemoKey(
     scope: options.scope,
     projectPath: options.project,
     compileRoot: options.compileRoot,
-    mcpLifecycle: options.mcpLifecycle,
     overwrite: options.overwrite,
     compileOnly: options.compileOnly,
     resolvedRoots,
@@ -2809,7 +2767,6 @@ async function refreshDiscoveredPlugin(
     scope: options.scope,
     projectPath: options.projectPath,
     compileRoot: options.compileRoot,
-    mcpLifecycle: options.mcpLifecycle,
     clean: options.clean,
     dryRun: options.dryRun,
     quiet: options.json,
@@ -3215,7 +3172,6 @@ async function runCompilePhaseForPlugin(options: {
   scope: HarnessScope;
   projectPath?: string;
   compileRoot?: string;
-  mcpLifecycle: CompileMcpLifecycleMode;
   clean?: boolean;
   dryRun: boolean;
   indent?: string;
@@ -3248,7 +3204,6 @@ async function runCompilePhaseForPlugin(options: {
         root: options.compileRoot,
         prismHome: resolvePrismHome(),
         dryRun: options.dryRun,
-        mcpLifecycle: options.mcpLifecycle,
         ...(options.emitWorkflowRefs !== undefined
           ? { emitWorkflowRefs: options.emitWorkflowRefs }
           : {}),
@@ -3320,11 +3275,6 @@ function parseWorkflowPermissionMode(value: string): WorkflowPermissionMode {
   throw new InvalidArgumentError(
     `Invalid permission mode '${value}'. Expected one of: ${WORKFLOW_PERMISSION_MODES.join(", ")}`,
   );
-}
-
-function parseMcpLifecycleMode(value: string): CompileMcpLifecycleMode {
-  if (value === "none" || value === "verify" || value === "serve") return value;
-  throw new InvalidArgumentError("--mcp-lifecycle must be one of: none, verify, serve.");
 }
 
 function assertProjectPathForProjectScope(

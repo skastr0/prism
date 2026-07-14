@@ -131,7 +131,6 @@ const runSelfTestMode = async (harnesses: readonly ShimHarnessId[]): Promise<Top
           scope: "global",
           prismHome: sandbox.prismHome,
           dryRun: false,
-          mcpLifecycle: "none",
         }).pipe(Effect.provide(Layer.succeed(HarnessRoots, sandbox.roots))),
       );
     }

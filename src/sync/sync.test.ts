@@ -253,6 +253,143 @@ describe("sync engine — same-path conflict guard (PQ-156)", () => {
   });
 });
 
+describe("sync engine — cross-plugin ownership guard (PQ-162)", () => {
+  // Every real caller (refresh.ts, compile/pipeline.ts) scopes one planSync
+  // call to exactly one plugin, so a genuine two-plugin bare-name collision
+  // (e.g. two plugins each shipping skills/debugging/SKILL.md) never appears
+  // within a single call's desired.files — it appears across two sequential,
+  // differently-scoped calls instead. This helper mirrors that real shape,
+  // unlike the unscoped `refresh()` used elsewhere in this file.
+  const refreshScoped = async (desired: DesiredRoot, plugin: string, options: { overwrite?: boolean } = {}) => {
+    const snapshot = await readSnapshot({ prismHome: home, harness: desired.harness, root });
+    const plan = await planSync({
+      desired,
+      snapshot: snapshot.manifest,
+      scopePlugins: new Set([plugin]),
+      degradedOwnership: options.overwrite ?? false,
+    });
+    return applySync({ prismHome: home, plan });
+  };
+
+  const skillPath = () => join(root, "skills", "debugging", "SKILL.md");
+
+  test("a second plugin's later, separately-scoped refresh at a bare-name path already owned by a different plugin fails closed, naming both — not a silent last-writer, not a misattributed 'never managed' block", async () => {
+    await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "plugin-a debugging skill\n", plugin: "plugin-a" }] }),
+      "plugin-a",
+    );
+    expect(await readFile(skillPath())).toBe("plugin-a debugging skill\n");
+
+    try {
+      await refreshScoped(
+        desiredWith({ files: [{ targetPath: skillPath(), content: "plugin-b debugging skill\n", plugin: "plugin-b" }] }),
+        "plugin-b",
+      );
+      throw new Error("expected a PathConflictError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PathConflictError);
+      if (!(error instanceof PathConflictError)) throw error;
+      expect(error.targetPath).toBe(skillPath());
+      expect(error.firstPlugin).toBe("plugin-a");
+      expect(error.secondPlugin).toBe("plugin-b");
+    }
+    // plugin-a's content survives untouched — no partial clobber.
+    expect(await readFile(skillPath())).toBe("plugin-a debugging skill\n");
+  });
+
+  test("--overwrite does not let a second plugin adopt a path another plugin already owns (AGENTS.md invariant 7: no adopt, ever)", async () => {
+    await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "plugin-a debugging skill\n", plugin: "plugin-a" }] }),
+      "plugin-a",
+    );
+
+    await expect(
+      refreshScoped(
+        desiredWith({ files: [{ targetPath: skillPath(), content: "plugin-b debugging skill\n", plugin: "plugin-b" }] }),
+        "plugin-b",
+        { overwrite: true },
+      ),
+    ).rejects.toBeInstanceOf(PathConflictError);
+    expect(await readFile(skillPath())).toBe("plugin-a debugging skill\n");
+  });
+
+  test("the same plugin re-emitting its own path across separately-scoped calls converges, not a conflict", async () => {
+    await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "v1\n", plugin: "plugin-a" }] }),
+      "plugin-a",
+    );
+    const second = await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "v2\n", plugin: "plugin-a" }] }),
+      "plugin-a",
+    );
+    expect(second.failures).toEqual([]);
+    expect(kinds(second)).toEqual(["repair"]);
+    expect(await readFile(skillPath())).toBe("v2\n");
+  });
+
+  // Content-gate: a plugin-attribution mismatch alone does not throw when
+  // the desired bytes already match what is on record. Two real cases this
+  // covers, both proven here: (a) a legitimate multi-producer convergent
+  // artifact (OpenCode's per-owner tool-binding mirror — every consumer of
+  // the same foreign owner regenerates byte-identical content at that
+  // owner's own bundle path; see the doc comment on
+  // assertNoForeignOwnerConflicts), and (b) rollout safety over a snapshot
+  // that still carries a stale attribution from before a producer-side
+  // attribution fix — the entry converges silently instead of permanently
+  // wedging every future refresh on a plugin-name mismatch bytes can never
+  // resolve. A genuine two-author collision never coincides on content by
+  // accident (proven above), so this costs that law nothing.
+  test("a plugin-attribution mismatch with byte-identical content converges silently, never a conflict, and self-heals the recorded owner", async () => {
+    await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "shared bytes\n", plugin: "plugin-a" }] }),
+      "plugin-a",
+    );
+
+    const report = await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "shared bytes\n", plugin: "plugin-b" }] }),
+      "plugin-b",
+    );
+    expect(report.failures).toEqual([]);
+    expect(kinds(report)).toEqual(["skip"]);
+    expect(await readFile(skillPath())).toBe("shared bytes\n");
+
+    // The manifest now self-heals to the latest plugin's attribution (the
+    // same rule any owned-file write already follows) — plugin-b's own next
+    // write, even with diverged content, is a normal repair by its now-
+    // recorded owner, not a fresh cross-plugin collision.
+    const repaired = await refreshScoped(
+      desiredWith({ files: [{ targetPath: skillPath(), content: "plugin-b's own update\n", plugin: "plugin-b" }] }),
+      "plugin-b",
+    );
+    expect(repaired.failures).toEqual([]);
+    expect(kinds(repaired)).toEqual(["repair"]);
+    expect(await readFile(skillPath())).toBe("plugin-b's own update\n");
+  });
+
+  test("a plugin-attribution mismatch with diverging content still fails closed, naming both — the content gate never masks a real collision", async () => {
+    const divergingPath = join(root, "skills", "diverging", "SKILL.md");
+    await refreshScoped(
+      desiredWith({ files: [{ targetPath: divergingPath, content: "plugin-a's own bytes\n", plugin: "plugin-a" }] }),
+      "plugin-a",
+    );
+
+    try {
+      await refreshScoped(
+        desiredWith({ files: [{ targetPath: divergingPath, content: "plugin-b's different bytes\n", plugin: "plugin-b" }] }),
+        "plugin-b",
+      );
+      throw new Error("expected a PathConflictError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PathConflictError);
+      if (!(error instanceof PathConflictError)) throw error;
+      expect(error.targetPath).toBe(divergingPath);
+      expect(error.firstPlugin).toBe("plugin-a");
+      expect(error.secondPlugin).toBe("plugin-b");
+    }
+    expect(await readFile(divergingPath)).toBe("plugin-a's own bytes\n");
+  });
+});
+
 describe("sync engine — grok MCP port normalization (PQ-167)", () => {
   const mcpPath = () => join(root, "plugins", "demo", ".mcp.json");
   const renderMcpConfig = (port: number, extraServers?: Record<string, unknown>): string =>

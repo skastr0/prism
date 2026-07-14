@@ -532,6 +532,72 @@ const assertNoPathConflicts = (desired: DesiredRoot): void => {
   }
 };
 
+/**
+ * Cross-plugin ownership guard (PQ-162), extending PQ-156's same-call guard
+ * above across calls. Every real caller scopes one `planSync` invocation to
+ * exactly one plugin (`scopePlugins` is always a singleton — see refresh.ts,
+ * compile/pipeline.ts), so two DIFFERENT plugins' desired files never appear
+ * together in one `desired.files` array and `assertNoPathConflicts` can
+ * never observe the collision. It surfaces one call later instead: once
+ * plugin A has written a path, plugin B's own later, differently-scoped
+ * refresh desiring the SAME path finds no in-scope snapshot entry (plugin A
+ * is out of scope for plugin B's run) and `planOwnedFile` falls through to
+ * its generic foreign-file classification — `blocked`, "a file Prism has
+ * never managed already exists here". That is factually wrong (the path IS
+ * Prism-managed, by plugin A) and silent about which two plugins actually
+ * collided, i.e. exactly the silent-last-writer-adjacent failure invariant 2
+ * forbids (AGENTS.md: "Never silent last-writer-wins"). This closes that gap
+ * by reading the snapshot's recorded owner directly, regardless of this
+ * call's scope, and reuses PQ-156's error type and law: a bare-name skill,
+ * agent, or tool collision across plugins fails closed here exactly like a
+ * same-call collision does above, naming both plugins.
+ *
+ * Content-gated, unlike the same-call guard above: a plugin mismatch alone
+ * does not throw when the desired bytes still match what is already on
+ * record. That covers a real shipped shape (OpenCode's per-owner
+ * tool-binding mirror bundle, `src/compile/lowerers/opencode.ts`
+ * `planOwnerGeneratedRuntimePlugins`): every consumer plugin that binds a
+ * foreign owner's canonical tool regenerates that owner's OWN generated
+ * bundle as a byte-for-byte-identical, deterministic projection of the
+ * owner's own `tools/` directory, so N different consumers (and the owner's
+ * own compile, if it has one) all converge on the exact same content at the
+ * exact same path — a legitimate multi-producer convergence, not the
+ * two-independent-authors collision this law targets. It also makes the
+ * guard safe to roll out over a snapshot that still carries a stale
+ * attribution from before a producer-side attribution fix: since the bytes
+ * are unchanged, that stale entry converges silently instead of wedging
+ * every future refresh against a plugin-name mismatch it can never resolve.
+ * A REAL two-author collision (skills, agents, commands at a bare-name
+ * path) never coincides on content by accident, so this narrowing costs
+ * nothing there — same-content-different-author is not a scenario real
+ * independent artifacts fall into.
+ */
+const assertNoForeignOwnerConflicts = (
+  desired: DesiredRoot,
+  snapshot: SnapshotManifest,
+): void => {
+  const ownedEntryByPath = new Map<string, SnapshotEntry>();
+  for (const entry of snapshot.entries) {
+    if (entry.mode !== "owned") continue;
+    if (entry.plugin === RETIRED_SHIM_SENTINEL_OWNER) continue;
+    ownedEntryByPath.set(entry.targetPath, entry);
+  }
+  for (const file of desired.files) {
+    const entry = ownedEntryByPath.get(file.targetPath);
+    if (entry === undefined || entry.plugin === file.plugin) continue;
+    const desiredHash = computeContentHash(file.content);
+    const converged =
+      desiredHash === entry.contentHash ||
+      ownedFileContentHash(desired.harness, file.content) === entry.contentHash;
+    if (converged) continue;
+    throw new PathConflictError({
+      targetPath: file.targetPath,
+      firstPlugin: entry.plugin,
+      secondPlugin: file.plugin,
+    });
+  }
+};
+
 export const planSync = async (options: {
   readonly desired: DesiredRoot;
   readonly snapshot: SnapshotManifest;
@@ -546,6 +612,7 @@ export const planSync = async (options: {
   readonly scopePlugins?: ReadonlySet<string>;
 }): Promise<SyncPlan> => {
   assertNoPathConflicts(options.desired);
+  assertNoForeignOwnerConflicts(options.desired, options.snapshot);
   const degradedOwnership = options.degradedOwnership ?? false;
   const inScope = (plugin: string): boolean =>
     options.scopePlugins === undefined || options.scopePlugins.has(plugin);

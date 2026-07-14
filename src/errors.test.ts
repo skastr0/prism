@@ -19,6 +19,7 @@ import {
   BundleBuildError,
   isPrismError,
   McpBundleMissingError,
+  PathConflictError,
   PluginManifestError,
   PRISM_ERROR_TAGS,
   PrismConfigError,
@@ -108,6 +109,11 @@ const SAMPLE_ERRORS: ReadonlyArray<PrismError> = [
     plugin: "demo",
     hint: "a file Prism has never managed already exists here with different content — delete or move it, then refresh",
   }),
+  new PathConflictError({
+    targetPath: "/tmp/root/.codex/agents/reviewer.md",
+    firstPlugin: "booth",
+    secondPlugin: "quasar",
+  }),
 ];
 
 test("every PrismError tag renders headline + hint and never a stack frame", () => {
@@ -143,6 +149,21 @@ test("BlockedTargetError renders its structured fields", () => {
   );
   expect(rendered).toContain("plugin: demo-plugin");
   expect(rendered).toContain("hint: delete or move it, then refresh");
+  expect(rendered).not.toMatch(STACK_FRAME);
+});
+
+test("PathConflictError renders its structured fields", () => {
+  const error = new PathConflictError({
+    targetPath: "/tmp/root/.codex/agents/reviewer.md",
+    firstPlugin: "booth",
+    secondPlugin: "quasar",
+  });
+
+  const rendered = renderPrismError(error);
+  expect(rendered).toContain(
+    "Two plugins target the same path '/tmp/root/.codex/agents/reviewer.md': 'booth' and 'quasar'",
+  );
+  expect(rendered).toContain("hint: give one plugin sole ownership of this path");
   expect(rendered).not.toMatch(STACK_FRAME);
 });
 

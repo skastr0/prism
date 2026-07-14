@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
+import { getDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
 import { exists } from "../fs.js";
 import { computeMcpHttpConfigContentHash } from "../content-hash.js";
 import { prismMcpServerPath } from "./mcp-runtime-path.js";
@@ -392,4 +393,69 @@ test("grok per-plugin shim regions stay independent across plugin compiles, and 
   const afterEmpty = await readFile(configPath, "utf8");
   expect(afterEmpty).not.toContain("prism:grok.mcp.");
   expect(afterEmpty).not.toContain("PRISM_SHIM_PLUGINS");
+});
+
+// ---------------------------------------------------------------------------
+// PQ-171: a scoped --compile-root must never mutate the shared, live MCP
+// daemon registry, regardless of --mcp-lifecycle. Since the UDS/stdio-shim
+// migration (WS6) retired compile-time daemon spawn/stop/restart entirely,
+// this now holds unconditionally -- proven here rather than left "true by
+// luck" the way the pre-WS6 incident (a scratch --compile-root run that
+// restarted a live daemon) found it.
+// ---------------------------------------------------------------------------
+
+test("a scoped --compile-root compile with mcpLifecycle serve never registers or touches a live daemon (PQ-171)", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const compileRoot = join(root, "scratch-compile-root");
+  const pluginRoot = join(root, "lifecycle-scope-plugin");
+  await writeShimUnionPlugin({ pluginRoot, name: "lifecycle-scope-plugin", toolName: "echo_tool" });
+
+  expect(await getDaemon("lifecycle-scope-plugin", prismHome)).toEqual({ kind: "absent" });
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome,
+      pluginPath: pluginRoot,
+      target: "codex-cli",
+      scope: "global",
+      root: compileRoot,
+      dryRun: false,
+      mcpLifecycle: "serve",
+    }),
+  );
+
+  // The generated bundle itself still lands under the shared prismHome (a
+  // separately established, separately tested invariant -- `root` scopes the
+  // harness config output, never PRISM_HOME's own MCP runtime tree). What
+  // must NEVER happen, for any root, is a live daemon registration: no pid,
+  // no socket, no registry entry.
+  expect(await exists(prismMcpServerPath(prismHome, "lifecycle-scope-plugin"))).toBe(true);
+  expect(await getDaemon("lifecycle-scope-plugin", prismHome)).toEqual({ kind: "absent" });
+});
+
+test("--dry-run compile with mcpLifecycle serve writes nothing at all, registry or bundle (PQ-171)", async () => {
+  const root = await createTempRoot();
+  const prismHome = join(root, "prism-home");
+  const compileRoot = join(root, "scratch-compile-root");
+  const pluginRoot = join(root, "lifecycle-dryrun-plugin");
+  await writeShimUnionPlugin({ pluginRoot, name: "lifecycle-dryrun-plugin", toolName: "echo_tool" });
+
+  await Effect.runPromise(
+    compilePluginForTarget({
+      prismHome,
+      pluginPath: pluginRoot,
+      target: "codex-cli",
+      scope: "global",
+      root: compileRoot,
+      dryRun: true,
+      mcpLifecycle: "serve",
+    }),
+  );
+
+  // A genuinely side-effect-free plan: neither the generated bundle nor a
+  // daemon registration exists after a dry-run, no matter what
+  // --mcp-lifecycle asked for.
+  expect(await exists(prismMcpServerPath(prismHome, "lifecycle-dryrun-plugin"))).toBe(false);
+  expect(await getDaemon("lifecycle-dryrun-plugin", prismHome)).toEqual({ kind: "absent" });
 });

@@ -159,67 +159,65 @@ test("codex-cli lowerer emits desired files plus config.toml regions", async () 
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: {
     shell: { targets: { "codex-cli": { name: "shell.command" } } },
   },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const, additionalContext: "unsupported-pretool-context" }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell-after.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell-after",
   description: "Audit shell command responses",
   event: hookEvent.toolAfter,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.output?.ok ? { decision: "continue" as const } : { decision: "block" as const, message: "missing tool_response fallback" }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "session-ended.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-ended",
   description: "Observe session end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -227,7 +225,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -542,9 +540,9 @@ test("codex-cli lowerer emits prompt and permission request hook wrappers", asyn
   await writeText(
     join(pluginRoot, "hooks", "prompt-context.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-context",
   event: hookEvent.promptSubmit,
   handle: (event) => Effect.succeed({
@@ -552,15 +550,15 @@ export default defineHook({
     systemMessage: "system:" + event.target.harness,
     additionalContext: "prompt:" + event.prompt,
   }),
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "hooks", "permission-guard.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "permission-guard",
   event: hookEvent.permissionRequest,
   match: { tool: hookTool.any() },
@@ -569,7 +567,7 @@ export default defineHook({
       ? { decision: "allow" as const, systemMessage: "approved" }
       : { decision: "block" as const, message: "permission-blocked" },
   ),
-});
+};
 `,
   );
 
@@ -789,9 +787,8 @@ test("codex-cli lowerer emits a per-owner-plugin stdio-shim MCP server", async (
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo via stdio shim",
   input: Schema.Struct({ message: Schema.String }),
@@ -799,7 +796,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 
@@ -902,75 +899,70 @@ test("codex-cli lowerer full hook event and wrapper protocol fidelity", async ()
   await writeText(
     join(pluginRoot, "hooks", "stop-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "stop-check",
   event: "stop",
   handle: (_event) => {
     return Effect.succeed({ decision: "block" as const, message: "stop blocked" });
   },
-});
+};
 `
   );
 
   await writeText(
     join(pluginRoot, "hooks", "subagent-stop-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "subagent-stop-check",
   event: "subagent.stop",
   handle: (_event) => {
     return Effect.succeed({ decision: "block" as const, message: "subagent stop blocked" });
   },
-});
+};
 `
   );
 
   await writeText(
     join(pluginRoot, "hooks", "compact-before-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "compact-before-check",
   event: "compact.before",
   handle: (_event) => {
     return Effect.succeed({ decision: "block" as const, message: "compact before blocked" });
   },
-});
+};
 `
   );
 
   await writeText(
     join(pluginRoot, "hooks", "subagent-start-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "subagent-start-check",
   event: "subagent.start",
   handle: (_event) => {
     return Effect.succeed({ decision: "continue" as const, additionalContext: "subagent-start-ctx" });
   },
-});
+};
 `
   );
 
   await writeText(
     join(pluginRoot, "hooks", "compact-after-check.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "compact-after-check",
   event: "compact.after",
   handle: (_event) => {
     return Effect.succeed({ decision: "continue" as const, systemMessage: "compact-after-sys" });
   },
-});
+};
 `
   );
 

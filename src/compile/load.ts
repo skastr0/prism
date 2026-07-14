@@ -1213,14 +1213,6 @@ const collectBindingToolSlotSources = (
     seenIdentifiers: Set<string> = new Set(),
   ): boolean => {
     const unwrapped = unwrapExpression(expression);
-    if (
-      ts.isCallExpression(unwrapped) &&
-      ts.isIdentifier(unwrapped.expression) &&
-      unwrapped.expression.text === "defineAgent"
-    ) {
-      collectFromAgentObject(asObjectLiteral(unwrapped.arguments[0]));
-      return true;
-    }
 
     if (ts.isObjectLiteralExpression(unwrapped)) {
       collectFromAgentObject(unwrapped);
@@ -1244,15 +1236,6 @@ const collectBindingToolSlotSources = (
   const visit = (node: TypeScript.Node): void => {
     if (ts.isExportAssignment(node)) {
       if (collectFromAgentExpression(node.expression)) return;
-    }
-
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "defineAgent"
-    ) {
-      collectFromAgentExpression(node);
-      return;
     }
 
     ts.forEachChild(node, visit);

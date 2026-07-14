@@ -100,65 +100,63 @@ test("factory-droid lowerer emits native plugin bundle surfaces", async () => {
 
   await writeText(
     join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-    `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-
-export default defineToolspace({
+    `
+export default {
   name: "workspace",
   tools: { shell: { targets: { "factory-droid": { name: "Execute" } } } },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-shell.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "audit-echo.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-echo",
   description: "Audit canonical echo calls",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.canonical("echo") },
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "hooks", "session-ended.hook.ts"),
     `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-ended",
   description: "Observe session end",
   event: hookEvent.sessionEnd,
   handle: (_event) => Effect.succeed({ decision: "continue" as const }),
-});
+};
 `,
   );
 
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -166,7 +164,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 

@@ -1163,7 +1163,8 @@ const schemaStructCall = (): JsonObject =>
 const runGeneratedRule = async (
   ruleName: string,
   node: JsonObject,
-  filename = "agents/builder.agent.ts"
+  filename = "agents/builder.agent.ts",
+  visitorKey: "CallExpression" | "ExportDefaultDeclaration" = "CallExpression"
 ): Promise<JsonObject[]> => {
   const plugin = await loadGeneratedLintPlugin();
   const reports: JsonObject[] = [];
@@ -1172,9 +1173,19 @@ const runGeneratedRule = async (
     report: (diagnostic) => reports.push(diagnostic),
   });
 
-  visitors?.CallExpression?.(node);
+  visitors?.[visitorKey]?.(node);
   return reports;
 };
+
+const exportDefaultDeclaration = (declaration: JsonObject): JsonObject => ({
+  type: "ExportDefaultDeclaration",
+  declaration,
+});
+const satisfiesExpression = (expression: JsonObject, typeAnnotation: JsonObject): JsonObject => ({
+  type: "TSSatisfiesExpression",
+  expression,
+  typeAnnotation,
+});
 
 const createInstallAllFixture = async (): Promise<{
   monorepoRoot: string;
@@ -1232,9 +1243,8 @@ const createCliMcpFixture = async (options?: {
   await writeFile(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo through CLI lifecycle.",
   input: Schema.Struct({ message: Schema.String }),
@@ -1242,7 +1252,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
   return { pluginRoot, hermesRoot, prismHome };
@@ -1273,9 +1283,9 @@ const createCliPackageFixture = async (): Promise<{
   );
   await writeFile(
     join(pluginRoot, "hooks", "prompt-context.hook.ts"),
-    `import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-context",
   event: hookEvent.promptSubmit,
   targets: ["codex-cli"],
@@ -1283,7 +1293,7 @@ export default defineHook({
     decision: "continue",
     additionalContext: "cli:" + event.prompt,
   }),
-});
+};
 `,
   );
 
@@ -1741,27 +1751,33 @@ test("generated Oxlint rule rejects inline Schema slot fills but allows imported
 });
 
 test("generated Oxlint rule rejects trait-owned slots and tool input/output replacement", async () => {
-  const traitDefinition = callExpression(identifier("defineTrait"), [
-    objectExpression([
-      property("name", literal("submittable")),
-      property("slots", objectExpression([property("builder_report", objectExpression([]))])),
-      property(
-        "tools",
-        objectExpression([
-          property(
-            "submit_work",
-            objectExpression([
-              property("ref", literal("orbit-core:submit_work")),
-              property("input", identifier("WorkSubmissionBase")),
-              property("output", identifier("OrbitDispatchReceipt")),
-            ])
-          ),
-        ])
-      ),
-    ]),
+  const traitObject = objectExpression([
+    property("name", literal("submittable")),
+    property("slots", objectExpression([property("builder_report", objectExpression([]))])),
+    property(
+      "tools",
+      objectExpression([
+        property(
+          "submit_work",
+          objectExpression([
+            property("ref", literal("orbit-core:submit_work")),
+            property("input", identifier("WorkSubmissionBase")),
+            property("output", identifier("OrbitDispatchReceipt")),
+          ])
+        ),
+      ])
+    ),
   ]);
+  const traitDefinition = exportDefaultDeclaration(
+    satisfiesExpression(traitObject, identifier("TraitSource"))
+  );
 
-  const reports = await runGeneratedRule("no-trait-tool-contract-overrides", traitDefinition);
+  const reports = await runGeneratedRule(
+    "no-trait-tool-contract-overrides",
+    traitDefinition,
+    "traits/submittable.trait.ts",
+    "ExportDefaultDeclaration"
+  );
 
   expect(reports).toHaveLength(3);
   expect(reports.map((report) => String(report.message))).toEqual([

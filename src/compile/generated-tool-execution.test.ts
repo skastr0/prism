@@ -55,9 +55,8 @@ const createMatrixToolFixture = async (
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -65,7 +64,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
 };
@@ -202,9 +201,8 @@ test(
       await writeText(
         join(ownerRoot, "tools", "greet.tool.ts"),
         `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "greet",
   description: "Greet someone",
   input: Schema.Struct({ name: Schema.String }),
@@ -212,7 +210,7 @@ export default defineTool({
   async handle(input) {
     return { greeting: \`Hello, \${input.name}!\` };
   },
-});
+};
 `,
       );
 
@@ -243,9 +241,8 @@ A worker that greets through an owner-provided canonical tool.
 
       await writeText(
         join(consumerRoot, "traits", "greeter.trait.ts"),
-        `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+        `
+export default {
   name: "greeter",
   description: "Can greet through the owner tool",
   tools: {
@@ -256,20 +253,20 @@ export default defineTrait({
   require: {
     tools: ["greet"],
   },
-});
+};
 `,
       );
 
       await writeText(
         join(consumerRoot, "agents", "worker.agent.ts"),
-        `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+        `import { bindTrait } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "worker",
   description: "Worker that greets via owner tool",
   identity: "worker",
   traits: [bindTrait("greeter")],
-});
+};
 `,
       );
 

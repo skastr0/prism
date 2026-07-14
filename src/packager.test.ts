@@ -90,9 +90,9 @@ const createCodexPromptPlugin = async (root: string): Promise<string> => {
   );
   await writeText(
     join(pluginRoot, "hooks", "prompt-context.hook.ts"),
-    `import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-context",
   event: hookEvent.promptSubmit,
   targets: ["codex-cli"],
@@ -100,7 +100,7 @@ export default defineHook({
     decision: "continue",
     additionalContext: "prompt:" + event.prompt,
   }),
-});
+};
 `,
   );
   return pluginRoot;
@@ -125,9 +125,8 @@ const createCursorToolPlugin = async (root: string): Promise<string> => {
   await writeText(
     join(pluginRoot, "tools", "echo.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo a message",
   input: Schema.Struct({ message: Schema.String }),
@@ -135,7 +134,7 @@ export default defineTool({
   async handle(input) {
     return { message: input.message };
   },
-});
+};
 `,
   );
   return pluginRoot;
@@ -378,9 +377,9 @@ test("packagePluginForTarget updates owned package output when source changes", 
 
   await writeText(
     join(pluginRoot, "hooks", "prompt-context.hook.ts"),
-    `import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+    `import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "prompt-context",
   event: hookEvent.promptSubmit,
   targets: ["codex-cli"],
@@ -388,7 +387,7 @@ export default defineHook({
     decision: "continue",
     additionalContext: "updated:" + event.prompt,
   }),
-});
+};
 `,
   );
 

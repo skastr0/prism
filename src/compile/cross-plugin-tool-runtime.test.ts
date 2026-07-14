@@ -58,9 +58,8 @@ const createOwnerPlugin = async (
   await writeText(
     join(pluginRoot, "tools", "acknowledge.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "acknowledge",
   description: "Acknowledge a request",
   input: Schema.Struct({ summary: Schema.String }),
@@ -68,7 +67,7 @@ export default defineTool({
   async handle() {
     return { acknowledged: true };
   },
-});
+};
 `,
   );
   return pluginRoot;
@@ -109,35 +108,34 @@ description: Consumer
 
   await writeText(
     join(pluginRoot, "traits", "ack-capable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "ack-capable",
   description: "Can acknowledge via owner tool",
   tools: { acknowledge: { ref: ${JSON.stringify(`${ownerName}:acknowledge`)} } },
-});
+};
 `,
   );
 
   await writeText(
     join(pluginRoot, "agents", "consumer.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+    `import { bindTrait } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "consumer",
   description: "Consumer agent",
   identity: "consumer",
   traits: [bindTrait("ack-capable")],
-});
+};
 `,
   );
 
   if (options.withOrbitBind) {
     await writeText(
       join(pluginRoot, "orbits", "use-ack.orbit.ts"),
-      `import { agentRef, defineOrbit } from ${JSON.stringify(prismImportPath)};
+      `import { agentRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineOrbit({
+export default {
   name: "use-ack",
   description: "Use ack with bind",
   phases: [{ name: "Run", agents: [agentRef("consumer")] }],
@@ -145,7 +143,7 @@ export default defineOrbit({
     // @ts-expect-error bind is not supported by the orbit schema yet
     { ref: ${JSON.stringify(`${ownerName}:acknowledge`)}, as: "acknowledge", bind: { board: "default" } },
   ],
-});
+};
 `,
     );
   }

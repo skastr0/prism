@@ -817,27 +817,4 @@ export const hookMatcher = {
   tool: hookTool,
 } as const;
 
-/** Transitional identity wrapper. The canonical public source type is `AgentSource`. */
-export const defineAgent = <T extends AgentSource>(agent: T): T => agent;
-/** Transitional identity wrapper. The canonical public source type is `TraitSource`. */
-export const defineTrait = <T extends TraitSource>(trait: T): T => trait;
-/** Transitional identity wrapper. The canonical public source type is `OrbitSource`. */
-export const defineOrbit = <T extends OrbitSource>(orbit: T): T =>
-  orbit;
-/** Transitional identity wrapper. The canonical public source type is `ToolSource`. */
-export const defineTool = <T extends ToolSource>(tool: T): T => tool;
-/** Transitional identity wrapper. The canonical public source type is `ToolspaceSource`. */
-export const defineToolspace = <T extends ToolspaceSource>(toolspace: T): T =>
-  toolspace;
-/** Transitional identity wrapper. The canonical public source type is `ModelspaceSource`. */
-export const defineModelspace = <T extends ModelspaceSource>(modelspace: T): T =>
-  modelspace;
-/** Transitional identity wrapper. The canonical public source type is `SkillspaceSource`. */
-export const defineSkillspace = <T extends SkillspaceSource>(skillspace: T): T =>
-  skillspace;
-/** Transitional identity wrapper. The canonical public source type is `HookSource`. */
-export const defineHook = <E extends HookEvent, T extends HookSource<E>>(
-  hook: T,
-): T => hook;
-
 export type { ToolRuntimeContext, ToolRuntimeCost } from "./compile/runtime/schema-bridge";

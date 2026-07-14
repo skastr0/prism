@@ -148,9 +148,8 @@ export const ReviewDetails = Schema.Struct({
   await writeText(
     join(orbitRoot, "tools", "create_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "create_glyph",
   description: "Create an orbit glyph",
   input: Schema.Struct({
@@ -185,15 +184,15 @@ export default defineTool({
     }
     return { created: true, orbit: input.orbit, id: input.id };
   },
-});
+};
 `,
   );
   await writeText(
     join(orbitRoot, "tools", "submit_review.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool, schemaSlot } from ${JSON.stringify(prismImportPath)};
+import { schemaSlot } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "submit_review",
   description: "Submit orbit review findings",
   input: Schema.Struct({
@@ -209,43 +208,41 @@ export default defineTool({
   async handle(input, context) {
     return { acknowledged: true, verdict: input.details.verdict };
   },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "traits", "glyph-writer.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "glyph-writer",
   description: "Can create orbit glyphs",
   tools: {
     create_glyph: { ref: "orbit-core:create_glyph" },
   },
   require: { tools: ["create_glyph"] },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "traits", "review-submitter.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "review-submitter",
   description: "Can submit Forge-specialized review findings",
   tools: {
     submit_review: { ref: "orbit-core:submit_review" },
   },
   require: { tools: ["submit_review"] },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "builder.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+    `import { bindTrait } from ${JSON.stringify(prismImportPath)};
 import { ReviewDetails } from "../schemas/review-details.ts";
 
-export default defineAgent({
+export default {
   name: "builder",
   description: "Builder with orbit-core tools",
   identity: "builder",
@@ -259,7 +256,7 @@ export default defineAgent({
       },
     }),
   ],
-});
+};
 `,
   );
 
@@ -360,9 +357,8 @@ test("MCP bundle embeds a readable runtime-source fingerprint (PQ-170)", async (
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "echo",
   description: "Echo for the runtime-source fingerprint fixture.",
   input: Schema.Struct({ message: Schema.String }),
@@ -370,7 +366,7 @@ export default defineTool({
   async handle(input) {
     return { echoed: input.message };
   },
-});
+};
 `,
   );
 
@@ -1127,9 +1123,8 @@ test("MCP bundle generation supports unknown object payload schemas", async () =
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "inspect",
   description: "Accepts an arbitrary JSON object payload",
   input: Schema.Struct({
@@ -1139,7 +1134,7 @@ export default defineTool({
   async handle() {
     return { ok: true };
   },
-});
+};
 `,
   );
 
@@ -1167,9 +1162,8 @@ test("MCP bundle generation supports refined object output schemas", async () =>
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "inspect",
   description: "Returns a refined object output",
   input: Schema.Struct({ payload: Schema.String }),
@@ -1179,7 +1173,7 @@ export default defineTool({
   async handle() {
     return { ok: true };
   },
-});
+};
 `,
   );
 
@@ -1209,9 +1203,8 @@ test("MCP bundle validates tool output at runtime", async () => {
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "inspect",
   description: "Returns an invalid output payload",
   input: Schema.Struct({ payload: Schema.String }),
@@ -1219,7 +1212,7 @@ export default defineTool({
   async handle() {
     return { ok: "not-a-boolean" };
   },
-});
+};
 `,
   );
 
@@ -1287,9 +1280,8 @@ test("MCP bundle generation fails closed when a tool input schema cannot become 
   await writeText(
     toolPath,
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "inspect",
   description: "Uses an intentionally unsupported MCP input schema",
   input: Schema.Struct({
@@ -1299,7 +1291,7 @@ export default defineTool({
   async handle() {
     return { ok: true };
   },
-});
+};
 `,
   );
 

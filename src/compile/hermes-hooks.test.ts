@@ -99,56 +99,55 @@ describe("hermes hook lowerer", () => {
     // Write toolspace
     await writeText(
       join(pluginRoot, "toolspaces", "workspace.toolspace.ts"),
-      `import { defineToolspace } from ${JSON.stringify(prismImportPath)};
-export default defineToolspace({
+      `export default {
   name: "workspace",
   tools: {
     shell: { targets: { hermes: { name: "shell.command" } } },
   },
-});`
+};`
     );
 
     // Write tool.before hook
     await writeText(
       join(pluginRoot, "hooks", "audit-shell.hook.ts"),
       `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
+import { hookEvent, hookTool, toolRef } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-shell",
   description: "Audit shell commands",
   event: hookEvent.toolBefore,
   match: { tool: hookTool.tool(toolRef("workspace", "shell")) },
   handle: (event) => Effect.succeed(event.tool.input?.block ? { decision: "block" as const, message: "blocked" } : { decision: "continue" as const }),
-});`
+};`
     );
 
     // Write prompt.submit hook
     await writeText(
       join(pluginRoot, "hooks", "audit-submit.hook.ts"),
       `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "audit-submit",
   description: "Audit prompts",
   event: hookEvent.promptSubmit,
   handle: (event) => Effect.succeed({ decision: "continue" as const, additionalContext: "injected-context" }),
-});`
+};`
     );
 
     // Write session.end hook
     await writeText(
       join(pluginRoot, "hooks", "session-ended.hook.ts"),
       `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
 
-export default defineHook({
+export default {
   name: "session-ended",
   description: "Session ended",
   event: hookEvent.sessionEnd,
   handle: (event) => Effect.succeed({ decision: "continue" as const }),
-});`
+};`
     );
 
     const registry = await Effect.runPromise(loadPlugin(pluginRoot));
@@ -256,12 +255,12 @@ export default defineHook({
       await writeText(
         join(pluginRoot, "hooks", `${name}.hook.ts`),
         `import { Effect } from ${JSON.stringify(effectImportPath)};
-import { defineHook, hookEvent } from ${JSON.stringify(prismImportPath)};
-export default defineHook({
+import { hookEvent } from ${JSON.stringify(prismImportPath)};
+export default {
   name: "${name}",
   event: hookEvent.toolBefore,
   handle: (event) => Effect.succeed({ decision: "continue" as const }),
-});`,
+};`,
       );
     }
 

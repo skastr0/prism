@@ -64,15 +64,14 @@ test("consumer-only codex plugin does not write an MCP server bundle", async () 
   await writeText(
     join(depRoot, "tools", "claim_glyph.tool.ts"),
     `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: "claim_glyph",
   description: "Claim a glyph",
   input: Schema.Struct({ glyphId: Schema.String }),
   output: Schema.Struct({ claimed: Schema.Boolean }),
   async handle() { return { claimed: true }; },
-});
+};
 `,
   );
 
@@ -97,25 +96,24 @@ export default defineTool({
   );
   await writeText(
     join(pluginRoot, "traits", "tower-capable.trait.ts"),
-    `import { defineTrait } from ${JSON.stringify(prismImportPath)};
-
-export default defineTrait({
+    `
+export default {
   name: "tower-capable",
   description: "Can use tower tools",
   tools: { claim_glyph: { ref: "tower-tools:claim_glyph" } },
-});
+};
 `,
   );
   await writeText(
     join(pluginRoot, "agents", "orchestrator.agent.ts"),
-    `import { bindTrait, defineAgent } from ${JSON.stringify(prismImportPath)};
+    `import { bindTrait } from ${JSON.stringify(prismImportPath)};
 
-export default defineAgent({
+export default {
   name: "orchestrator",
   description: "Consumes tower tools",
   identity: "orchestrator",
   traits: [bindTrait("tower-capable")],
-});
+};
 `,
   );
 
@@ -174,15 +172,14 @@ const writeShimUnionPlugin = async (options: {
     await writeText(
       join(options.pluginRoot, "tools", `${options.toolName}.tool.ts`),
       `import { Schema } from ${JSON.stringify(effectImportPath)};
-import { defineTool } from ${JSON.stringify(prismImportPath)};
 
-export default defineTool({
+export default {
   name: ${JSON.stringify(options.toolName)},
   description: "Echo fixture",
   input: Schema.Struct({ message: Schema.String }),
   output: Schema.Struct({ message: Schema.String }),
   async handle(input) { return { message: input.message }; },
-});
+};
 `,
     );
   }

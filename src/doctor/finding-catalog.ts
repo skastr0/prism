@@ -251,9 +251,9 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
   {
     family: "snapshot.disk-drift",
     code: "snapshot.owned-missing",
-    severity: "error",
+    severity: "warning",
     fix: "refresh",
-    description: "Prism-owned file recorded in snapshot is missing.",
+    description: "Prism-owned file recorded in snapshot is missing (PQ-157: refresh always heals this — recreate if still desired, drop if not).",
   },
   {
     family: "snapshot.disk-drift",

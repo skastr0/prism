@@ -33,6 +33,22 @@ import {
   renderMarkerRegion,
 } from "./regions.js";
 
+/**
+ * PQ-157 (one classifier): a Prism-owned file recorded in a snapshot but
+ * missing from disk is ALWAYS self-healing under this module's own rules —
+ * never a state that needs a human. `planOwnedFile` (below) classifies a
+ * missing-but-still-desired file as `create`, recreating it wordlessly; a
+ * missing-and-no-longer-desired file is silently dropped from the manifest
+ * (see the "Orphaned owned files" loop in `planSync`) with no op at all,
+ * because there is nothing left to reconcile. Neither path ever reaches
+ * `blocked`. Doctor imports this fact for `snapshot.owned-missing` instead of
+ * maintaining its own severity judgment, so the two can never drift apart
+ * again — if a future change to this module ever makes a missing owned file
+ * NOT self-healing, this constant (and its pinning tests in sync.test.ts)
+ * must be updated first, which forces doctor's severity to be revisited too.
+ */
+export const MISSING_OWNED_FILE_SELF_HEALS = true as const;
+
 export type SyncOp =
   | { readonly kind: "create"; readonly targetPath: string; readonly content: string; readonly mode?: number; readonly plugin: string; readonly reason: "new" }
   | { readonly kind: "repair"; readonly targetPath: string; readonly content: string; readonly mode?: number; readonly plugin: string; readonly reason: "source-changed" | "drifted"; readonly backup: boolean }

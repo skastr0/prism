@@ -7,6 +7,8 @@ import { EXIT_CODES } from "./exit.js";
 import { computeContentHash, computeMcpHttpConfigContentHash } from "./content-hash.js";
 import { commitSnapshot, snapshotPath } from "./state/store.js";
 import { createCanonicalCompileFixture } from "./compile/test-fixtures.js";
+import { listDirRecursive, readFile } from "./fs.js";
+import { refreshPlugin } from "./refresh.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
@@ -432,6 +434,79 @@ test("doctor --fix drops stale snapshot entries for missing owned files", async 
   expect(report.findings.map((finding) => finding.code)).toContain("snapshot.stale-entry-dropped");
   const read = await import("./state/store.js").then((m) => m.readSnapshot({ prismHome, harness: "opencode", root: harnessRoot }));
   expect(read.manifest.entries.map((entry) => entry.targetPath)).toEqual([livePath]);
+});
+
+// PQ-157: doctor derives severity from the sync plan classifier (one
+// classifier) instead of maintaining an independent judgment. A missing
+// owned file is always self-healing per plan.ts's own rules (planOwnedFile
+// recreates it if still desired; planSync silently drops the entry if not),
+// so the finding must report <=warning with a refresh heal hint, and the
+// dirty -> refresh -> clean cycle must actually converge.
+test("doctor reports a still-desired missing owned file as <=warning with a refresh heal hint, and refresh heals it (PQ-157)", async () => {
+  const prismHome = join(root, "prism-home");
+  const pluginRoot = join(root, "plugins", "recreate-demo");
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify({ name: "recreate-demo", version: "0.1.0", targets: { commands: ["opencode"] } }, null, 2),
+  );
+  await writeText(join(pluginRoot, "commands", "review.md"), "managed command\n");
+
+  const firstRefresh = await refreshPlugin({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    prismHome,
+    overwrite: false,
+    dryRun: false,
+  });
+  expect(firstRefresh.success).toBe(true);
+
+  const commandPath = join(process.env.HOME!, ".config", "opencode", "commands", "review.md");
+  expect(await Bun.file(commandPath).exists()).toBe(true);
+
+  // Simulate the drift HLT-002/PQ-157 target: the owned file vanishes from
+  // disk while the plugin still desires it (e.g. a stray external delete).
+  await rm(commandPath);
+
+  const beforeFiles = (await listDirRecursive(root)).sort();
+  const beforeHashes = new Map(
+    await Promise.all(beforeFiles.map(async (relative) => [relative, computeContentHash(await readFile(join(root, relative)))] as const)),
+  );
+
+  const dirtyReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  const missingFinding = dirtyReport.findings.find((finding) => finding.code === "snapshot.owned-missing");
+  expect(missingFinding).toBeDefined();
+  expect(missingFinding!.severity).toBe("warning");
+  expect(missingFinding!.fix).toBe("refresh");
+
+  // A read-only doctor run must never write to disk.
+  const afterFiles = (await listDirRecursive(root)).sort();
+  expect(afterFiles).toEqual(beforeFiles);
+  for (const relative of afterFiles) {
+    expect(computeContentHash(await readFile(join(root, relative)))).toBe(beforeHashes.get(relative)!);
+  }
+
+  const secondRefresh = await refreshPlugin({
+    pluginPath: pluginRoot,
+    harnesses: ["opencode"],
+    prismHome,
+    overwrite: false,
+    dryRun: false,
+  });
+  expect(secondRefresh.success).toBe(true);
+  expect(await Bun.file(commandPath).exists()).toBe(true);
+
+  const cleanReport = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+  expect(cleanReport.findings.map((finding) => finding.code)).not.toContain("snapshot.owned-missing");
 });
 
 test("doctor --fix drops stale snapshot region entries for missing marker fences", async () => {

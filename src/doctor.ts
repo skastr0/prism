@@ -24,7 +24,7 @@ import {
   type SnapshotManifest,
 } from "./state/snapshot.js";
 import { gcSnapshots, snapshotDir } from "./state/store.js";
-import { parseRegionRef } from "./sync/plan.js";
+import { MISSING_OWNED_FILE_SELF_HEALS, parseRegionRef } from "./sync/plan.js";
 import {
   manifestHasCompileTargets,
   readManifest,
@@ -237,8 +237,13 @@ const validateOwnedSnapshotEntry = async (
   entry: SnapshotEntry,
 ): Promise<DoctorFinding[]> => {
   if (!(await exists(entry.targetPath))) {
+    // Severity derives from the sync plan classifier (PQ-157, one
+    // classifier): plan.ts's planOwnedFile recreates a still-desired missing
+    // file (`create`) and planSync silently drops a no-longer-desired one —
+    // neither path is ever `blocked`, so this is always a refresh-heals
+    // state, never a hard error.
     return [finding({
-      severity: "error",
+      severity: MISSING_OWNED_FILE_SELF_HEALS ? "warning" : "error",
       family: "snapshot.disk-drift",
       code: "snapshot.owned-missing",
       message: `Prism-owned file recorded in snapshot is missing: ${entry.targetPath}`,

@@ -895,6 +895,11 @@ export const renderWorkflowOrbitsModule = (options: {
 import { Schema } from "effect";
 import { agents, type WorkflowAgentRef } from "./agents.ts";
 
+// Re-exported so orbit-phase authors can import agents, orbits, and the ref
+// type from one specifier ("prism/refs/orbits") instead of also reaching into
+// bare "prism/refs" just for the type.
+export type { WorkflowAgentRef } from "./agents.ts";
+
 export interface WorkflowOrbitPhaseIo {
   readonly inputs: ReadonlyArray<string>;
   readonly outputs: ReadonlyArray<string>;

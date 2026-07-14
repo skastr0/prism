@@ -447,6 +447,12 @@ describe("workflow refs emitter", () => {
     expect(output).toContain("} as const satisfies Record<string, Record<string, WorkflowOrbit>>");
   });
 
+  test("re-exports WorkflowAgentRef so orbit-phase authors need one specifier", () => {
+    const output = renderWorkflowOrbitsModule({ manifest: orbitManifest() });
+
+    expect(output).toContain('export type { WorkflowAgentRef } from "./agents.ts";');
+  });
+
   test("per-phase agent type aliases include orbit name to avoid export collisions", () => {
     const sharedPhaseManifest = buildCompileManifestForTarget({
       base: {

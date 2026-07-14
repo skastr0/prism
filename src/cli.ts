@@ -69,11 +69,15 @@ import {
 import type { SyncReport } from "./sync/apply.js";
 import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
-import { loadWorkflowFile, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
+import { loadWorkflowFile, paddedTableColumns, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord } from "./workflow-store.js";
-import { listRegisteredWorkflowStores, registerWorkflowStore } from "./workflow-store-registry.js";
+import {
+  listRegisteredWorkflowStores,
+  registerWorkflowStore,
+  type WorkflowStoreRegistryEntry,
+} from "./workflow-store-registry.js";
 import { renderWorkflowTraceHuman, workflowSpansToOtlpJson } from "./workflow-tracing.js";
 import {
   buildWorkflowCatalog,
@@ -245,6 +249,45 @@ const parseFiniteNonNegative = (value: string): number => {
     throw new InvalidArgumentError("must be a finite non-negative number");
   }
   return parsed;
+};
+
+const SINCE_RELATIVE_DURATION_PATTERN = /^(\d+)(m|h|d)$/;
+
+// `--since` accepts either an ISO date/time (anything Date.parse understands) or a relative
+// duration shorthand (30m/24h/7d), resolved against wall-clock time at parse time.
+const parseSinceOption = (value: string): number => {
+  const trimmed = value.trim();
+  const relative = SINCE_RELATIVE_DURATION_PATTERN.exec(trimmed);
+  if (relative !== null) {
+    const amount = Number(relative[1]);
+    const unitMs = relative[2] === "m" ? 60_000 : relative[2] === "h" ? 3_600_000 : 86_400_000;
+    return Date.now() - amount * unitMs;
+  }
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) {
+    throw new InvalidArgumentError(
+      "--since must be an ISO date/time (e.g. 2026-07-01T00:00:00Z) or a relative duration like 24h, 7d, or 30m",
+    );
+  }
+  return parsed;
+};
+
+// Workflow runs persist `created_at` as SQLite's `datetime('now')` format
+// (`YYYY-MM-DD HH:MM:SS`, UTC, space-separated) — normalize to ISO before parsing.
+const parseWorkflowRunCreatedAtMs = (createdAt: string | undefined): number | undefined =>
+  createdAt === undefined ? undefined : Date.parse(`${createdAt.replace(" ", "T")}Z`);
+
+// A run's terminal cause collapsed to its `kind` tag: the aggregable "cause" column for
+// `runs list`/`runs summary --all` (OBS-005's terminalCause field, flattened for rollups).
+const workflowRunCauseTag = (run: WorkflowRunRecord): string | null => run.terminalCause?.kind ?? null;
+
+const resolveRunsCutoffMs = (options: { readonly hours?: number; readonly since?: number }): number | undefined => {
+  if (options.hours !== undefined && options.since !== undefined) {
+    throw new CliUsageError("--hours and --since are mutually exclusive — pass one");
+  }
+  if (options.since !== undefined) return options.since;
+  if (options.hours !== undefined) return Date.now() - options.hours * 3_600_000;
+  return undefined;
 };
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -791,40 +834,126 @@ workflowCache
     }
   });
 
+/**
+ * Collects every run across all machine-registered workflow stores, applying an optional
+ * since/hours cutoff and an optional --fail-stale-after-ms reconciliation per store. Shared by
+ * `runs list --all` and `runs summary --all` so both surfaces enumerate stores identically
+ * (OBS-007).
+ */
+const collectWorkflowRunsAcrossRegisteredStores = async (options: {
+  readonly cutoffMs?: number;
+  readonly failStaleAfterMs?: string;
+}): Promise<{
+  readonly entries: ReadonlyArray<WorkflowStoreRegistryEntry>;
+  readonly runs: ReadonlyArray<WorkflowRunRecord & { readonly storePath: string }>;
+}> => {
+  const entries = listRegisteredWorkflowStores(resolvePrismHome());
+  const runs: Array<WorkflowRunRecord & { readonly storePath: string }> = [];
+  for (const entry of entries) {
+    let crossStore: WorkflowStore | undefined;
+    try {
+      crossStore = await WorkflowStore.open(entry.path);
+      if (options.failStaleAfterMs !== undefined) {
+        crossStore.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+      }
+      for (const run of crossStore.listRuns()) {
+        const createdAtMs = parseWorkflowRunCreatedAtMs(run.createdAt);
+        if (options.cutoffMs !== undefined && createdAtMs !== undefined && createdAtMs < options.cutoffMs) continue;
+        runs.push({ ...run, storePath: entry.path });
+      }
+    } finally {
+      crossStore?.close();
+    }
+  }
+  return { entries, runs };
+};
+
+// Newest-first by createdAt, using plain code-point comparison (not localeCompare, which is
+// locale-sensitive for otherwise-identical sqlite datetime strings).
+const compareWorkflowRunsNewestFirst = <T extends { readonly createdAt?: string }>(left: T, right: T): number => {
+  const leftCreated = left.createdAt ?? "";
+  const rightCreated = right.createdAt ?? "";
+  if (leftCreated === rightCreated) return 0;
+  return leftCreated < rightCreated ? 1 : -1;
+};
+
+interface WorkflowRunsRollupRow {
+  readonly workflow: string;
+  readonly status: string;
+  readonly cause: string | null;
+  readonly count: number;
+}
+
+/** Aggregates runs into workflow x status x cause counts — the standing daily-review surface. */
+const buildWorkflowRunsRollup = (runs: ReadonlyArray<WorkflowRunRecord>): WorkflowRunsRollupRow[] => {
+  const rows = new Map<string, WorkflowRunsRollupRow>();
+  for (const run of runs) {
+    const cause = workflowRunCauseTag(run);
+    const key = JSON.stringify([run.workflow, run.status, cause]);
+    const existing = rows.get(key);
+    rows.set(key, existing !== undefined
+      ? { ...existing, count: existing.count + 1 }
+      : { workflow: run.workflow, status: run.status, cause, count: 1 });
+  }
+  return [...rows.values()].sort((left, right) => {
+    if (right.count !== left.count) return right.count - left.count;
+    if (left.workflow !== right.workflow) return left.workflow < right.workflow ? -1 : 1;
+    if (left.status !== right.status) return left.status < right.status ? -1 : 1;
+    const leftCause = left.cause ?? "";
+    const rightCause = right.cause ?? "";
+    return leftCause === rightCause ? 0 : leftCause < rightCause ? -1 : 1;
+  });
+};
+
+const renderWorkflowRunsRollupHuman = (
+  rows: ReadonlyArray<WorkflowRunsRollupRow>,
+  totals: { readonly runs: number; readonly stores: number },
+): string => {
+  const heading = `Workflow runs rollup: ${totals.runs} run${totals.runs === 1 ? "" : "s"} across ${totals.stores} store${totals.stores === 1 ? "" : "s"}`;
+  if (rows.length === 0) return `${heading}\n(no runs in range)`;
+  const header = ["workflow", "status", "cause", "count"] as const;
+  const cells = rows.map((row) => [row.workflow, row.status, row.cause ?? "-", String(row.count)]);
+  const { widths, formatRow } = paddedTableColumns(header, cells);
+  return [
+    heading,
+    formatRow(header),
+    formatRow(widths.map((width) => "-".repeat(width))),
+    ...cells.map(formatRow),
+  ].join("\n");
+};
+
 workflowRuns
   .command("list")
-  .description("List workflow runs from the SQLite workflow store")
+  .description("List workflow runs from the SQLite workflow store, newest first")
   .option("--store <path>", "SQLite workflow store path")
   .option("--limit <n>", "Maximum number of runs to return", parsePositiveInteger)
   .option("--all", "List runs across every registered workflow store on this machine (ignores --store)")
-  .option("--hours <n>", "With --all, only include runs created in the last n hours", parsePositiveInteger)
+  .option("--hours <n>", "Only include runs created in the last n hours", parsePositiveInteger)
+  .option(
+    "--since <when>",
+    "Only include runs created at/after this ISO date/time or relative duration (e.g. 24h, 7d, 30m)",
+    parseSinceOption,
+  )
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before listing")
-  .action(async (options: { readonly store?: string; readonly limit?: number; readonly all?: boolean; readonly hours?: number; readonly failStaleAfterMs?: string }) => {
+  .action(async (options: {
+    readonly store?: string;
+    readonly limit?: number;
+    readonly all?: boolean;
+    readonly hours?: number;
+    readonly since?: number;
+    readonly failStaleAfterMs?: string;
+  }) => {
     let store: WorkflowStore | undefined;
     try {
+      const cutoffMs = resolveRunsCutoffMs(options);
       if (options.all === true) {
-        const entries = listRegisteredWorkflowStores(resolvePrismHome());
-        const cutoff = options.hours !== undefined ? Date.now() - options.hours * 3_600_000 : undefined;
-        const runs: Array<WorkflowRunRecord & { readonly storePath: string }> = [];
-        for (const entry of entries) {
-          let crossStore: WorkflowStore | undefined;
-          try {
-            crossStore = await WorkflowStore.open(entry.path);
-            if (options.failStaleAfterMs !== undefined) {
-              crossStore.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
-            }
-            for (const run of crossStore.listRuns()) {
-              if (
-                cutoff !== undefined && run.createdAt !== undefined &&
-                Date.parse(`${run.createdAt.replace(" ", "T")}Z`) < cutoff
-              ) continue;
-              runs.push({ ...run, storePath: entry.path });
-            }
-          } finally {
-            crossStore?.close();
-          }
-        }
-        runs.sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""));
+        const { entries, runs: rawRuns } = await collectWorkflowRunsAcrossRegisteredStores({
+          cutoffMs,
+          failStaleAfterMs: options.failStaleAfterMs,
+        });
+        const runs = rawRuns
+          .map((run) => ({ ...run, cause: workflowRunCauseTag(run) }))
+          .sort(compareWorkflowRunsNewestFirst);
         await writeStdout(`${JSON.stringify({
           stores: entries.length,
           runs: options.limit !== undefined ? runs.slice(0, options.limit) : runs,
@@ -835,10 +964,18 @@ workflowRuns
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
-      console.log(JSON.stringify({ runs: store.listRuns().reverse().slice(0, options.limit) }, null, 2));
+      const runs = store.listRuns()
+        .filter((run) => {
+          if (cutoffMs === undefined) return true;
+          const createdAtMs = parseWorkflowRunCreatedAtMs(run.createdAt);
+          return createdAtMs === undefined || createdAtMs >= cutoffMs;
+        })
+        .reverse()
+        .map((run) => ({ ...run, cause: workflowRunCauseTag(run) }));
+      console.log(JSON.stringify({ runs: runs.slice(0, options.limit) }, null, 2));
     } catch (error) {
       printCliError(error, "Workflow runs list failed");
-      exitWith(EXIT_CODES.domainFailure);
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
     } finally {
       store?.close();
     }
@@ -898,16 +1035,68 @@ workflowRuns
     }
   });
 
+interface ResolvedWorkflowRunStore {
+  readonly store: WorkflowStore;
+  readonly storePath: string;
+}
+
+/**
+ * Resolves which workflow store holds `runId`. An explicit `--store` is honored as given (no
+ * scanning — the caller named the store, missing means missing). Without `--store`, checks the
+ * current project's default store first, then falls back to scanning every machine-registered
+ * store: a run started from a different cwd, or via `--store`, lands outside the default store,
+ * and `runs show` must still find it without the caller knowing which store (reproduced
+ * 2026-07-13, run 07cedd42-57d2 in a non-default store; WFE routing defect).
+ */
+const resolveWorkflowRunStore = async (
+  runId: string,
+  explicitStorePath: string | undefined,
+): Promise<ResolvedWorkflowRunStore | null> => {
+  if (explicitStorePath !== undefined) {
+    const store = await WorkflowStore.open(explicitStorePath);
+    if (store.getRun(runId) === null) {
+      store.close();
+      return null;
+    }
+    return { store, storePath: explicitStorePath };
+  }
+
+  const defaultStorePath = resolveWorkflowStorePath(undefined);
+  const candidatePaths = [
+    defaultStorePath,
+    ...listRegisteredWorkflowStores(resolvePrismHome())
+      .map((entry) => entry.path)
+      .filter((path) => resolve(path) !== resolve(defaultStorePath)),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    const candidateStore = await WorkflowStore.open(candidatePath);
+    if (candidateStore.getRun(runId) !== null) {
+      return { store: candidateStore, storePath: candidatePath };
+    }
+    candidateStore.close();
+  }
+  return null;
+};
+
 workflowRuns
   .command("show <runId>")
-  .description("Show task history for one workflow run")
+  .description(
+    "Show task history for one workflow run. Without --store, resolves the run across every " +
+      "registered workflow store on this machine.",
+  )
   .option("--store <path>", "SQLite workflow store path")
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing tasks")
   .action(async (runId: string, options: { readonly store?: string; readonly failStaleAfterMs?: string }) => {
     let store: WorkflowStore | undefined;
     try {
-      const storePath = resolveWorkflowStorePath(options.store);
-      store = await WorkflowStore.open(storePath);
+      const explicitStorePath = options.store !== undefined ? resolveWorkflowStorePath(options.store) : undefined;
+      const resolved = await resolveWorkflowRunStore(runId, explicitStorePath);
+      if (resolved === null) {
+        throw new CliUsageError(`workflow run not found: ${runId}`);
+      }
+      store = resolved.store;
+      const storePath = resolved.storePath;
       if (options.failStaleAfterMs !== undefined) {
         store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
       }
@@ -931,34 +1120,76 @@ workflowRuns
   });
 
 workflowRuns
-  .command("summary <runId>")
-  .description("Show compact execution evidence for one workflow run")
+  .command("summary [runId]")
+  .description(
+    "Show compact execution evidence for one workflow run. With --all (no runId), reports a " +
+      "workflow x status x cause rollup across every registered workflow store on this machine " +
+      "— the standing daily-review surface.",
+  )
   .option("--store <path>", "SQLite workflow store path")
-  .option("--json", "Print the compact summary as JSON", false)
+  .option("--all", "Report a workflow x status x cause rollup across every registered workflow store (ignores --store)")
+  .option("--hours <n>", "With --all, only include runs created in the last n hours", parsePositiveInteger)
+  .option(
+    "--since <when>",
+    "With --all, only include runs created at/after this ISO date/time or relative duration (e.g. 24h, 7d, 30m)",
+    parseSinceOption,
+  )
+  .option("--json", "Print the compact summary (or rollup) as JSON", false)
   .option("--fail-stale-after-ms <ms>", "Mark running workflow runs older than this many milliseconds as failed before showing the summary")
-  .action(async (runId: string, options: { readonly store?: string; readonly json?: boolean; readonly failStaleAfterMs?: string }) => {
-    let store: WorkflowStore | undefined;
+  .action(async (runId: string | undefined, options: {
+    readonly store?: string;
+    readonly all?: boolean;
+    readonly hours?: number;
+    readonly since?: number;
+    readonly json?: boolean;
+    readonly failStaleAfterMs?: string;
+  }) => {
     try {
-      const storePath = resolveWorkflowStorePath(options.store);
-      store = await WorkflowStore.open(storePath);
-      if (options.failStaleAfterMs !== undefined) {
-        store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+      if (options.all === true) {
+        if (runId !== undefined) {
+          throw new CliUsageError("workflow runs summary --all does not take a runId");
+        }
+        const cutoffMs = resolveRunsCutoffMs(options);
+        const { entries, runs } = await collectWorkflowRunsAcrossRegisteredStores({
+          cutoffMs,
+          failStaleAfterMs: options.failStaleAfterMs,
+        });
+        const rollup = buildWorkflowRunsRollup(runs);
+        const totals = { runs: runs.length, stores: entries.length };
+        if (options.json === true) {
+          await writeStdout(`${JSON.stringify({ totals, rollup }, null, 2)}\n`);
+        } else {
+          await writeStdout(`${renderWorkflowRunsRollupHuman(rollup, totals)}\n`);
+        }
+        return;
       }
-      const summary = store.compactRunSummary(runId);
-      if (summary === null) {
-        throw new CliUsageError(`workflow run not found: ${runId}`);
+
+      if (runId === undefined) {
+        throw new CliUsageError("workflow runs summary requires a runId, or --all for the machine-wide rollup");
       }
-      const runnerLogPath = workflowRunnerLogPathIfPresent(storePath, summary.run);
-      if (options.json === true) {
-        console.log(JSON.stringify({ summary, ...(runnerLogPath !== undefined ? { runnerLogPath } : {}) }, null, 2));
-      } else {
-        process.stdout.write(formatWorkflowRunCompactSummary(summary, runnerLogPath));
+      let store: WorkflowStore | undefined;
+      try {
+        const storePath = resolveWorkflowStorePath(options.store);
+        store = await WorkflowStore.open(storePath);
+        if (options.failStaleAfterMs !== undefined) {
+          store.failStaleRuns(parsePositiveInteger(options.failStaleAfterMs));
+        }
+        const summary = store.compactRunSummary(runId);
+        if (summary === null) {
+          throw new CliUsageError(`workflow run not found: ${runId}`);
+        }
+        const runnerLogPath = workflowRunnerLogPathIfPresent(storePath, summary.run);
+        if (options.json === true) {
+          console.log(JSON.stringify({ summary, ...(runnerLogPath !== undefined ? { runnerLogPath } : {}) }, null, 2));
+        } else {
+          process.stdout.write(formatWorkflowRunCompactSummary(summary, runnerLogPath));
+        }
+      } finally {
+        store?.close();
       }
     } catch (error) {
       printCliError(error, "Workflow runs summary failed");
       exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    } finally {
-      store?.close();
     }
   });
 

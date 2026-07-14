@@ -112,6 +112,20 @@ const resolveTaskModelRow = (task: AnyWorkflowTask): WorkflowTaskModelResolution
   }
 };
 
+/**
+ * Column widths + a row formatter for a fixed-width, `padEnd`-aligned text table — shared by
+ * every CLI human-readable table render (`workflow validate --table`, `workflow runs summary
+ * --all`) so the padding/joining convention lives in one place.
+ */
+export const paddedTableColumns = (
+  header: ReadonlyArray<string>,
+  cells: ReadonlyArray<ReadonlyArray<string>>,
+): { readonly widths: ReadonlyArray<number>; readonly formatRow: (cols: ReadonlyArray<string>) => string } => {
+  const widths = header.map((title, i) => Math.max(title.length, ...cells.map((row) => row[i]!.length)));
+  const formatRow = (cols: ReadonlyArray<string>): string => cols.map((col, i) => col.padEnd(widths[i]!)).join("  ");
+  return { widths, formatRow };
+};
+
 /** Human-readable rendering of a resolution table, for `prism workflow validate --table`. */
 export const renderWorkflowModelResolutionTable = (
   rows: ReadonlyArray<WorkflowTaskModelResolutionRow>,
@@ -124,8 +138,7 @@ export const renderWorkflowModelResolutionTable = (
     row.error !== undefined ? "UNRESOLVED" : row.model ?? "-",
     row.error ?? row.source ?? "-",
   ]);
-  const widths = header.map((title, i) => Math.max(title.length, ...cells.map((row) => row[i]!.length)));
-  const formatRow = (cols: ReadonlyArray<string>): string => cols.map((col, i) => col.padEnd(widths[i]!)).join("  ");
+  const { widths, formatRow } = paddedTableColumns(header, cells);
   return [
     formatRow(header),
     formatRow(widths.map((width) => "-".repeat(width))),

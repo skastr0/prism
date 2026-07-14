@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,6 +39,27 @@ const pathExists = async (path: string): Promise<boolean> => {
     return false;
   }
 };
+
+// WFE-008: `mergeEnv` spreads `process.env` as its base, so every `runCli`
+// call that omits an explicit `PRISM_HOME` override (most `{}` calls here)
+// otherwise registers its tmp store into the developer's real `~/.prism`
+// registry (src/cli.ts's resolveWorkflowStorePath runs on every store touch).
+// Sandbox PRISM_HOME for the whole file; a call that passes its own
+// PRISM_HOME override still wins because `...overrides` is spread last.
+let sandboxPrismHome: string;
+let previousPrismHomeEnv: string | undefined;
+
+beforeAll(async () => {
+  sandboxPrismHome = await mkdtemp(join(tmpdir(), "prism-cli-home-"));
+  previousPrismHomeEnv = process.env.PRISM_HOME;
+  process.env.PRISM_HOME = sandboxPrismHome;
+});
+
+afterAll(async () => {
+  if (previousPrismHomeEnv === undefined) delete process.env.PRISM_HOME;
+  else process.env.PRISM_HOME = previousPrismHomeEnv;
+  await rm(sandboxPrismHome, { recursive: true, force: true });
+});
 
 const mergeEnv = (overrides: Record<string, string>): Record<string, string> =>
   Object.fromEntries(

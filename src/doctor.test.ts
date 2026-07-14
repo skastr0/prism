@@ -15,6 +15,7 @@ import { pluginServerKey, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-nami
 import { pluginDaemonLogPath } from "@skastr0/prism-sdk/mcp/daemon-resolver";
 import { registerDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
 import type { RegistryEntry, RegistryResult } from "@skastr0/prism-sdk/mcp/uds-registry";
+import { listRegisteredWorkflowStores, registerWorkflowStore } from "./workflow-store-registry.js";
 
 let root: string;
 let originalHome: string | undefined;
@@ -427,6 +428,60 @@ test("doctor --fix drops snapshots for dead roots", async () => {
 
   expect(report.findings.map((finding) => finding.code)).toContain("snapshot.dead-root-dropped");
   expect(await Bun.file(path).exists()).toBe(false);
+});
+
+// WFE-008: `<prismHome>/state/workflow-store-registry.json` is otherwise
+// append-only (registerWorkflowStore/listRegisteredWorkflowStores only prune
+// dead entries when a workflow command happens to touch the registry again),
+// so a machine's already-accumulated tmp-store residue needs an explicit,
+// deliberate cleanup surface — this is that surface.
+test("doctor reports a dead workflow store registry entry without mutating it", async () => {
+  const prismHome = join(root, "prism-home");
+  const liveStorePath = join(root, "live.sqlite");
+  const deadStorePath = join(root, "gone.sqlite");
+  await writeText(liveStorePath, "");
+  registerWorkflowStore(prismHome, liveStorePath);
+  registerWorkflowStore(prismHome, deadStorePath);
+  await rm(deadStorePath, { force: true });
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: false,
+  });
+
+  const residue = report.findings.filter((finding) => finding.family === "workflow.store-registry");
+  expect(residue).toHaveLength(1);
+  expect(residue[0]).toMatchObject({ code: "workflow.store-registry.stale-entry", path: deadStorePath });
+
+  // Read-only: the dead entry must still be on disk for `--fix` to find.
+  const rawEntries = JSON.parse(await Bun.file(join(prismHome, "state", "workflow-store-registry.json")).text()) as {
+    readonly stores: ReadonlyArray<{ readonly path: string }>;
+  };
+  expect(rawEntries.stores.map((entry) => entry.path).sort()).toEqual([deadStorePath, liveStorePath].sort());
+});
+
+test("doctor --fix drops dead workflow store registry entries", async () => {
+  const prismHome = join(root, "prism-home");
+  const liveStorePath = join(root, "live.sqlite");
+  const deadStorePath = join(root, "gone.sqlite");
+  await writeText(liveStorePath, "");
+  registerWorkflowStore(prismHome, liveStorePath);
+  registerWorkflowStore(prismHome, deadStorePath);
+  await rm(deadStorePath, { force: true });
+
+  const report = await runDoctor({
+    harnesses: ["opencode"],
+    scope: "global",
+    prismHome,
+    fix: true,
+  });
+
+  const dropped = report.findings.filter((finding) => finding.code === "workflow.store-registry.stale-entry-dropped");
+  expect(dropped).toHaveLength(1);
+  expect(dropped[0]?.path).toBe(deadStorePath);
+  expect(listRegisteredWorkflowStores(prismHome).map((entry) => entry.path)).toEqual([liveStorePath]);
 });
 
 test("doctor --fix drops stale snapshot entries for missing owned files", async () => {

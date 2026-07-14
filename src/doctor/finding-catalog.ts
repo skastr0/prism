@@ -561,6 +561,21 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "info",
     description: "Booted out and removed retired launchd-era Prism MCP residue (only emitted during --fix).",
   },
+
+  // workflow.store-registry
+  {
+    family: "workflow.store-registry",
+    code: "workflow.store-registry.stale-entry",
+    severity: "info",
+    fix: "gc",
+    description: "The workflow store registry references a store whose backing file no longer exists.",
+  },
+  {
+    family: "workflow.store-registry",
+    code: "workflow.store-registry.stale-entry-dropped",
+    severity: "info",
+    description: "Dropped a workflow store registry entry for a missing store (only emitted during --fix).",
+  },
 ] as const;
 
 export const FINDING_CODES: readonly string[] = FINDING_CATALOG.map((entry) => entry.code);

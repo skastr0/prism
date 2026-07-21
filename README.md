@@ -17,8 +17,11 @@ MCP server (see
 [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)) do
 so over the stdio-shim transport: the harness spawns `prism mcp shim`, which
 resolves or spawns a content-addressed Unix-domain-socket daemon at
-`PRISM_HOME/runtime/mcp/<plugin>/<hash-prefix>.sock`. Prism no longer emits
-the retired Streamable HTTP MCP transport.
+`PRISM_HOME/runtime/mcp/<plugin>/<hash-prefix>.sock` when that path fits the
+platform limit. Long Prism homes use the fixed-width, private fallback
+`/tmp/prism-mcp-<uid>/<identity>.sock`; durable bundles, registry records, and
+logs remain under `PRISM_HOME`. Prism no longer emits the retired Streamable
+HTTP MCP transport.
 
 ## Development
 
@@ -49,7 +52,7 @@ bun run check:refresh-idempotency
 The gate runs `refresh --plugins ../prism-plugins --harness codex-cli` twice in
 isolated `HOME`, `PRISM_HOME`, and MCP runtime roots. Codex CLI reaches
 generated tools over the stdio-shim transport (a content-addressed UDS daemon
-under `PRISM_HOME`); the gate additionally stops any corpus plugin still
+whose durable state remains under `PRISM_HOME`); the gate additionally stops any corpus plugin still
 configured for the retired Streamable HTTP transport before cleanup. The gate
 fails on warm-run stale prunes, config churn, duplicate MCP tables, orphan
 hook blocks, snapshot churn, or backup churn.

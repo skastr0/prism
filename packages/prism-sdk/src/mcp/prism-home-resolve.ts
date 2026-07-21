@@ -2,8 +2,10 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
- * Resolve the Prism home directory every runtime-root path in `prism-sdk`
- * (registry files, UDS sockets, compiled bundle locations) is derived from.
+ * Resolve the Prism home directory every durable runtime-root path in
+ * `prism-sdk` (registry files, compiled bundles, daemon logs) is derived
+ * from. UDS socket identity includes this value, but an overlong literal
+ * path falls back to a fixed-width per-user temporary namespace.
  *
  * Mirrors `resolvePrismHome()` in the root package's `src/prism-home.ts`
  * (this package cannot import that module -- `packages/prism-sdk` has no

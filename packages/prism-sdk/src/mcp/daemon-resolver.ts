@@ -30,7 +30,8 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { prepareDaemonLogSink } from "./daemon-log.js";
-import { udsPathFor as udsPathForDefault } from "./uds-path.js";
+import { resolvePrismHomeForSdk } from "./prism-home-resolve.js";
+import { assertValidUdsPluginName, udsPathFor as udsPathForDefault } from "./uds-path.js";
 import { getDaemon as getDaemonDefault, type RegistryEntry, type RegistryResult } from "./uds-registry.js";
 import { probeSocketLiveness as probeSocketLivenessDefault, type ProbeResult } from "./uds-singleton.js";
 
@@ -54,20 +55,20 @@ export const DEFAULT_SPAWN_TIMEOUT_MS = 15_000;
 const DEFAULT_POLL_INTERVAL_MS = 50;
 
 /**
- * `<prismHome>/runtime/mcp/<plugin>` -- the per-plugin runtime directory
- * that owns this plugin's registry file, socket file(s), and compiled
- * bundle. Derived from `udsPathFor` (any hash value yields the same parent
- * directory) rather than re-deriving the layout independently.
+ * `<prismHome>/runtime/mcp/<plugin>` -- the per-plugin durable runtime
+ * directory that owns this plugin's registry file, compiled bundle, and
+ * daemon log. The live UDS socket intentionally resides in a separate,
+ * fixed-width temporary namespace because `PRISM_HOME` may be longer than
+ * macOS's `sun_path` limit.
  *
- * `prismHome` is threaded explicitly (never read from the environment
- * here): the CLI edge resolves `PRISM_HOME` once via `resolvePrismHome()`
- * and passes the result down. An omitted value falls back to the same
- * `~/.prism` default `resolvePrismHome()` uses when unset -- `prism-sdk`
- * cannot import that resolver itself (no dependency on the root `src/`
- * tree).
+ * The CLI edge normally resolves `PRISM_HOME` once and threads it here.
+ * The SDK resolver preserves the same environment/default fallback for
+ * defensive direct callers (`PRISM_HOME`, then `~/.prism`).
  */
-export const pluginRuntimeDir = (plugin: string, prismHome?: string): string =>
-  dirname(udsPathForDefault(plugin, "", prismHome));
+export const pluginRuntimeDir = (plugin: string, prismHome?: string): string => {
+  assertValidUdsPluginName(plugin);
+  return join(resolvePrismHomeForSdk(prismHome), "runtime", "mcp", plugin);
+};
 
 /**
  * `<prismHome>/runtime/mcp/<plugin>/server.mjs` -- the canonical compiled
@@ -81,20 +82,11 @@ export const pluginBundlePath = (plugin: string, prismHome?: string): string =>
  * `<prismHome>/runtime/mcp/<plugin>/daemon.log` -- the append-only,
  * size-capped file a freshly spawned daemon's stdout+stderr is redirected to
  * (OBS-001; see `daemon-log.ts`'s `prepareDaemonLogSink`). Lives next to the
- * compiled bundle and the daemon's own socket/registry files
- * (`pluginRuntimeDir`), so "where does this plugin's daemon log live" is
+ * compiled bundle and registry file (`pluginRuntimeDir`), so "where does
+ * this plugin's daemon log live" is
  * answered the same deterministic way as "where is its bundle" -- one
- * directory, derived once.
- *
- * This piggybacks on `pluginRuntimeDir`, which in turn derives from
- * `udsPathFor` and so inherits that function's plugin-name/length
- * validation even though a log file path itself carries no such OS
- * constraint (only an actual `bind()`ed socket path is bound by
- * `sockaddr_un.sun_path`). That's intentional: the log necessarily lives in
- * the same directory as the socket this plugin would bind, so if the socket
- * path fits, the log path's directory always fits too -- and if it
- * wouldn't, `resolveOrSpawnDaemon` already fails earlier building the real
- * socket path, before any daemon is spawned for this hint to describe.
+ * durable directory, derived once. Ordinary file paths are not subject to
+ * the Unix socket byte limit.
  */
 export const pluginDaemonLogPath = (plugin: string, prismHome?: string): string =>
   join(pluginRuntimeDir(plugin, prismHome), "daemon.log");
@@ -103,8 +95,7 @@ export const pluginDaemonLogPath = (plugin: string, prismHome?: string): string 
  * `pluginDaemonLogPath`, but never throws -- for call sites where the log
  * path is a cosmetic hint (enriching a timeout error message, an `mcp
  * status` line) rather than the thing actually being spawned or read into.
- * A plugin/prismHome combination that cannot produce a valid UDS-shaped path
- * (see `pluginDaemonLogPath`'s doc comment) degrades to "no hint" instead of
+ * An invalid plugin/prismHome combination degrades to "no hint" instead of
  * replacing the real error or status with an unrelated one.
  */
 export const tryPluginDaemonLogPath = (plugin: string, prismHome: string | undefined): string | undefined => {
@@ -196,7 +187,8 @@ export interface ResolveOrSpawnOptions {
   readonly plugin: string;
   /**
    * Prism home directory, threaded from the CLI edge (`resolvePrismHome()`).
-   * Only consulted to build the *default* `bundlePathFor`/`udsPathFor`; a
+   * Consulted to build the default durable bundle path and the socket's
+   * fixed-width identity; a
    * caller that supplies either override directly takes over that
    * resolution entirely and this is ignored for that one.
    */
@@ -213,10 +205,8 @@ export interface ResolveOrSpawnOptions {
 
 /**
  * Returns `true` when the bundle on disk no longer matches
- * `registeredHash`. Locating the bundle (`bundlePathFor`, which by default
- * derives from `udsPathFor` and so can throw `UDSPathLengthError` for a
- * plugin/home combination that would not fit a UDS socket path either) or
- * reading it (deleted, or -- in a hermetic test -- never written) are both
+ * `registeredHash`. Locating the bundle or reading it (deleted, or -- in a
+ * hermetic test -- never written) are both
  * treated as "unknown, not proven stale": a live daemon is strictly better
  * than none, so failing to independently re-derive where a *hypothetical
  * replacement* bundle would live never forces a respawn of an

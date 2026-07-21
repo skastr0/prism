@@ -51,13 +51,6 @@ const effectImportPath = join(process.cwd(), "node_modules", "effect", "dist", "
 );
 const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/");
 
-// Short and rooted directly at `/tmp` (not `os.tmpdir()`, which on this
-// machine resolves to a much longer per-session path under
-// `/var/folders/...`): the daemon's actual UDS socket path is
-// content-addressed and hard-capped at 100 bytes (`sockaddr_un.sun_path`,
-// see `uds-path.ts`), so the sandboxed `$HOME` this test spawns daemons
-// under has to leave enough of that budget for `.prism/runtime/mcp/<plugin>/
-// <16-hex-hash>.sock`.
 const PLUGIN_NAME = "e2e-spawn";
 
 interface FixtureBundle {
@@ -190,8 +183,8 @@ const makeShimClient = (
   // threads it all the way to `pluginBundlePath`/`udsPathFor` -- so the
   // globally-sandboxed `PRISM_HOME` this whole test run inherits from
   // `scripts/test-preload.ts` must NOT leak into this subprocess, or the
-  // shim looks for the fixture bundle under the wrong (and much longer)
-  // sandbox path instead of this test's own short `homeRoot`.
+  // shim looks for the fixture bundle under the wrong sandbox path instead
+  // of this test's own `homeRoot`.
   const { PRISM_HOME: _inheritedPrismHome, ...envWithoutInheritedPrismHome } = process.env as Record<
     string,
     string
@@ -220,7 +213,9 @@ const makeShimClient = (
 test(
   "5 concurrent shims resolving the same absent plugin spawn exactly one daemon; a later hash mismatch spawns a fresh one",
   async () => {
-    const homeRoot = await mkdtemp(join("/tmp", "prism-uds-e2e-"));
+    const homeRoot = await mkdtemp(
+      join(tmpdir(), "prism-uds-e2e-deliberately-long-sandbox-home-"),
+    );
     tempRoots.push(homeRoot);
 
     const bundleV1 = await compileFixtureBundleContent("echoed");
@@ -251,6 +246,8 @@ test(
 
     const entryV1 = await readRegistryEntry(homeRoot, PLUGIN_NAME);
     expect(entryV1).toBeDefined();
+    expect(entryV1!.sock).toMatch(/^\/tmp\/prism-mcp-[^/]+\/[a-f0-9]{32}\.sock$/);
+    expect(Buffer.byteLength(entryV1!.sock, "utf8")).toBeLessThanOrEqual(100);
 
     // --- Phase 2: simulate `prism refresh` -- same path, new bytes/hash. ---
     const bundleV2 = await compileFixtureBundleContent("reechoed");

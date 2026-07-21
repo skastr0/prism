@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -298,6 +298,37 @@ describe("UDS Singleton & Stale Socket Recovery", () => {
   });
 
   describe("regression: acquireLock exclusivity (was: rename() silently replaces, all racers 'win')", () => {
+    for (const initialMode of [0o755, 0o500]) {
+      it(`normalizes an owned lock directory from mode ${initialMode.toString(8)} to 0700`, async () => {
+        const lockDir = join(testDir, "lock-dir");
+        await mkdir(lockDir);
+        await chmod(lockDir, initialMode);
+
+        expect(await acquireLock(join(lockDir, "secure.lock"), 100, process.pid)).toBe(true);
+        expect((await stat(lockDir)).mode & 0o777).toBe(0o700);
+      });
+    }
+
+    it("rejects a symlink as the lock directory", async () => {
+      const target = join(testDir, "symlink-target");
+      const linked = join(testDir, "symlink-lock-dir");
+      await mkdir(target);
+      await symlink(target, linked, "dir");
+
+      await expect(
+        acquireLock(join(linked, "unsafe.lock"), 100, process.pid),
+      ).rejects.toBeInstanceOf(UDSSingletonError);
+    });
+
+    it("fails closed when the lock directory cannot be created", async () => {
+      const notDirectory = join(testDir, "not-a-directory");
+      await writeFile(notDirectory, "occupied");
+
+      await expect(
+        acquireLock(join(notDirectory, "unsafe.lock"), 100, process.pid),
+      ).rejects.toBeInstanceOf(UDSSingletonError);
+    });
+
     it("exactly one of 20 concurrent acquire attempts wins the lock", async () => {
       const lockPath = join(testDir, "race.lock");
       const pid = process.pid;

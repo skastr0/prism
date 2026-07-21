@@ -1,4 +1,4 @@
-import { mkdir, unlink, readFile, open } from "node:fs/promises";
+import { chmod, lstat, mkdir, unlink, readFile, open } from "node:fs/promises";
 import { dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { Socket } from "node:net";
@@ -157,6 +157,49 @@ async function tryCreateLockFile(lockPath: string, pid: number): Promise<boolean
   }
 }
 
+async function ensurePrivateLockDirectory(lockDir: string): Promise<void> {
+  try {
+    await mkdir(lockDir, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    throw new UDSSingletonError(`Failed to create lock directory ${lockDir}`, error);
+  }
+
+  let info;
+  try {
+    info = await lstat(lockDir);
+  } catch (error) {
+    throw new UDSSingletonError(`Failed to inspect lock directory ${lockDir}`, error);
+  }
+
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new UDSSingletonError(`Lock directory ${lockDir} must be a real directory`);
+  }
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (uid !== undefined && info.uid !== uid) {
+    throw new UDSSingletonError(
+      `Lock directory ${lockDir} is owned by uid ${info.uid}, expected ${uid}`,
+    );
+  }
+
+  if ((info.mode & 0o777) !== 0o700) {
+    try {
+      await chmod(lockDir, 0o700);
+      info = await lstat(lockDir);
+    } catch (error) {
+      throw new UDSSingletonError(`Failed to secure lock directory ${lockDir}`, error);
+    }
+    if (info.isSymbolicLink() || !info.isDirectory() || (info.mode & 0o777) !== 0o700) {
+      throw new UDSSingletonError(`Lock directory ${lockDir} could not be secured to mode 0700`);
+    }
+    if (uid !== undefined && info.uid !== uid) {
+      throw new UDSSingletonError(
+        `Lock directory ${lockDir} changed ownership while being secured`,
+      );
+    }
+  }
+}
+
 /**
  * Acquire a lock via exclusive file creation (fs `wx` open), with
  * dead-holder reclamation and retry.
@@ -185,12 +228,7 @@ export async function acquireLock(
   const startTime = Date.now();
   const retryIntervalMs = 10;
 
-  // Ensure lock directory exists
-  try {
-    await mkdir(lockDir, { recursive: true });
-  } catch {
-    // Directory may already exist
-  }
+  await ensurePrivateLockDirectory(lockDir);
 
   while (Date.now() - startTime < timeoutMs) {
     if (await tryCreateLockFile(lockPath, pid)) {

@@ -1246,12 +1246,8 @@ test("pluginIsServable: no bundle and a registered-but-dead daemon is genuinely 
 
 test("doctor's mcp.health finding for an unhealthy daemon points at the daemon's log file (OBS-001)", async () => {
   const pluginRoot = join(root, "mcp-health-plugin");
-  // Short, dedicated prismHome (not the shared root-nested convention used
-  // elsewhere in this file): this is the one doctor test that reaches the
-  // real `pluginDaemonLogPath` -> `udsPathFor`, which asserts a 100-byte
-  // sun_path budget (see daemon-resolver.test.ts) that the shared `root`'s
-  // long mkdtemp prefix plus "/prism-home" would blow before the plugin
-  // name is even counted.
+  // Dedicated prismHome keeps the real daemon log path isolated from the
+  // other doctor fixtures.
   const prismHome = await mkdtemp(join(tmpdir(), "ph"));
   const pluginName = "m";
 

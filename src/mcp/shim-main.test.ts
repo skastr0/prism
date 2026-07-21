@@ -144,8 +144,7 @@ export default {
   const child = spawn("bun", [serverPath], {
     cwd: root,
     env: {
-      ...process.env,
-      HOME: options.home,
+      ...shimSubprocessEnv(options.home),
       PRISM_MCP_UDS_PATH: socketPath,
       PRISM_MCP_REGISTRY_PLUGIN_NAME: options.pluginName,
       PRISM_MCP_REGISTRY_BUNDLE_HASH: `test-hash-${options.pluginName}`,

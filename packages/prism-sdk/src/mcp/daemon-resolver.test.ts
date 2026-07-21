@@ -43,16 +43,21 @@ const bindFakeDaemon = (socketPath: string): void => {
 };
 
 describe("pluginRuntimeDir / pluginBundlePath", () => {
-  it("derive from udsPathFor's own directory layout rather than re-deriving it", () => {
-    expect(pluginRuntimeDir("my-plugin")).toBe(dirname(udsPathFor("my-plugin", "")));
-    expect(pluginBundlePath("my-plugin")).toBe(join(pluginRuntimeDir("my-plugin"), "server.mjs"));
-  });
-
-  it("thread an explicit prismHome through to udsPathFor instead of raw homedir()", () => {
-    const prismHome = "/custom/prism-home";
+  it("keeps durable bundle state under Prism home, separate from the short socket namespace", () => {
+    const prismHome = join("/tmp", "long-prism-home-" + "x".repeat(120));
     expect(pluginRuntimeDir("my-plugin", prismHome)).toBe(
+      join(prismHome, "runtime", "mcp", "my-plugin"),
+    );
+    expect(pluginRuntimeDir("my-plugin", prismHome)).not.toBe(
       dirname(udsPathFor("my-plugin", "", prismHome)),
     );
+    expect(pluginBundlePath("my-plugin", prismHome)).toBe(
+      join(pluginRuntimeDir("my-plugin", prismHome), "server.mjs"),
+    );
+  });
+
+  it("threads an explicit prismHome into the durable runtime directory", () => {
+    const prismHome = "/custom/prism-home";
     expect(pluginRuntimeDir("my-plugin", prismHome)).toBe(
       "/custom/prism-home/runtime/mcp/my-plugin",
     );
@@ -63,7 +68,7 @@ describe("pluginRuntimeDir / pluginBundlePath", () => {
 });
 
 describe("pluginDaemonLogPath / tryPluginDaemonLogPath", () => {
-  it("derives from pluginRuntimeDir, next to the bundle and socket (OBS-001)", () => {
+  it("derives from pluginRuntimeDir, next to the bundle and registry (OBS-001)", () => {
     expect(pluginDaemonLogPath("my-plugin")).toBe(join(pluginRuntimeDir("my-plugin"), "daemon.log"));
   });
 
@@ -144,8 +149,8 @@ describe("resolveOrSpawnDaemon", () => {
   });
 
   it("honors options.prismHome in the default bundlePathFor/udsPathFor when neither is overridden", async () => {
-    // Short prefix + short plugin name: udsPathFor's 100-byte sun_path
-    // assertion leaves little headroom once the OS tmpdir prefix is added.
+    // Explicit Prism home proves both paths use the caller-selected root as
+    // durable location / socket identity.
     const prismHome = await mkdtemp(join(tmpdir(), "ph"));
     tempDirs.push(prismHome);
     const bundlePath = pluginBundlePath("p", prismHome);
@@ -284,11 +289,7 @@ describe("resolveOrSpawnDaemon", () => {
     const dir = await makeTempDir();
     const bundlePath = join(dir, "server.mjs");
     await writeBundle(bundlePath, "console.log('v1');");
-    // Short prismHome + short plugin name: `pluginDaemonLogPath` routes
-    // through the real `udsPathFor` (see its doc comment) and so is bound
-    // by its 100-byte sun_path assertion even though this hint is just a
-    // log file path -- same constraint the "honors options.prismHome" test
-    // above works around.
+    // Explicit Prism home keeps the diagnostic path deterministic.
     const prismHome = await mkdtemp(join(tmpdir(), "ph"));
     tempDirs.push(prismHome);
     const plugin = "q";
@@ -316,10 +317,7 @@ describe("resolveOrSpawnDaemon", () => {
   });
 
   it("redirects a real spawned daemon's stdout+stderr into its per-plugin log file (OBS-001)", async () => {
-    // Short prismHome + short plugin name -- same sun_path-length reason as
-    // the test above; `defaultSpawnDaemon` derives the log path via
-    // `pluginDaemonLogPath` -> `pluginRuntimeDir`, which is still subject to
-    // that assertion even though a log file itself has no such OS limit.
+    // Explicit Prism home keeps the spawned daemon's log path deterministic.
     const prismHome = await mkdtemp(join(tmpdir(), "ph"));
     tempDirs.push(prismHome);
     const plugin = "p";

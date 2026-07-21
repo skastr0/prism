@@ -242,8 +242,7 @@ const councilTasks: Record<Harness, ReturnType<typeof councilTask>> = {
 
 // ---------------------------------------------------------------------------
 // Fault-tolerant fan-out — one auth-gated or otherwise broken harness must
-// not sink the rest of the council (same shape as
-// workflows/prism-workflow-e2e-plan-council.workflow.ts's captureLens).
+// not sink the rest of this harness QA council.
 // ---------------------------------------------------------------------------
 
 type HarnessOutcome =
@@ -268,9 +267,9 @@ const captureOutcome = (wf: WorkflowRuntime, harness: Harness) =>
     // `as` (not an annotation) deliberately: this validate harness's TS
     // resolution of `Effect.either(wf.runTask(...))` degrades to
     // `Either<unknown, unknown>` for dynamic (`run:`) workflows — the same
-    // failure independently reproduces on this branch's own
-    // workflows/prism-workflow-permissions-fanout.workflow.ts, so it is an
-    // environment limitation of the validate path, not a real type error;
+    // failure independently reproduces in the dynamic fan-out validation
+    // fixture, so it is an environment limitation of the validate path, not
+    // a real type error;
     // `wf.runTask`'s declared signature (`WorkflowRuntime.runTask`,
     // src/workflows.ts) already guarantees this shape.
     const result = (yield* Effect.either(wf.runTask(councilTasks[harness]))) as Either.Either<

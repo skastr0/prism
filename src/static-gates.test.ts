@@ -230,7 +230,6 @@ const WRITE_PRIMITIVE_ALLOWLIST: ReadonlySet<string> = new Set([
   // PRISM_HOME writers (never harness roots):
   "compile/cache.ts",
   "compile/compile-manifest.ts",
-  "compile/corpus-memo.ts",
   "compile/lockfile.ts",
   "compile/mcp-runtime-path.ts",
 ]);

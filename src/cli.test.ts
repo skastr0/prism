@@ -2261,7 +2261,7 @@ test("refresh --plugins emits workflow refs once after directory compile", async
   expect(second.stdout).not.toContain("repair");
 }, 30_000);
 
-test("refresh --plugins corpus-hash memo skips the desired-tree rebuild on a converged rerun, and invalidates on a plugin content change (PQ-090)", async () => {
+test("refresh --plugins repairs managed target drift on a warm rerun (PRD-013)", async () => {
   const { monorepoRoot, projectRoot, homeRoot } = await createInstallAllFixture();
   const args = [
     "refresh",
@@ -2280,27 +2280,17 @@ test("refresh --plugins corpus-hash memo skips the desired-tree rebuild on a con
   expect(cold.stdout).toContain("Compile (opencode, project)");
   expect(cold.stdout).not.toContain("memo hit");
 
+  const managedTarget = join(projectRoot, ".opencode", "agents", "builder.md");
+  const convergedContent = await readFile(managedTarget, "utf8");
+  await writeFile(managedTarget, "Externally drifted managed target.\n");
+
   const warm = await runCli(args, { HOME: homeRoot });
   expect(warm.exitCode).toBe(0);
-  expect(warm.stdout).toContain("Corpus unchanged since last converged refresh (memo hit");
-  expect(warm.stdout).not.toContain("Compile (opencode, project)");
+  expect(warm.stdout).not.toContain("memo hit");
+  expect(warm.stdout).toContain("Compile (opencode, project)");
+  expect(warm.stdout).toContain("repair");
   expect(warm.stdout).toContain("All plugin refreshes completed successfully");
-
-  const identityPath = join(
-    monorepoRoot,
-    "trait-orbit-contracts",
-    "identities",
-    "builder.identity.md",
-  );
-  await writeFile(
-    identityPath,
-    (await readFile(identityPath, "utf8")) + "\n\nTouched for PQ-090 invalidation coverage.\n",
-  );
-
-  const afterMutation = await runCli(args, { HOME: homeRoot });
-  expect(afterMutation.exitCode).toBe(0);
-  expect(afterMutation.stdout).not.toContain("memo hit");
-  expect(afterMutation.stdout).toContain("Compile (opencode, project)");
+  expect(await readFile(managedTarget, "utf8")).toBe(convergedContent);
 }, 30_000);
 
 test("refresh --plugins skips skill validation when skills are not targeted", async () => {

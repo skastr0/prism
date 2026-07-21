@@ -1,12 +1,39 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import { chmod, mkdir, open as openFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { stableJsonHash, stableJsonStringify, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
-import { ensureDir, exists } from "./fs.js";
+import { exists } from "./fs.js";
 import { deriveProjectKey } from "./project-key.js";
+import {
+  DEFAULT_WORKFLOW_RETENTION_MS,
+  addWorkflowRunArtifactCounts,
+  emptyWorkflowRunArtifactCounts,
+  workflowRetentionCutoff,
+  type WorkflowCacheArtifactCounts,
+  type WorkflowRetentionCleanupReport,
+  type WorkflowRunArtifactCounts,
+  type WorkflowRunDeletionReport,
+} from "./workflow-data-governance.js";
+import {
+  WORKFLOW_DATA_POLICY_VERSION,
+  WORKFLOW_SECRET_DIGEST_PREFIX,
+  applyWorkflowDataPolicy,
+  digestWorkflowSecret,
+  inspectWorkflowSensitiveData,
+  redactWorkflowData,
+  redactWorkflowText,
+} from "./workflow-data-policy.js";
 import type { WorkflowJudgeVerdict } from "./workflows.js";
 import type { WorkflowJudgeIdentity, WorkflowRunTaskSnapshot, WorkflowTaskIdentity } from "./workflow-identity.js";
 export { workflowRunTaskSnapshotForTask, workflowTaskIdentity, type WorkflowJudgeIdentity, type WorkflowRunTaskSnapshot, type WorkflowTaskIdentity } from "./workflow-identity.js";
 import { openWorkflowDatabase, type WorkflowDatabase } from "./workflow-runtime.js";
+import {
+  readRedactedWorkflowRunnerLog,
+  redactWorkflowRunnerLogInPlace,
+  removeWorkflowRunnerLog,
+  workflowRunnerLogPath,
+  type WorkflowRunnerLogRemoval,
+} from "./workflow-runner-log.js";
 import type { WorkflowSpanRecord } from "./workflow-tracing.js";
 import { normalizeWorkflowSessionMetadata, workflowStableSessionFromMetadata } from "./workflow-session.js";
 import {
@@ -49,6 +76,15 @@ export interface WorkflowJudgeRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+export type WorkflowCacheWriteResult =
+  | { readonly stored: true }
+  | {
+      readonly stored: false;
+      readonly reason: "sensitive-data";
+      readonly findingCount: number;
+      readonly findingPaths: ReadonlyArray<string>;
+    };
 
 export type WorkflowRunTaskStatus = "completed" | "failed" | "escalated";
 
@@ -322,6 +358,49 @@ export interface WorkflowEventRecord {
   readonly payload: unknown;
   readonly createdAt: string;
 }
+
+export interface WorkflowRunInspection {
+  readonly schema: "prism.workflow-run-inspection.v1";
+  readonly dataPolicyVersion: number;
+  readonly store: {
+    readonly path: string;
+    readonly schemaVersion: number;
+    readonly files: ReadonlyArray<{
+      readonly path: string;
+      readonly present: boolean;
+      readonly mode: number | null;
+      readonly bytes: number | null;
+    }>;
+  };
+  readonly run: WorkflowRunRecord;
+  readonly rows: WorkflowRunArtifactCounts;
+  readonly runnerLog: {
+    readonly path: string | null;
+    readonly present: boolean;
+    readonly bytes: number | null;
+  };
+}
+
+export interface WorkflowRunExport {
+  readonly schema: "prism.workflow-run-export.v1";
+  readonly dataPolicyVersion: number;
+  readonly exportedAt: string;
+  readonly run: WorkflowRunRecord;
+  readonly snapshot: WorkflowRunSnapshot | null;
+  readonly tasks: ReadonlyArray<WorkflowRunTaskRecord>;
+  readonly taskSnapshots: ReadonlyArray<WorkflowRunTaskSnapshot>;
+  readonly attempts: ReadonlyArray<WorkflowTaskAttemptRecord>;
+  readonly events: ReadonlyArray<WorkflowEventRecord>;
+  readonly spans: ReadonlyArray<Omit<WorkflowSpanRecord, "startNs" | "endNs"> & {
+    readonly startNs: string;
+    readonly endNs: string | null;
+  }>;
+  readonly runnerLog: {
+    readonly path: string;
+    readonly bytes: number;
+    readonly content: string;
+  } | null;
+}
 export type WorkflowTaskAttemptStatus = "running" | "completed" | "failed" | "stopped" | "crashed";
 
 export type WorkflowTaskAttemptFailureKind = "executor" | "decode" | "finish" | "stopped" | "crashed";
@@ -508,7 +587,7 @@ export const projectWorkflowStoreDir = (prismHome: string, cwd: string = process
 export const defaultWorkflowStorePath = (prismHome: string, cwd: string = process.cwd()): string =>
   join(projectWorkflowStoreDir(prismHome, cwd), "workflows.sqlite");
 
-export const WORKFLOW_STORE_SCHEMA_VERSION = 4;
+export const WORKFLOW_STORE_SCHEMA_VERSION = 5;
 
 /**
  * AR-001: the task-cache resource identity used to key `workflow_task_records`
@@ -555,6 +634,38 @@ export interface WorkflowStoreSchemaNotice {
 }
 
 const WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES = 64 * 1024;
+const WORKFLOW_STORE_FILE_MODE = 0o600;
+const WORKFLOW_STORE_DIRECTORY_MODE = 0o700;
+
+const redactedJson = (value: unknown): string =>
+  JSON.stringify(redactWorkflowData(value)) ?? "null";
+
+const redactedStableJson = (value: unknown): string =>
+  stableJsonStringify(redactWorkflowData(value) as StableJsonValue);
+
+const redactPersistedJson = (value: string): string => {
+  try {
+    return redactedJson(JSON.parse(value) as unknown);
+  } catch {
+    // A malformed legacy JSON field was already unreadable. Preserve its
+    // evidence as a valid JSON string while still removing embedded secrets.
+    return JSON.stringify(redactWorkflowText(value));
+  }
+};
+
+const cachePayloadIsSafe = (...values: ReadonlyArray<unknown>): boolean =>
+  inspectWorkflowSensitiveData(values).length === 0;
+
+const secureWorkflowStoreFiles = async (path: string): Promise<void> => {
+  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      await chmod(candidate, WORKFLOW_STORE_FILE_MODE);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+  }
+};
 
 const sqliteDateTime = (date: Date): string =>
   date.toISOString().slice(0, 19).replace("T", " ");
@@ -624,20 +735,21 @@ const serializeAttemptMetadata = (
       sessionId: null,
     };
   }
-  const json = stableJsonStringify(normalized as unknown as StableJsonValue);
+  const persisted = redactWorkflowData(normalized);
+  const json = stableJsonStringify(persisted as unknown as StableJsonValue);
   if (Buffer.byteLength(json, "utf8") > WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES) {
     throw new Error(
       `Workflow task attempt metadata exceeds ${WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES} bytes`,
     );
   }
-  const stableSession = workflowStableSessionFromMetadata(normalized);
+  const stableSession = workflowStableSessionFromMetadata(persisted);
   return {
-    metadata: normalized,
+    metadata: persisted,
     json,
     adapter: stableSession?.adapter ?? stringMetadata(normalized, "adapter"),
-    model: stringMetadata(normalized, "model"),
-    nativeAgent: stringMetadata(normalized, "nativeAgent"),
-    sessionId: stableSession?.sessionId ?? externalSessionPointer(normalized),
+    model: stringMetadata(persisted, "model"),
+    nativeAgent: stringMetadata(persisted, "nativeAgent"),
+    sessionId: stableSession?.sessionId ?? externalSessionPointer(persisted),
   };
 };
 
@@ -860,6 +972,7 @@ const addColumnIfMissing = (db: WorkflowDatabase, statement: string): void => {
 
 const enableConcurrentWorkflowAccess = (db: WorkflowDatabase): void => {
   db.exec("pragma busy_timeout = 5000;");
+  db.exec("pragma secure_delete = on;");
   try {
     db.exec("pragma journal_mode = WAL;");
   } catch (error) {
@@ -1243,13 +1356,387 @@ const migrateWorkflowStoreToVersion4 = (db: WorkflowDatabase): void => {
 
     db.exec("drop table if exists workflow_task_records;");
     db.exec("alter table workflow_task_records_ar001_v4 rename to workflow_task_records;");
-    db.exec(`pragma user_version = ${WORKFLOW_STORE_SCHEMA_VERSION};`);
+    db.exec("pragma user_version = 4;");
+  })();
+};
+
+/**
+ * PRD-010: establish the workflow ledger's durable-data boundary. Historical
+ * evidence is redacted in place, whereas cache entries containing secrets are
+ * removed instead of rewritten because rewriting would change cache semantics.
+ */
+const migrateWorkflowStoreToVersion5 = (db: WorkflowDatabase): void => {
+  db.transaction(() => {
+    // Some early ledgers and hand-built integrations stamped a schema version
+    // while omitting unused tables. Version 5 makes the current schema whole so
+    // governance commands can count and clean every artifact deterministically.
+    db.exec(`
+      create table if not exists workflow_judge_records (
+        workflow text not null,
+        task_id text not null,
+        task_cache_key text not null,
+        criterion text not null,
+        judge_cache_key text not null primary key,
+        verdict text not null,
+        feedback text,
+        evidence_json text not null,
+        output_json text not null,
+        task_metadata_json text not null,
+        metadata_json text,
+        created_at text not null default (datetime('now')),
+        updated_at text not null default (datetime('now'))
+      );
+      create table if not exists workflow_run_tasks (
+        run_id text not null,
+        ordinal integer not null,
+        workflow text not null,
+        task_id text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        status text not null,
+        cached integer not null,
+        output_json text not null,
+        metadata_json text,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, ordinal)
+      );
+      create table if not exists workflow_events (
+        run_id text not null,
+        sequence integer not null,
+        task_id text,
+        type text not null,
+        payload_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, sequence)
+      );
+      create table if not exists workflow_run_snapshots (
+        run_id text primary key,
+        workflow_file text not null,
+        options_json text,
+        created_at text not null default (datetime('now')),
+        updated_at text not null default (datetime('now'))
+      );
+      create table if not exists workflow_run_task_snapshots (
+        run_id text not null,
+        ordinal integer not null,
+        task_id text not null,
+        phase text,
+        prompt text not null,
+        cache_key text not null,
+        prompt_hash text not null,
+        agent_manifest_hash text not null,
+        agent_plugin text not null,
+        agent_name text not null,
+        agent_description text not null,
+        agent_source_hash text not null,
+        worker_json text,
+        output_schema_json text,
+        finish_criteria_json text not null,
+        created_at text not null default (datetime('now')),
+        primary key (run_id, ordinal)
+      );
+      create table if not exists workflow_spans (
+        run_id text not null,
+        trace_id text not null,
+        span_id text primary key,
+        parent_span_id text,
+        task_id text,
+        name text not null,
+        kind text not null default 'internal',
+        start_ns text not null,
+        end_ns text,
+        duration_ms real,
+        status text not null default 'unset',
+        error_message text,
+        attributes_json text not null default '{}',
+        created_at text not null default (datetime('now'))
+      );
+      create index if not exists workflow_spans_run_idx on workflow_spans (run_id, start_ns);
+      create table if not exists workflow_task_attempts (
+        run_id text not null,
+        ordinal integer not null,
+        attempt integer not null,
+        task_id text not null,
+        status text not null check (status in ('running', 'completed', 'failed', 'stopped', 'crashed')),
+        started_at text not null default (datetime('now')),
+        finished_at text,
+        adapter text,
+        model text,
+        native_agent text,
+        session_id text,
+        failure_kind text check (failure_kind is null or failure_kind in ('executor', 'decode', 'finish', 'stopped', 'crashed')),
+        failure_message text,
+        metadata_json text,
+        usage_json text,
+        primary key (run_id, ordinal, attempt)
+      );
+      create index if not exists workflow_task_attempts_run_idx
+        on workflow_task_attempts (run_id, ordinal, attempt);
+      create table if not exists workflow_runner_log_cleanup (
+        run_id text primary key,
+        queued_at text not null default (datetime('now'))
+      );
+    `);
+    const tableExists = (name: string): boolean => db.query<{ readonly name: string }, [string]>(
+      "select name from sqlite_master where type = 'table' and name = ?",
+    ).get(name) !== null;
+
+    const taskCacheRows = db.query<{
+      readonly row_id: number;
+      readonly workflow: string;
+      readonly task_id: string;
+      readonly cache_key: string;
+      readonly agent_plugin: string;
+      readonly agent_name: string;
+      readonly output_json: string;
+      readonly metadata_json: string | null;
+    }, []>(`
+      select rowid as row_id, workflow, task_id, cache_key, agent_plugin,
+             agent_name, output_json, metadata_json
+      from workflow_task_records
+    `).all();
+    const deleteTaskCache = db.query("delete from workflow_task_records where rowid = ?");
+    for (const row of taskCacheRows) {
+      let safe = false;
+      try {
+        safe = cachePayloadIsSafe(
+          {
+            workflow: row.workflow,
+            taskId: row.task_id,
+            cacheKey: row.cache_key,
+            agent: { plugin: row.agent_plugin, name: row.agent_name },
+          },
+          JSON.parse(row.output_json) as unknown,
+          row.metadata_json === null ? undefined : JSON.parse(row.metadata_json) as unknown,
+        );
+      } catch {
+        // Invalid JSON cannot be a trustworthy cache hit.
+      }
+      if (!safe) deleteTaskCache.run(row.row_id);
+    }
+
+    if (tableExists("workflow_judge_records")) {
+      const judgeCacheRows = db.query<{
+        readonly row_id: number;
+        readonly workflow: string;
+        readonly task_id: string;
+        readonly task_cache_key: string;
+        readonly criterion: string;
+        readonly judge_cache_key: string;
+        readonly feedback: string | null;
+        readonly evidence_json: string;
+        readonly output_json: string;
+        readonly task_metadata_json: string;
+        readonly metadata_json: string | null;
+      }, []>(`
+        select rowid as row_id, workflow, task_id, task_cache_key, criterion,
+               judge_cache_key, feedback, evidence_json, output_json,
+               task_metadata_json, metadata_json
+        from workflow_judge_records
+      `).all();
+      const deleteJudgeCache = db.query("delete from workflow_judge_records where rowid = ?");
+      for (const row of judgeCacheRows) {
+        let safe = false;
+        try {
+          safe = cachePayloadIsSafe(
+            {
+              workflow: row.workflow,
+              taskId: row.task_id,
+              taskCacheKey: row.task_cache_key,
+              criterion: row.criterion,
+              cacheKey: row.judge_cache_key,
+            },
+            row.feedback,
+            JSON.parse(row.evidence_json) as unknown,
+            JSON.parse(row.output_json) as unknown,
+            JSON.parse(row.task_metadata_json) as unknown,
+            row.metadata_json === null ? undefined : JSON.parse(row.metadata_json) as unknown,
+          );
+        } catch {
+          // Invalid JSON cannot be a trustworthy cache hit.
+        }
+        if (!safe) deleteJudgeCache.run(row.row_id);
+      }
+    }
+
+    const runs = db.query<{
+      readonly run_id: string;
+      readonly workflow: string;
+      readonly terminal_cause_json: string | null;
+      readonly handoff_token: string | null;
+    }, []>(`
+      select run_id, workflow, terminal_cause_json, handoff_token
+      from workflow_runs
+    `).all();
+    const updateRun = db.query(`
+      update workflow_runs
+      set workflow = ?, terminal_cause_json = ?, handoff_token = ?
+      where run_id = ?
+    `);
+    for (const row of runs) {
+      const handoffToken = row.handoff_token === null
+        ? null
+        : row.handoff_token.startsWith(WORKFLOW_SECRET_DIGEST_PREFIX)
+          ? row.handoff_token
+          : digestWorkflowSecret(row.handoff_token);
+      updateRun.run(
+        redactWorkflowText(row.workflow),
+        row.terminal_cause_json === null ? null : redactPersistedJson(row.terminal_cause_json),
+        handoffToken,
+        row.run_id,
+      );
+    }
+
+    if (tableExists("workflow_run_tasks")) {
+      const runTasks = db.query<{
+      readonly run_id: string;
+      readonly ordinal: number;
+      readonly workflow: string;
+      readonly output_json: string;
+      readonly metadata_json: string | null;
+    }, []>(`
+      select run_id, ordinal, workflow, output_json, metadata_json
+      from workflow_run_tasks
+    `).all();
+      const updateRunTask = db.query(`
+      update workflow_run_tasks
+      set workflow = ?, output_json = ?, metadata_json = ?
+      where run_id = ? and ordinal = ?
+    `);
+      for (const row of runTasks) {
+        updateRunTask.run(
+          redactWorkflowText(row.workflow),
+          redactPersistedJson(row.output_json),
+          row.metadata_json === null ? null : redactPersistedJson(row.metadata_json),
+          row.run_id,
+          row.ordinal,
+        );
+      }
+    }
+
+    if (tableExists("workflow_task_attempts")) {
+      const attempts = db.query<{
+      readonly run_id: string;
+      readonly ordinal: number;
+      readonly attempt: number;
+      readonly failure_message: string | null;
+      readonly metadata_json: string | null;
+    }, []>(`
+      select run_id, ordinal, attempt, failure_message, metadata_json
+      from workflow_task_attempts
+    `).all();
+      const updateAttempt = db.query(`
+      update workflow_task_attempts
+      set failure_message = ?, metadata_json = ?
+      where run_id = ? and ordinal = ? and attempt = ?
+    `);
+      for (const row of attempts) {
+        updateAttempt.run(
+          row.failure_message === null ? null : redactWorkflowText(row.failure_message),
+          row.metadata_json === null ? null : redactPersistedJson(row.metadata_json),
+          row.run_id,
+          row.ordinal,
+          row.attempt,
+        );
+      }
+    }
+
+    if (tableExists("workflow_events")) {
+      const events = db.query<{
+      readonly run_id: string;
+      readonly sequence: number;
+      readonly payload_json: string;
+    }, []>("select run_id, sequence, payload_json from workflow_events").all();
+      const updateEvent = db.query(`
+      update workflow_events set payload_json = ? where run_id = ? and sequence = ?
+    `);
+      for (const row of events) {
+        updateEvent.run(redactPersistedJson(row.payload_json), row.run_id, row.sequence);
+      }
+    }
+
+    if (tableExists("workflow_run_snapshots")) {
+      const runSnapshots = db.query<{
+      readonly run_id: string;
+      readonly workflow_file: string;
+      readonly options_json: string | null;
+    }, []>("select run_id, workflow_file, options_json from workflow_run_snapshots").all();
+      const updateRunSnapshot = db.query(`
+      update workflow_run_snapshots set workflow_file = ?, options_json = ? where run_id = ?
+    `);
+      for (const row of runSnapshots) {
+        updateRunSnapshot.run(
+          redactWorkflowText(row.workflow_file),
+          row.options_json === null ? null : redactPersistedJson(row.options_json),
+          row.run_id,
+        );
+      }
+    }
+
+    if (tableExists("workflow_run_task_snapshots")) {
+      const taskSnapshots = db.query<{
+      readonly run_id: string;
+      readonly ordinal: number;
+      readonly prompt: string;
+      readonly agent_description: string;
+      readonly worker_json: string | null;
+      readonly output_schema_json: string | null;
+      readonly finish_criteria_json: string;
+    }, []>(`
+      select run_id, ordinal, prompt, agent_description, worker_json,
+             output_schema_json, finish_criteria_json
+      from workflow_run_task_snapshots
+    `).all();
+      const updateTaskSnapshot = db.query(`
+      update workflow_run_task_snapshots
+      set prompt = ?, agent_description = ?, worker_json = ?,
+          output_schema_json = ?, finish_criteria_json = ?
+      where run_id = ? and ordinal = ?
+    `);
+      for (const row of taskSnapshots) {
+        updateTaskSnapshot.run(
+          redactWorkflowText(row.prompt),
+          redactWorkflowText(row.agent_description),
+          row.worker_json === null ? null : redactPersistedJson(row.worker_json),
+          row.output_schema_json === null ? null : redactPersistedJson(row.output_schema_json),
+          redactPersistedJson(row.finish_criteria_json),
+          row.run_id,
+          row.ordinal,
+        );
+      }
+    }
+
+    if (tableExists("workflow_spans")) {
+      const spans = db.query<{
+      readonly span_id: string;
+      readonly error_message: string | null;
+      readonly attributes_json: string;
+    }, []>("select span_id, error_message, attributes_json from workflow_spans").all();
+      const updateSpan = db.query(`
+      update workflow_spans set error_message = ?, attributes_json = ? where span_id = ?
+    `);
+      for (const row of spans) {
+        updateSpan.run(
+          row.error_message === null ? null : redactWorkflowText(row.error_message),
+          redactPersistedJson(row.attributes_json),
+          row.span_id,
+        );
+      }
+    }
+
+    db.exec("pragma user_version = 5;");
   })();
 };
 
 export class WorkflowStore {
+  initialRetentionCleanup: WorkflowRetentionCleanupReport | null = null;
+
   constructor(
     private readonly db: WorkflowDatabase,
+    readonly path: string,
     readonly schemaNotice: WorkflowStoreSchemaNotice | null = null,
   ) {}
   private updateRunUsageInCurrentTransaction(
@@ -1286,12 +1773,25 @@ export class WorkflowStore {
   }
 
 
-  static async open(path: string): Promise<WorkflowStore> {
-    await ensureDir(dirname(path));
+  static async open(
+    path: string,
+    options: { readonly applyDefaultRetention?: boolean } = {},
+  ): Promise<WorkflowStore> {
+    const directory = dirname(path);
+    const directoryPreexisting = await exists(directory);
+    await mkdir(directory, { recursive: true, mode: WORKFLOW_STORE_DIRECTORY_MODE });
+    if (!directoryPreexisting) await chmod(directory, WORKFLOW_STORE_DIRECTORY_MODE);
     const preexisting = await exists(path);
-    const db = openWorkflowDatabase(path);
+    const handle = await openFile(path, "a", WORKFLOW_STORE_FILE_MODE);
+    await handle.close();
+    await chmod(path, WORKFLOW_STORE_FILE_MODE);
+
+    let db: WorkflowDatabase | undefined;
+    let schemaVersion = 0;
+    const previousUmask = process.umask(0o077);
     try {
-      const schemaVersion = readWorkflowStoreSchemaVersion(db);
+      db = openWorkflowDatabase(path);
+      schemaVersion = readWorkflowStoreSchemaVersion(db);
       if (schemaVersion > WORKFLOW_STORE_SCHEMA_VERSION) {
         throw new Error(
           `Workflow store schema version ${schemaVersion} is newer than supported version ${WORKFLOW_STORE_SCHEMA_VERSION}. Upgrade Prism before opening ${path}.`,
@@ -1310,42 +1810,313 @@ export class WorkflowStore {
       if (schemaVersion <= 3) {
         migrateWorkflowStoreToVersion4(db);
       }
-      const schemaNotice: WorkflowStoreSchemaNotice | null = preexisting && schemaVersion < WORKFLOW_STORE_SCHEMA_VERSION
-        ? {
-            severity: "info",
-            openedVersion: schemaVersion,
-            currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
-            message: `Workflow store at ${path} was schema version ${schemaVersion}; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
-          }
-        : null;
-      return new WorkflowStore(db, schemaNotice);
+      if (schemaVersion <= 4) {
+        migrateWorkflowStoreToVersion5(db);
+      }
+    } catch (error) {
+      db?.close();
+      throw error;
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    const schemaNotice: WorkflowStoreSchemaNotice | null = preexisting && schemaVersion < WORKFLOW_STORE_SCHEMA_VERSION
+      ? {
+          severity: "info",
+          openedVersion: schemaVersion,
+          currentVersion: WORKFLOW_STORE_SCHEMA_VERSION,
+          message: `Workflow store at ${path} was schema version ${schemaVersion}; migrated to ${WORKFLOW_STORE_SCHEMA_VERSION} on open.`,
+        }
+      : null;
+    const store = new WorkflowStore(db, path, schemaNotice);
+    try {
+      await store.flushQueuedRunnerLogCleanup();
+      // Detached runners write their crash channel outside SQLite. A hard kill
+      // can bypass the child's terminal redaction, so every observer open
+      // first terminalizes dead runner pids, then reconciles exact terminal
+      // sidecars. Live logs are never rewritten underneath their writer.
+      store.failDeadPidRuns();
+      const observedRuns = db.query<{
+        readonly run_id: string;
+        readonly runner_pid: number | null;
+      }, []>(
+        "select run_id, runner_pid from workflow_runs where status != 'running' order by run_id asc",
+      ).all();
+      for (const run of observedRuns) {
+        if (run.runner_pid !== null && processIsAlive(run.runner_pid)) continue;
+        await redactWorkflowRunnerLogInPlace(path, run.run_id);
+      }
+      if (options.applyDefaultRetention !== false) {
+        store.initialRetentionCleanup = await store.pruneByAge({ olderThanMs: DEFAULT_WORKFLOW_RETENTION_MS });
+      }
+      await secureWorkflowStoreFiles(path);
+      return store;
     } catch (error) {
       db.close();
       throw error;
     }
   }
 
-  // WFE-008: `enableConcurrentWorkflowAccess` puts the store in WAL mode, but
-  // nothing repo-wide ever ran `wal_checkpoint` — relying on SQLite's implicit
-  // last-connection checkpoint left an orphan WAL file to grow unbounded
-  // across runs (observed 3.7MB WAL over a 76KB db). PASSIVE checkpoints
-  // every frame it can without waiting on (or blocking) any other reader or
-  // writer, so a store closed while a *different* process still holds the
-  // same file open (the detached runner + this test process pattern in
-  // workflow-controls.test.ts) never stalls that other connection. TRUNCATE
-  // was tried first and reverted: it can block a concurrent writer past its
-  // busy_timeout, which then fails the *other* process's own query with
-  // "database is locked" — a real regression this file's tests caught. A
-  // checkpoint is still a no-op (never throws) when the store isn't in WAL
-  // mode. Best-effort: a checkpoint that cannot complete must never block
-  // the store from closing.
+  // WFE-008: checkpoint without disrupting a detached runner sharing the
+  // store. PASSIVE first moves every immediately available frame. When it
+  // proves the WAL is fully checkpointed and no persisted foreign runner is
+  // active, a zero-timeout TRUNCATE removes the empty sidecar; a concurrent
+  // reader/writer makes that attempt report busy immediately instead of
+  // blocking or failing the other process. Best-effort:
+  // cleanup must never prevent close.
   close(): void {
     try {
-      this.db.exec("pragma wal_checkpoint(passive);");
+      const checkpoint = this.db.query<{
+        readonly busy: number;
+        readonly log: number;
+        readonly checkpointed: number;
+      }, []>("pragma wal_checkpoint(passive);").get();
+      const foreignRunner = this.db.query<{ readonly count: number }, [number]>(`
+        select count(*) as count
+        from workflow_runs
+        where status = 'running' and runner_pid is not null and runner_pid != ?
+      `).get(process.pid)?.count ?? 0;
+      if (foreignRunner === 0 && checkpoint?.busy === 0 && checkpoint.log === checkpoint.checkpointed) {
+        this.db.exec("pragma busy_timeout = 0;");
+        this.db.exec("pragma wal_checkpoint(truncate);");
+      }
     } catch {
       // best-effort by contract — see comment above
     }
     this.db.close();
+  }
+
+  private countRunArtifacts(runId: string): WorkflowRunArtifactCounts {
+    const count = (table: string): number => {
+      const row = this.db.query<{ readonly count: number }, [string]>(
+        `select count(*) as count from ${table} where run_id = ?`,
+      ).get(runId);
+      return row?.count ?? 0;
+    };
+    return {
+      runs: count("workflow_runs"),
+      tasks: count("workflow_run_tasks"),
+      attempts: count("workflow_task_attempts"),
+      events: count("workflow_events"),
+      spans: count("workflow_spans"),
+      runSnapshots: count("workflow_run_snapshots"),
+      taskSnapshots: count("workflow_run_task_snapshots"),
+    };
+  }
+
+  private deleteRunRowsInCurrentTransaction(runId: string): WorkflowRunArtifactCounts {
+    const counts = this.countRunArtifacts(runId);
+    if (counts.runs > 0) {
+      this.db.query(`
+        insert into workflow_runner_log_cleanup (run_id) values (?)
+        on conflict(run_id) do nothing
+      `).run(runId);
+    }
+    this.db.query("delete from workflow_spans where run_id = ?").run(runId);
+    this.db.query("delete from workflow_events where run_id = ?").run(runId);
+    this.db.query("delete from workflow_task_attempts where run_id = ?").run(runId);
+    this.db.query("delete from workflow_run_task_snapshots where run_id = ?").run(runId);
+    this.db.query("delete from workflow_run_tasks where run_id = ?").run(runId);
+    this.db.query("delete from workflow_run_snapshots where run_id = ?").run(runId);
+    this.db.query("delete from workflow_runs where run_id = ?").run(runId);
+    return counts;
+  }
+
+  private async removeQueuedRunnerLog(runId: string): Promise<WorkflowRunnerLogRemoval> {
+    const runnerLog = await removeWorkflowRunnerLog(this.path, runId);
+    this.db.query("delete from workflow_runner_log_cleanup where run_id = ?").run(runId);
+    return runnerLog;
+  }
+
+  private async flushQueuedRunnerLogCleanup(): Promise<void> {
+    const queued = this.db.query<{ readonly run_id: string }, []>(`
+      select run_id from workflow_runner_log_cleanup order by queued_at asc, run_id asc
+    `).all();
+    for (const entry of queued) await this.removeQueuedRunnerLog(entry.run_id);
+  }
+
+  async inspectRun(runId: string): Promise<WorkflowRunInspection> {
+    const run = this.getRun(runId);
+    if (run === null) throw new Error(`Workflow run ${runId} does not exist`);
+    const fileDetails = async (path: string) => {
+      try {
+        const file = await stat(path);
+        return { path, present: true, mode: file.mode & 0o777, bytes: file.size } as const;
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          return { path, present: false, mode: null, bytes: null } as const;
+        }
+        throw error;
+      }
+    };
+    let runnerLogPath: string | null = null;
+    try {
+      runnerLogPath = workflowRunnerLogPath(this.path, runId);
+    } catch {
+      // Historical stores may contain run ids that predate sidecar path safety.
+    }
+    const runnerLog = runnerLogPath === null
+      ? { path: null, present: false, bytes: null } as const
+      : await fileDetails(runnerLogPath).then((file) => ({
+          path: file.path,
+          present: file.present,
+          bytes: file.bytes,
+        }));
+    return {
+      schema: "prism.workflow-run-inspection.v1",
+      dataPolicyVersion: WORKFLOW_DATA_POLICY_VERSION,
+      store: {
+        path: this.path,
+        schemaVersion: readWorkflowStoreSchemaVersion(this.db),
+        files: await Promise.all([this.path, `${this.path}-wal`, `${this.path}-shm`].map(fileDetails)),
+      },
+      run,
+      rows: this.countRunArtifacts(runId),
+      runnerLog,
+    };
+  }
+
+  async exportRun(runId: string): Promise<WorkflowRunExport> {
+    const run = this.getRun(runId);
+    if (run === null) throw new Error(`Workflow run ${runId} does not exist`);
+    let runnerLog: WorkflowRunExport["runnerLog"] = null;
+    try {
+      runnerLog = await readRedactedWorkflowRunnerLog(this.path, runId);
+    } catch (error) {
+      if (!(error instanceof Error && error.message.includes("cannot address a runner log path"))) {
+        throw error;
+      }
+    }
+    const spans = this.listSpans(runId).map((span) => ({
+      ...span,
+      startNs: span.startNs.toString(),
+      endNs: span.endNs?.toString() ?? null,
+    }));
+    return redactWorkflowData({
+      schema: "prism.workflow-run-export.v1",
+      dataPolicyVersion: WORKFLOW_DATA_POLICY_VERSION,
+      exportedAt: new Date().toISOString(),
+      run,
+      snapshot: this.getRunSnapshot(runId),
+      tasks: this.listRunTasks(runId),
+      taskSnapshots: this.listRunTaskSnapshots(runId),
+      attempts: this.listRunTaskAttempts(runId),
+      events: this.listRunEvents(runId),
+      spans,
+      runnerLog,
+    });
+  }
+
+  async deleteRun(runId: string): Promise<WorkflowRunDeletionReport> {
+    const run = this.getRun(runId);
+    if (run?.status === "running") {
+      throw new Error(`Workflow run ${runId} is running; stop it before deletion`);
+    }
+    if (run?.runnerPid !== undefined && processIsAlive(run.runnerPid)) {
+      throw new Error(`Workflow run ${runId} still has live runner pid ${run.runnerPid}; wait for runner shutdown before deletion`);
+    }
+    const rows = this.db.transaction(() => this.deleteRunRowsInCurrentTransaction(runId))();
+    const runnerLog = rows.runs > 0
+      ? await this.removeQueuedRunnerLog(runId)
+      : await removeWorkflowRunnerLog(this.path, runId);
+    return {
+      runId,
+      status: rows.runs === 0 ? "missing" : "deleted",
+      rows,
+      runnerLog,
+    };
+  }
+
+  async pruneByAge(options: {
+    readonly olderThanMs?: number;
+    readonly now?: Date;
+  } = {}): Promise<WorkflowRetentionCleanupReport> {
+    const olderThanMs = options.olderThanMs ?? DEFAULT_WORKFLOW_RETENTION_MS;
+    const cutoff = workflowRetentionCutoff(olderThanMs, options.now);
+    const cutoffSql = sqliteDateTime(cutoff);
+    const candidates = this.db.query<{ readonly run_id: string }, [string]>(`
+      select run_id
+      from workflow_runs
+      where status != 'running'
+        and coalesce(finished_at, created_at) < ?
+      order by coalesce(finished_at, created_at) asc, run_id asc
+    `).all(cutoffSql);
+    const taskCacheCandidates = this.db.query<{ readonly count: number }, [string]>(`
+      select count(*) as count from workflow_task_records where updated_at < ?
+    `).get(cutoffSql)?.count ?? 0;
+    const judgeCacheCandidates = this.db.query<{ readonly count: number }, [string]>(`
+      select count(*) as count from workflow_judge_records where updated_at < ?
+    `).get(cutoffSql)?.count ?? 0;
+    if (candidates.length === 0 && taskCacheCandidates === 0 && judgeCacheCandidates === 0) {
+      return {
+        policy: "workflow-ledger-retention-v1",
+        olderThanMs,
+        cutoff: cutoff.toISOString(),
+        runs: { matched: 0, deleted: 0, rows: emptyWorkflowRunArtifactCounts() },
+        caches: { taskCache: 0, judgeCache: 0 },
+        runnerLogs: { deleted: 0, missing: 0, skippedUnsafeRunId: 0 },
+      };
+    }
+
+    const result = this.db.transaction(() => {
+      let rows = emptyWorkflowRunArtifactCounts();
+      const deletedRunIds: string[] = [];
+      for (const candidate of candidates) {
+        const current = this.db.query<{
+          readonly status: WorkflowRunStatus;
+          readonly expired: number;
+          readonly runner_pid: number | null;
+        }, [string, string]>(`
+          select status, coalesce(finished_at, created_at) < ? as expired, runner_pid
+          from workflow_runs
+          where run_id = ?
+        `).get(cutoffSql, candidate.run_id);
+        if (current === null || current.status === "running" || current.expired !== 1) continue;
+        if (current.runner_pid !== null && processIsAlive(current.runner_pid)) continue;
+        const deleted = this.deleteRunRowsInCurrentTransaction(candidate.run_id);
+        rows = addWorkflowRunArtifactCounts(rows, deleted);
+        if (deleted.runs > 0) deletedRunIds.push(candidate.run_id);
+      }
+      const taskCache = this.db.query<{ readonly count: number }, [string]>(`
+        select count(*) as count from workflow_task_records where updated_at < ?
+      `).get(cutoffSql)?.count ?? 0;
+      const judgeCache = this.db.query<{ readonly count: number }, [string]>(`
+        select count(*) as count from workflow_judge_records where updated_at < ?
+      `).get(cutoffSql)?.count ?? 0;
+      this.db.query("delete from workflow_task_records where updated_at < ?").run(cutoffSql);
+      this.db.query("delete from workflow_judge_records where updated_at < ?").run(cutoffSql);
+      return { rows, taskCache, judgeCache, deletedRunIds };
+    })();
+
+    let runnerLogsDeleted = 0;
+    let runnerLogsMissing = 0;
+    let runnerLogsSkippedUnsafeRunId = 0;
+    for (const runId of result.deletedRunIds) {
+      const removal = await this.removeQueuedRunnerLog(runId);
+      if (removal.status === "deleted") runnerLogsDeleted += 1;
+      else if (removal.status === "missing") runnerLogsMissing += 1;
+      else runnerLogsSkippedUnsafeRunId += 1;
+    }
+
+    return {
+      policy: "workflow-ledger-retention-v1",
+      olderThanMs,
+      cutoff: cutoff.toISOString(),
+      runs: {
+        matched: candidates.length,
+        deleted: result.rows.runs,
+        rows: result.rows,
+      },
+      caches: {
+        taskCache: result.taskCache,
+        judgeCache: result.judgeCache,
+      },
+      runnerLogs: {
+        deleted: runnerLogsDeleted,
+        missing: runnerLogsMissing,
+        skippedUnsafeRunId: runnerLogsSkippedUnsafeRunId,
+      },
+    };
   }
 
   getCompleted(identity: WorkflowTaskIdentity, options: { readonly allowMockSourced?: boolean } = {}): CompletedWorkflowTaskRecord | null {
@@ -1418,7 +2189,24 @@ export class WorkflowStore {
     readonly evidence: unknown;
     readonly output: unknown;
     readonly taskMetadata: unknown;
-  }): void {
+  }): WorkflowCacheWriteResult {
+    const policy = applyWorkflowDataPolicy({
+      identity: input.identity,
+      feedback: "feedback" in input.verdict ? input.verdict.feedback : undefined,
+      evidence: input.evidence,
+      output: input.output,
+      taskMetadata: input.taskMetadata,
+      metadata: input.verdict.metadata,
+    });
+    if (policy.findings.length > 0) {
+      return {
+        stored: false,
+        reason: "sensitive-data",
+        findingCount: policy.findings.length,
+        findingPaths: policy.findings.map((finding) => finding.path),
+      };
+    }
+    const persisted = policy.value;
     this.db.query(`
       insert into workflow_judge_records (
         workflow, task_id, task_cache_key, criterion, judge_cache_key,
@@ -1441,12 +2229,13 @@ export class WorkflowStore {
       input.identity.criterion,
       input.identity.cacheKey,
       input.verdict.verdict,
-      "feedback" in input.verdict ? input.verdict.feedback ?? null : null,
-      JSON.stringify(input.evidence),
-      JSON.stringify(input.output),
-      JSON.stringify(input.taskMetadata),
-      input.verdict.metadata === undefined ? null : JSON.stringify(input.verdict.metadata),
+      persisted.feedback ?? null,
+      JSON.stringify(persisted.evidence),
+      JSON.stringify(persisted.output),
+      JSON.stringify(persisted.taskMetadata),
+      persisted.metadata === undefined ? null : JSON.stringify(persisted.metadata),
     );
+    return { stored: true };
   }
 
   listJudgeRecords(options: {
@@ -1526,8 +2315,9 @@ export class WorkflowStore {
   }
 
   createRun(workflow: string, runId: string = randomUUID()): string {
-    this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, workflow);
-    this.recordEvent({ runId, type: "run.started", payload: { workflow } });
+    const persistedWorkflow = redactWorkflowText(workflow);
+    this.db.query("insert into workflow_runs (run_id, workflow, status) values (?, ?, 'running')").run(runId, persistedWorkflow);
+    this.recordEvent({ runId, type: "run.started", payload: { workflow: persistedWorkflow } });
     return runId;
   }
 
@@ -1546,8 +2336,8 @@ export class WorkflowStore {
         updated_at = excluded.updated_at
     `).run(
       input.runId,
-      input.workflowFile,
-      input.options === undefined ? null : JSON.stringify(input.options),
+      redactWorkflowText(input.workflowFile),
+      input.options === undefined ? null : redactedJson(input.options),
     );
   }
 
@@ -1594,17 +2384,17 @@ export class WorkflowStore {
       input.ordinal,
       input.taskId,
       input.phase ?? null,
-      input.prompt,
+      redactWorkflowText(input.prompt),
       input.cacheKey,
       input.promptHash,
       input.agentManifestHash,
       input.agent.plugin,
       input.agent.name,
-      input.agent.description,
+      redactWorkflowText(input.agent.description),
       input.agent.sourceHash,
-      input.worker === undefined ? null : JSON.stringify(input.worker),
-      input.outputSchema === undefined ? null : JSON.stringify(input.outputSchema),
-      JSON.stringify(input.finishCriteria),
+      input.worker === undefined ? null : redactedJson(input.worker),
+      input.outputSchema === undefined ? null : redactedJson(input.outputSchema),
+      redactedJson(input.finishCriteria),
     );
   }
 
@@ -1642,25 +2432,36 @@ export class WorkflowStore {
   }
 
   setRunHandoffToken(runId: string, token: string): void {
-    this.db.query("update workflow_runs set handoff_token = ? where run_id = ?").run(token, runId);
+    this.db.query("update workflow_runs set handoff_token = ? where run_id = ?").run(digestWorkflowSecret(token), runId);
   }
 
   consumeRunHandoffToken(runId: string, token: string): boolean {
     const row = this.db.query<HandoffTokenRow, [string]>(
       "select handoff_token from workflow_runs where run_id = ?"
     ).get(runId);
-    if (row?.handoff_token !== token) return false;
+    if (row?.handoff_token === null || row?.handoff_token === undefined) return false;
+    const expected = Buffer.from(row.handoff_token, "utf8");
+    const provided = Buffer.from(digestWorkflowSecret(token), "utf8");
+    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) return false;
     this.db.query("update workflow_runs set handoff_token = null where run_id = ?").run(runId);
     return true;
   }
 
   markRunRunnerStarted(runId: string, runnerPid: number): void {
-    this.db.query(`
-      update workflow_runs
-      set runner_pid = ?, heartbeat_at = datetime('now')
-      where run_id = ? and status = 'running'
-    `).run(runnerPid, runId);
-    this.recordEvent({ runId, type: "runner.started", payload: { runnerPid } });
+    const started = this.db.transaction(() => {
+      const row = this.db.query<{ readonly run_id: string }, [number, string]>(`
+        update workflow_runs
+        set runner_pid = ?, heartbeat_at = datetime('now')
+        where run_id = ? and status = 'running'
+        returning run_id
+      `).get(runnerPid, runId);
+      if (row === null) return false;
+      this.recordEvent({ runId, type: "runner.started", payload: { runnerPid } });
+      return true;
+    })();
+    if (!started) {
+      throw new Error(`Workflow run ${runId} does not exist or is already terminal`);
+    }
   }
 
   heartbeatRun(runId: string): void {
@@ -1790,7 +2591,7 @@ export class WorkflowStore {
         metadata.nativeAgent,
         metadata.sessionId,
         input.failure?.kind ?? null,
-        input.failure?.message ?? null,
+        input.failure === undefined ? null : redactWorkflowText(input.failure.message),
         input.metadata === undefined ? 0 : 1,
         metadata.json,
         input.runId,
@@ -1869,7 +2670,7 @@ export class WorkflowStore {
     status: Exclude<WorkflowRunStatus, "running" | "unknown">,
     terminalCause: WorkflowRunTerminalCause,
   ): RunRow | null {
-    const terminalCauseJson = stableJsonStringify(terminalCause as unknown as StableJsonValue);
+    const terminalCauseJson = redactedStableJson(terminalCause);
     const updated = this.db.query<RunRow, [WorkflowRunStatus, string, string]>(`
       update workflow_runs
       set status = ?, terminal_cause_json = ?, finished_at = datetime('now')
@@ -1899,7 +2700,7 @@ export class WorkflowStore {
     `).all(
       attemptTerminal.status,
       attemptTerminal.failure?.kind ?? null,
-      attemptTerminal.failure?.message ?? null,
+      attemptTerminal.failure === null ? null : redactWorkflowText(attemptTerminal.failure.message),
       runId,
     );
     for (const attempt of reconciled) {
@@ -2062,7 +2863,7 @@ export class WorkflowStore {
       input.runId,
       input.taskId ?? null,
       input.type,
-      JSON.stringify(input.payload),
+      redactedJson(input.payload),
     );
   }
 
@@ -2081,7 +2882,7 @@ export class WorkflowStore {
       span.kind,
       span.startNs.toString(),
       span.status,
-      JSON.stringify(span.attributes),
+      redactedJson(span.attributes),
     );
   }
 
@@ -2104,8 +2905,8 @@ export class WorkflowStore {
       input.endNs.toString(),
       input.endNs.toString(),
       input.status,
-      input.errorMessage,
-      JSON.stringify(input.attributes),
+      input.errorMessage === null ? null : redactWorkflowText(input.errorMessage),
+      redactedJson(input.attributes),
       input.spanId,
     );
   }
@@ -2166,21 +2967,30 @@ export class WorkflowStore {
     return this.db.transaction(() => {
       const crashed: WorkflowRunRecord[] = [];
       for (const row of dead) {
+        const current = this.db.query<StaleRunRow, [string, number]>(`
+          select run_id, workflow, status, terminal_cause_json, finished_at,
+                 runner_pid, heartbeat_at, usage_agent_runs, usage_reused,
+                 usage_tokens_in, usage_tokens_out, usage_cost_usd, usage_duration_ms,
+                 created_at
+          from workflow_runs
+          where run_id = ? and status = 'running' and runner_pid = ?
+        `).get(row.run_id, row.runner_pid!);
+        if (current === null || current.runner_pid === null || processIsAlive(current.runner_pid)) continue;
         const cause: WorkflowRunCrashedCause = {
           kind: "crashed",
           reason: "dead-runner-pid",
-          ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-          ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+          runnerPid: current.runner_pid,
+          ...(current.heartbeat_at !== null ? { heartbeatAt: current.heartbeat_at } : {}),
         };
         this.recordEvent({
-          runId: row.run_id,
+          runId: current.run_id,
           type: "run.stale_dead_pid",
           payload: {
             ...cause,
-            createdAt: row.created_at,
+            createdAt: current.created_at,
           },
         });
-        const updated = this.finishRunInCurrentTransaction(row.run_id, "crashed", cause);
+        const updated = this.finishRunInCurrentTransaction(current.run_id, "crashed", cause);
         if (updated !== null) crashed.push(runRecordFromRow(updated));
       }
       return crashed;
@@ -2276,8 +3086,8 @@ export class WorkflowStore {
         input.agent.name,
         input.status,
         input.cached ? 1 : 0,
-        JSON.stringify(input.output),
-        input.metadata === undefined ? null : JSON.stringify(input.metadata),
+        redactedJson(input.output),
+        input.metadata === undefined ? null : redactedJson(input.metadata),
       );
       if (input.cached) {
         this.updateRunUsageInCurrentTransaction(input.runId, addWorkflowReuse);
@@ -2715,8 +3525,23 @@ export class WorkflowStore {
     readonly output: unknown;
     readonly metadata?: Record<string, unknown>;
     readonly outputSource?: WorkflowTaskOutputSource;
-  }): void {
+  }): WorkflowCacheWriteResult {
     const metadata = normalizeWorkflowSessionMetadata(input.metadata);
+    const policy = applyWorkflowDataPolicy({
+      identity: input.identity,
+      agent: input.agent,
+      output: input.output,
+      ...(metadata !== undefined ? { metadata } : {}),
+    });
+    if (policy.findings.length > 0) {
+      return {
+        stored: false,
+        reason: "sensitive-data",
+        findingCount: policy.findings.length,
+        findingPaths: policy.findings.map((finding) => finding.path),
+      };
+    }
+    const persisted = policy.value;
     const key = workflowTaskResourceKey(input.identity);
     this.db.query(`
       insert into workflow_task_records (
@@ -2745,9 +3570,10 @@ export class WorkflowStore {
       input.identity.agentManifestHash,
       input.agent.plugin,
       input.agent.name,
-      JSON.stringify(input.output),
-      metadata === undefined ? null : JSON.stringify(metadata),
+      JSON.stringify(persisted.output),
+      persisted.metadata === undefined ? null : JSON.stringify(persisted.metadata),
       input.outputSource ?? null,
     );
+    return { stored: true };
   }
 }

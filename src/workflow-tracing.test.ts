@@ -360,6 +360,36 @@ describe("otlp serialization", () => {
     expect(attributes).toContainEqual({ key: "prism.run_id", value: { stringValue: "run-1" } });
     expect(attributes).toContainEqual({ key: "prism.task_id", value: { stringValue: "build" } });
   });
+
+  test("applies the central redaction policy at the OTLP export edge", () => {
+    const record: WorkflowSpanRecord = {
+      runId: "run-1",
+      traceId: "ab".repeat(16),
+      spanId: "cd".repeat(8),
+      parentSpanId: null,
+      taskId: "build",
+      name: "workflow.task",
+      kind: "internal",
+      startNs: 1n,
+      endNs: 2n,
+      status: "error",
+      errorMessage: "Authorization: Bearer abcdefghijklmnop",
+      attributes: {
+        apiKey: "must-not-export",
+        sessionId: "sk-session-shaped-but-required",
+      },
+    };
+
+    const serialized = JSON.stringify(workflowSpansToOtlpJson([record], {
+      serviceName: "prism-workflow",
+      attributes: { password: "resource-secret" },
+    }));
+    expect(serialized).not.toContain("abcdefghijklmnop");
+    expect(serialized).not.toContain("must-not-export");
+    expect(serialized).not.toContain("resource-secret");
+    expect(serialized).toContain("sk-session-shaped-but-required");
+    expect(serialized).toContain("[REDACTED]");
+  });
 });
 
 describe("workflow store registry", () => {

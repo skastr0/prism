@@ -723,7 +723,14 @@ const runJudgeCriterion = async (input: {
   }
   judgeSpan?.annotate("judge.verdict", verdict.verdict);
   judgeSpan?.end("ok");
-  input.store?.recordJudge({ identity, verdict, evidence, output: input.output, taskMetadata });
+  const cacheWrite = input.store?.recordJudge({ identity, verdict, evidence, output: input.output, taskMetadata });
+  if (cacheWrite?.stored === false) {
+    recordEvent(input.store, input.runId, input.task.id, "task.judge.cache_write.skipped_sensitive", {
+      criterion: input.criterion.name,
+      cacheKey,
+      findingCount: cacheWrite.findingCount,
+    });
+  }
   recordEvent(input.store, input.runId, input.task.id, "task.judge.completed", {
     criterion: input.criterion.name,
     cacheKey,
@@ -1318,9 +1325,9 @@ const executeWorkflowTask = async (input: {
       });
       let attemptUsageObserved = false;
       try {
-        if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
         input.cancellation.throwIfAborted();
         startAttempt();
+        if (!cacheHit) recordEvent(store, runId, task.id, "task.executor.started", { attempt: repairs });
         const stopTracking = input.cancellation.trackTask(task.id);
         try {
           if (cacheHit) {
@@ -1388,15 +1395,19 @@ const executeWorkflowTask = async (input: {
         }
         executorSpan?.end("error", error);
         const parseError = error instanceof WorkflowOutputParseError ? error : undefined;
+        let parseAttemptFinished = false;
+        let parseInterrupted = false;
         if (parseError !== undefined) {
+          parseInterrupted = finishInterruptedAttempt(error);
+          if (!parseInterrupted) finishFailedAttempt("decode", error);
+          parseAttemptFinished = true;
           recordEvent(store, runId, task.id, "task.decode.failed", {
             attempt: repairs,
             error: parseError.message,
             ...(parseError.rawText !== undefined ? { rawText: parseError.rawText } : {}),
           });
         }
-        if (parseError !== undefined && decodeRepairs < maxDecodeRepairs) {
-          finishFailedAttempt("decode", error);
+        if (parseError !== undefined && !parseInterrupted && decodeRepairs < maxDecodeRepairs) {
           repairs += 1;
           decodeRepairs += 1;
           const repairPrompt = parseRepairPrompt(parseError);
@@ -1432,8 +1443,8 @@ const executeWorkflowTask = async (input: {
             continue;
           }
         }
-        const interrupted = finishInterruptedAttempt(error);
-        if (!interrupted) finishFailedAttempt(parseError !== undefined ? "decode" : "executor", error);
+        const interrupted = parseAttemptFinished ? parseInterrupted : finishInterruptedAttempt(error);
+        if (!interrupted && !parseAttemptFinished) finishFailedAttempt("executor", error);
         const output: Record<string, unknown> = { error: errorMessage(error) };
         const rawText = (error as { readonly rawText?: unknown } | null | undefined)?.rawText;
         if (rawText !== undefined) output.rawText = rawText;
@@ -1463,9 +1474,9 @@ const executeWorkflowTask = async (input: {
       const decoded = decodeTaskOutput(task, rawOutput);
       if (Either.isLeft(decoded)) {
         const error = decoded.left;
-        recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
         if (decodeRepairs < maxDecodeRepairs) {
           finishFailedAttempt("decode", error);
+          recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
           repairs += 1;
           decodeRepairs += 1;
           const repairPrompt = schemaRepairPrompt(error);
@@ -1474,6 +1485,7 @@ const executeWorkflowTask = async (input: {
         }
         const decodeError = new WorkflowTaskDecodeError(task.id, error);
         finishFailedAttempt("decode", decodeError);
+        recordEvent(store, runId, task.id, "task.decode.failed", { attempt: repairs, error: String(error), attemptedOutput: rawOutput });
         recordRunTaskIfPersisted({
           store,
           runId,
@@ -1613,17 +1625,24 @@ const executeWorkflowTask = async (input: {
       throw error;
     }
     if (!cacheHit) {
-      store?.recordCompleted({
+      const cacheWrite = store?.recordCompleted({
         identity,
         agent: taskAgent(task),
         output: decodedOutput,
         metadata: finalMetadata,
         ...(mockOutput ? { outputSource: "mock-output" as const } : {}),
       });
-      recordEvent(store, runId, task.id, "task.cache_write.completed", {
-        cacheKey: identity.cacheKey,
-        ...(mockOutput ? { outputSource: "mock-output" } : {}),
-      });
+      if (cacheWrite?.stored === false) {
+        recordEvent(store, runId, task.id, "task.cache_write.skipped_sensitive", {
+          cacheKey: identity.cacheKey,
+          findingCount: cacheWrite.findingCount,
+        });
+      } else {
+        recordEvent(store, runId, task.id, "task.cache_write.completed", {
+          cacheKey: identity.cacheKey,
+          ...(mockOutput ? { outputSource: "mock-output" } : {}),
+        });
+      }
     }
     recordRunTaskIfPersisted({
       store,

@@ -37,7 +37,7 @@ import type {
 } from "./types.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import {
   compilePluginForTarget,
@@ -73,6 +73,8 @@ import { loadWorkflowFile, paddedTableColumns, renderWorkflowModelResolutionTabl
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
 import { DEFAULT_WORKFLOW_MAX_PROMPT_BYTES, runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord, type WorkflowStoreSchemaNotice } from "./workflow-store.js";
+import { DEFAULT_WORKFLOW_RETENTION_AGE, parseWorkflowRetentionAge } from "./workflow-data-governance.js";
+import { redactWorkflowRunnerLogInPlace } from "./workflow-runner-log.js";
 import {
   listRegisteredWorkflowStores,
   registerWorkflowStore,
@@ -550,6 +552,7 @@ workflow
     let store: WorkflowStore | undefined;
     let heartbeat: NodeJS.Timeout | undefined;
     let executionRunId: string | undefined;
+    let executionStorePath: string | undefined;
     let terminationController: AbortController | undefined;
     let terminationHandlers: Partial<Record<WorkflowRunnerTerminationSignal, () => void>> | undefined;
     let requestedExitCode: ExitCode | undefined;
@@ -577,6 +580,7 @@ workflow
         skipTypecheck: isDetachSpawnParent || isDetachedChild,
       });
       const storePath = resolveWorkflowStorePath(options.store);
+      executionStorePath = storePath;
       if (options.detach === true) {
         if (options.runId !== undefined || options.runToken !== undefined) {
           throw new CliUsageError("--run-id and --run-token are reserved for Prism's internal detached runner");
@@ -705,6 +709,22 @@ workflow
         for (const signal of WORKFLOW_RUNNER_TERMINATION_SIGNALS) {
           const handler = terminationHandlers[signal];
           if (handler !== undefined) process.off(signal, handler);
+        }
+      }
+      if (
+        process.env.PRISM_WORKFLOW_DETACHED_CHILD === "1"
+        && executionStorePath !== undefined
+        && executionRunId !== undefined
+      ) {
+        try {
+          await redactWorkflowRunnerLogInPlace(executionStorePath, executionRunId);
+        } catch (error) {
+          store?.recordEvent({
+            runId: executionRunId,
+            type: "runner.log_redaction.failed",
+            payload: { error: error instanceof Error ? error.message : String(error) },
+          });
+          requestedExitCode = EXIT_CODES.domainFailure;
         }
       }
       store?.close();
@@ -1099,6 +1119,98 @@ const resolveWorkflowRunStore = async (
   }
   return null;
 };
+
+workflowRuns
+  .command("inspect <runId>")
+  .description("Inspect one run's ledger row counts, sidecar, schema, and store file permissions")
+  .option("--store <path>", "SQLite workflow store path")
+  .action(async (runId: string, options: { readonly store?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      const explicitStorePath = options.store !== undefined ? resolveWorkflowStorePath(options.store) : undefined;
+      const resolved = await resolveWorkflowRunStore(runId, explicitStorePath);
+      if (resolved === null) throw new CliUsageError(`workflow run not found: ${runId}`);
+      store = resolved.store;
+      await writeStdout(`${JSON.stringify(await store.inspectRun(runId), null, 2)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow runs inspect failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("export <runId>")
+  .description("Export one run as a centrally redacted JSON evidence bundle")
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--out <path>", "Write owner-readable JSON to this path instead of stdout")
+  .action(async (runId: string, options: { readonly store?: string; readonly out?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      const explicitStorePath = options.store !== undefined ? resolveWorkflowStorePath(options.store) : undefined;
+      const resolved = await resolveWorkflowRunStore(runId, explicitStorePath);
+      if (resolved === null) throw new CliUsageError(`workflow run not found: ${runId}`);
+      store = resolved.store;
+      const content = `${JSON.stringify(await store.exportRun(runId), null, 2)}\n`;
+      if (options.out === undefined) {
+        await writeStdout(content);
+        return;
+      }
+      const outputPath = expandPath(options.out);
+      await ensureDir(dirname(outputPath));
+      await writeFile(outputPath, content, { encoding: "utf8", mode: 0o600 });
+      await chmod(outputPath, 0o600);
+      await writeStdout(`${JSON.stringify({ runId, exported: outputPath, mode: "0600" }, null, 2)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow runs export failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("delete <runId>")
+  .description("Delete one terminal run and its exact detached-runner sidecar")
+  .option("--store <path>", "SQLite workflow store path")
+  .action(async (runId: string, options: { readonly store?: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      if (options.store !== undefined) {
+        store = await WorkflowStore.open(resolveWorkflowStorePath(options.store));
+      } else {
+        const resolved = await resolveWorkflowRunStore(runId, undefined);
+        store = resolved?.store ?? await WorkflowStore.open(resolveWorkflowStorePath(undefined));
+      }
+      await writeStdout(`${JSON.stringify(await store.deleteRun(runId), null, 2)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow runs delete failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
+
+workflowRuns
+  .command("prune")
+  .description(`Prune terminal runs and cache entries older than the bounded default (${DEFAULT_WORKFLOW_RETENTION_AGE})`)
+  .option("--store <path>", "SQLite workflow store path")
+  .option("--older-than <duration>", "Age such as 30m, 24h, or 30d", DEFAULT_WORKFLOW_RETENTION_AGE)
+  .action(async (options: { readonly store?: string; readonly olderThan: string }) => {
+    let store: WorkflowStore | undefined;
+    try {
+      const storePath = resolveWorkflowStorePath(options.store);
+      store = await WorkflowStore.open(storePath, { applyDefaultRetention: false });
+      const cleanup = await store.pruneByAge({ olderThanMs: parseWorkflowRetentionAge(options.olderThan) });
+      await writeStdout(`${JSON.stringify({ store: storePath, cleanup }, null, 2)}\n`);
+    } catch (error) {
+      printCliError(error, "Workflow runs prune failed");
+      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
+    } finally {
+      store?.close();
+    }
+  });
 
 workflowRuns
   .command("show <runId>")

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Cause, Context, Exit, Option, Tracer } from "effect";
+import { redactWorkflowData, redactWorkflowText } from "./workflow-data-policy.js";
 import type { WorkflowStore } from "./workflow-store.js";
 
 export type WorkflowSpanStatus = "ok" | "error" | "unset";
@@ -413,7 +414,10 @@ export const workflowSpansToOtlpJson = (
   resourceSpans: [
     {
       resource: {
-        attributes: otlpKeyValues({ "service.name": resource.serviceName, ...(resource.attributes ?? {}) }),
+        attributes: otlpKeyValues(redactWorkflowData({
+          "service.name": resource.serviceName,
+          ...(resource.attributes ?? {}),
+        })),
       },
       scopeSpans: [
         {
@@ -426,9 +430,13 @@ export const workflowSpansToOtlpJson = (
             kind: 1,
             startTimeUnixNano: span.startNs.toString(),
             endTimeUnixNano: (span.endNs ?? span.startNs).toString(),
-            attributes: otlpKeyValues({ ...span.attributes, ...(span.taskId !== null ? { "prism.task_id": span.taskId } : {}), "prism.run_id": span.runId }),
+            attributes: otlpKeyValues(redactWorkflowData({
+              ...span.attributes,
+              ...(span.taskId !== null ? { "prism.task_id": span.taskId } : {}),
+              "prism.run_id": span.runId,
+            })),
             status: span.status === "error"
-              ? { code: 2, ...(span.errorMessage !== null ? { message: span.errorMessage } : {}) }
+              ? { code: 2, ...(span.errorMessage !== null ? { message: redactWorkflowText(span.errorMessage) } : {}) }
               : span.status === "ok"
                 ? { code: 1 }
                 : { code: 0 },

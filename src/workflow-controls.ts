@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
+import { dirname } from "node:path";
 import { expandPath } from "./fs.js";
 import { loadWorkflowFile } from "./workflow-loader.js";
 import { currentCliCommand } from "./workflow-cli-command.js";
@@ -11,6 +11,14 @@ import {
   workflowProcessGroupExists,
 } from "./workflow-process-guard.js";
 import { WorkflowStore, type WorkflowRunRecord } from "./workflow-store.js";
+import {
+  WORKFLOW_RUNNER_LOG_DIRECTORY_MODE,
+  WORKFLOW_RUNNER_LOG_FILE_MODE,
+  redactWorkflowRunnerLogInPlace,
+  workflowRunnerLogDir,
+  workflowRunnerLogPath,
+  workflowRunnerLogPathIfPresent,
+} from "./workflow-runner-log.js";
 import { getWorkflowWorkerAdapter } from "./workflow-workers.js";
 
 export interface WorkflowDetachedRunOptions {
@@ -118,31 +126,7 @@ const mergeWorkflowRunOptions = (
  * Directory holding per-run detached-runner stdout/stderr capture files, kept
  * as a sibling of the SQLite store so it travels with `--store`.
  */
-export const workflowRunnerLogDir = (storePath: string): string =>
-  join(dirname(expandPath(storePath)), "runner-logs");
-
-/**
- * Deterministic capture-file path for one run's detached runner. Derivable
- * from runId + storePath alone, with no store lookup required to find it —
- * including for a runner that died before writing its first ledger row.
- */
-export const workflowRunnerLogPath = (storePath: string, runId: string): string =>
-  join(workflowRunnerLogDir(storePath), `${runId}.log`);
-
-/**
- * The capture-file path, but only when it is meaningful to surface: the run
- * actually had a detached runner (`runnerPid` set) and a file exists on disk.
- * Foreground runs, and runs recorded before this capture existed, get
- * `undefined` — silence, not a dangling path to nothing.
- */
-export const workflowRunnerLogPathIfPresent = (
-  storePath: string,
-  run: { readonly runId: string; readonly runnerPid?: number },
-): string | undefined => {
-  if (run.runnerPid === undefined) return undefined;
-  const path = workflowRunnerLogPath(storePath, run.runId);
-  return existsSync(path) ? path : undefined;
-};
+export { workflowRunnerLogDir, workflowRunnerLogPath, workflowRunnerLogPathIfPresent };
 
 export const requestWorkflowRunnerTermination = async (
   store: WorkflowStore,
@@ -241,8 +225,10 @@ export const startDetachedWorkflowRun = async (
   // firehose. The parent's fd copy is closed right after spawn; the child
   // keeps its own duplicated reference to the same open file.
   const logPath = workflowRunnerLogPath(run.storePath, run.runId);
-  mkdirSync(dirname(logPath), { recursive: true });
-  const logFd = openSync(logPath, "a");
+  mkdirSync(dirname(logPath), { recursive: true, mode: WORKFLOW_RUNNER_LOG_DIRECTORY_MODE });
+  chmodSync(dirname(logPath), WORKFLOW_RUNNER_LOG_DIRECTORY_MODE);
+  const logFd = openSync(logPath, "a", WORKFLOW_RUNNER_LOG_FILE_MODE);
+  chmodSync(logPath, WORKFLOW_RUNNER_LOG_FILE_MODE);
 
   let child: WorkflowSpawnedProcess;
   try {
@@ -341,6 +327,7 @@ export const startDetachedWorkflowRun = async (
         });
       }
     }
+    await redactWorkflowRunnerLogInPlace(run.storePath, run.runId);
     if (terminationError !== undefined) {
       throw new Error(
         `${errorMessage(error)}; failed to confirm detached runner group termination: ${errorMessage(terminationError)}`,

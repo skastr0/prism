@@ -179,7 +179,7 @@ describe("workflow store", () => {
         primary key (run_id, ordinal)
       );
       insert into workflow_runs (run_id, workflow, status, finished_at)
-      values ('v1-run', 'legacy-v1', 'completed', '2026-01-01 00:00:00');
+      values ('v1-run', 'legacy-v1', 'completed', datetime('now'));
       insert into workflow_run_tasks (
         run_id, ordinal, workflow, task_id, cache_key, prompt_hash, agent_manifest_hash,
         agent_plugin, agent_name, status, cached, output_json

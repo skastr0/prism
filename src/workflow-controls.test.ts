@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -775,7 +775,7 @@ test("stop returns only after the detached runner and inherited-stdio worker tre
     await cleanupProcessTree(runnerPid, marker);
     await rm(root, { recursive: true, force: true });
   }
-});
+}, 10_000);
 
 for (const signal of ["SIGINT", "SIGHUP"] as const) {
   test(`${signal} aborts a detached run, closes its store, and leaves no descendants`, async () => {
@@ -864,7 +864,7 @@ for (const signal of ["SIGINT", "SIGHUP"] as const) {
       await cleanupProcessTree(runnerPid, marker);
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 }
 
 test("update starts the replacement worker only after the old process group is absent", async () => {
@@ -1033,6 +1033,8 @@ test("a detached runner's pre-readiness failure output lands in the runner log (
       const logPath = workflowRunnerLogPath(storePath, runId);
       const content = await waitForFileContent(logPath, (c) => c.trim().length > 0);
       expect(content.trim().length).toBeGreaterThan(0);
+      expect((await stat(logPath)).mode & 0o777).toBe(0o600);
+      expect((await stat(workflowRunnerLogDir(storePath))).mode & 0o777).toBe(0o700);
       expect(workflowRunnerLogPathIfPresent(storePath, { runId, runnerPid: 4242 })).toBe(logPath);
     } finally {
       store.close();

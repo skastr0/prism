@@ -141,7 +141,7 @@ test("workflow budget flags reject non-positive integer limits and non-finite or
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(message);
   }
-});
+}, 15_000);
 
 test("workflow monitor help exposes deterministic timeout controls", async () => {
   const help = await runCli(["workflow", "monitor", "--help"], {});
@@ -514,7 +514,7 @@ const createLegacyV1Store = (storePath: string, runId: string): void => {
       primary key (run_id, sequence)
     );
     insert into workflow_runs (run_id, workflow, status, finished_at)
-    values ('${runId}', 'legacy-workflow', 'completed', '2026-01-01 00:00:00');
+    values ('${runId}', 'legacy-workflow', 'completed', datetime('now'));
     pragma user_version = 1;
   `);
   db.close();

@@ -142,4 +142,24 @@ try {
     expect(result.stdout.trim()).toBe("WorkflowBunRuntimeUnavailableError");
     expect(result.stderr).toBe("");
   });
+
+  test("workflow worker process spawning fails closed outside Bun", async () => {
+    const result = await runNodeBundle(`
+import { runWorkflowWorkerProcess } from ${JSON.stringify(join(repoRoot, "src/workflow-worker-process.ts"))};
+import { WorkflowBunRuntimeUnavailableError } from ${JSON.stringify(join(repoRoot, "src/workflow-errors.ts"))};
+
+try {
+  await runWorkflowWorkerProcess({ command: "node", args: ["--version"], cwd: process.cwd() });
+  throw new Error("expected Bun runtime error");
+} catch (error) {
+  if (!(error instanceof WorkflowBunRuntimeUnavailableError)) throw error;
+  if (!error.message.includes("process spawning")) throw error;
+  console.log(error.name);
+}
+`);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("WorkflowBunRuntimeUnavailableError");
+    expect(result.stderr).toBe("");
+  });
 });

@@ -1,14 +1,27 @@
 import { WorkflowBunRuntimeUnavailableError } from "./workflow-errors.js";
 
-export interface WorkflowBunSpawnOptions {
+interface WorkflowBunSpawnBaseOptions {
   readonly cmd: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: Record<string, string | undefined>;
   readonly detached?: boolean;
-  readonly stdin: "ignore";
   /** A `number` redirects to that open file descriptor (e.g. a log file opened before spawn). */
   readonly stdout: "ignore" | "pipe" | number;
   readonly stderr: "ignore" | "pipe" | number;
+}
+
+export interface WorkflowBunSpawnOptions extends WorkflowBunSpawnBaseOptions {
+  readonly stdin: "ignore";
+}
+
+export interface WorkflowBunPipedSpawnOptions extends WorkflowBunSpawnBaseOptions {
+  readonly stdin: "pipe";
+  readonly stdout: "pipe";
+  readonly stderr: "pipe";
+}
+
+export interface WorkflowBunWritableStdin {
+  end(error?: Error): number | Promise<number>;
 }
 
 export interface WorkflowBunSpawnedProcess {
@@ -20,9 +33,15 @@ export interface WorkflowBunSpawnedProcess {
   unref?(): void;
 }
 
+export interface WorkflowBunPipedSpawnedProcess extends WorkflowBunSpawnedProcess {
+  readonly stdin: WorkflowBunWritableStdin;
+  readonly stdout: ReadableStream<Uint8Array>;
+}
+
 export interface WorkflowBunRuntime {
   which(name: string): string | null;
   spawn(options: WorkflowBunSpawnOptions): WorkflowBunSpawnedProcess;
+  spawn(options: WorkflowBunPipedSpawnOptions): WorkflowBunPipedSpawnedProcess;
 }
 
 export const workflowBunRuntime = (capability: string): WorkflowBunRuntime => {

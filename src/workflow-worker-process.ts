@@ -1,5 +1,6 @@
 import { currentCliCommand } from "./workflow-cli-command.js";
 import { encodeWorkflowProcessGuardRequest } from "./workflow-process-guard.js";
+import { spawnWorkflowProcess } from "./workflow-runtime.js";
 
 export interface WorkflowWorkerProcessOptions {
   readonly command: string;
@@ -41,7 +42,7 @@ export const runWorkflowWorkerProcess = async (
   options: WorkflowWorkerProcessOptions,
 ): Promise<WorkflowWorkerProcessResult> => {
   const started = Date.now();
-  const guard = Bun.spawn({
+  const guard = spawnWorkflowProcess({
     cmd: [
       ...currentCliCommand(),
       "__workflow-process-guard",

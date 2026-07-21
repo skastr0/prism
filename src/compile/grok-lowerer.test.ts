@@ -93,7 +93,7 @@ afterEach(async () => {
   );
 });
 
-test("grok lowerer emits a plugin bundle with agents, skills, HTTP MCP, and hooks", async () => {
+test("grok global lowerer emits a plugin bundle with agents, skills, MCP, and hooks", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const pluginRoot = join(root, "grok-plugin-fixture");
@@ -316,7 +316,7 @@ export default {
     hooks: [hook, canonicalHook, sessionEndHook, promptSubmitHook, subagentStopHook, notificationHook],
     registry,
     target: {
-      scope: "project",
+      scope: "global",
       root: outputRoot,
       mcpExposureProfile: "prism-generated-grok-plugin-fixture:grok",
       sourcePluginName: "grok-plugin-fixture",
@@ -474,6 +474,201 @@ export default {
   });
   expect(notifyRes.exitCode).toBe(0);
   expect(notifyRes.stdout.trim()).toBe("");
+});
+
+test("grok project lowerer emits agents and skills directly without a shadow plugin bundle", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".grok");
+  const pluginRoot = join(root, "grok-project-fixture");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify({
+      name: "grok-project-fixture",
+      version: "0.1.0",
+      targets: { skills: ["grok"], orbits: ["grok"] },
+    }, null, 2) + "\n",
+  );
+  await writeText(
+    join(pluginRoot, "skills", "testing", "SKILL.md"),
+    "---\nname: testing\ndescription: Project testing guidance\n---\n\n# Testing\n",
+  );
+  await writeText(
+    join(pluginRoot, "orbits", "delivery.orbit.ts"),
+    "export default { name: 'delivery', description: 'Project delivery orbit', phases: [{ name: 'Build' }] };\n",
+  );
+
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const { files, regions } = await planLowering({
+    agents: [{
+      name: "worker",
+      description: "Project worker",
+      body: "# Worker\n",
+      color: undefined,
+      model: { model: "grok-4.5" },
+      targetOverride: {},
+      skills: [],
+      allowedSkills: [],
+      allowedTools: [],
+      toolBindings: [],
+    }],
+    orbits: [...registry.orbits.values()],
+    skills: [...registry.skills.values()],
+    hooks: [],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "grok-project-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  });
+
+  expect(files.map((file) => file.targetPath).sort()).toEqual([
+    join(outputRoot, "agents", "worker.md"),
+    join(outputRoot, "skills", "delivery", "SKILL.md"),
+    join(outputRoot, "skills", "testing", "SKILL.md"),
+  ].sort());
+  expect(files.some((file) => file.targetPath.includes(`${join(outputRoot, "plugins")}/`))).toBe(false);
+  expect(findContentOperation(files, join("hooks", "hooks.json"))).toBeUndefined();
+  expect(regions).toEqual([]);
+});
+
+test("grok global lowerer omits an empty hooks map", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".grok");
+  const { files } = await planLowering({
+    agents: [{
+      name: "worker",
+      description: "Global worker",
+      body: "# Worker\n",
+      color: undefined,
+      model: {},
+      targetOverride: {},
+      skills: [],
+      allowedSkills: [],
+      allowedTools: [],
+      toolBindings: [],
+    }],
+    orbits: [],
+    skills: [],
+    hooks: [],
+    target: {
+      scope: "global",
+      root: outputRoot,
+      sourcePluginName: "grok-global-fixture",
+      sourcePluginVersion: "0.1.0",
+    },
+  });
+
+  expect(findContentOperation(files, join(".claude-plugin", "plugin.json"))).toBeDefined();
+  expect(findContentOperation(files, join("agents", "worker.md"))?.targetPath).toContain(
+    join(outputRoot, "plugins", "prism-generated-grok-global-fixture"),
+  );
+  expect(findContentOperation(files, join("hooks", "hooks.json"))).toBeUndefined();
+});
+
+test("grok project lowerer rejects non-empty hooks with an actionable exactly-once diagnostic", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".grok");
+  const pluginRoot = join(root, "grok-project-hooks-fixture");
+  const hookPath = join(pluginRoot, "hooks", "started.hook.ts");
+
+  await writeText(
+    join(pluginRoot, "plugin.json"),
+    JSON.stringify({
+      name: "grok-project-hooks-fixture",
+      version: "0.1.0",
+      targets: { hooks: ["grok"] },
+    }, null, 2) + "\n",
+  );
+  await writeText(
+    hookPath,
+    "export default { name: 'started', event: 'session.start', handle: () => ({ decision: 'continue' }) };\n",
+  );
+  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
+  const hook = registry.hooks.get("started");
+  if (!hook) throw new Error("expected started hook");
+
+  await expect(planLowering({
+    agents: [],
+    orbits: [],
+    skills: [],
+    hooks: [hook],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "grok-project-hooks-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  })).rejects.toThrow(
+    "Grok project-scope hooks are unsupported until Prism can prove exactly-once hook loading",
+  );
+  await expect(planLowering({
+    agents: [],
+    orbits: [],
+    skills: [],
+    hooks: [hook],
+    registry,
+    target: {
+      scope: "project",
+      root: outputRoot,
+      sourcePluginName: "grok-project-hooks-fixture",
+      sourcePluginVersion: "0.1.0",
+      sourcePluginPath: pluginRoot,
+    },
+  })).rejects.toThrow(hookPath);
+});
+
+test("grok agent MCP tool advertisement and config share the MCP emit flag", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".grok");
+  const binding = permissionBinding("owner-tools", "echo");
+  const previous = process.env.PRISM_TOOLS_MCP_EMIT;
+  const output = await (async () => {
+    process.env.PRISM_TOOLS_MCP_EMIT = "0";
+    try {
+      return await planLowering({
+        agents: [{
+          name: "consumer",
+          description: "Consumes one native and one canonical tool",
+          body: "# Consumer\n",
+          color: undefined,
+          model: {},
+          targetOverride: {},
+          skills: [],
+          allowedSkills: [],
+          allowedTools: ["read_file"],
+          toolBindings: [binding],
+        }],
+        orbits: [],
+        skills: [],
+        hooks: [],
+        target: {
+          scope: "project",
+          root: outputRoot,
+          sourcePluginName: "grok-mcp-off-fixture",
+          sourcePluginVersion: "0.1.0",
+        },
+      });
+    } finally {
+      if (previous === undefined) delete process.env.PRISM_TOOLS_MCP_EMIT;
+      else process.env.PRISM_TOOLS_MCP_EMIT = previous;
+    }
+  })();
+
+  const agent = findContentOperation(output.files, join("agents", "consumer.md"));
+  const generatedName = renderPluginAllowlist(
+    "grok",
+    "owner-tools",
+    mcpToolNameForBinding("owner-tools", binding),
+  );
+  expect(agent?.content).toContain('- "read_file"');
+  expect(agent?.content).not.toContain(generatedName);
+  expect(output.regions).toEqual([]);
 });
 
 test("grok lowerer preserves frontmatter precedence and omission rules", async () => {
@@ -682,7 +877,7 @@ export default {
       hooks: [hook],
       registry,
       target: {
-        scope: "project",
+        scope: "global",
         root: outputRoot,
         sourcePluginName: "invalid-grok-hook-fixture",
         sourcePluginVersion: "0.1.0",

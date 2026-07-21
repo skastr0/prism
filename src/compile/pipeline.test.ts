@@ -7272,7 +7272,7 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
 });
 
-test("compilePluginForTarget lowers Grok plugin-bundle surfaces", async () => {
+test("compilePluginForTarget migrates Grok project output from a stale bundle to native discovery paths", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "grok-pipeline-demo");
   const projectRoot = join(root, "project");
@@ -7361,6 +7361,48 @@ export default {
 `,
   );
 
+  const grokRoot = join(projectRoot, ".grok");
+  const stalePluginRoot = join(
+    grokRoot,
+    "plugins",
+    "prism-generated-grok-pipeline-demo",
+  );
+  const staleBundleFiles = [
+    {
+      targetPath: join(stalePluginRoot, ".claude-plugin", "plugin.json"),
+      content: '{"name":"prism-generated-grok-pipeline-demo"}\n',
+    },
+    {
+      targetPath: join(stalePluginRoot, "agents", "worker.md"),
+      content: "---\nname: worker\nskills:\n  - testing\n---\n\n# Stale worker\n",
+    },
+    {
+      targetPath: join(stalePluginRoot, "skills", "testing", "SKILL.md"),
+      content: "---\nname: testing\ndescription: Stale testing\n---\n\n# Stale\n",
+    },
+    {
+      targetPath: join(stalePluginRoot, "hooks", "hooks.json"),
+      content: '{"hooks":{}}\n',
+    },
+  ];
+  for (const stale of staleBundleFiles) {
+    await writeText(stale.targetPath, stale.content);
+  }
+  await commitSnapshot({
+    prismHome: testPrismHome(),
+    manifest: {
+      version: 1,
+      harness: "grok",
+      root: grokRoot,
+      entries: staleBundleFiles.map((stale) => ({
+        targetPath: stale.targetPath,
+        contentHash: computeContentHash(stale.content),
+        mode: "owned" as const,
+        plugin: "grok-pipeline-demo",
+      })),
+    },
+  });
+
   const grok = await Effect.runPromise(
     compilePluginForTarget({
       prismHome: testPrismHome(),
@@ -7373,26 +7415,52 @@ export default {
   );
 
   expect(grok.outputRoot).toBe(join(projectRoot, ".grok/"));
-  const pluginRootPath = join(
-    projectRoot,
-    ".grok",
-    "plugins",
-    "prism-generated-grok-pipeline-demo",
-  );
-  const agent = await readFile(join(pluginRootPath, "agents", "worker.md"), "utf8");
+  const agentPath = join(grokRoot, "agents", "worker.md");
+  const skillPath = join(grokRoot, "skills", "testing", "SKILL.md");
+  const agent = await readFile(agentPath, "utf8");
   expect(agent).toContain('description: "Grok worker"');
   expect(agent).toContain('model: "grok-build"');
   expect(agent).toContain('- "read_file"');
   expect(agent).toContain('disallowedTools:\n  - "web_fetch"');
   // Grok must not emit frontmatter skills (full-body preload poison, 7ea1e27).
   expect(agent).not.toContain("\nskills:");
-  expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
+  expect(await pathExists(skillPath)).toBe(true);
+  for (const stale of staleBundleFiles) {
+    expect(grok.operations).toContainEqual(
+      expect.objectContaining({
+        kind: "prune",
+        targetPath: stale.targetPath,
+      }),
+    );
+    expect(await pathExists(stale.targetPath)).toBe(false);
+  }
+  expect(await directoryExists(stalePluginRoot)).toBe(false);
+  const grokSnapshot = await readSnapshot({
+    prismHome: testPrismHome(),
+    harness: "grok",
+    root: grokRoot,
+  });
+  expect(
+    grokSnapshot.manifest.entries.some((entry) =>
+      entry.targetPath.startsWith(`${stalePluginRoot}/`),
+    ),
+  ).toBe(false);
+  expect(
+    grokSnapshot.manifest.entries.some(
+      (entry) => entry.targetPath === agentPath,
+    ),
+  ).toBe(true);
+  expect(
+    grokSnapshot.manifest.entries.some(
+      (entry) => entry.targetPath === skillPath,
+    ),
+  ).toBe(true);
   // Shim registration lands in <grok-root>/config.toml (the only MCP source
-  // grok resolves for installed plugins), never in a bundle-level .mcp.json,
+  // grok resolves for installed plugins), never in an .mcp.json,
   // one server per MCP-owning plugin keyed by that plugin's own name.
-  expect(await pathExists(join(pluginRootPath, ".mcp.json"))).toBe(false);
+  expect(await pathExists(join(grokRoot, ".mcp.json"))).toBe(false);
   const grokOwnerServerKey = pluginServerKey("grok-pipeline-demo");
-  const grokConfig = await readFile(join(projectRoot, ".grok", "config.toml"), "utf8");
+  const grokConfig = await readFile(join(grokRoot, "config.toml"), "utf8");
   expect(grokConfig).toContain(`# --- prism:grok.mcp.${grokOwnerServerKey} begin ---`);
   expect(grokConfig).toContain(`["mcp_servers"."${grokOwnerServerKey}"]`);
   expect(grokConfig).toContain('command = "prism"');
@@ -7406,8 +7474,7 @@ export default {
     "utf8",
   );
   expect(mcpServer).toContain("grok_pipeline_demo_submit_work");
-  expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
-  expect(await pathExists(join(projectRoot, ".grok", "agents", "worker.md"))).toBe(false);
+  expect(await pathExists(join(grokRoot, "mcp"))).toBe(false);
 });
 
 test("compilePluginForTarget lowers Factory Droid plugin-bundle surfaces", async () => {

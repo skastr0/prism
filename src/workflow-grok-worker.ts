@@ -66,12 +66,11 @@ const pathExists = async (path: string): Promise<boolean> => {
 // repair resumes it with `grok -r <sessionId>`. (Tests redirect by setting HOME.)
 const grokHome = (): string => join(process.env.HOME ?? homedir(), ".grok");
 
-// Grok 0.2.91 rejects file-loaded agents whose frontmatter carries a `tools:`
-// allowlist when the session model is the grok-4.x family. Grok non-interactive
-// sessions also preload every frontmatter skill body into fixed context. Remove
-// only those top-level frontmatter keys; body text and unrelated YAML stay byte-
-// identical.
-const stripAgentFrontmatterKey = (source: string, key: "skills" | "tools"): string => {
+// Grok non-interactive sessions preload every frontmatter skill body into fixed
+// context. Remove only that top-level key; body text and unrelated YAML stay
+// byte-identical. Grok 0.2.102 supports `tools:` on Grok-4 profiles, so workflow
+// execution preserves the allowlist exactly as the lowerer emitted it.
+const stripAgentFrontmatterKey = (source: string, key: "skills"): string => {
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
   const lines = source.split(newline);
   if (lines[0] !== "---") return source;
@@ -87,27 +86,14 @@ const stripAgentFrontmatterKey = (source: string, key: "skills" | "tools"): stri
   return lines.join(newline);
 };
 
-export const stripAgentToolsFrontmatter = (source: string): string =>
-  stripAgentFrontmatterKey(source, "tools");
-
 export const stripAgentSkillsFrontmatter = (source: string): string =>
   stripAgentFrontmatterKey(source, "skills");
 
-export const sanitizeGrokWorkflowAgentSource = (
-  source: string,
-  options: { readonly stripTools: boolean },
-): string => {
-  let next = stripAgentSkillsFrontmatter(source);
-  if (options.stripTools) next = stripAgentToolsFrontmatter(next);
-  return next;
-};
-
-const grokModelRejectsToolsFrontmatter = (model: string | undefined): boolean =>
-  model !== undefined && model.startsWith("grok-4");
+export const sanitizeGrokWorkflowAgentSource = (source: string): string =>
+  stripAgentSkillsFrontmatter(source);
 
 const prepareGrokWorkflowRuntime = async (
   task: AnyWorkflowTask,
-  model: string | undefined,
   maxAgentBytes: number,
 ): Promise<GrokWorkflowRuntime> => {
   const home = grokHome();
@@ -122,8 +108,7 @@ const prepareGrokWorkflowRuntime = async (
   };
   if (!(await pathExists(sourceAgentPath))) return { agent: task.agent.name, env };
   const source = await readFile(sourceAgentPath, "utf8");
-  const stripTools = grokModelRejectsToolsFrontmatter(model);
-  const sanitized = sanitizeGrokWorkflowAgentSource(source, { stripTools });
+  const sanitized = sanitizeGrokWorkflowAgentSource(source);
   const agentSourceBytes = new TextEncoder().encode(sanitized).byteLength;
   if (agentSourceBytes > maxAgentBytes) {
     throw new WorkflowWorkerError(
@@ -202,10 +187,8 @@ export const buildGrokArgs = (input: {
   return [
     "--model",
     // Keep in sync with WORKFLOW_HARNESS_DETECTION_SPECS.grok.defaultModel
-    // (workflow-harness-detection.ts); the grok-4.x tools-frontmatter conflict
-    // (PQ-176 class) is handled by the tools-stripped temp agent copy above.
-    // This fallback only fires when buildGrokArgs is called directly without
-    // going through model resolution.
+    // (workflow-harness-detection.ts). This fallback only fires when
+    // buildGrokArgs is called directly without going through model resolution.
     input.model ?? "grok-4.5",
     "--agent",
     input.agent,
@@ -307,7 +290,7 @@ export const runGrokWorkflowTask = async (
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_MAX_AGENT_BYTES)
     ?? DEFAULT_GROK_MAX_AGENT_BYTES;
   const startedAt = Date.now();
-  const runtime = await prepareGrokWorkflowRuntime(task, options.model, maxAgentBytes);
+  const runtime = await prepareGrokWorkflowRuntime(task, maxAgentBytes);
   try {
   const args = buildGrokArgs({
     cwd: options.cwd,

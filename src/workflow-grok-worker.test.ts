@@ -9,7 +9,6 @@ import {
   runGrokWorkflowTask,
   sanitizeGrokWorkflowAgentSource,
   stripAgentSkillsFrontmatter,
-  stripAgentToolsFrontmatter,
 } from "./workflow-grok-worker.js";
 import { runWorkflow } from "./workflow-runner.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
@@ -42,7 +41,7 @@ const fakeGrokJsonRun = (callsFile: string, sessionId: string): string => [
   "",
 ].join("\n");
 
-describe("grok agent frontmatter sanitize (tools + skills)", () => {
+describe("grok agent frontmatter sanitize (skills only)", () => {
   const generated = [
     "---",
     'name: "builder"',
@@ -60,44 +59,24 @@ describe("grok agent frontmatter sanitize (tools + skills)", () => {
     "",
   ].join("\n");
 
-  test("removes the tools block and preserves every other frontmatter key and the body", () => {
-    const stripped = stripAgentToolsFrontmatter(generated);
-    expect(stripped).not.toContain("tools:");
-    expect(stripped).not.toContain("agent-foundations__git_commit");
-    expect(stripped).toContain('name: "builder"');
-    expect(stripped).toContain('model: "grok-composer-2.5-fast"');
-    expect(stripped).toContain("skills:");
-    expect(stripped).toContain('  - "atomic-commits"');
-    expect(stripped).toContain("Body stays.");
-  });
-
-  test("leaves agents without a tools block byte-identical", () => {
-    const noTools = generated.replace(/^tools:\n(?:^ {2}- .*\n)+/mu, "");
-    expect(stripAgentToolsFrontmatter(noTools)).toBe(noTools);
-  });
-
-  test("removes the skills block (Grok preloads full skill bodies for frontmatter skills)", () => {
+  test("removes skills while preserving the Grok-4 tools allowlist and body", () => {
     const stripped = stripAgentSkillsFrontmatter(generated);
     expect(stripped).not.toContain("skills:");
     expect(stripped).not.toContain("atomic-commits");
     expect(stripped).not.toContain("ad-creative");
     expect(stripped).toContain("tools:");
+    expect(stripped).toContain("agent-foundations__git_commit");
+    expect(stripped).toContain("tower__get_board");
     expect(stripped).toContain('name: "builder"');
     expect(stripped).toContain("Body stays.");
   });
 
-  test("sanitize strips skills always and tools when requested", () => {
-    const both = sanitizeGrokWorkflowAgentSource(generated, { stripTools: true });
-    expect(both).not.toContain("tools:");
-    expect(both).not.toContain("skills:");
-    expect(both).toContain('name: "builder"');
-    expect(both).toContain("Body stays.");
-
-    const skillsOnly = sanitizeGrokWorkflowAgentSource(generated, { stripTools: false });
-    expect(skillsOnly).toContain("tools:");
-    expect(skillsOnly).not.toContain("skills:");
+  test("sanitize leaves an agent without skills byte-identical", () => {
+    const noSkills = generated.replace(/^skills:\n(?:^ {2}- .*\n)+/mu, "");
+    expect(sanitizeGrokWorkflowAgentSource(noSkills)).toBe(noSkills);
   });
-  test("removes inline keys, preserves CRLF, and never strips body text", () => {
+
+  test("removes inline skills, preserves CRLF, tools, and body text", () => {
     const source = [
       "---",
       "name: builder",
@@ -108,11 +87,13 @@ describe("grok agent frontmatter sanitize (tools + skills)", () => {
       "skills:",
       "  - body-example",
     ].join("\r\n");
-    const stripped = sanitizeGrokWorkflowAgentSource(source, { stripTools: true });
-    expect(stripped).toContain("name: builder\r\n---");
+    const stripped = sanitizeGrokWorkflowAgentSource(source);
+    expect(
+      stripped.startsWith("---\r\nname: builder\r\ntools: []\r\n---\r\n"),
+    ).toBe(true);
     expect(stripped).toContain("\r\nskills:\r\n  - body-example");
     expect(stripped).not.toContain("skills: [one, two]");
-    expect(stripped).not.toContain("tools: []");
+    expect(stripped).toContain("tools: []");
   });
 
 });
@@ -151,6 +132,7 @@ describe("grok worker structured session id", () => {
       const result = await runGrokWorkflowTask(task, {
         cwd: root,
         bin: fakeGrok,
+        model: "grok-4.5",
         resolvedPermission: "legacy",
       });
 
@@ -164,7 +146,7 @@ describe("grok worker structured session id", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  test("sanitizes a generated agent in a unique temporary file and removes it after execution", async () => {
+  test("strips skills, preserves tools, and removes the temporary agent after execution", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-grok-sanitize-"));
     const oldHome = process.env.HOME;
     try {
@@ -177,6 +159,9 @@ describe("grok worker structured session id", () => {
       await writeFile(sourceAgent, [
         "---",
         "name: builder",
+        "model: grok-4.5",
+        "tools:",
+        "  - read_file",
         "skills:",
         "  - oversized-preloaded-skill",
         "---",
@@ -197,12 +182,15 @@ describe("grok worker structured session id", () => {
       const result = await runGrokWorkflowTask(task, {
         cwd: root,
         bin: fakeGrok,
+        model: "grok-4.5",
         resolvedPermission: "legacy",
       });
       const call = JSON.parse(await Bun.file(callsFile).text()) as { agentPath: string; source: string };
       expect(result.output).toEqual({ summary: "ok" });
       expect(call.agentPath).not.toBe(sourceAgent);
       expect(call.source).not.toContain("skills:");
+      expect(call.source).toContain("tools:\n  - read_file");
+      expect(call.source).toContain("model: grok-4.5");
       expect(call.source).toContain("Body stays.");
       expect(await Bun.file(call.agentPath).exists()).toBe(false);
       expect(result.metadata).toMatchObject({

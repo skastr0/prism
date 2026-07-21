@@ -26,11 +26,10 @@ import {
   allReferencedBindingsByOwner,
   collectBindingNameMap,
   groupAgentToolBindingsByOwner,
-  mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
-import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
+import type { DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginWritePusher,
@@ -89,6 +88,9 @@ const generatedPluginRoot = (target: GrokLowerTarget): string =>
 
 const generatedPath = (target: GrokLowerTarget, relativePath: string): string =>
   join(generatedPluginRoot(target), ...relativePath.split("/"));
+
+const directPath = (target: GrokLowerTarget, relativePath: string): string =>
+  join(target.root, ...relativePath.split("/"));
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
@@ -150,14 +152,17 @@ const composeGrokTools = (
   target: GrokLowerTarget,
   override: Record<string, unknown> | undefined,
   namer: GrokToolNamer,
+  includeMcpTools: boolean,
 ): string[] => {
   const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(namer.name(ownerPlugin, binding));
+  if (includeMcpTools) {
+    for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+      target.sourcePluginName,
+      agent,
+    )) {
+      for (const binding of bindings) {
+        generatedTools.push(namer.name(ownerPlugin, binding));
+      }
     }
   }
   return uniqueSorted([
@@ -197,6 +202,7 @@ const composeAgentFrontmatter = (
   agent: ComposedAgent,
   target: GrokLowerTarget,
   namer: GrokToolNamer,
+  includeMcpTools: boolean,
 ): Record<string, unknown> => {
   const override = grokOverrideForAgent(agent);
   const model = agent.model ?? {};
@@ -212,7 +218,7 @@ const composeAgentFrontmatter = (
     reasoning_effort: stringValue(override?.reasoning_effort),
     temperature: firstDefined(numberValue(override?.temperature), numberValue(model.temperature)),
     top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
-    tools: composeGrokTools(agent, target, override, namer),
+    tools: composeGrokTools(agent, target, override, namer, includeMcpTools),
     disallowedTools: composeGrokDisallowedTools(override),
     // Never emit skills into Grok agent frontmatter. Grok non-interactive sessions
     // preload FULL skill bodies for every frontmatter skill entry (2026-07-11:
@@ -226,8 +232,9 @@ const renderAgentMarkdown = (
   agent: ComposedAgent,
   target: GrokLowerTarget,
   namer: GrokToolNamer,
+  includeMcpTools: boolean,
 ): string => {
-  return `${serializeFrontmatter(composeAgentFrontmatter(agent, target, namer))}\n\n${agent.body}\n`;
+  return `${serializeFrontmatter(composeAgentFrontmatter(agent, target, namer, includeMcpTools))}\n\n${agent.body}\n`;
 };
 
 const grokNativeHookEvent = (event: Hook["event"]): string => {
@@ -365,6 +372,7 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 };
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
+const pushDirectWrite = createGeneratedPluginWritePusher(directPath);
 
 const quote = (value: string): string => JSON.stringify(value);
 
@@ -423,8 +431,12 @@ const renderGrokPerPluginShimServerToml = (owner: string): string => {
  * tool allowlist in the server table (agent frontmatter `tools:` gates
  * exposure), so only owner plugins are tracked here.
  */
-const planMcpServerRegion = (input: LowerInput, regions: DesiredRegion[]): void => {
-  if (!toolsMcpHarnessEmitEnabled()) return;
+const planMcpServerRegion = (
+  input: LowerInput,
+  regions: DesiredRegion[],
+  enabled: boolean,
+): void => {
+  if (!enabled) return;
   const bindingsByOwner = allReferencedBindingsByOwner(
     input.target.sourcePluginName,
     input.tools,
@@ -442,12 +454,49 @@ const planMcpServerRegion = (input: LowerInput, regions: DesiredRegion[]): void 
   }
 };
 
+const assertProjectHooksSupported = (input: LowerInput): void => {
+  const hooks = input.hooks ?? [];
+  if (input.target.scope !== "project" || hooks.length === 0) return;
+
+  const sources = hooks
+    .map((hook) => `${hook.name} (${hook.sourcePath})`)
+    .sort((left, right) => left.localeCompare(right));
+  throw new Error(
+    `Grok project-scope hooks are unsupported until Prism can prove exactly-once hook loading. ` +
+      `Compile Grok with '--scope global', or remove 'grok' from plugin.json -> targets.hooks. ` +
+      `Project hooks: ${sources.join(", ")}`,
+  );
+};
+
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const regions: DesiredRegion[] = [];
   const namer = createGrokToolNamer();
+  const emitMcp = toolsMcpHarnessEmitEnabled();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
+  const planAgentWrites = (write: typeof pushWrite): Promise<void> =>
+    planGeneratedPluginAgentWrites({
+      input,
+      state,
+      pushWrite: write,
+      renderAgentMarkdown: (agent) =>
+        renderAgentMarkdown(agent, input.target, namer, emitMcp),
+    });
+
+  assertProjectHooksSupported(input);
+
+  if (input.target.scope === "project") {
+    await planAgentWrites(pushDirectWrite);
+    await planGeneratedPluginSkillWrites({ input, state, pushWrite: pushDirectWrite });
+    await planStandardGeneratedPluginOrbitSkillWrites({
+      input,
+      state,
+      pushWrite: pushDirectWrite,
+    });
+    planMcpServerRegion(input, regions, emitMcp);
+    return { files: state.files, regions };
+  }
 
   // An artifact-less compile must not plant an empty generated plugin
   // bundle — only the MCP server region (if any owner is referenced)
@@ -467,12 +516,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       pluginId: generatedPluginId(input.target),
       json,
     });
-    await planGeneratedPluginAgentWrites({
-      input,
-      state,
-      pushWrite,
-      renderAgentMarkdown: (agent) => renderAgentMarkdown(agent, input.target, namer),
-    });
+    await planAgentWrites(pushWrite);
     await planGeneratedPluginSkillWrites({ input, state, pushWrite });
     await planStandardGeneratedPluginOrbitSkillWrites({
       input,
@@ -480,8 +524,8 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       pushWrite,
     });
   }
-  planMcpServerRegion(input, regions);
-  if (hasBundleArtifacts) {
+  planMcpServerRegion(input, regions, emitMcp);
+  if ((input.hooks?.length ?? 0) > 0) {
     await planGeneratedPluginHookWrites({
       input,
       state,

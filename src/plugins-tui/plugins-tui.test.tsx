@@ -7,6 +7,7 @@ import { withPrismSandbox } from "../testing/prism-sandbox.js";
 import { readManifest } from "../manifest.js";
 import { planAllForPlugin, pluginTargetedHarnesses } from "../plugin-inventory.js";
 import { PluginsApp } from "./app.js";
+import { waitForTestFrame } from "./test-utils.js";
 
 const writeText = async (path: string, content: string): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -69,11 +70,8 @@ test("plugins TUI lists the plugins discovered in a folder", async () => {
       { width: 120, height: 40 },
     );
     try {
-      // Flush the mount effect's async loadPluginRows (readdir -> setState) inside act.
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-      });
-      const frame = await setup.waitForFrame(
+      const frame = await waitForTestFrame(
+        setup,
         (candidate) => candidate.includes("Plugins") && candidate.includes("alpha-plugin"),
       );
       expect(frame).toContain("preview");

@@ -820,12 +820,19 @@ export function PluginsApp({
   }, [selectedPath]);
 
   useEffect(() => {
+    let live = true;
     loadPluginRows({ dir })
       .then((loaded) => {
+        if (!live) return;
         setRows(loaded);
         setError(null);
       })
-      .catch(fail);
+      .catch((cause: unknown) => {
+        if (live) fail(cause);
+      });
+    return () => {
+      live = false;
+    };
   }, [dir]);
 
   useEffect(() => {

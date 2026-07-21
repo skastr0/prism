@@ -1162,6 +1162,21 @@ describe("workflow store", () => {
         cause: { kind: "workflow-cost-exceeded", limitUsd: 1.25, observedUsd: 1.5 } as const,
         message: "workflow cost 1.5 USD exceeds maxCostUsd 1.25 USD",
       },
+      {
+        runId: "workflow-cost-unavailable-run",
+        cause: { kind: "workflow-cost-unavailable", limitUsd: 1.25 } as const,
+        message: "workflow maxCostUsd 1.25 USD cannot be enforced because a live task attempt did not report costUsd; use a worker/provider that reports cost or omit --max-cost-usd",
+      },
+      {
+        runId: "workflow-prompt-limit-run",
+        cause: {
+          kind: "workflow-prompt-limit-exceeded",
+          taskId: "task-4",
+          limitBytes: 1024,
+          observedBytes: 2048,
+        } as const,
+        message: "workflow task task-4 prompt context is 2048 bytes, exceeding maxPromptBytes 1024; shorten the task/repair prompt or raise --max-prompt-bytes deliberately",
+      },
     ];
 
     for (const [index, entry] of cases.entries()) {

@@ -24,6 +24,7 @@ export interface WorkflowDetachedRunOptions {
   readonly taskNoProgressMs?: number;
   readonly maxTasks?: number;
   readonly maxCostUsd?: number;
+  readonly maxPromptBytes?: number;
 }
 
 export interface WorkflowUpdateResult {
@@ -69,6 +70,7 @@ export const workflowRunOptionsSnapshot = (
   ...(options.taskNoProgressMs !== undefined ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
   ...(options.maxTasks !== undefined ? { maxTasks: options.maxTasks } : {}),
   ...(options.maxCostUsd !== undefined ? { maxCostUsd: options.maxCostUsd } : {}),
+  ...(options.maxPromptBytes !== undefined ? { maxPromptBytes: options.maxPromptBytes } : {}),
 });
 
 const workflowDetachedRunOptionsFromSnapshot = (
@@ -88,6 +90,7 @@ const workflowDetachedRunOptionsFromSnapshot = (
   ...(isFinitePositiveInteger(options?.taskNoProgressMs) ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
   ...(isFinitePositiveInteger(options?.maxTasks) ? { maxTasks: options.maxTasks } : {}),
   ...(isFiniteNonNegativeNumber(options?.maxCostUsd) ? { maxCostUsd: options.maxCostUsd } : {}),
+  ...(isFinitePositiveInteger(options?.maxPromptBytes) ? { maxPromptBytes: options.maxPromptBytes } : {}),
 });
 
 const mergeWorkflowRunOptions = (
@@ -107,6 +110,7 @@ const mergeWorkflowRunOptions = (
     ...(next.taskNoProgressMs !== undefined ? { taskNoProgressMs: next.taskNoProgressMs } : {}),
     ...(next.maxTasks !== undefined ? { maxTasks: next.maxTasks } : {}),
     ...(next.maxCostUsd !== undefined ? { maxCostUsd: next.maxCostUsd } : {}),
+    ...(next.maxPromptBytes !== undefined ? { maxPromptBytes: next.maxPromptBytes } : {}),
   };
 };
 
@@ -219,6 +223,7 @@ export const workflowDetachedRunArgs = (
   ...(options.taskNoProgressMs !== undefined ? ["--task-no-progress-ms", String(options.taskNoProgressMs)] : []),
   ...(options.maxTasks !== undefined ? ["--max-tasks", String(options.maxTasks)] : []),
   ...(options.maxCostUsd !== undefined ? ["--max-cost-usd", String(options.maxCostUsd)] : []),
+  ...(options.maxPromptBytes !== undefined ? ["--max-prompt-bytes", String(options.maxPromptBytes)] : []),
 ];
 
 export const startDetachedWorkflowRun = async (

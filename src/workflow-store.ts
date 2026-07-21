@@ -246,6 +246,18 @@ export type WorkflowRunCostExceededCause = {
   readonly observedUsd: number;
 };
 
+export type WorkflowRunCostUnavailableCause = {
+  readonly kind: "workflow-cost-unavailable";
+  readonly limitUsd: number;
+};
+
+export type WorkflowRunPromptLimitCause = {
+  readonly kind: "workflow-prompt-limit-exceeded";
+  readonly taskId: string;
+  readonly limitBytes: number;
+  readonly observedBytes: number;
+};
+
 
 export type WorkflowRunTerminalCause =
   | WorkflowRunCompletedCause
@@ -255,7 +267,9 @@ export type WorkflowRunTerminalCause =
   | WorkflowRunCrashedCause
   | WorkflowRunTimeoutCause
   | WorkflowRunFanoutExceededCause
-  | WorkflowRunCostExceededCause;
+  | WorkflowRunCostExceededCause
+  | WorkflowRunCostUnavailableCause
+  | WorkflowRunPromptLimitCause;
 
 export interface WorkflowRunRecord {
   readonly runId: string;
@@ -643,6 +657,8 @@ const terminalCauseForStatus = (
       || resolved.kind === "workflow-timeout"
       || resolved.kind === "workflow-fanout-exceeded"
       || resolved.kind === "workflow-cost-exceeded"
+      || resolved.kind === "workflow-cost-unavailable"
+      || resolved.kind === "workflow-prompt-limit-exceeded"
     ))
     || (status === "escalated" && resolved.kind === "task-escalated")
     || (status === "stopped" && resolved.kind === "stopped")
@@ -666,6 +682,10 @@ const taskAttemptFailureMessageFromRunCause = (cause: WorkflowRunTerminalCause):
       return `workflow live task dispatch ${cause.observed} exceeds maxTasks ${cause.limit}`;
     case "workflow-cost-exceeded":
       return `workflow cost ${cause.observedUsd} USD exceeds maxCostUsd ${cause.limitUsd} USD`;
+    case "workflow-cost-unavailable":
+      return `workflow maxCostUsd ${cause.limitUsd} USD cannot be enforced because a live task attempt did not report costUsd; use a worker/provider that reports cost or omit --max-cost-usd`;
+    case "workflow-prompt-limit-exceeded":
+      return `workflow task ${cause.taskId} prompt context is ${cause.observedBytes} bytes, exceeding maxPromptBytes ${cause.limitBytes}; shorten the task/repair prompt or raise --max-prompt-bytes deliberately`;
     default:
       return cause.kind;
   }

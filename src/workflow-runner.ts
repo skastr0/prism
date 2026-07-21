@@ -17,7 +17,9 @@ import {
 } from "./workflows.js";
 import {
   WorkflowCostExceededError,
+  WorkflowCostUnavailableError,
   WorkflowFanoutExceededError,
+  WorkflowPromptLimitError,
   WorkflowRunStoppedError,
   WorkflowRunTimeoutError,
   WorkflowTaskDecodeError,
@@ -38,7 +40,7 @@ import type {
   WorkflowTaskAttemptFailureKind,
   WorkflowTaskAttemptStatus,
 } from "./workflow-store.js";
-import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError } from "./workflow-worker-contract.js";
+import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
 import { parsePositiveInteger } from "./workflow-worker-process.js";
 import {
   normalizeWorkflowSessionMetadata,
@@ -111,6 +113,8 @@ export {
   WorkflowTaskNoProgressError,
   WorkflowFanoutExceededError,
   WorkflowCostExceededError,
+  WorkflowCostUnavailableError,
+  WorkflowPromptLimitError,
   type WorkflowRuntimeError,
 } from "./workflow-errors.js";
 
@@ -180,6 +184,8 @@ export type WorkflowTaskExecutor = (
 
 export const DEFAULT_WORKFLOW_TASK_CONCURRENCY = 8;
 
+export const DEFAULT_WORKFLOW_MAX_PROMPT_BYTES = 256 * 1024;
+
 const WORKFLOW_TASK_PROGRESS_EVENT_MIN_INTERVAL_MS = 5_000;
 
 const assertWorkflowRepairBudget = (
@@ -215,10 +221,12 @@ const assertWorkflowRunBudgets = (options: {
   readonly taskNoProgressMs?: number;
   readonly maxTasks?: number;
   readonly maxCostUsd?: number;
+  readonly maxPromptBytes?: number;
 }): void => {
   assertFinitePositiveInteger("maxWallMs", options.maxWallMs);
   assertFinitePositiveInteger("taskNoProgressMs", options.taskNoProgressMs);
   assertFinitePositiveInteger("maxTasks", options.maxTasks);
+  assertFinitePositiveInteger("maxPromptBytes", options.maxPromptBytes);
   if (
     options.maxCostUsd !== undefined
     && (!Number.isFinite(options.maxCostUsd) || options.maxCostUsd < 0)
@@ -249,7 +257,11 @@ interface RunCancellationBarrier {
 
 interface WorkflowRunBudget {
   readonly admitLiveTask: () => void;
-  readonly observeLiveAttempt: (metadata: Record<string, unknown> | undefined) => void;
+  readonly assertPrompt: (task: AnyWorkflowTask) => void;
+  readonly observeLiveAttempt: (
+    metadata: Record<string, unknown> | undefined,
+    requireReportedCost: boolean,
+  ) => void;
   readonly dispose: () => void;
 }
 
@@ -945,21 +957,25 @@ const createRunCancellationBarrier = (
 
 const isWorkflowRunBudgetError = (
   error: unknown,
-): error is WorkflowRunTimeoutError | WorkflowFanoutExceededError | WorkflowCostExceededError =>
+): error is WorkflowRunTimeoutError | WorkflowFanoutExceededError | WorkflowCostExceededError | WorkflowCostUnavailableError | WorkflowPromptLimitError =>
   error instanceof WorkflowRunTimeoutError
   || error instanceof WorkflowFanoutExceededError
-  || error instanceof WorkflowCostExceededError;
+  || error instanceof WorkflowCostExceededError
+  || error instanceof WorkflowCostUnavailableError
+  || error instanceof WorkflowPromptLimitError;
 
 const createWorkflowRunBudget = (
   options: {
     readonly maxWallMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
+    readonly maxPromptBytes?: number;
   },
   cancellation: RunCancellationBarrier,
 ): WorkflowRunBudget => {
   let liveTasks = 0;
   let observedCostUsd = 0;
+  const maxPromptBytes = options.maxPromptBytes ?? DEFAULT_WORKFLOW_MAX_PROMPT_BYTES;
   const wallTimer = options.maxWallMs === undefined ? undefined : setTimeout(() => {
     const error = new WorkflowRunTimeoutError(options.maxWallMs!);
     cancellation.abort(error, "workflow-timeout");
@@ -975,8 +991,29 @@ const createWorkflowRunBudget = (
       }
       liveTasks = observed;
     },
-    observeLiveAttempt: (metadata) => {
-      observedCostUsd += workflowUsageFromMetadata(metadata).costUsd ?? 0;
+    assertPrompt: (task) => {
+      const observedBytes = Buffer.byteLength(
+        `${task.prompt}${workflowWorkerJsonInstruction(task)}`,
+        "utf8",
+      );
+      if (observedBytes <= maxPromptBytes || cancellation.signal.aborted) return;
+      const error = new WorkflowPromptLimitError(task.id, maxPromptBytes, observedBytes);
+      cancellation.abort(error, "workflow-prompt-limit-exceeded");
+      throw error;
+    },
+    observeLiveAttempt: (metadata, requireReportedCost) => {
+      const costUsd = workflowUsageFromMetadata(metadata).costUsd;
+      if (
+        options.maxCostUsd !== undefined
+        && requireReportedCost
+        && costUsd === undefined
+        && !cancellation.signal.aborted
+      ) {
+        const error = new WorkflowCostUnavailableError(options.maxCostUsd);
+        cancellation.abort(error, "workflow-cost-unavailable");
+        throw error;
+      }
+      observedCostUsd += costUsd ?? 0;
       if (
         options.maxCostUsd !== undefined
         && observedCostUsd > options.maxCostUsd
@@ -1273,6 +1310,7 @@ const executeWorkflowTask = async (input: {
       if (!cacheHit) metadata = undefined;
       input.cancellation.throwIfAborted();
       assertRunStillRunning(store, runId);
+      input.budget.assertPrompt(attemptTask);
       const executorSpan = cacheHit ? undefined : tracing.startSpan("task.executor", {
         parentSpanId: taskSpan.spanId,
         taskId: task.id,
@@ -1307,7 +1345,7 @@ const executeWorkflowTask = async (input: {
               ...(pendingRepair !== undefined ? { repair: pendingRepair } : {}),
             }));
             attemptUsageObserved = true;
-            input.budget.observeLiveAttempt(metadata);
+            input.budget.observeLiveAttempt(metadata, !mockOutput);
           }
         } finally {
           stopTracking();
@@ -1340,7 +1378,7 @@ const executeWorkflowTask = async (input: {
         if (!cacheHit && !attemptUsageObserved) {
           attemptUsageObserved = true;
           try {
-            input.budget.observeLiveAttempt(metadata);
+            input.budget.observeLiveAttempt(metadata, !mockOutput);
           } catch (budgetError) {
             error = budgetError;
           }
@@ -1684,7 +1722,7 @@ const taskTerminalCause = (
 });
 
 const workflowRunBudgetTerminalCause = (
-  error: WorkflowRunTimeoutError | WorkflowFanoutExceededError | WorkflowCostExceededError,
+  error: WorkflowRunTimeoutError | WorkflowFanoutExceededError | WorkflowCostExceededError | WorkflowCostUnavailableError | WorkflowPromptLimitError,
 ): WorkflowRunTerminalCause => {
   if (error instanceof WorkflowRunTimeoutError) {
     return { kind: "workflow-timeout", limitMs: error.limitMs };
@@ -1694,6 +1732,20 @@ const workflowRunBudgetTerminalCause = (
       kind: "workflow-fanout-exceeded",
       limit: error.limit,
       observed: error.observed,
+    };
+  }
+  if (error instanceof WorkflowCostUnavailableError) {
+    return {
+      kind: "workflow-cost-unavailable",
+      limitUsd: error.limitUsd,
+    };
+  }
+  if (error instanceof WorkflowPromptLimitError) {
+    return {
+      kind: "workflow-prompt-limit-exceeded",
+      taskId: error.taskId,
+      limitBytes: error.limitBytes,
+      observedBytes: error.observedBytes,
     };
   }
   return {
@@ -1913,6 +1965,7 @@ export const runWorkflow = async (
     readonly taskNoProgressMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
+    readonly maxPromptBytes?: number;
     readonly runId?: string;
     readonly runtimeOptions?: WorkflowRuntimeOptions;
     readonly abortSignal?: AbortSignal;
@@ -1939,6 +1992,7 @@ export const runWorkflow = async (
       workflow: workflow.name,
       "workflow.mode": "run" in workflow ? "dynamic" : "static",
       "workflow.max_concurrent_tasks": maxConcurrentTasks,
+      "workflow.max_prompt_bytes": options.maxPromptBytes ?? DEFAULT_WORKFLOW_MAX_PROMPT_BYTES,
     },
   });
   const rootSpanId = tracing.enabled ? rootSpan.spanId : undefined;

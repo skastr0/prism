@@ -118,6 +118,9 @@ test("workflow run, update, and resume expose budgets but no cache bypass", asyn
     expect(result.stdout).toContain("--task-no-progress-ms");
     expect(result.stdout).toContain("--max-tasks");
     expect(result.stdout).toContain("--max-cost-usd");
+    expect(result.stdout).toContain("--max-prompt-bytes");
+    expect(result.stdout).toContain("Maximum UTF-8 bytes in each prepared task");
+    expect(result.stdout).toContain("prompt context");
     expect(result.stdout).not.toContain("--cache");
     expect(result.stdout).not.toContain("--no-cache");
   }
@@ -128,6 +131,7 @@ test("workflow budget flags reject non-positive integer limits and non-finite or
     ["--max-wall-ms", "0", "must be a positive integer"],
     ["--task-no-progress-ms", "1.5", "must be a positive integer"],
     ["--max-tasks", "Infinity", "must be a positive integer"],
+    ["--max-prompt-bytes", "0", "must be a positive integer"],
     ["--max-cost-usd", "-0.01", "must be a finite non-negative number"],
     ["--max-cost-usd", "Infinity", "must be a finite non-negative number"],
     ["--max-cost-usd", "", "must be a finite non-negative number"],

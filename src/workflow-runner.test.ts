@@ -8,15 +8,18 @@ import { WorkflowStore } from "./workflow-store.js";
 import { workflowTaskIdentity } from "./workflow-identity.js";
 import {
   runWorkflow,
+  DEFAULT_WORKFLOW_MAX_PROMPT_BYTES,
   WorkflowCostExceededError,
+  WorkflowCostUnavailableError,
   WorkflowFanoutExceededError,
   WorkflowRunStoppedError,
   WorkflowRunTimeoutError,
+  WorkflowPromptLimitError,
   WorkflowTaskDecodeError,
   WorkflowTaskEscalatedError,
   WorkflowTaskNoProgressError,
 } from "./workflow-runner.js";
-import { parseWorkflowWorkerJsonOutput, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
+import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
 import {
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
@@ -944,6 +947,8 @@ console.log(JSON.stringify(result));
       { maxWallMs: 1.5 },
       { taskNoProgressMs: Number.POSITIVE_INFINITY },
       { maxTasks: -1 },
+      { maxPromptBytes: 0 },
+      { maxPromptBytes: 1.5 },
       { maxCostUsd: -0.01 },
       { maxCostUsd: Number.NaN },
     ] as const;
@@ -1185,6 +1190,85 @@ console.log(JSON.stringify(result));
         terminalCause: { kind: "workflow-cost-exceeded", limitUsd: 1, observedUsd: 1.2 },
         usage: { agentRuns: 2, reused: 0, costUsd: 1.2 },
       });
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when maxCostUsd is set but a live attempt does not report cost", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-cost-unavailable-"));
+    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+    try {
+      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
+      const workflow = defineWorkflow({ name: "cost-unavailable", tasks: [task] as const });
+      const runId = store.createRun(workflow.name);
+      let calls = 0;
+
+      await expect(runWorkflow(workflow, {
+        runId,
+        store,
+        maxCostUsd: 1,
+        executeTask: async () => {
+          calls += 1;
+          return {
+            output: { summary: "built" },
+            metadata: { usage: { inputTokens: 12, outputTokens: 4 } },
+          };
+        },
+      })).rejects.toEqual(new WorkflowCostUnavailableError(1));
+
+      expect(calls).toBe(1);
+      expect(store.getRun(runId)).toMatchObject({
+        status: "failed",
+        terminalCause: { kind: "workflow-cost-unavailable", limitUsd: 1 },
+      });
+    } finally {
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an oversized prepared prompt context before invoking an executor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-prompt-budget-"));
+    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+    try {
+      const task = defineTask({
+        id: "oversized",
+        agent: builder,
+        prompt: "x".repeat(DEFAULT_WORKFLOW_MAX_PROMPT_BYTES),
+        output: PatchReport,
+      });
+      const workflow = defineWorkflow({ name: "prompt-budget", tasks: [task] as const });
+      const runId = store.createRun(workflow.name);
+      const observedBytes = Buffer.byteLength(
+        `${task.prompt}${workflowWorkerJsonInstruction(task)}`,
+        "utf8",
+      );
+      let calls = 0;
+
+      await expect(runWorkflow(workflow, {
+        runId,
+        store,
+        executeTask: async () => {
+          calls += 1;
+          return { summary: "unexpected" };
+        },
+      })).rejects.toEqual(
+        new WorkflowPromptLimitError(task.id, DEFAULT_WORKFLOW_MAX_PROMPT_BYTES, observedBytes),
+      );
+
+      expect(calls).toBe(0);
+      expect(store.getRun(runId)).toMatchObject({
+        status: "failed",
+        terminalCause: {
+          kind: "workflow-prompt-limit-exceeded",
+          taskId: task.id,
+          limitBytes: DEFAULT_WORKFLOW_MAX_PROMPT_BYTES,
+          observedBytes,
+        },
+      });
+      expect(store.listRunTaskAttempts(runId)).toEqual([]);
     } finally {
       store.close();
       await rm(root, { recursive: true, force: true });

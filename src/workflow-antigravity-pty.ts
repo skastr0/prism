@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { findWorkflowExecutable } from "./workflow-runtime.js";
-import type { WorkflowWorkerProcessOptions, WorkflowWorkerProcessResult } from "./workflow-worker-process.js";
+import {
+  WorkflowWorkerOutputCapture,
+  resolveWorkflowWorkerOutputLimit,
+  type WorkflowWorkerProcessOptions,
+  type WorkflowWorkerProcessResult,
+} from "./workflow-worker-process.js";
 
 /**
  * Embedded Python PTY wrapper for spawning the Antigravity CLI (`agy`) with a
@@ -195,6 +200,7 @@ const materializePtyWrapper = async (): Promise<string> => {
 export const runAntigravityPtyProcess = async (
   options: AntigravityPtyProcessOptions,
 ): Promise<WorkflowWorkerProcessResult> => {
+  const maxOutputBytes = resolveWorkflowWorkerOutputLimit(options.maxOutputBytes);
   const python3 = resolvePython3();
   if (python3 === undefined) {
     throw new Error("python3 is required for the Antigravity PTY wrapper but was not found");
@@ -217,8 +223,6 @@ export const runAntigravityPtyProcess = async (
   let timedOut = false;
   let aborted = false;
   let killed = false;
-  let stdout = "";
-  let stderr = "";
 
   const killGroup = async (): Promise<void> => {
     if (killed || child.pid === undefined) return;
@@ -231,12 +235,20 @@ export const runAntigravityPtyProcess = async (
   };
 
   const recordKillGroupFailure = (error: unknown): void => {
-    stderr += `\nfailed to terminate Antigravity PTY process group: ${error instanceof Error ? error.message : String(error)}`;
+    outputCapture.append(
+      "stderr",
+      `\nfailed to terminate Antigravity PTY process group: ${error instanceof Error ? error.message : String(error)}`,
+    );
   };
 
   const requestKillGroup = (): void => {
     killGroup().catch(recordKillGroupFailure);
   };
+
+  const outputCapture = new WorkflowWorkerOutputCapture({
+    maxBytes: maxOutputBytes,
+    onLimit: requestKillGroup,
+  });
 
   const onAbort = (): void => {
     aborted = true;
@@ -259,28 +271,30 @@ export const runAntigravityPtyProcess = async (
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
-    stdout += chunk;
+    outputCapture.append("stdout", String(chunk));
     options.onOutputActivity?.("stdout");
   });
   child.stderr.on("data", (chunk) => {
-    stderr += chunk;
+    outputCapture.append("stderr", String(chunk));
     options.onOutputActivity?.("stderr");
   });
 
   try {
     const exitCode = await new Promise<number | null>((resolve) => {
       child.on("error", (error) => {
-        stderr += String(error);
+        outputCapture.append("stderr", String(error));
         resolve(null);
       });
       child.on("close", (code) => {
         resolve(code);
       });
     });
+    const outputLimitError = outputCapture.limitError();
+    if (outputLimitError !== undefined) throw outputLimitError;
     return {
       exitCode,
-      stdout,
-      stderr,
+      stdout: outputCapture.output("stdout"),
+      stderr: outputCapture.output("stderr"),
       durationMs: Date.now() - started,
       timedOut,
       aborted,

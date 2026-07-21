@@ -35,6 +35,28 @@ export class WorkflowCostExceededError extends Error {
   }
 }
 
+export class WorkflowCostUnavailableError extends Error {
+  override readonly name = "WorkflowCostUnavailableError";
+  constructor(readonly limitUsd: number) {
+    super(
+      `workflow maxCostUsd ${limitUsd} USD cannot be enforced because a live task attempt did not report costUsd; use a worker/provider that reports cost or omit --max-cost-usd`,
+    );
+  }
+}
+
+export class WorkflowPromptLimitError extends Error {
+  override readonly name = "WorkflowPromptLimitError";
+  constructor(
+    readonly taskId: string,
+    readonly limitBytes: number,
+    readonly observedBytes: number,
+  ) {
+    super(
+      `workflow task ${taskId} prompt context is ${observedBytes} bytes, exceeding maxPromptBytes ${limitBytes}; shorten the task/repair prompt or raise --max-prompt-bytes deliberately`,
+    );
+  }
+}
+
 /** Errors surfaced by {@link WorkflowRuntime.runTask} and dynamic workflow runs. */
 export class WorkflowTaskDecodeError extends Error {
   override readonly name = "WorkflowTaskDecodeError";
@@ -95,4 +117,6 @@ export type WorkflowRuntimeError =
   | WorkflowTaskNoProgressError
   | WorkflowFanoutExceededError
   | WorkflowCostExceededError
+  | WorkflowCostUnavailableError
+  | WorkflowPromptLimitError
   | Error;

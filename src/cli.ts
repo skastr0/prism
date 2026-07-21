@@ -71,7 +71,7 @@ import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, paddedTableColumns, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
-import { runWorkflow } from "./workflow-runner.js";
+import { DEFAULT_WORKFLOW_MAX_PROMPT_BYTES, runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord, type WorkflowStoreSchemaNotice } from "./workflow-store.js";
 import {
   listRegisteredWorkflowStores,
@@ -219,6 +219,9 @@ program
 const workflow = program
   .command("workflow")
   .description("Validate Prism workflow files");
+
+const WORKFLOW_PROMPT_BUDGET_DESCRIPTION =
+  `Maximum UTF-8 bytes in each prepared task prompt context (default ${DEFAULT_WORKFLOW_MAX_PROMPT_BYTES})`;
 
 const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);
@@ -522,6 +525,7 @@ workflow
   .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
   .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
   .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
+  .option("--max-prompt-bytes <bytes>", WORKFLOW_PROMPT_BUDGET_DESCRIPTION, parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
   .addOption(new CommanderOption("--run-id <id>").hideHelp())
@@ -537,6 +541,7 @@ workflow
     readonly taskNoProgressMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
+    readonly maxPromptBytes?: number;
     readonly store?: string;
     readonly detach?: boolean;
     readonly runId?: string;
@@ -652,6 +657,7 @@ workflow
         taskNoProgressMs: options.taskNoProgressMs,
         maxTasks: options.maxTasks,
         maxCostUsd: options.maxCostUsd,
+        maxPromptBytes: options.maxPromptBytes,
         runId: executionRunId,
         abortSignal: terminationController.signal,
         runtimeOptions: {
@@ -1349,6 +1355,7 @@ workflowRuns
   .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
   .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
   .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
+  .option("--max-prompt-bytes <bytes>", WORKFLOW_PROMPT_BUDGET_DESCRIPTION, parsePositiveInteger)
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
@@ -1361,6 +1368,7 @@ workflowRuns
     readonly taskNoProgressMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
+    readonly maxPromptBytes?: number;
   }) => {
     try {
       const storePath = resolveWorkflowStorePath(options.store);
@@ -1389,6 +1397,7 @@ workflowRuns
   .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
   .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
   .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
+  .option("--max-prompt-bytes <bytes>", WORKFLOW_PROMPT_BUDGET_DESCRIPTION, parsePositiveInteger)
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
@@ -1401,6 +1410,7 @@ workflowRuns
     readonly taskNoProgressMs?: number;
     readonly maxTasks?: number;
     readonly maxCostUsd?: number;
+    readonly maxPromptBytes?: number;
   }) => {
     try {
       const storePath = resolveWorkflowStorePath(options.store);

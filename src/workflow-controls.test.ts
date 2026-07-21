@@ -323,6 +323,7 @@ test("workflow budget controls round-trip through snapshots and exact detached c
     taskNoProgressMs: 4_000,
     maxTasks: 7,
     maxCostUsd: 1.25,
+    maxPromptBytes: 262_144,
   } as const;
 
   expect(workflowRunOptionsSnapshot(options)).toEqual(options);
@@ -360,6 +361,8 @@ test("workflow budget controls round-trip through snapshots and exact detached c
     "7",
     "--max-cost-usd",
     "1.25",
+    "--max-prompt-bytes",
+    "262144",
   ]);
 });
 
@@ -394,6 +397,8 @@ test("detached CLI budget flags persist and survive the child handoff", async ()
       "3",
       "--max-cost-usd",
       "0",
+      "--max-prompt-bytes",
+      "8192",
     ], { PRISM_HOME: join(root, "prism-home") });
 
     expect(result.exitCode).toBe(0);
@@ -409,6 +414,7 @@ test("detached CLI budget flags persist and survive the child handoff", async ()
         taskNoProgressMs: 20_000,
         maxTasks: 3,
         maxCostUsd: 0,
+        maxPromptBytes: 8_192,
       });
       const run = store.getRun(runId);
       if (!isValidPid(run?.runnerPid)) {
@@ -474,6 +480,7 @@ export default defineWorkflow({
         taskNoProgressMs: 20_000,
         maxTasks: 2,
         maxCostUsd: 1.25,
+        maxPromptBytes: 8_192,
       },
     });
     store.close();
@@ -494,6 +501,8 @@ export default defineWorkflow({
       "3",
       "--max-cost-usd",
       "0.75",
+      "--max-prompt-bytes",
+      "16384",
     ], { PRISM_HOME: join(root, "prism-home") });
     expect(update.exitCode).toBe(0);
     expect(update.stderr).toBe("");
@@ -504,18 +513,21 @@ export default defineWorkflow({
         taskNoProgressMs: 20_000,
         maxTasks: 2,
         maxCostUsd: 1.25,
+        maxPromptBytes: 8_192,
       },
       overrideOptions: {
         maxWallMs: 40_000,
         taskNoProgressMs: 25_000,
         maxTasks: 3,
         maxCostUsd: 0.75,
+        maxPromptBytes: 16_384,
       },
       effectiveOptions: {
         maxWallMs: 40_000,
         taskNoProgressMs: 25_000,
         maxTasks: 3,
         maxCostUsd: 0.75,
+        maxPromptBytes: 16_384,
       },
     });
     expect(result.update.inheritedOptions).not.toHaveProperty("cache");
@@ -540,6 +552,7 @@ export default defineWorkflow({
         taskNoProgressMs: 25_000,
         maxTasks: 3,
         maxCostUsd: 0.75,
+        maxPromptBytes: 16_384,
       });
       expect(updatedStore.getRunSnapshot(result.runId)?.options).not.toHaveProperty("cache");
     } finally {
@@ -602,6 +615,7 @@ export default defineWorkflow({
         taskNoProgressMs: 20_000,
         maxTasks: 2,
         maxCostUsd: 1.25,
+        maxPromptBytes: 8_192,
       },
     });
     // Move the previous run to a terminal status before resuming — the exact
@@ -645,6 +659,7 @@ export default defineWorkflow({
         taskNoProgressMs: 20_000,
         maxTasks: 2,
         maxCostUsd: 1.25,
+        maxPromptBytes: 8_192,
       });
       expect(updatedStore.getRunSnapshot(result.runId)?.options).not.toHaveProperty("cache");
       const events = updatedStore.listRunEvents(result.runId);

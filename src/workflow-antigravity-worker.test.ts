@@ -14,6 +14,7 @@ import {
   runAntigravityWorkflowTask,
 } from "./workflow-antigravity-worker.js";
 import { WorkflowOutputParseError } from "./workflow-worker-contract.js";
+import { WorkflowWorkerOutputLimitError } from "./workflow-worker-process.js";
 import { Schema } from "effect";
 
 const createTempRoot = async (): Promise<string> =>
@@ -190,6 +191,33 @@ describe("runAntigravityPtyProcess", () => {
       expect(result.timedOut).toBe(true);
       expect(result.exitCode).not.toBe(0);
       expect(result.stdout).toBe("");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds PTY output capture and terminates the process group on overflow", async () => {
+    const root = await createTempRoot();
+    try {
+      let failure: unknown;
+      try {
+        await runAntigravityPtyProcess({
+          command: "sh",
+          args: ["-c", "head -c 8192 /dev/zero | tr '\\0' 'p'; sleep 30"],
+          cwd: root,
+          processTimeoutMs: 10_000,
+          maxOutputBytes: 1024,
+          printTimeout: "10s",
+        });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(WorkflowWorkerOutputLimitError);
+      const error = failure as WorkflowWorkerOutputLimitError;
+      expect(error.limitBytes).toBe(1024);
+      expect(error.observedBytes).toBeGreaterThan(1024);
+      expect(Buffer.byteLength(error.metadata.stdoutExcerpt ?? "", "utf8")).toBeLessThanOrEqual(4096);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

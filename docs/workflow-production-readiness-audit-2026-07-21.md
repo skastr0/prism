@@ -37,6 +37,48 @@ the task began; workers outlived the runner by roughly 42 minutes. The release
 gate is therefore prompt-topology removal plus bounded descendants and live
 canaries—not better wording around compaction.
 
+## Final-message cross-check
+
+The final assistant message in each negative session was inspected separately
+from the individual failure excerpts. A completion-shaped final message is not
+accepted as evidence when a later session or the live artifact contradicts it.
+The important contradictions are:
+
+- `claude:81eb5154c3b4b3abebc4f2ca149ac8e1` ended by saying the workflow CLI,
+  skill, rule, and MCP surface were shipped and the repos were clean. The later
+  final assessment in `codex:27b7aedc76e6a8eb1912c1424d58f521` proved that
+  scaffold still wrote into the repo, still instructed `git add`, the skill
+  contradicted itself, and the MCP descriptions were stale. The later artifact
+  wins; the earlier completion claim does not close those rows.
+- `codex:2eb79b873474387c1e925105bbb4789a` ended with workflow MCP parity committed
+  and focused tests green. That establishes source coverage only. It does not
+  prove that the generated/installed tool fleet was refreshed or that a detached
+  run was recoverable through that exact deployed tool surface.
+- `codex:a1d786d8d42e94dfbfb735ba28f8d299` ended with the externalized-native-module
+  packaging defect fixed and `/tmp` smoke tests green. The same checks must run
+  again on the exact release candidate; a historical binary cannot certify a
+  later package.
+- `grok:2bbe1919c9fe2ed6def5cf43b3917ca0` ended with two separate root causes:
+  unattended MCP permission cancellation returned exit-0 empty output, while a
+  detached run remained silently `running` without `runner.started`. Neither is
+  reclassified as a generic model failure.
+- `claude:7ef1f88eed3ce86dfd95f4fc1177c77b` ended by saying Grok should work
+  materially better after reaping 1,770 leaked daemons and repairing ports, but
+  explicitly retained dynamic-port/config drift and pooled-connection hangs.
+  That is incident containment, not a production-readiness verdict.
+- `grok:f7e9efa1c529331e6752bf23247a8970` ended with the event ledger still allowing
+  phase events to lead durable task rows and with decode failures lacking useful
+  evidence. Those findings remain release-blocking until the transactional
+  ordering and evidence tests pass.
+- `hermes:784d31cbbde301ec65f80f219d9fc752` ended with a repo-local production
+  workflow committed and validated. That is evidence of the old authoring
+  contract causing repository scatter, not evidence that the current
+  home-root-only contract was satisfied.
+
+This cross-check is why the table below distinguishes source coverage,
+deployed proof, tested contract, and open work instead of inheriting the final
+message's confidence.
+
 ## Required end-to-end acceptance
 
 1. A clean-home scaffold validates and runs on its first invocation; no

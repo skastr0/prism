@@ -100,6 +100,35 @@ test("doctor --plugins reports zero topology findings for a compiler-correct ins
   });
 });
 
+test("doctor --plugins accepts the production-default CLI topology with no MCP server", async () => {
+  await withDoctorWorld(async (world) => {
+    const pluginsRoot = join(world.sandbox.root, "plugins");
+    await writeFixturePlugin(pluginsRoot, { name: "widget", ownTools: ["foo"] });
+    const previous = process.env.PRISM_TOOLS_MCP_EMIT;
+
+    delete process.env.PRISM_TOOLS_MCP_EMIT;
+    try {
+      const report = await runDoctor({
+        harnesses: ["codex-cli"],
+        scope: "global",
+        prismHome: world.sandbox.prismHome,
+        roots: world.sandbox.roots,
+        fix: false,
+        pluginsDir: pluginsRoot,
+      });
+
+      const topologyCodes = report.findings
+        .filter((finding) => finding.family === "topology.invariant")
+        .map((finding) => finding.code);
+      expect(topologyCodes).not.toContain("topology.owner-missing-server");
+      expect(topologyCodes).not.toContain("topology.mcp-disabled-server");
+    } finally {
+      if (previous === undefined) delete process.env.PRISM_TOOLS_MCP_EMIT;
+      else process.env.PRISM_TOOLS_MCP_EMIT = previous;
+    }
+  });
+});
+
 test("doctor --plugins detects a seeded topology violation (the retired aggregated shim key)", async () => {
   await withDoctorWorld(async (world) => {
     const pluginsRoot = join(world.sandbox.root, "plugins");

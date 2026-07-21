@@ -6,7 +6,10 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/antigravity-cli.js";
+import { mcpToolNameForBinding } from "./mcp-bundle.js";
+import type { ResolvedContractBinding } from "./resolve.js";
 import type { DesiredFile } from "../sync/desired.js";
+import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
 
 const tempRoots: string[] = [];
 
@@ -29,6 +32,17 @@ const findContentOperation = (
   suffix: string,
 ): DesiredFile | undefined =>
   files.find((file) => file.targetPath.endsWith(suffix));
+
+const permissionBinding = (
+  ownerPlugin: string,
+  toolName: string,
+): ResolvedContractBinding => ({
+  kind: "permission",
+  logicalName: toolName,
+  toolPluginName: ownerPlugin,
+  toolName,
+  toolSourcePath: `/plugins/${ownerPlugin}/tools/${toolName}.tool.ts`,
+});
 
 const runGeneratedHookWrapper = (
   wrapperPath: string,
@@ -387,4 +401,65 @@ export default {
     (operation) => operation.targetPath.endsWith("server.mjs"),
   );
   expect(bundle).toBeUndefined();
+});
+
+test("antigravity-cli production default omits generated MCP tool advertisements and MCP config", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".agents");
+  const owner = "antigravity-mcp-off-fixture";
+  const binding = permissionBinding(owner, "echo");
+  const previous = process.env.PRISM_TOOLS_MCP_EMIT;
+  const previousCli = process.env.PRISM_TOOLS_CLI_EMIT;
+  const previousInject = process.env.PRISM_TOOLS_CLI_INJECT;
+
+  delete process.env.PRISM_TOOLS_MCP_EMIT;
+  delete process.env.PRISM_TOOLS_CLI_EMIT;
+  delete process.env.PRISM_TOOLS_CLI_INJECT;
+  try {
+    const { files } = await planLowering({
+      agents: [{
+        name: "consumer",
+        description: "Consumes one native and one canonical tool",
+        body: "# Consumer\n",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: ["read_file"],
+        toolBindings: [binding],
+      }],
+      orbits: [],
+      tools: [],
+      hooks: [],
+      target: {
+        scope: "project",
+        root: outputRoot,
+        sourcePluginName: owner,
+        sourcePluginVersion: "0.1.0",
+      },
+    });
+
+    const agent = findContentOperation(files, join("agents", "consumer.md"));
+    const generatedName = `mcp_${pluginServerKey(owner)}_${renderPluginWire(
+      "antigravity-cli",
+      owner,
+      mcpToolNameForBinding(owner, binding),
+    )}`;
+    expect(agent?.content).toContain('- "read_file"');
+    expect(agent?.content).not.toContain(generatedName);
+    expect(agent?.content).toContain("Load skill `prism-tools-antigravity-mcp-off-fixture`");
+    expect(agent?.content).toContain(
+      "prism tools invoke antigravity-mcp-off-fixture <tool-name>",
+    );
+    expect(agent?.content).toContain("`echo`");
+    expect(findContentOperation(files, "mcp_config.json")).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.PRISM_TOOLS_MCP_EMIT;
+    else process.env.PRISM_TOOLS_MCP_EMIT = previous;
+    if (previousCli === undefined) delete process.env.PRISM_TOOLS_CLI_EMIT;
+    else process.env.PRISM_TOOLS_CLI_EMIT = previousCli;
+    if (previousInject === undefined) delete process.env.PRISM_TOOLS_CLI_INJECT;
+    else process.env.PRISM_TOOLS_CLI_INJECT = previousInject;
+  }
 });

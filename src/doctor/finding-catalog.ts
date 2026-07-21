@@ -381,38 +381,24 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
   // mcp.health
   {
     family: "mcp.health",
-    code: "mcp.port-conflict",
+    code: "mcp.missing-bundle",
     severity: "error",
-    fix: "mcp-restart",
-    description: "MCP server port is occupied but no Prism pid is recorded.",
-  },
-  {
-    family: "mcp.health",
-    code: "mcp.stale-pid",
-    severity: "warning",
-    fix: "mcp-restart",
-    description: "Recorded MCP server pid is not running.",
+    fix: "refresh",
+    description: "Compiled daemon bundle is missing, so CLI tool invocation cannot spawn the plugin.",
   },
   {
     family: "mcp.health",
     code: "mcp.stale-build",
     severity: "error",
-    fix: "mcp-restart",
-    description: "MCP runtime server hash does not match the generated bundle.",
-  },
-  {
-    family: "mcp.health",
-    code: "mcp.stale-health",
-    severity: "error",
-    fix: "mcp-restart",
-    description: "MCP runtime health mismatch.",
+    fix: "refresh",
+    description: "A live daemon is not safely restartable from the current generated bundle/runtime.",
   },
   {
     family: "mcp.health",
     code: "mcp.status-unavailable",
-    severity: "warning",
+    severity: "error",
     fix: "refresh",
-    description: "Could not determine MCP server status.",
+    description: "Could not determine CLI daemon status; tool availability is not proven.",
   },
 
   // determinism.selfcheck
@@ -524,6 +510,13 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "error",
     fix: "manual",
     description: "[D] A server's allowlist contains the same tool name more than once.",
+  },
+  {
+    family: "topology.invariant",
+    code: "topology.mcp-disabled-server",
+    severity: "error",
+    fix: "refresh",
+    description: "[E] A generated MCP server remains configured while harness MCP emission is disabled.",
   },
   {
     family: "topology.invariant",

@@ -1010,7 +1010,7 @@ const planTargetLowering = (options: {
     // CLI tool agent surface: skill and/or always-on rules (inject mode).
     // Catalog is normally written during prepareUnionMcpServer; fall back to
     // building from owned bindings so dry-run / first-pass still plans inject.
-    if (toolsCliEmitEnabled() && options.artifacts.tools.length > 0) {
+    if (toolsCliEmitEnabled()) {
       const ownedBindings = bindingsOwnedByPlugin(
         options.registry.pluginName,
         options.artifacts.tools,
@@ -1035,7 +1035,6 @@ const planTargetLowering = (options: {
           mode: toolsCliInjectMode(),
           targetId: options.targetId,
           outputRoot: options.outputRoot,
-          prismHome: options.prismHome,
           pluginName: options.registry.pluginName,
           catalog,
         });

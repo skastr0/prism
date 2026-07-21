@@ -7,8 +7,14 @@ import { Effect } from "effect";
 import { composeAgent } from "./compose.js";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/kimi-code.js";
-import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { instantiateOrbit, resolveAgent, validateOrbit } from "./resolve.js";
+import { mcpToolNameForBinding } from "./mcp-bundle.js";
+import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
+import {
+  instantiateOrbit,
+  resolveAgent,
+  validateOrbit,
+  type ResolvedContractBinding,
+} from "./resolve.js";
 import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -23,6 +29,17 @@ const findContentOperation = (
   files: ReadonlyArray<DesiredFile>,
   suffix: string,
 ): DesiredFile | undefined => files.find((file) => file.targetPath.endsWith(suffix));
+
+const permissionBinding = (
+  ownerPlugin: string,
+  toolName: string,
+): ResolvedContractBinding => ({
+  kind: "permission",
+  logicalName: toolName,
+  toolPluginName: ownerPlugin,
+  toolName,
+  toolSourcePath: `/plugins/${ownerPlugin}/tools/${toolName}.tool.ts`,
+});
 
 const findRegionByKey = (
   regions: ReadonlyArray<DesiredRegion>,
@@ -192,5 +209,74 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
     });
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
+  }
+});
+
+test("kimi-code production default omits generated MCP role tools and MCP config", async () => {
+  const root = await createTempRoot();
+  const outputRoot = join(root, ".kimi-code");
+  const owner = "kimi-mcp-off-fixture";
+  const binding = permissionBinding(owner, "echo");
+  const previous = process.env.PRISM_TOOLS_MCP_EMIT;
+  const previousCli = process.env.PRISM_TOOLS_CLI_EMIT;
+  const previousInject = process.env.PRISM_TOOLS_CLI_INJECT;
+
+  delete process.env.PRISM_TOOLS_MCP_EMIT;
+  delete process.env.PRISM_TOOLS_CLI_EMIT;
+  delete process.env.PRISM_TOOLS_CLI_INJECT;
+  try {
+    const { files } = await planLowering({
+      agents: [{
+        name: "consumer",
+        description: "Consumes one native and one canonical tool",
+        body: "# Consumer\n",
+        color: undefined,
+        model: {},
+        targetOverride: {},
+        skills: [],
+        allowedSkills: [],
+        allowedTools: ["read_file"],
+        toolBindings: [binding],
+      }],
+      orbits: [],
+      tools: [],
+      skills: [],
+      hooks: [],
+      target: {
+        scope: "global",
+        root: outputRoot,
+        sourcePluginName: owner,
+        sourcePluginVersion: "0.1.0",
+      },
+    });
+
+    const role = findContentOperation(
+      files,
+      join("skills", "prism-agent-consumer", "SKILL.md"),
+    );
+    const generatedName = `mcp__${pluginServerKey(owner)}__${renderPluginWire(
+      "kimi-code",
+      owner,
+      mcpToolNameForBinding(owner, binding),
+    )}`;
+    expect(role?.content).toContain("Native tools requested by this role: `read_file`.");
+    expect(role?.content).not.toContain("Generated MCP tools for this role:");
+    expect(role?.content).not.toContain(generatedName);
+    expect(role?.content).toContain("Load skill `prism-tools-kimi-mcp-off-fixture`");
+    expect(role?.content).toContain(
+      "prism tools invoke kimi-mcp-off-fixture <tool-name>",
+    );
+    expect(role?.content).toContain("`echo`");
+    const manifest = JSON.parse(
+      findContentOperation(files, "kimi.plugin.json")?.content ?? "{}",
+    ) as { readonly mcpServers?: unknown };
+    expect(manifest.mcpServers).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.PRISM_TOOLS_MCP_EMIT;
+    else process.env.PRISM_TOOLS_MCP_EMIT = previous;
+    if (previousCli === undefined) delete process.env.PRISM_TOOLS_CLI_EMIT;
+    else process.env.PRISM_TOOLS_CLI_EMIT = previousCli;
+    if (previousInject === undefined) delete process.env.PRISM_TOOLS_CLI_INJECT;
+    else process.env.PRISM_TOOLS_CLI_INJECT = previousInject;
   }
 });

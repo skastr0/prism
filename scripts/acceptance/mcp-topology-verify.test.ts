@@ -342,6 +342,80 @@ test("assertion E detects an owner plugin targeting a harness with no server pre
   });
 });
 
+test("assertion E accepts zero servers when harness MCP emission is disabled", async () => {
+  await withTempDir(async (dir) => {
+    const pluginsRoot = join(dir, "plugins");
+    await writeFixturePlugin(pluginsRoot, {
+      name: "widget",
+      ownTools: ["foo"],
+      targetsTools: ["codex-cli"],
+    });
+
+    const root = join(dir, "harnesses", "codex-cli");
+    await mkdir(root, { recursive: true });
+    const report = await verifyTopology({
+      pluginPaths: [join(pluginsRoot, "widget")],
+      harnesses: ["codex-cli"],
+      roots: singleHarnessRoots("codex-cli", root),
+      mcpEmitEnabled: false,
+    });
+
+    const codes = findViolationCodes(report, "codex-cli");
+    expect(codes).not.toContain("topology.owner-missing-server");
+    expect(codes).not.toContain("topology.mcp-disabled-server");
+    expect(report.pass).toBe(true);
+  });
+});
+
+test("assertion E rejects a residual generated server when harness MCP emission is disabled", async () => {
+  await withTempDir(async (dir) => {
+    const pluginsRoot = join(dir, "plugins");
+    const pluginPath = await writeFixturePlugin(pluginsRoot, {
+      name: "widget",
+      ownTools: ["foo"],
+      targetsTools: ["codex-cli"],
+    });
+    const registry = await Effect.runPromise(loadPlugin(pluginPath));
+    const ownedBindings = await Effect.runPromise(
+      resolveOwnedMcpBindingsForTarget(registry, "codex-cli", "global"),
+    );
+    const allowlist = ownedBindings.map((binding) =>
+      renderPluginAllowlist(
+        "codex-cli",
+        "widget",
+        generatedToolNameForBinding("widget", binding),
+      ),
+    );
+
+    const root = join(dir, "harnesses", "codex-cli");
+    await writeText(
+      join(root, "config.toml"),
+      [
+        `[mcp_servers."widget"]`,
+        `command = "prism"`,
+        `args = ["mcp", "shim"]`,
+        `enabled_tools = ${JSON.stringify(allowlist)}`,
+        `[mcp_servers."widget".env]`,
+        `PRISM_SHIM_PLUGINS = "widget"`,
+        `PRISM_SHIM_HARNESS = "codex-cli"`,
+        ``,
+      ].join("\n"),
+    );
+
+    const report = await verifyTopology({
+      pluginPaths: [pluginPath],
+      harnesses: ["codex-cli"],
+      roots: singleHarnessRoots("codex-cli", root),
+      mcpEmitEnabled: false,
+    });
+
+    const codes = findViolationCodes(report, "codex-cli");
+    expect(codes).toContain("topology.mcp-disabled-server");
+    expect(codes).not.toContain("topology.owner-missing-server");
+    expect(report.pass).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // F — no dead transports
 // ---------------------------------------------------------------------------

@@ -25,9 +25,10 @@
  *                       (empty-allowlist) server.
  *   D. No duplication — one server entry per owner plugin per harness root;
  *                       no fully-qualified `<server>::<tool>` name repeats.
- *   E. Coverage       — every owner plugin whose `plugin.json` `targets.tools`
- *                       names a harness has a server present in that
- *                       harness's root.
+ *   E. Emit mode      — when harness MCP emission is enabled, every owner
+ *                       targeted to a harness has one server there; when it
+ *                       is disabled (the production default), zero generated
+ *                       MCP servers remain in that harness root.
  *   F. No dead        — zero prism-looking entries carrying an HTTP `url`
  *      transports        transport anywhere in a scanned servers map (Prism
  *                       is stdio-only: `command: "prism"`, args: ["mcp",
@@ -61,6 +62,7 @@ import { exists, expandPath, isDirectory, listDir, readFile } from "../fs.js";
 import { getHarnessMcpContract, type HarnessMcpContract } from "../harness-mcp-contract.js";
 import { getManifestArtifactTargets, readManifest } from "../manifest.js";
 import type { HarnessRootsEnv } from "../services/prism-env.js";
+import { toolsMcpHarnessEmitEnabled } from "../tools-cli/flags.js";
 import type { HarnessId, PluginManifest } from "../types.js";
 import {
   pluginServerKey,
@@ -119,6 +121,7 @@ export const TOPOLOGY_FINDING_CODES = [
   "topology.duplicate-owner-server",
   "topology.duplicate-fq-tool-name",
   "topology.duplicate-tool-in-allowlist",
+  "topology.mcp-disabled-server",
   "topology.owner-missing-server",
   "topology.dead-http-transport",
 ] as const;
@@ -570,10 +573,12 @@ export const verifyHarnessTopology = async (
   harness: ShimHarnessId,
   root: string,
   inventory: PluginInventory,
+  options: { readonly mcpEmitEnabled?: boolean } = {},
 ): Promise<HarnessTopologyReport> => {
   const contract: HarnessMcpContract = getHarnessMcpContract(harness);
   const allowlistIsWithinServer =
     contract.mcpSupport === "supported" && contract.toolAllowlist === "within-server";
+  const mcpEmitEnabled = options.mcpEmitEnabled ?? toolsMcpHarnessEmitEnabled();
 
   const entries = await collectHarnessServerEntries(harness, root);
   const managed = entries.filter((entry) => looksPrismManaged(entry.serverKey, entry));
@@ -750,18 +755,37 @@ export const verifyHarnessTopology = async (
     }
   }
 
-  // ---- E: coverage ----
-  for (const [name, record] of inventory.all) {
-    if ((record.ownedBindingsByHarness.get(harness)?.length ?? 0) === 0) continue;
-    if (!record.targetedHarnesses.has(harness)) continue;
-    const key = pluginServerKey(name);
-    if (!managedByKey.has(key)) {
+  // ---- E: mode-aware coverage ----
+  // Harness MCP emission is opt-in. In the production-default CLI topology,
+  // zero generated MCP servers is the only valid state; when emission is
+  // explicitly enabled, every owner targeted to this harness must be present.
+  if (!mcpEmitEnabled) {
+    for (const entry of managed) {
       violate(
         "E",
-        "topology.owner-missing-server",
-        `owner plugin '${name}' targets ${harness} for tools but has no server entry (expected key '${key}')`,
-        { serverKey: key, plugin: name },
+        "topology.mcp-disabled-server",
+        `server '${entry.serverKey}' remains configured even though harness MCP emission is disabled`,
+        {
+          path: entry.configPath,
+          serverKey: entry.serverKey,
+          plugin: singleOwnerFromEnv(entry),
+          data: { mcpEmitEnabled: false },
+        },
       );
+    }
+  } else {
+    for (const [name, record] of inventory.all) {
+      if ((record.ownedBindingsByHarness.get(harness)?.length ?? 0) === 0) continue;
+      if (!record.targetedHarnesses.has(harness)) continue;
+      const key = pluginServerKey(name);
+      if (!managedByKey.has(key)) {
+        violate(
+          "E",
+          "topology.owner-missing-server",
+          `owner plugin '${name}' targets ${harness} for tools but has no server entry (expected key '${key}')`,
+          { serverKey: key, plugin: name, data: { mcpEmitEnabled: true } },
+        );
+      }
     }
   }
 
@@ -796,6 +820,7 @@ export interface VerifyTopologyOptions {
   readonly pluginPaths: readonly string[];
   readonly harnesses: readonly ShimHarnessId[];
   readonly roots: HarnessRootsEnv;
+  readonly mcpEmitEnabled?: boolean;
 }
 
 export const verifyTopology = async (options: VerifyTopologyOptions): Promise<TopologyReport> => {
@@ -803,7 +828,11 @@ export const verifyTopology = async (options: VerifyTopologyOptions): Promise<To
   const harnesses: HarnessTopologyReport[] = [];
   for (const harness of options.harnesses) {
     const root = expandPath(options.roots.resolve(harness));
-    harnesses.push(await verifyHarnessTopology(harness, root, inventory));
+    harnesses.push(await verifyHarnessTopology(harness, root, inventory, {
+      ...(options.mcpEmitEnabled !== undefined
+        ? { mcpEmitEnabled: options.mcpEmitEnabled }
+        : {}),
+    }));
   }
   return {
     schema: "prism.acceptance.mcp-topology-verify.v1",

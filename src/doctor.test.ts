@@ -1244,10 +1244,8 @@ test("pluginIsServable: no bundle and a registered-but-dead daemon is genuinely 
   expect(servable).toBe(false);
 });
 
-test("doctor's mcp.health finding for an unhealthy daemon points at the daemon's log file (OBS-001)", async () => {
+test("doctor reports a missing CLI daemon bundle with refresh remediation and log path", async () => {
   const pluginRoot = join(root, "mcp-health-plugin");
-  // Dedicated prismHome keeps the real daemon log path isolated from the
-  // other doctor fixtures.
   const prismHome = await mkdtemp(join(tmpdir(), "ph"));
   const pluginName = "m";
 
@@ -1260,15 +1258,18 @@ test("doctor's mcp.health finding for an unhealthy daemon points at the daemon's
         targets: { tools: ["hermes"] },
       }, null, 2)}\n`,
     );
-
-    // A registered daemon whose socket is never bound classifies as
-    // "stale-pid" (lifecycle.ts's classifyStatus) -- the cheapest way to
-    // force a non-running/non-stopped finding without compiling a real
-    // bundle.
-    await registerDaemon(
-      pluginName,
-      { pid: 999999, sock: join(prismHome, "never-bound.sock"), bundleHash: "deadbeef", startedAt: 0, lastUsed: 0 },
-      prismHome,
+    await writeText(
+      join(pluginRoot, "tools", "echo.tool.ts"),
+      [
+        `export default {`,
+        `  name: "echo",`,
+        `  description: "Echo fixture",`,
+        `  input: {},`,
+        `  output: {},`,
+        `  handle: async () => ({}),`,
+        `};`,
+        ``,
+      ].join("\n"),
     );
 
     const report = await runDoctor({
@@ -1281,8 +1282,115 @@ test("doctor's mcp.health finding for an unhealthy daemon points at the daemon's
 
     const mcpHealthFindings = report.findings.filter((f) => f.family === "mcp.health");
     expect(mcpHealthFindings).toHaveLength(1);
-    expect(mcpHealthFindings[0]?.code).toBe("mcp.stale-pid");
+    expect(mcpHealthFindings[0]?.code).toBe("mcp.missing-bundle");
+    expect(mcpHealthFindings[0]?.severity).toBe("error");
+    expect(mcpHealthFindings[0]?.fix).toBe("refresh");
     expect(mcpHealthFindings[0]?.data?.logPath).toBe(pluginDaemonLogPath(pluginName, prismHome));
+  } finally {
+    await rm(prismHome, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
+test("doctor fails closed when CLI daemon status cannot be resolved", async () => {
+  const pluginRoot = join(root, "mcp-status-unavailable-plugin");
+  const prismHome = await mkdtemp(join(tmpdir(), "ph"));
+  const pluginName = "status-unavailable";
+
+  try {
+    await writeText(
+      join(pluginRoot, "plugin.json"),
+      `${JSON.stringify({
+        name: pluginName,
+        version: "0.1.0",
+        targets: { tools: ["hermes"] },
+      }, null, 2)}\n`,
+    );
+    await writeText(
+      join(pluginRoot, "tools", "echo.tool.ts"),
+      [
+        `export default {`,
+        `  name: "echo",`,
+        `  description: "Echo fixture",`,
+        `  input: {},`,
+        `  output: {},`,
+        `  handle: async () => ({}),`,
+        `};`,
+        ``,
+      ].join("\n"),
+    );
+    // A directory at the expected bundle file path makes lifecycle hashing
+    // fail deterministically (EISDIR), exercising Doctor's status-resolution
+    // catch without mocking the observability path.
+    await mkdir(prismMcpServerPath(prismHome, pluginName), { recursive: true });
+
+    const report = await runDoctor({
+      pluginPath: pluginRoot,
+      harnesses: ["hermes"],
+      scope: "global",
+      prismHome,
+      fix: false,
+    });
+
+    const statusFinding = report.findings.find(
+      (finding) => finding.code === "mcp.status-unavailable",
+    );
+    expect(statusFinding?.severity).toBe("error");
+    expect(statusFinding?.fix).toBe("refresh");
+    expect(doctorExitCode(report)).toBe(EXIT_CODES.domainFailure);
+  } finally {
+    await rm(prismHome, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
+test("doctor treats a dead daemon registry entry with a valid bundle as lazy-recoverable", async () => {
+  const pluginRoot = join(root, "mcp-lazy-recovery-plugin");
+  const prismHome = await mkdtemp(join(tmpdir(), "ph"));
+  const pluginName = "lazy-recovery";
+
+  try {
+    await writeText(
+      join(pluginRoot, "plugin.json"),
+      `${JSON.stringify({
+        name: pluginName,
+        version: "0.1.0",
+        targets: { tools: ["hermes"] },
+      }, null, 2)}\n`,
+    );
+    await writeText(
+      join(pluginRoot, "tools", "echo.tool.ts"),
+      [
+        `export default {`,
+        `  name: "echo",`,
+        `  description: "Echo fixture",`,
+        `  input: {},`,
+        `  output: {},`,
+        `  handle: async () => ({}),`,
+        `};`,
+        ``,
+      ].join("\n"),
+    );
+    await writeText(prismMcpServerPath(prismHome, pluginName), "export {};\n");
+    await registerDaemon(
+      pluginName,
+      {
+        pid: 999999,
+        sock: join(prismHome, "never-bound.sock"),
+        bundleHash: "deadbeef",
+        startedAt: 0,
+        lastUsed: 0,
+      },
+      prismHome,
+    );
+
+    const report = await runDoctor({
+      pluginPath: pluginRoot,
+      harnesses: ["hermes"],
+      scope: "global",
+      prismHome,
+      fix: false,
+    });
+
+    expect(report.findings.filter((finding) => finding.family === "mcp.health")).toEqual([]);
   } finally {
     await rm(prismHome, { recursive: true, force: true }).catch(() => undefined);
   }

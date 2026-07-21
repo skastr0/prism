@@ -39,7 +39,13 @@ import {
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
-import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
+import {
+  toolsCliEmitEnabled,
+  toolsCliInjectMode,
+  toolsMcpHarnessEmitEnabled,
+  type ToolsCliInjectMode,
+} from "../../tools-cli/flags.js";
+import { renderToolCliAgentGuidance } from "../../tools-cli/inject.js";
 
 const TARGET_ID = "antigravity-cli" as const;
 const PLUGIN_PREFIX = "prism-generated";
@@ -83,7 +89,11 @@ const pluginRelativePath = (target: AntigravityCliLowerTarget, path: string): st
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
-const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: AntigravityCliLowerTarget): Record<string, unknown> => {
+const composeAntigravityAgentFrontmatter = (
+  agent: ComposedAgent,
+  target: AntigravityCliLowerTarget,
+  includeMcpTools: boolean,
+): Record<string, unknown> => {
   const frontmatter: Record<string, unknown> = {
     name: agent.name,
     description: agent.description,
@@ -97,12 +107,14 @@ const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: Antigr
   }
 
   const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(antigravityMcpToolNameForBinding(ownerPlugin, binding));
+  if (includeMcpTools) {
+    for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+      target.sourcePluginName,
+      agent,
+    )) {
+      for (const binding of bindings) {
+        generatedTools.push(antigravityMcpToolNameForBinding(ownerPlugin, binding));
+      }
     }
   }
   const tools = uniqueSorted([
@@ -120,8 +132,27 @@ const composeAntigravityAgentFrontmatter = (agent: ComposedAgent, target: Antigr
   return frontmatter;
 };
 
-const renderAntigravityAgentMarkdown = (agent: ComposedAgent, target: AntigravityCliLowerTarget): string =>
-  `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
+const renderAntigravityAgentMarkdown = (
+  agent: ComposedAgent,
+  target: AntigravityCliLowerTarget,
+  includeMcpTools: boolean,
+  includeCliGuidance: boolean,
+  cliMode: ToolsCliInjectMode,
+): string => {
+  const groups = includeCliGuidance
+    ? [...groupAgentToolBindingsByOwner(target.sourcePluginName, agent)].map(
+        ([ownerPlugin, bindings]) => ({
+          pluginName: ownerPlugin,
+          toolNames: bindings.map((binding) =>
+            ownerPlugin === target.sourcePluginName ? binding.logicalName : binding.toolName
+          ),
+        }),
+      )
+    : [];
+  const guidance = renderToolCliAgentGuidance(groups, cliMode).trimEnd();
+  const body = [agent.body.trimEnd(), guidance].filter((section) => section.length > 0).join("\n\n");
+  return `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent, target, includeMcpTools))}\n\n${body}\n`;
+};
 
 const targetIncludesAntigravity = (targets: readonly PluginTargetId[] | undefined): boolean =>
   resolveManifestTargets(targets ?? []).includes(TARGET_ID);
@@ -342,16 +373,18 @@ const planHooks = async (
 };
 
 /**
- * Per-plugin server scheme (operator-locked): a generated plugin bundle
+ * Opt-in MCP mode's per-plugin server scheme: a generated plugin bundle
  * registers exactly ONE MCP server — its own, keyed by `pluginServerKey` —
  * and only when the source plugin OWNS generated tools. A consumer plugin
- * (agents referencing foreign owners' tools only) emits no server entry and
- * no `mcp_config.json` at all: the owner's own bundle registers the server,
- * and the consumer's agents name it via `mcp_<owner>_<tool>` frontmatter
- * entries (`antigravityMcpToolNameForBinding`).
+ * (agents referencing foreign owners' tools only) emits no server entry. In
+ * the production-default CLI mode neither owner nor consumer emits MCP
+ * config/names; agents receive thin `prism tools invoke` guidance instead.
  */
-const planMcpServers = (input: LowerInput): Record<string, unknown> => {
-  if (!toolsMcpHarnessEmitEnabled()) return {};
+const planMcpServers = (
+  input: LowerInput,
+  enabled: boolean,
+): Record<string, unknown> => {
+  if (!enabled) return {};
   const ownedBindings = bindingsOwnedByPlugin(
     input.target.sourcePluginName,
     input.tools,
@@ -380,6 +413,9 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const plugin = input.target.sourcePluginName;
   const root = pluginRoot(input.target);
+  const emitMcp = toolsMcpHarnessEmitEnabled();
+  const emitCli = toolsCliEmitEnabled();
+  const cliMode = toolsCliInjectMode();
 
   const contextFiles = await collectContextFiles(input);
   if (contextFiles.length > 0) {
@@ -393,7 +429,13 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   for (const agent of input.agents) {
     pushDesiredFile(files, {
       targetPath: join(root, "agents", `${agent.name}.md`),
-      content: renderAntigravityAgentMarkdown(agent, input.target),
+      content: renderAntigravityAgentMarkdown(
+        agent,
+        input.target,
+        emitMcp,
+        emitCli && !emitMcp,
+        cliMode,
+      ),
       plugin,
     });
   }
@@ -416,7 +458,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     }
   }
 
-  const mcpServers = await planMcpServers(input);
+  const mcpServers = planMcpServers(input, emitMcp);
   await planHooks(input, files);
 
   const manifest: Record<string, unknown> = {

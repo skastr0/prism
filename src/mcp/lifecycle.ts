@@ -28,7 +28,12 @@ import { probeSocketLiveness } from "@skastr0/prism-sdk/mcp/uds-singleton";
 
 export type McpLifecycleHarness = HarnessId;
 
-export type McpDaemonState = "running" | "stopped" | "stale-pid" | "stale-build";
+export type McpDaemonState =
+  | "running"
+  | "stopped"
+  | "stale-pid"
+  | "stale-build"
+  | "missing-bundle";
 
 export interface McpLifecycleCommonOptions {
   readonly pluginPath: string;
@@ -133,8 +138,17 @@ const fetchHealthOverUds = async (socketPath: string): Promise<McpRuntimeHealth 
 const classifyStatus = async (
   descriptor: McpRuntimeDescriptor,
 ): Promise<McpStatusResult> => {
+  const currentHash = await currentServerHash(descriptor);
   const registered = await getDaemon(descriptor.pluginName, descriptor.prismHome);
   if (registered.kind === "absent") {
+    if (currentHash === undefined) {
+      return {
+        state: "missing-bundle",
+        descriptor,
+        staleReasons: ["missing-server-file"],
+        detail: `compiled bundle is missing at ${descriptor.serverPath}; CLI tool invocation cannot spawn this plugin`,
+      };
+    }
     return {
       state: "stopped",
       descriptor,
@@ -146,6 +160,15 @@ const classifyStatus = async (
   const entry = registered.value;
   const liveness = await probeSocketLiveness(entry.sock);
   if (liveness !== "live") {
+    if (currentHash === undefined) {
+      return {
+        state: "missing-bundle",
+        descriptor,
+        registry: entry,
+        staleReasons: ["missing-server-file", "socket-not-live"],
+        detail: `compiled bundle is missing at ${descriptor.serverPath} and the registered daemon is not responding`,
+      };
+    }
     return {
       state: "stale-pid",
       descriptor,
@@ -155,7 +178,6 @@ const classifyStatus = async (
     };
   }
 
-  const currentHash = await currentServerHash(descriptor);
   if (currentHash === undefined) {
     return {
       state: "stale-build",
@@ -189,7 +211,7 @@ const classifyStatus = async (
       registry: entry,
       health,
       staleReasons: ["server-source-sha256-mismatch"],
-      detail: "the live daemon predates a prism runtime-template change; restart it via the shim (spawn a fresh one)",
+      detail: "the live daemon predates a prism runtime-template change; refresh the bundle so the next CLI invocation replaces it",
     };
   }
 

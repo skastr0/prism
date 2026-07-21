@@ -29,7 +29,7 @@ Build a **catalog-driven conformance suite** in `src/doctor/`, not isolated hand
 
 4. **Keep the boundary clear**: these are acceptance-style tests over real `runDoctor` and disk state. Leave pure helpers (region parsing, `markerLine`, hash comparisons) to existing unit tests in `state/` and `sync/`.
 
-5. **Fix-path assertion strategy**: assert durable state, not internal refresh logs. For `fix: "manual"` codes, assert `--fix` *does not* clear them. For `fix: "refresh"` / `"gc"` / `"mcp-restart"`, assert idempotent second runs converge to an empty finding list.
+5. **Fix-path assertion strategy**: assert durable state, not internal refresh logs. For `fix: "manual"` codes, assert `--fix` *does not* clear them. For `fix: "refresh"` / `"gc"`, assert idempotent second runs converge to an empty finding list.
 
 ## Risks and failure modes
 

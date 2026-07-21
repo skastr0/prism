@@ -43,7 +43,13 @@ import {
   uniqueSorted,
   type LowerOutput,
 } from "./shared.js";
-import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
+import {
+  toolsCliEmitEnabled,
+  toolsCliInjectMode,
+  toolsMcpHarnessEmitEnabled,
+  type ToolsCliInjectMode,
+} from "../../tools-cli/flags.js";
+import { renderToolCliAgentGuidance } from "../../tools-cli/inject.js";
 
 const TARGET_ID = "kimi-code" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -206,14 +212,19 @@ const renderSkill = (frontmatter: Record<string, unknown>, body: string): string
 const renderKimiAgentRoleSkill = (
   agent: ComposedAgent,
   target: KimiCodeLowerTarget,
+  includeMcpTools: boolean,
+  includeCliGuidance: boolean,
+  cliMode: ToolsCliInjectMode,
 ): string => {
   const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(kimiMcpToolName(ownerPlugin, binding));
+  if (includeMcpTools) {
+    for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
+      target.sourcePluginName,
+      agent,
+    )) {
+      for (const binding of bindings) {
+        generatedTools.push(kimiMcpToolName(ownerPlugin, binding));
+      }
     }
   }
   const tools = uniqueSorted(generatedTools, { dropEmpty: true });
@@ -227,6 +238,19 @@ const renderKimiAgentRoleSkill = (
     "",
     agent.body.trimEnd(),
   ];
+
+  if (includeCliGuidance) {
+    const groups = [...groupAgentToolBindingsByOwner(target.sourcePluginName, agent)].map(
+      ([ownerPlugin, bindings]) => ({
+        pluginName: ownerPlugin,
+        toolNames: bindings.map((binding) =>
+          ownerPlugin === target.sourcePluginName ? binding.logicalName : binding.toolName
+        ),
+      }),
+    );
+    const guidance = renderToolCliAgentGuidance(groups, cliMode).trimEnd();
+    if (guidance.length > 0) sections.push("", guidance);
+  }
 
   if (nativeTools.length > 0 || tools.length > 0 || skills.length > 0) {
     sections.push("", "## Kimi Role Surface");
@@ -328,6 +352,9 @@ const planAgentRoleSkills = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
   files: DesiredFile[],
+  includeMcpTools: boolean,
+  includeCliGuidance: boolean,
+  cliMode: ToolsCliInjectMode,
 ): void => {
   for (const agent of input.agents) {
     pushWrite(
@@ -335,7 +362,13 @@ const planAgentRoleSkills = (
       desiredRelativePaths,
       input.target,
       `skills/${roleSkillName(agent.name)}/SKILL.md`,
-      renderKimiAgentRoleSkill(agent, input.target),
+      renderKimiAgentRoleSkill(
+        agent,
+        input.target,
+        includeMcpTools,
+        includeCliGuidance,
+        cliMode,
+      ),
     );
   }
 };
@@ -439,19 +472,18 @@ const renderKimiMcpServerEntry = (options: {
 };
 
 /**
- * Per-plugin-manifest law: this compile's `kimi.plugin.json` carries an MCP
- * server entry ONLY when the compiling plugin itself owns generated tools
- * (own canonical tools, plus its own synthetic trait/orbit dispatch tools) --
- * one server, keyed by `pluginServerKey(sourcePluginName)`, scoped to that
- * plugin's own bindings alone. A plugin whose agents merely reference a
- * foreign owner's tools is a consumer and gets NO server entry here: the
- * foreign owner's own compile carries its own server (reachable once that
- * owner's generated plugin is installed too), so this compile does not
- * duplicate it.
+ * Opt-in MCP mode's per-plugin-manifest law: `kimi.plugin.json` carries an
+ * MCP server entry only when this plugin owns generated tools (own canonical
+ * tools plus synthetic trait/orbit dispatch tools). Production-default CLI
+ * mode emits neither that server nor MCP role names; bundle-local skills and
+ * thin role pointers expose `prism tools invoke` instead.
  */
-const planMcpServer = (input: LowerInput): ReadonlyMap<string, Record<string, unknown>> => {
+const planMcpServer = (
+  input: LowerInput,
+  enabled: boolean,
+): ReadonlyMap<string, Record<string, unknown>> => {
   const servers = new Map<string, Record<string, unknown>>();
-  if (!toolsMcpHarnessEmitEnabled()) return servers;
+  if (!enabled) return servers;
   const sourcePluginName = input.target.sourcePluginName;
 
   const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
@@ -607,6 +639,7 @@ const renderManifest = (
   desiredRelativePaths: ReadonlySet<string>,
   contexts: ReadonlyArray<{ label: string; content: string }>,
   mcp: ReadonlyMap<string, Record<string, unknown>>,
+  hasToolCliSkill: boolean,
 ): string => {
   const manifest: Record<string, unknown> = {
     name: generatedPluginId(input.target),
@@ -618,7 +651,7 @@ const renderManifest = (
     },
   };
 
-  if ([...desiredRelativePaths].some((path) => path.startsWith("skills/"))) {
+  if (hasToolCliSkill || [...desiredRelativePaths].some((path) => path.startsWith("skills/"))) {
     manifest.skills = "./skills/";
   }
   if (contexts.length > 0 && desiredRelativePaths.has("skills/prism-context/SKILL.md")) {
@@ -650,6 +683,15 @@ const hasPluginOutput = (
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const contexts = await collectContextFiles(input);
+  const emitMcp = toolsMcpHarnessEmitEnabled();
+  const emitCli = toolsCliEmitEnabled();
+  const cliMode = toolsCliInjectMode();
+  const ownedBindings = bindingsOwnedByPlugin(
+    input.target.sourcePluginName,
+    input.tools ?? [],
+    input.agents,
+  );
+  const hasToolCliSkill = emitCli && cliMode === "skill" && ownedBindings.length > 0;
 
   if (!hasPluginOutput(input, contexts)) {
     // No plugin output: the sync engine prunes the previously managed plugin
@@ -657,9 +699,16 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     return { files: [], regions: [] };
   }
 
-  const mcp = await planMcpServer(input);
+  const mcp = planMcpServer(input, emitMcp);
   await planTargetedSkillWrites(input, state.desiredRelativePaths, state.files);
-  planAgentRoleSkills(input, state.desiredRelativePaths, state.files);
+  planAgentRoleSkills(
+    input,
+    state.desiredRelativePaths,
+    state.files,
+    emitMcp,
+    emitCli && !emitMcp,
+    cliMode,
+  );
   planOrbitSkillWrites(input, state.desiredRelativePaths, state.files);
   await planCommandSkillWrites(input, state.desiredRelativePaths, state.files);
   planContextSkillWrite(input, state.desiredRelativePaths, state.files, contexts);
@@ -670,7 +719,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     state.desiredRelativePaths,
     input.target,
     "kimi.plugin.json",
-    renderManifest(input, state.desiredRelativePaths, contexts, mcp),
+    renderManifest(input, state.desiredRelativePaths, contexts, mcp, hasToolCliSkill),
   );
 
   const regions: DesiredRegion[] = [...installedPluginRegions(input)];

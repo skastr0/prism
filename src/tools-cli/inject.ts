@@ -12,17 +12,20 @@ import { HARNESSES } from "../harnesses.js";
 import type { HarnessId } from "../types.js";
 import type { DesiredFile, DesiredRegion } from "../sync/desired.js";
 import { normalizeBundleSegment } from "../compile/lowerers/shared.js";
-import type { ToolCliCatalog } from "./catalog.js";
+import {
+  renderToolCliSkillMarkdown,
+  type ToolCliCatalog,
+} from "./catalog.js";
 import type { ToolsCliInjectMode } from "./flags.js";
-import { prismToolSkillPath } from "./paths.js";
-import { exists, readFile } from "../fs.js";
 
-/** Harnesses that load skills/ trees directly (skill file install target). */
+/** Harnesses with a native skills/ surface, direct or generated-plugin-local. */
 export const TOOLS_CLI_SKILL_HARNESSES = new Set<HarnessId>([
   "codex-cli",
   "hermes",
   "opencode",
   "grok",
+  "antigravity-cli",
+  "kimi-code",
 ]);
 
 export const toolsCliSkillName = (pluginName: string): string =>
@@ -104,6 +107,50 @@ export const renderToolCliRules = (
   mode: ToolsCliInjectMode,
 ): string => (mode === "rules" ? renderToolCliRulesFull(catalog) : renderToolCliRulesPointer(catalog));
 
+export interface ToolCliAgentGroup {
+  readonly pluginName: string;
+  readonly toolNames: ReadonlyArray<string>;
+}
+
+/**
+ * Thin per-role pointer for plugin-bundle harnesses that cannot inherit a
+ * shared AGENTS.md rules region. This deliberately names the skill and CLI
+ * command only; it never inlines the generated skill body into every agent.
+ */
+export const renderToolCliAgentGuidance = (
+  groups: ReadonlyArray<ToolCliAgentGroup>,
+  mode: ToolsCliInjectMode,
+): string => {
+  const normalized = groups
+    .map((group) => ({
+      pluginName: group.pluginName,
+      toolNames: [...new Set(group.toolNames)].sort((left, right) => left.localeCompare(right)),
+    }))
+    .filter((group) => group.toolNames.length > 0)
+    .sort((left, right) => left.pluginName.localeCompare(right.pluginName));
+  if (normalized.length === 0) return "";
+
+  const lines = [
+    "## Prism CLI tools",
+    "",
+    "Canonical tools are exposed through stateless CLI calls, not MCP tool names.",
+    "",
+  ];
+  for (const group of normalized) {
+    const tools = group.toolNames.map((tool) => `\`${tool}\``).join(", ");
+    if (mode === "skill") {
+      lines.push(
+        `- Load skill \`${toolsCliSkillName(group.pluginName)}\` for ${tools}; invoke with \`prism tools invoke ${group.pluginName} <tool-name> --input '<json-object>'\`.`,
+      );
+    } else {
+      lines.push(
+        `- ${tools} -> \`prism tools invoke ${group.pluginName} <tool-name> --input '<json-object>'\`.`,
+      );
+    }
+  }
+  return `${lines.join("\n")}\n`;
+};
+
 const commentStyleForRulesFile = (
   rulesFile: string,
 ): { readonly prefix: string; readonly suffix?: string } => {
@@ -121,7 +168,6 @@ export interface PlanToolsCliAgentSurfaceOptions {
   readonly mode: ToolsCliInjectMode;
   readonly targetId: HarnessId;
   readonly outputRoot: string;
-  readonly prismHome: string;
   readonly pluginName: string;
   readonly catalog: ToolCliCatalog;
 }
@@ -130,6 +176,42 @@ export interface PlanToolsCliAgentSurfaceResult {
   readonly files: DesiredFile[];
   readonly regions: DesiredRegion[];
 }
+
+const generatedPluginRoot = (
+  targetId: "antigravity-cli" | "kimi-code",
+  outputRoot: string,
+  pluginName: string,
+): string => {
+  // Antigravity's lowerer predates the shared bundle segment and collapses
+  // dots/underscores to hyphens; Kimi uses the shared segment verbatim. The
+  // CLI surface must land inside the exact plugin root each lowerer owns.
+  const segment = targetId === "antigravity-cli"
+    ? pluginName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "plugin"
+    : normalizeBundleSegment(pluginName);
+  const generatedId = `prism-generated-${segment}`;
+  return targetId === "antigravity-cli"
+    ? join(outputRoot, "plugins", generatedId)
+    : join(outputRoot, "plugins", "managed", generatedId);
+};
+
+const toolCliSkillTargetPath = (
+  options: PlanToolsCliAgentSurfaceOptions,
+  skillName: string,
+): string => {
+  if (options.targetId === "antigravity-cli" || options.targetId === "kimi-code") {
+    return join(
+      generatedPluginRoot(options.targetId, options.outputRoot, options.pluginName),
+      "skills",
+      skillName,
+      "SKILL.md",
+    );
+  }
+  return join(options.outputRoot, "skills", skillName, "SKILL.md");
+};
 
 /**
  * Plan skill install + rules region for one harness after CLI catalog is written.
@@ -143,14 +225,23 @@ export const planToolsCliAgentSurface = async (
   const skillName = toolsCliSkillName(plugin);
 
   if (options.mode === "skill" && TOOLS_CLI_SKILL_HARNESSES.has(options.targetId)) {
-    const skillSrc = prismToolSkillPath(options.prismHome, plugin);
-    if (await exists(skillSrc)) {
-      files.push({
-        targetPath: join(options.outputRoot, "skills", skillName, "SKILL.md"),
-        content: await readFile(skillSrc),
-        plugin,
-      });
-    }
+    files.push({
+      targetPath: toolCliSkillTargetPath(options, skillName),
+      content: renderToolCliSkillMarkdown(options.catalog),
+      plugin,
+    });
+  }
+
+  if (options.targetId === "antigravity-cli") {
+    files.push({
+      targetPath: join(
+        generatedPluginRoot(options.targetId, options.outputRoot, plugin),
+        "rules",
+        `${skillName}.md`,
+      ),
+      content: renderToolCliRules(options.catalog, options.mode),
+      plugin,
+    });
   }
 
   const harness = HARNESSES[options.targetId];

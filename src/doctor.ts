@@ -31,7 +31,11 @@ import {
   readManifest,
   resolveManifestTargets,
 } from "./manifest.js";
-import { compilePluginForTarget } from "./compile/pipeline.js";
+import {
+  compilePluginForTarget,
+  resolveOwnedMcpBindingsForTarget,
+} from "./compile/pipeline.js";
+import { loadPlugin } from "./compile/load.js";
 import { prismMcpServerPath } from "./compile/mcp-runtime-path.js";
 import { pluginServerKey, shimServerKey, type ShimHarnessId } from "@skastr0/prism-sdk/mcp/wire-naming";
 import { getDaemon } from "@skastr0/prism-sdk/mcp/uds-registry";
@@ -91,7 +95,7 @@ export interface DoctorFinding {
   readonly plugin?: string;
   readonly root?: string;
   readonly path?: string;
-  readonly fix?: "refresh" | "gc" | "manual" | "mcp-restart";
+  readonly fix?: "refresh" | "gc" | "manual";
   readonly data?: Record<string, unknown>;
 }
 
@@ -2171,11 +2175,17 @@ const validateMcpHealth = async (options: {
 }): Promise<DoctorFinding[]> => {
   if (!options.pluginPath) return [];
   const manifest = await readManifest(options.pluginPath);
+  const registryExit = await Effect.runPromiseExit(loadPlugin(expandPath(options.pluginPath)));
+  if (registryExit._tag === "Failure") return [];
+  const registry = registryExit.value;
   const findings: DoctorFinding[] = [];
   for (const harness of options.harnesses) {
     if (!manifestHasCompileTargets(manifest, harness)) continue;
-    if (!resolveManifestTargets(manifest.targets.tools ?? []).includes(harness)) continue;
     try {
+      const ownedBindings = await Effect.runPromise(
+        resolveOwnedMcpBindingsForTarget(registry, harness, options.scope),
+      );
+      if (ownedBindings.length === 0) continue;
       const status = await getMcpStatus({
         pluginPath: options.pluginPath,
         harness,
@@ -2183,27 +2193,55 @@ const validateMcpHealth = async (options: {
         projectPath: options.projectPath,
         prismHome: options.prismHome,
       });
-      if (status.state === "running" || status.state === "stopped") continue;
-      findings.push(finding({
-        severity: status.state === "stale-pid" ? "warning" : "error",
-        family: "mcp.health",
-        code: `mcp.${status.state}`,
-        message: status.detail,
-        harness,
-        plugin: manifest.name,
-        path: status.descriptor.serverPath,
-        fix: "mcp-restart",
-        data: {
-          serverName: status.descriptor.serverName,
-          staleReasons: status.staleReasons,
-          // Where to read this daemon's own diagnostics (OBS-001
-          // acceptance: doctor must be able to point at the log path).
-          ...(status.descriptor.logPath ? { logPath: status.descriptor.logPath } : {}),
-        },
-      }));
+      if (
+        status.state === "running" ||
+        status.state === "stopped" ||
+        status.state === "stale-pid" ||
+        (status.state === "stale-build" &&
+          status.staleReasons.length === 1 &&
+          status.staleReasons[0] === "bundle-hash-mismatch")
+      ) {
+        // `stale-pid` and a pure bundle-hash mismatch are lazy-recovery
+        // states: the next CLI invocation replaces the dead/stale daemon
+        // from the valid bundle. Doctor reports only states requiring an
+        // operator action.
+        continue;
+      }
+      const data = {
+        serverName: status.descriptor.serverName,
+        staleReasons: status.staleReasons,
+        // Where to read this daemon's own diagnostics (OBS-001
+        // acceptance: doctor must be able to point at the log path).
+        ...(status.descriptor.logPath ? { logPath: status.descriptor.logPath } : {}),
+      };
+      if (status.state === "missing-bundle") {
+        findings.push(finding({
+          severity: "error",
+          family: "mcp.health",
+          code: "mcp.missing-bundle",
+          message: status.detail,
+          harness,
+          plugin: manifest.name,
+          path: status.descriptor.serverPath,
+          fix: "refresh",
+          data,
+        }));
+      } else {
+        findings.push(finding({
+          severity: "error",
+          family: "mcp.health",
+          code: "mcp.stale-build",
+          message: status.detail,
+          harness,
+          plugin: manifest.name,
+          path: status.descriptor.serverPath,
+          fix: "refresh",
+          data,
+        }));
+      }
     } catch (error) {
       findings.push(finding({
-        severity: "warning",
+        severity: "error",
         family: "mcp.health",
         code: "mcp.status-unavailable",
         message: error instanceof Error ? error.message : String(error),
@@ -2297,7 +2335,7 @@ const TOPOLOGY_ASSERTION_FIX: Record<McpTopologyAssertion, DoctorFinding["fix"]>
   B: "refresh", // owner/allowlist drift from the compiler's own canonical shape -- a refresh recomputes and rewrites it
   C: "refresh", // stale server for a plugin that lost its MCP ownership -- the next refresh's sync-prune removes it
   D: "manual", // duplicate/orphaned generated bundle directories -- refresh does not delete a stray bundle dir it doesn't own
-  E: "refresh", // owner plugin missing its server entry -- refresh compiles and adds it
+  E: "refresh", // refresh adds required servers in MCP mode or prunes residual servers in CLI mode
   F: "manual", // dead HTTP transport remnant from the retired transport -- no lowerer emits or removes this shape anymore
 };
 

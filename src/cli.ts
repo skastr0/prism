@@ -555,6 +555,17 @@ workflow
     let terminationController: AbortController | undefined;
     let terminationHandlers: Partial<Record<WorkflowRunnerTerminationSignal, () => void>> | undefined;
     let requestedExitCode: ExitCode | undefined;
+    const activeWorkerExecutions = new Set<Promise<unknown>>();
+    const trackWorkerExecution = <A>(execution: Promise<A>): Promise<A> => {
+      activeWorkerExecutions.add(execution);
+      void execution.finally(() => activeWorkerExecutions.delete(execution)).catch(() => undefined);
+      return execution;
+    };
+    const drainWorkerExecutions = async (): Promise<void> => {
+      while (activeWorkerExecutions.size > 0) {
+        await Promise.allSettled([...activeWorkerExecutions]);
+      }
+    };
     try {
       // Typecheck gating for detached runs: the user-facing foreground command
       // is the typecheck moat. The detached background child is spawned by
@@ -656,7 +667,7 @@ workflow
           fallbackPermission: parsedPermission,
         },
         executeTask: async (task, context) => {
-          if (outputs === null) return workerExecutor!(task, context);
+          if (outputs === null) return trackWorkerExecution(workerExecutor!(task, context));
           if (!Object.prototype.hasOwnProperty.call(outputs, task.id)) {
             throw new Error(`missing mock output for workflow task ${task.id}`);
           }
@@ -685,6 +696,12 @@ workflow
       requestedExitCode = EXIT_CODES.domainFailure;
     } finally {
       clearInterval(heartbeat);
+      // The run-scoped cancellation races return promptly by design so custom
+      // executors cannot wedge the library API. The CLI owns only Prism's
+      // built-in worker executors, whose process guards have bounded cleanup;
+      // keep the store and runner alive until every guard has reaped its worker
+      // group before a requested process exit can occur.
+      await drainWorkerExecutions();
       if (terminationHandlers !== undefined) {
         for (const signal of WORKFLOW_RUNNER_TERMINATION_SIGNALS) {
           const handler = terminationHandlers[signal];

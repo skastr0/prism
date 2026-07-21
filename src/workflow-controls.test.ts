@@ -211,6 +211,7 @@ const writeHangingWorkerTree = async (input: {
     "setInterval(() => {",
     "  if (stopping && (!releasePath || existsSync(releasePath))) process.exit(0);",
     "}, 10);",
+    "if (terminationMarkerPath) appendFileSync(terminationMarkerPath, `${role}:ready\\n`);",
   ];
   await writeFile(grandchildPath, [
     "import { appendFileSync, existsSync } from 'node:fs';",
@@ -767,11 +768,18 @@ for (const signal of ["SIGINT", "SIGHUP"] as const) {
     const workflowPath = join(root, `${signal.toLowerCase()}.workflow.ts`);
     const storePath = join(root, "workflows.sqlite");
     const markerPath = join(root, "worker-tree.json");
+    const releasePath = join(root, "release-worker-tree");
+    const terminationMarkerPath = join(root, "worker-termination.log");
     let runnerPid: number | undefined;
     let marker: WorkerTreeMarker | undefined;
     try {
       await writeFile(workflowPath, workerWorkflowSource(`signal-${signal.toLowerCase()}`));
-      const workerPath = await writeHangingWorkerTree({ root, markerPath });
+      const workerPath = await writeHangingWorkerTree({
+        root,
+        markerPath,
+        releasePath,
+        terminationMarkerPath,
+      });
       const detachedResult = await runCli(
         root,
         ["workflow", "run", workflowPath, "--detach", "--store", storePath, "--worker", "grok"],
@@ -783,11 +791,32 @@ for (const signal of ["SIGINT", "SIGHUP"] as const) {
       expect(await pollUntil(() => Bun.file(markerPath).exists())).toBe(true);
       marker = await readWorkerTreeMarker(markerPath);
       expect(treePids(runnerPid, marker).every(isPidAlive)).toBe(true);
+      expect(await pollUntil(async () => {
+        if (!(await Bun.file(terminationMarkerPath).exists())) return false;
+        const content = await Bun.file(terminationMarkerPath).text();
+        return ["worker:ready", "guard:ready", "grandchild:ready"]
+          .every((entry) => content.includes(entry));
+      })).toBe(true);
 
       process.kill(runnerPid, signal);
 
+      expect(await pollUntil(async () => {
+        if (!(await Bun.file(terminationMarkerPath).exists())) return false;
+        const content = await Bun.file(terminationMarkerPath).text();
+        return ["worker:SIGTERM", "guard:SIGTERM", "grandchild:SIGTERM"]
+          .every((entry) => content.includes(entry));
+      })).toBe(true);
+      // The workload deliberately remains alive until release. The CLI must
+      // therefore remain the process guard's owner instead of exiting as soon
+      // as its run-scoped abort race rejects. HEAD before the fix exited here
+      // while the orphaned guard continued cleanup in the background.
+      await delay(500);
+      expect(isPidAlive(runnerPid)).toBe(true);
+      expect(isProcessGroupAlive(runnerPid)).toBe(true);
+
+      await writeFile(releasePath, "release");
       expect(await pollUntil(() => treePids(runnerPid!, marker!).every((pid) => !isPidAlive(pid)))).toBe(true);
-      expect(isProcessGroupAlive(runnerPid)).toBe(false);
+      expect(await pollUntil(() => !isProcessGroupAlive(runnerPid!))).toBe(true);
       const reopened = await WorkflowStore.open(storePath);
       try {
         const run = reopened.getRun(runId);
@@ -816,6 +845,7 @@ for (const signal of ["SIGINT", "SIGHUP"] as const) {
         reopenedAgain.close();
       }
     } finally {
+      await writeFile(releasePath, "release").catch(() => undefined);
       await cleanupProcessTree(runnerPid, marker);
       await rm(root, { recursive: true, force: true });
     }

@@ -72,7 +72,9 @@ From a clean `main` with CI green:
 bun scripts/apply-release-version.ts 0.3.1
 bun install --lockfile-only
 bun run verify && bun run test:ci && bun run smoke:core && bun run smoke:npm-cli
-git add -A && git commit -m "chore(release): v0.3.1"
+git add -- package.json bun.lock packages/prism-sdk/package.json packages/npm/*/package.json
+git diff --cached --check
+git commit -m "chore(release): v0.3.1"
 git push origin main
 git tag -a v0.3.1 -m v0.3.1
 git push origin v0.3.1        # <- this fires npm-publish.yml

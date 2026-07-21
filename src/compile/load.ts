@@ -644,7 +644,36 @@ export const prepareImportWrapper = async (
     ? await workflowSpecifierOverrides()
     : await pluginSpecifierOverrides();
   const cacheKey = `${mode}:${pluginRoot}`;
-  const transformed = await getTransformedPluginRoot(cacheKey, pluginRoot, overrides);
+  // A workflow transform embeds a cache-busted `prism/refs` URL. Reusing the
+  // copied tree would also reuse that old URL (and any source bytes copied at
+  // the same time), so a second load in the same process could execute stale
+  // refs even though its outer module specifier was fresh. Workflow loads are
+  // correctness-sensitive and normally happen once per CLI process: give each
+  // one an uncached tree and remove it as soon as the import completes.
+  const uncachedWorkflowParent = options.workflow
+    ? await (async () => {
+        const fs = await import("node:fs/promises");
+        const outputParent = await fs.mkdtemp(join(tmpdir(), "prism-workflow-sources-"));
+        await copyTransformedPluginTree({
+          pluginRoot,
+          outputParent,
+          overrides,
+          visited: new Set<string>(),
+        });
+        return outputParent;
+      })()
+    : undefined;
+  const transformed = uncachedWorkflowParent === undefined
+    ? await getTransformedPluginRoot(cacheKey, pluginRoot, overrides)
+    : {
+        cacheKey,
+        pluginRoot,
+        root: join(uncachedWorkflowParent, basename(pluginRoot)),
+        outputParent: uncachedWorkflowParent,
+        activeImports: 0,
+        lastUsed: Date.now(),
+        cleanupTimer: undefined,
+      } satisfies TransformedPluginRoot;
   transformed.activeImports += 1;
   transformed.lastUsed = Date.now();
   let cleaned = false;
@@ -658,7 +687,12 @@ export const prepareImportWrapper = async (
       cleaned = true;
       transformed.activeImports = Math.max(0, transformed.activeImports - 1);
       transformed.lastUsed = Date.now();
-      scheduleTransformedPluginRootCleanup(transformed);
+      if (uncachedWorkflowParent !== undefined) {
+        const fs = await import("node:fs/promises");
+        await fs.rm(uncachedWorkflowParent, { recursive: true, force: true });
+      } else {
+        scheduleTransformedPluginRootCleanup(transformed);
+      }
     },
   };
 };

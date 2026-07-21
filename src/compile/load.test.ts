@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { Cause, Effect, Option, Schema } from "effect";
 import type { CompileError } from "./errors.js";
-import { loadPlugin } from "./load.js";
+import { loadPlugin, prepareImportWrapper } from "./load.js";
 import type { PluginRegistry } from "./registry.js";
 import type { Agent } from "./sources.js";
 
@@ -49,6 +49,27 @@ const prismImportPath = join(process.cwd(), "src", "index.ts").replace(/\\/g, "/
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+test("workflow imports never reuse a transformed tree with stale prism refs", async () => {
+  const root = await createTempRoot();
+  await writeText(join(root, "plugin.json"), JSON.stringify({ name: "workflow-cache-fixture", version: "0.1.0" }));
+  const sourcePath = join(root, "workflow.ts");
+  await writeText(sourcePath, 'import { agents } from "prism/refs";\nexport default agents;\n');
+
+  const first = await prepareImportWrapper(sourcePath, { workflow: true });
+  const firstSource = await readFile(first.transformedPath, "utf8");
+  await first.cleanup();
+
+  const second = await prepareImportWrapper(sourcePath, { workflow: true });
+  try {
+    const secondSource = await readFile(second.transformedPath, "utf8");
+    expect(second.transformedPath).not.toBe(first.transformedPath);
+    expect(secondSource).not.toBe(firstSource);
+    expect(secondSource).toContain("/generated/agents.ts?t=");
+  } finally {
+    await second.cleanup();
+  }
 });
 
 const writeManifest = (pluginRoot: string): Promise<void> =>

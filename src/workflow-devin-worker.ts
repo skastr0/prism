@@ -6,7 +6,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
 
 export type DevinWorkflowWorkerOptions = {
@@ -16,6 +16,7 @@ export type DevinWorkflowWorkerOptions = {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"devin">;
 
 export class DevinWorkflowWorkerError extends Error {
@@ -212,6 +213,7 @@ export const runDevinWorkflowTask = async (
         cwd: options.cwd,
         processTimeoutMs,
         abortSignal: options.abortSignal,
+        onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
         earlyExitPatterns: DEVIN_AUTH_PROMPT_PATTERNS,
       });
 

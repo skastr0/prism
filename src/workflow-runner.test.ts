@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1001,6 +1001,8 @@ console.log(JSON.stringify(result));
   test("resets per-attempt progress and then fails on inactivity", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-progress-budget-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
+    let fakeNow = 10_000;
+    const dateNow = spyOn(Date, "now").mockImplementation(() => fakeNow);
     try {
       // WFE-009: pin to a single attempt — idle timeout is a classified-transient executor
       // failure and would otherwise be retried once by the new default budget, doubling
@@ -1015,20 +1017,24 @@ console.log(JSON.stringify(result));
       const workflow = defineWorkflow({ name: "task-progress-budget", tasks: [task] as const });
       const runId = store.createRun(workflow.name);
       let progressReports = 0;
-      const startedAt = Date.now();
+      let reportAfterSettlement: (() => void) | undefined;
+      const startedAt = performance.now();
       let caught: unknown;
       try {
         await runWorkflow(workflow, {
           runId,
           store,
-          taskNoProgressMs: 25,
+          taskNoProgressMs: 100,
           executeTask: async (_task, context) => {
-            await delay(15);
-            context?.reportProgress?.();
-            progressReports += 1;
-            await delay(15);
-            context?.reportProgress?.();
-            progressReports += 1;
+            reportAfterSettlement = context?.reportProgress;
+            for (let index = 0; index < 8; index += 1) {
+              await delay(8);
+              fakeNow += 500;
+              // Runtime callers can bypass TypeScript; arbitrary strings must never enter
+              // the durable event payload as worker output or user-provided content.
+              context?.reportProgress?.(index === 0 ? "private-payload" as never : "worker-stdout");
+              progressReports += 1;
+            }
             return await new Promise<never>(() => undefined);
           },
         });
@@ -1036,9 +1042,20 @@ console.log(JSON.stringify(result));
         caught = error;
       }
 
-      expect(caught).toEqual(new WorkflowTaskNoProgressError("build", 25));
-      expect(progressReports).toBe(2);
-      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(45);
+      expect(caught).toEqual(new WorkflowTaskNoProgressError("build", 100));
+      expect(progressReports).toBe(8);
+      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(150);
+      fakeNow += 6_000;
+      reportAfterSettlement?.();
+      const progressEvents = store.listRunEvents(runId)
+        .filter((event) => event.type === "task.progress");
+      expect(progressEvents).toHaveLength(1);
+      expect(progressEvents[0]).toMatchObject({
+        taskId: "build",
+        payload: { source: "executor" },
+        createdAt: expect.any(String),
+      });
+      expect(JSON.stringify(progressEvents[0]?.payload)).not.toContain("Build.");
       expect(store.getRun(runId)).toMatchObject({
         status: "failed",
         terminalCause: {
@@ -1047,10 +1064,11 @@ console.log(JSON.stringify(result));
           ordinal: 0,
           attempt: 1,
           errorName: "WorkflowTaskNoProgressError",
-          message: "workflow task build made no progress for 25ms",
+          message: "workflow task build made no progress for 100ms",
         },
       });
     } finally {
+      dateNow.mockRestore();
       store.close();
       await rm(root, { recursive: true, force: true });
     }

@@ -138,6 +138,27 @@ describe("runWorkflowWorkerProcess process ownership", () => {
     ]);
   });
 
+  test("reports stdout and stderr activity without exposing chunk content", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "prism-workflow-activity-"));
+    const activity: string[] = [];
+    try {
+      const result = await runWorkflowWorkerProcess({
+        command: "sh",
+        args: ["-c", "printf 'private-stdout'; printf 'private-stderr' >&2"],
+        cwd: root,
+        onOutputActivity: (stream) => activity.push(stream),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("private-stdout");
+      expect(result.stderr).toBe("private-stderr");
+      expect(new Set(activity)).toEqual(new Set(["stdout", "stderr"]));
+      expect(activity.join(" ")).not.toContain("private");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("timeout kills the direct child and inherited-stdio descendant", async () => {
     const fixture = await createProcessFixture();
     let parentPid: number | undefined;

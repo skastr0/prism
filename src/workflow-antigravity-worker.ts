@@ -8,7 +8,7 @@ import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess, workflowWorkerProcessExcerpt } from "./workflow-worker-process.js";
 import { runAntigravityPtyProcess } from "./workflow-antigravity-pty.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
 /**
  * Environment-variable overrides for the Antigravity workflow worker:
@@ -31,6 +31,7 @@ export type AntigravityWorkflowWorkerOptions = {
   readonly printTimeout?: string;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
   /** Override the default retry budget. Mostly useful in tests. */
   readonly maxAttempts?: number;
   /** Override the default retry backoff. Mostly useful in tests. */
@@ -140,6 +141,7 @@ const preflightAgyCommand = async (input: {
   readonly cwd: string;
   readonly processTimeoutMs: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 }): Promise<void> => {
   const result = await runWorkflowWorkerProcess({
     command: input.command,
@@ -147,6 +149,7 @@ const preflightAgyCommand = async (input: {
     cwd: input.cwd,
     processTimeoutMs: input.processTimeoutMs,
     abortSignal: input.abortSignal,
+    onOutputActivity: (stream) => input.reportProgress?.(`worker-${stream}`),
   });
   const metadata = {
     adapter: "antigravity-cli",
@@ -344,6 +347,7 @@ const runAgyOnce = async (input: {
   readonly cwd: string;
   readonly processTimeoutMs: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly printTimeout: string;
   readonly usePty: boolean;
 }): Promise<AgyAttemptResult> => {
@@ -356,6 +360,7 @@ const runAgyOnce = async (input: {
         cwd: input.cwd,
         processTimeoutMs: input.processTimeoutMs,
         abortSignal: input.abortSignal,
+        onOutputActivity: (stream) => input.reportProgress?.(`worker-${stream}`),
         printTimeout: input.printTimeout,
       });
     }
@@ -365,6 +370,7 @@ const runAgyOnce = async (input: {
       cwd: input.cwd,
       processTimeoutMs: input.processTimeoutMs,
       abortSignal: input.abortSignal,
+      onOutputActivity: (stream) => input.reportProgress?.(`worker-${stream}`),
     });
   } catch (error) {
     return {
@@ -478,6 +484,7 @@ const runAgyWithRetry = (input: {
   readonly cwd: string;
   readonly processTimeoutMs: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly printTimeout: string;
   readonly model: string;
   readonly permission: AntigravityWorkflowPermissionMode;
@@ -501,6 +508,7 @@ const runAgyWithRetry = (input: {
           cwd: input.cwd,
           processTimeoutMs: Math.max(1, deadlineAt - Date.now()),
           abortSignal: input.abortSignal,
+          reportProgress: input.reportProgress,
         });
       }
       for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
@@ -527,6 +535,7 @@ const runAgyWithRetry = (input: {
           cwd: input.cwd,
           processTimeoutMs: remainingMs,
           abortSignal: input.abortSignal,
+          reportProgress: input.reportProgress,
           printTimeout: input.printTimeout,
           usePty,
         });
@@ -612,6 +621,7 @@ export const runAntigravityWorkflowTask = async (
       cwd: options.cwd,
       processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.reportProgress,
       printTimeout,
       model,
       permission: options.resolvedPermission,

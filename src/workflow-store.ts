@@ -265,9 +265,16 @@ export interface WorkflowRunRecord {
   readonly finishedAt: string | null;
   readonly runnerPid?: number;
   readonly heartbeatAt?: string;
+  readonly liveness: WorkflowRunLiveness;
   readonly createdAt?: string;
   readonly usage: WorkflowUsageTotals;
 }
+
+export type WorkflowRunLiveness = "alive" | "stale" | "unknown";
+
+// The CLI persists a heartbeat every two seconds. Five missed beats is enough to
+// distinguish a live local runner from a process that exists but has stopped advancing.
+export const WORKFLOW_RUN_LIVENESS_STALE_AFTER_MS = 10_000;
 
 export type WorkflowRunStatus =
   | "running"
@@ -538,6 +545,12 @@ const WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES = 64 * 1024;
 const sqliteDateTime = (date: Date): string =>
   date.toISOString().slice(0, 19).replace("T", " ");
 
+const sqliteTimestampMs = (timestamp: string | undefined): number | null => {
+  if (timestamp === undefined) return null;
+  const parsed = Date.parse(`${timestamp.replace(" ", "T")}Z`);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 const pickContractMetadata = (metadata: Record<string, unknown> | undefined): Record<string, unknown> => {
   if (metadata === undefined) return {};
   const contractVersion = metadata.contractVersion;
@@ -558,6 +571,18 @@ const processIsAlive = (pid: number): boolean => {
     }
     return false;
   }
+};
+
+export const workflowRunLiveness = (
+  run: Pick<WorkflowRunRecord, "status" | "runnerPid" | "heartbeatAt">,
+  nowMs: number = Date.now(),
+): WorkflowRunLiveness => {
+  if (run.status !== "running") return "unknown";
+  if (run.runnerPid === undefined || run.heartbeatAt === undefined) return "unknown";
+  const heartbeatMs = sqliteTimestampMs(run.heartbeatAt);
+  if (heartbeatMs === null || heartbeatMs > nowMs) return "unknown";
+  if (!processIsAlive(run.runnerPid)) return "stale";
+  return nowMs - heartbeatMs > WORKFLOW_RUN_LIVENESS_STALE_AFTER_MS ? "stale" : "alive";
 };
 
 const objectPayload = (payload: unknown): Record<string, unknown> | null =>
@@ -678,19 +703,25 @@ const workflowUsageTotalsFromRow = (row: RunRow): WorkflowUsageTotals => ({
   durationMs: row.usage_duration_ms,
 });
 
-const runRecordFromRow = (row: RunRow & { readonly created_at?: string }): WorkflowRunRecord => ({
-  runId: row.run_id,
-  workflow: row.workflow,
-  status: row.status,
-  terminalCause: row.terminal_cause_json === null
-    ? null
-    : JSON.parse(row.terminal_cause_json) as WorkflowRunTerminalCause,
-  finishedAt: row.finished_at,
-  ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
-  ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
-  ...(row.created_at !== undefined ? { createdAt: row.created_at } : {}),
-  usage: workflowUsageTotalsFromRow(row),
-});
+const runRecordFromRow = (row: RunRow & { readonly created_at?: string }): WorkflowRunRecord => {
+  const durable = {
+    status: row.status,
+    ...(row.runner_pid !== null ? { runnerPid: row.runner_pid } : {}),
+    ...(row.heartbeat_at !== null ? { heartbeatAt: row.heartbeat_at } : {}),
+  };
+  return {
+    runId: row.run_id,
+    workflow: row.workflow,
+    ...durable,
+    liveness: workflowRunLiveness(durable),
+    terminalCause: row.terminal_cause_json === null
+      ? null
+      : JSON.parse(row.terminal_cause_json) as WorkflowRunTerminalCause,
+    finishedAt: row.finished_at,
+    ...(row.created_at !== undefined ? { createdAt: row.created_at } : {}),
+    usage: workflowUsageTotalsFromRow(row),
+  };
+};
 
 const stringMetadata = (metadata: Record<string, unknown> | undefined, key: string): string | null => {
   const value = metadata?.[key];
@@ -744,12 +775,6 @@ const eventRepairMode = (payload: Record<string, unknown> | null): string | null
 const eventRepairCount = (payload: Record<string, unknown> | null): number | null => {
   const repairs = payload?.repairs;
   return typeof repairs === "number" && Number.isInteger(repairs) && repairs >= 0 ? repairs : null;
-};
-
-const sqliteTimestampMs = (timestamp: string | undefined): number | null => {
-  if (timestamp === undefined) return null;
-  const parsed = Date.parse(`${timestamp.replace(" ", "T")}Z`);
-  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const elapsedMs = (start: string | undefined, finish: string | undefined): number | null => {

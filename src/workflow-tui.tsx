@@ -151,7 +151,7 @@ function RunPane({
       ) : (
         state.runs.map((run) => {
           const selected = run.run.runId === selectedRunId;
-          const content = `${selected ? ">" : " "} ${shortId(run.run.runId)} ${run.run.status} t${run.totals.totalTasks} ${badgeText(run.cacheBadges)} ${run.run.workflow}`;
+          const content = `${selected ? ">" : " "} ${shortId(run.run.runId)} ${run.run.status}/${run.run.liveness} t${run.totals.totalTasks} ${badgeText(run.cacheBadges)} ${run.run.workflow}`;
           return (
             <text
               key={run.run.runId}
@@ -257,6 +257,9 @@ function DetailPane({
       `run ${run.run.runId}`,
       `workflow ${run.run.workflow}`,
       `status ${run.run.status}`,
+      `liveness ${run.run.liveness}`,
+      `runner pid ${run.run.runnerPid ?? "-"}`,
+      `heartbeat ${run.run.heartbeatAt ?? "-"}`,
       `duration ${durationText(run.totals.durationMs)}`,
       `tasks total ${run.totals.totalTasks} fresh ${run.totals.freshExecutions} hits ${run.totals.cacheHits} repairs ${run.totals.repairs}`,
       `cache ${badgeText(run.cacheBadges)}`,
@@ -276,6 +279,7 @@ function DetailPane({
         `cache ${badgeText(task.badges)}`,
         `cache key ${task.cacheKey ?? task.snapshot?.cacheKey ?? "-"}`,
         `last event ${task.lastEventType ?? "-"}`,
+        `last activity ${task.lastEventAt ?? "-"}`,
         `external session ${task.externalSessionPointer ?? "-"}`,
         "",
         "prompt",

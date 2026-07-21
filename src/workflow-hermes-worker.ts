@@ -3,7 +3,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
 export type HermesWorkflowWorkerOptions = {
   readonly cwd: string;
@@ -14,6 +14,7 @@ export type HermesWorkflowWorkerOptions = {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"hermes">;
 
 export class HermesWorkflowWorkerError extends Error {
@@ -119,6 +120,7 @@ export const runHermesWorkflowTask = async (
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
   if (aborted) {
     throw new HermesWorkflowWorkerError(

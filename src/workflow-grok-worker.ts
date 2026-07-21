@@ -7,7 +7,7 @@ import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorker
 import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromRecordKeys } from "./workflow-session.js";
 
 export type GrokWorkflowWorkerOptions = {
@@ -19,6 +19,7 @@ export type GrokWorkflowWorkerOptions = {
   readonly processTimeoutMs?: number;
   readonly maxAgentBytes?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"grok">;
 
 export class WorkflowWorkerError extends Error {
@@ -308,6 +309,7 @@ export const runGrokWorkflowTask = async (
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     env: runtime.env,
     earlyExitPatterns: GROK_AUTH_PROMPT_PATTERNS,
   });

@@ -3,7 +3,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 
 export type OpenCodeWorkflowWorkerOptions = {
   readonly cwd: string;
@@ -12,6 +12,7 @@ export type OpenCodeWorkflowWorkerOptions = {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"opencode">;
 
 export class OpenCodeWorkflowWorkerError extends Error {
@@ -157,6 +158,7 @@ export const runOpenCodeWorkflowTask = async (
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
   if (aborted) {
     throw new OpenCodeWorkflowWorkerError(

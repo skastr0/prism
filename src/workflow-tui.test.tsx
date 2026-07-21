@@ -67,6 +67,8 @@ test("workflow monitor renders persisted run task data and refreshes", async () 
       && candidate.includes("cache key monitor-build"),
     );
     expect(frame).toContain("workflow file");
+    expect(frame).toContain("liveness unknown");
+    expect(frame).toContain("last activity");
 
     act(() => {
       setup.mockInput.pressKey("r");

@@ -7,7 +7,7 @@ import { Effect, Schema } from "effect";
 import { stableJsonHash } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import { runWorkflow, WorkflowRunStoppedError, WorkflowTaskDecodeError, WorkflowTaskEscalatedError } from "./workflow-runner.js";
-import { isWorkflowRunOutcomeSuccessful, WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore, workflowTaskIdentity } from "./workflow-store.js";
+import { isWorkflowRunOutcomeSuccessful, WORKFLOW_STORE_SCHEMA_VERSION, WorkflowStore, workflowRunLiveness, workflowTaskIdentity } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { DEFAULT_WORKFLOW_DECODE_REPAIRS, defineTask, defineWorkflow, type WorkflowAgentRef, type WorkflowFinishOptions, type WorkflowWorkerId } from "./workflows.js";
 
@@ -1465,10 +1465,11 @@ describe("workflow store", () => {
       runId: "detached-run",
       workflow: "store-smoke",
       status: "running",
+      liveness: "alive",
       runnerPid: process.pid,
       heartbeatAt: expect.any(String),
     });
-    expect(heartbeat).toMatchObject({ runnerPid: process.pid, heartbeatAt: expect.any(String) });
+    expect(heartbeat).toMatchObject({ runnerPid: process.pid, heartbeatAt: expect.any(String), liveness: "alive" });
     expect(store.listRuns()).toEqual([expect.objectContaining({
       runId: "detached-run",
       runnerPid: process.pid,
@@ -1481,8 +1482,33 @@ describe("workflow store", () => {
 
     store.finishRun("detached-run", "completed");
     store.heartbeatRun("detached-run");
-    expect(store.getRun("detached-run")?.status).toBe("completed");
+    expect(store.getRun("detached-run")).toMatchObject({ status: "completed", liveness: "unknown" });
     store.close();
+  });
+
+  test("derives run liveness only from running status, runner pid, and bounded heartbeat age", () => {
+    const now = Date.parse("2026-07-21T12:00:00Z");
+    expect(workflowRunLiveness({
+      status: "running",
+      runnerPid: process.pid,
+      heartbeatAt: "2026-07-21 11:59:59",
+    }, now)).toBe("alive");
+    expect(workflowRunLiveness({
+      status: "running",
+      runnerPid: process.pid,
+      heartbeatAt: "2026-07-21 11:59:40",
+    }, now)).toBe("stale");
+    expect(workflowRunLiveness({ status: "running" }, now)).toBe("unknown");
+    expect(workflowRunLiveness({
+      status: "running",
+      runnerPid: process.pid,
+      heartbeatAt: "2026-07-21 12:00:01",
+    }, now)).toBe("unknown");
+    expect(workflowRunLiveness({
+      status: "completed",
+      runnerPid: process.pid,
+      heartbeatAt: "2026-07-21 11:59:59",
+    }, now)).toBe("unknown");
   });
 
   test("runner observes a stopped run before starting the next task", async () => {

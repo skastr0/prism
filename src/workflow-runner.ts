@@ -116,6 +116,10 @@ export {
 
 export type WorkflowTaskRepairMode = "native-continuation" | "fresh-executor-invocation" | "none";
 
+export type WorkflowTaskProgressSource = "executor" | "worker-stdout" | "worker-stderr";
+
+export type WorkflowTaskProgressReporter = (source?: WorkflowTaskProgressSource) => void;
+
 export type WorkflowTaskRepairFallbackReason =
   | "adapter-does-not-support-continuation"
   | "executor-does-not-advertise-continuation"
@@ -155,13 +159,13 @@ type WorkflowTaskRepairPlan =
 
 export interface WorkflowTaskExecutionContext {
   readonly abortSignal?: AbortSignal;
-  readonly reportProgress?: () => void;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly repair?: WorkflowTaskRepairContext;
 }
 
 export interface WorkflowTaskExecutionContextWithoutRepair {
   readonly abortSignal?: AbortSignal;
-  readonly reportProgress?: () => void;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 }
 
 export type WorkflowTaskRepairLoopOption<Worker extends string> =
@@ -175,6 +179,8 @@ export type WorkflowTaskExecutor = (
 ) => Promise<unknown | WorkflowTaskExecution>;
 
 export const DEFAULT_WORKFLOW_TASK_CONCURRENCY = 8;
+
+const WORKFLOW_TASK_PROGRESS_EVENT_MIN_INTERVAL_MS = 5_000;
 
 const assertWorkflowRepairBudget = (
   name: "maxRepairs" | "maxDecodeRepairs",
@@ -477,10 +483,12 @@ const executeLiveTaskAttempt = async (input: {
   readonly runSignal: AbortSignal;
   readonly taskNoProgressMs?: number;
   readonly repair?: WorkflowTaskRepairContext;
+  readonly onProgress?: (source: WorkflowTaskProgressSource) => void;
 }): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
   const controller = new AbortController();
   let settled = false;
   let progressTimer: NodeJS.Timeout | undefined;
+  let lastProgressEventAt: number | undefined;
   const abortFromRun = (): void => {
     if (!controller.signal.aborted) controller.abort(input.runSignal.reason);
   };
@@ -492,6 +500,19 @@ const executeLiveTaskAttempt = async (input: {
     progressTimer = setTimeout(() => {
       controller.abort(new WorkflowTaskNoProgressError(input.task.id, input.taskNoProgressMs!));
     }, input.taskNoProgressMs);
+  };
+  const reportProgress: WorkflowTaskProgressReporter = (source) => {
+    if (settled || controller.signal.aborted) return;
+    resetProgressTimer();
+    const now = Date.now();
+    if (
+      lastProgressEventAt !== undefined
+      && now - lastProgressEventAt < WORKFLOW_TASK_PROGRESS_EVENT_MIN_INTERVAL_MS
+    ) return;
+    lastProgressEventAt = now;
+    input.onProgress?.(
+      source === "worker-stdout" || source === "worker-stderr" ? source : "executor",
+    );
   };
   resetProgressTimer();
   let rejectOnAbort!: (reason: unknown) => void;
@@ -507,7 +528,7 @@ const executeLiveTaskAttempt = async (input: {
     executeTask: input.executeTask,
     context: {
       abortSignal: controller.signal,
-      reportProgress: resetProgressTimer,
+      reportProgress,
       ...(input.repair !== undefined ? { repair: input.repair } : {}),
     },
   });
@@ -1276,6 +1297,13 @@ const executeWorkflowTask = async (input: {
               executeTask,
               runSignal: input.cancellation.signal,
               taskNoProgressMs: input.taskNoProgressMs,
+              onProgress: (source) => recordEvent(
+                store,
+                runId,
+                task.id,
+                "task.progress",
+                { source },
+              ),
               ...(pendingRepair !== undefined ? { repair: pendingRepair } : {}),
             }));
             attemptUsageObserved = true;

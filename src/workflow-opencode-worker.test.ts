@@ -59,15 +59,18 @@ describe("opencode worker session id", () => {
       const fakeOpenCode = join(root, "fake-opencode.mjs");
       await writeFile(fakeOpenCode, fakeOpenCodeEventStream(callsFile, "ses_109952961ffeaJCDLyv5j46jjS"));
       await chmod(fakeOpenCode, 0o755);
+      const progressSources: string[] = [];
 
       const result = await runOpenCodeWorkflowTask(task, {
         cwd: root,
         bin: fakeOpenCode,
         resolvedPermission: "legacy",
+        reportProgress: (source) => progressSources.push(source ?? "executor"),
       });
 
       expect(result.output).toEqual({ summary: "ok" });
       expect(result.metadata?.sessionId).toBe("ses_109952961ffeaJCDLyv5j46jjS");
+      expect(progressSources).toContain("worker-stdout");
 
       const argv = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
       expect(argv.slice(argv.indexOf("--format"), argv.indexOf("--format") + 2)).toEqual(["--format", "json"]);

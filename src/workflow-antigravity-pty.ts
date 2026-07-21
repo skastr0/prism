@@ -260,9 +260,11 @@ export const runAntigravityPtyProcess = async (
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
     stdout += chunk;
+    options.onOutputActivity?.("stdout");
   });
   child.stderr.on("data", (chunk) => {
     stderr += chunk;
+    options.onOutputActivity?.("stderr");
   });
 
   try {

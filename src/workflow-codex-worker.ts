@@ -7,7 +7,7 @@ import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema } from "./workflow-output-schema.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRecordKeys, stableSessionIdFromRegex } from "./workflow-session.js";
 
 export type CodexWorkflowWorkerOptions = {
@@ -18,6 +18,7 @@ export type CodexWorkflowWorkerOptions = {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"codex-cli">;
 
 export class CodexWorkflowWorkerError extends Error {
@@ -170,6 +171,7 @@ export const runCodexWorkflowTask = async (
       cwd: options.cwd,
       processTimeoutMs,
       abortSignal: options.abortSignal,
+      onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     });
     if (aborted) {
       throw new CodexWorkflowWorkerError(

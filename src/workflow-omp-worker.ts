@@ -16,6 +16,7 @@ import {
 } from "./workflow-permissions.js";
 import type {
   WorkflowTaskExecution,
+  WorkflowTaskProgressReporter,
   WorkflowTaskRepairLoopOption,
 } from "./workflow-runner.js";
 
@@ -30,6 +31,7 @@ export type OmpWorkflowWorkerOptions = {
   readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"omp">;
 
 export class OmpWorkflowWorkerError extends Error {
@@ -230,6 +232,7 @@ export const runOmpWorkflowTask = async (
       cwd: options.cwd,
       processTimeoutMs,
       abortSignal: options.abortSignal,
+      onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     });
   if (aborted) {
     throw new OmpWorkflowWorkerError(

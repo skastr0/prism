@@ -6,7 +6,7 @@ import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./
 import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines, stableSessionIdFromRegex } from "./workflow-session.js";
 
 export type AmpWorkflowWorkerOptions = {
@@ -16,6 +16,7 @@ export type AmpWorkflowWorkerOptions = {
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"amp-code">;
 
 export class AmpWorkflowWorkerError extends Error {
@@ -192,6 +193,7 @@ export const runAmpWorkflowTask = async (
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   }).finally(() => permissionSettings.cleanup());
   if (aborted) {
     throw new AmpWorkflowWorkerError(

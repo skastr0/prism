@@ -78,6 +78,7 @@ const workflowWorkerAdapters = {
       resolvedPermission: options.resolvedPermission,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -89,6 +90,7 @@ const workflowWorkerAdapters = {
       resolvedPermission: resolveAntigravityPermission(options.resolvedPermission),
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -101,6 +103,7 @@ const workflowWorkerAdapters = {
       restrictedTools: options.restrictedTools,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -118,6 +121,7 @@ const workflowWorkerAdapters = {
         resolvedPermission: options.resolvedPermission,
         processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
+        reportProgress: options.context?.reportProgress,
         repair: options.context?.repair,
       });
     },
@@ -130,6 +134,7 @@ const workflowWorkerAdapters = {
       resolvedPermission: options.resolvedPermission,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -145,6 +150,7 @@ const workflowWorkerAdapters = {
         resolvedPermission: options.resolvedPermission,
         processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
+        reportProgress: options.context?.reportProgress,
         repair: options.context?.repair,
       });
     },
@@ -157,6 +163,7 @@ const workflowWorkerAdapters = {
       resolvedPermission: options.resolvedPermission,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -168,6 +175,7 @@ const workflowWorkerAdapters = {
       resolvedPermission: options.resolvedPermission,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -179,6 +187,7 @@ const workflowWorkerAdapters = {
       resolvedPermission: options.resolvedPermission,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
+      reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
     }),
   },
@@ -199,6 +208,7 @@ const workflowWorkerAdapters = {
         restrictedTools: options.restrictedTools,
         processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
+        reportProgress: options.context?.reportProgress,
         repair: options.context?.repair,
       });
     },
@@ -268,7 +278,9 @@ export const createWorkflowWorkerExecutor = (input: {
     // no resume, no repair context. Continuation stays the preferred path when it works above.
     return getWorkflowWorkerAdapter(worker).runTask(task, {
       ...commonOptions,
-      ...(context !== undefined ? { context: { abortSignal: context.abortSignal } } : {}),
+      ...(context !== undefined
+        ? { context: { abortSignal: context.abortSignal, reportProgress: context.reportProgress } }
+        : {}),
     });
   };
 };

@@ -8,7 +8,7 @@ import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema, type WorkflowJsonSchema } from "./workflow-output-schema.js";
-import type { WorkflowTaskExecution, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
+import type { WorkflowTaskExecution, WorkflowTaskProgressReporter, WorkflowTaskRepairLoopOption } from "./workflow-runner.js";
 import { stableSessionIdFromJsonLines } from "./workflow-session.js";
 
 export type ClaudeWorkflowWorkerOptions = {
@@ -19,6 +19,7 @@ export type ClaudeWorkflowWorkerOptions = {
   readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
+  readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"claude-code">;
 
 export class ClaudeWorkflowWorkerError extends Error {
@@ -277,6 +278,7 @@ export const runClaudeWorkflowTask = async (
     cwd: options.cwd,
     processTimeoutMs,
     abortSignal: options.abortSignal,
+    onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
   if (aborted) {
     throw new ClaudeWorkflowWorkerError(

@@ -9,11 +9,14 @@ export interface WorkflowWorkerProcessOptions {
   readonly abortSignal?: AbortSignal;
   readonly processTimeoutMs?: number;
   readonly env?: Record<string, string>;
+  readonly onOutputActivity?: (stream: WorkflowWorkerOutputStream) => void;
   readonly earlyExitPatterns?: ReadonlyArray<{
     readonly name: string;
     readonly pattern: RegExp;
   }>;
 }
+
+export type WorkflowWorkerOutputStream = "stdout" | "stderr";
 
 export interface WorkflowWorkerProcessResult {
   readonly exitCode: number | null;
@@ -80,13 +83,17 @@ export const runWorkflowWorkerProcess = async (
     earlyExit = matched.name;
     closeLease();
   };
-  const readStream = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
+  const readStream = async (
+    stream: ReadableStream<Uint8Array>,
+    source: WorkflowWorkerOutputStream,
+  ): Promise<string> => {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let output = "";
     while (true) {
       const read = await reader.read();
       if (read.done) break;
+      if (read.value.byteLength > 0) options.onOutputActivity?.(source);
       const text = decoder.decode(read.value, { stream: true });
       output += text;
       observeOutput(text);
@@ -112,11 +119,11 @@ export const runWorkflowWorkerProcess = async (
       closeLease();
     }, options.processTimeoutMs);
   const exit = guard.exited;
-  const stdout = readStream(guard.stdout).catch((error: unknown) => {
+  const stdout = readStream(guard.stdout, "stdout").catch((error: unknown) => {
     closeLease();
     throw error;
   });
-  const stderr = readStream(guard.stderr).catch((error: unknown) => {
+  const stderr = readStream(guard.stderr, "stderr").catch((error: unknown) => {
     closeLease();
     throw error;
   });

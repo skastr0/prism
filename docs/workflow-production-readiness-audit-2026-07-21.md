@@ -74,6 +74,15 @@ The important contradictions are:
   workflow committed and validated. That is evidence of the old authoring
   contract causing repository scatter, not evidence that the current
   home-root-only contract was satisfied.
+- `claude:7ffcbcbf4940444cf425ce0d89032f6a` traced a Grok task rejection to
+  Prism passing `--no-wait-for-background`: that mode disables background
+  execution while the effective Grok terminal-tool contract may still require
+  automatic backgrounding. The current Prism source still passes the flag,
+  and the installed Grok binary still carries the invariant
+  `auto_background_on_timeout requires enabled_background to be true`.
+  Rebuilding alone cannot close this; Prism must remove the contradictory
+  argument and prove bounded completion plus descendant cleanup in a live
+  canary.
 
 This cross-check is why the table below distinguishes source coverage,
 deployed proof, tested contract, and open work instead of inheriting the final
@@ -117,6 +126,9 @@ message's confidence.
   integrated and must pass migration, redaction, permission, export, delete,
   prune, and concurrent-observer tests.
 - Grok's auth diagnostic classifier still accepts overly broad plain prose.
+- Grok still receives `--no-wait-for-background`, a hidden mode that can
+  contradict the terminal tool's automatic-background contract and reject a
+  task before useful work begins.
 - Source closure is not deployed closure. The packed binary, installed
   `prism-dev`, generated workflow tools, actual Grok tree, and live harness
   canaries have not yet completed the final release-candidate matrix.
@@ -166,7 +178,7 @@ The status below is deliberately conservative. **Source covered** still becomes
 | 32 | Stop/abort/timeout left harness descendants alive | Source covered by process-group ownership across normal exit, timeout, early exit, overflow, stop, and update. |
 | 33 | Duplicate detached-child silent-death observation | Same closure and packaged falsifier as #2/#24. |
 | 34 | A fusion failure aborted the run instead of becoming evidence | Source covered by task fault isolation and partial-result/fusion regressions; authors still choose fail-fast versus `Effect.either`. |
-| 35 | Grok tool config rejected a task until a full rebuild | Source topology fixed; actual project/global refresh plus clean Grok canary is required to rule out stale generated config. |
+| 35 | Grok tool config rejected a task because `--no-wait-for-background` disabled background execution while the terminal tool required automatic backgrounding | Open until Prism removes the contradictory argument; the refreshed-home canary must prove bounded completion and a clean descendant census. |
 | 36 | Antigravity could report timeout/error as exit 0, orphan children, or return empty output | Source covered by sentinel, retry, PTY, setup, deadline, and process-group tests; live repeated canaries remain required. |
 | 37 | Codex task timeout override did not reach the worker | Source covered by run/update/resume controls and Codex process-timeout regression. |
 | 38 | Fusion output often needed a schema repair for a missing field | Contract closed: bounded decode repair is intentional and independently budgeted; exhausted repair is terminal and auditable. |

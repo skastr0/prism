@@ -233,7 +233,7 @@ test("validateSkill warns when body exceeds recommended length", async () => {
   expect(result.skillPath).toBe(skillPath);
 });
 
-test("readManifest rejects unsupported direct source noun targets", async () => {
+test("readManifest rejects unsupported direct agents and accepts supported Hermes hooks", async () => {
   const agentPluginRoot = await createPluginWithManifest("unsupported-hermes-agent", {
     agents: ["hermes"],
   });
@@ -244,12 +244,10 @@ test("readManifest rejects unsupported direct source noun targets", async () => 
   await expectManifestValidationDetails(agentPluginRoot, [
     "targets.agents resolves to unsupported compile harnesses: hermes (Hermes Agent). Source agents must be authored as agents/*.agent.ts and can only target compile-supported harnesses.",
   ]);
-  await expectManifestValidationDetails(hookPluginRoot, [
-    "targets.hooks resolves to unsupported harnesses for hooks: hermes (Hermes Agent)",
-  ]);
+  expect((await readManifest(hookPluginRoot)).targets.hooks).toEqual(["hermes"]);
 });
 
-test("readManifest rejects presets that resolve to no supported source noun targets", async () => {
+test("readManifest rejects empty agent presets and accepts claw-harness hooks through Hermes", async () => {
   const agentPluginRoot = await createPluginWithManifest("empty-preset-agent", {
     agents: ["claw-harness"],
   });
@@ -260,9 +258,7 @@ test("readManifest rejects presets that resolve to no supported source noun targ
   await expectManifestValidationDetails(agentPluginRoot, [
     "targets.agents preset 'claw-harness' resolves to no supported harnesses for agents",
   ]);
-  await expectManifestValidationDetails(hookPluginRoot, [
-    "targets.hooks preset 'claw-harness' resolves to no supported harnesses for hooks",
-  ]);
+  expect((await readManifest(hookPluginRoot)).targets.hooks).toEqual(["claw-harness"]);
 });
 
 test("readManifest rejects file-level targets in shared install artifacts", async () => {

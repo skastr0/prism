@@ -3,20 +3,6 @@
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { createServer } from "node:net";
-
-const getFreePort = (): Promise<number> =>
-  new Promise((resolvePort, reject) => {
-    const server = createServer();
-    server.unref();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => (port ? resolvePort(port) : reject(new Error("could not allocate a free port"))));
-    });
-  });
-
 
 const repoRoot = resolve(import.meta.dir, "..");
 const skipBuild = process.argv.includes("--skip-build");
@@ -76,6 +62,66 @@ const run = async (
   }
 
   return stdout;
+};
+
+const runExpectingFailure = async (
+  label: string,
+  command: readonly string[],
+  options: {
+    readonly cwd?: string;
+    readonly env?: Record<string, string>;
+    readonly expectedExitCode: number;
+    readonly stderrIncludes: string;
+  },
+): Promise<void> => {
+  console.log(`\n${label}`);
+  const proc = Bun.spawn(command, {
+    cwd: options.cwd ?? repoRoot,
+    env: { ...process.env, ...options.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (exitCode !== options.expectedExitCode || !stderr.includes(options.stderrIncludes)) {
+    throw new Error(
+      `${label} expected exit ${options.expectedExitCode} and stderr containing ` +
+        `${JSON.stringify(options.stderrIncludes)}; got exit ${exitCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+    );
+  }
+};
+
+const waitForMcpDaemonStopped = async (options: {
+  readonly prismBin: string;
+  readonly pluginRoot: string;
+  readonly cwd: string;
+  readonly env: Record<string, string>;
+}): Promise<void> => {
+  const deadline = Date.now() + 10_000;
+  let lastOutput = "";
+  while (Date.now() < deadline) {
+    const proc = Bun.spawn(
+      ["node", options.prismBin, "mcp", "status", options.pluginRoot, "--harness", "hermes"],
+      {
+        cwd: options.cwd,
+        env: { ...process.env, ...options.env },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    lastOutput = `${stdout}${stderr}`;
+    if (exitCode === 0 && /^stopped\s/.test(stdout.trim())) return;
+    await Bun.sleep(100);
+  }
+  throw new Error(`Smoke MCP daemon did not idle-reap within 10s. Last status:\n${lastOutput}`);
 };
 
 const writeText = async (path: string, content: string): Promise<void> => {
@@ -149,7 +195,7 @@ const assertTreeDoesNotContainForbiddenPaths = async (
   }
 };
 
-const createCanonicalToolFixture = async (pluginRoot: string, mcpPort: number): Promise<void> => {
+const createCanonicalToolFixture = async (pluginRoot: string): Promise<void> => {
   await writeText(
     join(pluginRoot, "plugin.json"),
     `${JSON.stringify(
@@ -157,16 +203,7 @@ const createCanonicalToolFixture = async (pluginRoot: string, mcpPort: number): 
         name: "runtime-smoke",
         version: "0.1.0",
         targets: {
-          tools: ["hermes"],
-        },
-        runtime: {
-          mcp: {
-            hermes: {
-              transport: "streamable-http",
-              host: "127.0.0.1",
-              port: mcpPort,
-            },
-          },
+          tools: ["hermes", "codex-cli"],
         },
       },
       null,
@@ -275,8 +312,7 @@ const main = async (): Promise<void> => {
     await mkdir(appRoot, { recursive: true });
     await mkdir(hermesRoot, { recursive: true });
     await writeText(join(appRoot, "package.json"), `{"private":true,"type":"module"}\n`);
-    const mcpPort = await getFreePort();
-    await createCanonicalToolFixture(pluginRoot, mcpPort);
+    await createCanonicalToolFixture(pluginRoot);
 
     // Platform packages declare "@skastr0/prism-sdk" as a real (non-workspace)
     // dependency. If it is not also packed and installed alongside from a local
@@ -315,35 +351,63 @@ const main = async (): Promise<void> => {
         },
       },
     );
-    const mcpEnv = { PRISM_HOME: prismHome };
-    try {
-      await run(
-        "Refreshing canonical tool fixture with installed Prism CLI (serving HTTP MCP)",
-        [
-          "node",
-          prismBin,
-          "refresh",
-          "--plugin",
-          pluginRoot,
-          "--harness",
-          "hermes",
-          "--compile-only",
-          "--compile-root",
-          hermesRoot,
-        ],
-        { cwd: appRoot, env: mcpEnv },
-      );
-    } finally {
-      await run(
-        "Stopping the smoke HTTP MCP daemon",
-        ["node", prismBin, "mcp", "stop", pluginRoot, "--harness", "hermes", "--scope", "global"],
-        { cwd: appRoot, env: mcpEnv },
-      ).catch(() => undefined);
+    const mcpEnv = { PRISM_HOME: prismHome, PRISM_MCP_IDLE_TTL_MS: "100" };
+    await run(
+      "Refreshing canonical tool fixture with installed Prism CLI",
+      [
+        "node",
+        prismBin,
+        "refresh",
+        "--plugin",
+        pluginRoot,
+        "--harness",
+        "hermes",
+        "--compile-only",
+        "--compile-root",
+        hermesRoot,
+      ],
+      { cwd: appRoot, env: mcpEnv },
+    );
+    const toolOutput = await run(
+      "Invoking a canonical tool through the installed Prism CLI",
+      [
+        "node",
+        prismBin,
+        "tools",
+        "invoke",
+        "runtime-smoke",
+        "echo",
+        "--input",
+        JSON.stringify({ message: "packaged canonical tool works" }),
+      ],
+      { cwd: appRoot, capture: true, env: mcpEnv },
+    );
+    if (!toolOutput.includes('"echoed": "packaged canonical tool works"')) {
+      throw new Error(`Canonical tool smoke did not return the expected output. Got:\n${toolOutput}`);
     }
+    await waitForMcpDaemonStopped({ prismBin, pluginRoot, cwd: appRoot, env: mcpEnv });
+    console.log("Canonical tool invocation and idle cleanup passed.");
 
     await assertTreeDoesNotContainForbiddenPaths(hermesRoot, forbiddenPaths);
 
     const { workflowPath, mockPath } = await createWorkflowFixture(tempRoot);
+    const removedCacheBypassCommands = [
+      ["workflow", "run", workflowPath, "--no-cache"],
+      ["workflow", "runs", "update", "smoke-run", workflowPath, "--no-cache"],
+      ["workflow", "runs", "resume", "smoke-run", workflowPath, "--no-cache"],
+    ] as const;
+    for (const command of removedCacheBypassCommands) {
+      await runExpectingFailure(
+        `Checking removed cache bypass: prism ${command.slice(0, -1).join(" ")}`,
+        ["node", prismBin, ...command],
+        {
+          cwd: appRoot,
+          env: { PRISM_HOME: prismHome },
+          expectedExitCode: 2,
+          stderrIncludes: "unknown option '--no-cache'",
+        },
+      );
+    }
     const workflowOutput = await run(
       "Running a workflow end-to-end with the installed Prism CLI",
       [

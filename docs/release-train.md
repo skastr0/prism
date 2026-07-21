@@ -29,7 +29,7 @@ How a decided version becomes a published set of npm packages. The version is
 operator decides vX.Y.Z
   -> bun scripts/apply-release-version.ts X.Y.Z
   -> bun install --lockfile-only
-  -> gate: bun run verify + smoke:core + smoke:npm-cli
+  -> gate: bun run verify + test:ci + smoke:core + smoke:npm-cli
   -> commit "chore(release): vX.Y.Z" -> push main
   -> git tag vX.Y.Z -> push tag   fires npm-publish.yml
        -> release environment approval  (manual, held on purpose)
@@ -38,7 +38,7 @@ operator decides vX.Y.Z
 
 Two workflows, one direction, no loops:
 
-- **`ci.yml`** — the merge gate. Runs `bun run verify` and the publish smokes
+- **`ci.yml`** — the merge gate. Runs `bun run verify`, `bun run test:ci`, and the publish smokes
   (`smoke:core`, `smoke:npm-cli`). The smokes live here so packaging breakage
   is caught on the PR, *before* a tag exists.
 - **`npm-publish.yml`** — the publisher. Fires on `v*` tag push (or manual
@@ -71,7 +71,7 @@ From a clean `main` with CI green:
 ```
 bun scripts/apply-release-version.ts 0.3.1
 bun install --lockfile-only
-bun run verify && bun run smoke:core && bun run smoke:npm-cli
+bun run verify && bun run test:ci && bun run smoke:core && bun run smoke:npm-cli
 git add -A && git commit -m "chore(release): v0.3.1"
 git push origin main
 git tag -a v0.3.1 -m v0.3.1

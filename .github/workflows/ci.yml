@@ -47,10 +47,8 @@ jobs:
   # sandboxes PRISM_HOME into a mkdtemp before any test module loads and
   # hard-fails if it ever resolves to the real `~/.prism` — the standalone
   # sha256-snapshot wrapper this replaced was removed in 213f8a3 as
-  # redundant. src/cli.test.ts is excluded: 3 of its Hermes MCP tests assert
-  # the retired HTTP transport and are known-red pre-existing debt (tracked
-  # in REV-003), unrelated to any single PR — same carve-out verify already
-  # makes by never including cli.test.ts in check:mcp-suites.
+  # redundant. No suite carve-outs are allowed here: the release workflow
+  # runs this exact gate before publish.
   test:
     runs-on: ubuntu-latest
     steps:

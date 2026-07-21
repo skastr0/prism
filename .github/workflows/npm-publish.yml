@@ -30,6 +30,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile --cpu='*' --os='*'
       - run: bun run verify
+      - run: bun run test:ci
       - run: bun run smoke:core
       - run: bun run build:npm-cli
       - run: bun run pack:npm-cli:dry-run

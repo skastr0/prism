@@ -33,8 +33,8 @@ interface JsonRpcEnvelope {
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** Minimal one-shot MCP Streamable-HTTP-over-UDS client (initialize + tools/call). */
-const callDaemonTool = async (options: {
+/** Minimal one-shot MCP Streamable-HTTP-over-UDS client (initialize + tools/call + DELETE). */
+export const callDaemonTool = async (options: {
   readonly pluginName: string;
   readonly socketPath: string;
   readonly wireName: string;
@@ -95,6 +95,41 @@ const callDaemonTool = async (options: {
     }
   };
 
+  const terminateSession = async (): Promise<void> => {
+    if (!sessionId) return;
+    const headers: Record<string, string> = {
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": LATEST_PROTOCOL_VERSION,
+      "mcp-session-id": sessionId,
+    };
+    if (options.exposureProfile) headers["x-prism-mcp-exposure"] = options.exposureProfile;
+
+    // Cleanup is deliberately best-effort. Once tools/call returned, turning
+    // a DELETE transport failure into a CLI failure would invite a retry of a
+    // mutating tool whose effect already happened. The daemon's session TTL
+    // remains the abnormal-path backstop; the normal path always sends DELETE.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.min(options.timeoutMs, 5_000));
+      try {
+        const init: UdsRequestInit = {
+          method: "DELETE",
+          headers,
+          signal: controller.signal,
+          unix: options.socketPath,
+        };
+        const response = await fetch("http://localhost/mcp", init);
+        await response.body?.cancel().catch(() => undefined);
+        if (response.ok || response.status === 404) return;
+      } catch {
+        // One bounded retry handles a transient connection teardown without
+        // replaying the tool call itself.
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  };
+
   const initResponse = await request("initialize", {
     protocolVersion: LATEST_PROTOCOL_VERSION,
     capabilities: {},
@@ -105,20 +140,24 @@ const callDaemonTool = async (options: {
     throw new ToolsCliInvokeError("daemon initialize did not return mcp-session-id", 2);
   }
   sessionId = sid;
-  const initBody = await parseBody(initResponse);
-  if (initBody.error) {
-    throw new ToolsCliInvokeError(`daemon initialize failed: ${initBody.error.message}`, 2);
-  }
+  try {
+    const initBody = await parseBody(initResponse);
+    if (initBody.error) {
+      throw new ToolsCliInvokeError(`daemon initialize failed: ${initBody.error.message}`, 2);
+    }
 
-  const callResponse = await request("tools/call", {
-    name: options.wireName,
-    arguments: options.args,
-  });
-  const callBody = await parseBody(callResponse);
-  if (callBody.error) {
-    throw new ToolsCliInvokeError(callBody.error.message, 1, callBody.error.data);
+    const callResponse = await request("tools/call", {
+      name: options.wireName,
+      arguments: options.args,
+    });
+    const callBody = await parseBody(callResponse);
+    if (callBody.error) {
+      throw new ToolsCliInvokeError(callBody.error.message, 1, callBody.error.data);
+    }
+    return callBody.result;
+  } finally {
+    await terminateSession();
   }
-  return callBody.result;
 };
 
 export const resolveWireName = (catalog: ToolCliCatalog, toolName: string): string => {

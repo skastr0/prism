@@ -9,6 +9,47 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.4.1 - 2026-07-22
+
+Workflow runtime hardening and ledger lifecycle. This is a minor milestone for
+durable unattended execution — not a claim that every harness canary is
+perfect or that exact multi-adapter session resume is finished.
+
+### Added
+
+- Durable workflow execution lifecycle: process-group ownership, attempt and terminal-cause evidence, stale-run reconciliation, and hardened stop/wait/update/resume controls.
+- Host-side resource ceilings on `prism workflow run`: `--task-timeout-ms`, `--max-wall-ms`, `--task-no-progress-ms`, `--max-concurrent-tasks`, `--max-tasks`, `--max-cost-usd`, `--max-prompt-bytes`.
+- Live run progress and liveness on the store, CLI, and monitor TUI.
+- Workflow runs observability: machine-wide / cross-store list and show, summary rollups (`--since`, cause column), events, wait, and span `trace` (optional OTLP export).
+- Workflow ledger governance (schema v5): retention, `runs inspect|export|delete|prune`, redaction policy, restrictive store file modes, hashed handoff tokens, and runner-log cleanup.
+- OMP workflow worker and compile lowerer target.
+- Content-addressed global task-cache identity; workflow task cache is mandatory when a store is present (`--no-cache` removed from run/update/resume).
+- Doctor/workflow-store registry GC, WAL checkpoint on store close, and soft schema-divergence surfacing.
+- Workflow scaffolds default under Prism home (`~/.prism/workflows`), not the target repository.
+
+### Changed
+
+- Generated workflow refs reload on every run instead of trusting a stale in-process surface.
+- Grok project agents lower as direct native files without `skills:` frontmatter preload lists.
+- Repo-local production workflow scripts and delivery examples retired in favor of home-root authoring.
+- Publish and verify gates fail closed (including workflow store schema version discipline when the store schema moves).
+
+### Fixed
+
+- Worker process trees drained before runner exit; detached runner output captured.
+- Worker forensics persisted on hard task failure.
+- MCP UDS path bounds for long Prism homes; one-shot MCP session close; size-capped daemon log sinks.
+- Multiple harness adapter timeout and output-extraction edge cases (including Antigravity timeout wording).
+- OpenCode consumers no longer re-materialize a foreign owner's bundle.
+- Doctor cleanup for orphaned Prism-fingerprinted MCP entries and retired launchd-era residue.
+
+### Not in this release (follow-ups)
+
+- Exact multi-adapter session continuation / execution-provenance integration.
+- Authoritative cumulative token and compaction ceiling enforcement on every worker.
+- Remaining ledger governance edge cases under independent review (identity-column secret policy, runner-log symlink ownership, pre-start PID reservation, concurrent migration serialization).
+- Generated workflow-tool parity for inspect/export/delete/prune (CLI has them; tool surface refresh pending).
+
 ## 0.3.5 - 2026-07-10
 
 ### Added

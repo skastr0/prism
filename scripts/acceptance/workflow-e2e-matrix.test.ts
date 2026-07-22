@@ -166,7 +166,7 @@ describe("workflow-e2e live config seeding", () => {
 });
 
 describe("workflow-e2e temp cleanup", () => {
-  test("reaps MCP servers before deleting temp roots", async () => {
+  test.skip("reaps MCP servers before deleting temp roots (MCP excised)", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-cleanup-test-"));
     const server = join(root, "runtime", "mcp", "fixture", "server.mjs");
     await mkdir(join(root, "runtime", "mcp", "fixture"), { recursive: true });
@@ -517,7 +517,7 @@ describe("workflow-e2e matrix evidence checks", () => {
     }
   });
 
-  test("requires Claude stream-json tool-use telemetry for generated MCP proof", () => {
+  test.skip("requires Claude stream-json tool-use telemetry for generated MCP proof (MCP excised)", () => {
     const entry = {
       harness: "claude-code" as const,
       workflow: "smoke-claude-code.workflow.ts",
@@ -586,7 +586,7 @@ describe("workflow-e2e matrix evidence checks", () => {
     expect(telemetry?.detail).toContain("keyed challenge proof");
   });
 
-  test("requires Codex stderr evidence to show shim MCP challenge_echo execution", () => {
+  test.skip("requires Codex stderr evidence to show shim MCP challenge_echo execution (MCP excised)", () => {
     const entry = {
       harness: "codex-cli" as const,
       workflow: "smoke-codex-cli.workflow.ts",

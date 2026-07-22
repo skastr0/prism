@@ -5,7 +5,6 @@
     "": {
       "name": "prism",
       "dependencies": {
-        "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/plugin": "^1.15.13",
         "@opentui/core": "0.4.1",
         "@opentui/react": "0.4.1",
@@ -26,7 +25,7 @@
     },
     "packages/npm/prism": {
       "name": "@skastr0/prism",
-      "version": "0.3.5",
+      "version": "0.4.1",
       "bin": {
         "prism": "bin/prism.js",
       },
@@ -39,7 +38,7 @@
     },
     "packages/npm/prism-darwin-arm64": {
       "name": "@skastr0/prism-darwin-arm64",
-      "version": "0.3.5",
+      "version": "0.4.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/plugin": "^1.15.13",
@@ -52,7 +51,7 @@
     },
     "packages/npm/prism-darwin-x64": {
       "name": "@skastr0/prism-darwin-x64",
-      "version": "0.3.5",
+      "version": "0.4.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/plugin": "^1.15.13",
@@ -65,7 +64,7 @@
     },
     "packages/npm/prism-linux-arm64": {
       "name": "@skastr0/prism-linux-arm64",
-      "version": "0.3.5",
+      "version": "0.4.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/plugin": "^1.15.13",
@@ -81,7 +80,7 @@
     },
     "packages/npm/prism-linux-x64": {
       "name": "@skastr0/prism-linux-x64",
-      "version": "0.3.5",
+      "version": "0.4.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/plugin": "^1.15.13",
@@ -97,9 +96,8 @@
     },
     "packages/prism-sdk": {
       "name": "@skastr0/prism-sdk",
-      "version": "0.3.5",
+      "version": "0.4.1",
       "dependencies": {
-        "@modelcontextprotocol/sdk": "1.29.0",
         "effect": "^3.21.1",
       },
     },

@@ -40,26 +40,6 @@
     "./stable-json": {
       "types": "./dist/stable-json.d.ts",
       "import": "./dist/stable-json.js"
-    },
-    "./mcp/shim": {
-      "types": "./dist/mcp/shim.d.ts",
-      "import": "./dist/mcp/shim.js"
-    },
-    "./mcp/wire-naming": {
-      "types": "./dist/mcp/wire-naming.d.ts",
-      "import": "./dist/mcp/wire-naming.js"
-    },
-    "./mcp/uds-registry": {
-      "types": "./dist/mcp/uds-registry.d.ts",
-      "import": "./dist/mcp/uds-registry.js"
-    },
-    "./mcp/uds-singleton": {
-      "types": "./dist/mcp/uds-singleton.d.ts",
-      "import": "./dist/mcp/uds-singleton.js"
-    },
-    "./mcp/daemon-resolver": {
-      "types": "./dist/mcp/daemon-resolver.d.ts",
-      "import": "./dist/mcp/daemon-resolver.js"
     }
   },
   "files": [
@@ -75,7 +55,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "effect": "^3.21.1",
-    "@modelcontextprotocol/sdk": "1.29.0"
+    "effect": "^3.21.1"
   }
 }

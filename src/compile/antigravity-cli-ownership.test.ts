@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/antigravity-cli.js";
-import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -26,9 +25,9 @@ afterEach(async () => {
   );
 });
 
-test("antigravity-cli lowerer owner-qualifies foreign tool bindings without copying owner MCP config", async () => {
+test("antigravity-cli lowerer injects CLI guidance for foreign tool bindings without MCP config", async () => {
   const root = await createTempRoot();
-  const outputRoot = join(root, ".antigravity");
+  const outputRoot = join(root, ".agents");
   const ownerPluginName = "ot";
 
   const consumerAgent: ComposedAgent = {
@@ -68,11 +67,11 @@ test("antigravity-cli lowerer owner-qualifies foreign tool bindings without copy
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  const wire = renderPluginWire("antigravity-cli", ownerPluginName, "ot_echo");
-  const echoPermission = `mcp_${pluginServerKey(ownerPluginName)}_${wire}`;
-  expect(echoPermission).toBe("mcp_ot_echo");
-  expect(agent?.content).toContain(echoPermission);
-  expect(agent?.content).not.toContain("mcp_prism-generated-consumer-plugin_ot_echo");
+  expect(agent?.content).toContain("Load skill `prism-tools-ot`");
+  expect(agent?.content).toContain("prism tools invoke ot <tool-name>");
+  expect(agent?.content).toContain("`echo`");
+  expect(agent?.content).not.toContain("mcp_ot_echo");
+  expect(agent?.content).not.toContain("mcp_");
 
   const mcpConfig = findContentOperation(operations, "mcp_config.json");
   expect(mcpConfig).toBeUndefined();

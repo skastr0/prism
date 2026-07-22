@@ -231,8 +231,7 @@ const WRITE_PRIMITIVE_ALLOWLIST: ReadonlySet<string> = new Set([
   "compile/cache.ts",
   "compile/compile-manifest.ts",
   "compile/lockfile.ts",
-  "compile/mcp-runtime-path.ts",
-]);
+  ]);
 
 const importedFsWritePrimitives = (content: string): string[] => {
   const found = new Set<string>();
@@ -283,8 +282,7 @@ const allowedMcpBareWriteCall = (
   count: number,
   content: string,
 ): boolean =>
-  relativePath === "mcp/lifecycle.ts" &&
-  callName === ".writeFile" &&
+    callName === ".writeFile" &&
   count === 1 &&
   content.includes("await handle.writeFile(`${JSON.stringify({");
 

@@ -301,14 +301,6 @@ const resolveBundleImportPath = (specifier: string): string => {
 
 export const effectBundleImportPath = (): string => resolveBundleImportPath("effect");
 
-export const mcpSdkMcpBundleImportPath = (): string =>
-  resolveBundleImportPath("@modelcontextprotocol/sdk/server/mcp.js");
-
-export const mcpSdkWebStandardHttpBundleImportPath = (): string =>
-  resolveBundleImportPath("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
-
-export const mcpSdkStdioBundleImportPath = (): string =>
-  resolveBundleImportPath("@modelcontextprotocol/sdk/server/stdio.js");
 
 export const opencodePluginBundleImportPath = (): string =>
   resolveBundleImportPath("@opencode-ai/plugin");
@@ -317,25 +309,3 @@ export const typescriptBundleImportPath = (): string => resolveBundleImportPath(
 
 export const zodV4BundleImportPath = (): string => resolveBundleImportPath("zod/v4");
 
-// The registry/singleton modules are internal MCP modules in prism-sdk,
-// exposed as package subpath exports (`@skastr0/prism-sdk/mcp/uds-registry`
-// / `.../uds-singleton`) precisely so they resolve through the same
-// `resolveBundleImportPath` machinery as every other runtime dependency
-// above. A relative `import.meta.resolve("../../packages/...")` from *this*
-// file only resolves correctly when this module's own file is at its real
-// source-tree location: inside a `bun build --compile` standalone binary,
-// this file is embedded at a synthetic virtual-root path, so the relative
-// walk lands on a nonexistent literal path (e.g. `/packages/...`) instead of
-// the real prism-sdk source — Bun.build then fails to resolve it when
-// bundling the generated MCP server entry. Package-specifier resolution
-// sidesteps that entirely: it either finds a real on-disk `node_modules`
-// copy of `@skastr0/prism-sdk` (compiled binary, via
-// `PRISM_RUNTIME_DEPS_PACKAGE_ROOT` or the executable's own package root) or
-// falls back to `import.meta.resolve` for a *bare* specifier, which Node/Bun
-// module resolution walks from the real filesystem regardless of where the
-// calling module was embedded.
-export const udsRegistryBundleImportPath = (): string =>
-  resolveBundleImportPath("@skastr0/prism-sdk/mcp/uds-registry");
-
-export const udsSingletonBundleImportPath = (): string =>
-  resolveBundleImportPath("@skastr0/prism-sdk/mcp/uds-singleton");

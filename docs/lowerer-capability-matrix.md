@@ -1,6 +1,6 @@
 # Lowerer Capability Matrix
 
-Checked: 2026-07-14
+Checked: 2026-07-22
 
 Prism keeps two related contracts separate:
 
@@ -9,8 +9,8 @@ Prism keeps two related contracts separate:
 
 This matters because "plugin" means different things per product. A generated Claude,
 Grok, Factory, or Antigravity plugin bundle is not the same thing as an Amp or
-OpenCode TypeScript plugin API, and neither is the same thing as an MCP server
-patched into a config file.
+OpenCode TypeScript plugin API, and neither is the same thing as the CLI tool
+runtime under `PRISM_HOME/runtime/tools/`.
 
 ## Surface Kinds
 
@@ -18,9 +18,8 @@ patched into a config file.
 | --- | --- |
 | `native-plugin-api` | Prism emits code for a harness runtime plugin API, such as OpenCode, Amp, or OMP TypeScript plugins. |
 | `native-plugin-bundle` | Prism emits the product's plugin package layout, such as Claude Code, Antigravity, Grok, or Factory plugin bundles. |
-| `generated-mcp` | Prism emits a generated MCP server for canonical tools. |
 | `markdown-file` | Prism emits generated markdown files consumed directly by the harness. |
-| `direct-file` | Prism copies or appends install-phase files directly into harness roots. |
+| `direct-file` | Prism copies or appends install-phase files directly into harness roots (also used for the shared CLI tool runtime under `PRISM_HOME`). |
 | `config-patch` | Prism patches a harness config file and owns only the generated block/table/section. |
 | `unsupported` | Prism intentionally does not manage the surface. |
 
@@ -32,37 +31,50 @@ patched into a config file.
 | `compile-verified` | The lowerer compiles and is maintained, but no live worker dispatch has been run against the harness. |
 | `unsupported` | Prism intentionally does not manage the surface (reuses the Surface Kind of the same name). |
 
-## Matrix
+## Tools surface (CLI-only)
 
-All `generated-mcp` surfaces are per-owning-plugin: each source plugin that
-owns canonical tools gets its own bundle at
-`<PRISM_HOME>/runtime/mcp/<plugin>/server.mjs` (never inside harness roots)
-and its own server entry per harness root — never a shared aggregated shim
-across plugins. Harnesses reach it over the stdio-shim transport
-(`command: "prism"`, `args: ["mcp", "shim"]`), with `PRISM_SHIM_PLUGINS`
-scoping the spawned process to that single owner. Per-harness tool exposure
-uses each harness's own mechanism: codex `enabled_tools`, hermes
-`tools.include`, and kimi `enabledTools` filter inside the server's own config
-entry; Claude Code, Antigravity CLI, and Factory Droid allowlist per agent via
-frontmatter tool names scoped to each server; Cursor and Grok have no native
-per-tool filter and expose the owner's full tool set once its server entry
-exists.
+Prism no longer emits harness MCP config (`.mcp.json`, `mcp_config.json`,
+`config.toml#mcp_servers`, `config.yaml#mcp_servers`, Cursor `mcp.json`, Kimi
+`mcpServers`, etc.) and no longer registers generated MCP servers for harnesses.
+
+Canonical tools lower to:
+
+```text
+<PRISM_HOME>/runtime/tools/<plugin>/runtime.mjs
+<PRISM_HOME>/runtime/tools/<plugin>/catalog.json
+```
+
+Agents invoke them with:
+
+```bash
+prism tools invoke <plugin> <tool-name> --input '<json-object>'
+```
+
+Compile still marks `generatedCanonicalTools: "executable"` for harnesses that
+own tools; the surface kind is `direct-file` (CLI runtime), not a harness MCP
+wire. Harnesses with native plugin tool APIs (OpenCode, Amp, Pi, OMP) keep
+`native-plugin-api` for in-process tools and still get CLI catalogs for
+cross-plugin invoke.
+
+The `mcpConfig` surface is `unsupported` on every harness.
+
+## Matrix
 
 | Harness | Plugin surface | Agents | Skills | Tools | Hooks | Config patches | Verification tier |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | `generated-mcp` via `.mcp.json` | plugin hooks | none for generated bundle | `live-proven` |
+| Claude Code | `native-plugin-bundle` via skills-dir plugin | plugin markdown | plugin skills | CLI runtime + skill inject | plugin hooks | none for generated bundle | `live-proven` |
 | OpenCode | `native-plugin-api` | root markdown | root skills | native plugin tools | native plugin hooks | `opencode.json` agent/plugin entries | `live-proven` |
 | OpenClaw | unsupported | unsupported | direct skills | unsupported | unsupported | none | `unsupported` |
-| Hermes Agent | unsupported | unsupported | root/profile skills | `generated-mcp` | unsupported | `config.yaml#mcp_servers` | `live-proven` |
-| Codex CLI | unsupported | root TOML files | root skills | `generated-mcp` | `config.toml` hooks | `config.toml#mcp_servers` | `live-proven` |
-| Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via plugin config | plugin hooks | plugin-local `mcp_config.json` | `live-proven` (live dispatch verified, smoke fixture pending) |
-| Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | `generated-mcp` via plugin manifest | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
+| Hermes Agent | unsupported | unsupported | root/profile skills | CLI runtime | config hooks | none for tools | `live-proven` |
+| Codex CLI | unsupported | root TOML files | root skills | CLI runtime + skill inject | `config.toml` hooks | none for tools | `live-proven` |
+| Antigravity CLI | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` (live dispatch verified, smoke fixture pending) |
+| Kimi Code | `native-plugin-bundle` + installed record | role-skill fallback | plugin skills | CLI runtime + skill inject | `config.toml` hooks | `plugins/installed.json`, `config.toml#hooks` | `live-proven` |
 | Amp Code | `native-plugin-api` | generated role-skill fallback | root skills | native `registerTool` plugin tools and `registerCommand` commands | native `amp.on(...)` plugin events | none | `live-proven` |
-| Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | `generated-mcp` | unsupported | `mcp.json#mcpServers` | `compile-verified` |
-| Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | `generated-mcp` via plugin `mcp.json` | plugin hooks | none for generated bundle | `compile-verified` |
+| Cursor | `native-plugin-bundle` for commands | unsupported | direct skills | CLI runtime | unsupported | none for tools | `compile-verified` |
+| Factory Droid | `native-plugin-bundle` | plugin droids | plugin skills when compiled, direct skills when skills-only | CLI runtime | plugin hooks | none for generated bundle | `compile-verified` |
 | Pi | `native-plugin-bundle` | pi-agents markdown discovery | package skills | native `registerTool` extension tools | extension events + hook wrappers | `settings.json#packages` | `compile-verified` |
 | Oh My Pi | `native-plugin-api` | native agent markdown | root skills | native `registerTool` extension tools | extension events + hook wrappers | none | `live-proven` (live dispatch verified, smoke fixture pending) |
-| Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | `generated-mcp` via `config.toml#mcp_servers` region | plugin hooks | `config.toml#mcp_servers` | `live-proven` |
+| Grok Build | `native-plugin-bundle` | plugin agents | plugin skills | CLI runtime + skill inject | plugin hooks | none for tools | `live-proven` |
 | Devin CLI | unsupported (plugins beta deferred) | unsupported (subagent AGENT.md later) | direct skills | unsupported (PR1) | project `hooks.v1.json` / global `config.json#hooks` members | none (never whole-file `config.json`) | `live-proven` |
 
 Cursor and Factory Droid are closed at `compile-verified` outright, not pending a
@@ -81,29 +93,26 @@ plugin: `~/.claude/skills/<plugin>/.claude-plugin/plugin.json` for personal
 scope or `<cwd>/.claude/skills/<plugin>/.claude-plugin/plugin.json` for project
 scope. Prism treats that as the canonical generated-local Claude surface and
 does not write marketplace cache internals. Generated Claude bundles put
-root-level `commands/`, `agents/`, `skills/`, `hooks/`, and `.mcp.json`
-components under `<claude-root>/skills/prism-generated-<plugin>/`. Claude
-plugins namespace skills and flat Markdown commands as `/plugin-name:name`, so
-Prism treats `targets.commands: ["claude-code"]` as compile-managed and does
-not write direct `~/.claude/commands/` files.
+root-level `commands/`, `agents/`, `skills/`, and `hooks/` components under
+`<claude-root>/skills/prism-generated-<plugin>/`. Claude plugins namespace skills
+and flat Markdown commands as `/plugin-name:name`, so Prism treats
+`targets.commands: ["claude-code"]` as compile-managed and does not write direct
+`~/.claude/commands/` files. Canonical tools are not registered as Claude MCP
+servers; they are CLI-invoked.
 
 Official Antigravity CLI plugins are staged under
 `~/.gemini/antigravity-cli/plugins/<plugin_name>/` with root `plugin.json`,
-optional `mcp_config.json`, optional `hooks.json`, and optional `skills/`,
-`agents/`, and `rules/` directories. Prism follows that native bundle shape for
-compiled rules, agents, targeted skills, concrete orbit skills, canonical-tool
-MCP servers, and hooks. Antigravity skills surface as slash commands, so Prism
-does not write a separate direct command-file surface; unsupported direct
-`targets.commands: ["antigravity-cli"]` declarations fail manifest validation
-instead of being silently dropped. Remote MCP entries use Antigravity's
-documented `serverUrl` field, and hook wrappers emit Antigravity `PreToolUse`,
-`PostToolUse`, and `Stop` output shapes. Hook lowering is Prism-hook-DSL
-lowering, not a generic Antigravity hook authoring API: Prism currently maps
-`tool.before`, `tool.after`, `session.start`, and `session.end` to
-`PreToolUse`, `PostToolUse`, `PreInvocation`, and `Stop`, preserves the full
-native Antigravity stdin payload at `event.native`, and intentionally does not
-model Antigravity-only `PostInvocation` outputs such as `injectSteps` or
-`terminationBehavior`.
+optional `hooks.json`, and optional `skills/`, `agents/`, and `rules/`
+directories. Prism follows that native bundle shape for compiled rules, agents,
+targeted skills, concrete orbit skills, and hooks. Antigravity skills surface as
+slash commands, so Prism does not write a separate direct command-file surface;
+unsupported direct `targets.commands: ["antigravity-cli"]` declarations fail
+manifest validation instead of being silently dropped. Hook lowering is
+Prism-hook-DSL lowering: Prism currently maps `tool.before`, `tool.after`,
+`session.start`, and `session.end` to `PreToolUse`, `PostToolUse`,
+`PreInvocation`, and `Stop`, preserves the full native Antigravity stdin payload
+at `event.native`, and intentionally does not model Antigravity-only
+`PostInvocation` outputs such as `injectSteps` or `terminationBehavior`.
 
 Amp is product-native for generated commands, tools, and supported hooks through its
 TypeScript plugin API. Prism emits generated plugins under Amp's documented
@@ -131,8 +140,8 @@ skill with `--prompt --output-format stream-json`. Kimi's prompt mode does not
 allow `--yolo` or `--auto`, so tool-use automation is limited to what the model
 can emit in a single prompt response; full headless tool execution requires Kimi
 ACP server mode, which Prism does not yet implement.
-Canonical tools lower through plugin-declared MCP servers using Kimi's
-plugin MCP runtime names and `mcp__<server>__<tool>` qualification. Hooks are not plugin manifest fields; Prism
+Canonical tools lower through the CLI runtime (`prism tools invoke`), not
+plugin-declared MCP servers. Hooks are not plugin manifest fields; Prism
 patches managed `[[hooks]]` entries in `<kimi-root>/config.toml` and stores hook
 wrappers in the generated plugin bundle. The current Moonshot-hosted Kimi Code
 CLI docs also support project-local `.kimi-code/skills/` and
@@ -156,33 +165,26 @@ surface is shared between the two targets.
 
 Factory Droid compile output follows the documented plugin layout: only
 `.factory-plugin/plugin.json` lives under `.factory-plugin/`, while generated
-droids, skills, hooks, and MCP config live at the plugin root. Factory rules and
+droids, skills, and hooks live at the plugin root. Factory rules and
 commands remain install-phase direct-file artifacts, because Droid's native
 plugin command surface is still a slash-command file surface rather than a
 compile-owned canonical command model. When a generated Factory bundle contains
 agents, tools, or hooks, Prism bundles targeted managed skills into that plugin
 to avoid double-loading the same Prism-owned skill from `.factory/skills/`.
 Permission-only skill visibility still fails closed because the official Droid
-frontmatter documents `tools` but not a per-droid skill allowlist.
+frontmatter documents `tools` but not a per-droid skill allowlist. Canonical
+tools are CLI-invoked; Prism does not write plugin-local `mcp.json`.
 
-Hermes profile-local MCP is intentionally expressed through the existing root
-override rather than a new target. Hermes profiles are separate Hermes homes, so
-`prism refresh --plugin ./plugin --harness hermes --compile-only --compile-root ~/.hermes/profiles/<name>` writes
-skills and `config.yaml#mcp_servers` into that profile root. The `config.yaml`
-entry is a stdio-shim `command`/`args`/`env` block; the daemon it spawns is
-content-addressed under the single shared `PRISM_HOME`, so no separate
-per-profile MCP runtime root is needed (the retired `--mcp-root` flag is gone).
-See `docs/hermes-profile-mcp.md` for the collision and non-goal contract:
-Prism does not lower SOUL/personality files, runtime delegation, or native
-Hermes Python plugins as part of profile-local MCP support.
+Hermes profile-local tools use the existing root override rather than a new
+target. Hermes profiles are separate Hermes homes, so
+`prism refresh --plugin ./plugin --harness hermes --compile-only --compile-root ~/.hermes/profiles/<name>`
+writes skills into that profile root. Tools are CLI-only under shared
+`PRISM_HOME` (no per-profile MCP runtime). See historical Hermes profile docs for
+collision/non-goal notes: Prism does not lower SOUL/personality files, runtime
+delegation, or native Hermes Python plugins.
 
-Cursor compile support is tools-only. Cursor's official MCP contract uses
-`~/.cursor/mcp.json` globally and `.cursor/mcp.json` per project, and Cursor CLI
-respects the same file as the IDE. Prism lowers canonical tools into a generated
-MCP server and patches one compiler-owned `mcpServers` entry in that file:
-generated entries use the stdio-shim `command`/`args`/`env` shape
-(`command: "prism"`, `args: ["mcp", "shim"]`, `env` scoping the process to its
-owner plugin) — no `url`, no `headers`. Cursor documents local plugins under
+Cursor compile support is tools-only for catalog/runtime emission. Prism does
+not patch Cursor `mcp.json`. Cursor documents local plugins under
 `~/.cursor/plugins/local/<plugin>` with `.cursor-plugin/plugin.json` and default
 `commands/` component discovery, so Prism installs Cursor command artifacts into
 a generated local plugin bundle instead of direct `~/.cursor/commands/` files.

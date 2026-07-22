@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/kimi-code.js";
-import { pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -26,11 +25,10 @@ afterEach(async () => {
   );
 });
 
-test("kimi-code lowerer owner-qualifies foreign tool bindings without copying owner MCP servers", async () => {
+test("kimi-code lowerer injects CLI guidance for foreign tool bindings without MCP servers", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".kimi-code");
   const ownerPluginName = "ot";
-  const ownerServerName = pluginServerKey(ownerPluginName);
 
   const consumerAgent: ComposedAgent = {
     name: "consumer",
@@ -72,17 +70,15 @@ test("kimi-code lowerer owner-qualifies foreign tool bindings without copying ow
     operations,
     join("skills", "prism-agent-consumer", "SKILL.md"),
   );
-  expect(roleSkill?.content).toContain(`mcp__${ownerServerName}__echo`);
-  expect(roleSkill?.content).not.toContain("prism-generated-consumer-plugin");
+  expect(roleSkill?.content).toContain("Load skill `prism-tools-ot`");
+  expect(roleSkill?.content).toContain("prism tools invoke ot <tool-name>");
+  expect(roleSkill?.content).toContain("`echo`");
+  expect(roleSkill?.content).not.toContain("mcp__");
+  expect(roleSkill?.content).not.toContain("Generated MCP tools for this role:");
 
   const manifest = findContentOperation(operations, "kimi.plugin.json");
   const parsed = JSON.parse(manifest?.content ?? "{}") as {
     mcpServers?: Record<string, unknown>;
   };
-  // Consumer plugin (no owned bindings of its own) carries NO mcpServers at
-  // all under the per-plugin-manifest law -- not the owner's server key, and
-  // not its own.
   expect(parsed.mcpServers).toBeUndefined();
-  expect(parsed.mcpServers?.[ownerServerName]).toBeUndefined();
-  expect(parsed.mcpServers?.["consumer-plugin"]).toBeUndefined();
 });

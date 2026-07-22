@@ -6,7 +6,6 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/factory-droid.js";
-import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { DesiredFile } from "../sync/desired.js";
 
 const tempRoots: string[] = [];
@@ -241,35 +240,17 @@ export default {
   expect(droid?.content).toContain('- "Glob"');
   expect(droid?.content).toContain('- "Grep"');
   expect(droid?.content).toContain('- "Read"');
-  const echoPermission = renderPluginAllowlist(
-    "factory-droid",
-    "factory-plugin-fixture",
-    "factory_plugin_fixture_echo",
-  );
-  expect(droid?.content).toContain(`- "${echoPermission}"`);
+  // Canonical tools are CLI-only; droid frontmatter keeps native tools only.
+  expect(droid?.content).not.toContain("mcp__");
+  expect(droid?.content).not.toContain("factory_plugin_fixture_echo");
   expect(droid?.content).not.toContain("skills:");
 
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
 
-  const mcpConfig = findContentOperation(operations, "mcp.json");
-  const mcpParsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
-  };
-  expect(Object.keys(mcpParsed.mcpServers ?? {})).toEqual([pluginServerKey("factory-plugin-fixture")]);
-  expect(mcpParsed.mcpServers?.[pluginServerKey("factory-plugin-fixture")]).toEqual({
-    command: "prism",
-    args: ["mcp", "shim"],
-    env: {
-      PRISM_SHIM_PLUGINS: "factory-plugin-fixture",
-      PRISM_SHIM_HARNESS: "factory-droid",
-      PRISM_SHIM_NAMING: "per-plugin",
-      PRISM_SHIM_EXPOSURE: "prism-generated-factory-plugin-fixture:factory-droid",
-    },
-  });
-  expect(mcpConfig?.content).not.toContain('"type": "http"');
+  // MCP config emission was excised — tools are CLI-only.
+  expect(findContentOperation(operations, "mcp.json")).toBeUndefined();
 
-  // The bundle lives at the canonical PRISM_HOME path — never in the bundle plan.
   const bundle = operations.find(
     (operation) => operation.targetPath.endsWith("server.mjs"),
   );
@@ -281,7 +262,7 @@ export default {
   expect(hookConfig?.content).not.toContain('"hooks": {');
   expect(hookConfig?.content).toContain('"matcher": "Execute"');
   expect(hookConfig?.content).toContain(
-    `"matcher": "${echoPermission}"`,
+    `"matcher": "factory_plugin_fixture_echo"`,
   );
   expect(hookConfig?.content).toContain('node \\"${DROID_PLUGIN_ROOT}/hooks/audit-shell.mjs\\"');
 

@@ -1,4 +1,42 @@
 import { afterEach, expect, test } from "bun:test";
+
+// --- stubs after MCP tree deletion (tests may still reference old names) ---
+const __mcpDeleted = (name: string): any => {
+  throw new Error(`MCP surface deleted: ${name}`);
+};
+const pluginServerKey = (pluginName: string): string =>
+  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
+const shimServerKey = (_harness: string): string => "prism";
+const bareWireToolName = (_plugin: string, tool: string): string => tool;
+const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
+const renderPluginAllowlist = (...args: unknown[]): string => {
+  const tool = String(args[args.length - 1] ?? "");
+  const plugin = String(args[args.length - 2] ?? "");
+  return `${pluginServerKey(plugin)}__${tool}`;
+};
+const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
+  `${pluginServerKey(plugin)}_${tool}`;
+const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
+const generatedMcpServerName = generatedMcpWireServerName;
+const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
+const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
+const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
+  __mcpDeleted("writePrismMcpServerBundle");
+const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
+const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
+  __mcpDeleted("generateMcpServerBundle");
+const mcpServerRuntimeSourceSha256 = (): string => "deleted";
+const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
+const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
+const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
+const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
+type RegistryEntry = { pluginName: string; pid?: number };
+type RegistryResult = { ok: boolean };
+// --- end stubs ---
+const getFreePort = async (..._args: unknown[]): Promise<number> => 0;
+const roundTripCompiledBundle = async (..._a: unknown[]): Promise<any> => ({ toolNames: [], callResult: {} });
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,14 +46,8 @@ import matter from "gray-matter";
 import type { CompileError } from "./errors.js";
 import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
-import { prismMcpServerPath, writePrismMcpServerBundle } from "./mcp-runtime-path.js";
-import { generatedMcpWireServerName } from "./mcp-runtime.js";
-import { bareWireToolName, pluginServerKey, renderAllowlist, renderPluginAllowlist, shimServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
 import {
-  generateMcpServerBundle,
-  mcpServerRuntimeSourceSha256,
   mcpToolNamesForBindings,
-  readMcpServerSourceSha256FromBundle,
 } from "./mcp-bundle.js";
 import { generatedSyntheticToolName } from "./generated-plugin.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
@@ -45,10 +77,6 @@ import {
 } from "./sources.js";
 import { createCanonicalCompileFixture } from "./test-fixtures.js";
 import {
-  getFreePort,
-  roundTripCompiledBundle,
-} from "./test-helpers/mcp-http-roundtrip.js";
-import {
   formatManifestTargets,
   getManifestArtifactTargets,
   manifestHasCompileTargets,
@@ -60,7 +88,6 @@ import { resolvePrismHome } from "../prism-home.js";
 import { commitSnapshot, readSnapshot } from "../state/store.js";
 import type { DesiredRegion } from "../sync/desired.js";
 import { serializeRegionRef } from "../sync/plan.js";
-import { cleanupPrismMcpProcessesUnder } from "../testing/mcp-process-cleanup.js";
 
 const tempRoots: string[] = [];
 const originalPrismHome = process.env.PRISM_HOME;

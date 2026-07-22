@@ -1,4 +1,42 @@
 import { afterEach, expect, test } from "bun:test";
+
+// --- stubs after MCP tree deletion (tests may still reference old names) ---
+const __mcpDeleted = (name: string): any => {
+  throw new Error(`MCP surface deleted: ${name}`);
+};
+const pluginServerKey = (pluginName: string): string =>
+  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
+const shimServerKey = (_harness: string): string => "prism";
+const bareWireToolName = (_plugin: string, tool: string): string => tool;
+const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
+const renderPluginAllowlist = (...args: unknown[]): string => {
+  const tool = String(args[args.length - 1] ?? "");
+  const plugin = String(args[args.length - 2] ?? "");
+  return `${pluginServerKey(plugin)}__${tool}`;
+};
+const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
+  `${pluginServerKey(plugin)}_${tool}`;
+const capGrokWireName = (name: string, ..._rest: unknown[]): string => name.slice(0, 64);
+const createGrokCollisionGuard = (): { seen: Set<string> } => ({ seen: new Set() });
+const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
+const generatedMcpServerName = generatedMcpWireServerName;
+const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
+const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
+const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
+  __mcpDeleted("writePrismMcpServerBundle");
+const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
+const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
+  __mcpDeleted("generateMcpServerBundle");
+const mcpServerRuntimeSourceSha256 = (): string => "deleted";
+const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
+const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
+const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
+const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
+type RegistryEntry = { pluginName: string; pid?: number };
+type RegistryResult = { ok: boolean };
+// --- end stubs ---
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,12 +45,6 @@ import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/grok.js";
 import { mcpToolNameForBinding } from "./mcp-bundle.js";
-import {
-  capGrokWireName,
-  createGrokCollisionGuard,
-  pluginServerKey,
-  renderPluginAllowlist,
-} from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
@@ -93,7 +125,7 @@ afterEach(async () => {
   );
 });
 
-test("grok global lowerer emits a plugin bundle with agents, skills, MCP, and hooks", async () => {
+test("grok global lowerer emits a plugin bundle with agents, skills, and hooks", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const pluginRoot = join(root, "grok-plugin-fixture");
@@ -368,29 +400,11 @@ export default {
   const skill = findContentOperation(operations, join("skills", "testing", "SKILL.md"));
   expect(skill?.content).toContain("# Testing");
 
-  // The shim registration is a managed region in <grok-root>/config.toml —
-  // grok never resolves a `.mcp.json` inside an installed plugin bundle, so
-  // a bundle-level file would leave every generated tool unreachable.
+  // MCP config emission was excised — tools are CLI-only.
   expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
-  const ownerServerKey = pluginServerKey("grok-plugin-fixture");
-  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${ownerServerKey}`);
-  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
-  expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
-  expect(mcpRegion.plugin).toBe("grok-plugin-fixture");
-  expect(mcpRegion.content).toContain(`["mcp_servers"."${ownerServerKey}"]`);
-  expect(mcpRegion.content).toContain('command = "prism"');
-  expect(mcpRegion.content).toContain('args = ["mcp", "shim"]');
-  expect(mcpRegion.content).toContain(`["mcp_servers"."${ownerServerKey}"."env"]`);
-  expect(mcpRegion.content).toContain('PRISM_SHIM_PLUGINS = "grok-plugin-fixture"');
-  expect(mcpRegion.content).toContain('PRISM_SHIM_HARNESS = "grok"');
-  expect(mcpRegion.content).toContain('PRISM_SHIM_NAMING = "per-plugin"');
-  // Per-plugin regions never carry an explicit exposure profile: absent, the
-  // shim derives `prism-generated-<owner>:grok` itself.
-  expect(mcpRegion.content).not.toContain("PRISM_SHIM_EXPOSURE");
-  expect(mcpRegion.content).not.toContain("http");
-  expect(mcpRegion.content).not.toContain("PRISM_MCP_ENABLED_TOOLS");
+  expect(regions.some((region) => region.regionKey.startsWith("grok.mcp."))).toBe(false);
 
-  // The bundle itself lives in PRISM_HOME — never in the generated plugin.
+  // No MCP server.mjs in the generated plugin plan.
   const bundle = operations.find(
     (operation) => operation.targetPath.endsWith("server.mjs"),
   );
@@ -401,20 +415,19 @@ export default {
   expect(hookConfig?.content).toContain('"SessionEnd"');
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_terminal_cmd"');
-  const generatedEchoTool = renderPluginAllowlist("grok", "grok-plugin-fixture", "grok_plugin_fixture_echo");
-  const generatedSyntheticTool = renderPluginAllowlist(
-    "grok",
-    "grok-plugin-fixture",
-    mcpToolNameForBinding("grok-plugin-fixture", longSyntheticBinding),
-  );
-  expect(generatedEchoTool).toBe(`${ownerServerKey}__echo`);
-  expect(generatedEchoTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
-  expect(generatedSyntheticTool.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
-  expect(generatedSyntheticTool.split("__")).toHaveLength(2);
-  expect(agent?.content).toContain(`- "${generatedSyntheticTool}"`);
-  expect(hookConfig?.content).toContain(
-    `"matcher": "${generatedEchoTool}"`,
-  );
+  // Hook matchers use CLI tool names (not harness MCP wire names).
+  const generatedEchoTool = mcpToolNameForBinding("grok-plugin-fixture", {
+    kind: "permission",
+    logicalName: "echo",
+    toolPluginName: "grok-plugin-fixture",
+    toolName: "echo",
+    toolSourcePath: "tools/echo.tool.ts",
+  });
+  const generatedSyntheticTool = mcpToolNameForBinding("grok-plugin-fixture", longSyntheticBinding);
+  expect(hookConfig?.content).toContain(`"matcher": "${generatedEchoTool}"`);
+  // Agent frontmatter no longer lists generated tool wire names.
+  expect(agent?.content).not.toContain(`- "${generatedSyntheticTool}"`);
+  expect(agent?.content).not.toContain(`- "${generatedEchoTool}"`);
   expect(hookConfig?.content).toContain(
     join(outputRoot, "plugins", "prism-generated-grok-plugin-fixture", "hooks", "audit-shell.mjs"),
   );
@@ -762,7 +775,7 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(omissionAgent?.content).not.toContain("direct-skill");
 });
 
-test("grok lowerer emits a per-owner-plugin stdio-shim MCP entry for self-owned tools", async () => {
+test("grok lowerer emits no MCP config region for self-owned tools", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const pluginRoot = join(root, "grok-shim-fixture");
@@ -814,27 +827,9 @@ export default {
     },
   });
 
+  // MCP config emission was excised — tools are CLI-only.
   expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
-  const ownerServerKey = pluginServerKey("grok-shim-fixture");
-  const mcpRegion = regions.find((region) => region.regionKey === `grok.mcp.${ownerServerKey}`);
-  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the grok shim");
-  expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
-  // The region is owned by the plugin whose server it registers, not
-  // whichever compile happens to render it — stable across every compile
-  // that references this owner.
-  expect(mcpRegion.plugin).toBe("grok-shim-fixture");
-  expect(mcpRegion.content).toBe(
-    [
-      `["mcp_servers"."${ownerServerKey}"]`,
-      'command = "prism"',
-      'args = ["mcp", "shim"]',
-      "enabled = true",
-      `["mcp_servers"."${ownerServerKey}"."env"]`,
-      'PRISM_SHIM_PLUGINS = "grok-shim-fixture"',
-      'PRISM_SHIM_HARNESS = "grok"',
-      'PRISM_SHIM_NAMING = "per-plugin"',
-    ].join("\n"),
-  );
+  expect(regions.some((region) => region.regionKey.startsWith("grok.mcp."))).toBe(false);
 });
 
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {
@@ -916,28 +911,13 @@ test("grok lowerer reproduces the reported typefully-cli overflow and keeps it c
   });
 
   const agent = findContentOperation(operations, join("agents", "typefully-consumer.md"));
-  const expectedName = renderPluginAllowlist(
-    "grok",
-    "typefully-cli",
-    mcpToolNameForBinding("typefully-cli", binding),
-  );
-
-  // The reported drop was caused by a server prefix that spelled out the
-  // full plugin id ("prism-generated-typefully-cli", 29 chars) instead of a
-  // compact key. Under the per-plugin server scheme the server segment is
-  // the owner's own (short) plugin name, and the wire segment is the bare
-  // tool name with the redundant own-namespace prefix stripped — even more
-  // headroom than the original compact-key fix. Assert the compact form is
-  // what's actually emitted, with no truncation needed.
-  expect(expectedName).toBe(
-    `${pluginServerKey("typefully-cli")}__linkedin_organizations_resolve`,
-  );
-  expect(expectedName.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
-  expect(expectedName).toMatch(GROK_TOOL_NAME_REGEX);
-  expect(agent?.content).toContain(`- "${expectedName}"`);
+  // Tools are CLI-only — agent frontmatter no longer lists MCP wire names.
+  expect(agent?.content).not.toContain("mcp__");
+  expect(agent?.content).not.toContain("tools:");
+  expect(agent?.content).toContain("# Typefully consumer");
 });
 
-test("grok lowerer caps every generated tool name at 64 chars across a corpus of owner/tool name lengths", async () => {
+test("grok lowerer no longer emits generated tool wire names in agent frontmatter", async () => {
   const root = await createTempRoot();
 
   // A representative corpus: the reported real-world case, short names,
@@ -982,41 +962,17 @@ test("grok lowerer caps every generated tool name at 64 chars across a corpus of
   });
 
   const agent = findContentOperation(operations, join("agents", "corpus-consumer.md"));
-  const toolsBlockMatch = agent?.content.match(/\ntools:\n((?:  - .*\n)+)/u);
-  if (!toolsBlockMatch) throw new Error("expected a non-empty tools: block");
-  const emittedNames = [...toolsBlockMatch[1]!.matchAll(/- "([^"]+)"/gu)].map((match) => match[1]!);
-
-  expect(emittedNames.length).toBe(corpus.length);
-  for (const name of emittedNames) {
-    expect(name.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
-    expect(name).toMatch(GROK_TOOL_NAME_REGEX);
-  }
-
-  // Every emitted name must exactly match `renderPluginAllowlist`'s own
-  // decision (byte-identical when it fits uncapped; deterministically capped
-  // when it doesn't) — regeneration must never rename a compliant tool.
-  // Collisions can only occur within one owner's own server namespace (see
-  // `createGrokToolNamer`), so the guard is scoped per owner, matching the
-  // real lowerer.
-  const guards = new Map<string, ReturnType<typeof createGrokCollisionGuard>>();
+  // Tools are CLI-only — generated MCP wire names are no longer emitted into
+  // Grok agent frontmatter. CLI names stay under the portable length budget.
+  expect(agent?.content).not.toContain("\ntools:");
+  expect(agent?.content).not.toContain("mcp__");
   for (const { plugin, tool } of corpus) {
-    let guard = guards.get(plugin);
-    if (!guard) {
-      guard = createGrokCollisionGuard();
-      guards.set(plugin, guard);
-    }
-    const expected = renderPluginAllowlist(
-      "grok",
-      plugin,
-      mcpToolNameForBinding(plugin, permissionBinding(plugin, tool)),
-      guard,
-    );
-    expect(emittedNames).toContain(expected);
+    const name = mcpToolNameForBinding(plugin, permissionBinding(plugin, tool));
+    expect(name.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   }
 });
 
 // The core cap/collision algorithm now lives in `capGrokWireName`
-// (`@skastr0/prism-sdk/mcp/wire-naming`), with its own general-purpose test
 // coverage there (compliant-untouched, truncate+hash, determinism, collision
 // guard). This test keeps only the one boundary case not covered there: a
 // truncation cut landing mid-run-of-underscores must not leave a doubled or

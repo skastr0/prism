@@ -15,6 +15,7 @@ test("lowerer capability matrix covers every supported harness and excludes remo
 
   expect(sorted(matrixIds)).toEqual(sorted(harnessIds));
   expect(matrixIds).not.toContain("gemini-cli");
+  expect(LOWERER_SURFACE_KINDS).not.toContain("generated-mcp");
 
   for (const harnessId of harnessIds) {
     const profile = LOWERER_CAPABILITIES[harnessId];
@@ -23,7 +24,10 @@ test("lowerer capability matrix covers every supported harness and excludes remo
     for (const surface of Object.values(profile.surfaces)) {
       expect(LOWERER_SURFACE_KINDS).toContain(surface.kind);
       expect(surface.summary.length).toBeGreaterThan(0);
+      expect(surface.kind).not.toBe("generated-mcp" as never);
     }
+    // MCP config emission was excised — every harness marks the surface unsupported.
+    expect(profile.surfaces.mcpConfig.kind).toBe("unsupported");
   }
 });
 
@@ -98,7 +102,7 @@ test("agent model-binding demand follows lowerer surfaces", () => {
   expect(LOWERER_CAPABILITIES["kimi-code"].compile.agentModelBindings).toBe("ignored");
 });
 
-test("capability profiles distinguish product-native plugin surfaces from MCP and direct files", () => {
+test("capability profiles distinguish product-native plugin surfaces from CLI tools and direct files", () => {
   expect(LOWERER_CAPABILITIES["antigravity-cli"].surfaces.pluginBundle.kind).toBe(
     "native-plugin-bundle",
   );
@@ -124,6 +128,10 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
   expect(LOWERER_CAPABILITIES["claude-code"].surfaces.commands).toMatchObject({
     kind: "native-plugin-bundle",
     path: "<generated-plugin>/commands/",
+  });
+  expect(LOWERER_CAPABILITIES["claude-code"].surfaces.generatedTools).toMatchObject({
+    kind: "direct-file",
+    path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
   });
   expect(LOWERER_CAPABILITIES["kimi-code"].compile).toEqual({
     agents: "supported",
@@ -178,16 +186,15 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
     path: "<omp-root>/extensions/prism-generated-<plugin>/",
   });
   expect(LOWERER_CAPABILITIES.omp.surfaces.mcpConfig.kind).toBe("unsupported");
-  expect(LOWERER_CAPABILITIES.hermes.surfaces.generatedTools.kind).toBe(
-    "generated-mcp",
-  );
+  expect(LOWERER_CAPABILITIES.hermes.surfaces.generatedTools).toMatchObject({
+    kind: "direct-file",
+    path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+  });
   expect(LOWERER_CAPABILITIES["codex-cli"].surfaces.agents).toMatchObject({
     kind: "direct-file",
     path: "<codex-root>/agents/<name>.toml",
   });
-  expect(LOWERER_CAPABILITIES["codex-cli"].surfaces.mcpConfig.kind).toBe(
-    "config-patch",
-  );
+  expect(LOWERER_CAPABILITIES["codex-cli"].surfaces.mcpConfig.kind).toBe("unsupported");
   expect(LOWERER_CAPABILITIES.openclaw.surfaces.skills.kind).toBe("direct-file");
   expect(LOWERER_CAPABILITIES.cursor.compile).toEqual({
     agents: "unsupported",
@@ -204,11 +211,9 @@ test("capability profiles distinguish product-native plugin surfaces from MCP an
     kind: "native-plugin-bundle",
     path: "<generated-plugin>/commands/",
   });
-  expect(LOWERER_CAPABILITIES.cursor.surfaces.generatedTools.kind).toBe(
-    "generated-mcp",
-  );
-  expect(LOWERER_CAPABILITIES.cursor.surfaces.mcpConfig).toMatchObject({
-    kind: "config-patch",
-    path: "<cursor-root>/mcp.json#mcpServers",
+  expect(LOWERER_CAPABILITIES.cursor.surfaces.generatedTools).toMatchObject({
+    kind: "direct-file",
+    path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
   });
+  expect(LOWERER_CAPABILITIES.cursor.surfaces.mcpConfig.kind).toBe("unsupported");
 });

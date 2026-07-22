@@ -1,4 +1,40 @@
 import { afterEach, expect, test } from "bun:test";
+
+// --- stubs after MCP tree deletion (tests may still reference old names) ---
+const __mcpDeleted = (name: string): any => {
+  throw new Error(`MCP surface deleted: ${name}`);
+};
+const pluginServerKey = (pluginName: string): string =>
+  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
+const shimServerKey = (_harness: string): string => "prism";
+const bareWireToolName = (_plugin: string, tool: string): string => tool;
+const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
+const renderPluginAllowlist = (...args: unknown[]): string => {
+  const tool = String(args[args.length - 1] ?? "");
+  const plugin = String(args[args.length - 2] ?? "");
+  return `${pluginServerKey(plugin)}__${tool}`;
+};
+const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
+  `${pluginServerKey(plugin)}_${tool}`;
+const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
+const generatedMcpServerName = generatedMcpWireServerName;
+const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
+const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
+const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
+  __mcpDeleted("writePrismMcpServerBundle");
+const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
+const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
+  __mcpDeleted("generateMcpServerBundle");
+const mcpServerRuntimeSourceSha256 = (): string => "deleted";
+const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
+const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
+const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
+const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
+type RegistryEntry = { pluginName: string; pid?: number };
+type RegistryResult = { ok: boolean };
+// --- end stubs ---
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,10 +42,8 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/antigravity-cli.js";
-import { mcpToolNameForBinding } from "./mcp-bundle.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import type { DesiredFile } from "../sync/desired.js";
-import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
 
 const tempRoots: string[] = [];
 
@@ -320,7 +354,7 @@ export default {
   expect(JSON.parse(stopResult.stdout.trim())).toEqual({ decision: "continue" });
 });
 
-test("antigravity-cli lowerer emits an aggregated stdio-shim MCP entry for self-owned tools", async () => {
+test("antigravity-cli lowerer emits no MCP config for self-owned tools", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".agents");
   const pluginRoot = join(root, "antigravity-shim-fixture");
@@ -378,24 +412,8 @@ export default {
     version: "0.1.0",
   });
 
-  const mcpConfig = findContentOperation(operations, "mcp_config.json");
-  const parsed = JSON.parse(mcpConfig?.content ?? "{}") as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>;
-  };
-  // ONE per-plugin entry, keyed by the owner plugin's own server key.
-  expect(Object.keys(parsed.mcpServers ?? {})).toEqual(["antigravity-shim-fixture"]);
-  expect(parsed.mcpServers?.["antigravity-shim-fixture"]).toEqual({
-    command: "prism",
-    args: ["mcp", "shim"],
-    env: {
-      PRISM_SHIM_PLUGINS: "antigravity-shim-fixture",
-      PRISM_SHIM_HARNESS: "antigravity-cli",
-      PRISM_SHIM_NAMING: "per-plugin",
-      PRISM_SHIM_EXPOSURE: "prism-generated-antigravity-shim-fixture:antigravity-cli",
-    },
-  });
-
-  // The bundle itself lives in PRISM_HOME — never in the generated plugin.
+  // MCP config emission was excised — tools are CLI-only.
+  expect(findContentOperation(operations, "mcp_config.json")).toBeUndefined();
   const bundle = operations.find(
     (operation) => operation.targetPath.endsWith("server.mjs"),
   );
@@ -440,13 +458,8 @@ test("antigravity-cli production default omits generated MCP tool advertisements
     });
 
     const agent = findContentOperation(files, join("agents", "consumer.md"));
-    const generatedName = `mcp_${pluginServerKey(owner)}_${renderPluginWire(
-      "antigravity-cli",
-      owner,
-      mcpToolNameForBinding(owner, binding),
-    )}`;
     expect(agent?.content).toContain('- "read_file"');
-    expect(agent?.content).not.toContain(generatedName);
+    expect(agent?.content).not.toContain("mcp_");
     expect(agent?.content).toContain("Load skill `prism-tools-antigravity-mcp-off-fixture`");
     expect(agent?.content).toContain(
       "prism tools invoke antigravity-mcp-off-fixture <tool-name>",

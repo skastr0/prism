@@ -1,4 +1,40 @@
 import { describe, expect, test } from "bun:test";
+
+// --- stubs after MCP tree deletion (tests may still reference old names) ---
+const __mcpDeleted = (name: string): any => {
+  throw new Error(`MCP surface deleted: ${name}`);
+};
+const pluginServerKey = (pluginName: string): string =>
+  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
+const shimServerKey = (_harness: string): string => "prism";
+const bareWireToolName = (_plugin: string, tool: string): string => tool;
+const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
+const renderPluginAllowlist = (...args: unknown[]): string => {
+  const tool = String(args[args.length - 1] ?? "");
+  const plugin = String(args[args.length - 2] ?? "");
+  return `${pluginServerKey(plugin)}__${tool}`;
+};
+const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
+  `${pluginServerKey(plugin)}_${tool}`;
+const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
+const generatedMcpServerName = generatedMcpWireServerName;
+const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
+const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
+  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
+const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
+  __mcpDeleted("writePrismMcpServerBundle");
+const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
+const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
+  __mcpDeleted("generateMcpServerBundle");
+const mcpServerRuntimeSourceSha256 = (): string => "deleted";
+const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
+const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
+const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
+const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
+type RegistryEntry = { pluginName: string; pid?: number };
+type RegistryResult = { ok: boolean };
+// --- end stubs ---
 import { buildAmpArgs, assertAmpWorkflowMode } from "./workflow-amp-worker.js";
 import {
   DEFAULT_ANTIGRAVITY_MODEL,
@@ -16,7 +52,6 @@ import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
 import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError, type WorkflowWorkerAdapterOptionsForCapability } from "./workflow-workers.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
-import { generatedMcpWireServerName } from "./compile/mcp-runtime.js";
 
 type UnsupportedRepairOptions = WorkflowWorkerAdapterOptionsForCapability<"no-repair-loop-continuation">;
 

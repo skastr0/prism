@@ -3,7 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLowering } from "./lowerers/claude-code.js";
-import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ComposedAgent } from "./compose.js";
 import type { DesiredFile } from "../sync/desired.js";
 
@@ -26,7 +25,7 @@ afterEach(async () => {
   );
 });
 
-test("claude-code lowerer owner-qualifies foreign tool bindings and attaches no server for a pure consumer plugin", async () => {
+test("claude-code lowerer does not emit MCP wire names or MCP config for foreign tool bindings", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".claude");
   const ownerPluginName = "ot";
@@ -37,9 +36,8 @@ test("claude-code lowerer owner-qualifies foreign tool bindings and attaches no 
     body: "# Consumer\n",
     color: undefined,
     model: {},
-    // Generated agents now omit `tools:` (Claude treats it as an exclusive allowlist that strips
-    // built-ins). An explicit author tools override re-emits the merged allowlist — the surface
-    // where the owner-qualified foreign binding name remains observable.
+    // Generated agents omit `tools:` (Claude treats it as an exclusive allowlist that strips
+    // built-ins). An explicit author tools override re-emits the native allowlist only.
     targetOverride: { "claude-code": { tools: ["Read"] } },
     skills: [],
     allowedSkills: [],
@@ -71,17 +69,12 @@ test("claude-code lowerer owner-qualifies foreign tool bindings and attaches no 
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  const echoPermission = renderPluginAllowlist("claude-code", ownerPluginName, "ot_echo");
-  expect(echoPermission).toBe(`mcp__${pluginServerKey(ownerPluginName)}__echo`);
-  expect(agent?.content).toContain(echoPermission);
+  expect(agent?.content).toContain('- "Read"');
+  expect(agent?.content).not.toContain("mcp__");
   expect(agent?.content).not.toContain("mcp__prism-generated-consumer-plugin__ot_echo");
   expect(agent?.content).not.toContain("mcp__consumer-plugin__");
 
-  // A pure consumer plugin — one that owns no tools/synthetic bindings of
-  // its own and only references a foreign owner's tools — attaches NO
-  // server entry at all. The foreign tool is resolved at session scope
-  // through the OWNER plugin's own per-plugin server (named above), which
-  // only that owner plugin's bundle ever registers.
+  // Tools are CLI-only — no harness MCP config is emitted for consumers or owners.
   const mcpConfig = findContentOperation(operations, ".mcp.json");
   expect(mcpConfig).toBeUndefined();
 

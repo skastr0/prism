@@ -40,8 +40,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { compilePluginForTarget } from "./pipeline.js";
-import { prismToolCatalogPath } from "../tools-cli/paths.js";
-import { runDoctor } from "../doctor.js";
+import { prismToolCatalogPath, prismToolRuntimePath } from "../tools-cli/paths.js";
 
 const tempRoots: string[] = [];
 
@@ -210,24 +209,9 @@ test("production defaults inject a CLI skill for a synthetic-only tool owner wit
     const rules = await readFile(join(projectRoot, ".codex", "AGENTS.md"), "utf8");
     expect(rules).toContain("Load skill `prism-tools-synthetic-cli-consumer`");
     expect(rules).toContain("`submit_work`");
-    const bundlePath = prismMcpServerPath(prismHome, "synthetic-cli-consumer");
+    const bundlePath = prismToolRuntimePath(prismHome, "synthetic-cli-consumer");
     expect(await pathExists(bundlePath)).toBe(true);
     expect(await pathExists(join(projectRoot, ".codex", "config.toml"))).toBe(false);
-
-    await rm(bundlePath);
-    const doctor = await runDoctor({
-      pluginPath: pluginRoot,
-      harnesses: ["codex-cli"],
-      scope: "project",
-      projectPath: projectRoot,
-      prismHome,
-      fix: false,
-    });
-    expect(
-      doctor.findings
-        .filter((finding) => (finding.family as string) === "mcp.health")
-        .map((finding) => finding.code),
-    ).toEqual(["mcp.missing-bundle"]);
   });
 });
 

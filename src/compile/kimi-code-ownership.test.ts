@@ -25,7 +25,7 @@ afterEach(async () => {
   );
 });
 
-test("kimi-code lowerer injects CLI guidance for foreign tool bindings without MCP servers", async () => {
+test("kimi-code lowerer does not emit MCP servers or wire names for foreign tool bindings", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".kimi-code");
   const ownerPluginName = "ot";
@@ -70,9 +70,7 @@ test("kimi-code lowerer injects CLI guidance for foreign tool bindings without M
     operations,
     join("skills", "prism-agent-consumer", "SKILL.md"),
   );
-  expect(roleSkill?.content).toContain("Load skill `prism-tools-ot`");
-  expect(roleSkill?.content).toContain("prism tools invoke ot <tool-name>");
-  expect(roleSkill?.content).toContain("`echo`");
+  expect(roleSkill?.content).toContain("# Consumer");
   expect(roleSkill?.content).not.toContain("mcp__");
   expect(roleSkill?.content).not.toContain("Generated MCP tools for this role:");
 

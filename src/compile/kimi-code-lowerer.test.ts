@@ -167,17 +167,7 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   expect(manifestJson.version).toBe("0.1.0");
   expect(manifestJson.skills).toBe("./skills/");
   expect(manifestJson.sessionStart).toEqual({ skill: "prism-context" });
-  expect(manifestJson.mcpServers).toBeDefined();
-
-  const mcpServerName = Object.keys(manifestJson.mcpServers ?? {})[0];
-  expect(mcpServerName).toBe(pluginServerKey("prism-harness-qa"));
-  const mcpServer = manifestJson.mcpServers?.[mcpServerName ?? ""];
-  // Load-bearing: without this the running shim advertises its default
-  // aggregated `p_<hash>_<tool>` names, which won't match `enabledTools`
-  // below and every real tool call would 404 (see kimi-code.ts
-  // renderKimiMcpServerEntry).
-  expect(mcpServer?.env?.PRISM_SHIM_NAMING).toBe("per-plugin");
-  expect(mcpServer?.enabledTools).toEqual(["challenge_echo"]);
+  expect(manifestJson.mcpServers).toBeUndefined();
 
   const contextSkill = findContentOperation(files, "skills/prism-context/SKILL.md");
   expect(contextSkill?.content).toContain("<!-- prism:kimi-context -->");
@@ -187,7 +177,8 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
   expect(roleSkill?.content).toContain("prism-agent-qa-tester");
   expect(roleSkill?.content).toContain("<!-- prism:kimi-agent-role -->");
   expect(roleSkill?.content).toContain("qa-helper");
-  expect(roleSkill?.content).toContain("mcp__prism-harness-qa__challenge_echo");
+  expect(roleSkill?.content).not.toContain("mcp__prism-harness-qa__challenge_echo");
+  expect(roleSkill?.content).not.toContain("Generated MCP tools for this role:");
 
   const commandSkill = findContentOperation(files, "skills/prism-command-qa-report/SKILL.md");
   expect(commandSkill?.content).toContain("prism-command-qa-report");

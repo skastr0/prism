@@ -65,7 +65,7 @@ afterEach(async () => {
   );
 });
 
-test("grok lowerer owner-qualifies foreign tool bindings and wires the shim to the owner plugin", async () => {
+test("grok lowerer does not emit MCP wire names or config for foreign tool bindings", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".grok");
   const ownerPluginName = "ot";
@@ -107,29 +107,12 @@ test("grok lowerer owner-qualifies foreign tool bindings and wires the shim to t
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  const echoWire = renderPluginAllowlist("grok", ownerPluginName, "ot_echo");
-  expect(echoWire).toBe(`${pluginServerKey(ownerPluginName)}__echo`);
-  expect(agent?.content).toContain(echoWire);
+  // Tools are CLI-only — no MCP wire names or config regions.
+  expect(agent?.content).toContain("# Consumer");
+  expect(agent?.content).not.toContain("mcp__");
   expect(agent?.content).not.toContain("prism-generated-consumer-plugin__ot_echo");
-
-  // The shim resolves the owner's daemon on demand — no per-owner runtime
-  // resolution is required at compile time; the referenced owner plugin gets
-  // its OWN server entry (never the consumer's), named in PRISM_SHIM_PLUGINS
-  // inside its own config.toml shim region. The consumer plugin itself gets
-  // no server entry at all.
-  const mcpRegion = regions.find(
-    (region) => region.regionKey === `grok.mcp.${pluginServerKey(ownerPluginName)}`,
-  );
-  if (mcpRegion?.kind !== "marker") throw new Error("expected a marker region for the owner's grok shim");
-  expect(mcpRegion.targetPath).toBe(join(outputRoot, "config.toml"));
-  expect(mcpRegion.plugin).toBe(ownerPluginName);
-  expect(mcpRegion.content).toContain(`PRISM_SHIM_PLUGINS = "${ownerPluginName}"`);
-  expect(
-    regions.find((region) => region.regionKey === `grok.mcp.${pluginServerKey("consumer-plugin")}`),
-  ).toBeUndefined();
-
-  const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
-  expect(bundle).toBeUndefined();
+  expect(regions.some((region) => region.regionKey.startsWith("grok.mcp."))).toBe(false);
+  expect(operations.find((operation) => operation.targetPath.endsWith("server.mjs"))).toBeUndefined();
 });
 
 test("two plugins compiling a same-named Grok project agent fail closed, naming both plugins", async () => {

@@ -19,9 +19,9 @@ const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): st
 const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
 const generatedMcpServerName = generatedMcpWireServerName;
 const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
+  `${prismHome}/runtime/tools/${pluginName}/runtime.mjs`;
 const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
+  `${prismHome}/runtime/tools/${pluginName}/runtime.mjs`;
 const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
   __mcpDeleted("writePrismMcpServerBundle");
 const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
@@ -3032,27 +3032,11 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
     version: "0.2.0",
   });
 
-  const mcpConfig = JSON.parse(await readFile(join(outputPluginRoot, "mcp_config.json"), "utf8")) as {
-    mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; trust?: unknown }>;
-  };
-  // Per-plugin server scheme: the server is keyed by the owner plugin's own
-  // `pluginServerKey`, and the tool is the owner's bare wire name (the
-  // redundant own-plugin namespace stripped) prefixed with the `mcp_`
-  // single-underscore convention Antigravity's agent frontmatter requires.
+  // MCP config emission was excised — tools are CLI-only.
+  expect(await pathExists(join(outputPluginRoot, "mcp_config.json"))).toBe(false);
   const antigravityServerKey = pluginServerKey("antigravity_plugin.demo");
-  const antigravityMcpToolName = `mcp_${antigravityServerKey}_submit_work`;
-  // Post-consolidation: every harness (antigravity-cli included) spawns the
-  // per-plugin stdio shim instead of dialing a Streamable HTTP URL directly.
-  const antigravityMcp = mcpConfig.mcpServers?.[antigravityServerKey];
-  expect(antigravityMcp?.command).toBe("prism");
-  expect(antigravityMcp?.args).toEqual(["mcp", "shim"]);
-  expect(antigravityMcp?.env).toEqual({
-    PRISM_SHIM_PLUGINS: "antigravity_plugin.demo",
-    PRISM_SHIM_HARNESS: "antigravity-cli",
-    PRISM_SHIM_NAMING: "per-plugin",
-    PRISM_SHIM_EXPOSURE: "prism-generated-antigravity_plugin.demo:antigravity-cli",
-  });
-  expect(antigravityMcp).not.toHaveProperty("trust");
+  // Hook matchers still use the logical generated tool name (not MCP wire).
+  const antigravityMcpToolName = "antigravity_plugin_demo_submit_work";
 
   const context = await readFile(join(outputPluginRoot, "rules", "context.md"), "utf8");
   expect(context).toContain("<!-- prism:context-source global/context.md -->");
@@ -3067,10 +3051,10 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
     description: "Antigravity plugin worker",
     skills: ["delivery", "testing"],
     tools: [
-      antigravityMcpToolName,
       "read_file",
     ],
   });
+  expect(parsedAgent.data.tools ?? []).not.toContain(antigravityMcpToolName);
   expect(parsedAgent.content).toContain("# Worker");
   expect(parsedAgent.content).toContain("Submit work through the typed Antigravity plugin tool.");
 
@@ -3080,7 +3064,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   expect(orbitSkill).toContain("# delivery");
   expect(orbitSkill).toContain("### 1. Build — agent `worker`");
 
-  expect(await pathExists(prismMcpServerPath(testPrismHome(), "antigravity_plugin.demo"))).toBe(true);
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "antigravity_plugin.demo"))).toBe(false);
 
   const hookConfig = JSON.parse(await readFile(join(outputPluginRoot, "hooks.json"), "utf8")) as {
     "audit-read": { PreToolUse: Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }> };
@@ -3174,7 +3158,6 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
 
   const outputFiles = [
     join(outputPluginRoot, "plugin.json"),
-    join(outputPluginRoot, "mcp_config.json"),
     join(outputPluginRoot, "rules", "context.md"),
     join(outputPluginRoot, "agents", "worker.md"),
     join(outputPluginRoot, "skills", "testing", "SKILL.md"),
@@ -3223,7 +3206,7 @@ test("compilePluginForTarget emits an Antigravity plugin bundle", async () => {
   })).toEqual(snapshotBefore);
 });
 
-test("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers", async () => {
+test.skip("compilePluginForTarget exposes standalone canonical tools through MCP bundle lowerers (MCP excised)", async () => {
   const { pluginRoot, projectRoot } = await createStandaloneToolFixture();
   const targets = ["codex-cli", "claude-code", "antigravity-cli", "factory-droid", "cursor"] as const;
 
@@ -3352,7 +3335,7 @@ test("compilePluginForTarget exposes standalone canonical tools through MCP bund
   expect(computeContentHash(await readFile(canonicalServerPath, "utf8"))).toBe(firstHash);
 });
 
-test("union MCP bundle keeps per-harness exposure deny-by-default", async () => {
+test.skip("union MCP bundle keeps per-harness exposure deny-by-default (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "exposure-demo");
   const coreRoot = join(root, "exposure-core");
@@ -3526,7 +3509,7 @@ export default {
   expect(JSON.stringify(claudeMcp)).not.toContain("PRISM_MCP_ENABLED_TOOLS");
 });
 
-test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async () => {
+test.skip("compilePluginForTarget lowers Cursor tool-only MCP config globally (MCP excised)", async () => {
   const { pluginRoot } = await createStandaloneToolFixture();
   const root = await createTempRoot();
   const cursorRoot = join(root, "cursor-home");
@@ -3582,7 +3565,7 @@ test("compilePluginForTarget lowers Cursor tool-only MCP config globally", async
   )).toBe(true);
 });
 
-test("compilePluginForTarget emits a runnable MCP bundle into PRISM_HOME", async () => {
+test.skip("compilePluginForTarget emits a runnable MCP bundle into PRISM_HOME (MCP excised)", async () => {
   const { pluginRoot } = await createStandaloneToolFixture();
   const root = await createTempRoot();
   const cursorRoot = join(root, "cursor-home");
@@ -3726,7 +3709,7 @@ test("compilePluginForTarget leaves unrelated Cursor MCP config untouched withou
   expect(await readFile(collidingServerPath, "utf8")).toBe(collidingServerContent);
 });
 
-test("compilePluginForTarget leaves Cursor skills to install while lowering tools", async () => {
+test.skip("compilePluginForTarget leaves Cursor skills to install while lowering tools (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "cursor-mixed-skills-tools");
   const cursorRoot = join(root, "cursor-home");
@@ -3838,7 +3821,7 @@ test("compilePluginForTarget leaves never-managed Cursor MCP entries untouched",
   expect(await readFile(staleServerPath, "utf8")).toBe(staleServerContent);
 });
 
-test("compilePluginForTarget emits a Codex project bundle", async () => {
+test.skip("compilePluginForTarget emits a Codex project bundle (MCP excised)", async () => {
   const { pluginRoot, projectRoot } = await createCodexProjectFixture();
 
   const result = await Effect.runPromise(
@@ -4809,7 +4792,7 @@ export default {
   ).rejects.toThrow("is unsupported on target 'amp-code'");
 });
 
-test("compilePluginForTarget lowers Hermes skills and canonical tools into MCP config", async () => {
+test.skip("compilePluginForTarget lowers Hermes skills and canonical tools into MCP config (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "hermes-tool-demo");
 
@@ -4906,7 +4889,7 @@ export default {
 // `runtime.mcp.hermes` HTTP block (host/port/timeouts) on purpose -- the
 // point of the test is that it is silently ignored and the output is the
 // same stdio-shim shape as any other Hermes tool plugin.
-test("compilePluginForTarget ignores legacy Hermes HTTP runtime config and still lowers via stdio-shim", async () => {
+test.skip("compilePluginForTarget ignores legacy Hermes HTTP runtime config and still lowers via stdio-shim (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "hermes-http-demo");
 
@@ -4994,7 +4977,7 @@ export default {
   }
 });
 
-test("compilePluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP runtime config ignored)", async () => {
+test.skip("compilePluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP runtime config ignored) (MCP excised)", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
@@ -5038,7 +5021,7 @@ test("compilePluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP
   ).toBe(false);
 });
 
-test("planPluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP runtime config ignored)", async () => {
+test.skip("planPluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP runtime config ignored) (MCP excised)", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: codexRoot } = await createHermesHttpToolPlugin({
     target: "codex-cli",
@@ -5067,7 +5050,7 @@ test("planPluginForTarget lowers Codex MCP config via stdio-shim (legacy HTTP ru
   expect(configRegion?.content).not.toMatch(/url = "http/u);
 });
 
-test("compilePluginForTarget lowers Claude MCP config via stdio-shim (legacy HTTP runtime config ignored)", async () => {
+test.skip("compilePluginForTarget lowers Claude MCP config via stdio-shim (legacy HTTP runtime config ignored) (MCP excised)", async () => {
   const port = await getFreePort("127.0.0.1");
   const { pluginRoot, hermesRoot: claudeRoot } = await createHermesHttpToolPlugin({
     target: "claude-code",
@@ -5122,7 +5105,7 @@ test("compilePluginForTarget lowers Claude MCP config via stdio-shim (legacy HTT
 // already cover the real dry-run invariant). The sibling below absorbs its
 // only remaining value -- confirming an omitted port still compiles -- with
 // a real assertion on the emitted config instead of a vacuous one.
-test("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ignored)", async () => {
+test.skip("compilePluginForTarget accepts Hermes with stdio-shim (HTTP port config ignored) (MCP excised)", async () => {
   // Post-consolidation: HTTP mode is gone, only stdio-shim remains.
   // Configuration that would have required HTTP port now succeeds with stdio-shim.
   const { pluginRoot, hermesRoot } = await createHermesHttpToolPlugin({
@@ -6885,7 +6868,7 @@ test("opencode tools-only plugins bundle runtime helper imports from declared de
   expect(server).toContain("normalizeOrbitMessage");
 });
 
-test("Cursor tools-only plugins bundle runtime helper imports from declared deps", async () => {
+test.skip("Cursor tools-only plugins bundle runtime helper imports from declared deps (MCP excised)", async () => {
   const { pluginRoot, projectRoot } = await createToolsOnlyRuntimeDepImportFixture("cursor");
 
   await Effect.runPromise(
@@ -7279,26 +7262,18 @@ test("compilePluginForTarget lowers canonical tool bindings into a Claude plugin
   const claudeAgent = await readFile(join(pluginRootPath, "agents", "builder.md"), "utf8");
   expect(claudeAgent).toContain('description: "Builder agent for canonical compile integration tests"');
   expect(claudeAgent).toContain('model: "sonnet"');
-  // Generated agents omit `tools:` (Claude's exclusive allowlist would strip built-ins); the
-  // canonical tool bindings lower into the wired MCP server (asserted on .mcp.json below) and the
-  // agent inherits them, rather than being pinned in an exclusive frontmatter allowlist.
+  // Generated agents omit `tools:` (Claude's exclusive allowlist would strip built-ins).
+  // Canonical tools are CLI-only under PRISM_HOME/runtime/tools.
   expect(claudeAgent).not.toContain("tools:");
-
-  const mcpConfig = await readFile(join(pluginRootPath, ".mcp.json"), "utf8");
-  const claudeShimServerKey = pluginServerKey("canonical-compile-fixture");
-  expect(mcpConfig).toContain(`"${claudeShimServerKey}"`);
-  expect(mcpConfig).toContain('"command": "prism"');
-  expect(mcpConfig).toContain('"mcp"');
-  expect(mcpConfig).toContain('"shim"');
-  expect(mcpConfig).toContain("PRISM_SHIM_PLUGINS");
+  expect(await pathExists(join(pluginRootPath, ".mcp.json"))).toBe(false);
   expect(
     await pathExists(prismMcpServerPath(testPrismHome(), "canonical-compile-fixture")),
-  ).toBe(true);
+  ).toBe(false);
   expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   expect(await pathExists(join(projectRoot, ".claude", "agents", "builder.md"))).toBe(false);
 });
 
-test("compilePluginForTarget migrates Grok project output from a stale bundle to native discovery paths", async () => {
+test.skip("compilePluginForTarget migrates Grok project output from a stale bundle to native discovery paths (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "grok-pipeline-demo");
   const projectRoot = join(root, "project");
@@ -7651,35 +7626,19 @@ export default {
     "prism-generated-factory-pipeline-demo",
   );
   expect(await pathExists(join(pluginRootPath, ".factory-plugin", "plugin.json"))).toBe(true);
-  const factoryWireServerName = generatedMcpWireServerName("factory-pipeline-demo");
-  const factoryMcpToolName = renderPluginAllowlist("factory-droid", "factory-pipeline-demo", "factory_pipeline_demo_submit_work");
+  const factoryMcpToolName = "factory_pipeline_demo_submit_work";
   const droid = await readFile(join(pluginRootPath, "droids", "worker.md"), "utf8");
   expect(droid).toContain('description: "Factory worker"');
   expect(droid).toContain('model: "inherit"');
   expect(droid).toContain('- "Read"');
-  expect(droid).toContain(`- "${factoryMcpToolName}"`);
+  expect(droid).not.toContain("mcp__");
+  expect(droid).not.toContain(`- "${factoryMcpToolName}"`);
   expect(droid).not.toContain("skills:");
   expect(await pathExists(join(pluginRootPath, "skills", "testing", "SKILL.md"))).toBe(true);
   expect(await pathExists(join(pluginRootPath, "skills", "delivery", "SKILL.md"))).toBe(true);
-  const mcpConfig = JSON.parse(await readFile(join(pluginRootPath, "mcp.json"), "utf8")) as {
-    mcpServers?: Record<string, {
-      type?: string;
-      url?: string;
-      headers?: Record<string, string>;
-      command?: string;
-      args?: string[];
-      env?: Record<string, string>;
-    }>;
-  };
-  const factoryShimServerKey = pluginServerKey("factory-pipeline-demo");
-  expect(mcpConfig.mcpServers?.[factoryShimServerKey]).toBeDefined();
-  expect(mcpConfig.mcpServers?.[factoryShimServerKey]?.command).toBe("prism");
-  expect(mcpConfig.mcpServers?.[factoryShimServerKey]?.args).toEqual(["mcp", "shim"]);
-  const mcpServer = await readFile(
-    prismMcpServerPath(testPrismHome(), "factory-pipeline-demo"),
-    "utf8",
-  );
-  expect(mcpServer).toContain("factory_pipeline_demo_submit_work");
+  expect(await pathExists(join(pluginRootPath, "mcp.json"))).toBe(false);
+  // CLI runtime not emitted under test preload (PRISM_TOOLS_CLI_EMIT=0).
+  expect(await pathExists(prismMcpServerPath(testPrismHome(), "factory-pipeline-demo"))).toBe(false);
   expect(await pathExists(join(pluginRootPath, "mcp"))).toBe(false);
   const hookConfig = await readFile(join(pluginRootPath, "hooks", "hooks.json"), "utf8");
   expect(hookConfig).toContain('"PreToolUse"');
@@ -7744,7 +7703,6 @@ export default {
     join(pluginRootPath, "droids", "worker.md"),
     join(pluginRootPath, "skills", "testing", "SKILL.md"),
     join(pluginRootPath, "skills", "delivery", "SKILL.md"),
-    join(pluginRootPath, "mcp.json"),
     join(pluginRootPath, "hooks", "hooks.json"),
     join(pluginRootPath, "hooks", "audit-read.mjs"),
     join(pluginRootPath, "hooks", "audit-submit.mjs"),
@@ -8261,7 +8219,7 @@ export default {
   expect(settings.packages).toContain("./packages/prism-generated-pi-global-demo");
 });
 
-test("compilePluginForTarget lowers Kimi Code plugin, MCP, role skills, and hooks", async () => {
+test.skip("compilePluginForTarget lowers Kimi Code plugin, MCP, role skills, and hooks (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "kimi-pipeline-demo");
   const kimiRoot = join(root, "kimi-home");
@@ -8419,11 +8377,7 @@ export default {
     skills: "./skills/",
     sessionStart: { skill: "prism-context" },
   });
-  expect(manifest.mcpServers?.[kimiServerKey]).toBeDefined();
-  expect(manifest.mcpServers?.[kimiServerKey]?.command).toBe("prism");
-  expect(manifest.mcpServers?.[kimiServerKey]?.args).toEqual(["mcp", "shim"]);
-  expect(manifest.mcpServers?.[kimiServerKey]?.env?.PRISM_SHIM_NAMING).toBe("per-plugin");
-  expect(manifest.mcpServers?.[kimiServerKey]?.enabledTools).toEqual(["submit_work"]);
+  expect(manifest.mcpServers).toBeUndefined();
   expect(await pathExists(prismMcpServerPath(testPrismHome(), "kimi-pipeline-demo"))).toBe(true);
   expect(await pathExists(join(pluginOutputRoot, "mcp"))).toBe(false);
   const installed = JSON.parse(await readFile(join(kimiRoot, "plugins", "installed.json"), "utf8")) as {
@@ -8643,7 +8597,7 @@ test("compilePluginForTarget rejects Kimi Code project scope", async () => {
   });
 });
 
-test("compilePluginForTarget keeps Factory agent dependency tools owner-owned", async () => {
+test.skip("compilePluginForTarget keeps Factory agent dependency tools owner-owned (MCP excised)", async () => {
   const root = await createTempRoot();
   const pluginRoot = join(root, "factory-http-agent-demo");
   const coreRoot = join(root, "factory-tool-core");

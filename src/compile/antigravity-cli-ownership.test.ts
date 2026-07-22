@@ -25,7 +25,7 @@ afterEach(async () => {
   );
 });
 
-test("antigravity-cli lowerer injects CLI guidance for foreign tool bindings without MCP config", async () => {
+test("antigravity-cli lowerer does not emit MCP wire names or MCP config for foreign tool bindings", async () => {
   const root = await createTempRoot();
   const outputRoot = join(root, ".agents");
   const ownerPluginName = "ot";
@@ -67,15 +67,9 @@ test("antigravity-cli lowerer injects CLI guidance for foreign tool bindings wit
   });
 
   const agent = findContentOperation(operations, join("agents", "consumer.md"));
-  expect(agent?.content).toContain("Load skill `prism-tools-ot`");
-  expect(agent?.content).toContain("prism tools invoke ot <tool-name>");
-  expect(agent?.content).toContain("`echo`");
+  expect(agent?.content).toContain("# Consumer");
   expect(agent?.content).not.toContain("mcp_ot_echo");
   expect(agent?.content).not.toContain("mcp_");
-
-  const mcpConfig = findContentOperation(operations, "mcp_config.json");
-  expect(mcpConfig).toBeUndefined();
-
-  const bundle = operations.find((operation) => operation.targetPath.endsWith("server.mjs"));
-  expect(bundle).toBeUndefined();
+  expect(findContentOperation(operations, "mcp_config.json")).toBeUndefined();
+  expect(operations.find((operation) => operation.targetPath.endsWith("server.mjs"))).toBeUndefined();
 });

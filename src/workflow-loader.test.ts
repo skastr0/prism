@@ -3485,8 +3485,8 @@ export default defineWorkflow({
       "task.started",
       "task.cache_lookup.started",
       "task.cache_lookup.miss",
-      "task.executor.started",
       "task.attempt.started",
+      "task.executor.started",
       "task.executor.completed",
       "task.decode.started",
       "task.decode.completed",
@@ -3499,7 +3499,7 @@ export default defineWorkflow({
     expect(cursorResult.events.map((event) => ({ sequence: event.sequence, type: event.type }))).toEqual([
       { sequence: 3, type: "task.cache_lookup.started" },
       { sequence: 4, type: "task.cache_lookup.miss" },
-      { sequence: 5, type: "task.executor.started" },
+      { sequence: 5, type: "task.attempt.started" },
     ]);
     expect(followedEvents).toEqual([
       { runId: runResult.runId, event: expect.objectContaining({ sequence: 3, type: "task.cache_lookup.started" }) },

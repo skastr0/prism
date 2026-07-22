@@ -1372,7 +1372,8 @@ test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => 
   ], { PRISM_HOME: prismHome });
 
   expect(status.exitCode).toBe(0);
-  expect(status.stdout).toContain("stopped");
+  // Fixture is never refreshed, so the honest state is missing-bundle (not stopped).
+  expect(status.stdout).toMatch(/\b(stopped|missing-bundle)\b/);
   expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
 });
 

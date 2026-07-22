@@ -15,6 +15,15 @@ export const WORKFLOW_HARNESS_IDS: ReadonlyArray<WorkflowWorkerHarnessId> = work
 
 export type WorkflowHarnessId = WorkflowWorkerHarnessId;
 
+/** Shared env/CLI integer parser kept off the worker-process module so the public SDK graph stays free of spawn runtime. */
+export const parsePositiveInteger = (value: string | undefined): number | undefined => {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/u.test(value)) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+};
+
 export type WorkflowHarnessDetectionStatus = "available" | "missing" | "broken";
 
 export type WorkflowHarnessDetectionReasonCode =

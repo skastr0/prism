@@ -1,6 +1,9 @@
 import { currentCliCommand } from "./workflow-cli-command.js";
+import { parsePositiveInteger } from "./workflow-harness-detection.js";
 import { encodeWorkflowProcessGuardRequest } from "./workflow-process-guard.js";
 import { spawnWorkflowProcess } from "./workflow-runtime.js";
+
+export { parsePositiveInteger };
 
 export interface WorkflowWorkerProcessOptions {
   readonly command: string;
@@ -64,14 +67,6 @@ export interface WorkflowWorkerProcessResult {
   readonly aborted: boolean;
   readonly earlyExit?: string;
 }
-
-export const parsePositiveInteger = (value: string | undefined): number | undefined => {
-  if (value === undefined) return undefined;
-  if (!/^\d+$/u.test(value)) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-  return parsed;
-};
 
 const utf8Tail = (value: string, maxBytes: number): string => {
   const encoded = Buffer.from(value, "utf8");

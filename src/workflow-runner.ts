@@ -41,7 +41,7 @@ import type {
   WorkflowTaskAttemptStatus,
 } from "./workflow-store.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { parsePositiveInteger } from "./workflow-worker-process.js";
+import { parsePositiveInteger } from "./workflow-harness-detection.js";
 import {
   normalizeWorkflowSessionMetadata,
   workflowAdapterFromMetadata,

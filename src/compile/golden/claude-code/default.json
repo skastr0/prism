@@ -5,10 +5,6 @@
       "path": "<HARNESS_ROOT>/skills/prism-generated-canonical-compile-fixture/.claude-plugin/plugin.json"
     },
     {
-      "content": "{\n  \"mcpServers\": {\n    \"canonical-compile-fixture\": {\n      \"command\": \"prism\",\n      \"args\": [\n        \"mcp\",\n        \"shim\"\n      ],\n      \"env\": {\n        \"PRISM_SHIM_PLUGINS\": \"canonical-compile-fixture\",\n        \"PRISM_SHIM_HARNESS\": \"claude-code\",\n        \"PRISM_SHIM_NAMING\": \"per-plugin\",\n        \"PRISM_SHIM_EXPOSURE\": \"prism-generated-canonical-compile-fixture:claude-code\"\n      }\n    }\n  }\n}\n",
-      "path": "<HARNESS_ROOT>/skills/prism-generated-canonical-compile-fixture/.mcp.json"
-    },
-    {
       "content": "---\nname: \"builder\"\ndescription: \"Builder agent for canonical compile integration tests\"\nmodel: \"sonnet\"\ntemperature: 0.1\ntop_p: 0.7\nskills:\n  - \"delivery-contract\"\n  - \"testing\"\n---\n\n# Builder\n\nYou implement one committed glyph and validate it before review.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### committable\n\nCommit owned implementation changes only after the submitted work is complete.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
       "path": "<HARNESS_ROOT>/skills/prism-generated-canonical-compile-fixture/agents/builder.md"
     },

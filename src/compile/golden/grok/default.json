@@ -5,15 +5,15 @@
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/.claude-plugin/plugin.json"
     },
     {
-      "content": "---\nname: \"builder\"\ndescription: \"Builder agent for canonical compile integration tests\"\nmodel: \"grok-builder\"\ntools:\n  - \"canonical-compile-fixture__commit_work\"\n  - \"protocol-core__create_glyph\"\n  - \"protocol-core__external_submit\"\n  - \"read_repo\"\n  - \"run_shell\"\n  - \"search_repo\"\n---\n\n# Builder\n\nYou implement one committed glyph and validate it before review.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### committable\n\nCommit owned implementation changes only after the submitted work is complete.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "content": "---\nname: \"builder\"\ndescription: \"Builder agent for canonical compile integration tests\"\nmodel: \"grok-builder\"\ntools:\n  - \"read_repo\"\n  - \"run_shell\"\n  - \"search_repo\"\n---\n\n# Builder\n\nYou implement one committed glyph and validate it before review.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### committable\n\nCommit owned implementation changes only after the submitted work is complete.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/agents/builder.md"
     },
     {
-      "content": "---\nname: \"reviewer\"\ndescription: \"Reviewer agent for canonical compile integration tests\"\nmodel: \"grok-reviewer\"\ntools:\n  - \"canonical-compile-fixture__submit_review_rev_73c884a8\"\n  - \"protocol-core__external_submit\"\n  - \"read_repo\"\n  - \"search_repo\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "content": "---\nname: \"reviewer\"\ndescription: \"Reviewer agent for canonical compile integration tests\"\nmodel: \"grok-reviewer\"\ntools:\n  - \"read_repo\"\n  - \"search_repo\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/agents/reviewer.md"
     },
     {
-      "content": "---\nname: \"security-reviewer\"\ndescription: \"Security reviewer variant using the same reviewable trait\"\nmodel: \"grok-reviewer\"\ntools:\n  - \"canonical-compile-fixture__submit_review_sec_dbfb2428\"\n  - \"protocol-core__external_submit\"\n  - \"read_repo\"\n  - \"search_repo\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
+      "content": "---\nname: \"security-reviewer\"\ndescription: \"Security reviewer variant using the same reviewable trait\"\nmodel: \"grok-reviewer\"\ntools:\n  - \"read_repo\"\n  - \"search_repo\"\n---\n\n# Reviewer\n\nYou assess completed work and report whether it is ready to ship.\n\n## Recommended Skills\n\nLoad when the work calls for them:\n\n- `testing`\n\n## Trait Instructions\n\n### submittable\n\nSubmit completed work through the typed submission surface before handing off.\n\n### self-assessing\n\nRun the relevant validation before final response or handoff.\n",
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/agents/security-reviewer.md"
     },
     {
@@ -33,20 +33,5 @@
       "path": "<HARNESS_ROOT>/plugins/prism-generated-canonical-compile-fixture/skills/golden-skill/SKILL.md"
     }
   ],
-  "regions": [
-    {
-      "commentPrefix": "#",
-      "content": "[\"mcp_servers\".\"canonical-compile-fixture\"]\ncommand = \"prism\"\nargs = [\"mcp\", \"shim\"]\nenabled = true\n[\"mcp_servers\".\"canonical-compile-fixture\".\"env\"]\nPRISM_SHIM_PLUGINS = \"canonical-compile-fixture\"\nPRISM_SHIM_HARNESS = \"grok\"\nPRISM_SHIM_NAMING = \"per-plugin\"",
-      "kind": "marker",
-      "regionKey": "grok.mcp.canonical-compile-fixture",
-      "targetPath": "<HARNESS_ROOT>/config.toml"
-    },
-    {
-      "commentPrefix": "#",
-      "content": "[\"mcp_servers\".\"protocol-core\"]\ncommand = \"prism\"\nargs = [\"mcp\", \"shim\"]\nenabled = true\n[\"mcp_servers\".\"protocol-core\".\"env\"]\nPRISM_SHIM_PLUGINS = \"protocol-core\"\nPRISM_SHIM_HARNESS = \"grok\"\nPRISM_SHIM_NAMING = \"per-plugin\"",
-      "kind": "marker",
-      "regionKey": "grok.mcp.protocol-core",
-      "targetPath": "<HARNESS_ROOT>/config.toml"
-    }
-  ]
+  "regions": []
 }

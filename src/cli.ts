@@ -48,12 +48,6 @@ import {
 import { cleanCache, getCacheDir } from "./compile/cache.js";
 import { topologicallySortedPlugins } from "./plugin-order.js";
 import { createPluginScaffold } from "./plugin-scaffold.js";
-import {
-  formatMcpStatus,
-  getMcpStatus,
-  listMcpStatuses,
-  type McpLifecycleHarness,
-} from "./mcp/lifecycle.js";
 import { prismWorkflowsSourceDir, resolvePrismHome } from "./prism-home.js";
 import { discoverPluginPaths } from "./plugin-inventory.js";
 import {
@@ -1661,84 +1655,10 @@ program
     }
   });
 
-const mcpCommand = program
-  .command("mcp")
-  .description(
-    "Observe Prism-generated MCP daemons (UDS-only; the stdio shim resolves-or-spawns and idle-reaps them)",
-  );
-
-mcpCommand
-  .command("status [plugin-path]")
-  .description("Show Prism-generated MCP daemon status (read from the UDS registry)")
-  .option("--harness <id>", "Target MCP harness", parseMcpLifecycleHarness, "hermes")
-  .option(
-    "--scope <scope>",
-    `Output scope (${HARNESS_SCOPES.join("|")})`,
-    parseHarnessScope,
-    "global"
-  )
-  .option("-p, --project <path>", "Project root when using --scope project")
-  .action(async (pluginPath: string | undefined, options) => {
-    try {
-      assertProjectPathForProjectScope(options.scope, options.project);
-      if (pluginPath) {
-        const status = await getMcpStatus({
-          pluginPath,
-          harness: options.harness,
-          scope: options.scope,
-          projectPath: options.project,
-          prismHome: resolvePrismHome(),
-        });
-        console.log(formatMcpStatus(status));
-        return;
-      }
-
-      const statuses = await listMcpStatuses({
-        harness: options.harness,
-        scope: options.scope,
-        projectPath: options.project,
-        prismHome: resolvePrismHome(),
-      });
-      if (statuses.length === 0) {
-        console.log("stopped         (no Prism MCP runtime files found)");
-        return;
-      }
-      for (const status of statuses) {
-        console.log(formatMcpStatus(status));
-      }
-    } catch (error) {
-      printCliError(error, "MCP status error");
-      exitWith(exitCodeForCliError(error, EXIT_CODES.domainFailure));
-    }
-  });
-
-mcpCommand
-  .command("shim")
-  .description(
-    "Run the aggregating stdio MCP shim (the process a harness lowerer's " +
-      "generated stdio-shim config spawns directly; entirely env-driven, no flags)",
-  )
-  .addHelpText(
-    "after",
-    `
-Env vars read (all optional except PRISM_SHIM_PLUGINS):
-  PRISM_SHIM_PLUGINS             comma-separated plugin names to aggregate
-  PRISM_SHIM_DAEMON_TIMEOUT_MS   per-request daemon timeout
-  PRISM_SHIM_SPAWN_TIMEOUT_MS    resolve-or-spawn timeout for a cold daemon
-  PRISM_SHIM_ENABLED_TOOLS       comma-separated allowlist of wire tool names
-  PRISM_SHIM_EXPOSURE            explicit X-Prism-Mcp-Exposure value forwarded to
-                                 every daemon; when unset the shim derives the
-                                 per-owner profile prism-generated-<owner>:<harness>
-`,
-  )
-  .action(async () => {
-    await import("./mcp/shim-main.js");
-  });
-
 const toolsCommand = program
   .command("tools")
   .description(
-    "Stateless Prism tool surface: list/invoke compiled plugin tools via CLI (no harness MCP shims)",
+    "Stateless Prism tool surface: list/invoke compiled plugin tools in-process via CLI",
   );
 
 toolsCommand
@@ -3221,13 +3141,6 @@ function parseHarnessScope(value: string): HarnessScope {
 
   throw new InvalidArgumentError(
     `Invalid scope '${value}'. Expected one of: ${HARNESS_SCOPES.join(", ")}`
-  );
-}
-
-function parseMcpLifecycleHarness(value: string): McpLifecycleHarness {
-  if (isValidHarnessId(value)) return value;
-  throw new InvalidArgumentError(
-    `Invalid MCP lifecycle harness '${value}'. Expected one of: ${getAllHarnessIds().join(", ")}.`
   );
 }
 

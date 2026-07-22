@@ -5,7 +5,7 @@
  * The env read (`PRISM_HOME`, falling back to ~/.prism) happens exactly once,
  * at the CLI edge, when `PrismHomeLive` is built into the runtime. Library
  * code never falls back to the environment: new code (WS3+ snapshot store,
- * sync engine, MCP supervisor) consumes the `PrismHome` tag, so tests are
+ * sync engine) consumes the `PrismHome` tag, so tests are
  * structurally unable to touch real state — they provide `PrismHomeTest`.
  *
  * Do not add `resolvePrismHome()` default-argument fallbacks to new modules;

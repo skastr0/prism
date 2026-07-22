@@ -26,7 +26,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: true,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: ["AGENTS.md"],
   },
 
@@ -47,7 +46,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: true,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: ["CLAUDE.md"],
   },
 
@@ -68,7 +66,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: false,
   },
 
   hermes: {
@@ -88,7 +85,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: true,
   },
 
   "codex-cli": {
@@ -108,7 +104,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: true,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: ["CLAUDE.md"],
   },
 
@@ -129,7 +124,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: ["AGENTS.md", "ANTIGRAVITY.md"],
   },
 
@@ -150,7 +144,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: true,
   },
 
   "amp-code": {
@@ -170,7 +163,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: ["AGENT.md", "CLAUDE.md"],
   },
 
@@ -191,7 +183,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: true,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: ["AGENTS.md"],
   },
 
@@ -212,7 +203,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: true,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: [".droid.yaml", "CLAUDE.md"],
   },
 
@@ -233,7 +223,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: false,
   },
 
   omp: {
@@ -254,7 +243,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: true,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
   },
 
   grok: {
@@ -274,7 +262,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: true,
     supportsSkills: true,
-    supportsMCP: true,
     alternativeRulesFiles: [
       "Agents.md",
       "Claude.md",
@@ -304,7 +291,6 @@ export const HARNESSES: Record<HarnessId, HarnessConfig> = {
     supportsCommands: false,
     supportsAgents: false,
     supportsSkills: true,
-    supportsMCP: false,
     alternativeRulesFiles: ["AGENT.md", "CLAUDE.md", "AGENTS.local.md"],
   },
 };

@@ -59,10 +59,8 @@ const COMPILE_MANAGED_PLUGIN_ARTIFACT_TARGETS: Partial<Record<PluginArtifactType
   skills: ["pi", "omp", "kimi-code"],
 };
 
-export interface SourceRuntimeRequirements {
-  readonly mcpConfigured: boolean;
-  readonly streamableHttpMcp: boolean;
-}
+/** Target-scoped runtime requirements (MCP config retired — empty). */
+export interface SourceRuntimeRequirements {}
 
 export interface SourceSelectionEntry {
   readonly noun: SourceNoun;
@@ -258,15 +256,9 @@ const emptySourceNounRecord = (): Record<SourceNoun, boolean> =>
   Object.fromEntries(SOURCE_NOUNS.map((noun) => [noun, false])) as Record<SourceNoun, boolean>;
 
 const runtimeRequirementsForTarget = (
-  runtime: PluginRuntimeConfig,
-  target: HarnessId,
-): SourceRuntimeRequirements => {
-  const mcp = runtime.mcp?.[target];
-  return {
-    mcpConfigured: mcp !== undefined,
-    streamableHttpMcp: mcp !== undefined,
-  };
-};
+  _runtime: PluginRuntimeConfig,
+  _target: HarnessId,
+): SourceRuntimeRequirements => ({});
 
 export const selectSourcesForTarget = (
   selection: SourceSelection,

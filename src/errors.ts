@@ -12,7 +12,7 @@
  * constructed throughout the compile pipeline); this module absorbs them into
  * the union instead of duplicating them. New error families added by later
  * workstreams (SnapshotDecodeError, RegionPatchError, BlockedTargetError,
- * McpSupervisorError, TokenStoreError, …) join the union here.
+ * TokenStoreError, …) join the union here.
  */
 
 import { basename, join } from "node:path";
@@ -79,8 +79,8 @@ export class PrismConfigError extends Schema.TaggedError<PrismConfigError>()(
 ) {}
 
 // ---------------------------------------------------------------------------
-// BundleBuildError — re-minted from the plain-Error class in
-// src/compile/mcp-bundle.ts.
+// BundleBuildError — re-minted from the plain-Error class used by
+// src/compile/mcp-bundle.ts (tool runtime bundle builder).
 // ---------------------------------------------------------------------------
 
 export class BundleBuildError extends Schema.TaggedError<BundleBuildError>()(

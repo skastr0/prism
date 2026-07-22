@@ -45,8 +45,3 @@ export const toolsCliInjectMode = (env: NodeJS.ProcessEnv = process.env): ToolsC
   return "skill";
 };
 
-/**
- * MCP harness config emit is gone. Always false so residual lowerer call sites
- * compile until those blocks are deleted in the same excision train.
- */
-export const toolsMcpHarnessEmitEnabled = (_env?: NodeJS.ProcessEnv): boolean => false;

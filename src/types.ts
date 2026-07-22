@@ -52,7 +52,6 @@ export interface HarnessConfig {
   supportsCommands: boolean;
   supportsAgents: boolean;
   supportsSkills: boolean;
-  supportsMCP: boolean;
 
   // Alternative rules filenames this harness recognizes
   alternativeRulesFiles?: string[];
@@ -84,19 +83,8 @@ export type PluginManifestTargets = Partial<
   Record<AnyArtifactType, PluginTargetId[]>
 >;
 
-export type PrismMcpTransport = "streamable-http";
-
-export interface PluginRuntimeMcpHarnessConfig {
-  transport?: PrismMcpTransport;
-  host?: string;
-  port?: number;
-  connectTimeoutMs?: number;
-  toolTimeoutMs?: number;
-}
-
-export interface PluginRuntimeConfig {
-  mcp?: Partial<Record<HarnessId, PluginRuntimeMcpHarnessConfig>>;
-}
+/** Reserved plugin runtime knobs. MCP harness config is retired. */
+export interface PluginRuntimeConfig {}
 
 // Plugin manifest (plugin.json)
 export interface PluginManifest {

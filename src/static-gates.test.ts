@@ -38,22 +38,22 @@ const TOMBSTONE_RULES: readonly TombstoneRule[] = [
     pattern: /writeServerBundle/,
     allowedFiles: new Set([GATE_FILE]),
     reason:
-      "deleted in WS3 — the MCP lifecycle consumes the compiled canonical bundle at " +
-      "PRISM_HOME/runtime/mcp/<plugin>/server.mjs; it never writes (or snapshots/restores) bundles",
+      "deleted in WS3 — server bundle write/snapshot/restore APIs are gone; tool runtime " +
+      "bundles live under PRISM_HOME/runtime/tools/ (CLI), not a live MCP supervisor path",
   },
   {
     pattern: /defaultMcpRuntimeRoot/,
     allowedFiles: new Set([GATE_FILE]),
     reason:
-      "deleted in WS3 — the ~/.config dual MCP runtime root died with the canonical " +
-      "PRISM_HOME/runtime/mcp relocation (no --mcp-root, no per-harness in-root bundles)",
+      "deleted in WS3 — dual MCP runtime roots / --mcp-root / per-harness in-root bundles " +
+      "are gone; tools are CLI under PRISM_HOME/runtime/tools/",
   },
   {
     pattern: /__PRISM_HTTP_PORT__/,
     allowedFiles: new Set([GATE_FILE]),
     reason:
-      "deleted in WS3 — HTTP identity (host/port) is never baked into bundle bytes; " +
-      "the server reads PRISM_MCP_UDS_PATH at startup (Unix domain socket only, no TCP)",
+      "deleted in WS3 — baked HTTP identity tokens are gone with Streamable-HTTP MCP; " +
+      "tool runtime is CLI, not a UDS/TCP MCP daemon",
   },
   {
     pattern: /executeStandardLowering/,
@@ -199,8 +199,9 @@ test("workflow engine Bun-only APIs stay behind the runtime seam", async () => {
 /**
  * One-writer gate: among compile/sync modules plus the direct refresh planner,
  * only src/sync/apply.ts may import harness-root write primitives from fs.ts.
- * PRISM_HOME-side writers (compile cache, lockfile, canonical MCP
- * bundle) are explicitly allowlisted — they never touch harness roots.
+ * PRISM_HOME-side writers (compile cache, lockfile, tool runtime
+ * catalog/bundle under runtime/tools/) are explicitly allowlisted — they never
+ * touch harness roots.
  *
  * Lowerer modules get an additional stricter check below: even temp build
  * writes must flow through compile/temp-build-fs.ts so lowerers stay pure
@@ -216,12 +217,6 @@ const NODE_FS_WRITE_PRIMITIVES = [
   "copyFile",
   "chmod",
 ] as const;
-const MCP_NODE_FS_BARE_WRITE_PRIMITIVES = ["writeFile", "copyFile", "chmod"] as const;
-const MCP_BARE_WRITE_CALLS = [
-  { name: "Bun.write", pattern: /\bBun\.write\s*\(/gu },
-  { name: ".writeFile", pattern: /\.writeFile\s*\(/gu },
-] as const;
-
 const WRITE_GATED_PATH_PREFIXES = ["sync/", "compile/"] as const;
 const WRITE_GATED_FILES: ReadonlySet<string> = new Set(["refresh.ts"]);
 
@@ -231,7 +226,8 @@ const WRITE_PRIMITIVE_ALLOWLIST: ReadonlySet<string> = new Set([
   "compile/cache.ts",
   "compile/compile-manifest.ts",
   "compile/lockfile.ts",
-  ]);
+  "compile/pipeline.ts", // CLI tool runtime under PRISM_HOME/runtime/tools/
+]);
 
 const importedFsWritePrimitives = (content: string): string[] => {
   const found = new Set<string>();
@@ -256,35 +252,6 @@ const importedNodeFsWritePrimitives = (content: string): string[] => {
   }
   return [...found].sort();
 };
-
-const importedNodeFsBareWritePrimitives = (content: string): string[] => {
-  const found = new Set<string>();
-  const importPattern = /import\s*\{([^}]*)\}\s*from\s*["']node:fs\/promises["']/g;
-  for (const match of content.matchAll(importPattern)) {
-    for (const rawSpecifier of match[1]!.split(",")) {
-      const name = rawSpecifier.replace(/\s+as\s+.*$/u, "").trim();
-      if ((MCP_NODE_FS_BARE_WRITE_PRIMITIVES as readonly string[]).includes(name)) {
-        found.add(name);
-      }
-    }
-  }
-  return [...found].sort();
-};
-
-const countPatternMatches = (content: string, pattern: RegExp): number => {
-  pattern.lastIndex = 0;
-  return [...content.matchAll(pattern)].length;
-};
-
-const allowedMcpBareWriteCall = (
-  relativePath: string,
-  callName: string,
-  count: number,
-  content: string,
-): boolean =>
-    callName === ".writeFile" &&
-  count === 1 &&
-  content.includes("await handle.writeFile(`${JSON.stringify({");
 
 test("only src/sync/apply.ts imports harness-root write primitives among compile-path modules", async () => {
   const violations: string[] = [];
@@ -328,42 +295,7 @@ test("compile lowerers do not import node fs write primitives directly", async (
   expect(violations).toEqual([]);
 });
 
-test("MCP source writes route through the supervisor", async () => {
-  const violations: string[] = [];
-
-  for (const relativePath of await listSourceFiles()) {
-    if (!relativePath.startsWith("mcp/")) continue;
-    if (relativePath.endsWith(".test.ts")) continue;
-    if (relativePath === "mcp/supervisor.ts") continue;
-
-    const content = await readFile(join(SRC_ROOT, relativePath), "utf8");
-    const nodePrimitives = importedNodeFsBareWritePrimitives(content);
-    if (nodePrimitives.length > 0) {
-      violations.push(
-        `${relativePath}: imports ${nodePrimitives.join(", ")} from node:fs/promises`,
-      );
-    }
-
-    const projectPrimitives = importedFsWritePrimitives(content);
-    if (projectPrimitives.length > 0) {
-      violations.push(`${relativePath}: imports ${projectPrimitives.join(", ")} from fs.ts`);
-    }
-
-    for (const call of MCP_BARE_WRITE_CALLS) {
-      const count = countPatternMatches(content, call.pattern);
-      if (
-        count > 0 &&
-        !allowedMcpBareWriteCall(relativePath, call.name, count, content)
-      ) {
-        violations.push(`${relativePath}: uses bare ${call.name} call`);
-      }
-    }
-  }
-
-  expect(violations).toEqual([]);
-});
-
-test("mcp-bundle does not read ast-to-json-schema from disk at module load", async () => {
+test("tool runtime bundle (mcp-bundle.ts) does not read ast-to-json-schema from disk at module load", async () => {
   const content = await readFile(join(SRC_ROOT, "compile/mcp-bundle.ts"), "utf8");
 
   expect(content).not.toMatch(
@@ -373,7 +305,7 @@ test("mcp-bundle does not read ast-to-json-schema from disk at module load", asy
   expect(content).not.toMatch(/\breadFileSync\b/);
 });
 
-test("process.exit is confined to exit helper and generated MCP runtime strings", async () => {
+test("process.exit is confined to exit helper and tool-runtime / lowerer strings", async () => {
   const allowed = new Set([
     "exit.ts",
     "compile/mcp-bundle.ts",

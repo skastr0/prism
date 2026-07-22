@@ -794,9 +794,6 @@ export const resolveOwnedToolBindingsForTarget = (
     return bindingsOwnedByPlugin(registry.pluginName, tools, agentsWithOrbitTools);
   });
 
-/** @deprecated alias — use resolveOwnedToolBindingsForTarget */
-export const resolveOwnedMcpBindingsForTarget = resolveOwnedToolBindingsForTarget;
-
 const writeToolCliRuntimeModule = async (
   prismHome: string,
   pluginName: string,

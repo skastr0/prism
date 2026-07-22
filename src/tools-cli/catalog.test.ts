@@ -10,7 +10,6 @@ import {
 import {
   toolsCliEmitEnabled,
   toolsCliInjectMode,
-  toolsMcpHarnessEmitEnabled,
 } from "./flags.js";
 import {
   renderToolCliRulesFull,
@@ -130,13 +129,10 @@ describe("tools-cli catalog", () => {
 });
 
 describe("tools-cli flags", () => {
-  test("CLI emit defaults on; MCP emit always off; inject defaults skill", () => {
+  test("CLI emit defaults on; inject defaults skill", () => {
     expect(toolsCliEmitEnabled({})).toBe(true);
-    expect(toolsMcpHarnessEmitEnabled({})).toBe(false);
     expect(toolsCliInjectMode({})).toBe("skill");
     expect(toolsCliEmitEnabled({ PRISM_TOOLS_CLI_EMIT: "0" })).toBe(false);
-    expect(toolsMcpHarnessEmitEnabled({ PRISM_TOOLS_MCP_EMIT: "0" })).toBe(false);
-    expect(toolsMcpHarnessEmitEnabled({ PRISM_TOOLS_MCP_EMIT: "1" })).toBe(false);
     expect(toolsCliInjectMode({ PRISM_TOOLS_CLI_INJECT: "rules" })).toBe("rules");
     expect(toolsCliInjectMode({ PRISM_TOOLS_CLI_INJECT: "skill" })).toBe("skill");
   });

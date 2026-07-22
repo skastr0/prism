@@ -215,7 +215,7 @@ test("renderPrismCause unpacks an AggregateError's nested causes", async () => {
 
 test("renderPrismCause appends a hint line when a defect carries one", async () => {
   const defect = Object.assign(new Error("daemon not running"), {
-    hint: "run: prism mcp serve <plugin>",
+    hint: "run: prism tools invoke <plugin> <tool> --input '{}'",
   });
 
   const exit = await Effect.runPromiseExit(Effect.promise(() => Promise.reject(defect)));
@@ -224,5 +224,5 @@ test("renderPrismCause appends a hint line when a defect carries one", async () 
 
   const rendered = renderPrismCause(exit.cause);
   expect(rendered).toContain("Error: daemon not running");
-  expect(rendered).toContain("hint: run: prism mcp serve <plugin>");
+  expect(rendered).toContain("hint: run: prism tools invoke <plugin> <tool> --input '{}'");
 });

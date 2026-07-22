@@ -8,20 +8,23 @@ Experimental. The package format, generated outputs, and harness adapters may ch
 
 ## Tool Surface
 
-Agents reach compiled tools through a managed CLI surface by default: `prism
-tools list|show|invoke|skill`, with per-plugin catalogs under
-`PRISM_HOME/runtime/tools/` and either an injected skill (default) or
-always-on rules for discovery. Set `PRISM_TOOLS_MCP_EMIT=1` to also emit a
-harness MCP config entry. Harnesses that reach Prism tools through a generated
-MCP server (see
-[`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)) do
-so over the stdio-shim transport: the harness spawns `prism mcp shim`, which
-resolves or spawns a content-addressed Unix-domain-socket daemon at
-`PRISM_HOME/runtime/mcp/<plugin>/<hash-prefix>.sock` when that path fits the
-platform limit. Long Prism homes use the fixed-width, private fallback
-`/tmp/prism-mcp-<uid>/<identity>.sock`; durable bundles, registry records, and
-logs remain under `PRISM_HOME`. Prism no longer emits the retired Streamable
-HTTP MCP transport.
+Compiled tools are **stateless CLI only**. Agents use:
+
+```bash
+prism tools list
+prism tools show <plugin>
+prism tools invoke <plugin> <tool> --input '<json-object>'
+```
+
+Compile writes under `PRISM_HOME/runtime/tools/<plugin>/`:
+
+- `catalog.json` — tool inventory
+- `SKILL.md` — agent discovery (or always-on rules via `PRISM_TOOLS_CLI_INJECT=rules`)
+- `runtime.mjs` — bundled handles loaded **in-process** by invoke (no daemon, no MCP)
+
+Some harnesses (OpenCode, Amp, Pi, OMP) also register the same handles natively
+in their plugin APIs. Hooks customize harness behavior via native plugins or
+one-shot command wrappers — never a long-lived protocol server.
 
 ## Development
 
@@ -50,12 +53,8 @@ bun run check:refresh-idempotency
 ```
 
 The gate runs `refresh --plugins ../prism-plugins --harness codex-cli` twice in
-isolated `HOME`, `PRISM_HOME`, and MCP runtime roots. Codex CLI reaches
-generated tools over the stdio-shim transport (a content-addressed UDS daemon
-whose durable state remains under `PRISM_HOME`); the gate additionally stops any corpus plugin still
-configured for the retired Streamable HTTP transport before cleanup. The gate
-fails on warm-run stale prunes, config churn, duplicate MCP tables, orphan
-hook blocks, snapshot churn, or backup churn.
+isolated `HOME` and `PRISM_HOME`. It fails on warm-run stale prunes, config
+churn, orphan hook blocks, snapshot churn, or backup churn.
 
 ## Lowerer Capabilities
 

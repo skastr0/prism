@@ -41,8 +41,6 @@ const claudeFailureSessionId = (stdout: string, fallback: string | undefined): s
 
 export interface ClaudeGeneratedPluginDiscovery {
   readonly pluginDir?: string;
-  readonly mcpConfig?: string;
-  readonly allowedTools?: readonly string[];
 }
 
 interface ClaudeJsonEnvelope {
@@ -122,47 +120,12 @@ const claudeEnvelopeOutput = (envelope: ClaudeJsonEnvelope): unknown => {
 // plugin/skill). Tests redirect by spawning with HOME set. (homedir() honors $HOME.)
 const claudeRoot = (): string => join(homedir(), ".claude");
 
-const CLAUDE_MCP_TOOL_PATTERN = /\bmcp__[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+\b/gu;
-
-const extractClaudeMcpToolNames = (source: string): readonly string[] =>
-  [...new Set(source.match(CLAUDE_MCP_TOOL_PATTERN) ?? [])].sort();
-
-const unexpectedClaudeMcpToolCalls = (
-  toolCallNames: readonly string[],
-  allowedTools: readonly string[] | undefined,
-  enforceGeneratedPluginAllowList: boolean,
-): readonly string[] => {
-  if (!enforceGeneratedPluginAllowList) return [];
-  const mcpToolCallNames = [...new Set(toolCallNames.filter((name) => name.startsWith("mcp__")))].sort();
-  // No declared MCP allow-list means the generated agent omits a `tools:` frontmatter and so
-  // inherits its plugin's MCP tools (scoped by --mcp-config + --strict-mcp-config); there is
-  // nothing to reject. Per-agent MCP scoping is enforced only when an explicit allow-list exists.
-  if (allowedTools === undefined || allowedTools.length === 0) return [];
-  const allowed = new Set(allowedTools);
-  return mcpToolCallNames.filter((name) => !allowed.has(name));
-};
-
 export const discoverClaudeGeneratedPlugin = (
   task: AnyWorkflowTask,
 ): ClaudeGeneratedPluginDiscovery => {
   const pluginDir = join(claudeRoot(), "skills", generatedPluginIdForOwner(task.agent.plugin));
   if (!existsSync(pluginDir)) return {};
-
-  const mcpConfig = join(pluginDir, ".mcp.json");
-  const agentFile = join(pluginDir, "agents", `${task.agent.name}.md`);
-  const agentToolNames = existsSync(agentFile)
-    ? extractClaudeMcpToolNames(readFileSync(agentFile, "utf8"))
-    : [];
-  if (!existsSync(mcpConfig) && agentToolNames.length > 0) {
-    throw new ClaudeWorkflowWorkerError(
-      `generated Claude plugin '${pluginDir}' for agent '${task.agent.plugin}:${task.agent.name}' references MCP tools but is missing '${mcpConfig}'`,
-    );
-  }
-  return {
-    pluginDir,
-    ...(existsSync(mcpConfig) ? { mcpConfig } : {}),
-    ...(agentToolNames.length > 0 ? { allowedTools: agentToolNames } : {}),
-  };
+  return { pluginDir };
 };
 
 const assertClaudePermission = (
@@ -236,11 +199,6 @@ export const buildClaudeArgs = (input: {
     ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : ["--agent", input.agent]),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
-    ...(input.generatedPlugin?.mcpConfig !== undefined ? [`--mcp-config=${input.generatedPlugin.mcpConfig}`] : []),
-    ...(input.generatedPlugin?.mcpConfig !== undefined ? ["--strict-mcp-config"] : []),
-    ...(input.generatedPlugin?.allowedTools !== undefined && input.generatedPlugin.allowedTools.length > 0
-      ? [`--allowedTools=${input.generatedPlugin.allowedTools.join(",")}`]
-      : []),
     ...(input.outputSchema !== undefined ? ["--json-schema", JSON.stringify(input.outputSchema)] : []),
     ...permissionArgs,
     input.prompt,
@@ -312,17 +270,6 @@ export const runClaudeWorkflowTask = async (
     throw error;
   }
   const { envelope, toolCallNames } = claudeStream;
-  const unexpectedMcpToolCalls = unexpectedClaudeMcpToolCalls(
-    toolCallNames,
-    generatedPlugin.allowedTools,
-    generatedPlugin.pluginDir !== undefined,
-  );
-  if (unexpectedMcpToolCalls.length > 0) {
-    throw new ClaudeWorkflowWorkerError(
-      `claude called MCP tools outside generated agent allow-list: ${unexpectedMcpToolCalls.join(", ")}`,
-      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: envelope.session_id ?? resumeSessionId }),
-    );
-  }
   if (envelope.is_error !== undefined && envelope.is_error !== false) {
     throw new ClaudeWorkflowWorkerError(
       `claude returned an error: ${typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result)}`,
@@ -343,7 +290,6 @@ export const runClaudeWorkflowTask = async (
       totalCostUsd: envelope.total_cost_usd,
       numTurns: envelope.num_turns,
       claudeToolCallNames: toolCallNames,
-      claudeMcpToolCallCount: toolCallNames.filter((name) => name.startsWith("mcp__")).length,
       claudeNativeOutputSchema: outputSchema !== undefined,
       ...(options.repair !== undefined
         ? {

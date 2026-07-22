@@ -181,7 +181,6 @@ test("capability profiles distinguish product-native plugin surfaces from CLI to
     kind: "native-plugin-api",
     path: "<omp-root>/extensions/prism-generated-<plugin>/",
   });
-  expect(LOWERER_CAPABILITIES.omp.surfaces.mcpConfig.kind).toBe("unsupported");
   expect(LOWERER_CAPABILITIES.hermes.surfaces.generatedTools).toMatchObject({
     kind: "direct-file",
     path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
@@ -190,7 +189,6 @@ test("capability profiles distinguish product-native plugin surfaces from CLI to
     kind: "direct-file",
     path: "<codex-root>/agents/<name>.toml",
   });
-  expect(LOWERER_CAPABILITIES["codex-cli"].surfaces.mcpConfig.kind).toBe("unsupported");
   expect(LOWERER_CAPABILITIES.openclaw.surfaces.skills.kind).toBe("direct-file");
   expect(LOWERER_CAPABILITIES.cursor.compile).toEqual({
     agents: "unsupported",
@@ -211,5 +209,4 @@ test("capability profiles distinguish product-native plugin surfaces from CLI to
     kind: "direct-file",
     path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
   });
-  expect(LOWERER_CAPABILITIES.cursor.surfaces.mcpConfig.kind).toBe("unsupported");
 });

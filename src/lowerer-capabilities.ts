@@ -21,7 +21,6 @@ export const LOWERER_SURFACE_IDS = [
   "skills",
   "generatedTools",
   "hooks",
-  "mcpConfig",
   "agentConfig",
 ] as const;
 
@@ -121,14 +120,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/hooks/hooks.json",
         summary: "Hooks are bundled in Claude Code's plugin hook layout.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: unsupported("Claude agent behavior lives in generated agent frontmatter."),
     },
   },
@@ -173,7 +171,6 @@ export const LOWERER_CAPABILITIES = {
         path: "<generated-plugin>/dist/server.mjs",
         summary: "Hooks lower through the OpenCode plugin API.",
       },
-      mcpConfig: unsupported("Prism-generated OpenCode tools do not require MCP config."),
       agentConfig: {
         kind: "config-patch",
         path: "<opencode-root>/opencode.json#agent.<name>",
@@ -198,7 +195,6 @@ export const LOWERER_CAPABILITIES = {
       },
       generatedTools: unsupported(),
       hooks: unsupported(),
-      mcpConfig: unsupported(),
       agentConfig: unsupported(),
     },
     notes: ["OpenClaw remains Prism skills-only for now."],
@@ -225,14 +221,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "config-patch",
         path: "<hermes-root>/config.yaml#hooks",
         summary: "Compile patches managed Hermes hook entries and wrapper files.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: unsupported(),
     },
   },
@@ -266,14 +261,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "config-patch",
         path: "<codex-root>/config.toml#hooks",
         summary: "Compile patches managed Codex hook entries and wrapper files.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: {
         kind: "direct-file",
         path: "<codex-root>/agents/<name>.toml",
@@ -311,14 +305,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/hooks.json",
         summary: "Hooks are bundled in Antigravity plugin format.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/agents/",
@@ -360,14 +353,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "config-patch",
         path: "<kimi-root>/config.toml#hooks",
         summary: "Hooks lower to managed [[hooks]] config entries plus generated wrapper scripts.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/skills/prism-agent-<name>/SKILL.md",
@@ -422,7 +414,6 @@ export const LOWERER_CAPABILITIES = {
         path: "<generated-plugin>.ts",
         summary: "Supported Prism hooks lower to Amp amp.on(...) plugin event handlers; session.end fails closed because Amp has no native session-end event.",
       },
-      mcpConfig: unsupported("Prism-generated Amp tools use plugin APIs instead of MCP config."),
       agentConfig: unsupported("No Prism-managed Amp agent config patch exists."),
     },
     notes: [
@@ -465,10 +456,9 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: unsupported(),
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: unsupported(),
     },
     notes: [
@@ -512,14 +502,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/hooks/hooks.json",
         summary: "Hooks are bundled in Factory plugin format.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/droids/",
@@ -568,7 +557,6 @@ export const LOWERER_CAPABILITIES = {
         path: "<generated-package>/extensions/prism-extension.js and <generated-package>/hooks/",
         summary: "Hooks lower through Pi extension events and generated wrapper files.",
       },
-      mcpConfig: unsupported("Prism-generated Pi tools use extension APIs instead of MCP config."),
       agentConfig: {
         kind: "markdown-file",
         path: "~/.pi/agents/<name>.md or .pi/agents/<name>.md",
@@ -621,9 +609,6 @@ export const LOWERER_CAPABILITIES = {
         path: "<omp-root>/extensions/prism-generated-<plugin>/",
         summary: "Hooks lower through OMP's native extension API.",
       },
-      mcpConfig: unsupported(
-        "Prism-generated OMP tools use the native extension API; no MCP config patch is required.",
-      ),
       agentConfig: {
         kind: "direct-file",
         path: "<omp-root>/agents/",
@@ -665,14 +650,13 @@ export const LOWERER_CAPABILITIES = {
       generatedTools: {
         kind: "direct-file",
         path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
-        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke` (no harness MCP config).",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
       },
       hooks: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/hooks/hooks.json",
         summary: "Hooks are bundled in Grok plugin format.",
       },
-      mcpConfig: unsupported("Prism tools are CLI-only; no harness MCP config is emitted."),
       agentConfig: {
         kind: "native-plugin-bundle",
         path: "<generated-plugin>/agents/",
@@ -711,16 +695,13 @@ export const LOWERER_CAPABILITIES = {
         path: "<devin-root>/skills/",
         summary: "Install and compile write Agent Skill folders (global and project .devin/skills).",
       },
-      generatedTools: unsupported("Devin MCP/tools lowering is not managed in PR1."),
+      generatedTools: unsupported("Devin tools are not managed as a Prism install surface in PR1."),
       hooks: {
         kind: "direct-file",
         path: "project: hooks.v1.json; global: config.json#hooks json-array-member + hooks/*.mjs",
         summary:
           "Project scope writes hooks.v1.json; global scope upserts Prism entries into config.json hooks without whole-file adopt. Wrappers under hooks/.",
       },
-      mcpConfig: unsupported(
-        "PR1 does not patch config.json mcpServers (user-shared with herdr); MCP deferred.",
-      ),
       agentConfig: {
         kind: "direct-file",
         path: "ephemeral --agent-config for workflow runs",

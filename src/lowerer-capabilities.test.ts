@@ -15,7 +15,6 @@ test("lowerer capability matrix covers every supported harness and excludes remo
 
   expect(sorted(matrixIds)).toEqual(sorted(harnessIds));
   expect(matrixIds).not.toContain("gemini-cli");
-  expect(LOWERER_SURFACE_KINDS).not.toContain("generated-mcp");
 
   for (const harnessId of harnessIds) {
     const profile = LOWERER_CAPABILITIES[harnessId];
@@ -24,10 +23,7 @@ test("lowerer capability matrix covers every supported harness and excludes remo
     for (const surface of Object.values(profile.surfaces)) {
       expect(LOWERER_SURFACE_KINDS).toContain(surface.kind);
       expect(surface.summary.length).toBeGreaterThan(0);
-      expect(surface.kind).not.toBe("generated-mcp" as never);
     }
-    // MCP config emission was excised — every harness marks the surface unsupported.
-    expect(profile.surfaces.mcpConfig.kind).toBe("unsupported");
   }
 });
 

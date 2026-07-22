@@ -42,10 +42,11 @@ interface PluginMirror {
   readonly files: ReadonlyArray<MirrorFile>;
 }
 
-type McpAdapterSpec =
+type ToolAdapterSpec =
   | {
       readonly kind: "tool";
-      readonly mcpName: string;
+      /** Generated identity used in runtime maps / native registration. */
+      readonly name: string;
       readonly logicalName: string;
       readonly pluginName: string;
       readonly toolName: string;
@@ -53,7 +54,7 @@ type McpAdapterSpec =
     }
   | {
       readonly kind: "synthetic";
-      readonly mcpName: string;
+      readonly name: string;
       readonly logicalName: string;
       readonly pluginName: string;
       readonly contractName: string;
@@ -467,16 +468,16 @@ const normalizeMirroredPluginSource = async (options: {
 const adapterSpecsForBindings = (
   sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
-): McpAdapterSpec[] => {
-  const byName = new Map<string, McpAdapterSpec>();
-  const specs: McpAdapterSpec[] = [];
+): ToolAdapterSpec[] => {
+  const byName = new Map<string, ToolAdapterSpec>();
+  const specs: ToolAdapterSpec[] = [];
   for (const binding of bindings) {
-    const mcpName = cliToolNameForBinding(sourcePluginName, binding);
-    const spec: McpAdapterSpec =
+    const name = cliToolNameForBinding(sourcePluginName, binding);
+    const spec: ToolAdapterSpec =
       binding.kind === "permission"
         ? {
             kind: "tool",
-            mcpName,
+            name,
             logicalName: binding.logicalName,
             pluginName: binding.toolPluginName,
             toolName: binding.toolName,
@@ -484,28 +485,28 @@ const adapterSpecsForBindings = (
           }
         : {
             kind: "synthetic",
-            mcpName,
+            name,
             logicalName: binding.logicalName,
             pluginName: binding.contract!.pluginName,
             contractName: binding.contract!.name,
             contractRelativePath: `contracts/${binding.contract!.name}.contract`,
           };
 
-    const existing = byName.get(mcpName);
+    const existing = byName.get(name);
     if (existing) {
-      if (mcpAdapterSpecsEqual(existing, spec)) continue;
+      if (toolAdapterSpecsEqual(existing, spec)) continue;
       throw new Error(
-        `MCP tool name collision for '${mcpName}': ${describeMcpAdapterSpec(existing)} conflicts with ${describeMcpAdapterSpec(spec)}`,
+        `tool name collision for '${name}': ${describeToolAdapterSpec(existing)} conflicts with ${describeToolAdapterSpec(spec)}`,
       );
     }
-    byName.set(mcpName, spec);
+    byName.set(name, spec);
     specs.push(spec);
   }
-  return specs.sort((left, right) => left.mcpName.localeCompare(right.mcpName));
+  return specs.sort((left, right) => left.name.localeCompare(right.name));
 };
 
-const mcpAdapterSpecsEqual = (left: McpAdapterSpec, right: McpAdapterSpec): boolean => {
-  if (left.kind !== right.kind || left.mcpName !== right.mcpName) return false;
+const toolAdapterSpecsEqual = (left: ToolAdapterSpec, right: ToolAdapterSpec): boolean => {
+  if (left.kind !== right.kind || left.name !== right.name) return false;
   if (left.kind === "tool" && right.kind === "tool") {
     return (
       left.pluginName === right.pluginName &&
@@ -523,11 +524,11 @@ const mcpAdapterSpecsEqual = (left: McpAdapterSpec, right: McpAdapterSpec): bool
   return false;
 };
 
-const describeMcpAdapterSpec = (spec: McpAdapterSpec): string => {
+const describeToolAdapterSpec = (spec: ToolAdapterSpec): string => {
   if (spec.kind === "tool") {
-    return `logical '${spec.logicalName}' -> tool ${spec.pluginName}:${spec.toolName}`;
+    return `tool ${spec.pluginName}/${spec.toolName} as ${spec.name}`;
   }
-  return `logical '${spec.logicalName}' -> synthetic contract ${spec.pluginName}:${spec.contractName}`;
+  return `synthetic ${spec.pluginName}/${spec.contractName} as ${spec.name}`;
 };
 
 const safeIdentifier = (value: string): string =>
@@ -593,9 +594,7 @@ const inputJsonSchemaFromEffectSchema = (schema: Schema.Schema.AnyNoContext): Js
 
 const literalToZod = (literal: string | number | boolean | null): ZodSchema => {
   // Use z.enum for string literals so the emitted JSON Schema uses "enum"
-  // instead of "const". Some MCP clients (including Kimi) reject "const"
-  // with "must be equal to constant". enum is draft-07 compatible and
-  // universally supported.
+  // instead of "const" — enum is draft-07 compatible and widely supported.
   if (typeof literal === "string") {
     return z.enum([literal] as [string, ...string[]]);
   }
@@ -846,7 +845,7 @@ interface RenderedToolSurfaceBindings {
   readonly entries: string;
 }
 
-const renderToolSurfaceImport = (ident: string, spec: McpAdapterSpec): string => {
+const renderToolSurfaceImport = (ident: string, spec: ToolAdapterSpec): string => {
   if (spec.kind === "tool") {
     return `import ${ident} from ${JSON.stringify(`./plugins/${spec.pluginName}/tools/${spec.toolName}.tool`)};`;
   }
@@ -854,13 +853,13 @@ const renderToolSurfaceImport = (ident: string, spec: McpAdapterSpec): string =>
 };
 
 const renderToolSurfaceBindings = (
-  specs: ReadonlyArray<McpAdapterSpec>,
-  renderEntry: (spec: McpAdapterSpec, ident: string) => string,
+  specs: ReadonlyArray<ToolAdapterSpec>,
+  renderEntry: (spec: ToolAdapterSpec, ident: string) => string,
 ): RenderedToolSurfaceBindings => {
   const imports: string[] = [];
   const entries: string[] = [];
   for (const [index, spec] of specs.entries()) {
-    const ident = `surface_${index}_${safeIdentifier(spec.mcpName)}`;
+    const ident = `surface_${index}_${safeIdentifier(spec.name)}`;
     imports.push(renderToolSurfaceImport(ident, spec));
     entries.push(renderEntry(spec, ident));
   }
@@ -890,14 +889,14 @@ const renderPiExtensionRuntime = (
 const renderAmpPluginEntry = (options: {
   readonly sourcePluginName: string;
   readonly version: string;
-  readonly specs: ReadonlyArray<McpAdapterSpec>;
+  readonly specs: ReadonlyArray<ToolAdapterSpec>;
   readonly setupImports?: string;
   readonly setupSource?: string;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
     (spec, ident) =>
-      `  createToolDefinition(${JSON.stringify(spec.mcpName)}, ${ident} as ToolSurface),`,
+      `  createToolDefinition(${JSON.stringify(spec.name)}, ${ident} as ToolSurface),`,
   );
 
   return joinGeneratedSections([
@@ -918,7 +917,7 @@ const renderAmpPluginEntry = (options: {
 const renderPiExtensionEntry = (options: {
   readonly sourcePluginName: string;
   readonly version: string;
-  readonly specs: ReadonlyArray<McpAdapterSpec>;
+  readonly specs: ReadonlyArray<ToolAdapterSpec>;
   readonly setupImports?: string;
   readonly setupSource?: string;
   readonly runtimeAgent: string;
@@ -927,7 +926,7 @@ const renderPiExtensionEntry = (options: {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
     (spec, ident) =>
-      `  createToolDefinition(${JSON.stringify(spec.mcpName)}, ${ident} as ToolSurface),`,
+      `  createToolDefinition(${JSON.stringify(spec.name)}, ${ident} as ToolSurface),`,
   );
 
   return joinGeneratedSections([
@@ -1002,21 +1001,12 @@ const normalizeBuiltAmpPluginBundle = stripBundlerPathComments;
 
 const normalizeBuiltPiExtensionBundle = stripBundlerPathComments;
 
-/**
- * Sorted, deduped generated tool names for a binding set.
- */
-export const mcpToolNamesForBindings = (
-  sourcePluginName: string,
-  bindings: ReadonlyArray<ResolvedContractBinding>,
-): string[] =>
-  adapterSpecsForBindings(sourcePluginName, bindings).map((spec) => spec.mcpName);
-
-/** CLI-facing tool names (logical); one row per tool, no protocol wire prefixes. */
+/** Sorted, deduped tool names (generated identity) for a binding set. */
 export const cliToolNamesForBindings = (
   sourcePluginName: string,
   bindings: ReadonlyArray<ResolvedContractBinding>,
 ): string[] =>
-  adapterSpecsForBindings(sourcePluginName, bindings).map((spec) => spec.logicalName);
+  adapterSpecsForBindings(sourcePluginName, bindings).map((spec) => spec.name);
 
 export interface ToolCliRuntimeBundleOptions {
   readonly sourcePluginName: string;
@@ -1079,7 +1069,7 @@ export const invokeTool = async (name, rawArgs = {}, callContext = {}) => {
 const renderToolCliRuntimeEntry = (options: {
   readonly sourcePluginName: string;
   readonly version: string;
-  readonly specs: ReadonlyArray<McpAdapterSpec>;
+  readonly specs: ReadonlyArray<ToolAdapterSpec>;
 }): string => {
   const { imports, entries } = renderToolSurfaceBindings(
     options.specs,
@@ -1089,7 +1079,7 @@ const renderToolCliRuntimeEntry = (options: {
   return joinGeneratedSections([
     `// GENERATED by prism — do not edit.
 // Stateless CLI tool runtime for ${options.sourcePluginName} v${options.version}.
-// Loaded in-process by \`prism tools invoke\` — no daemon, no MCP.`,
+// Loaded in-process by \`prism tools invoke\` (one-shot).`,
     `import { Schema } from ${JSON.stringify(effectBundleImportPath())};`,
     imports,
     replaceTemplateTokens(CLI_TOOL_RUNTIME, {
@@ -1179,7 +1169,7 @@ export const generateAmpPluginBundle = async (
 ): Promise<AmpPluginBundle> => {
   const version = options.version ?? "0.1.0";
   const specs = adapterSpecsForBindings(options.sourcePluginName, options.bindings);
-  const toolNames = specs.map((spec) => spec.mcpName);
+  const toolNames = specs.map((spec) => spec.name);
   const mirrors = await collectMirrorsForBindings(
     options.bindings,
     options.sourcePluginName,
@@ -1240,7 +1230,7 @@ export const generatePiExtensionBundle = async (
 ): Promise<PiExtensionBundle> => {
   const version = options.version ?? "0.1.0";
   const specs = adapterSpecsForBindings(options.sourcePluginName, options.bindings);
-  const toolNames = specs.map((spec) => spec.mcpName);
+  const toolNames = specs.map((spec) => spec.name);
   const mirrors = await collectMirrorsForBindings(
     options.bindings,
     options.sourcePluginName,

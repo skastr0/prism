@@ -1,40 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
-// --- stubs after MCP tree deletion (tests may still reference old names) ---
-const __mcpDeleted = (name: string): any => {
-  throw new Error(`MCP surface deleted: ${name}`);
-};
-const pluginServerKey = (pluginName: string): string =>
-  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
-const shimServerKey = (_harness: string): string => "prism";
-const bareWireToolName = (_plugin: string, tool: string): string => tool;
-const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
-const renderPluginAllowlist = (...args: unknown[]): string => {
-  const tool = String(args[args.length - 1] ?? "");
-  const plugin = String(args[args.length - 2] ?? "");
-  return `${pluginServerKey(plugin)}__${tool}`;
-};
-const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
-  `${pluginServerKey(plugin)}_${tool}`;
-const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
-const generatedMcpServerName = generatedMcpWireServerName;
-const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
-const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
-const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
-  __mcpDeleted("writePrismMcpServerBundle");
-const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
-const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
-  __mcpDeleted("generateMcpServerBundle");
-const mcpServerRuntimeSourceSha256 = (): string => "deleted";
-const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
-const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
-const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
-const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
-type RegistryEntry = { pluginName: string; pid?: number };
-type RegistryResult = { ok: boolean };
-// --- end stubs ---
 import { Database } from "bun:sqlite";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1341,7 +1306,6 @@ export default {
 
 afterEach(async () => {
   const roots = tempRoots.splice(0);
-  await Promise.all(roots.map((root) => cleanupPrismMcpProcessesUnder(root).catch(() => undefined)));
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -1388,63 +1352,6 @@ test("init --typescript scaffolds OXC configs, scripts, and local plugin", async
   expect(await pathExists(join(pluginRoot, "README.md"))).toBe(false);
 });
 
-// The old "mcp serve/status/stop manages a Hermes daemon" lifecycle test is
-// removed, not migrated: `mcp serve`, `mcp stop`, and `mcp restart` are
-// retired CLI subcommands (04bdc3d) -- only `mcp status` and `mcp shim`
-// remain. Daemons are now resolve-or-spawned lazily by the stdio shim and
-// idle-reaped, with no manual start/stop surface; that lifecycle is covered
-// at the component level by packages/prism-sdk/src/mcp/daemon-resolver.test.ts
-// and uds-registry.test.ts, not through a CLI subcommand any more.
-test("mcp status accepts supported non-Hermes lifecycle harnesses", async () => {
-  const { pluginRoot, prismHome } = await createCliMcpFixture({ harness: "cursor" });
-
-  const status = await runCli([
-    "mcp",
-    "status",
-    pluginRoot,
-    "--harness",
-    "cursor",
-  ], { PRISM_HOME: prismHome });
-
-  expect(status.exitCode).toBe(0);
-  // Fixture is never refreshed, so the honest state is missing-bundle (not stopped).
-  expect(status.stdout).toMatch(/\b(stopped|missing-bundle)\b/);
-  expect(status.stdout).toContain("prism-generated-cli-hermes-tools");
-});
-
-test("refresh compile-only writes Hermes MCP config to an explicit profile root", async () => {
-  const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
-
-  const result = await runCli([
-    "refresh",
-    "--plugin",
-    pluginRoot,
-    "--harness",
-    "hermes",
-    "--compile-only",
-    "--compile-root",
-    hermesRoot,
-  ], { PRISM_HOME: prismHome });
-
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout).toContain(`Root: ${hermesRoot}`);
-  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-  expect(config).toContain("mcp_servers:");
-  // Post-consolidation: Hermes registers the stdio shim under the owner
-  // plugin's own server key, never the retired direct-HTTP `url` shape.
-  expect(config).toContain("cli-hermes-tools:");
-  expect(config).toContain("command: prism");
-  expect(config).toContain('PRISM_SHIM_PLUGINS: "cli-hermes-tools"');
-  expect(config).toContain('PRISM_SHIM_HARNESS: "hermes"');
-  expect(config).toContain('PRISM_SHIM_NAMING: "per-plugin"');
-  expect(config).not.toContain("url:");
-  expect(
-    await pathExists(join(prismHome, "runtime", "mcp", "cli-hermes-tools", "server.mjs")),
-  ).toBe(true);
-  // The bundle never lands inside the harness root.
-  expect(await pathExists(join(hermesRoot, "prism", "mcp"))).toBe(false);
-});
-
 test("package CLI writes distributable payload", async () => {
   const { pluginRoot, outRoot, prismHome } = await createCliPackageFixture();
 
@@ -1472,32 +1379,6 @@ test("package CLI writes distributable payload", async () => {
 
 });
 
-// Renamed from "...HTTP MCP by default": HTTP transport is retired
-// (04bdc3d, bf57b62); a plain `refresh` (not just `--compile-only`)
-// registers the stdio shim by default, with no daemon left running to stop
-// afterward -- the shim resolve-or-spawns lazily on first tool call.
-test("refresh registers Hermes stdio-shim MCP by default", async () => {
-  const { pluginRoot, hermesRoot } = await createCliMcpFixture();
-  const common = [
-    "refresh",
-    "--plugin",
-    pluginRoot,
-    "--harness",
-    "hermes",
-    "--compile-root",
-    hermesRoot,
-    "--no-validate",
-  ];
-
-  const served = await runCli(common, {});
-  expect(served.exitCode).toBe(0);
-  expect(served.stdout).toContain("Compile (hermes, global)");
-  const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-  expect(config).toContain("cli-hermes-tools:");
-  expect(config).toContain("command: prism");
-  expect(config).toContain('PRISM_SHIM_PLUGINS: "cli-hermes-tools"');
-}, 20_000);
-
 test("refresh --plugins compiles Hermes child plugins into an explicit profile root", async () => {
   const { pluginRoot, hermesRoot, prismHome } = await createCliMcpFixture();
 
@@ -1516,17 +1397,14 @@ test("refresh --plugins compiles Hermes child plugins into an explicit profile r
   expect(result.stdout).toContain("Compile (hermes, global)");
   expect(result.stdout).toContain(`Root: ${hermesRoot}`);
   expect(result.stdout).toContain("All plugin refreshes completed successfully");
+  // Tools are CLI-only — no harness MCP config and no runtime/mcp bundle.
   const config = await readFile(join(hermesRoot, "config.yaml"), "utf8");
-  expect(config).toContain("mcp_servers:");
-  // Hermes now registers one server per owner plugin, keyed by the plugin's
-  // own server key (never the retired aggregated `prism-mcp-shim` key).
-  expect(config).toContain("cli-hermes-tools:");
+  expect(config).not.toContain("mcp_servers:");
   expect(config).not.toContain("prism-mcp-shim:");
-  expect(config).toContain('PRISM_SHIM_PLUGINS: "cli-hermes-tools"');
-  expect(config).toContain('PRISM_SHIM_NAMING: "per-plugin"');
+  expect(config).not.toContain("PRISM_SHIM_");
   expect(
     await pathExists(join(prismHome, "runtime", "mcp", "cli-hermes-tools", "server.mjs")),
-  ).toBe(true);
+  ).toBe(false);
   expect(await pathExists(join(hermesRoot, "prism", "mcp"))).toBe(false);
 });
 

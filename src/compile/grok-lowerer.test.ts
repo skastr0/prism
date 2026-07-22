@@ -1,42 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 
-// --- stubs after MCP tree deletion (tests may still reference old names) ---
-const __mcpDeleted = (name: string): any => {
-  throw new Error(`MCP surface deleted: ${name}`);
-};
-const pluginServerKey = (pluginName: string): string =>
-  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
-const shimServerKey = (_harness: string): string => "prism";
-const bareWireToolName = (_plugin: string, tool: string): string => tool;
-const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
-const renderPluginAllowlist = (...args: unknown[]): string => {
-  const tool = String(args[args.length - 1] ?? "");
-  const plugin = String(args[args.length - 2] ?? "");
-  return `${pluginServerKey(plugin)}__${tool}`;
-};
-const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
-  `${pluginServerKey(plugin)}_${tool}`;
-const capGrokWireName = (name: string, budget: number = 64, ..._rest: unknown[]): string => name.slice(0, budget);
-const createGrokCollisionGuard = (): { seen: Set<string> } => ({ seen: new Set() });
-const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
-const generatedMcpServerName = generatedMcpWireServerName;
-const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
-const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
-const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
-  __mcpDeleted("writePrismMcpServerBundle");
-const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
-const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
-  __mcpDeleted("generateMcpServerBundle");
-const mcpServerRuntimeSourceSha256 = (): string => "deleted";
-const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
-const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
-const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
-const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
-type RegistryEntry = { pluginName: string; pid?: number };
-type RegistryResult = { ok: boolean };
-// --- end stubs ---
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -635,54 +598,6 @@ test("grok project lowerer rejects non-empty hooks with an actionable exactly-on
   })).rejects.toThrow(hookPath);
 });
 
-test("grok agent MCP tool advertisement and config share the MCP emit flag", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".grok");
-  const binding = permissionBinding("owner-tools", "echo");
-  const previous = process.env.PRISM_TOOLS_MCP_EMIT;
-  const output = await (async () => {
-    process.env.PRISM_TOOLS_MCP_EMIT = "0";
-    try {
-      return await planLowering({
-        agents: [{
-          name: "consumer",
-          description: "Consumes one native and one canonical tool",
-          body: "# Consumer\n",
-          color: undefined,
-          model: {},
-          targetOverride: {},
-          skills: [],
-          allowedSkills: [],
-          allowedTools: ["read_file"],
-          toolBindings: [binding],
-        }],
-        orbits: [],
-        skills: [],
-        hooks: [],
-        target: {
-          scope: "project",
-          root: outputRoot,
-          sourcePluginName: "grok-mcp-off-fixture",
-          sourcePluginVersion: "0.1.0",
-        },
-      });
-    } finally {
-      if (previous === undefined) delete process.env.PRISM_TOOLS_MCP_EMIT;
-      else process.env.PRISM_TOOLS_MCP_EMIT = previous;
-    }
-  })();
-
-  const agent = findContentOperation(output.files, join("agents", "consumer.md"));
-  const generatedName = renderPluginAllowlist(
-    "grok",
-    "owner-tools",
-    cliToolNameForBinding("owner-tools", binding),
-  );
-  expect(agent?.content).toContain('- "read_file"');
-  expect(agent?.content).not.toContain(generatedName);
-  expect(output.regions).toEqual([]);
-});
-
 test("grok lowerer preserves frontmatter precedence and omission rules", async () => {
   const root = await createTempRoot();
   const { files: operations } = await planLowering({
@@ -773,63 +688,6 @@ test("grok lowerer preserves frontmatter precedence and omission rules", async (
   expect(omissionAgent?.content).not.toContain("\ntools:");
   expect(omissionAgent?.content).not.toContain("\nskills:");
   expect(omissionAgent?.content).not.toContain("direct-skill");
-});
-
-test("grok lowerer emits no MCP config region for self-owned tools", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".grok");
-  const pluginRoot = join(root, "grok-shim-fixture");
-
-  await writeText(
-    join(pluginRoot, "plugin.json"),
-    `${JSON.stringify(
-      {
-        name: "grok-shim-fixture",
-        version: "0.1.0",
-        targets: {
-          tools: ["grok"],
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeText(
-    join(pluginRoot, "tools", "echo.tool.ts"),
-    `import { Schema } from ${JSON.stringify(effectImportPath)};
-
-export default {
-  name: "echo",
-  description: "Echo via the stdio shim",
-  input: Schema.Struct({ message: Schema.String }),
-  output: Schema.Struct({ message: Schema.String }),
-  async handle(input) {
-    return { message: input.message };
-  },
-};
-`,
-  );
-
-  const registry = await Effect.runPromise(loadPlugin(pluginRoot));
-  const { files: operations, regions } = await planLowering({
-    agents: [],
-    orbits: [],
-    tools: [...registry.tools.values()],
-    skills: [],
-    hooks: [],
-    registry,
-    target: {
-      scope: "project",
-      root: outputRoot,
-      sourcePluginName: "grok-shim-fixture",
-      sourcePluginVersion: "0.1.0",
-      sourcePluginPath: pluginRoot,
-    },
-  });
-
-  // MCP config emission was excised — tools are CLI-only.
-  expect(findContentOperation(operations, ".mcp.json")).toBeUndefined();
-  expect(regions.some((region) => region.regionKey.startsWith("grok.mcp."))).toBe(false);
 });
 
 test("grok lowerer fails closed when hook matcher has no Grok target mapping", async () => {
@@ -970,20 +828,4 @@ test("grok lowerer no longer emits generated tool wire names in agent frontmatte
     const name = cliToolNameForBinding(plugin, permissionBinding(plugin, tool));
     expect(name.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   }
-});
-
-// The core cap/collision algorithm now lives in `capGrokWireName`
-// coverage there (compliant-untouched, truncate+hash, determinism, collision
-// guard). This test keeps only the one boundary case not covered there: a
-// truncation cut landing mid-run-of-underscores must not leave a doubled or
-// dangling underscore where the hash suffix is joined on — exercised here at
-// the budget Grok's shim actually uses.
-test.skip("capGrokWireName does not leave a doubled or dangling underscore at a mid-run-of-underscores truncation boundary (wire-naming deleted)", () => {
-  const budget = GROK_MAX_TOOL_NAME_LENGTH - pluginServerKey("typefully-cli").length - 2;
-  const prefixLength = budget - 8 - 1;
-  const trailingUnderscoreAtBoundary = `${"a".repeat(prefixLength - 5)}_____${"b".repeat(50)}`;
-  const cappedTrailingUnderscore = capGrokWireName(trailingUnderscoreAtBoundary, budget);
-  expect(cappedTrailingUnderscore.length).toBeLessThanOrEqual(budget);
-  expect(cappedTrailingUnderscore).toMatch(GROK_TOOL_NAME_REGEX);
-  expect(cappedTrailingUnderscore).not.toMatch(/__/u);
 });

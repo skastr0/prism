@@ -1,40 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 
-// --- stubs after MCP tree deletion (tests may still reference old names) ---
-const __mcpDeleted = (name: string): any => {
-  throw new Error(`MCP surface deleted: ${name}`);
-};
-const pluginServerKey = (pluginName: string): string =>
-  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
-const shimServerKey = (_harness: string): string => "prism";
-const bareWireToolName = (_plugin: string, tool: string): string => tool;
-const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
-const renderPluginAllowlist = (...args: unknown[]): string => {
-  const tool = String(args[args.length - 1] ?? "");
-  const plugin = String(args[args.length - 2] ?? "");
-  return `${pluginServerKey(plugin)}__${tool}`;
-};
-const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
-  `${pluginServerKey(plugin)}_${tool}`;
-const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
-const generatedMcpServerName = generatedMcpWireServerName;
-const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
-const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
-const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
-  __mcpDeleted("writePrismMcpServerBundle");
-const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
-const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
-  __mcpDeleted("generateMcpServerBundle");
-const mcpServerRuntimeSourceSha256 = (): string => "deleted";
-const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
-const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
-const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
-const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
-type RegistryEntry = { pluginName: string; pid?: number };
-type RegistryResult = { ok: boolean };
-// --- end stubs ---
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -235,74 +200,5 @@ test("kimi-code lowerer emits a generated plugin with all compile surfaces", asy
     });
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
-  }
-});
-
-test("kimi-code production default omits generated MCP role tools and MCP config", async () => {
-  const root = await createTempRoot();
-  const outputRoot = join(root, ".kimi-code");
-  const owner = "kimi-mcp-off-fixture";
-  const binding = permissionBinding(owner, "echo");
-  const previous = process.env.PRISM_TOOLS_MCP_EMIT;
-  const previousCli = process.env.PRISM_TOOLS_CLI_EMIT;
-  const previousInject = process.env.PRISM_TOOLS_CLI_INJECT;
-
-  delete process.env.PRISM_TOOLS_MCP_EMIT;
-  delete process.env.PRISM_TOOLS_CLI_EMIT;
-  delete process.env.PRISM_TOOLS_CLI_INJECT;
-  try {
-    const { files } = await planLowering({
-      agents: [{
-        name: "consumer",
-        description: "Consumes one native and one canonical tool",
-        body: "# Consumer\n",
-        color: undefined,
-        model: {},
-        targetOverride: {},
-        skills: [],
-        allowedSkills: [],
-        allowedTools: ["read_file"],
-        toolBindings: [binding],
-      }],
-      orbits: [],
-      tools: [],
-      skills: [],
-      hooks: [],
-      target: {
-        scope: "global",
-        root: outputRoot,
-        sourcePluginName: owner,
-        sourcePluginVersion: "0.1.0",
-      },
-    });
-
-    const role = findContentOperation(
-      files,
-      join("skills", "prism-agent-consumer", "SKILL.md"),
-    );
-    const generatedName = `mcp__${pluginServerKey(owner)}__${renderPluginWire(
-      "kimi-code",
-      owner,
-      cliToolNameForBinding(owner, binding),
-    )}`;
-    expect(role?.content).toContain("Native tools requested by this role: `read_file`.");
-    expect(role?.content).not.toContain("Generated MCP tools for this role:");
-    expect(role?.content).not.toContain(generatedName);
-    expect(role?.content).toContain("Load skill `prism-tools-kimi-mcp-off-fixture`");
-    expect(role?.content).toContain(
-      "prism tools invoke kimi-mcp-off-fixture <tool-name>",
-    );
-    expect(role?.content).toContain("`echo`");
-    const manifest = JSON.parse(
-      findContentOperation(files, "kimi.plugin.json")?.content ?? "{}",
-    ) as { readonly mcpServers?: unknown };
-    expect(manifest.mcpServers).toBeUndefined();
-  } finally {
-    if (previous === undefined) delete process.env.PRISM_TOOLS_MCP_EMIT;
-    else process.env.PRISM_TOOLS_MCP_EMIT = previous;
-    if (previousCli === undefined) delete process.env.PRISM_TOOLS_CLI_EMIT;
-    else process.env.PRISM_TOOLS_CLI_EMIT = previousCli;
-    if (previousInject === undefined) delete process.env.PRISM_TOOLS_CLI_INJECT;
-    else process.env.PRISM_TOOLS_CLI_INJECT = previousInject;
   }
 });

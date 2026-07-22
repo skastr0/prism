@@ -1,40 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 
-// --- stubs after MCP tree deletion (tests may still reference old names) ---
-const __mcpDeleted = (name: string): any => {
-  throw new Error(`MCP surface deleted: ${name}`);
-};
-const pluginServerKey = (pluginName: string): string =>
-  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
-const shimServerKey = (_harness: string): string => "prism";
-const bareWireToolName = (_plugin: string, tool: string): string => tool;
-const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
-const renderPluginAllowlist = (...args: unknown[]): string => {
-  const tool = String(args[args.length - 1] ?? "");
-  const plugin = String(args[args.length - 2] ?? "");
-  return `${pluginServerKey(plugin)}__${tool}`;
-};
-const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
-  `${pluginServerKey(plugin)}_${tool}`;
-const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
-const generatedMcpServerName = generatedMcpWireServerName;
-const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
-const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
-const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
-  __mcpDeleted("writePrismMcpServerBundle");
-const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
-const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
-  __mcpDeleted("generateMcpServerBundle");
-const mcpServerRuntimeSourceSha256 = (): string => "deleted";
-const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
-const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
-const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
-const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
-type RegistryEntry = { pluginName: string; pid?: number };
-type RegistryResult = { ok: boolean };
-// --- end stubs ---
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -170,49 +135,6 @@ afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
-});
-
-test("production defaults inject a CLI skill for a synthetic-only tool owner without MCP config", async () => {
-  const { pluginRoot, projectRoot } = await createSyntheticOnlyFixture();
-  const prismHome = join(projectRoot, ".prism-home");
-  await withProductionToolDefaults(async () => {
-    const result = await Effect.runPromise(
-      compilePluginForTarget({
-        prismHome,
-        pluginPath: pluginRoot,
-        target: "codex-cli",
-        scope: "project",
-        projectPath: projectRoot,
-        dryRun: false,
-      }),
-    );
-    expect(result.failures).toEqual([]);
-
-    const catalog = JSON.parse(
-      await readFile(
-        prismToolCatalogPath(prismHome, "synthetic-cli-consumer"),
-        "utf8",
-      ),
-    ) as { readonly tools?: ReadonlyArray<{ readonly name?: string }> };
-    expect(catalog.tools?.map((tool) => tool.name)).toEqual(["submit_work"]);
-
-    const skillPath = join(
-      projectRoot,
-      ".codex",
-      "skills",
-      "prism-tools-synthetic-cli-consumer",
-      "SKILL.md",
-    );
-    const skill = await readFile(skillPath, "utf8");
-    expect(skill).toContain("prism tools invoke synthetic-cli-consumer submit_work");
-
-    const rules = await readFile(join(projectRoot, ".codex", "AGENTS.md"), "utf8");
-    expect(rules).toContain("Load skill `prism-tools-synthetic-cli-consumer`");
-    expect(rules).toContain("`submit_work`");
-    const bundlePath = prismToolRuntimePath(prismHome, "synthetic-cli-consumer");
-    expect(await pathExists(bundlePath)).toBe(true);
-    expect(await pathExists(join(projectRoot, ".codex", "config.toml"))).toBe(false);
-  });
 });
 
 test("Antigravity production defaults keep an assigned canonical tool discoverable via a bundle-local CLI skill", async () => {

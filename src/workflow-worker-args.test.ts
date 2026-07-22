@@ -1,40 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-// --- stubs after MCP tree deletion (tests may still reference old names) ---
-const __mcpDeleted = (name: string): any => {
-  throw new Error(`MCP surface deleted: ${name}`);
-};
-const pluginServerKey = (pluginName: string): string =>
-  pluginName.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "plugin";
-const shimServerKey = (_harness: string): string => "prism";
-const bareWireToolName = (_plugin: string, tool: string): string => tool;
-const renderAllowlist = (...args: unknown[]): string => String(args[args.length - 1] ?? "");
-const renderPluginAllowlist = (...args: unknown[]): string => {
-  const tool = String(args[args.length - 1] ?? "");
-  const plugin = String(args[args.length - 2] ?? "");
-  return `${pluginServerKey(plugin)}__${tool}`;
-};
-const renderPluginWire = (plugin: string, tool: string, ..._rest: unknown[]): string =>
-  `${pluginServerKey(plugin)}_${tool}`;
-const generatedMcpWireServerName = (pluginName: string): string => `prism-generated-${pluginName}`;
-const generatedMcpServerName = generatedMcpWireServerName;
-const prismMcpServerPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/server.mjs`;
-const prismMcpServerStdioPath = (prismHome: string, pluginName: string): string =>
-  `${prismHome}/runtime/mcp/${pluginName}/entry-stdio.mjs`;
-const writePrismMcpServerBundle = async (..._args: unknown[]): Promise<{ path: string }> =>
-  __mcpDeleted("writePrismMcpServerBundle");
-const resolveOwnerMcpRuntime = (..._args: unknown[]): any => __mcpDeleted("resolveOwnerMcpRuntime");
-const generateMcpServerBundle = async (..._args: unknown[]): Promise<any> =>
-  __mcpDeleted("generateMcpServerBundle");
-const mcpServerRuntimeSourceSha256 = (): string => "deleted";
-const readMcpServerSourceSha256FromBundle = (_c: string): string | undefined => undefined;
-const cleanupPrismMcpProcessesUnder = async (_root: string): Promise<void> => {};
-const pluginDaemonLogPath = (..._args: unknown[]): string => "/tmp/prism-mcp-deleted.log";
-const registerDaemon = async (..._args: unknown[]): Promise<any> => __mcpDeleted("registerDaemon");
-type RegistryEntry = { pluginName: string; pid?: number };
-type RegistryResult = { ok: boolean };
-// --- end stubs ---
 import { buildAmpArgs, assertAmpWorkflowMode } from "./workflow-amp-worker.js";
 import {
   DEFAULT_ANTIGRAVITY_MODEL,
@@ -113,31 +78,6 @@ describe("workflow worker argument builders", () => {
     expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "provider/model"]);
     expect(args).not.toContain("subagent");
-  });
-
-  test("claude loads generated plugin MCP config explicitly", () => {
-    const allowedToolName = `mcp__${generatedMcpWireServerName("prism-harness-qa")}__prism_harness_qa_challenge_echo`;
-    const args = buildClaudeArgs({
-      agent: "qa-tester",
-      model: "sonnet",
-      prompt: "return json",
-      generatedPlugin: {
-        pluginDir: "/home/test/.claude/skills/prism-generated-prism-harness-qa",
-        mcpConfig: "/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json",
-        allowedTools: [allowedToolName],
-      },
-    });
-
-    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual(["--agent", "qa-tester"]);
-    expect(args.slice(args.indexOf("--plugin-dir"), args.indexOf("--plugin-dir") + 2)).toEqual([
-      "--plugin-dir",
-      "/home/test/.claude/skills/prism-generated-prism-harness-qa",
-    ]);
-    expect(args.slice(args.indexOf("--output-format"), args.indexOf("--output-format") + 2)).toEqual(["--output-format", "stream-json"]);
-    expect(args).toContain("--verbose");
-    expect(args).toContain("--mcp-config=/home/test/.claude/skills/prism-generated-prism-harness-qa/.mcp.json");
-    expect(args).toContain("--strict-mcp-config");
-    expect(args).toContain(`--allowedTools=${allowedToolName}`);
   });
 
   test("amp accepts only deep and rush workflow modes", () => {

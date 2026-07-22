@@ -108,36 +108,6 @@ describe("astToJsonSchema", () => {
     );
   });
 
-  test("MCP options unwrap Refinement to base JSON Schema type", () => {
-    const schema = Schema.Struct({
-      project_key: Schema.String.pipe(Schema.minLength(1)),
-      label: Schema.NonEmptyString,
-    });
-    const json = jsonSchemaFromEffectSchema(schema, MCP_AST_TO_JSON_SCHEMA_OPTIONS);
-    expect(json).toMatchObject({
-      type: "object",
-      properties: {
-        project_key: { type: "string" },
-        label: { type: "string" },
-      },
-      required: ["project_key", "label"],
-    });
-  });
-
-  test("MCP options map Schema.Record to additionalProperties object", () => {
-    const schema = Schema.Struct({
-      payload: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-    });
-    const json = jsonSchemaFromEffectSchema(schema, MCP_AST_TO_JSON_SCHEMA_OPTIONS);
-    expect(json).toMatchObject({
-      type: "object",
-      properties: {
-        payload: { type: "object", additionalProperties: true },
-      },
-      required: ["payload"],
-    });
-  });
-
   test("rejects Record index signatures", () => {
     expectWorkflowError(
       () => jsonSchemaFromEffectSchema(
@@ -162,53 +132,11 @@ describe("astToJsonSchema", () => {
     );
   });
 
-  test("honors MCP enum literal representation and unknown keyword mapping", () => {
-    const schema = jsonSchemaFromEffectSchema(
-      Schema.Struct({
-        mode: Schema.Literal("on"),
-        extra: Schema.Unknown,
-      }),
-      MCP_AST_TO_JSON_SCHEMA_OPTIONS,
-    );
-
-    const properties = schema.properties as Record<string, Record<string, unknown>>;
-    expect(properties).toMatchObject({
-      mode: { enum: ["on"] },
-      extra: { type: "object", additionalProperties: true },
-    });
-    expect(properties.mode).not.toHaveProperty("const");
-  });
-
   test("supports explicit const literal representation", () => {
     const schema = astToJsonSchema(Schema.Literal("fixed").ast, {
       errorPrefix: "test",
       literalRepresentation: "const",
     });
     expect(schema).toEqual({ const: "fixed" });
-  });
-
-  test("workflow and MCP bundle paths share identical converter output", () => {
-    const supportedSubset = Schema.Struct({
-      summary: Schema.String.annotations({ description: "Short result summary" }),
-      count: Schema.Number,
-      ok: Schema.Boolean,
-      tags: Schema.Array(Schema.String),
-      mode: Schema.Literal("pass", "fail"),
-      maybeScore: Schema.optional(Schema.Number),
-      nullableNote: Schema.NullOr(Schema.String),
-    });
-
-    const workflowDirect = jsonSchemaFromEffectSchema(
-      supportedSubset,
-      WORKFLOW_AST_TO_JSON_SCHEMA_OPTIONS,
-    );
-    const workflowWrapped = workflowJsonSchemaFromEffectSchema(supportedSubset);
-    const mcpBundle = jsonSchemaFromEffectSchema(supportedSubset, {
-      ...MCP_AST_TO_JSON_SCHEMA_OPTIONS,
-      errorPrefix: "mcp-schema-bridge",
-    });
-
-    expect(workflowWrapped).toEqual(workflowDirect);
-    expect(mcpBundle).toEqual(workflowDirect);
   });
 });

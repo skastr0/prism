@@ -163,28 +163,6 @@ test("packagePluginForTarget writes package payload and activation manifest", as
 
 });
 
-test("packagePluginForTarget includes MCP HTTP and stdio bundle entries", async () => {
-  const root = await createTempRoot();
-  const pluginRoot = await createCursorToolPlugin(root);
-
-  const result = await packagePluginForTarget({
-    pluginPath: pluginRoot,
-    target: "cursor",
-  });
-
-  const mcpRoot = join(
-    result.packageRoot,
-    "payload",
-    "mcp",
-    "prism_generated_cursor_tool_plugin",
-  );
-  expect(await pathExists(join(mcpRoot, "server.mjs"))).toBe(true);
-  expect(await pathExists(join(mcpRoot, "entry-stdio.mjs"))).toBe(true);
-  const stdio = await readFile(join(mcpRoot, "entry-stdio.mjs"), "utf8");
-  expect(stdio).toContain("PRISM_MCP_ENABLED_TOOLS");
-  expect(stdio).not.toContain("Bun.serve");
-});
-
 test("packaged Codex prompt hook emits additional context JSON", async () => {
   const root = await createTempRoot();
   const pluginRoot = await createCodexPromptPlugin(root);

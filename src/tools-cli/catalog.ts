@@ -1,5 +1,8 @@
+/**
+ * Catalog + skill docs for Prism tools CLI surface under PRISM_HOME.
+ */
+
 import { exists, listDir, readFile, writeFile } from "../fs.js";
-import { mcpToolNameForBinding } from "../compile/mcp-bundle.js";
 import type { ResolvedContractBinding } from "../compile/resolve.js";
 import { normalizeBundleSegment } from "../compile/lowerers/shared.js";
 import {
@@ -13,8 +16,6 @@ export const TOOL_CLI_CATALOG_VERSION = 1 as const;
 
 export interface ToolCliCatalogEntry {
   readonly name: string;
-  /** Daemon/MCP wire tool name used for tools/call (may equal `name`). */
-  readonly wireName: string;
   readonly logicalName: string;
   readonly description: string;
 }
@@ -59,15 +60,12 @@ export const buildToolCliCatalog = (options: {
   readonly toolDescriptions?: ReadonlyMap<string, string>;
   readonly generatedAt?: string;
 }): ToolCliCatalog => {
-  // Bindings fan out per exposure/agent surface; CLI catalog is one row per tool.
   const byLogical = new Map<string, ToolCliCatalogEntry>();
   for (const binding of options.bindings) {
     const key = binding.logicalName;
     if (byLogical.has(key)) continue;
-    const wireName = mcpToolNameForBinding(options.pluginName, binding);
     byLogical.set(key, {
       name: binding.logicalName,
-      wireName,
       logicalName: binding.logicalName,
       description: descriptionFor(binding, options.toolDescriptions),
     });
@@ -98,7 +96,7 @@ description: Invoke ${catalog.plugin} Prism tools via managed CLI (stateless). U
 
 # Prism tools: ${catalog.plugin}
 
-These tools are **stateless CLI calls**. Prefer this surface over MCP stdio shims.
+These tools are **stateless CLI calls**. One process per invoke: load runtime, run handle, exit.
 
 ## Invoke
 
@@ -109,7 +107,7 @@ prism tools invoke ${catalog.plugin} <tool-name> --input @./payload.json
 
 - Exit \`0\` + JSON on stdout on success.
 - Non-zero exit + JSON error on stderr/stdout on failure.
-- Business logic runs in the existing Prism daemon for \`${catalog.plugin}\` (lazy spawn); no per-session MCP process.
+- Business logic runs **in-process** in the Prism CLI (compiled \`runtime.mjs\`). No daemon.
 
 ## List
 
@@ -125,9 +123,8 @@ ${toolLines.join("\n\n")}
 
 ## Notes
 
-- Install/refresh the owning plugin so the catalog and daemon bundle stay current.
-- Do not spawn \`prism mcp shim\` for these tools; shell the CLI instead.
-- State lives in the tool's own store (e.g. Tower SQLite), never in the agent process.
+- Install/refresh the owning plugin so the catalog and \`runtime.mjs\` stay current.
+- Tool-owned stores (e.g. Tower SQLite) may hold state; the invoke process itself is one-shot.
 `;
 };
 
@@ -148,6 +145,9 @@ export const writeToolCliCatalog = async (
   if (options.dryRun) {
     return { catalogPath, skillPath, catalog, written: false };
   }
+
+  // Ensure plugin dir exists via catalog write path.
+  void prismToolPluginDir(options.prismHome, options.pluginName);
 
   let written = true;
   if (await exists(catalogPath)) {

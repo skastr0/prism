@@ -1761,7 +1761,7 @@ toolsCommand
           return;
         }
         for (const tool of catalog.tools) {
-          console.log(`${tool.name}\t${tool.wireName}\t${tool.description}`);
+          console.log(`${tool.name}\t${tool.description}`);
         }
         return;
       }
@@ -1806,7 +1806,6 @@ toolsCommand
       console.log(`tools (${catalog.tools.length}):`);
       for (const tool of catalog.tools) {
         console.log(`  ${tool.name}`);
-        console.log(`    wire: ${tool.wireName}`);
         console.log(`    ${tool.description}`);
       }
     } catch (error) {
@@ -1817,9 +1816,9 @@ toolsCommand
 
 toolsCommand
   .command("invoke <plugin> <tool>")
-  .description("Invoke a compiled tool (JSON in/out; lazy-spawns the plugin daemon)")
+  .description("Invoke a compiled tool in-process (JSON in/out; no daemon)")
   .option("--input <json-or-@file>", "JSON object args, or @path to a JSON file", "{}")
-  .option("--timeout-ms <n>", "Daemon resolve + call timeout", (v) => Number(v), 60_000)
+  .option("--timeout-ms <n>", "Tool call timeout", (v) => Number(v), 60_000)
   .option("--json", "Always print JSON (default)", true)
   .action(async (plugin: string, tool: string, options: { input?: string; timeoutMs?: number }) => {
     try {

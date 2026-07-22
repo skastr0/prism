@@ -1,10 +1,10 @@
 /**
- * Agent-facing surface for compiled tools (replaces MCP discovery).
+ * Agent-facing surface for compiled tools (CLI discovery).
  *
- * Always: catalogs + `prism tools invoke` (written by writeToolCliCatalog).
+ * Always: catalogs + runtime.mjs + `prism tools invoke`.
  * Additionally, per inject mode:
  *   - skill (default): install skill + thin always-on rules pointer
- *   - rules: full tool inventory as always-on rules (MCP-like), no skill file
+ *   - rules: full tool inventory as always-on rules, no skill file
  */
 
 import { join } from "node:path";
@@ -35,8 +35,7 @@ export const toolsCliRulesRegionKey = (pluginName: string): string =>
   `tools-cli.${normalizeBundleSegment(pluginName)}`;
 
 /**
- * Full inventory — always-on rules that simulate MCP tool discovery.
- * Agents see every tool name + invoke recipe without loading a skill.
+ * Full inventory — always-on rules for tool discovery without loading a skill.
  */
 export const renderToolCliRulesFull = (catalog: ToolCliCatalog): string => {
   const skill = toolsCliSkillName(catalog.plugin);
@@ -51,7 +50,7 @@ export const renderToolCliRulesFull = (catalog: ToolCliCatalog): string => {
   return [
     `## Prism tools: ${catalog.plugin}`,
     "",
-    "These tools are **stateless CLI calls** (not MCP stdio). Prefer shell invoke over shims.",
+    "These tools are **stateless CLI calls** (in-process `prism tools invoke`).",
     "",
     "### Invoke",
     "",
@@ -67,7 +66,6 @@ export const renderToolCliRulesFull = (catalog: ToolCliCatalog): string => {
     "### Notes",
     "",
     `- Full skill doc (optional detail): \`${skill}\``,
-    "- Do not spawn `prism mcp shim` for these tools.",
     "",
   ].join("\n");
 };
@@ -90,14 +88,13 @@ export const renderToolCliRulesPointer = (catalog: ToolCliCatalog): string => {
     "",
     `Load skill \`${skill}\` for invoke recipes and full descriptions.`,
     "",
-    "Shell surface (preferred over MCP):",
+    "Shell surface:",
     "",
     "```bash",
     `prism tools invoke ${catalog.plugin} <tool-name> --input '<json-object>'`,
     `prism tools list --plugin ${catalog.plugin}`,
     "```",
     "",
-    "Do not spawn `prism mcp shim` for these tools.",
     "",
   ].join("\n");
 };

@@ -60,7 +60,7 @@ describe("tools-cli catalog", () => {
     expect(catalog.tools.map((t) => t.name)).toEqual(["create_glyph", "list_glyphs"]);
   });
 
-  test("buildToolCliCatalog preserves each binding's wire name", () => {
+  test("buildToolCliCatalog preserves each binding's logical name", () => {
     const catalog = buildToolCliCatalog({
       pluginName: "tower",
       bindings: [
@@ -82,11 +82,11 @@ describe("tools-cli catalog", () => {
       generatedAt: "2026-07-10T00:00:00.000Z",
     });
 
-    expect(catalog.tools.find((tool) => tool.name === "submit_review")?.wireName).toBe(
-      "tower_submit_review",
+    expect(catalog.tools.find((tool) => tool.name === "submit_review")?.logicalName).toBe(
+      "submit_review",
     );
-    expect(catalog.tools.find((tool) => tool.name === "submit_review_findings")?.wireName).toBe(
-      "tower_submit_review_findings",
+    expect(catalog.tools.find((tool) => tool.name === "submit_review_findings")?.logicalName).toBe(
+      "submit_review_findings",
     );
   });
 
@@ -99,7 +99,8 @@ describe("tools-cli catalog", () => {
     const md = renderToolCliSkillMarkdown(catalog);
     expect(md).toContain("prism tools invoke tower");
     expect(md).toContain("list_glyphs");
-    expect(md).toContain("Do not spawn `prism mcp shim`");
+    expect(md).toContain("in-process");
+    expect(md).toContain("No daemon");
   });
 
   test("writeToolCliCatalog is idempotent on identical content", async () => {
@@ -129,13 +130,13 @@ describe("tools-cli catalog", () => {
 });
 
 describe("tools-cli flags", () => {
-  test("CLI emit defaults on; MCP off; inject defaults skill", () => {
+  test("CLI emit defaults on; MCP emit always off; inject defaults skill", () => {
     expect(toolsCliEmitEnabled({})).toBe(true);
     expect(toolsMcpHarnessEmitEnabled({})).toBe(false);
     expect(toolsCliInjectMode({})).toBe("skill");
     expect(toolsCliEmitEnabled({ PRISM_TOOLS_CLI_EMIT: "0" })).toBe(false);
     expect(toolsMcpHarnessEmitEnabled({ PRISM_TOOLS_MCP_EMIT: "0" })).toBe(false);
-    expect(toolsMcpHarnessEmitEnabled({ PRISM_TOOLS_MCP_EMIT: "1" })).toBe(true);
+    expect(toolsMcpHarnessEmitEnabled({ PRISM_TOOLS_MCP_EMIT: "1" })).toBe(false);
     expect(toolsCliInjectMode({ PRISM_TOOLS_CLI_INJECT: "rules" })).toBe("rules");
     expect(toolsCliInjectMode({ PRISM_TOOLS_CLI_INJECT: "skill" })).toBe("skill");
   });

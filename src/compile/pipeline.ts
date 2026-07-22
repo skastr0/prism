@@ -9,7 +9,7 @@ import { Effect, Option } from "effect";
 import { basename, dirname } from "node:path";
 import { getHarness, harnessSupportsProjectScope, resolveHarnessRoot } from "../harnesses.js";
 import { HarnessRoots } from "../services/prism-env.js";
-import { exists, expandPath, readFile } from "../fs.js";
+import { exists, expandPath, readFile, writeFile } from "../fs.js";
 import { deriveProjectKey } from "../project-key.js";
 import type { HarnessId, HarnessScope, PluginTargetId } from "../types.js";
 import { loadPlugin } from "./load.js";
@@ -60,7 +60,6 @@ import type { PluginRegistry } from "./registry.js";
 import { planHooksForTarget, type HookFidelityEntry } from "./hook-planning.js";
 import {
   getCompileTargetCapabilities,
-  targetHasGeneratedMcpConfig,
 } from "./target-capabilities.js";
 import {
   resolveManifestTargetsForSourceNoun,
@@ -71,7 +70,6 @@ import {
 } from "../source-selection.js";
 import {
   computeAgentCacheDescriptor,
-  computeContentHash,
   computeStableHash,
   getCacheDir,
   readCacheEntry,
@@ -79,23 +77,10 @@ import {
   type AgentCacheDescriptor,
 } from "./cache.js";
 import { writeLockfile } from "./lockfile.js";
-import { sha256Hex } from "../mcp/runtime-metadata.js";
+import { computeContentHash } from "../content-hash.js";
 import {
-  generatedMcpServerName,
-  mcpExposureProfileForTarget,
-} from "./mcp-runtime.js";
-import {
-  prismMcpServerPath,
-  writePrismMcpServerBundle,
-} from "./mcp-runtime-path.js";
-import {
-  generateMcpServerBundle,
-  mcpServerArtifactRelativePath,
-  mcpServerStdioArtifactRelativePath,
-  mcpToolNamesForBindings,
-  type McpServerExposureProfile,
+  generateToolCliRuntimeBundle,
 } from "./mcp-bundle.js";
-import { join as joinPath } from "node:path";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { bindingsOwnedByPlugin } from "./tool-bindings.js";
 import { toolsCliEmitEnabled, toolsCliInjectMode } from "../tools-cli/flags.js";
@@ -105,6 +90,7 @@ import {
   writeToolCliCatalog,
 } from "../tools-cli/catalog.js";
 import { planToolsCliAgentSurface } from "../tools-cli/inject.js";
+import { prismToolRuntimePath } from "../tools-cli/paths.js";
 
 interface LowererModule {
   readonly planLowering: (input: {
@@ -776,39 +762,15 @@ const selectTargetArtifacts = (
 };
 
 // ---------------------------------------------------------------------------
-// Union MCP bundle (overhaul WS3): ONE HTTP bundle per plugin, merging the
-// canonical tool bindings of every generated-MCP-config harness the plugin
-// targets. Per-harness exposure stays client-side where the harness has native
-// filters, and server-side through the HTTP exposure profile header for shared
-// daemons that cannot inherit per-client environment.
+// CLI tool runtime: catalog + in-process runtime.mjs under PRISM_HOME.
+// No MCP servers, sockets, or protocol glue.
 // ---------------------------------------------------------------------------
 
-const MCP_UNION_NOUNS = ["tools", "agents", "orbits"] as const;
-
-const unionMcpTargetHarnesses = (registry: PluginRegistry): HarnessId[] => {
-  const harnesses = new Set<HarnessId>();
-  for (const noun of MCP_UNION_NOUNS) {
-    for (const target of resolveManifestTargetsForSourceNoun(
-      (registry.targets[noun] ?? []) as readonly PluginTargetId[],
-      noun,
-    )) {
-      if (!targetHasGeneratedMcpConfig(target)) continue;
-      harnesses.add(target);
-    }
-  }
-  return [...harnesses].sort((left, right) => left.localeCompare(right));
-};
-
 /**
- * The bindings a plugin owns for a single (target, scope) — its own
- * canonical tools plus any synthetic contract-dispatch bindings its agents'
- * traits materialize (`bindingsOwnedByPlugin`). This is the ONE compiler
- * predicate for "is this plugin an MCP owner here", reused by the union MCP
- * bundle below and by `mcp-topology-verify.ts`'s diagnostic-mode owner
- * detection — never re-derived, so both stay bit-for-bit aligned with what
- * the lowerers actually emit.
+ * Bindings a plugin owns for a single (target, scope) — own canonical tools
+ * plus synthetic contract-dispatch bindings from agent traits.
  */
-export const resolveOwnedMcpBindingsForTarget = (
+export const resolveOwnedToolBindingsForTarget = (
   registry: PluginRegistry,
   target: HarnessId,
   scope: HarnessScope,
@@ -832,121 +794,89 @@ export const resolveOwnedMcpBindingsForTarget = (
     return bindingsOwnedByPlugin(registry.pluginName, tools, agentsWithOrbitTools);
   });
 
-const resolveUnionMcpBundleInputs = (
-  registry: PluginRegistry,
-  scope: HarnessScope,
-): Effect.Effect<{
-  readonly bindings: ReadonlyArray<ResolvedContractBinding>;
-  readonly exposureProfiles: ReadonlyArray<McpServerExposureProfile>;
-}, CompileError> =>
-  Effect.gen(function* () {
-    const bindings: ResolvedContractBinding[] = [];
-    const exposureProfiles: McpServerExposureProfile[] = [];
-    const serverName = generatedMcpServerName(registry.pluginName);
-    for (const harness of unionMcpTargetHarnesses(registry)) {
-      const targetBindings = yield* resolveOwnedMcpBindingsForTarget(registry, harness, scope);
-      bindings.push(...targetBindings);
-      exposureProfiles.push({
-        name: mcpExposureProfileForTarget(serverName, harness),
-        toolNames: mcpToolNamesForBindings(registry.pluginName, targetBindings),
-      });
-    }
-    return { bindings, exposureProfiles };
-  });
+/** @deprecated alias — use resolveOwnedToolBindingsForTarget */
+export const resolveOwnedMcpBindingsForTarget = resolveOwnedToolBindingsForTarget;
 
-interface PreparedMcpServer {
-  /** Absolute path harness configs reference (canonical PRISM_HOME path). */
-  readonly serverPath: string;
-  readonly serverSha256: string;
-  /** Package mode only: bundle bytes emitted as a plan operation instead. */
-  readonly packagedBundleContent?: string;
-  readonly packagedStdioBundleContent?: string;
-}
+const writeToolCliRuntimeModule = async (
+  prismHome: string,
+  pluginName: string,
+  content: string,
+): Promise<{ readonly path: string; readonly written: boolean; readonly sha256: string }> => {
+  const path = prismToolRuntimePath(prismHome, pluginName);
+  const sha256 = computeContentHash(content);
+  if (await exists(path)) {
+    const current = await readFile(path);
+    if (current === content) return { path, written: false, sha256 };
+  }
+  await writeFile(path, content);
+  return { path, written: true, sha256 };
+};
 
-const prepareUnionMcpServer = (options: {
+const prepareToolCliRuntime = (options: {
   readonly compileOptions: CompileOptions;
   readonly context: CompileTargetContext;
   readonly registry: PluginRegistry;
   readonly agents: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
-}): Effect.Effect<PreparedMcpServer | undefined, CompileError> =>
+}): Effect.Effect<void, CompileError> =>
   Effect.gen(function* () {
+    if (!toolsCliEmitEnabled()) return;
+
     const targetBindings = bindingsOwnedByPlugin(
       options.registry.pluginName,
       options.artifacts.tools,
       options.agents,
     );
-    if (targetBindings.length === 0) return undefined;
+    if (targetBindings.length === 0) return;
 
-    const unionInputs = yield* resolveUnionMcpBundleInputs(
-      options.registry,
-      options.compileOptions.scope,
-    );
-    const serverName = generatedMcpServerName(options.registry.pluginName);
-    const bundle = yield* Effect.promise(() =>
-      generateMcpServerBundle({
-        sourcePluginName: options.registry.pluginName,
-        sourcePluginRoot: options.registry.pluginPath,
-        dependencyPluginRoots: Object.entries(options.registry.dependencyPaths),
-        serverName,
-        version: options.registry.pluginVersion,
-        bundleId: serverName,
-        bindings: unionInputs.bindings,
-        exposureProfiles: unionInputs.exposureProfiles,
-      }),
-    );
-
-    if (options.compileOptions.packageMode === true) {
-      // Packages stay self-contained: the bundle ships inside the package
-      // payload (an inert distributable, not a live harness root).
-      return {
-        serverPath: joinPath(
-          options.context.outputRoot,
-          ...mcpServerArtifactRelativePath(serverName).split("/"),
-        ),
-        serverSha256: sha256Hex(bundle.content),
-        packagedBundleContent: bundle.content,
-        packagedStdioBundleContent: bundle.stdioContent,
-      };
-    }
-
-    if (options.compileOptions.dryRun) {
-      return {
-        serverPath: prismMcpServerPath(options.context.prismHome, options.registry.pluginName),
-        serverSha256: sha256Hex(bundle.content),
-      };
-    }
-
-    const write = yield* Effect.promise(() =>
-      writePrismMcpServerBundle(
-        options.context.prismHome,
-        options.registry.pluginName,
-        bundle.content,
-        bundle.stdioContent,
-      ),
-    );
-
-    // CLI tool surface (skill + catalog). Default on; set PRISM_TOOLS_CLI_EMIT=0 to skip.
-    // Same bindings / daemon bundle — agent-facing path becomes `prism tools invoke`.
-    if (toolsCliEmitEnabled()) {
-      const descriptions = new Map<string, string>();
-      for (const tool of options.artifacts.tools) {
-        if (typeof tool.description === "string" && tool.description.trim().length > 0) {
-          descriptions.set(tool.name, tool.description);
-        }
+    const descriptions = new Map<string, string>();
+    for (const tool of options.artifacts.tools) {
+      if (typeof tool.description === "string" && tool.description.trim().length > 0) {
+        descriptions.set(tool.name, tool.description);
       }
+    }
+
+    if (options.compileOptions.dryRun || options.compileOptions.packageMode === true) {
+      // Still materialize catalog metadata for inject planning; skip runtime write.
       yield* Effect.promise(() =>
         writeToolCliCatalog({
           prismHome: options.context.prismHome,
           pluginName: options.registry.pluginName,
           pluginVersion: options.registry.pluginVersion,
-          bindings: unionInputs.bindings,
+          bindings: targetBindings,
           toolDescriptions: descriptions,
+          dryRun: options.compileOptions.dryRun === true,
         }),
       );
+      return;
     }
 
-    return { serverPath: write.path, serverSha256: write.sha256 };
+    const bundle = yield* Effect.promise(() =>
+      generateToolCliRuntimeBundle({
+        sourcePluginName: options.registry.pluginName,
+        sourcePluginRoot: options.registry.pluginPath,
+        dependencyPluginRoots: Object.entries(options.registry.dependencyPaths),
+        version: options.registry.pluginVersion,
+        bindings: targetBindings,
+      }),
+    );
+
+    yield* Effect.promise(() =>
+      writeToolCliRuntimeModule(
+        options.context.prismHome,
+        options.registry.pluginName,
+        bundle.content,
+      ),
+    );
+    yield* Effect.promise(() =>
+      writeToolCliCatalog({
+        prismHome: options.context.prismHome,
+        pluginName: options.registry.pluginName,
+        pluginVersion: options.registry.pluginVersion,
+        bindings: targetBindings,
+        toolDescriptions: descriptions,
+      }),
+    );
   });
 
 const planTargetLowering = (options: {
@@ -960,7 +890,6 @@ const planTargetLowering = (options: {
   readonly scope: HarnessScope;
   readonly outputRoot: string;
   readonly prismHome: string;
-  readonly mcpServer?: PreparedMcpServer;
 }): Effect.Effect<LowerOutput, CompileError> => {
   if (
     !options.surfaces.hasLowerableArtifacts &&
@@ -985,14 +914,6 @@ const planTargetLowering = (options: {
       target: {
         scope: options.scope,
         root: options.outputRoot,
-        ...(options.mcpServer && targetHasGeneratedMcpConfig(options.targetId)
-          ? {
-              mcpExposureProfile: mcpExposureProfileForTarget(
-                generatedMcpServerName(options.registry.pluginName),
-                options.targetId,
-              ),
-            }
-          : {}),
         prismHome: options.prismHome,
         sourcePluginName: options.registry.pluginName,
         sourcePluginVersion: options.registry.pluginVersion,
@@ -1007,9 +928,6 @@ const planTargetLowering = (options: {
     let loweredFiles = await injectSkillReferenceFiles(lowered.files, options.artifacts.skills);
     let loweredRegions = [...lowered.regions];
 
-    // CLI tool agent surface: skill and/or always-on rules (inject mode).
-    // Catalog is normally written during prepareUnionMcpServer; fall back to
-    // building from owned bindings so dry-run / first-pass still plans inject.
     if (toolsCliEmitEnabled()) {
       const ownedBindings = bindingsOwnedByPlugin(
         options.registry.pluginName,
@@ -1043,32 +961,6 @@ const planTargetLowering = (options: {
       }
     }
 
-    // Package mode ships the bundle inside the package payload as a desired
-    // file (live compiles write the canonical PRISM_HOME bundle instead).
-    if (options.mcpServer?.packagedBundleContent !== undefined) {
-      const serverName = generatedMcpServerName(options.registry.pluginName);
-      return {
-        files: [
-          {
-            targetPath: options.mcpServer.serverPath,
-            content: options.mcpServer.packagedBundleContent,
-            plugin: options.registry.pluginName,
-          },
-          ...(options.mcpServer.packagedStdioBundleContent !== undefined
-            ? [{
-                targetPath: joinPath(
-                  options.outputRoot,
-                  ...mcpServerStdioArtifactRelativePath(serverName).split("/"),
-                ),
-                content: options.mcpServer.packagedStdioBundleContent,
-                plugin: options.registry.pluginName,
-              }]
-            : []),
-          ...loweredFiles,
-        ],
-        regions: loweredRegions,
-      };
-    }
     return {
       files: loweredFiles,
       regions: loweredRegions,
@@ -1123,7 +1015,6 @@ const prepareLoweringInputs = (
   readonly orbits: ReadonlyArray<Orbit>;
   readonly composedForLowering: ReadonlyArray<ComposedAgent>;
   readonly artifacts: TargetArtifacts;
-  readonly mcpServer?: PreparedMcpServer;
 }, CompileError> =>
   Effect.gen(function* () {
     const context = yield* resolveCompileTargetContext(options);
@@ -1164,10 +1055,8 @@ const prepareLoweringInputs = (
       hooks: [...accepted],
     };
 
-    // Build (and write) the canonical union bundle now, so that a later
-    // resolve-or-spawn by the stdio shim (or `prism mcp status`) always
-    // reads fully-compiled bytes from disk, never a partial write.
-    const mcpServer = yield* prepareUnionMcpServer({
+    // Catalog + in-process CLI runtime under PRISM_HOME.
+    yield* prepareToolCliRuntime({
       compileOptions: options,
       context,
       registry,
@@ -1182,7 +1071,6 @@ const prepareLoweringInputs = (
       orbits,
       composedForLowering,
       artifacts: finalArtifacts,
-      ...(mcpServer ? { mcpServer } : {}),
     };
   });
 
@@ -1198,7 +1086,6 @@ export const planPluginForTarget = (
       orbits,
       composedForLowering,
       artifacts,
-      mcpServer,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1211,7 +1098,6 @@ export const planPluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
-      ...(mcpServer ? { mcpServer } : {}),
     });
 
     return {
@@ -1242,7 +1128,6 @@ export const compilePluginForTarget = (
       orbits,
       composedForLowering,
       artifacts,
-      mcpServer,
     } = yield* prepareLoweringInputs(options);
     const lowered = yield* planTargetLowering({
       targetId: context.targetId,
@@ -1255,7 +1140,6 @@ export const compilePluginForTarget = (
       scope: options.scope,
       outputRoot: context.outputRoot,
       prismHome: context.prismHome,
-      ...(mcpServer ? { mcpServer } : {}),
     });
     const report = yield* Effect.promise(() =>
       syncDesiredRoot({

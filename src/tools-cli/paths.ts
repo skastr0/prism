@@ -3,10 +3,9 @@
  *
  *   <PRISM_HOME>/runtime/tools/<plugin>/catalog.json
  *   <PRISM_HOME>/runtime/tools/<plugin>/SKILL.md
+ *   <PRISM_HOME>/runtime/tools/<plugin>/runtime.mjs
  *
- * Execution still uses the existing MCP daemon bundle at
- *   <PRISM_HOME>/runtime/mcp/<plugin>/server.mjs
- * via resolve-or-spawn + UDS tools/call — no second business-logic bundle.
+ * Invoke loads runtime.mjs in-process. No daemon. No MCP.
  */
 
 import { join } from "node:path";
@@ -23,3 +22,6 @@ export const prismToolCatalogPath = (prismHome: string, pluginName: string): str
 
 export const prismToolSkillPath = (prismHome: string, pluginName: string): string =>
   join(prismToolPluginDir(prismHome, pluginName), "SKILL.md");
+
+export const prismToolRuntimePath = (prismHome: string, pluginName: string): string =>
+  join(prismToolPluginDir(prismHome, pluginName), "runtime.mjs");

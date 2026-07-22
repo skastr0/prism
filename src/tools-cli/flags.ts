@@ -1,14 +1,14 @@
 /**
  * Tool surface compile flags.
  *
- * Destination: agents invoke Prism tools via managed CLI (`prism tools invoke`)
- * plus an agent-facing inject mode — not via harness MCP stdio fan-out.
+ * Agents invoke Prism tools via managed CLI (`prism tools invoke`) plus an
+ * agent-facing inject mode (skill or rules). There is no MCP path.
  *
  * Inject modes (PRISM_TOOLS_CLI_INJECT):
  *   - skill (default): install prism-tools-<plugin> skill + thin rules pointer
- *   - rules: full tool inventory as always-on rules (MCP-like discovery)
+ *   - rules: full tool inventory as always-on rules
  *
- * Catalogs always land under PRISM_HOME for `prism tools list|invoke`.
+ * Catalogs + runtime.mjs always land under PRISM_HOME for `prism tools list|invoke`.
  */
 
 const truthy = (value: string | undefined): boolean => {
@@ -46,13 +46,7 @@ export const toolsCliInjectMode = (env: NodeJS.ProcessEnv = process.env): ToolsC
 };
 
 /**
- * Emit harness MCP stdio-shim server entries.
- * Default: OFF — agents use `prism tools invoke` + inject surface; no per-session
- * stdio fan-out. Set PRISM_TOOLS_MCP_EMIT=1 to re-enable harness MCP config
- * (daemon bundles still write for CLI invoke either way).
+ * MCP harness config emit is gone. Always false so residual lowerer call sites
+ * compile until those blocks are deleted in the same excision train.
  */
-export const toolsMcpHarnessEmitEnabled = (env: NodeJS.ProcessEnv = process.env): boolean => {
-  if (falsy(env.PRISM_TOOLS_MCP_EMIT)) return false;
-  if (truthy(env.PRISM_TOOLS_MCP_EMIT)) return true;
-  return false;
-};
+export const toolsMcpHarnessEmitEnabled = (_env?: NodeJS.ProcessEnv): boolean => false;

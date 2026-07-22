@@ -25,6 +25,7 @@ test("blockedSkipRow always reports expected: null regardless of the gate's norm
 });
 
 test("blockedSkipRow names a null normal expectation explicitly", () => {
+  const row = blockedSkipRow("idempotency-git", null);
   expect(row.blocked).toContain("no fixed expectation");
 });
 

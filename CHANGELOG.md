@@ -9,6 +9,37 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.4.2 - 2026-07-22
+
+Tools are a one-shot Prism CLI surface. Canonical tools compile to
+`PRISM_HOME/runtime/tools/<plugin>/` (`catalog.json`, `SKILL.md`, `runtime.mjs`)
+and run with `prism tools invoke` in-process. OpenCode, Amp, Pi, and OMP still
+register the same handles through native plugin APIs where those harnesses
+support them. Hooks remain native plugins or one-shot command wrappers.
+
+### Added
+
+- In-process CLI tool runtime (`runtime.mjs`) loaded by `prism tools invoke`.
+- `tool-runtime-bundle` compile path for CLI, Amp, and Pi tool packages.
+
+### Changed
+
+- Agent discovery for tools is CLI skill/rules only (`PRISM_TOOLS_CLI_EMIT`,
+  `PRISM_TOOLS_CLI_INJECT`).
+- Lowerer capability matrix describes tools as CLI or native plugin APIs.
+- Publish/verify tool suites no longer depend on a protocol server stack.
+
+### Removed
+
+- Generated harness MCP server config, stdio shim, UDS daemons, and
+  `prism mcp` CLI.
+- `@modelcontextprotocol/sdk` and `@skastr0/prism-sdk` MCP package exports.
+- Doctor MCP topology / daemon health surfaces and related acceptance scripts.
+
+### Fixed
+
+- Tool invoke no longer depends on daemon spawn, session setup, or socket paths.
+
 ## 0.4.1 - 2026-07-22
 
 Workflow runtime hardening and ledger lifecycle. This is a minor milestone for

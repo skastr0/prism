@@ -94,34 +94,13 @@ const runExpectingFailure = async (
   }
 };
 
-const waitForMcpDaemonStopped = async (options: {
-  readonly prismBin: string;
-  readonly pluginRoot: string;
-  readonly cwd: string;
-  readonly env: Record<string, string>;
-}): Promise<void> => {
-  const deadline = Date.now() + 10_000;
-  let lastOutput = "";
-  while (Date.now() < deadline) {
-    const proc = Bun.spawn(
-      ["node", options.prismBin, "mcp", "status", options.pluginRoot, "--harness", "hermes"],
-      {
-        cwd: options.cwd,
-        env: { ...process.env, ...options.env },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    lastOutput = `${stdout}${stderr}`;
-    if (exitCode === 0 && /^stopped\s/.test(stdout.trim())) return;
-    await Bun.sleep(100);
+const pathExists = async (path: string): Promise<boolean> => {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
   }
-  throw new Error(`Smoke MCP daemon did not idle-reap within 10s. Last status:\n${lastOutput}`);
 };
 
 const writeText = async (path: string, content: string): Promise<void> => {
@@ -351,7 +330,7 @@ const main = async (): Promise<void> => {
         },
       },
     );
-    const mcpEnv = { PRISM_HOME: prismHome, PRISM_MCP_IDLE_TTL_MS: "100" };
+    const prismEnv = { PRISM_HOME: prismHome };
     await run(
       "Refreshing canonical tool fixture with installed Prism CLI",
       [
@@ -366,8 +345,12 @@ const main = async (): Promise<void> => {
         "--compile-root",
         hermesRoot,
       ],
-      { cwd: appRoot, env: mcpEnv },
+      { cwd: appRoot, env: prismEnv },
     );
+    const runtimePath = join(prismHome, "runtime", "tools", "runtime-smoke", "runtime.mjs");
+    if (!(await pathExists(runtimePath))) {
+      throw new Error(`Expected CLI tool runtime at ${runtimePath}`);
+    }
     const toolOutput = await run(
       "Invoking a canonical tool through the installed Prism CLI",
       [
@@ -380,13 +363,12 @@ const main = async (): Promise<void> => {
         "--input",
         JSON.stringify({ message: "packaged canonical tool works" }),
       ],
-      { cwd: appRoot, capture: true, env: mcpEnv },
+      { cwd: appRoot, capture: true, env: prismEnv },
     );
     if (!toolOutput.includes('"echoed": "packaged canonical tool works"')) {
       throw new Error(`Canonical tool smoke did not return the expected output. Got:\n${toolOutput}`);
     }
-    await waitForMcpDaemonStopped({ prismBin, pluginRoot, cwd: appRoot, env: mcpEnv });
-    console.log("Canonical tool invocation and idle cleanup passed.");
+    console.log("Canonical tool invocation passed.");
 
     await assertTreeDoesNotContainForbiddenPaths(hermesRoot, forbiddenPaths);
 

@@ -80,7 +80,7 @@ export class PrismConfigError extends Schema.TaggedError<PrismConfigError>()(
 
 // ---------------------------------------------------------------------------
 // BundleBuildError — re-minted from the plain-Error class used by
-// src/compile/mcp-bundle.ts (tool runtime bundle builder).
+// src/compile/tool-runtime-bundle.ts (tool runtime bundle builder).
 // ---------------------------------------------------------------------------
 
 export class BundleBuildError extends Schema.TaggedError<BundleBuildError>()(

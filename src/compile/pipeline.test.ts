@@ -48,7 +48,7 @@ import { loadPlugin } from "./load.js";
 import { readLockfile } from "./lockfile.js";
 import {
   mcpToolNamesForBindings,
-} from "./mcp-bundle.js";
+} from "./tool-runtime-bundle.js";
 import { generatedSyntheticToolName } from "./generated-plugin.js";
 import { bindingFromToolSource } from "./tool-bindings.js";
 import {

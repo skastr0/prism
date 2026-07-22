@@ -44,7 +44,7 @@ import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/grok.js";
-import { mcpToolNameForBinding } from "./mcp-bundle.js";
+import { cliToolNameForBinding } from "./tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { Contract } from "./sources.js";
 import type { DesiredFile } from "../sync/desired.js";
@@ -416,14 +416,14 @@ export default {
   expect(hookConfig?.content).not.toContain('"Stop"');
   expect(hookConfig?.content).toContain('"matcher": "run_terminal_cmd"');
   // Hook matchers use CLI tool names (not harness MCP wire names).
-  const generatedEchoTool = mcpToolNameForBinding("grok-plugin-fixture", {
+  const generatedEchoTool = cliToolNameForBinding("grok-plugin-fixture", {
     kind: "permission",
     logicalName: "echo",
     toolPluginName: "grok-plugin-fixture",
     toolName: "echo",
     toolSourcePath: "tools/echo.tool.ts",
   });
-  const generatedSyntheticTool = mcpToolNameForBinding("grok-plugin-fixture", longSyntheticBinding);
+  const generatedSyntheticTool = cliToolNameForBinding("grok-plugin-fixture", longSyntheticBinding);
   expect(hookConfig?.content).toContain(`"matcher": "${generatedEchoTool}"`);
   // Agent frontmatter no longer lists generated tool wire names.
   expect(agent?.content).not.toContain(`- "${generatedSyntheticTool}"`);
@@ -676,7 +676,7 @@ test("grok agent MCP tool advertisement and config share the MCP emit flag", asy
   const generatedName = renderPluginAllowlist(
     "grok",
     "owner-tools",
-    mcpToolNameForBinding("owner-tools", binding),
+    cliToolNameForBinding("owner-tools", binding),
   );
   expect(agent?.content).toContain('- "read_file"');
   expect(agent?.content).not.toContain(generatedName);
@@ -967,7 +967,7 @@ test("grok lowerer no longer emits generated tool wire names in agent frontmatte
   expect(agent?.content).not.toContain("\ntools:");
   expect(agent?.content).not.toContain("mcp__");
   for (const { plugin, tool } of corpus) {
-    const name = mcpToolNameForBinding(plugin, permissionBinding(plugin, tool));
+    const name = cliToolNameForBinding(plugin, permissionBinding(plugin, tool));
     expect(name.length).toBeLessThanOrEqual(GROK_MAX_TOOL_NAME_LENGTH);
   }
 });

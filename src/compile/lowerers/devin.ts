@@ -17,7 +17,7 @@ import {
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
-import { mcpToolNameForBinding } from "../mcp-bundle.js";
+import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -130,7 +130,7 @@ const collectCanonicalToolNames = (
   collectBindingNameMap(bindings, (binding) => {
     const owner = ownerPluginForBinding(sourcePluginName, binding);
     // PR1 has no MCP wire names; fall back to logical binding id for matchers.
-    return mcpToolNameForBinding(owner, binding);
+    return cliToolNameForBinding(owner, binding);
   });
 
 const hookMatcher = (

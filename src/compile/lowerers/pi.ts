@@ -6,9 +6,9 @@ import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   generatePiExtensionBundle,
-  mcpToolNameForBinding,
+  cliToolNameForBinding,
   type PiExtensionBundle,
-} from "../mcp-bundle.js";
+} from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -124,7 +124,7 @@ const composeAgentTools = (
     agent,
   )) {
     for (const binding of bindings) {
-      generatedTools.push(mcpToolNameForBinding(ownerPlugin, binding));
+      generatedTools.push(cliToolNameForBinding(ownerPlugin, binding));
     }
   }
   return uniqueSorted([
@@ -202,7 +202,7 @@ const uniqueBindings = (
 ): ReadonlyArray<ResolvedContractBinding> => {
   const byToolName = new Map<string, ResolvedContractBinding>();
   for (const binding of bindings) {
-    const toolName = mcpToolNameForBinding(sourcePluginName, binding);
+    const toolName = cliToolNameForBinding(sourcePluginName, binding);
     const existing = byToolName.get(toolName);
     if (!existing) {
       byToolName.set(toolName, binding);
@@ -219,8 +219,8 @@ const uniqueBindings = (
     if (!same) throw new Error(`Pi tool name collision for '${toolName}'`);
   }
   return [...byToolName.values()].sort((left, right) =>
-    mcpToolNameForBinding(sourcePluginName, left).localeCompare(
-      mcpToolNameForBinding(sourcePluginName, right),
+    cliToolNameForBinding(sourcePluginName, left).localeCompare(
+      cliToolNameForBinding(sourcePluginName, right),
     ),
   );
 };
@@ -347,7 +347,7 @@ const planHookWrappers = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-      return mcpToolNameForBinding(owner, binding);
+      return cliToolNameForBinding(owner, binding);
     },
   );
   const planned: PlannedHook[] = [];

@@ -43,7 +43,7 @@ import { Effect } from "effect";
 import { composeAgent } from "./compose.js";
 import { loadPlugin } from "./load.js";
 import { planLowering } from "./lowerers/kimi-code.js";
-import { mcpToolNameForBinding } from "./mcp-bundle.js";
+import { cliToolNameForBinding } from "./tool-runtime-bundle.js";
 import {
   instantiateOrbit,
   resolveAgent,
@@ -283,7 +283,7 @@ test("kimi-code production default omits generated MCP role tools and MCP config
     const generatedName = `mcp__${pluginServerKey(owner)}__${renderPluginWire(
       "kimi-code",
       owner,
-      mcpToolNameForBinding(owner, binding),
+      cliToolNameForBinding(owner, binding),
     )}`;
     expect(role?.content).toContain("Native tools requested by this role: `read_file`.");
     expect(role?.content).not.toContain("Generated MCP tools for this role:");

@@ -100,9 +100,6 @@ export const cliToolNameForBinding = (
   binding: ResolvedContractBinding,
 ): string => generatedToolNameForBinding(sourcePluginName, binding);
 
-/** @deprecated Prefer cliToolNameForBinding — same generated tool name. */
-export const mcpToolNameForBinding = cliToolNameForBinding;
-
 export const ampPluginToolNameForBinding = cliToolNameForBinding;
 
 const fileExists = async (path: string): Promise<boolean> => {
@@ -474,7 +471,7 @@ const adapterSpecsForBindings = (
   const byName = new Map<string, McpAdapterSpec>();
   const specs: McpAdapterSpec[] = [];
   for (const binding of bindings) {
-    const mcpName = mcpToolNameForBinding(sourcePluginName, binding);
+    const mcpName = cliToolNameForBinding(sourcePluginName, binding);
     const spec: McpAdapterSpec =
       binding.kind === "permission"
         ? {

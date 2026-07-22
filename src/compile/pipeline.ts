@@ -80,7 +80,7 @@ import { writeLockfile } from "./lockfile.js";
 import { computeContentHash } from "../content-hash.js";
 import {
   generateToolCliRuntimeBundle,
-} from "./mcp-bundle.js";
+} from "./tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "./resolve.js";
 import { bindingsOwnedByPlugin } from "./tool-bindings.js";
 import { toolsCliEmitEnabled, toolsCliInjectMode } from "../tools-cli/flags.js";

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { generateToolCliRuntimeBundle } from "../compile/mcp-bundle.js";
+import { generateToolCliRuntimeBundle } from "../compile/tool-runtime-bundle.js";
 import { bindingFromToolSource } from "../compile/tool-bindings.js";
 import { writeToolCliCatalog } from "./catalog.js";
 import { invokeToolViaCli, ToolsCliInvokeError } from "./invoke.js";

@@ -8,7 +8,7 @@ import { resolveHookMatchForTarget } from "../hooks.js";
 import {
   ampPluginToolNameForBinding,
   generateAmpPluginBundle,
-} from "../mcp-bundle.js";
+} from "../tool-runtime-bundle.js";
 import { prepareHookBundleSource } from "../load.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";

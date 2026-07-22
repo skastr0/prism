@@ -295,8 +295,8 @@ test("compile lowerers do not import node fs write primitives directly", async (
   expect(violations).toEqual([]);
 });
 
-test("tool runtime bundle (mcp-bundle.ts) does not read ast-to-json-schema from disk at module load", async () => {
-  const content = await readFile(join(SRC_ROOT, "compile/mcp-bundle.ts"), "utf8");
+test("tool runtime bundle (tool-runtime-bundle.ts) does not read ast-to-json-schema from disk at module load", async () => {
+  const content = await readFile(join(SRC_ROOT, "compile/tool-runtime-bundle.ts"), "utf8");
 
   expect(content).not.toMatch(
     /(?:const|let|var)\s+\w+\s*=\s*readFileSync\([^)]*ast-to-json-schema/,
@@ -308,7 +308,7 @@ test("tool runtime bundle (mcp-bundle.ts) does not read ast-to-json-schema from 
 test("process.exit is confined to exit helper and tool-runtime / lowerer strings", async () => {
   const allowed = new Set([
     "exit.ts",
-    "compile/mcp-bundle.ts",
+    "compile/tool-runtime-bundle.ts",
     "compile/lowerers/claude-code.ts",
     "compile/lowerers/factory-droid.ts",
     "compile/lowerers/grok.ts",

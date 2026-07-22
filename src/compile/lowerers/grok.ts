@@ -10,7 +10,7 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
-import { mcpToolNameForBinding } from "../mcp-bundle.js";
+import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -230,7 +230,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return mcpToolNameForBinding(owner, binding);
+      return cliToolNameForBinding(owner, binding);
     },
   );
 

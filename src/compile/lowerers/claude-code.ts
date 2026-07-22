@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
-import { mcpToolNameForBinding } from "../mcp-bundle.js";
+import { cliToolNameForBinding } from "../tool-runtime-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -231,7 +231,7 @@ const claudeNativeHookEvent = (event: Hook["event"]): string => {
 const claudeToolNameForBinding = (
   ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string => mcpToolNameForBinding(ownerPluginName, binding);
+): string => cliToolNameForBinding(ownerPluginName, binding);
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,

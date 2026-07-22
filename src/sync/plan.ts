@@ -20,12 +20,11 @@
  */
 
 import { stat } from "node:fs/promises";
-import { computeContentHash, computeMcpHttpConfigContentHash } from "../content-hash.js";
+import { computeContentHash } from "../content-hash.js";
 import { PathConflictError } from "../errors.js";
 import { exists, readFile } from "../fs.js";
 import type { SnapshotEntry, SnapshotManifest } from "../state/snapshot.js";
 import type { DesiredFile, DesiredRegion, DesiredRoot } from "./desired.js";
-import { RETIRED_SHIM_SENTINEL_OWNER, sweepLegacyPrismMcpEntries } from "./legacy-prism-entries.js";
 import {
   applyRegion,
   removeJsonArrayMemberRegion,
@@ -196,14 +195,8 @@ const regionContentHash = (region: DesiredRegion): string =>
     region.kind === "marker" ? renderMarkerRegion(region) : JSON.stringify(region.value),
   );
 
-/**
- * Content hash for an owned file. Grok's owned .mcp.json bundles a dynamic
- * host:port the owner daemon can rebind on every restart; normalize it out of
- * the hash so a port change alone never reads as drift (PQ-167). Every other
- * harness (and every other grok owned file) hashes unchanged.
- */
-const ownedFileContentHash = (harness: string, content: string): string =>
-  harness === "grok" ? computeMcpHttpConfigContentHash(content) : computeContentHash(content);
+const ownedFileContentHash = (_harness: string, content: string): string =>
+  computeContentHash(content);
 
 const removeOrphanedRegion = (
   content: string,
@@ -377,24 +370,6 @@ const planSharedFileRegions = async (options: {
     content = outcome.content;
   }
 
-  // Scope-independent sweep for retired Prism MCP identities (the
-  // synthetic union-owner sentinel and pre-shim HTTP-era naming) that the
-  // snapshot-driven orphan removal above can never reach — see
-  // `legacy-prism-entries.ts` for why. Safe on every compile, scoped or
-  // not: gated on positive content provenance AND exclusion of this pass's
-  // own desired keys (threaded through below), so a live entry — however
-  // its name happens to be shaped — is never swept.
-  const legacySweep = sweepLegacyPrismMcpEntries(options.harness, content, options.desired);
-  if (legacySweep.changed) {
-    content = legacySweep.content;
-    removedRegions.push(...legacySweep.removedKeys);
-  }
-
-  // Reconcile: a regionKey removed above (orphan or legacy sweep) is never
-  // also reported as materialized, regardless of why it matched — the
-  // desired-keys exclusion inside the legacy sweep already makes this a
-  // no-op in practice, but the snapshot-truthfulness invariant holds
-  // structurally here rather than depending on that sweep's internals.
   const removedRegionKeys = new Set(removedRegions);
   const materializedRegionRefs = materialized
     .filter((entry) => !removedRegionKeys.has(entry.regionKey))
@@ -579,7 +554,6 @@ const assertNoForeignOwnerConflicts = (
   const ownedEntryByPath = new Map<string, SnapshotEntry>();
   for (const entry of snapshot.entries) {
     if (entry.mode !== "owned") continue;
-    if (entry.plugin === RETIRED_SHIM_SENTINEL_OWNER) continue;
     ownedEntryByPath.set(entry.targetPath, entry);
   }
   for (const file of desired.files) {
@@ -636,11 +610,6 @@ export const planSync = async (options: {
     ),
   );
   for (const entry of options.snapshot.entries) {
-    // The retired union scheme's sentinel owner is not a real plugin: no
-    // refresh is ever scoped to it, so its entries would be carried forever
-    // while the disk sweep removes their content — a permanent snapshot lie
-    // doctor reports as owned-but-missing. Drop them at the source.
-    if (entry.plugin === RETIRED_SHIM_SENTINEL_OWNER) continue;
     if (entry.mode === "owned") {
       if (inScope(entry.plugin)) snapshotOwned.set(entry.targetPath, entry);
       else carriedEntries.push(entry);

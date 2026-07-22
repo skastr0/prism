@@ -37,7 +37,7 @@ test("plugins TUI drives: list, tab navigation, and refresh confirm", async () =
     await writeText(join(dir, "broken", "plugin.json"), `${JSON.stringify({ name: "broken" }, null, 2)}\n`);
 
     const setup = await testRender(
-      <PluginsApp dir={dir} projectPath={prismHome} pollMs={600_000} />,
+      <PluginsApp dir={dir} projectPath={prismHome} />,
       { width: 130, height: 40 },
     );
     const mi = setup.mockInput;

@@ -8,7 +8,6 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { prismMcpServerPath } from "../compile/mcp-runtime-path.js";
 import { runDoctor, type DoctorReport } from "../doctor.js";
 import { computeContentHash } from "../content-hash.js";
 import { commitSnapshot } from "../state/store.js";
@@ -71,9 +70,10 @@ export class DoctorWorld {
     }
   }
 
-  /** Write a generated MCP bundle containing the listed tool names. */
+  /** Write a placeholder tool-runtime path (MCP bundles removed). */
   async withMcpBundle(pluginName: string, toolNames: readonly string[]): Promise<void> {
-    await this.writeText(prismMcpServerPath(this.sandbox.prismHome, pluginName), toolNames.join("\n"));
+    const path = join(this.sandbox.prismHome, "runtime", "mcp", pluginName, "server.mjs");
+    await this.writeText(path, toolNames.join("\n"));
   }
 
   /**

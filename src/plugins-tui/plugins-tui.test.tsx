@@ -66,7 +66,7 @@ test("plugins TUI lists the plugins discovered in a folder", async () => {
     await writeText(join(dir, "alpha-plugin", "rules", "global", "x.md"), "# X\n");
 
     const setup = await testRender(
-      <PluginsApp dir={dir} projectPath={prismHome} pollMs={600_000} />,
+      <PluginsApp dir={dir} projectPath={prismHome} />,
       { width: 120, height: 40 },
     );
     try {

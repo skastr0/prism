@@ -4,13 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   effectBundleImportPath,
-  mcpSdkMcpBundleImportPath,
-  mcpSdkStdioBundleImportPath,
-  mcpSdkWebStandardHttpBundleImportPath,
   opencodePluginBundleImportPath,
   typescriptBundleImportPath,
-  udsRegistryBundleImportPath,
-  udsSingletonBundleImportPath,
   zodV4BundleImportPath,
 } from "./runtime-deps.js";
 
@@ -73,40 +68,6 @@ test("runtime dependency entrypoints resolve from the installed package root bef
   );
   await writeText(join(root, "node_modules", "effect", "dist", "esm", "index.js"), "\n");
   await writeText(
-    join(root, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
-    `${JSON.stringify({
-      name: "@modelcontextprotocol/sdk",
-      type: "module",
-      exports: {
-        "./*": {
-          import: "./dist/esm/*",
-          require: "./dist/cjs/*",
-        },
-      },
-    })}\n`,
-  );
-  await writeText(
-    join(root, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "mcp.js"),
-    "\n",
-  );
-  await writeText(
-    join(
-      root,
-      "node_modules",
-      "@modelcontextprotocol",
-      "sdk",
-      "dist",
-      "esm",
-      "server",
-      "webStandardStreamableHttp.js",
-    ),
-    "\n",
-  );
-  await writeText(
-    join(root, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "stdio.js"),
-    "\n",
-  );
-  await writeText(
     join(root, "node_modules", "@opencode-ai", "plugin", "package.json"),
     `{"name":"@opencode-ai/plugin","type":"module","main":"dist/index.js"}\n`,
   );
@@ -121,49 +82,12 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     `{"name":"zod","type":"module"}\n`,
   );
   await writeText(join(root, "node_modules", "zod", "v4", "index.js"), "\n");
-  await writeText(
-    join(root, "node_modules", "@skastr0", "prism-sdk", "package.json"),
-    `${JSON.stringify({
-      name: "@skastr0/prism-sdk",
-      type: "module",
-      exports: {
-        "./mcp/uds-registry": { import: "./dist/mcp/uds-registry.js" },
-        "./mcp/uds-singleton": { import: "./dist/mcp/uds-singleton.js" },
-      },
-    })}\n`,
-  );
-  await writeText(
-    join(root, "node_modules", "@skastr0", "prism-sdk", "dist", "mcp", "uds-registry.js"),
-    "\n",
-  );
-  await writeText(
-    join(root, "node_modules", "@skastr0", "prism-sdk", "dist", "mcp", "uds-singleton.js"),
-    "\n",
-  );
 
   await withRuntimeDepsRoot(root, async () => {
     const resolvedRoot = root;
 
     expect(effectBundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "effect", "dist", "esm", "index.js").replace(/\\/g, "/"),
-    );
-    expect(mcpSdkMcpBundleImportPath()).toBe(
-      join(resolvedRoot, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "mcp.js").replace(/\\/g, "/"),
-    );
-    expect(mcpSdkWebStandardHttpBundleImportPath()).toBe(
-      join(
-        resolvedRoot,
-        "node_modules",
-        "@modelcontextprotocol",
-        "sdk",
-        "dist",
-        "esm",
-        "server",
-        "webStandardStreamableHttp.js",
-      ).replace(/\\/g, "/"),
-    );
-    expect(mcpSdkStdioBundleImportPath()).toBe(
-      join(resolvedRoot, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm", "server", "stdio.js").replace(/\\/g, "/"),
     );
     expect(opencodePluginBundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "@opencode-ai", "plugin", "dist", "index.js").replace(/\\/g, "/"),
@@ -173,17 +97,6 @@ test("runtime dependency entrypoints resolve from the installed package root bef
     );
     expect(zodV4BundleImportPath()).toBe(
       join(resolvedRoot, "node_modules", "zod", "v4", "index.js").replace(/\\/g, "/"),
-    );
-    // uds-registry/uds-singleton are internal prism-sdk modules, resolved
-    // as package-specifier subpath exports rather than a relative
-    // `import.meta.resolve` walk (see runtime-deps.ts for why: a relative
-    // walk from a compiled standalone binary lands on a nonexistent virtual
-    // path instead of the real prism-sdk source).
-    expect(udsRegistryBundleImportPath()).toBe(
-      join(resolvedRoot, "node_modules", "@skastr0", "prism-sdk", "dist", "mcp", "uds-registry.js").replace(/\\/g, "/"),
-    );
-    expect(udsSingletonBundleImportPath()).toBe(
-      join(resolvedRoot, "node_modules", "@skastr0", "prism-sdk", "dist", "mcp", "uds-singleton.js").replace(/\\/g, "/"),
     );
   });
 });

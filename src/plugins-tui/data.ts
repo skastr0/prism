@@ -8,8 +8,6 @@ import { basename } from "node:path";
 import { Effect } from "effect";
 import type { DoctorReport } from "../doctor.js";
 import { runDoctor } from "../doctor.js";
-import type { McpStatusResult } from "../mcp/lifecycle.js";
-import { listMcpStatuses } from "../mcp/lifecycle.js";
 import {
   discoverPluginPaths,
   planAllForPlugin,
@@ -115,20 +113,6 @@ export const loadDoctorReport = async (options: {
   });
 };
 
-/**
- * List all MCP daemon statuses. Returns [] on error (daemon may not be running).
- */
-export const loadMcpStatuses = async (): Promise<ReadonlyArray<McpStatusResult>> => {
-  try {
-    return await listMcpStatuses({
-      harness: "claude-code",
-      scope: "global",
-      prismHome: resolvePrismHome(),
-    });
-  } catch {
-    return [];
-  }
-};
 
 /**
  * Compute drift detail for a single tracked file: compare the snapshot hash

@@ -72,8 +72,6 @@ export interface PluginRow {
   readonly manifestError?: string;
   /** Worst state across all loaded scopes; undefined until status is computed. */
   readonly worst?: CellState;
-  /** True when a matching MCP daemon record exists. */
-  readonly hasMcp?: boolean;
 }
 
 // ── Introspection ──────────────────────────────────────────────────────────

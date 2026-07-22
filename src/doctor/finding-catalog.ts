@@ -7,7 +7,6 @@
  */
 
 import type { DoctorFinding, DoctorFindingFamily, DoctorSeverity } from "../doctor.js";
-import { TOPOLOGY_FINDING_CODES } from "./mcp-topology-checks.js";
 
 export interface FindingCatalogEntry {
   readonly family: DoctorFindingFamily;
@@ -93,84 +92,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
   },
   {
     family: "harness.config",
-    code: "config.mcp-shim-command-unresolvable",
-    severity: "error",
-    fix: "refresh",
-    description: "A harness's stdio-shim MCP server command does not resolve to a prism binary.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-args-invalid",
-    severity: "error",
-    fix: "refresh",
-    description: "A harness's stdio-shim MCP server args do not invoke 'prism mcp shim'.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-env-harness-mismatch",
-    severity: "error",
-    fix: "refresh",
-    description: "A harness's stdio-shim MCP server env.PRISM_SHIM_HARNESS is missing or wrong.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-env-plugins-missing",
-    severity: "error",
-    fix: "refresh",
-    description: "A harness's stdio-shim MCP server is missing env.PRISM_SHIM_PLUGINS.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-plugin-bundle-missing",
-    severity: "error",
-    fix: "refresh",
-    description:
-      "A stdio-shim MCP server references an owner plugin with no compiled MCP bundle AND no live daemon registered -- genuinely unservable, not merely not-yet-spawned.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-allowlist-invalid",
-    severity: "error",
-    fix: "refresh",
-    description: "A stdio-shim MCP server allowlist entry does not match the wire naming scheme.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-json-invalid",
-    severity: "error",
-    fix: "manual",
-    description: "A generated stdio-shim MCP JSON config file is not valid JSON.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-per-plugin-naming-missing",
-    severity: "error",
-    fix: "refresh",
-    description: "A per-owner-plugin stdio-shim MCP server is missing env.PRISM_SHIM_NAMING=per-plugin.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-per-plugin-plugin-mismatch",
-    severity: "error",
-    fix: "refresh",
-    description: "A per-owner-plugin stdio-shim MCP server's PRISM_SHIM_PLUGINS or server key does not name exactly one matching owner.",
-  },
-  {
-    family: "harness.config",
-    code: "config.mcp-shim-legacy-aggregated-entry",
-    severity: "warning",
-    fix: "manual",
-    description: "A retired aggregated `prism-mcp-shim` entry survives under the per-owner-plugin scheme.",
-  },
-  {
-    family: "harness.config",
-    code: "config.codex-enabled-tools-invalid",
-    severity: "error",
-    fix: "refresh",
-    description: "Codex MCP server has non-array enabled_tools.",
-  },
-  {
-    family: "harness.config",
     code: "config.codex-hook-command-missing",
     severity: "error",
     fix: "refresh",
@@ -199,13 +120,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
   },
   {
     family: "harness.config",
-    code: "config.claude-mcp-json-invalid",
-    severity: "error",
-    fix: "refresh",
-    description: "Claude generated plugin has invalid .mcp.json.",
-  },
-  {
-    family: "harness.config",
     code: "config.claude-hook-command-missing",
     severity: "error",
     fix: "refresh",
@@ -217,34 +131,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "error",
     fix: "refresh",
     description: "Claude generated plugin has invalid hooks.json.",
-  },
-  {
-    family: "harness.config",
-    code: "config.antigravity-mcp-json-invalid",
-    severity: "error",
-    fix: "refresh",
-    description: "Antigravity generated plugin has invalid mcp_config.json.",
-  },
-  {
-    family: "harness.config",
-    code: "config.antigravity-mcp-empty-servers",
-    severity: "error",
-    fix: "refresh",
-    description: "Antigravity generated plugin ships an empty mcpServers block.",
-  },
-  {
-    family: "harness.config",
-    code: "config.antigravity-mcp-legacy-aggregated-shim",
-    severity: "error",
-    fix: "refresh",
-    description: "Antigravity generated plugin still registers the legacy aggregated shim server.",
-  },
-  {
-    family: "harness.config",
-    code: "config.antigravity-mcp-not-per-plugin",
-    severity: "error",
-    fix: "refresh",
-    description: "Antigravity generated plugin MCP server is not a single-plugin per-plugin shim entry.",
   },
 
   // snapshot.disk-drift
@@ -306,19 +192,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     fix: "manual",
     description: "Prism-looking path is not recorded in the snapshot.",
   },
-  {
-    family: "namespace.stray",
-    code: "namespace.unowned-mcp-entry",
-    severity: "warning",
-    fix: "gc",
-    description: "A prism-fingerprinted MCP server entry in a shared harness config is outside every owned patch region.",
-  },
-  {
-    family: "namespace.stray",
-    code: "namespace.mcp-entry-pruned",
-    severity: "info",
-    description: "Pruned an orphaned prism-fingerprinted MCP entry from a shared harness config (only emitted during --fix).",
-  },
 
   // region.integrity
   {
@@ -378,29 +251,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     description: "Shared JSON config with Prism regions is not parseable.",
   },
 
-  // mcp.health
-  {
-    family: "mcp.health",
-    code: "mcp.missing-bundle",
-    severity: "error",
-    fix: "refresh",
-    description: "Compiled daemon bundle is missing, so CLI tool invocation cannot spawn the plugin.",
-  },
-  {
-    family: "mcp.health",
-    code: "mcp.stale-build",
-    severity: "error",
-    fix: "refresh",
-    description: "A live daemon is not safely restartable from the current generated bundle/runtime.",
-  },
-  {
-    family: "mcp.health",
-    code: "mcp.status-unavailable",
-    severity: "error",
-    fix: "refresh",
-    description: "Could not determine CLI daemon status; tool availability is not proven.",
-  },
-
   // determinism.selfcheck
   {
     family: "determinism.selfcheck",
@@ -415,122 +265,6 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
     severity: "error",
     fix: "manual",
     description: "Two dry-run compiles produced different operation plans.",
-  },
-
-  // topology.invariant — assertions A-F, shared with the mcp-topology-verify
-  // acceptance gate via ./mcp-topology-checks.ts. Only emitted when doctor is
-  // invoked with --plugins <dir>.
-  {
-    family: "topology.invariant",
-    code: "topology.legacy-shim-key",
-    severity: "error",
-    fix: "manual",
-    description: "[A] A server key is the retired aggregated shim key 'prism-mcp-shim'.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.legacy-hash-key",
-    severity: "error",
-    fix: "manual",
-    description: "[A] A server key matches the retired 'p_<hash8>' namespace pattern.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.shim-substring-in-key",
-    severity: "error",
-    fix: "manual",
-    description: "[A] A server key contains the substring 'shim'.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.unrecognized-server-key",
-    severity: "error",
-    fix: "manual",
-    description: "[A] A server key does not equal pluginServerKey(p) for any plugin in the installed set.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.plugins-env-not-single-owner",
-    severity: "error",
-    fix: "refresh",
-    description: "[B] A server's PRISM_SHIM_PLUGINS does not resolve to exactly one owner plugin.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.server-key-owner-mismatch",
-    severity: "error",
-    fix: "refresh",
-    description: "[B] A server key does not equal pluginServerKey(owner) for its own single owner.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.owner-not-installed",
-    severity: "error",
-    fix: "manual",
-    description: "[B] A server's owner plugin is not an MCP-owning plugin in the installed set.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.allowlist-mismatch",
-    severity: "error",
-    fix: "refresh",
-    description: "[B] A within-server allowlist does not equal the owner's own tools rendered bare.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.consumer-has-server",
-    severity: "error",
-    fix: "refresh",
-    description: "[C] A plugin that owns no MCP tools has a server entry.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.zero-tool-server",
-    severity: "error",
-    fix: "refresh",
-    description: "[C] A within-server harness carries a server advertising an empty allowlist.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.duplicate-owner-server",
-    severity: "error",
-    fix: "manual",
-    description: "[D] An owner plugin has more than one server entry in a harness root.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.duplicate-fq-tool-name",
-    severity: "error",
-    fix: "manual",
-    description: "[D] A fully-qualified '<server>::<tool>' name appears more than once in a harness root.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.duplicate-tool-in-allowlist",
-    severity: "error",
-    fix: "manual",
-    description: "[D] A server's allowlist contains the same tool name more than once.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.mcp-disabled-server",
-    severity: "error",
-    fix: "refresh",
-    description: "[E] A generated MCP server remains configured while harness MCP emission is disabled.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.owner-missing-server",
-    severity: "error",
-    fix: "refresh",
-    description: "[E] An owner plugin targets a harness for tools but has no server entry there.",
-  },
-  {
-    family: "topology.invariant",
-    code: "topology.dead-http-transport",
-    severity: "error",
-    fix: "manual",
-    description: "[F] A prism-looking server carries a dead HTTP url transport (Prism is stdio-only).",
   },
 
   // launchd.residue
@@ -572,16 +306,3 @@ export const FINDING_CATALOG: readonly FindingCatalogEntry[] = [
 ] as const;
 
 export const FINDING_CODES: readonly string[] = FINDING_CATALOG.map((entry) => entry.code);
-
-// `TOPOLOGY_FINDING_CODES` in `./mcp-topology-checks.ts` is the single source
-// of truth for every code the topology engine can emit; this catches drift
-// (a code added there without a matching catalog entry here) at import time
-// rather than only inside the meta-test.
-const missingTopologyCatalogEntries = TOPOLOGY_FINDING_CODES.filter(
-  (code) => !FINDING_CODES.includes(code),
-);
-if (missingTopologyCatalogEntries.length > 0) {
-  throw new Error(
-    `finding-catalog: missing catalog entries for topology code(s): ${missingTopologyCatalogEntries.join(", ")}`,
-  );
-}

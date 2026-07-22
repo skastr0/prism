@@ -18,8 +18,6 @@ import { exitWith } from "../exit.js";
 import { expandPath } from "../fs.js";
 import { readManifest } from "../manifest.js";
 import type { DoctorReport } from "../doctor.js";
-import type { McpStatusResult } from "../mcp/lifecycle.js";
-import { normalizeGeneratedPluginName } from "../compile/generated-plugin.js";
 import type {
   CellState,
   HarnessScope,
@@ -35,7 +33,7 @@ import { ATTR, PALETTE, clamp, colorJsonLine, jsonBlock, marchMask, spinnerFrame
 import { harnessMark } from "./harness-meta.js";
 import { classifyHarness, rollupStates, stateColor, stateGlyph, stateLabel } from "./status.js";
 import { buildPreview } from "./preview.js";
-import { applyRefresh, loadMcpStatuses, loadPluginRows } from "./data.js";
+import { applyRefresh, loadPluginRows } from "./data.js";
 import { getDoctor, getIntrospection, getPlan, invalidatePlugin } from "./cache.js";
 
 export interface PluginsTuiOptions {
@@ -124,7 +122,6 @@ const LIST_WINDOW = 24;
 function PluginList({
   rows,
   worstByPath,
-  mcpByPath,
   selectedIndex,
   focused,
   windowSize,
@@ -133,7 +130,6 @@ function PluginList({
 }: {
   readonly rows: ReadonlyArray<PluginRow>;
   readonly worstByPath: ReadonlyMap<string, CellState>;
-  readonly mcpByPath: ReadonlyMap<string, McpStatusResult>;
   readonly selectedIndex: number;
   readonly focused: boolean;
   readonly windowSize: number;
@@ -187,7 +183,6 @@ function PluginList({
                       : worst === "n/a"
                         ? PALETTE.fgDim
                         : PALETTE.fg;
-              const mcp = mcpByPath.get(row.pluginPath);
               return (
                 <box
                   key={row.pluginPath}
@@ -198,7 +193,6 @@ function PluginList({
                     <span fg={selected ? PALETTE.fgBright : PALETTE.fgDim}>{selected ? "› " : "  "}</span>
                     <span fg={markerColor}>{marker ? `${marker} ` : "  "}</span>
                     <span fg={nameColor}>{truncate(row.name, nameMax)}</span>
-                    {mcp && mcp.state === "running" ? <span fg={PALETTE.fgDim}>{" mcp"}</span> : null}
                   </text>
                 </box>
               );
@@ -750,11 +744,11 @@ function Footer({
 export function PluginsApp({
   dir,
   projectPath,
-  pollMs,
+  pollMs: _pollMs,
 }: {
   readonly dir: string;
   readonly projectPath: string;
-  readonly pollMs: number;
+  readonly pollMs?: number;
 }) {
   const renderer = useRenderer();
   const { width: termWidth, height: termHeight } = useTerminalDimensions();
@@ -776,7 +770,6 @@ export function PluginsApp({
   const [introspection, setIntrospection] = useState<Lazy<IntrospectionResult>>(null);
   const [doctor, setDoctor] = useState<Lazy<DoctorReport>>(null);
   const [worstByPath, setWorstByPath] = useState<ReadonlyMap<string, CellState>>(new Map());
-  const [mcpByPath, setMcpByPath] = useState<ReadonlyMap<string, McpStatusResult>>(new Map());
   const [log, setLog] = useState<ReadonlyArray<LogEntry>>([]);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
@@ -835,29 +828,6 @@ export function PluginsApp({
     };
   }, [dir]);
 
-  useEffect(() => {
-    let live = true;
-    const scan = (): void => {
-      loadMcpStatuses()
-        .then((statuses) => {
-          if (!live) return;
-          const map = new Map<string, McpStatusResult>();
-          for (const row of rows) {
-            const wanted = normalizeGeneratedPluginName(row.name);
-            const match = statuses.find((status) => normalizeGeneratedPluginName(status.descriptor.pluginName) === wanted);
-            if (match) map.set(row.pluginPath, match);
-          }
-          setMcpByPath(map);
-        })
-        .catch(() => undefined);
-    };
-    scan();
-    const timer = setInterval(scan, Math.max(1_000, pollMs));
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [rows, pollMs]);
 
   // Manifest + preview + per-scope status (cached, cancellable).
   useEffect(() => {
@@ -1055,7 +1025,6 @@ export function PluginsApp({
         <PluginList
           rows={rows}
           worstByPath={worstByPath}
-          mcpByPath={mcpByPath}
           selectedIndex={selectedIndex}
           focused={focus === "list"}
           windowSize={listWindow}
@@ -1105,5 +1074,5 @@ export const runPluginsTui = async (options: PluginsTuiOptions = {}): Promise<vo
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
   const dir = expandPath(options.dir ?? process.cwd());
   const projectPath = options.projectPath ? expandPath(options.projectPath) : gitRootOf(process.cwd());
-  createRoot(renderer).render(<PluginsApp dir={dir} projectPath={projectPath} pollMs={options.pollMs ?? 2_000} />);
+  createRoot(renderer).render(<PluginsApp dir={dir} projectPath={projectPath} />);
 };

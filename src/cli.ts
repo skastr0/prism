@@ -494,13 +494,11 @@ program
   .command("plugins [dir]")
   .description("Open the plugin manager / install-inspector TUI for a folder of plugins")
   .option("-p, --project <path>", "Project path for project-scoped install state")
-  .option("--poll-ms <ms>", "MCP status poll interval", parsePositiveInteger, 2000)
-  .action(async (dir: string | undefined, options: { readonly project?: string; readonly pollMs: number }) => {
+  .action(async (dir: string | undefined, options: { readonly project?: string }) => {
     try {
       await runPluginsTui({
         dir: dir ?? process.cwd(),
         ...(options.project ? { projectPath: options.project } : {}),
-        pollMs: options.pollMs,
       });
     } catch (error) {
       printCliError(error, "Plugins TUI failed");
@@ -1802,10 +1800,6 @@ program
     false,
   )
   .option("--json", "Print a machine-readable JSON report", false)
-  .option(
-    "--plugins <directory>",
-    "Directory of installed plugins to verify MCP topology against (shallow scan, mirrors refresh --plugins)",
-  )
   .action(async (pluginPath: string | undefined, options) => {
     try {
       assertProjectPathForProjectScope(options.scope, options.project);
@@ -1816,7 +1810,6 @@ program
         ...(options.project ? { projectPath: options.project } : {}),
         prismHome: resolvePrismHome(),
         fix: options.fix,
-        ...(options.plugins ? { pluginsDir: options.plugins } : {}),
       });
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));

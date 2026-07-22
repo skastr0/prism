@@ -1,15 +1,12 @@
 /** Hermes Agent lowerer. */
 
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { shimCommandForCompile } from "../shim-command.js";
 import type { ComposedAgent } from "../compose.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  bindingsOwnedByPlugin,
   collectBindingNameMap,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
@@ -21,26 +18,22 @@ import type { DesiredFile, DesiredRegion } from "../../sync/desired.js";
 import {
   pushDesiredFile,
   renderGeneratedOrbitSkill,
-  uniqueSorted,
-  yamlScalar,
   type LowerOutput,
   bundleGeneratedHookWrapper,
   matcherForResolvedToolHook,
   normalizeBundleSegment,
-  regexEscape,
   renderPrePostSessionHookWrapperEntry,
+  yamlScalar,
 } from "./shared.js";
 import { Effect } from "effect";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import type { ResolvedContractBinding } from "../resolve.js";
-import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "hermes" as const;
 
 export interface HermesLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpExposureProfile?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -97,70 +90,6 @@ const copyTargetedSkillArtifacts = async (
   }
 };
 
-/**
- * A per-owner-plugin mapping — exactly one plugin in `PRISM_SHIM_PLUGINS`,
- * `PRISM_SHIM_NAMING: per-plugin` so the shim advertises bare wire names
- * under its own `pluginServerKey` identity (no `PRISM_SHIM_EXPOSURE`: the
- * shim derives that owner's daemon profile itself from the single
- * configured plugin — see `@skastr0/prism-sdk/mcp/shim.ts`).
- */
-const renderHermesOwnerMcpServerYaml = (options: {
-  readonly serverName: string;
-  readonly plugin: string;
-  readonly toolNames: ReadonlyArray<string>;
-}): string[] => [
-  `  ${options.serverName}:`,
-  `    command: ${shimCommandForCompile()}`,
-  `    args:`,
-  `      - mcp`,
-  `      - shim`,
-  `    enabled: true`,
-  `    sampling:`,
-  `      enabled: false`,
-  `    env:`,
-  `      PRISM_SHIM_PLUGINS: ${yamlScalar(options.plugin)}`,
-  `      PRISM_SHIM_HARNESS: ${yamlScalar(TARGET_ID)}`,
-  `      PRISM_SHIM_NAMING: ${yamlScalar("per-plugin")}`,
-  `    tools:`,
-  `      include:`,
-  ...options.toolNames.map((toolName) => `        - ${yamlScalar(toolName)}`),
-];
-
-type PlannedMcpServer =
-  | {
-      readonly kind: "stdio-shim";
-      readonly serverName: string;
-      readonly plugin: string;
-      readonly toolNames: ReadonlyArray<string>;
-    }
-  | { readonly kind: "none" };
-
-/**
- * A per-plugin server can only ever front ONE daemon (the shim's
- * `per-plugin` naming mode requires exactly one configured plugin), so this
- * plugin's compile renders a server entry iff IT is a real MCP owner. Hermes
- * never receives agents (fail-closed by capability validation), so this is
- * always the plugin's own canonical-tool bindings.
- */
-const planMcpServer = (input: LowerInput): PlannedMcpServer => {
-  if (!toolsMcpHarnessEmitEnabled()) return { kind: "none" };
-  const sourcePluginName = input.target.sourcePluginName;
-  const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, []);
-  if (ownedBindings.length === 0) return { kind: "none" };
-
-  const toolNames = uniqueSorted(
-    ownedBindings.map((binding) =>
-      renderPluginAllowlist("hermes", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
-    ),
-  );
-  return {
-    kind: "stdio-shim",
-    serverName: pluginServerKey(sourcePluginName),
-    plugin: sourcePluginName,
-    toolNames,
-  };
-};
-
 const hermesGeneratedRoot = (target: HermesLowerTarget): string =>
   join(target.root, "plugins", `prism-generated-${normalizeBundleSegment(target.sourcePluginName)}`);
 
@@ -189,7 +118,7 @@ const collectCanonicalToolNames = (
 ): ReadonlyMap<string, string> =>
   collectBindingNameMap(bindings, (binding) => {
     const owner = ownerPluginForBinding(sourcePluginName, binding);
-    return renderPluginAllowlist("hermes", owner, mcpToolNameForBinding(owner, binding));
+    return mcpToolNameForBinding(owner, binding);
   });
 
 const hookMatcher = (
@@ -306,32 +235,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     }
   }
 
-  const mcp = planMcpServer(input);
-
-  // The hermes MCP wiring is one child mapping inside the user-shared
-  // top-level `mcp_servers:` key of config.yaml. The fence is anchored to
-  // that key so the region content lands inside the mapping (the anchor line
-  // is created when absent); the rest of config.yaml is never rewritten.
-  //
-  // Region-owned by THIS plugin (no cross-plugin union): a per-plugin server
-  // can only ever front one daemon, so only a real MCP owner's own compile
-  // renders (and the sync engine prunes) its mapping.
-  if (mcp.kind === "stdio-shim") {
-    regions.push({
-      kind: "marker",
-      targetPath: configPath(input.target),
-      regionKey: `hermes.mcp.${mcp.serverName}`,
-      commentPrefix: "#",
-      anchor: "mcp_servers:",
-      content: renderHermesOwnerMcpServerYaml({
-        serverName: mcp.serverName,
-        plugin: mcp.plugin,
-        toolNames: mcp.toolNames,
-      }).join("\n"),
-      plugin,
-    });
-  }
-
   const hooks = [...(input.hooks ?? [])].sort((left, right) => left.name.localeCompare(right.name));
   if (hooks.length > 0 && input.registry) {
     const bindings = mcpBindingsForAgentsAndTools(
@@ -386,6 +289,5 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     }
   }
 
-  // Each region is per-plugin — no cross-plugin coordination needed.
   return { files, regions };
 };

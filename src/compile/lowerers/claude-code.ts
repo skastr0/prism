@@ -9,18 +9,12 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
-import {
-  mcpToolNameForBinding,
-} from "../mcp-bundle.js";
-import { renderPluginAllowlist, pluginServerKey } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { shimCommandForCompile } from "../shim-command.js";
+import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  bindingsOwnedByPlugin,
-  groupAgentToolBindingsByOwner,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import { listDirRecursive, readFile } from "../../fs.js";
@@ -44,7 +38,6 @@ import {
   yamlScalar,
   type LowerOutput,
 } from "./shared.js";
-import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "claude-code" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -52,7 +45,6 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface ClaudeCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpExposureProfile?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -135,36 +127,21 @@ const renderUnsupportedOverrideDiagnostics = (
 
 const composeAgentFrontmatter = (
   agent: ComposedAgent,
-  target: ClaudeCodeLowerTarget,
+  _target: ClaudeCodeLowerTarget,
 ): Record<string, unknown> => {
   const override = agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
   const model = agent.model ?? {};
-  const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(claudeMcpPermissionNameForBinding(ownerPlugin, binding));
-    }
-  }
-  // Claude Code treats a subagent's `tools:` frontmatter as an EXCLUSIVE allowlist
-  // (docs: code.claude.com/docs/en/sub-agents — "exclusively allow"). Emitting a generated list
-  // of only the agent's declared MCP/native tools therefore silently strips the built-in
-  // Read/Write/Edit/Bash/Glob/Grep set, leaving the agent unable to do file or shell work —
-  // unlike every other harness, where Prism's declared tools sit on top of the built-ins. Claude
-  // has no "defaults + these" syntax without hardcoding the (version-drifting) built-in list, so
-  // for generated agents we omit `tools:` entirely: the subagent inherits all built-ins plus the
-  // MCP tools wired by `--mcp-config`/`--strict-mcp-config`. Per-agent fine-grained tool scoping
-  // degrades to inherit-all on Claude. An explicit author `tools:`/`allowed-tools:` override still
-  // emits an allowlist (opt-in; the author then owns including built-ins) and keeps the agent's
-  // MCP/native bindings so they remain callable.
+  // Claude Code treats a subagent's `tools:` frontmatter as an EXCLUSIVE allowlist.
+  // Emitting only declared tools strips built-ins (Read/Write/Edit/Bash/…), so generated
+  // agents omit `tools:` and inherit built-ins. Canonical tools are invoked via
+  // `prism tools invoke` (CLI), not harness MCP wire names. An explicit author
+  // `tools:`/`allowed-tools:` override still emits an allowlist (opt-in).
   const explicitTools = uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
   ]);
   const tools = explicitTools.length > 0
-    ? uniqueSorted([...explicitTools, ...agent.allowedTools, ...generatedTools])
+    ? uniqueSorted([...explicitTools, ...agent.allowedTools])
     : [];
 
   return {
@@ -250,21 +227,11 @@ const claudeNativeHookEvent = (event: Hook["event"]): string => {
   }
 };
 
-/**
- * Claude Code's per-agent `tools:` frontmatter is an exclusive allowlist of
- * fully-qualified `mcp__<server>__<tool>` permission strings. Each
- * MCP-owning plugin registers its own per-plugin server (keyed by
- * `pluginServerKey`, see `planMcpServer`), so the string built here names
- * the OWNER plugin's server — never this compiling plugin's own bundle,
- * even for a foreign binding referenced by a consumer agent — and must be
- * byte-identical to what `renderPluginAllowlist` would embed for the same
- * owner+binding.
- */
-const claudeMcpPermissionNameForBinding = (
+/** Logical generated tool name for hook matchers (CLI tool surface, not MCP wire). */
+const claudeToolNameForBinding = (
   ownerPluginName: string,
   binding: ResolvedContractBinding,
-): string =>
-  renderPluginAllowlist("claude-code", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
+): string => mcpToolNameForBinding(ownerPluginName, binding);
 
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
@@ -277,7 +244,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return claudeMcpPermissionNameForBinding(owner, binding);
+      return claudeToolNameForBinding(owner, binding);
     },
   );
 
@@ -450,52 +417,6 @@ const planCommands = async (
   }
 };
 
-const planMcpServer = async (
-  input: LowerInput,
-  files: DesiredFile[],
-  desiredRelativePaths: Set<string>,
-): Promise<void> => {
-  // Per-plugin server shape: only an MCP-OWNING plugin (one with its own
-  // generated tools or synthetic dispatch bindings — `bindingsOwnedByPlugin`)
-  // attaches a server of its own. A pure consumer plugin that only
-  // *references* a foreign owner's tools gets no `.mcp.json` at all — no
-  // re-export, no facade, no 0-tool shim. Its agents still resolve the
-  // foreign tool by naming the owner's own server key in their allowlist
-  // (`claudeMcpPermissionNameForBinding` / `renderPluginAllowlist`), which
-  // works at session scope as long as the owner plugin is also enabled.
-  if (!toolsMcpHarnessEmitEnabled()) return;
-  const ownedBindings = bindingsOwnedByPlugin(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-  if (ownedBindings.length === 0) return;
-
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
-    PRISM_SHIM_HARNESS: TARGET_ID,
-    PRISM_SHIM_NAMING: "per-plugin",
-  };
-  if (input.target.mcpExposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
-  }
-  pushWrite(
-    files,
-    desiredRelativePaths,
-    input.target,
-    ".mcp.json",
-    json({
-      mcpServers: {
-        [pluginServerKey(input.target.sourcePluginName)]: {
-          command: shimCommandForCompile(),
-          args: ["mcp", "shim"],
-          env,
-        },
-      },
-    }),
-  );
-};
-
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const resolveTarget = (relativePath: string): string =>
@@ -521,7 +442,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     pushWrite,
   });
   await planCommands(input, state.files, state.desiredRelativePaths);
-  await planMcpServer(input, state.files, state.desiredRelativePaths);
   await planGeneratedPluginHookWrites({
     input,
     state,

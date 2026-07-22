@@ -366,7 +366,6 @@ export default {
     target: {
       scope: "project",
       root: outputRoot,
-      mcpExposureProfile: "prism-generated-antigravity-shim-fixture:antigravity-cli",
       sourcePluginName: "antigravity-shim-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,

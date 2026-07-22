@@ -5,20 +5,17 @@
  * <antigravity-root>/plugins/prism-generated-<source-plugin>/.
  */
 
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget, type ResolvedHookMatch } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { pluginServerKey, renderPluginWire } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit } from "../sources.js";
 import {
   collectBindingNameMap,
-  bindingsOwnedByPlugin,
   groupAgentToolBindingsByOwner,
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
@@ -42,7 +39,6 @@ import {
 import {
   toolsCliEmitEnabled,
   toolsCliInjectMode,
-  toolsMcpHarnessEmitEnabled,
   type ToolsCliInjectMode,
 } from "../../tools-cli/flags.js";
 import { renderToolCliAgentGuidance } from "../../tools-cli/inject.js";
@@ -53,7 +49,6 @@ const PLUGIN_PREFIX = "prism-generated";
 export interface AntigravityCliLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpExposureProfile?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -84,15 +79,10 @@ const pluginIdForPlugin = (pluginName: string): string =>
 const pluginRoot = (target: AntigravityCliLowerTarget): string =>
   join(target.root, "plugins", pluginIdForPlugin(target.sourcePluginName));
 
-const pluginRelativePath = (target: AntigravityCliLowerTarget, path: string): string =>
-  relative(pluginRoot(target), path).replace(/\\/g, "/");
-
 const json = (value: unknown): string => JSON.stringify(value, null, 2) + "\n";
 
 const composeAntigravityAgentFrontmatter = (
   agent: ComposedAgent,
-  target: AntigravityCliLowerTarget,
-  includeMcpTools: boolean,
 ): Record<string, unknown> => {
   const frontmatter: Record<string, unknown> = {
     name: agent.name,
@@ -106,23 +96,11 @@ const composeAntigravityAgentFrontmatter = (
     if (typeof override.model === "string") frontmatter.model = override.model;
   }
 
-  const generatedTools: string[] = [];
-  if (includeMcpTools) {
-    for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-      target.sourcePluginName,
-      agent,
-    )) {
-      for (const binding of bindings) {
-        generatedTools.push(antigravityMcpToolNameForBinding(ownerPlugin, binding));
-      }
-    }
-  }
   const tools = uniqueSorted([
     ...(Array.isArray(override?.tools) && override.tools.every((tool) => typeof tool === "string")
       ? override.tools
       : []),
     ...agent.allowedTools,
-    ...generatedTools,
   ], { dropEmpty: true });
   if (tools.length > 0) frontmatter.tools = tools;
 
@@ -135,7 +113,6 @@ const composeAntigravityAgentFrontmatter = (
 const renderAntigravityAgentMarkdown = (
   agent: ComposedAgent,
   target: AntigravityCliLowerTarget,
-  includeMcpTools: boolean,
   includeCliGuidance: boolean,
   cliMode: ToolsCliInjectMode,
 ): string => {
@@ -151,7 +128,7 @@ const renderAntigravityAgentMarkdown = (
     : [];
   const guidance = renderToolCliAgentGuidance(groups, cliMode).trimEnd();
   const body = [agent.body.trimEnd(), guidance].filter((section) => section.length > 0).join("\n\n");
-  return `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent, target, includeMcpTools))}\n\n${body}\n`;
+  return `${serializeFrontmatter(composeAntigravityAgentFrontmatter(agent))}\n\n${body}\n`;
 };
 
 const targetIncludesAntigravity = (targets: readonly PluginTargetId[] | undefined): boolean =>
@@ -205,29 +182,6 @@ const renderContext = (contexts: ReadonlyArray<{ label: string; content: string 
   }
   return lines.join("\n");
 };
-
-/**
- * Antigravity's per-agent `tools:` frontmatter is a flat, cross-server
- * identifier space requiring a `mcp_<server>_<tool>` prefix (single
- * underscore, `mcp_` literal) to disambiguate which configured MCP server a
- * permission targets — this is Antigravity's own established convention
- * (predates the shim), not the generic `mcp__<server>__<tool>` shape the
- * per-plugin scheme's `renderPluginAllowlist` renders for Claude/Grok, so
- * this composes the prefix locally around the shared wire-name primitive
- * rather than calling `renderPluginAllowlist` directly.
- *
- * Per-plugin server scheme (operator-locked): the server segment is the
- * OWNER plugin's own `pluginServerKey` — never the aggregated
- * `prism-mcp-shim` key — and the tool segment is the owner's bare wire name
- * (the redundant own-plugin namespace stripped), byte-identical to what that
- * owner's own generated plugin bundle's per-plugin shim advertises for the
- * same binding.
- */
-const antigravityMcpToolNameForBinding = (
-  ownerPluginName: string,
-  binding: ResolvedContractBinding,
-): string =>
-  `mcp_${pluginServerKey(ownerPluginName)}_${renderPluginWire("antigravity-cli", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding))}`;
 
 const matcherForHook = (
   match: ResolvedHookMatch,
@@ -335,7 +289,7 @@ const planHooks = async (
     ),
     (binding) => {
       const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-      return antigravityMcpToolNameForBinding(owner, binding);
+      return mcpToolNameForBinding(owner, binding);
     },
   );
   const config: Record<string, Record<string, unknown>> = {};
@@ -372,48 +326,10 @@ const planHooks = async (
   });
 };
 
-/**
- * Opt-in MCP mode's per-plugin server scheme: a generated plugin bundle
- * registers exactly ONE MCP server — its own, keyed by `pluginServerKey` —
- * and only when the source plugin OWNS generated tools. A consumer plugin
- * (agents referencing foreign owners' tools only) emits no server entry. In
- * the production-default CLI mode neither owner nor consumer emits MCP
- * config/names; agents receive thin `prism tools invoke` guidance instead.
- */
-const planMcpServers = (
-  input: LowerInput,
-  enabled: boolean,
-): Record<string, unknown> => {
-  if (!enabled) return {};
-  const ownedBindings = bindingsOwnedByPlugin(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-  if (ownedBindings.length === 0) return {};
-
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
-    PRISM_SHIM_HARNESS: TARGET_ID,
-    PRISM_SHIM_NAMING: "per-plugin",
-  };
-  if (input.target.mcpExposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
-  }
-  return {
-    [pluginServerKey(input.target.sourcePluginName)]: {
-      command: shimCommandForCompile(),
-      args: ["mcp", "shim"],
-      env,
-    },
-  };
-};
-
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const files: DesiredFile[] = [];
   const plugin = input.target.sourcePluginName;
   const root = pluginRoot(input.target);
-  const emitMcp = toolsMcpHarnessEmitEnabled();
   const emitCli = toolsCliEmitEnabled();
   const cliMode = toolsCliInjectMode();
 
@@ -432,8 +348,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       content: renderAntigravityAgentMarkdown(
         agent,
         input.target,
-        emitMcp,
-        emitCli && !emitMcp,
+        emitCli,
         cliMode,
       ),
       plugin,
@@ -458,7 +373,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     }
   }
 
-  const mcpServers = planMcpServers(input, emitMcp);
   await planHooks(input, files);
 
   const manifest: Record<string, unknown> = {
@@ -470,14 +384,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     content: json(manifest),
     plugin,
   });
-
-  if (Object.keys(mcpServers).length > 0) {
-    pushDesiredFile(files, {
-      targetPath: join(root, "mcp_config.json"),
-      content: json({ mcpServers }),
-      plugin,
-    });
-  }
 
   return { files, regions: [] };
 };

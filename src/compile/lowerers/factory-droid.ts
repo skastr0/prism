@@ -10,16 +10,11 @@ import { Effect } from "effect";
 import { type ComposedAgent } from "../compose.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { pluginServerKey, renderPluginAllowlist } from "@skastr0/prism-sdk/mcp/wire-naming";
-import { shimCommandForCompile } from "../shim-command.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
   collectBindingNameMap,
-  bindingsOwnedByPlugin,
-  groupAgentToolBindingsByOwner,
-  mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
@@ -41,7 +36,6 @@ import {
   yamlScalar,
   type LowerOutput,
 } from "./shared.js";
-import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "factory-droid" as const;
 const GENERATED_PLUGIN_PREFIX = "prism-generated";
@@ -49,7 +43,6 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface FactoryDroidLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpExposureProfile?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -121,38 +114,23 @@ const reasoningEffortValue = (...values: unknown[]): string | undefined =>
       value !== undefined && FACTORY_REASONING_EFFORTS.has(value),
     );
 
+/** Native Factory tool categories (including Factory's own "mcp" category name). */
 const FACTORY_TOOL_CATEGORIES = new Set(["read-only", "edit", "execute", "web", "mcp"]);
 
 const factoryOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> | undefined =>
   agent.targetOverride[TARGET_ID] as Record<string, unknown> | undefined;
 
-const factoryMcpToolNameForBinding = (
-  ownerPluginName: string,
-  binding: ResolvedContractBinding,
-): string =>
-  renderPluginAllowlist("factory-droid", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding));
-
 const composeFactoryTools = (
   agent: ComposedAgent,
-  target: FactoryDroidLowerTarget,
   override: Record<string, unknown> | undefined,
 ): string | string[] | undefined => {
   const explicitArrayTools = [
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
   ];
-  const generatedTools: string[] = [];
-  for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-    target.sourcePluginName,
-    agent,
-  )) {
-    for (const binding of bindings) {
-      generatedTools.push(factoryMcpToolNameForBinding(ownerPlugin, binding));
-    }
-  }
   const category = stringValue(override?.tools);
   const merged = uniqueSorted(
-    [...explicitArrayTools, ...agent.allowedTools, ...generatedTools],
+    [...explicitArrayTools, ...agent.allowedTools],
     { dropEmpty: true },
   );
 
@@ -164,7 +142,7 @@ const composeFactoryTools = (
 
   if (category && merged.length > 0) {
     throw new Error(
-      `Factory Droid agent '${agent.name}' cannot combine tools category '${category}' with explicit, resolved, or generated tools. Use a Factory tool array when mixing native and MCP tool names.`,
+      `Factory Droid agent '${agent.name}' cannot combine tools category '${category}' with explicit or resolved native tools. Use a Factory tool array when mixing category and native tool names.`,
     );
   }
 
@@ -175,7 +153,6 @@ const composeFactoryTools = (
 
 const composeAgentFrontmatter = (
   agent: ComposedAgent,
-  target: FactoryDroidLowerTarget,
 ): Record<string, unknown> => {
   const override = factoryOverrideForAgent(agent);
   const model = agent.model ?? {};
@@ -192,14 +169,12 @@ const composeAgentFrontmatter = (
       model.effort,
       model.variant,
     ),
-    tools: composeFactoryTools(agent, target, override),
+    tools: composeFactoryTools(agent, override),
   };
 };
 
-const renderDroidMarkdown = (
-  agent: ComposedAgent,
-  target: FactoryDroidLowerTarget,
-): string => `${serializeFrontmatter(composeAgentFrontmatter(agent, target))}\n\n${agent.body}\n`;
+const renderDroidMarkdown = (agent: ComposedAgent): string =>
+  `${serializeFrontmatter(composeAgentFrontmatter(agent))}\n\n${agent.body}\n`;
 
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 
@@ -214,7 +189,7 @@ const planDroidWrites = async (
       desiredRelativePaths,
       input.target,
       `droids/${agent.name}.md`,
-      renderDroidMarkdown(agent, input.target),
+      renderDroidMarkdown(agent),
     );
   }
 };
@@ -232,7 +207,7 @@ const renderHooksJson = async (
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return factoryMcpToolNameForBinding(owner, binding);
+      return mcpToolNameForBinding(owner, binding);
     },
   );
 
@@ -297,48 +272,6 @@ const factoryBundleOwnsPluginSkills = (input: LowerInput): boolean =>
   (input.tools?.length ?? 0) > 0 ||
   (input.hooks?.length ?? 0) > 0;
 
-const planMcpServer = async (
-  input: LowerInput,
-  files: DesiredFile[],
-  desiredRelativePaths: Set<string>,
-): Promise<void> => {
-  // Per-plugin server: only a plugin that OWNS bindings (its own generated
-  // tools or synthetic dispatch bindings) gets a server entry, keyed by its
-  // own name and exposing only itself. Consumers referencing foreign owners
-  // get no server here — their agents' allowlists name the owner's server.
-  if (!toolsMcpHarnessEmitEnabled()) return;
-  const ownedBindings = bindingsOwnedByPlugin(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-  if (ownedBindings.length === 0) return;
-
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: input.target.sourcePluginName,
-    PRISM_SHIM_HARNESS: TARGET_ID,
-    PRISM_SHIM_NAMING: "per-plugin",
-  };
-  if (input.target.mcpExposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = input.target.mcpExposureProfile;
-  }
-  pushWrite(
-    files,
-    desiredRelativePaths,
-    input.target,
-    "mcp.json",
-    json({
-      mcpServers: {
-        [pluginServerKey(input.target.sourcePluginName)]: {
-          command: shimCommandForCompile(),
-          args: ["mcp", "shim"],
-          env,
-        },
-      },
-    }),
-  );
-};
-
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const resolveTarget = (relativePath: string): string =>
@@ -366,7 +299,6 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     state,
     pushWrite,
   });
-  await planMcpServer(input, state.files, state.desiredRelativePaths);
   await planGeneratedPluginHookWrites({
     input,
     state,

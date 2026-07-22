@@ -221,7 +221,6 @@ export default {
     target: {
       scope: "project",
       root: outputRoot,
-      mcpExposureProfile: "prism-generated-claude-plugin-fixture:claude-code",
       sourcePluginName: "claude-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -388,7 +387,6 @@ export default {
     target: {
       scope: "project",
       root: outputRoot,
-      mcpExposureProfile: "prism-generated-claude-shim-fixture:claude-code",
       sourcePluginName: "claude-shim-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,

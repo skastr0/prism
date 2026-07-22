@@ -27,7 +27,6 @@ import {
 } from "./compile-manifest.js";
 import { WORKFLOW_REFS_HARNESS, workflowAgentsPath, workflowModelsPath, workflowRefsRoot, workflowSkillsPath, workflowToolsPath } from "./workflow-refs-emitter.js";
 import { compilePluginForTarget, planPluginForTarget, type CompileResult } from "./pipeline.js";
-import { grokMcpServerNameForPlugin } from "./lowerers/grok.js";
 import { deriveProjectKey } from "../project-key.js";
 import { expandPath } from "../fs.js";
 import { emptyRegistry, type PluginRegistry } from "./registry.js";

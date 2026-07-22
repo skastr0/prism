@@ -214,7 +214,6 @@ export default {
     target: {
       scope: "project",
       root: outputRoot,
-      mcpExposureProfile: "prism-generated-factory-plugin-fixture:factory-droid",
       sourcePluginName: "factory-plugin-fixture",
       sourcePluginVersion: "0.4.0",
       sourcePluginPath: pluginRoot,

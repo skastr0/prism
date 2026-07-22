@@ -318,7 +318,6 @@ export default {
     target: {
       scope: "global",
       root: outputRoot,
-      mcpExposureProfile: "prism-generated-grok-plugin-fixture:grok",
       sourcePluginName: "grok-plugin-fixture",
       sourcePluginVersion: "0.3.0",
       sourcePluginPath: pluginRoot,
@@ -809,7 +808,6 @@ export default {
     target: {
       scope: "project",
       root: outputRoot,
-      mcpExposureProfile: "prism-generated-grok-shim-fixture:grok",
       sourcePluginName: "grok-shim-fixture",
       sourcePluginVersion: "0.1.0",
       sourcePluginPath: pluginRoot,

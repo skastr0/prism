@@ -11,25 +11,14 @@ import { type ComposedAgent } from "../compose.js";
 import { generatedPluginIdForOwner } from "../generated-plugin.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
 import { mcpToolNameForBinding } from "../mcp-bundle.js";
-import { generatedMcpWireServerName } from "../mcp-runtime.js";
-import { shimCommandForCompile } from "../shim-command.js";
-import {
-  type GrokCollisionGuard,
-  createGrokCollisionGuard,
-  pluginServerKey,
-  renderPluginAllowlist,
-} from "@skastr0/prism-sdk/mcp/wire-naming";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
 import {
-  allReferencedBindingsByOwner,
   collectBindingNameMap,
-  groupAgentToolBindingsByOwner,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
 import type { HarnessScope } from "../../types.js";
-import type { DesiredRegion } from "../../sync/desired.js";
 import {
   bundleGeneratedHookWrapper,
   createGeneratedPluginWritePusher,
@@ -46,25 +35,12 @@ import {
   yamlScalar,
   type LowerOutput,
 } from "./shared.js";
-import { toolsMcpHarnessEmitEnabled } from "../../tools-cli/flags.js";
 
 const TARGET_ID = "grok" as const;
-
-/**
- * The plugin's `p_<hash8>` HTTP-mode wire server name. Retained only for
- * external consumers still on the (deleted) HTTP-mode assertion path — the
- * lowerer's own naming now goes entirely through `@skastr0/prism-sdk/mcp/
- * wire-naming`'s `renderPluginAllowlist`/`renderPluginWire`, which registers
- * one config.toml server per MCP-owning plugin (`pluginServerKey`) and
- * advertises that plugin's bare, Grok-capped tool names under it.
- */
-export const grokMcpServerNameForPlugin = (sourcePluginName: string): string =>
-  generatedMcpWireServerName(sourcePluginName);
 
 export interface GrokLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpExposureProfile?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -149,29 +125,13 @@ const grokOverrideForAgent = (agent: ComposedAgent): Record<string, unknown> | u
 
 const composeGrokTools = (
   agent: ComposedAgent,
-  target: GrokLowerTarget,
   override: Record<string, unknown> | undefined,
-  namer: GrokToolNamer,
-  includeMcpTools: boolean,
-): string[] => {
-  const generatedTools: string[] = [];
-  if (includeMcpTools) {
-    for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-      target.sourcePluginName,
-      agent,
-    )) {
-      for (const binding of bindings) {
-        generatedTools.push(namer.name(ownerPlugin, binding));
-      }
-    }
-  }
-  return uniqueSorted([
+): string[] =>
+  uniqueSorted([
     ...stringArray(override?.tools),
     ...stringArray(override?.["allowed-tools"]),
     ...agent.allowedTools,
-    ...generatedTools,
   ]);
-};
 
 const composeGrokDisallowedTools = (
   override: Record<string, unknown> | undefined,
@@ -200,9 +160,6 @@ const composeGrokEffort = (
 
 const composeAgentFrontmatter = (
   agent: ComposedAgent,
-  target: GrokLowerTarget,
-  namer: GrokToolNamer,
-  includeMcpTools: boolean,
 ): Record<string, unknown> => {
   const override = grokOverrideForAgent(agent);
   const model = agent.model ?? {};
@@ -218,7 +175,7 @@ const composeAgentFrontmatter = (
     reasoning_effort: stringValue(override?.reasoning_effort),
     temperature: firstDefined(numberValue(override?.temperature), numberValue(model.temperature)),
     top_p: firstDefined(numberValue(override?.top_p), numberValue(model.top_p)),
-    tools: composeGrokTools(agent, target, override, namer, includeMcpTools),
+    tools: composeGrokTools(agent, override),
     disallowedTools: composeGrokDisallowedTools(override),
     // Never emit skills into Grok agent frontmatter. Grok non-interactive sessions
     // preload FULL skill bodies for every frontmatter skill entry (2026-07-11:
@@ -228,14 +185,8 @@ const composeAgentFrontmatter = (
   };
 };
 
-const renderAgentMarkdown = (
-  agent: ComposedAgent,
-  target: GrokLowerTarget,
-  namer: GrokToolNamer,
-  includeMcpTools: boolean,
-): string => {
-  return `${serializeFrontmatter(composeAgentFrontmatter(agent, target, namer, includeMcpTools))}\n\n${agent.body}\n`;
-};
+const renderAgentMarkdown = (agent: ComposedAgent): string =>
+  `${serializeFrontmatter(composeAgentFrontmatter(agent))}\n\n${agent.body}\n`;
 
 const grokNativeHookEvent = (event: Hook["event"]): string => {
   switch (event) {
@@ -268,54 +219,18 @@ const grokNativeHookEvent = (event: Hook["event"]): string => {
   }
 };
 
-interface GrokToolNamer {
-  readonly name: (ownerPlugin: string, binding: ResolvedContractBinding) => string;
-}
-
-/**
- * Renders every tool name this compile emits through the shared
- * `renderPluginAllowlist("grok", ownerPlugin, ...)` — the owner plugin's own
- * bare wire name (redundant own-namespace prefix stripped), Grok-capped at
- * <=64 chars for the fully-qualified `<pluginServerKey(owner)>__<bare>` name,
- * prefixed by that owner's own per-plugin server key (never a shared shim
- * key). Capping collisions can only occur between two tools on the SAME
- * owner's server (different owners never share a wire namespace), so the
- * `GrokCollisionGuard` is scoped per owner plugin, not globally across the
- * whole compile.
- */
-const createGrokToolNamer = (): GrokToolNamer => {
-  const guards = new Map<string, GrokCollisionGuard>();
-  const guardFor = (ownerPlugin: string): GrokCollisionGuard => {
-    const existing = guards.get(ownerPlugin);
-    if (existing) return existing;
-    const guard = createGrokCollisionGuard();
-    guards.set(ownerPlugin, guard);
-    return guard;
-  };
-  return {
-    name: (ownerPlugin, binding) =>
-      renderPluginAllowlist(
-        "grok",
-        ownerPlugin,
-        mcpToolNameForBinding(ownerPlugin, binding),
-        guardFor(ownerPlugin),
-      ),
-  };
-};
-
 const renderHooksJson = async (
   hooks: ReadonlyArray<Hook>,
   registry: PluginRegistry | undefined,
   target: GrokLowerTarget,
   bindings: ReadonlyArray<ResolvedContractBinding>,
-  namer: GrokToolNamer,
 ): Promise<string> => {
   const groupedHooks: Record<string, unknown[]> = {};
   const canonicalToolNames = collectBindingNameMap(
     bindings,
     (binding) => {
       const owner = ownerPluginForBinding(target.sourcePluginName, binding);
-      return namer.name(owner, binding);
+      return mcpToolNameForBinding(owner, binding);
     },
   );
 
@@ -374,86 +289,6 @@ const bundleHookWrapper = async (hook: Hook): Promise<string> => {
 const pushWrite = createGeneratedPluginWritePusher(generatedPath);
 const pushDirectWrite = createGeneratedPluginWritePusher(directPath);
 
-const quote = (value: string): string => JSON.stringify(value);
-
-const tomlArray = (values: ReadonlyArray<string>): string =>
-  `[${values.map((value) => quote(value)).join(", ")}]`;
-
-const tomlDottedTable = (segments: ReadonlyArray<string>): string =>
-  `[${segments.map((segment) => quote(segment)).join(".")}]`;
-
-/**
- * One `[mcp_servers.<pluginServerKey(owner)>]` entry per MCP-owning plugin
- * (the operator-locked shape: one server keyed by the plugin's own name,
- * never a shared shim key). `PRISM_SHIM_NAMING = "per-plugin"` selects the
- * shim's single-plugin naming mode (bare wire tool names — see
- * `@skastr0/prism-sdk/mcp/shim.ts`'s `ShimNamingMode`), matching the bare,
- * per-owner names `renderPluginAllowlist` renders into agent frontmatter.
- * `PRISM_SHIM_EXPOSURE` is deliberately omitted: absent, the shim derives
- * the per-owner daemon profile itself (`prism-generated-<owner>:grok`).
- */
-const renderGrokPerPluginShimServerToml = (owner: string): string => {
-  const serverName = pluginServerKey(owner);
-  return [
-    tomlDottedTable(["mcp_servers", serverName]),
-    `command = ${quote(shimCommandForCompile())}`,
-    `args = ${tomlArray(["mcp", "shim"])}`,
-    "enabled = true",
-    tomlDottedTable(["mcp_servers", serverName, "env"]),
-    `PRISM_SHIM_PLUGINS = ${quote(owner)}`,
-    `PRISM_SHIM_HARNESS = ${quote(TARGET_ID)}`,
-    `PRISM_SHIM_NAMING = ${quote("per-plugin")}`,
-  ].join("\n");
-};
-
-/**
- * Registers one stdio-shim entry per MCP-owning plugin in
- * `<grok-root>/config.toml`, each its own Prism-managed marker region keyed
- * `grok.mcp.<pluginServerKey(owner)>`.
- *
- * Why config.toml and not a plugin-bundle `.mcp.json`: Grok resolves MCP
- * servers only from its config sources (`~/.grok/config.toml`, project
- * `.grok/config.toml`, the project-root `.mcp.json`, and the Claude/Cursor
- * compat imports — see `grok mcp doctor`'s "Config sources"). A `.mcp.json`
- * inside an installed plugin bundle is counted by `grok inspect` but never
- * becomes a live server in an agent run, so every tool name the lowerer
- * advertised in agent frontmatter resolved to "Tool not found" via
- * CallMcpTool.
- *
- * Consumer plugins referencing a foreign owner's tools never get their own
- * server entry — only the owner does. This compile already knows every
- * owner it needs a region for (itself, plus any owner its own agents
- * reference), computed directly from its own resolved bindings — no
- * cross-plugin state required: the owner's own compile (or any other
- * compile that references it) renders the byte-identical region
- * independently, region-owned by that plugin, and the sync engine prunes it
- * the moment no compiling plugin references that owner anymore. There is no
- * tool allowlist in the server table (agent frontmatter `tools:` gates
- * exposure), so only owner plugins are tracked here.
- */
-const planMcpServerRegion = (
-  input: LowerInput,
-  regions: DesiredRegion[],
-  enabled: boolean,
-): void => {
-  if (!enabled) return;
-  const bindingsByOwner = allReferencedBindingsByOwner(
-    input.target.sourcePluginName,
-    input.tools,
-    input.agents,
-  );
-  for (const owner of uniqueSorted([...bindingsByOwner.keys()])) {
-    regions.push({
-      kind: "marker",
-      targetPath: join(input.target.root, "config.toml"),
-      regionKey: `grok.mcp.${pluginServerKey(owner)}`,
-      commentPrefix: "#",
-      content: renderGrokPerPluginShimServerToml(owner),
-      plugin: owner,
-    });
-  }
-};
-
 const assertProjectHooksSupported = (input: LowerInput): void => {
   const hooks = input.hooks ?? [];
   if (input.target.scope !== "project" || hooks.length === 0) return;
@@ -470,9 +305,6 @@ const assertProjectHooksSupported = (input: LowerInput): void => {
 
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
-  const regions: DesiredRegion[] = [];
-  const namer = createGrokToolNamer();
-  const emitMcp = toolsMcpHarnessEmitEnabled();
   const resolveTarget = (relativePath: string): string =>
     generatedPath(input.target, relativePath);
   const planAgentWrites = (write: typeof pushWrite): Promise<void> =>
@@ -480,8 +312,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       input,
       state,
       pushWrite: write,
-      renderAgentMarkdown: (agent) =>
-        renderAgentMarkdown(agent, input.target, namer, emitMcp),
+      renderAgentMarkdown,
     });
 
   assertProjectHooksSupported(input);
@@ -494,13 +325,10 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       state,
       pushWrite: pushDirectWrite,
     });
-    planMcpServerRegion(input, regions, emitMcp);
-    return { files: state.files, regions };
+    return { files: state.files, regions: [] };
   }
 
-  // An artifact-less compile must not plant an empty generated plugin
-  // bundle — only the MCP server region (if any owner is referenced)
-  // participates then.
+  // An artifact-less compile must not plant an empty generated plugin bundle.
   const hasBundleArtifacts =
     input.agents.length > 0 ||
     input.orbits.length > 0 ||
@@ -524,17 +352,15 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
       pushWrite,
     });
   }
-  planMcpServerRegion(input, regions, emitMcp);
   if ((input.hooks?.length ?? 0) > 0) {
     await planGeneratedPluginHookWrites({
       input,
       state,
-      renderHooksJson: (hooks, registry, target, bindings) =>
-        renderHooksJson(hooks, registry, target, bindings, namer),
+      renderHooksJson,
       bundleHookWrapper,
       resolveTarget,
     });
   }
 
-  return { files: state.files, regions };
+  return { files: state.files, regions: [] };
 };

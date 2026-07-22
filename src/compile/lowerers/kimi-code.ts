@@ -5,15 +5,7 @@ import { Effect } from "effect";
 import type { ComposedAgent } from "../compose.js";
 import { renderDerivedOrbitPhaseReferences } from "../derived-orbit-skill.js";
 import { resolveHookMatchForTarget } from "../hooks.js";
-import {
-  mcpToolNameForBinding,
-} from "../mcp-bundle.js";
-import {
-  pluginServerKey,
-  renderPluginAllowlist,
-  renderPluginWire,
-  stableHash8,
-} from "@skastr0/prism-sdk/mcp/wire-naming";
+import { mcpToolNameForBinding } from "../mcp-bundle.js";
 import type { ResolvedContractBinding } from "../resolve.js";
 import type { PluginRegistry } from "../registry.js";
 import type { CanonicalTool, Hook, Orbit, Skill } from "../sources.js";
@@ -24,8 +16,6 @@ import {
   mcpBindingsForAgentsAndTools,
   ownerPluginForBinding,
 } from "../tool-bindings.js";
-import { generatedPluginIdForOwner } from "../generated-plugin.js";
-import { shimCommandForCompile } from "../shim-command.js";
 import { collectArtifactSourceFiles, resolveManifestTargets } from "../../manifest.js";
 import { readFile } from "../../fs.js";
 import type { AnyArtifactType, HarnessScope, PluginTargetId } from "../../types.js";
@@ -46,7 +36,6 @@ import {
 import {
   toolsCliEmitEnabled,
   toolsCliInjectMode,
-  toolsMcpHarnessEmitEnabled,
   type ToolsCliInjectMode,
 } from "../../tools-cli/flags.js";
 import { renderToolCliAgentGuidance } from "../../tools-cli/inject.js";
@@ -57,7 +46,6 @@ const GENERATED_PLUGIN_PREFIX = "prism-generated";
 export interface KimiCodeLowerTarget {
   readonly scope: HarnessScope;
   readonly root: string;
-  readonly mcpExposureProfile?: string;
   readonly sourcePluginName: string;
   readonly sourcePluginVersion?: string;
   readonly sourcePluginPath?: string;
@@ -123,46 +111,6 @@ const roleSkillName = (agentName: string): string =>
 const commandSkillName = (relativePath: string): string =>
   `prism-command-${normalizeBundleSegment(relativePath.replace(/\.md$/u, ""), "command")}`;
 
-const KIMI_MCP_NAME_PREFIX = "mcp__";
-const KIMI_MCP_NAME_SEPARATOR = "__";
-const KIMI_MCP_MAX_QUALIFIED_LENGTH = 64;
-
-// Mirrors Kimi Code's packages/agent-core/src/mcp/tool-naming.ts contract for
-// the qualified tool name Kimi itself reports at hook/native-tool-call time.
-// Under the per-plugin server scheme every owner's `pluginServerKey` is
-// globally unique, so (unlike the retired aggregated `prism-mcp-shim` scheme)
-// no `plugin-<id>:` runtime-disambiguation prefix is needed here anymore.
-const sanitizeKimiMcpNamePart = (part: string): string =>
-  part.replace(/[^a-zA-Z0-9_-]/gu, "_").replace(/_+/gu, "_");
-
-const qualifyKimiMcpToolName = (serverName: string, toolName: string): string => {
-  const full = [
-    KIMI_MCP_NAME_PREFIX,
-    sanitizeKimiMcpNamePart(serverName),
-    KIMI_MCP_NAME_SEPARATOR,
-    sanitizeKimiMcpNamePart(toolName),
-  ].join("");
-  if (full.length <= KIMI_MCP_MAX_QUALIFIED_LENGTH) return full;
-
-  const hash = stableHash8(full);
-  const head = full.slice(0, KIMI_MCP_MAX_QUALIFIED_LENGTH - hash.length - 1);
-  return `${head}_${hash}`;
-};
-
-/**
- * The fully-qualified name Kimi reports for `binding` (owned by
- * `ownerPluginName`) at hook/native-tool-call time: the per-plugin server key
- * plus the bare wire name that server's own `enabledTools` advertises for it.
- */
-const kimiMcpToolName = (
-  ownerPluginName: string,
-  binding: ResolvedContractBinding,
-): string =>
-  qualifyKimiMcpToolName(
-    pluginServerKey(ownerPluginName),
-    renderPluginWire("kimi-code", ownerPluginName, mcpToolNameForBinding(ownerPluginName, binding)),
-  );
-
 const installedPluginsPath = (target: KimiCodeLowerTarget): string =>
   join(target.root, "plugins", "installed.json");
 
@@ -212,22 +160,9 @@ const renderSkill = (frontmatter: Record<string, unknown>, body: string): string
 const renderKimiAgentRoleSkill = (
   agent: ComposedAgent,
   target: KimiCodeLowerTarget,
-  includeMcpTools: boolean,
   includeCliGuidance: boolean,
   cliMode: ToolsCliInjectMode,
 ): string => {
-  const generatedTools: string[] = [];
-  if (includeMcpTools) {
-    for (const [ownerPlugin, bindings] of groupAgentToolBindingsByOwner(
-      target.sourcePluginName,
-      agent,
-    )) {
-      for (const binding of bindings) {
-        generatedTools.push(kimiMcpToolName(ownerPlugin, binding));
-      }
-    }
-  }
-  const tools = uniqueSorted(generatedTools, { dropEmpty: true });
   const nativeTools = uniqueSorted(agent.allowedTools, { dropEmpty: true });
   const skills = uniqueSorted([...agent.skills, ...agent.allowedSkills], { dropEmpty: true });
 
@@ -252,14 +187,10 @@ const renderKimiAgentRoleSkill = (
     if (guidance.length > 0) sections.push("", guidance);
   }
 
-  if (nativeTools.length > 0 || tools.length > 0 || skills.length > 0) {
+  if (nativeTools.length > 0 || skills.length > 0) {
     sections.push("", "## Kimi Role Surface");
     if (nativeTools.length > 0) {
       sections.push("", `Native tools requested by this role: ${nativeTools.map((tool) => `\`${tool}\``).join(", ")}.`);
-    }
-    if (tools.length > 0) {
-      sections.push("", "Generated MCP tools for this role:");
-      for (const tool of tools) sections.push(`- \`${tool}\``);
     }
     if (skills.length > 0) {
       sections.push("", `Related Kimi skills: ${skills.map((skill) => `\`${skill}\``).join(", ")}.`);
@@ -352,7 +283,6 @@ const planAgentRoleSkills = (
   input: LowerInput,
   desiredRelativePaths: Set<string>,
   files: DesiredFile[],
-  includeMcpTools: boolean,
   includeCliGuidance: boolean,
   cliMode: ToolsCliInjectMode,
 ): void => {
@@ -365,7 +295,6 @@ const planAgentRoleSkills = (
       renderKimiAgentRoleSkill(
         agent,
         input.target,
-        includeMcpTools,
         includeCliGuidance,
         cliMode,
       ),
@@ -433,77 +362,6 @@ const planContextSkillWrite = (
     "skills/prism-context/SKILL.md",
     renderContextSkill(contexts),
   );
-};
-
-/**
- * `enabledTools` is the load-bearing gate: it filters incoming `tools/call`
- * requests by the exact wire name this per-plugin server advertises, so
- * every entry here must come from `renderPluginAllowlist("kimi-code", ...)`,
- * never a bare or `qualifyKimiMcpToolName`-display name (that cosmetic form
- * is only ever shown in the per-role skill markdown, never fed into a config
- * gate) -- the Kimi law: allowlist == advertised wire names.
- */
-const renderKimiMcpServerEntry = (options: {
-  readonly plugins: ReadonlyArray<string>;
-  readonly exposureProfile?: string;
-  readonly toolNames: ReadonlyArray<string>;
-}): Record<string, unknown> => {
-  const env: Record<string, string> = {
-    PRISM_SHIM_PLUGINS: options.plugins.join(","),
-    PRISM_SHIM_HARNESS: TARGET_ID,
-    // Per-plugin-manifest law: this server always fronts exactly one owner
-    // plugin, so it must tell the shim to advertise (and gate `enabledTools`
-    // against) the bare per-plugin wire names -- never the shim's default
-    // `aggregated` `p_<hash>_<tool>` shape (see `shim-main.ts#parseNaming`).
-    // Without this, the running shim's real `tools/list` diverges from what
-    // `enabledTools` below expects and every tool call 404s.
-    PRISM_SHIM_NAMING: "per-plugin",
-  };
-  if (options.exposureProfile) {
-    env.PRISM_SHIM_EXPOSURE = options.exposureProfile;
-  }
-  return {
-    enabled: true,
-    command: shimCommandForCompile(),
-    args: ["mcp", "shim"],
-    env,
-    enabledTools: options.toolNames,
-  };
-};
-
-/**
- * Opt-in MCP mode's per-plugin-manifest law: `kimi.plugin.json` carries an
- * MCP server entry only when this plugin owns generated tools (own canonical
- * tools plus synthetic trait/orbit dispatch tools). Production-default CLI
- * mode emits neither that server nor MCP role names; bundle-local skills and
- * thin role pointers expose `prism tools invoke` instead.
- */
-const planMcpServer = (
-  input: LowerInput,
-  enabled: boolean,
-): ReadonlyMap<string, Record<string, unknown>> => {
-  const servers = new Map<string, Record<string, unknown>>();
-  if (!enabled) return servers;
-  const sourcePluginName = input.target.sourcePluginName;
-
-  const ownedBindings = bindingsOwnedByPlugin(sourcePluginName, input.tools, input.agents);
-  if (ownedBindings.length === 0) return servers;
-
-  const toolNames = uniqueSorted(
-    ownedBindings.map((binding) =>
-      renderPluginAllowlist("kimi-code", sourcePluginName, mcpToolNameForBinding(sourcePluginName, binding)),
-    ),
-  );
-  servers.set(
-    pluginServerKey(sourcePluginName),
-    renderKimiMcpServerEntry({
-      plugins: [sourcePluginName],
-      ...(input.target.mcpExposureProfile ? { exposureProfile: input.target.mcpExposureProfile } : {}),
-      toolNames,
-    }),
-  );
-
-  return servers;
 };
 
 const kimiNativeHookEvent = (event: Hook["event"]): string =>
@@ -576,7 +434,7 @@ const planHooks = async (
   );
   const canonicalToolNames = collectBindingNameMap(bindings, (binding) => {
     const owner = ownerPluginForBinding(input.target.sourcePluginName, binding);
-    return kimiMcpToolName(owner, binding);
+    return mcpToolNameForBinding(owner, binding);
   });
 
   const planned: PlannedHook[] = [];
@@ -638,7 +496,6 @@ const renderManifest = (
   input: LowerInput,
   desiredRelativePaths: ReadonlySet<string>,
   contexts: ReadonlyArray<{ label: string; content: string }>,
-  mcp: ReadonlyMap<string, Record<string, unknown>>,
   hasToolCliSkill: boolean,
 ): string => {
   const manifest: Record<string, unknown> = {
@@ -656,13 +513,6 @@ const renderManifest = (
   }
   if (contexts.length > 0 && desiredRelativePaths.has("skills/prism-context/SKILL.md")) {
     manifest.sessionStart = { skill: "prism-context" };
-  }
-  if (mcp.size > 0) {
-    const mcpServers: Record<string, unknown> = {};
-    for (const [serverName, entry] of mcp) {
-      mcpServers[serverName] = entry;
-    }
-    manifest.mcpServers = mcpServers;
   }
 
   return json(manifest);
@@ -683,7 +533,6 @@ const hasPluginOutput = (
 export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
   const state = createGeneratedPluginPlanState();
   const contexts = await collectContextFiles(input);
-  const emitMcp = toolsMcpHarnessEmitEnabled();
   const emitCli = toolsCliEmitEnabled();
   const cliMode = toolsCliInjectMode();
   const ownedBindings = bindingsOwnedByPlugin(
@@ -699,14 +548,12 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     return { files: [], regions: [] };
   }
 
-  const mcp = planMcpServer(input, emitMcp);
   await planTargetedSkillWrites(input, state.desiredRelativePaths, state.files);
   planAgentRoleSkills(
     input,
     state.desiredRelativePaths,
     state.files,
-    emitMcp,
-    emitCli && !emitMcp,
+    emitCli,
     cliMode,
   );
   planOrbitSkillWrites(input, state.desiredRelativePaths, state.files);
@@ -719,7 +566,7 @@ export const planLowering = async (input: LowerInput): Promise<LowerOutput> => {
     state.desiredRelativePaths,
     input.target,
     "kimi.plugin.json",
-    renderManifest(input, state.desiredRelativePaths, contexts, mcp, hasToolCliSkill),
+    renderManifest(input, state.desiredRelativePaths, contexts, hasToolCliSkill),
   );
 
   const regions: DesiredRegion[] = [...installedPluginRegions(input)];

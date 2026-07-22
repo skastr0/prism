@@ -1344,7 +1344,6 @@ export default defineWorkflow({
         sourcePluginName,
         sourcePluginVersion: "0.1.0",
         sourcePluginPath: join(root, sourcePluginName),
-        mcpExposureProfile: `prism-generated-${sourcePluginName}:grok`,
       },
     });
     await writeDesiredFiles(generatedFiles);

@@ -4,7 +4,7 @@
 Harden HTTP transport between harness clients and generated MCP servers against transient failures, timeouts, and reconnects.
 
 ## Key seams
-- `src/compile/mcp-bundle.ts` :: generated server uses `@modelcontextprotocol/sdk/server/streamable-http`
+- `src/compile/tool-runtime-bundle.ts` :: generated server uses `@modelcontextprotocol/sdk/server/streamable-http`
 - `src/mcp/lifecycle.ts` :: `fetchHealth`, HTTP client calls
 - The generated bundle's SSE/HTTP request handling
 

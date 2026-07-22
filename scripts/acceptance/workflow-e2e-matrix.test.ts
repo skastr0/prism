@@ -3,15 +3,12 @@ import { Effect } from "effect";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   CHALLENGE_PROOF_SECRET_ENV,
   keyedChallengeProof,
 } from "../../examples/prism-harness-qa/tools/proof";
 import { challengeFinish } from "../../examples/prism-harness-qa/workflows/challenge-proof";
 import {
-  CLAUDE_CHALLENGE_TOOL_NAME,
-  CODEX_CHALLENGE_COMPLETED_LINE,
   CONFIG_SEED_RULES,
   cleanupWorkflowE2EQaArtifacts,
   classifySetupBlocker,
@@ -21,7 +18,6 @@ import {
   hermesAuthHasXaiOauthCredential,
   isMutableLiveConfigSeedPath,
   OPENCODE_MODEL_SELECTION_SMOKE_MODEL,
-  removeWorkflowE2ETempRoots,
   resolveHermesAuthScopeForE2E,
   resolveHermesProfileForE2E,
   TOWER_COMMENT_FAMILY,
@@ -37,24 +33,6 @@ const pathExists = async (path: string): Promise<boolean> => {
   } catch {
     return false;
   }
-};
-
-const processIsRunning = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const waitForProcessRunning = async (pid: number): Promise<void> => {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (processIsRunning(pid)) return;
-    await delay(50);
-  }
-  throw new Error(`process ${pid} did not start`);
 };
 
 describe("workflow-e2e Tower evidence", () => {
@@ -166,33 +144,6 @@ describe("workflow-e2e live config seeding", () => {
 });
 
 describe("workflow-e2e temp cleanup", () => {
-  test.skip("reaps MCP servers before deleting temp roots (MCP excised)", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-cleanup-test-"));
-    const server = join(root, "runtime", "mcp", "fixture", "server.mjs");
-    await mkdir(join(root, "runtime", "mcp", "fixture"), { recursive: true });
-    await writeFile(server, "setInterval(() => {}, 1000);\n");
-
-    const proc = Bun.spawn({
-      cmd: [process.execPath, server],
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-
-    try {
-      await waitForProcessRunning(proc.pid);
-      expect(processIsRunning(proc.pid)).toBe(true);
-
-      await removeWorkflowE2ETempRoots([root]);
-
-      expect(processIsRunning(proc.pid)).toBe(false);
-      expect(await pathExists(root)).toBe(false);
-    } finally {
-      if (processIsRunning(proc.pid)) {
-        process.kill(proc.pid, "SIGKILL");
-      }
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 
   test("removes QA hot-path artifacts even when sync state is missing", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-e2e-qa-cleanup-test-"));
@@ -461,7 +412,6 @@ describe("workflow-e2e matrix evidence checks", () => {
             adapter: "claude-code",
             nativeAgent: "default",
             model: "sonnet",
-            claudeToolCallNames: [CLAUDE_CHALLENGE_TOOL_NAME],
             finish: { repairs: 0 },
           },
         },
@@ -517,61 +467,13 @@ describe("workflow-e2e matrix evidence checks", () => {
     }
   });
 
-  test.skip("requires Claude stream-json tool-use telemetry for generated MCP proof (MCP excised)", () => {
-    const entry = {
-      harness: "claude-code" as const,
-      workflow: "smoke-claude-code.workflow.ts",
-      challenge: "claude-code-2026-06-20-001",
-      expectedModel: "sonnet",
-    };
-    const claudeInput = (claudeToolCallNames: readonly string[]) => ({
-      run: completedRun,
-      expectedProof: proofFor(entry.challenge),
-      proof: {
-        pass: true,
-        metadata: {
-          adapter: "claude-code",
-          nativeAgent: "qa-tester",
-          model: "sonnet",
-          claudeToolCallNames,
-          finish: { repairs: 0 },
-        },
-      },
-    });
-
-    expect(CLAUDE_CHALLENGE_TOOL_NAME).toBe("mcp__prism-harness-qa__challenge_echo");
-
-    const passing = evaluateHarnessChecks(entry, claudeInput([CLAUDE_CHALLENGE_TOOL_NAME]));
-    expect(passing.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("pass");
-
-    const missingToolUse = evaluateHarnessChecks(entry, claudeInput([]));
-    expect(missingToolUse.find((item) => item.name === "generated-tool-call-observed")).toEqual({
-      name: "generated-tool-call-observed",
-      status: "fail",
-      detail: `expected Claude stream-json tool_use ${CLAUDE_CHALLENGE_TOOL_NAME}, got <none>`,
-    });
-
-    // The pre-shim transport is deleted; its tool_use name must not pass.
-    const preShimName = evaluateHarnessChecks(
-      entry,
-      claudeInput(["mcp__prism-generated-prism-harness-qa__prism_harness_qa_challenge_echo"]),
-    );
-    expect(preShimName.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-  });
-
-  test("marks OpenCode tool-call telemetry not applicable (no channel carries it)", () => {
-    const entry = {
-      harness: "opencode" as const,
-      workflow: "smoke-opencode.workflow.ts",
-      challenge: "opencode-2026-06-20-001",
-      expectedModel: "ollama-cloud/deepseek-v4-flash",
-    };
-
-    const checks = evaluateHarnessChecks(entry, {
-      run: completedRun,
-      expectedProof: proofFor(entry.challenge),
-      proof: {
-        pass: true,
+  test("marks tool-call telemetry not applicable; keyed challenge proof is the gate", () => {
+    const entries = [
+      {
+        harness: "opencode" as const,
+        workflow: "smoke-opencode.workflow.ts",
+        challenge: "opencode-2026-06-20-001",
+        expectedModel: "ollama-cloud/deepseek-v4-flash",
         metadata: {
           adapter: "opencode-cli",
           nativeAgent: "qa-tester",
@@ -579,100 +481,41 @@ describe("workflow-e2e matrix evidence checks", () => {
           finish: { repairs: 0 },
         },
       },
-    });
-    const telemetry = checks.find((item) => item.name === "generated-tool-call-observed");
-
-    expect(telemetry?.status).toBe("not-applicable");
-    expect(telemetry?.detail).toContain("keyed challenge proof");
-  });
-
-  test.skip("requires Codex stderr evidence to show shim MCP challenge_echo execution (MCP excised)", () => {
-    const entry = {
-      harness: "codex-cli" as const,
-      workflow: "smoke-codex-cli.workflow.ts",
-      challenge: "codex-cli-2026-06-20-001",
-      expectedModel: "gpt-5.4-mini",
-    };
-    const failDetail = "expected Codex stderr excerpt to include shim MCP challenge_echo completion with matching keyed JSON output";
-    const codexInput = (stderrExcerpt?: string) => ({
-      run: completedRun,
-      expectedProof: proofFor(entry.challenge),
-      proof: {
-        pass: true,
+      {
+        harness: "claude-code" as const,
+        workflow: "smoke-claude-code.workflow.ts",
+        challenge: "claude-code-2026-06-20-001",
+        expectedModel: "sonnet",
         metadata: {
-          adapter: "codex-cli",
-          model: "gpt-5.4-mini",
-          ...(stderrExcerpt !== undefined ? { stderrExcerpt } : {}),
+          adapter: "claude-code",
+          nativeAgent: "qa-tester",
+          model: "sonnet",
           finish: { repairs: 0 },
         },
       },
-    });
-    const toolOutputLine = (challenge: string, proof: string, source = "prism-generated-tool") =>
-      JSON.stringify({ challenge, proof, source });
+      {
+        harness: "codex-cli" as const,
+        workflow: "smoke-codex-cli.workflow.ts",
+        challenge: "codex-cli-2026-06-20-001",
+        expectedModel: "gpt-5.4-mini",
+        metadata: {
+          adapter: "codex-cli",
+          model: "gpt-5.4-mini",
+          finish: { repairs: 0 },
+        },
+      },
+    ];
 
-    expect(CODEX_CHALLENGE_COMPLETED_LINE).toBe(
-      "mcp: prism-harness-qa/challenge_echo (completed)",
-    );
-
-    const passing = evaluateHarnessChecks(entry, codexInput([
-      "mcp: prism-harness-qa/challenge_echo started",
-      CODEX_CHALLENGE_COMPLETED_LINE,
-      toolOutputLine(entry.challenge, proofFor(entry.challenge)),
-    ].join("\n")));
-    expect(passing.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("pass");
-
-    // The pre-shim server name is deleted; its completion line must not pass.
-    const preShimServer = evaluateHarnessChecks(entry, codexInput([
-      "mcp: prism-generated-prism-harness-qa/prism_harness_qa_challenge_echo (completed)",
-      toolOutputLine(entry.challenge, proofFor(entry.challenge)),
-    ].join("\n")));
-    expect(preShimServer.find((item) => item.name === "generated-tool-call-observed")).toEqual({
-      name: "generated-tool-call-observed",
-      status: "fail",
-      detail: failDetail,
-    });
-
-    const wrongChallenge = evaluateHarnessChecks(entry, codexInput([
-      CODEX_CHALLENGE_COMPLETED_LINE,
-      toolOutputLine("other-challenge", proofFor("other-challenge")),
-    ].join("\n")));
-    expect(wrongChallenge.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-
-    // A prompt-derivable legacy proof must not pass a keyed run.
-    const unkeyedProof = evaluateHarnessChecks(entry, codexInput([
-      CODEX_CHALLENGE_COMPLETED_LINE,
-      toolOutputLine(entry.challenge, `prism-tool-proof:${entry.challenge}`),
-    ].join("\n")));
-    expect(unkeyedProof.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-
-    const wrongSource = evaluateHarnessChecks(entry, codexInput([
-      CODEX_CHALLENGE_COMPLETED_LINE,
-      toolOutputLine(entry.challenge, proofFor(entry.challenge), "fallback-json"),
-    ].join("\n")));
-    expect(wrongSource.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-
-    const missingJsonOutput = evaluateHarnessChecks(entry, codexInput(CODEX_CHALLENGE_COMPLETED_LINE));
-    expect(missingJsonOutput.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-
-    const malformedJsonOutput = evaluateHarnessChecks(entry, codexInput([
-      CODEX_CHALLENGE_COMPLETED_LINE,
-      "{\"challenge\":\"codex-cli-2026-06-20-001\",\"proof\":",
-    ].join("\n")));
-    expect(malformedJsonOutput.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-
-    const interleavedMcpOutput = evaluateHarnessChecks(entry, codexInput([
-      CODEX_CHALLENGE_COMPLETED_LINE,
-      "mcp: other-server/other_tool (completed)",
-      toolOutputLine(entry.challenge, proofFor(entry.challenge)),
-    ].join("\n")));
-    expect(interleavedMcpOutput.find((item) => item.name === "generated-tool-call-observed")?.status).toBe("fail");
-
-    const missingStderr = evaluateHarnessChecks(entry, codexInput());
-    expect(missingStderr.find((item) => item.name === "generated-tool-call-observed")).toEqual({
-      name: "generated-tool-call-observed",
-      status: "fail",
-      detail: failDetail,
-    });
+    for (const { metadata, ...entry } of entries) {
+      const checks = evaluateHarnessChecks(entry, {
+        run: completedRun,
+        expectedProof: proofFor(entry.challenge),
+        proof: { pass: true, metadata },
+      });
+      const telemetry = checks.find((item) => item.name === "generated-tool-call-observed");
+      expect(telemetry?.status).toBe("not-applicable");
+      expect(telemetry?.detail).toContain("keyed challenge proof");
+    }
   });
 
   test("flags model mismatches", () => {
@@ -904,15 +747,6 @@ describe("workflow-e2e matrix evidence checks", () => {
         metadata: {
           adapter: "codex-cli",
           model: "gpt-5.4-mini",
-          stderrExcerpt: [
-            "mcp: prism-harness-qa/challenge_echo started",
-            CODEX_CHALLENGE_COMPLETED_LINE,
-            JSON.stringify({
-              challenge: "codex-cli-2026-06-20-001",
-              proof: proofFor("codex-cli-2026-06-20-001"),
-              source: "prism-generated-tool",
-            }),
-          ].join("\n"),
           finish: { repairs: 0 },
         },
       },

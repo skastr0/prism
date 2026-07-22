@@ -136,14 +136,6 @@ mcp_handshake() {
   fi
 }
 
-# Start a few representative daemons
-for sample in tower booth workflows; do
-  plug="$PLUGINS/$sample"
-  if [[ -d "$plug" ]]; then
-    (cd "$ROOT" && $PRISM_DEV mcp serve "$plug" --harness codex-cli --port auto >> "$SANDBOX/mcp-serve.log" 2>&1) || true
-  fi
-done
-
 for sample in tower booth workflows; do
   rt="$PRISM_HOME/runtime/mcp/$sample/runtime.json"
   if [[ -f "$rt" ]]; then
@@ -293,12 +285,6 @@ if [[ "$FAILURES" -eq 0 ]]; then
 else
   log "**QA FAIL** — $FAILURES failure(s)"
 fi
-
-# Cleanup sample MCP daemons
-for sample in tower booth workflows; do
-  plug="$PLUGINS/$sample"
-  (cd "$ROOT" && $PRISM_DEV mcp stop "$plug" --harness codex-cli >> "$SANDBOX/mcp-stop.log" 2>&1) || true
-done
 
 echo ""
 echo "Report: $REPORT"

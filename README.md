@@ -49,7 +49,7 @@ You don't run one AI coding harness anymore.
 ## What Prism does
 
 <p align="center">
-  <img src="assets/brand/prism-hero.png" alt="One source beam refracted into parallel channels, each landing on its own plate" width="720" />
+  <img src="assets/brand/prism-hero.png" alt="One amber source thread passing through an aperture plane and refracting into many distinct instrument channels" width="720" />
 </p>
 
 **Prism is a compiler.** One typed plugin source goes in; native agents, skills, tools, and hooks come out for fourteen harnesses — each artifact written in that harness's own format, converged idempotently, with drift detection and managed backups. One beam in, many channels out.

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const packageDir = join(repoRoot, "packages", "prism-packager");
+const sdkPackageDir = join(repoRoot, "packages", "prism-sdk");
 const fixturePlugin = join(repoRoot, "examples", "my-standards");
 
 const run = async (
@@ -39,27 +40,31 @@ const run = async (
   return stdout;
 };
 
-const packPackage = async (tarballDir: string): Promise<string> => {
+const packWorkspacePackage = async (
+  label: string,
+  dir: string,
+  tarballDir: string,
+): Promise<string> => {
   // --ignore-scripts: prepack re-runs build and would pollute --json stdout.
-  // Caller already built; publish workflow still runs prepack for safety.
   const stdout = await run(
-    "Packing prism-packager",
+    label,
     ["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", tarballDir],
-    { cwd: packageDir, capture: true },
+    { cwd: dir, capture: true },
   );
   const start = stdout.indexOf("[");
   if (start < 0) {
-    throw new Error(`npm pack returned no JSON array: ${stdout.slice(0, 500)}`);
+    throw new Error(`${label} returned no JSON array: ${stdout.slice(0, 500)}`);
   }
   const parsed = JSON.parse(stdout.slice(start)) as Array<{ readonly filename: string }>;
   const filename = parsed[0]?.filename;
   if (!filename) {
-    throw new Error("npm pack did not return a prism-packager tarball");
+    throw new Error(`${label} did not return a tarball filename`);
   }
   return join(tarballDir, filename);
 };
 
 // Build first so src/ is populated for pack.
+await run("Building prism-sdk", ["bun", "run", "build:core"]);
 await run("Building prism-packager", ["bun", "run", "build"], { cwd: packageDir });
 
 if (!existsSync(join(packageDir, "src", "index.ts"))) {
@@ -86,19 +91,47 @@ try {
   const appRoot = join(tempRoot, "app");
   await mkdir(tarballDir, { recursive: true });
   await mkdir(appRoot, { recursive: true });
-  await writeFile(
-    join(appRoot, "package.json"),
-    JSON.stringify({ private: true, type: "module" }, null, 2) + "\n",
-  );
 
   // Fixture plugin must be available inside the clean consumer project.
   const consumerPlugin = join(appRoot, "fixture-plugin");
   await cp(fixturePlugin, consumerPlugin, { recursive: true });
 
-  const tarball = await packPackage(tarballDir);
+  // Mirror release publish order: pack sdk + packager, then install both via
+  // file: deps so the exact @skastr0/prism-sdk pin does not hit the registry
+  // (this cut's version may not be published yet when smoke runs pre-tag).
+  const sdkTarball = await packWorkspacePackage(
+    "Packing prism-sdk (packager dep)",
+    sdkPackageDir,
+    tarballDir,
+  );
+  const packagerTarball = await packWorkspacePackage(
+    "Packing prism-packager",
+    packageDir,
+    tarballDir,
+  );
+  await writeFile(
+    join(appRoot, "package.json"),
+    JSON.stringify(
+      {
+        private: true,
+        type: "module",
+        dependencies: {
+          "@skastr0/prism-sdk": `file:${sdkTarball}`,
+          "@skastr0/prism-packager": `file:${packagerTarball}`,
+        },
+        // Force packager's exact pin onto the local sdk tarball (registry may
+        // not have this cut yet during pre-publish smoke).
+        overrides: {
+          "@skastr0/prism-sdk": `file:${sdkTarball}`,
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
   await run(
-    "Installing packed prism-packager into clean project",
-    ["bun", "add", tarball],
+    "Installing packed sdk + packager via file: deps",
+    ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"],
     { cwd: appRoot },
   );
 

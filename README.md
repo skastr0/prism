@@ -49,10 +49,10 @@ You don't run one AI coding harness anymore.
 ## What Prism does
 
 <p align="center">
-  <img src="assets/brand/prism-hero.png" alt="One beam in, a spectrum of parallel rays out" width="720" />
+  <img src="assets/brand/prism-hero.png" alt="One source beam refracted into parallel channels, each landing on its own plate" width="720" />
 </p>
 
-**Prism is a compiler.** One typed plugin source goes in; native agents, skills, tools, and hooks come out for fourteen harnesses — each artifact written in that harness's own format, converged idempotently, with drift detection and managed backups. White light in, spectrum out.
+**Prism is a compiler.** One typed plugin source goes in; native agents, skills, tools, and hooks come out for fourteen harnesses — each artifact written in that harness's own format, converged idempotently, with drift detection and managed backups. One beam in, many channels out.
 
 And because Prism knows every harness on your machine, it can also **conduct them**: Prism workflows are typed, Effect-powered task graphs that dispatch real harness workers, force schema-typed outputs, verify them with finish criteria, and persist every run in a durable SQLite ledger.
 
@@ -63,7 +63,7 @@ And because Prism knows every harness on your machine, it can also **conduct the
 - **Typed multi-model workflows** — `defineWorkflow` + Effect: fan a council across four model vendors, force every seat to return the same `Schema.Struct`, synthesize with a fifth
 - **Outputs you can trust** — deterministic and judge finish criteria with bounded repair loops; schema decode failures get repaired, not shipped
 - **A durable ledger** — every run in SQLite: replayable task cache, resume after a crash, span traces with OTLP export, evidence bundles
-- **Convergent by construction** — drift fails closed, stale artifacts get pruned, and backups live outside your config dirs
+- **Convergent by construction** — drifted files are detected and repaired with a backup taken first, stale artifacts get pruned, and backups live outside your config dirs
 - **Stateless tool runtime** — compiled tools load in-process from one CLI; no daemon, no socket, no MCP server to babysit
 
 ### Is / is not
@@ -293,7 +293,7 @@ prism workflow runs summary --all               # machine-wide rollup across eve
 prism workflow runs events <runId>              # append-only event stream
 prism workflow runs trace <runId> --otlp <url>  # span tree; export to a collector
 prism workflow runs export <runId>              # redacted JSON evidence bundle
-prism workflow resume <runId> council.workflow.ts  # completed tasks replay from cache
+prism workflow runs resume <runId> council.workflow.ts  # completed tasks replay from cache
 prism workflow monitor                          # live run monitor TUI
 ```
 
@@ -352,8 +352,8 @@ Prism uses `~/.prism` for durable install and compile state (`PRISM_HOME` to ove
 
 `prism refresh` is the unified convergence path: it compiles first when a plugin has compile targets for the selected harnesses, then reconciles file-router artifacts through the same sync engine. `prism plan` previews the same work without writing; `prism doctor` reports config and refresh-plan problems.
 
-- `state/roots/*.json` tracks Prism-owned outputs per harness root — repeated refreshes skip unchanged files, **fail closed on drift**, and prune stale managed files
-- `config.json` controls managed backups (`backup.mode`: `always`/`never`, `backup.retentionPerTarget`); backups live under `backups/`, never as sibling `.bak` files in your config dirs
+- `state/roots/*.json` tracks Prism-owned outputs per harness root — repeated refreshes skip unchanged files, detect and repair drifted files (a backup is taken first), and prune stale managed files; `prism doctor` surfaces drift warnings
+- Backups live under `backups/` inside `PRISM_HOME`, never as sibling `.bak` files in your config dirs; retention is configured in `config.json`
 - Idempotency is a tested invariant, not a hope: `bun run check:refresh-idempotency` runs refresh twice in isolated `HOME`/`PRISM_HOME` and fails on warm-run stale prunes, config churn, orphan hook blocks, snapshot churn, or backup churn
 
 ## Packages
@@ -362,7 +362,7 @@ Prism uses `~/.prism` for durable install and compile state (`PRISM_HOME` to ove
 |---|---|
 | [`@skastr0/prism`](https://www.npmjs.com/package/@skastr0/prism) | The CLI — public npm runner with per-platform binaries (`darwin-arm64/x64`, `linux-arm64/x64`) |
 | [`@skastr0/prism-sdk`](https://www.npmjs.com/package/@skastr0/prism-sdk) | Core contracts and codecs: `compile-manifest`, `refs`, `snapshot`, `stable-json` subpaths |
-| `@skastr0/prism-packager` | Embeddable packager: compile a plugin into harness-native `DesiredFile[]` payloads without shipping the CLI — release wiring landed, first registry publish pending |
+| [`@skastr0/prism-packager`](https://www.npmjs.com/package/@skastr0/prism-packager) | Embeddable packager: compile a plugin into harness-native `DesiredFile[]` payloads without shipping the CLI |
 
 ## Development
 
@@ -388,7 +388,7 @@ The smoke script installs packed tarballs into a clean temporary project, compil
 
 Experimental, and honest about it: the package format, generated outputs, and harness adapters may change.
 
-- Ten harness targets are **live-proven** (real workers dispatched end-to-end); Cursor, Factory Droid, and Pi are **compile-verified** — generated output is pinned by golden tests, live dispatch intentionally deferred. See [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)
+- Ten harness targets are **live-proven** (real workers dispatched end-to-end); Cursor, Factory Droid, and Pi are **compile-verified** — generated output is pinned by golden tests, live dispatch intentionally deferred; OpenClaw currently receives direct skill files only. See [`docs/lowerer-capability-matrix.md`](docs/lowerer-capability-matrix.md)
 - The workflow engine runs an Effect-based DAG with a durable SQLite ledger; it does not claim `@effect/workflow`-style durable execution
 - Workflow production hardening is tracked in the open: [`docs/workflow-production-readiness-audit-2026-07-21.md`](docs/workflow-production-readiness-audit-2026-07-21.md)
 

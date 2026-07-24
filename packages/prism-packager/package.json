@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-packager",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "type": "module",
   "description": "Embeddable Prism packager: compile a plugin into harness-native package payloads (DesiredFile[]) without shipping the Prism CLI.",
   "license": "MIT",

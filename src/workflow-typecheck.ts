@@ -112,7 +112,7 @@ export const checkWorkflowRefsFreshness = async (options: {
   process.stderr.write(
     `warning: generated workflow refs are stale (refs were generated from manifest ` +
       `${refsHash.slice(0, 12)}, current manifest is ${currentHash.slice(0, 12)}). ` +
-      `Run \`prism compile\` to regenerate refs.\n`,
+      `Run \`prism refresh <plugin-path>\` to regenerate refs.\n`,
   );
 };
 
@@ -206,7 +206,7 @@ export const typecheckWorkflowFile = (
   if (environment === null) {
     const message =
       `workflow type environment unavailable (no generated refs or ` +
-      `shipped declarations for this project). Run \`prism compile\` to enable typechecking.`;
+      `shipped declarations for this project). Run \`prism refresh <plugin-path>\` to enable typechecking.`;
     if (options.strictEnvironment === true) {
       throw new WorkflowTypecheckError(filePath, [
         { file: filePath, line: null, character: null, message },

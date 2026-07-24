@@ -321,7 +321,7 @@ const renderMissingSurfaceHuman = (surfaceDir: string): string =>
     `No compiled workflow surface found for this project at:`,
     `  ${surfaceDir}`,
     ``,
-    `Compile this project first: \`prism refresh <plugin-path>\` (or \`prism compile\`),`,
+    `Compile this project first: \`prism refresh <plugin-path>\`,`,
     `then re-run \`prism workflow catalog\`.`,
   ].join("\n");
 

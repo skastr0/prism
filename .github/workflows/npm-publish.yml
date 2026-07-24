@@ -40,6 +40,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Continue past individual failures so one new package's first-publish
+          # bootstrap (OIDC 404 until trusted publisher is configured on npm)
+          # does not strand already-known packages in the same cut.
+          failed=()
+
           for package_dir in \
             packages/prism-sdk \
             packages/prism-packager \
@@ -58,5 +63,16 @@ jobs:
             fi
 
             echo "Publishing ${package_name}@${package_version} from ${package_dir}"
-            npm publish "./${package_dir}" --access public
+            if ! npm publish "./${package_dir}" --access public; then
+              echo "::error::Failed to publish ${package_name}@${package_version}"
+              if [[ "${package_name}" == "@skastr0/prism-packager" ]]; then
+                echo "::notice::First publish of a new package name under OIDC often 404s until the package exists on npm with a trusted publisher for this repo (skastr0/prism). Create @skastr0/prism-packager + GitHub Actions trusted publisher on npmjs.com, then re-run this workflow."
+              fi
+              failed+=("${package_name}@${package_version}")
+            fi
           done
+
+          if ((${#failed[@]} > 0)); then
+            echo "Publish failures: ${failed[*]}"
+            exit 1
+          fi

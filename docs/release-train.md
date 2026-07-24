@@ -82,6 +82,32 @@ git push origin v0.3.1        # <- this fires npm-publish.yml
 
 Then approve the `release` environment on the npm-publish run.
 
+### First publish of a brand-new package name
+
+OIDC trusted publishing can update packages that already exist on npm. A **new**
+name under `@skastr0/*` (e.g. the first cut of `@skastr0/prism-packager`) often
+returns `404 Not Found` on `npm publish` until the package exists and has a
+trusted publisher for this repo.
+
+One-time bootstrap (operator):
+
+1. On [npmjs.com](https://www.npmjs.com/) under the `skastr0` user/org, create
+   the package name (or publish once with a classic automation token that can
+   create packages under the scope).
+2. Package settings → **Trusted Publisher** → GitHub Actions:
+   - Repository: `skastr0/prism`
+   - Workflow: `npm-publish.yml`
+3. Re-run **Publish npm packages** for the same tag (or cut the next patch).
+   The publish loop skips already-published members and retries the new one.
+
+Until that lands, embedders can use a monorepo `file:` link:
+
+```json
+"@skastr0/prism-packager": "file:../prism/packages/prism-packager"
+```
+
+(`file:` to `packages/prism-packager` only — never the private workspace root.)
+
 ## Commit messages
 
 Conventional types (`feat`/`fix`/`chore`/…) remain useful hygiene and changelog

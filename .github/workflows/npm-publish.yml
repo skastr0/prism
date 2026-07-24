@@ -32,6 +32,7 @@ jobs:
       - run: bun run verify
       - run: bun run test:ci
       - run: bun run smoke:core
+      - run: bun run smoke:packager
       - run: bun run build:npm-cli
       - run: bun run pack:npm-cli:dry-run
       - run: bun scripts/smoke-npm-cli.ts --skip-build
@@ -41,6 +42,7 @@ jobs:
 
           for package_dir in \
             packages/prism-sdk \
+            packages/prism-packager \
             packages/npm/prism-darwin-arm64 \
             packages/npm/prism-darwin-x64 \
             packages/npm/prism-linux-arm64 \

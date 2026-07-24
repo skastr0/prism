@@ -1,6 +1,36 @@
 # ADR: Embeddable Prism SDK Contract
 
-Status: ratified as amended 2026-07-13.
+Status: ratified as amended 2026-07-13; packager package amendment 2026-07-24.
+
+## Amendment (2026-07-24) — embeddable packager package
+
+Product consumers (notably Vellum factory install) need to embed Prism's
+**packager** — `packagePluginForTarget` → harness-native `DesiredFile[]` /
+activation regions — without shipping the Prism CLI or depending on the
+private workspace root (`@skastr0/prism-workspace`).
+
+This is **not** an expansion of `@skastr0/prism-sdk` (contracts stay thin).
+A **new** published package owns the packager surface:
+
+- **`@skastr0/prism-packager`** — Bun-required embeddable packager + compile
+  graph snapshot under `packages/prism-packager/`. Public exports:
+  `packagePluginForTarget`, `packagePluginForTargets`, `formatPackageOperations`,
+  and the apply types `DesiredFile` / `DesiredRegion` / `HarnessId` /
+  `HarnessScope`.
+- Implementation source of truth remains monorepo `src/packager.ts` (+
+  transitive compile/sync modules). The package is built by
+  `scripts/build-prism-packager.ts` as a publishable source snapshot.
+- Package dependencies are **plain published pins only** — no `workspace:*`
+  (required so Vellum `file:` / npm installs resolve; that failure mode already
+  burned on the workspace root).
+- Runtime: **Bun ≥ 1.3**. Node-only Electron main processes must invoke via a
+  Bun worker/subprocess; do not claim Node parity in v0.
+- Release train: same operator version as `@skastr0/prism` / `@skastr0/prism-sdk`;
+  publish order after `prism-sdk`, before platform CLI packages.
+
+The original "packager stays out of the SDK v0" decision below remains correct
+for `@skastr0/prism-sdk`. Packager is a **separate** artifact, not a reopening
+of the contracts package.
 
 ## Amendment (2026-07-13)
 

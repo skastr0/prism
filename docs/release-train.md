@@ -39,11 +39,11 @@ operator decides vX.Y.Z
 Two workflows, one direction, no loops:
 
 - **`ci.yml`** — the merge gate. Runs `bun run verify`, `bun run test:ci`, and the publish smokes
-  (`smoke:core`, `smoke:npm-cli`). The smokes live here so packaging breakage
+  (`smoke:core`, `smoke:packager`, `smoke:npm-cli`). The smokes live here so packaging breakage
   is caught on the PR, *before* a tag exists.
 - **`npm-publish.yml`** — the publisher. Fires on `v*` tag push (or manual
   dispatch), held behind the `release` environment approval, then publishes the
-  six packages in dependency order.
+  seven packages in dependency order (`prism-sdk` → `prism-packager` → platform bins → `prism`).
 
 There is no auto-tagging workflow. Tagging is the operator's (or the
 orchestrator's) manual act, performed after the gate is green locally — which
@@ -56,7 +56,7 @@ lockstep across:
 
 - the workspace root `package.json` (the version `scripts/compile.ts` stamps
   into the binary as `APP_VERSION`),
-- every workspace package (`packages/prism-sdk`, `packages/npm/*`), and
+- every workspace package (`packages/prism-sdk`, `packages/prism-packager`, `packages/npm/*`), and
 - the umbrella `@skastr0/prism` `optionalDependencies` pins on the four platform
   packages — these are exact-version pins and must move with the release so the
   umbrella resolves the freshly cut platform builds.
@@ -71,8 +71,8 @@ From a clean `main` with CI green:
 ```
 bun scripts/apply-release-version.ts 0.3.1
 bun install --lockfile-only
-bun run verify && bun run test:ci && bun run smoke:core && bun run smoke:npm-cli
-git add -- package.json bun.lock packages/prism-sdk/package.json packages/npm/*/package.json
+bun run verify && bun run test:ci && bun run smoke:core && bun run smoke:packager && bun run smoke:npm-cli
+git add -- package.json bun.lock packages/prism-sdk/package.json packages/prism-packager/package.json packages/npm/*/package.json
 git diff --cached --check
 git commit -m "chore(release): v0.3.1"
 git push origin main

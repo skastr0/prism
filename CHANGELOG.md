@@ -9,6 +9,16 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## Unreleased
+
+### Added
+
+- **`@skastr0/prism-packager`** — publishable Bun embeddable packager
+  (`packagePluginForTarget` → harness-native payload + `DesiredFile[]` /
+  activation regions). Built from monorepo `src/packager.ts` via
+  `scripts/build-prism-packager.ts`; no `workspace:*` deps; release-train and
+  `smoke:packager` wired. See `docs/sdk-contract.md` amendment 2026-07-24.
+
 ## 0.4.2 - 2026-07-22
 
 Tools are a one-shot Prism CLI surface. Canonical tools compile to

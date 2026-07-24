@@ -6,7 +6,7 @@
  * Scope of the rewrite:
  *   - the workspace root package.json (the version scripts/compile.ts stamps
  *     into the built binary as APP_VERSION), and
- *   - every workspace package (packages/prism-sdk + packages/npm/*), and
+ *   - every workspace package (packages/prism-sdk + packages/prism-packager + packages/npm/*), and
  *   - any @skastr0/prism* dependency pin that is exact-equal to the current
  *     version. The umbrella (@skastr0/prism) pins its platform packages by
  *     exact version in optionalDependencies; those pins must move with the

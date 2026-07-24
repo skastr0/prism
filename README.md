@@ -190,6 +190,8 @@ The canonical public names are the `*Source` contracts above; the older `define*
 
 A Prism workflow doesn't call a model API — it **dispatches a real harness CLI** (Claude Code, Codex, Grok, Kimi, OpenCode, Amp, …) as a worker, with a pinned model, a permission sandbox, and a schema the worker's final answer must decode into.
 
+This section is the tour; the complete field-by-field contract — model resolution precedence, judge semantics, phase inheritance, cache addressing, every run flag — is [`docs/workflows.md`](docs/workflows.md).
+
 ### A task is a typed contract
 
 ```ts
@@ -318,15 +320,16 @@ Transient worker failures retry with bounded attempts and backoff; config errors
 
 `amp-code` · `antigravity-cli` · `claude-code` · `codex-cli` · `devin` · `grok` · `hermes` · `kimi-code` · `opencode` · `omp`
 
-### Start in three moves
+### Start in four moves
 
 ```bash
 prism workflow scaffold my-first     # validating starter in ~/.prism/workflows
 prism workflow catalog               # discover typed agent/orbit/model refs
-prism workflow run ~/.prism/workflows/my-first.workflow.ts
+prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
+prism workflow run ~/.prism/workflows/my-first.workflow.ts --max-cost-usd 1
 ```
 
-`prism workflow typecheck` and `prism workflow validate` gate the file before anything dispatches; `--mock-output` lets you test a graph without spending a token.
+Two things to know before the first live run: workflow commands are **project-scoped** — run them from the project you compiled (`prism refresh`), or `catalog`/`refs` will tell you to compile first. And a live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, keep a budget flag on, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
 
 ## Stateless tools — no daemon, no MCP
 

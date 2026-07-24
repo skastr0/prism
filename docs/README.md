@@ -14,6 +14,7 @@ Start with the [root README](../README.md) for the product tour. These documents
 
 ## Workflows
 
+- [`workflows.md`](workflows.md) — **the full DSL reference**: `defineTask`/`defineWorkflow`/`phase` field by field, workers, permissions, model resolution, finish criteria, cache, and the run CLI
 - [`workflow-data-governance.md`](workflow-data-governance.md) — what the run store persists, and how it is governed
 - [`workflow-production-readiness-audit-2026-07-21.md`](workflow-production-readiness-audit-2026-07-21.md) — the open production-hardening audit: verified rows, open blockers, release rules
 

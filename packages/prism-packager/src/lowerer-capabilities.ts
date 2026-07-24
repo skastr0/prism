@@ -1,0 +1,745 @@
+import type { HarnessId } from "./types.js";
+
+export type GeneratedCanonicalToolSupport = "executable" | "unsupported";
+export type SkillPermissionSupport = "supported" | "unsupported";
+export type CompileSurfaceSupport = "supported" | "unsupported";
+export type AgentModelBindingSupport = "consumed" | "ignored";
+
+export interface CompileTargetCapabilities {
+  readonly agents: CompileSurfaceSupport;
+  readonly agentModelBindings: AgentModelBindingSupport;
+  readonly generatedCanonicalTools: GeneratedCanonicalToolSupport;
+  readonly hooks: CompileSurfaceSupport;
+  readonly skillPermissions: SkillPermissionSupport;
+}
+
+export const LOWERER_SURFACE_IDS = [
+  "pluginBundle",
+  "rules",
+  "commands",
+  "agents",
+  "skills",
+  "generatedTools",
+  "hooks",
+  "agentConfig",
+] as const;
+
+export type LowererSurfaceId = (typeof LOWERER_SURFACE_IDS)[number];
+
+export const LOWERER_SURFACE_KINDS = [
+  "native-plugin-api",
+  "native-plugin-bundle",
+  "markdown-file",
+  "direct-file",
+  "config-patch",
+  "unsupported",
+] as const;
+
+export type LowererSurfaceKind = (typeof LOWERER_SURFACE_KINDS)[number];
+
+export type HarnessFamily = "coding-harness" | "claw-harness";
+
+export interface LowererSurfaceCapability {
+  readonly kind: LowererSurfaceKind;
+  readonly summary: string;
+  readonly path?: string;
+}
+
+export interface LowererCapabilityProfile {
+  readonly harness: HarnessId;
+  readonly family: HarnessFamily;
+  /**
+   * Whether Prism Workflows can dispatch a task to this harness (a worker
+   * module exists under `src/workflow-*-worker.ts` and the harness is a
+   * member of `WorkflowWorkerId`, workflows.ts). This is the single source
+   * for `WORKFLOW_WORKERS` (workflow-catalog.ts) — do not hand-list harness
+   * ids elsewhere.
+   */
+  readonly workflowWorker: boolean;
+  readonly compile: CompileTargetCapabilities;
+  readonly surfaces: Record<LowererSurfaceId, LowererSurfaceCapability>;
+  readonly notes?: readonly string[];
+}
+
+const unsupported = (summary = "Prism does not manage this surface."): LowererSurfaceCapability => ({
+  kind: "unsupported",
+  summary,
+});
+
+const compileUnsupported: CompileTargetCapabilities = {
+  agents: "unsupported",
+  agentModelBindings: "ignored",
+  generatedCanonicalTools: "unsupported",
+  hooks: "unsupported",
+  skillPermissions: "unsupported",
+};
+
+const compileSupported = (
+  overrides: Partial<CompileTargetCapabilities> = {},
+): CompileTargetCapabilities => ({
+  agents: "supported",
+  agentModelBindings: "consumed",
+  generatedCanonicalTools: "executable",
+  hooks: "supported",
+  skillPermissions: "supported",
+  ...overrides,
+});
+
+export const LOWERER_CAPABILITIES = {
+  "claude-code": {
+    harness: "claude-code",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported(),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<claude-root>/skills/prism-generated-<plugin>/",
+        summary: "Compile emits Claude Code skills-directory plugin bundles with plugin metadata.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<claude-root>/CLAUDE.md",
+        summary: "Install appends managed sections to the native instructions file.",
+      },
+      commands: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/commands/",
+        summary: "Install compiles markdown command files into the generated plugin bundle.",
+      },
+      agents: {
+        kind: "markdown-file",
+        path: "<generated-plugin>/agents/",
+        summary: "Compile writes Claude-style subagent markdown inside the plugin bundle.",
+      },
+      skills: {
+        kind: "markdown-file",
+        path: "<generated-plugin>/skills/",
+        summary: "Compile bundles targeted skills and orbit skills as Agent Skills.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/hooks/hooks.json",
+        summary: "Hooks are bundled in Claude Code's plugin hook layout.",
+      },
+      agentConfig: unsupported("Claude agent behavior lives in generated agent frontmatter."),
+    },
+  },
+  opencode: {
+    harness: "opencode",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported(),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-api",
+        path: "<opencode-root>/plugins/prism-generated-<plugin>/",
+        summary: "Compile emits an OpenCode plugin using @opencode-ai/plugin APIs.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<opencode-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native instructions file.",
+      },
+      commands: {
+        kind: "direct-file",
+        path: "<opencode-root>/commands/",
+        summary: "Install writes markdown command files.",
+      },
+      agents: {
+        kind: "markdown-file",
+        path: "<opencode-root>/agents/",
+        summary: "Compile writes OpenCode agent markdown files.",
+      },
+      skills: {
+        kind: "markdown-file",
+        path: "<opencode-root>/skills/",
+        summary: "Install and compile write Agent Skill folders.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>/dist/server.mjs",
+        summary: "Canonical tools lower to OpenCode plugin tools.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>/dist/server.mjs",
+        summary: "Hooks lower through the OpenCode plugin API.",
+      },
+      agentConfig: {
+        kind: "config-patch",
+        path: "<opencode-root>/opencode.json#agent.<name>",
+        summary: "Compile patches compiler-owned agent keys and plugin entries.",
+      },
+    },
+  },
+  openclaw: {
+    harness: "openclaw",
+    family: "claw-harness",
+    workflowWorker: false,
+    compile: compileUnsupported,
+    surfaces: {
+      pluginBundle: unsupported("Prism does not manage OpenClaw plugin bundles yet."),
+      rules: unsupported(),
+      commands: unsupported(),
+      agents: unsupported(),
+      skills: {
+        kind: "direct-file",
+        path: "<openclaw-root>/skills/",
+        summary: "Install writes Agent Skill folders only.",
+      },
+      generatedTools: unsupported(),
+      hooks: unsupported(),
+      agentConfig: unsupported(),
+    },
+    notes: ["OpenClaw remains Prism skills-only for now."],
+  },
+  hermes: {
+    harness: "hermes",
+    family: "claw-harness",
+    workflowWorker: true,
+    compile: compileSupported({
+      agents: "unsupported",
+      agentModelBindings: "ignored",
+      skillPermissions: "unsupported",
+    }),
+    surfaces: {
+      pluginBundle: unsupported("Prism does not emit native Hermes Python plugins yet."),
+      rules: unsupported(),
+      commands: unsupported(),
+      agents: unsupported("Hermes compiled agents are intentionally fail-closed."),
+      skills: {
+        kind: "markdown-file",
+        path: "<hermes-root>/skills/",
+        summary: "Install and compile write Hermes skill folders.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "config-patch",
+        path: "<hermes-root>/config.yaml#hooks",
+        summary: "Compile patches managed Hermes hook entries and wrapper files.",
+      },
+      agentConfig: unsupported(),
+    },
+  },
+  "codex-cli": {
+    harness: "codex-cli",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported(),
+    surfaces: {
+      pluginBundle: unsupported("Codex CLI currently uses file and config surfaces, not plugin bundles."),
+      rules: {
+        kind: "direct-file",
+        path: "<codex-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native instructions file.",
+      },
+      commands: {
+        kind: "direct-file",
+        path: "<codex-root>/prompts/",
+        summary: "Install writes prompt markdown files.",
+      },
+      agents: {
+        kind: "direct-file",
+        path: "<codex-root>/agents/<name>.toml",
+        summary: "Compile writes Codex agent TOML files.",
+      },
+      skills: {
+        kind: "markdown-file",
+        path: "<codex-root>/skills/",
+        summary: "Install and compile write Agent Skill folders.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "config-patch",
+        path: "<codex-root>/config.toml#hooks",
+        summary: "Compile patches managed Codex hook entries and wrapper files.",
+      },
+      agentConfig: {
+        kind: "direct-file",
+        path: "<codex-root>/agents/<name>.toml",
+        summary: "Codex agent settings live in generated TOML files.",
+      },
+    },
+  },
+  "antigravity-cli": {
+    harness: "antigravity-cli",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported({ agentModelBindings: "ignored" }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<antigravity-root>/plugins/prism-generated-<plugin>/",
+        summary: "Compile emits Antigravity plugin bundles with plugin.json.",
+      },
+      rules: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/rules/",
+        summary: "Rules are bundled into Antigravity plugins.",
+      },
+      commands: unsupported("Antigravity commands are represented as skills/plugins, not direct command files."),
+      agents: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/agents/",
+        summary: "Compile writes subagent markdown inside the Antigravity plugin bundle.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/",
+        summary: "Compile bundles targeted skills and orbit skills.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/hooks.json",
+        summary: "Hooks are bundled in Antigravity plugin format.",
+      },
+      agentConfig: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/agents/",
+        summary: "Agent settings live in generated frontmatter.",
+      },
+    },
+  },
+  "kimi-code": {
+    harness: "kimi-code",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported({ agentModelBindings: "ignored" }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<kimi-root>/plugins/managed/prism-generated-<plugin>/",
+        summary: "Compile emits a Kimi plugin bundle with kimi.plugin.json and registers it in plugins/installed.json.",
+      },
+      rules: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-context/SKILL.md",
+        summary: "Rules lower into a sessionStart skill because Kimi plugins inject Markdown skills, not arbitrary rule files.",
+      },
+      commands: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-command-<name>/SKILL.md",
+        summary: "Command-like workflows lower as manual Kimi flow skills.",
+      },
+      agents: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-agent-<name>/SKILL.md",
+        summary: "Compiled agents lower honestly as role/workflow skills; Kimi subagents are runtime dispatches, not custom agent files.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/",
+        summary: "Compile bundles targeted plugin skills and orbit skills into the generated Kimi plugin.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "config-patch",
+        path: "<kimi-root>/config.toml#hooks",
+        summary: "Hooks lower to managed [[hooks]] config entries plus generated wrapper scripts.",
+      },
+      agentConfig: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/prism-agent-<name>/SKILL.md",
+        summary: "Agent role settings and instructions live in generated Kimi role skills.",
+      },
+    },
+    notes: [
+      "The active Kimi Code target uses ~/.kimi-code exclusively.",
+      "Kimi Code plugins are user-scoped in official docs; Prism keeps project scope unsupported for this lowerer.",
+      "Current Moonshot-hosted Kimi Code CLI docs also document project-local .kimi-code/skills and .kimi-code/mcp.json, but Prism does not mix those direct project surfaces with generated user-scoped plugin bundles yet.",
+      "Kimi Code subagents are runtime dispatches, so Prism compiled agents lower as role skills rather than native subagent definitions.",
+    ],
+  },
+  "amp-code": {
+    harness: "amp-code",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported({ agentModelBindings: "ignored" }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-api",
+        path: "<amp-root>/plugins/prism-generated-<plugin>.ts",
+        summary: "Compile emits a TypeScript Amp plugin using @ampcode/plugin APIs.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<amp-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native instructions file.",
+      },
+      commands: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>.ts",
+        summary: "Commands lower to Amp registerCommand definitions that append Prism command prompts to the active thread.",
+      },
+      agents: {
+        kind: "markdown-file",
+        path: "<amp-root>/skills/prism-agent-<name>/SKILL.md",
+        summary: "Compiled agents lower as generated role skills; Prism does not claim a native Amp custom-agent surface yet.",
+      },
+      skills: {
+        kind: "markdown-file",
+        path: "<amp-root>/skills/",
+        summary: "Install and compile write Agent Skill folders.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>.ts",
+        summary: "Canonical tools lower to Amp registerTool definitions.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<generated-plugin>.ts",
+        summary: "Supported Prism hooks lower to Amp amp.on(...) plugin event handlers; session.end fails closed because Amp has no native session-end event.",
+      },
+      agentConfig: unsupported("No Prism-managed Amp agent config patch exists."),
+    },
+    notes: [
+      "Amp generated commands, tools, and supported hooks use the native plugin API; compiled agents currently lower as role-skill guidance.",
+      "Amp exposes session.start, tool.call, tool.result, agent.start, and agent.end plugin events; Prism does not map portable session.end to agent.end.",
+    ],
+  },
+  cursor: {
+    harness: "cursor",
+    family: "coding-harness",
+    workflowWorker: false,
+    compile: compileSupported({
+      agents: "unsupported",
+      agentModelBindings: "ignored",
+      hooks: "unsupported",
+      skillPermissions: "unsupported",
+    }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<cursor-root>/plugins/local/prism-generated-<plugin>/",
+        summary: "Install emits local Cursor plugin bundles for Prism-managed command components.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<cursor-root>/.cursorrules or rules/",
+        summary: "Install writes Cursor rules files.",
+      },
+      commands: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/commands/",
+        summary: "Install writes Cursor commands inside the generated local plugin bundle.",
+      },
+      agents: unsupported(),
+      skills: {
+        kind: "direct-file",
+        path: "<cursor-root>/skills/",
+        summary: "Install writes Agent Skill folders.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: unsupported(),
+      agentConfig: unsupported(),
+    },
+    notes: [
+      "Cursor compile support is tools-only for now; compiled agents, orbits, hooks, and skill permission visibility remain unsupported.",
+      "Cursor command artifacts install through a local plugin bundle under ~/.cursor/plugins/local so Prism uses Cursor's native command discovery instead of direct command files.",
+      "Cursor Agent Skills are docs-backed under .cursor/skills and ~/.cursor/skills, so Prism keeps install-phase skills direct.",
+      "Cursor canonical tools are CLI-only (`prism tools invoke`); no mcp.json patch is emitted.",
+    ],
+  },
+  "factory-droid": {
+    harness: "factory-droid",
+    family: "coding-harness",
+    workflowWorker: false,
+    compile: compileSupported({ skillPermissions: "unsupported" }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<factory-root>/plugins/prism-generated-<plugin>/",
+        summary: "Compile emits Factory plugin bundles with .factory-plugin/plugin.json.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<factory-root>/AGENTS.md or rules/",
+        summary: "Install writes Factory instruction/rule files.",
+      },
+      commands: {
+        kind: "direct-file",
+        path: "<factory-root>/commands/",
+        summary: "Install writes Factory command markdown files.",
+      },
+      agents: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/droids/",
+        summary: "Compile writes generated droids inside the Factory plugin bundle.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/",
+        summary: "Compiled bundles own targeted skills; skills-only plugins still install direct skills.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/hooks/hooks.json",
+        summary: "Hooks are bundled in Factory plugin format.",
+      },
+      agentConfig: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/droids/",
+        summary: "Droid settings live in generated frontmatter.",
+      },
+    },
+  },
+  pi: {
+    harness: "pi",
+    family: "coding-harness",
+    workflowWorker: false,
+    compile: compileSupported(),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<pi-root>/packages/prism-generated-<plugin>/",
+        summary: "Compile emits a local Pi package and registers it through settings.json packages.",
+      },
+      rules: {
+        kind: "native-plugin-api",
+        path: "<generated-package>/extensions/prism-extension.js",
+        summary: "Rules lower as Pi before_agent_start context injection in the generated extension.",
+      },
+      commands: {
+        kind: "native-plugin-bundle",
+        path: "<generated-package>/prompts/",
+        summary: "Compile writes Prism command markdown as Pi prompt templates in the generated package.",
+      },
+      agents: {
+        kind: "markdown-file",
+        path: "~/.pi/agents/<name>.md or .pi/agents/<name>.md",
+        summary: "Compiled agents lower to the markdown files discovered by the pi-agents package.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-package>/skills/",
+        summary: "Compile bundles targeted skills and concrete orbit skills into the generated Pi package.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<generated-package>/extensions/prism-extension.js",
+        summary: "Canonical tools lower through Pi's extension registerTool API.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<generated-package>/extensions/prism-extension.js and <generated-package>/hooks/",
+        summary: "Hooks lower through Pi extension events and generated wrapper files.",
+      },
+      agentConfig: {
+        kind: "markdown-file",
+        path: "~/.pi/agents/<name>.md or .pi/agents/<name>.md",
+        summary: "Pi agent settings live in generated agent frontmatter.",
+      },
+    },
+    notes: [
+      "Pi packages are referenced from settings.json#packages; project scope uses .pi/settings.json.",
+      "Compiled Pi agents use pi-agents markdown discovery: ~/.pi/agents globally and nearest .pi/agents in project scope.",
+    ],
+  },
+  omp: {
+    harness: "omp",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported({ skillPermissions: "unsupported" }),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<omp-root>/extensions/prism-generated-<plugin>/",
+        summary: "Compile emits OMP native extensions under the extensions surface.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<omp-root>/rules/",
+        summary: "Compile writes OMP native rule files.",
+      },
+      commands: {
+        kind: "direct-file",
+        path: "<omp-root>/commands/",
+        summary: "Compile writes OMP native command files.",
+      },
+      agents: {
+        kind: "direct-file",
+        path: "<omp-root>/agents/",
+        summary: "Compile writes OMP native agent files.",
+      },
+      skills: {
+        kind: "direct-file",
+        path: "<omp-root>/skills/",
+        summary: "Compile writes OMP native skill folders.",
+      },
+      generatedTools: {
+        kind: "native-plugin-api",
+        path: "<omp-root>/extensions/prism-generated-<plugin>/",
+        summary: "Canonical tools lower through OMP's native extension API.",
+      },
+      hooks: {
+        kind: "native-plugin-api",
+        path: "<omp-root>/extensions/prism-generated-<plugin>/",
+        summary: "Hooks lower through OMP's native extension API.",
+      },
+      agentConfig: {
+        kind: "direct-file",
+        path: "<omp-root>/agents/",
+        summary: "OMP agent model bindings and settings live in generated agent files.",
+      },
+    },
+    notes: [
+      "OMP is a distinct harness from Pi and uses ~/.omp/agent globally or .omp project-local.",
+      "OMP does not expose a verified per-agent skill permission surface; permission-only skill access fails closed.",
+    ],
+  },
+  grok: {
+    harness: "grok",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: compileSupported(),
+    surfaces: {
+      pluginBundle: {
+        kind: "native-plugin-bundle",
+        path: "<grok-root>/plugins/prism-generated-<plugin>/",
+        summary: "Compile emits Grok plugin bundles.",
+      },
+      rules: {
+        kind: "direct-file",
+        path: "<grok-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native instructions file.",
+      },
+      commands: unsupported("Grok commands are not managed directly by Prism."),
+      agents: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/agents/",
+        summary: "Compile writes generated agents inside the Grok plugin bundle.",
+      },
+      skills: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/skills/",
+        summary: "Compile bundles targeted skills and orbit skills.",
+      },
+      generatedTools: {
+        kind: "direct-file",
+        path: "<prism-home>/runtime/tools/<plugin>/runtime.mjs",
+        summary: "Canonical tools lower to the CLI runtime; agents invoke via `prism tools invoke`.",
+      },
+      hooks: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/hooks/hooks.json",
+        summary: "Hooks are bundled in Grok plugin format.",
+      },
+      agentConfig: {
+        kind: "native-plugin-bundle",
+        path: "<generated-plugin>/agents/",
+        summary: "Agent settings live in generated frontmatter.",
+      },
+    },
+  },
+  devin: {
+    harness: "devin",
+    family: "coding-harness",
+    workflowWorker: true,
+    compile: {
+      agents: "unsupported",
+      agentModelBindings: "ignored",
+      generatedCanonicalTools: "unsupported",
+      hooks: "supported",
+      skillPermissions: "unsupported",
+    },
+    surfaces: {
+      pluginBundle: unsupported(
+        "Devin plugins are beta (`devin plugins install`); Prism PR1 uses direct skills/hooks files.",
+      ),
+      rules: {
+        kind: "direct-file",
+        path: "<devin-root>/AGENTS.md",
+        summary: "Install appends managed sections to the native AGENTS.md instructions file.",
+      },
+      commands: unsupported(
+        "Devin has no separate command-file surface; model command workflows as skills.",
+      ),
+      agents: unsupported(
+        "Devin has no primary agent picker; subagent AGENT.md files are reserved for a later PR.",
+      ),
+      skills: {
+        kind: "direct-file",
+        path: "<devin-root>/skills/",
+        summary: "Install and compile write Agent Skill folders (global and project .devin/skills).",
+      },
+      generatedTools: unsupported("Devin tools are not managed as a Prism install surface in PR1."),
+      hooks: {
+        kind: "direct-file",
+        path: "project: hooks.v1.json; global: config.json#hooks json-array-member + hooks/*.mjs",
+        summary:
+          "Project scope writes hooks.v1.json; global scope upserts Prism entries into config.json hooks without whole-file adopt. Wrappers under hooks/.",
+      },
+      agentConfig: {
+        kind: "direct-file",
+        path: "ephemeral --agent-config for workflow runs",
+        summary:
+          "Workflow worker writes temporary agent-config (system_instructions, allowed_tools); not a durable install surface.",
+      },
+    },
+    notes: [
+      "Never whole-file adopt ~/.config/devin/config.json — herdr hooks and user prefs live there.",
+      "Workflow default model is swe-1-7; headless via `devin -p` + ATIF --export session resume via -r.",
+    ],
+  },
+} as const satisfies Record<HarnessId, LowererCapabilityProfile>;
+
+export const getCompileTargetCapabilities = (
+  harness: string,
+): CompileTargetCapabilities =>
+  Object.hasOwn(LOWERER_CAPABILITIES, harness)
+    ? LOWERER_CAPABILITIES[harness as HarnessId].compile
+    : compileUnsupported;
+
+/**
+ * Harness ids flagged `workflowWorker: true` above — computed at the type
+ * level from the literal `as const` table, so it narrows exactly (no wider
+ * than `HarnessId`, no manual re-listing). Consumers (workflow-catalog.ts)
+ * assert this set against their own worker-module registry so a harness
+ * flagged here without a matching worker module is a tsc error.
+ */
+export type WorkflowWorkerHarnessId = {
+  [K in HarnessId]: (typeof LOWERER_CAPABILITIES)[K]["workflowWorker"] extends true ? K : never;
+}[HarnessId];
+
+const isWorkflowWorkerEntry = (
+  entry: readonly [HarnessId, LowererCapabilityProfile],
+): entry is readonly [WorkflowWorkerHarnessId, LowererCapabilityProfile] => entry[1].workflowWorker;
+
+/** Harness ids that can be dispatched as Prism Workflows workers, derived from the `workflowWorker` bit. */
+export const workflowWorkerHarnessIds = (): readonly WorkflowWorkerHarnessId[] =>
+  (Object.entries(LOWERER_CAPABILITIES) as ReadonlyArray<readonly [HarnessId, LowererCapabilityProfile]>)
+    .filter(isWorkflowWorkerEntry)
+    .map(([harness]) => harness);

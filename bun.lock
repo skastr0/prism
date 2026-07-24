@@ -90,6 +90,19 @@
         "@opentui/core-linux-x64-musl": "0.4.1",
       },
     },
+    "packages/prism-packager": {
+      "name": "@skastr0/prism-packager",
+      "version": "0.4.2",
+      "dependencies": {
+        "@opencode-ai/plugin": "^1.15.13",
+        "@skastr0/prism-sdk": "0.4.2",
+        "effect": "^3.21.1",
+        "gray-matter": "^4.0.3",
+        "jsonc-parser": "^3.3.1",
+        "typescript": "^5.8.3",
+        "zod": "4.4.3",
+      },
+    },
     "packages/prism-sdk": {
       "name": "@skastr0/prism-sdk",
       "version": "0.4.2",
@@ -147,6 +160,8 @@
     "@skastr0/prism-linux-arm64": ["@skastr0/prism-linux-arm64@workspace:packages/npm/prism-linux-arm64"],
 
     "@skastr0/prism-linux-x64": ["@skastr0/prism-linux-x64@workspace:packages/npm/prism-linux-x64"],
+
+    "@skastr0/prism-packager": ["@skastr0/prism-packager@workspace:packages/prism-packager"],
 
     "@skastr0/prism-sdk": ["@skastr0/prism-sdk@workspace:packages/prism-sdk"],
 

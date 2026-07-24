@@ -7,7 +7,8 @@
   "packageManager": "bun@1.3.14",
   "workspaces": [
     "packages/npm/*",
-    "packages/prism-sdk"
+    "packages/prism-sdk",
+    "packages/prism-packager"
   ],
   "exports": {
     ".": "./src/index.ts",
@@ -19,15 +20,18 @@
     "build": "bun run build:cli",
     "build:cli": "bun scripts/build.ts",
     "build:core": "tsc -p packages/prism-sdk/tsconfig.json",
+    "build:packager": "bun scripts/build-prism-packager.ts",
     "build:npm-cli": "bun scripts/build-npm-cli-packages.ts",
     "install:dev": "bun scripts/install.ts",
     "install:local": "bun run install:dev",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run build:core && bun run typecheck && bun run build && bun run check:harness-enumeration && bun run check:workflow-store-schema-version && bun run check:tool-suites",
+    "verify": "bun run build:core && bun run build:packager && bun run typecheck && bun run build && bun run check:harness-enumeration && bun run check:workflow-store-schema-version && bun run check:tool-suites",
     "verify:compiled": "bun run build:core && bun run build",
     "pack:npm-cli:dry-run": "npm pack --dry-run --workspace packages/npm/prism-darwin-arm64 --workspace packages/npm/prism-darwin-x64 --workspace packages/npm/prism-linux-arm64 --workspace packages/npm/prism-linux-x64 --workspace packages/npm/prism",
     "pack:core:dry-run": "npm pack --dry-run --workspace packages/prism-sdk",
+    "pack:packager:dry-run": "bun run build:packager && npm pack --dry-run --workspace packages/prism-packager",
     "smoke:core": "bun run build:core && bun run pack:core:dry-run && bun scripts/smoke-prism-sdk-package.ts",
+    "smoke:packager": "bun run build:packager && bun scripts/smoke-prism-packager-package.ts",
     "smoke:npm-cli": "bun run build:npm-cli && bun run pack:npm-cli:dry-run && bun scripts/smoke-npm-cli.ts --skip-build",
     "check:effect-versions": "bun scripts/effect-version-guard.ts",
     "check:harness-enumeration": "bun scripts/harness-enumeration-guard.ts",

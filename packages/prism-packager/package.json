@@ -1,0 +1,57 @@
+{
+  "name": "@skastr0/prism-packager",
+  "version": "0.4.2",
+  "type": "module",
+  "description": "Embeddable Prism packager: compile a plugin into harness-native package payloads (DesiredFile[]) without shipping the Prism CLI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skastr0/prism.git",
+    "directory": "packages/prism-packager"
+  },
+  "homepage": "https://github.com/skastr0/prism#readme",
+  "bugs": {
+    "url": "https://github.com/skastr0/prism/issues"
+  },
+  "keywords": [
+    "prism",
+    "ai-coding",
+    "agents",
+    "packager",
+    "harness",
+    "plugins"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun ../../scripts/build-prism-packager.ts",
+    "prepack": "bun run build"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.15.13",
+    "@skastr0/prism-sdk": "0.4.2",
+    "effect": "^3.21.1",
+    "gray-matter": "^4.0.3",
+    "jsonc-parser": "^3.3.1",
+    "typescript": "^5.8.3",
+    "zod": "4.4.3"
+  }
+}

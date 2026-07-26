@@ -39,7 +39,6 @@ const captureDevinFailure = async (
       cwd,
       bin,
       resolvedPermission: "permissive",
-      processTimeoutMs: 5_000,
     });
   } catch (error) {
     expect(error).toBeInstanceOf(DevinWorkflowWorkerError);
@@ -223,7 +222,6 @@ describe("workflow-devin-worker", () => {
         cwd: root,
         bin: fakeDevin,
         resolvedPermission: "permissive",
-        processTimeoutMs: 5_000,
         repair: {
           mode: "native-continuation",
           continuation: { adapter: "devin", sessionId: "prior-session-id" as StableSessionId },

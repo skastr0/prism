@@ -311,128 +311,7 @@ const treePids = (runnerPid: number, marker: WorkerTreeMarker): ReadonlyArray<nu
   marker.grandchildPid,
 ];
 
-test("workflow budget controls round-trip through snapshots and exact detached child arguments", () => {
-  const options = {
-    worker: "grok",
-    model: "grok-code-fast-1",
-    permission: "restricted",
-    mockOutput: "/tmp/mock-output.json",
-    maxConcurrentTasks: 2,
-    taskTimeoutMs: 3_000,
-    maxWallMs: 12_000,
-    taskNoProgressMs: 4_000,
-    maxTasks: 7,
-    maxCostUsd: 1.25,
-    maxPromptBytes: 262_144,
-  } as const;
-
-  expect(workflowRunOptionsSnapshot(options)).toEqual(options);
-  expect(workflowDetachedRunArgs(
-    "/tmp/example.workflow.ts",
-    options,
-    { runId: "run-1", storePath: "/tmp/workflows.sqlite", token: "token-1" },
-  )).toEqual([
-    "workflow",
-    "run",
-    "/tmp/example.workflow.ts",
-    "--store",
-    "/tmp/workflows.sqlite",
-    "--run-id",
-    "run-1",
-    "--run-token",
-    "token-1",
-    "--worker",
-    "grok",
-    "--model",
-    "grok-code-fast-1",
-    "--permission",
-    "restricted",
-    "--mock-output",
-    "/tmp/mock-output.json",
-    "--max-concurrent-tasks",
-    "2",
-    "--task-timeout-ms",
-    "3000",
-    "--max-wall-ms",
-    "12000",
-    "--task-no-progress-ms",
-    "4000",
-    "--max-tasks",
-    "7",
-    "--max-cost-usd",
-    "1.25",
-    "--max-prompt-bytes",
-    "262144",
-  ]);
-});
-
-test("detached CLI budget flags persist and survive the child handoff", async () => {
-  const root = await mkdtemp(join(tmpdir(), "prism-workflow-controls-roundtrip-"));
-  let runnerPid: number | undefined;
-  try {
-    const workflowPath = join(root, "roundtrip.workflow.ts");
-    const mockOutputPath = join(root, "mock-output.json");
-    const storePath = join(root, "workflows.sqlite");
-    await writeFile(workflowPath, workerWorkflowSource("budget-roundtrip"));
-    await writeFile(mockOutputPath, `${JSON.stringify({ build: { summary: "done" } })}\n`);
-
-    const result = await runCli(root, [
-      "workflow",
-      "run",
-      workflowPath,
-      "--mock-output",
-      mockOutputPath,
-      "--store",
-      storePath,
-      "--detach",
-      "--max-concurrent-tasks",
-      "2",
-      "--task-timeout-ms",
-      "5000",
-      "--max-wall-ms",
-      "30000",
-      "--task-no-progress-ms",
-      "20000",
-      "--max-tasks",
-      "3",
-      "--max-cost-usd",
-      "0",
-      "--max-prompt-bytes",
-      "8192",
-    ], { PRISM_HOME: join(root, "prism-home") });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe("");
-    const runId = parseCliRunId(result.stdout);
-    const store = await WorkflowStore.open(storePath);
-    try {
-      expect(store.getRunSnapshot(runId)?.options).toEqual({
-        mockOutput: mockOutputPath,
-        maxConcurrentTasks: 2,
-        taskTimeoutMs: 5_000,
-        maxWallMs: 30_000,
-        taskNoProgressMs: 20_000,
-        maxTasks: 3,
-        maxCostUsd: 0,
-        maxPromptBytes: 8_192,
-      });
-      const run = store.getRun(runId);
-      if (!isValidPid(run?.runnerPid)) {
-        throw new Error(`detached budget run did not persist a valid runner pid: ${runId}`);
-      }
-      runnerPid = run.runnerPid;
-    } finally {
-      store.close();
-    }
-    expect(await waitForPersistedTerminal(storePath, runId)).toBe(true);
-    expect(await pollUntil(() => !isProcessGroupAlive(runnerPid!))).toBe(true);
-  } finally {
-    if (runnerPid !== undefined) await terminateProcessGroup(runnerPid);
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("detached workflow update inherits budget controls, applies explicit overrides, and records child pid", async () => {
+test("detached workflow update inherits run options, applies explicit overrides, and records child pid", async () => {
   const root = await mkdtemp(join(tmpdir(), "prism-workflow-controls-"));
   try {
     const workflowPath = join(root, "update.workflow.ts");
@@ -475,12 +354,7 @@ export default defineWorkflow({
       options: {
         cache: false,
         mockOutput: mockOutputPath,
-        maxConcurrentTasks: 1,
-        maxWallMs: 30_000,
-        taskNoProgressMs: 20_000,
-        maxTasks: 2,
-        maxCostUsd: 1.25,
-        maxPromptBytes: 8_192,
+        worker: "grok",
       },
     });
     store.close();
@@ -493,42 +367,16 @@ export default defineWorkflow({
       workflowPath,
       "--store",
       storePath,
-      "--max-wall-ms",
-      "40000",
-      "--task-no-progress-ms",
-      "25000",
-      "--max-tasks",
-      "3",
-      "--max-cost-usd",
-      "0.75",
-      "--max-prompt-bytes",
-      "16384",
+      "--worker",
+      "codex-cli",
     ], { PRISM_HOME: join(root, "prism-home") });
     expect(update.exitCode).toBe(0);
     expect(update.stderr).toBe("");
     const result = JSON.parse(update.stdout) as WorkflowUpdateResult;
     expect(result.update).toMatchObject({
-      inheritedOptions: {
-        maxWallMs: 30_000,
-        taskNoProgressMs: 20_000,
-        maxTasks: 2,
-        maxCostUsd: 1.25,
-        maxPromptBytes: 8_192,
-      },
-      overrideOptions: {
-        maxWallMs: 40_000,
-        taskNoProgressMs: 25_000,
-        maxTasks: 3,
-        maxCostUsd: 0.75,
-        maxPromptBytes: 16_384,
-      },
-      effectiveOptions: {
-        maxWallMs: 40_000,
-        taskNoProgressMs: 25_000,
-        maxTasks: 3,
-        maxCostUsd: 0.75,
-        maxPromptBytes: 16_384,
-      },
+      inheritedOptions: { worker: "grok", mockOutput: mockOutputPath },
+      overrideOptions: { worker: "codex-cli" },
+      effectiveOptions: { worker: "codex-cli", mockOutput: mockOutputPath },
     });
     expect(result.update.inheritedOptions).not.toHaveProperty("cache");
     expect(result.update.overrideOptions).not.toHaveProperty("cache");
@@ -547,12 +395,7 @@ export default defineWorkflow({
       updatedRunnerPid = updatedRun.runnerPid;
       expect(updatedStore.getRunSnapshot(result.runId)?.options).toMatchObject({
         mockOutput: mockOutputPath,
-        maxConcurrentTasks: 1,
-        maxWallMs: 40_000,
-        taskNoProgressMs: 25_000,
-        maxTasks: 3,
-        maxCostUsd: 0.75,
-        maxPromptBytes: 16_384,
+        worker: "codex-cli",
       });
       expect(updatedStore.getRunSnapshot(result.runId)?.options).not.toHaveProperty("cache");
     } finally {
@@ -610,12 +453,6 @@ export default defineWorkflow({
       options: {
         cache: false,
         mockOutput: mockOutputPath,
-        maxConcurrentTasks: 1,
-        maxWallMs: 30_000,
-        taskNoProgressMs: 20_000,
-        maxTasks: 2,
-        maxCostUsd: 1.25,
-        maxPromptBytes: 8_192,
       },
     });
     // Move the previous run to a terminal status before resuming — the exact
@@ -654,12 +491,6 @@ export default defineWorkflow({
       resumedRunnerPid = resumedRun.runnerPid;
       expect(updatedStore.getRunSnapshot(result.runId)?.options).toMatchObject({
         mockOutput: mockOutputPath,
-        maxConcurrentTasks: 1,
-        maxWallMs: 30_000,
-        taskNoProgressMs: 20_000,
-        maxTasks: 2,
-        maxCostUsd: 1.25,
-        maxPromptBytes: 8_192,
       });
       expect(updatedStore.getRunSnapshot(result.runId)?.options).not.toHaveProperty("cache");
       const events = updatedStore.listRunEvents(result.runId);

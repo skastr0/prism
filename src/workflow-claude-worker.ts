@@ -25,7 +25,6 @@ export type ClaudeWorkflowWorkerOptions = {
   readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"claude-code">;
@@ -235,8 +234,6 @@ export const runClaudeWorkflowTask = async (
     );
   }
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CLAUDE_BIN ?? "claude";
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CLAUDE_PROCESS_TIMEOUT_MS);
   const resumeSessionId = options.repair?.mode === "native-continuation"
     ? options.repair.continuation.sessionId
     : undefined;
@@ -258,11 +255,10 @@ export const runClaudeWorkflowTask = async (
     restrictedTools: options.restrictedTools,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
-    processTimeoutMs,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
@@ -277,12 +273,6 @@ export const runClaudeWorkflowTask = async (
   if (aborted) {
     throw new ClaudeWorkflowWorkerError(
       "claude was aborted by Prism workflow stop",
-      failureMetadata(),
-    );
-  }
-  if (timedOut) {
-    throw new ClaudeWorkflowWorkerError(
-      `claude exceeded Prism process timeout after ${processTimeoutMs}ms`,
       failureMetadata(),
     );
   }
@@ -329,7 +319,6 @@ export const runClaudeWorkflowTask = async (
       nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
-      processTimeoutMs,
       sessionPersistence,
       ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
       ...(sessionId !== undefined ? { sessionId } : {}),

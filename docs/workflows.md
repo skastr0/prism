@@ -63,7 +63,6 @@ const task = defineTask({
     model: "gpt-5.6-terra",
     permission: "sandbox-read-only",
     sessionPersistence: "ephemeral",
-    processTimeoutMs: 900_000,
   },
   finish: {                              // WorkflowFinishOptions (see below)
     maxRepairs: 1,
@@ -125,14 +124,13 @@ worker: {
   permission?: WorkflowPermissionMode;
   sessionPersistence?: "persistent" | "ephemeral"; // claude-code | codex-cli | omp
   restrictedTools?: readonly string[];   // tool restriction list passed to the worker
-  processTimeoutMs?: number;             // hard per-attempt process timeout
   retry?: { maxAttempts?: number; backoffMs?: number };
 }
 ```
 
 **Permission modes** (7): `legacy` · `permissive` · `restricted` · `interactive` · `sandbox-read-only` · `sandbox-workspace-write` · `full-access`. Each worker adapter maps the mode onto that harness's own sandbox/approval flags. `antigravity-cli` accepts only `legacy` / `permissive` / `full-access` — the type system enforces it.
 
-**Retry** (executor-level, WFE-009): only *classified-transient* executor failures retry — process/idle timeout, unclassified non-zero exit. Config/load errors and cancellation-barrier outcomes never retry. `maxAttempts` counts total attempts (default 2, i.e. one retry); `backoffMs` spaces them.
+**Retry** (executor-level, WFE-009): only *classified-transient* executor failures retry — an unclassified non-zero worker exit. Config/load errors and cancellation-barrier outcomes never retry. `maxAttempts` counts total attempts (default 2, i.e. one retry); `backoffMs` spaces them.
 
 **Session persistence.** A task pinned to a worker with a native no-save mode may set `sessionPersistence: "ephemeral"`. The default is `"persistent"`.
 
@@ -320,29 +318,27 @@ prism workflow cache show
 ```bash
 prism workflow run <file> \
   --worker <id> --model <m> --permission <mode> \   # fallbacks for tasks that didn't pin
-  --max-concurrent-tasks <n> \
-  --task-timeout-ms <ms> --task-no-progress-ms <ms> \
-  --max-wall-ms <ms> --max-tasks <n> --max-cost-usd <usd> \
-  --max-prompt-bytes <bytes> \
   --store <path> \
   --detach
 ```
 
-Every guard below is **off by default**. Workers are long-running agents: Prism
-does not cap their runtime, their output size, or their prompt size, and there
-is no environment variable that silently reintroduces a cap. A run is bounded by
-what you ask for here, plus `prism workflow runs stop` — not by a number Prism
-guessed for you.
+**There are no runtime limits, and no flags to set them.** A task is a long-running
+agent: Prism does not cap its runtime, its output size, its prompt size, the
+run's wall clock, its task count, or its cost — and there is no environment
+variable that reintroduces a cap. Scope belongs in the prompt, the agent, the
+model, and the graph; not in a number the runner guessed.
 
-| Guard | Meaning | Default |
-|---|---|---|
-| `--max-cost-usd` | Ceiling on observed provider cost | off |
-| `--max-wall-ms` | Whole-workflow wall-clock ceiling | off |
-| `--max-tasks` | Ceiling on live cache-miss dispatches | off |
-| `--task-timeout-ms` | Per-task process timeout | off (no timeout) |
-| `--task-no-progress-ms` | Per-attempt inactivity cutoff | off |
-| `--max-prompt-bytes` | Prompt-context size ceiling | off (unlimited) |
-| `--max-concurrent-tasks` | Concurrency cap | 8 (paces the machine; never fails a task) |
+Live-run control is behavioural, not numeric:
+
+| Want to | Do |
+|---|---|
+| stop a run now | `prism workflow runs stop <id>` (terminates the runner's whole process group) |
+| see what it's doing | `prism workflow runs events\|show\|trace <id>`, or `prism workflow monitor` |
+| bound the spend | choose the model, the agent, and the number of tasks when you author the graph |
+
+Task concurrency is internal scheduler pacing sized to the machine
+(`max(4, min(16, cores - 2))`): excess live tasks queue and run as slots free, so
+it delays work and never fails it.
 
 `--detach` starts a detached background runner and prints a run id once the run is durably registered. Recover and operate through the ledger:
 

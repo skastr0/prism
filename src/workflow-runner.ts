@@ -1,3 +1,4 @@
+import { cpus } from "node:os";
 import { Cause, Effect, Either, Exit, Layer, Option } from "effect";
 import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
@@ -18,15 +19,9 @@ import {
   type WorkflowRuntimeError,
 } from "./workflows.js";
 import {
-  WorkflowCostExceededError,
-  WorkflowCostUnavailableError,
-  WorkflowFanoutExceededError,
-  WorkflowPromptLimitError,
   WorkflowRunStoppedError,
-  WorkflowRunTimeoutError,
   WorkflowTaskDecodeError,
   WorkflowTaskEscalatedError,
-  WorkflowTaskNoProgressError,
 } from "./workflow-errors.js";
 import {
   workflowRunTaskSnapshotForTask,
@@ -111,12 +106,6 @@ export {
   WorkflowRunStoppedError,
   WorkflowTaskDecodeError,
   WorkflowTaskEscalatedError,
-  WorkflowRunTimeoutError,
-  WorkflowTaskNoProgressError,
-  WorkflowFanoutExceededError,
-  WorkflowCostExceededError,
-  WorkflowCostUnavailableError,
-  WorkflowPromptLimitError,
   type WorkflowRuntimeError,
 } from "./workflow-errors.js";
 
@@ -185,7 +174,13 @@ export type WorkflowTaskExecutor = (
   context?: WorkflowTaskExecutionContext,
 ) => Promise<unknown | WorkflowTaskExecution>;
 
-export const DEFAULT_WORKFLOW_TASK_CONCURRENCY = 8;
+/**
+ * Internal scheduler pacing, not a budget: excess live tasks queue and run as
+ * slots free, so this never fails a task. Sized to the machine because each
+ * live task is a full harness process. Deliberately not an option — nothing
+ * about a workflow's intent belongs in this number.
+ */
+export const WORKFLOW_TASK_CONCURRENCY = Math.max(4, Math.min(16, cpus().length - 2));
 
 // No default prompt ceiling: prompt size is a property of the work, not a risk
 // to police. A limit applies only when a run asks for one via
@@ -222,25 +217,6 @@ const assertFinitePositiveInteger = (name: string, value: number | undefined): v
   }
 };
 
-const assertWorkflowRunBudgets = (options: {
-  readonly maxWallMs?: number;
-  readonly taskNoProgressMs?: number;
-  readonly maxTasks?: number;
-  readonly maxCostUsd?: number;
-  readonly maxPromptBytes?: number;
-}): void => {
-  assertFinitePositiveInteger("maxWallMs", options.maxWallMs);
-  assertFinitePositiveInteger("taskNoProgressMs", options.taskNoProgressMs);
-  assertFinitePositiveInteger("maxTasks", options.maxTasks);
-  assertFinitePositiveInteger("maxPromptBytes", options.maxPromptBytes);
-  if (
-    options.maxCostUsd !== undefined
-    && (!Number.isFinite(options.maxCostUsd) || options.maxCostUsd < 0)
-  ) {
-    throw new RangeError("maxCostUsd must be a finite non-negative number");
-  }
-};
-
 interface TaskExecutionLimiter {
   readonly run: <A>(operation: () => Promise<A>) => Promise<A>;
   readonly cancelPending: (reason: unknown) => void;
@@ -258,16 +234,6 @@ interface RunCancellationBarrier {
     };
   } | undefined;
   readonly trackTask: (taskId: string) => () => void;
-  readonly dispose: () => void;
-}
-
-interface WorkflowRunBudget {
-  readonly admitLiveTask: () => void;
-  readonly assertPrompt: (task: AnyWorkflowTask) => void;
-  readonly observeLiveAttempt: (
-    metadata: Record<string, unknown> | undefined,
-    requireReportedCost: boolean,
-  ) => void;
   readonly dispose: () => void;
 }
 
@@ -517,29 +483,19 @@ const executeLiveTaskAttempt = async (input: {
   readonly task: AnyWorkflowTask;
   readonly executeTask: WorkflowTaskExecutor;
   readonly runSignal: AbortSignal;
-  readonly taskNoProgressMs?: number;
   readonly repair?: WorkflowTaskRepairContext;
   readonly onProgress?: (source: WorkflowTaskProgressSource) => void;
 }): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
   const controller = new AbortController();
   let settled = false;
-  let progressTimer: NodeJS.Timeout | undefined;
   let lastProgressEventAt: number | undefined;
   const abortFromRun = (): void => {
     if (!controller.signal.aborted) controller.abort(input.runSignal.reason);
   };
   if (input.runSignal.aborted) abortFromRun();
   else input.runSignal.addEventListener("abort", abortFromRun, { once: true });
-  const resetProgressTimer = (): void => {
-    if (settled || controller.signal.aborted || input.taskNoProgressMs === undefined) return;
-    clearTimeout(progressTimer);
-    progressTimer = setTimeout(() => {
-      controller.abort(new WorkflowTaskNoProgressError(input.task.id, input.taskNoProgressMs!));
-    }, input.taskNoProgressMs);
-  };
   const reportProgress: WorkflowTaskProgressReporter = (source) => {
     if (settled || controller.signal.aborted) return;
-    resetProgressTimer();
     const now = Date.now();
     if (
       lastProgressEventAt !== undefined
@@ -550,7 +506,6 @@ const executeLiveTaskAttempt = async (input: {
       source === "worker-stdout" || source === "worker-stderr" ? source : "executor",
     );
   };
-  resetProgressTimer();
   let rejectOnAbort!: (reason: unknown) => void;
   const aborted = new Promise<never>((_resolve, reject) => {
     rejectOnAbort = reject;
@@ -576,7 +531,6 @@ const executeLiveTaskAttempt = async (input: {
     return await Promise.race([execution, aborted]);
   } finally {
     settled = true;
-    clearTimeout(progressTimer);
     input.runSignal.removeEventListener("abort", abortFromRun);
     controller.signal.removeEventListener("abort", onAbort);
   }
@@ -986,82 +940,6 @@ const createRunCancellationBarrier = (
   };
 };
 
-const isWorkflowRunBudgetError = (
-  error: unknown,
-): error is WorkflowRunTimeoutError | WorkflowFanoutExceededError | WorkflowCostExceededError | WorkflowCostUnavailableError | WorkflowPromptLimitError =>
-  error instanceof WorkflowRunTimeoutError
-  || error instanceof WorkflowFanoutExceededError
-  || error instanceof WorkflowCostExceededError
-  || error instanceof WorkflowCostUnavailableError
-  || error instanceof WorkflowPromptLimitError;
-
-const createWorkflowRunBudget = (
-  options: {
-    readonly maxWallMs?: number;
-    readonly maxTasks?: number;
-    readonly maxCostUsd?: number;
-    readonly maxPromptBytes?: number;
-  },
-  cancellation: RunCancellationBarrier,
-): WorkflowRunBudget => {
-  let liveTasks = 0;
-  let observedCostUsd = 0;
-  const maxPromptBytes = options.maxPromptBytes;
-  const wallTimer = options.maxWallMs === undefined ? undefined : setTimeout(() => {
-    const error = new WorkflowRunTimeoutError(options.maxWallMs!);
-    cancellation.abort(error, "workflow-timeout");
-  }, options.maxWallMs);
-  return {
-    admitLiveTask: () => {
-      cancellation.throwIfAborted();
-      const observed = liveTasks + 1;
-      if (options.maxTasks !== undefined && observed > options.maxTasks) {
-        const error = new WorkflowFanoutExceededError(options.maxTasks, observed);
-        cancellation.abort(error, "workflow-fanout-exceeded");
-        throw error;
-      }
-      liveTasks = observed;
-    },
-    assertPrompt: (task) => {
-      if (maxPromptBytes === undefined) return;
-      const observedBytes = Buffer.byteLength(
-        `${task.prompt}${workflowWorkerJsonInstruction(task)}`,
-        "utf8",
-      );
-      if (observedBytes <= maxPromptBytes || cancellation.signal.aborted) return;
-      const error = new WorkflowPromptLimitError(task.id, maxPromptBytes, observedBytes);
-      cancellation.abort(error, "workflow-prompt-limit-exceeded");
-      throw error;
-    },
-    observeLiveAttempt: (metadata, requireReportedCost) => {
-      const costUsd = workflowUsageFromMetadata(metadata).costUsd;
-      if (
-        options.maxCostUsd !== undefined
-        && requireReportedCost
-        && costUsd === undefined
-        && !cancellation.signal.aborted
-      ) {
-        const error = new WorkflowCostUnavailableError(options.maxCostUsd);
-        cancellation.abort(error, "workflow-cost-unavailable");
-        throw error;
-      }
-      observedCostUsd += costUsd ?? 0;
-      if (
-        options.maxCostUsd !== undefined
-        && observedCostUsd > options.maxCostUsd
-        && !cancellation.signal.aborted
-      ) {
-        const error = new WorkflowCostExceededError(options.maxCostUsd, observedCostUsd);
-        cancellation.abort(error, "workflow-cost-exceeded");
-        throw error;
-      }
-    },
-    dispose: () => {
-      clearTimeout(wallTimer);
-    },
-  };
-};
-
 const awaitRunScoped = async <A>(
   operation: Promise<A>,
   cancellation: RunCancellationBarrier,
@@ -1084,24 +962,20 @@ const awaitRunScoped = async <A>(
 // WFE-009: one shared executor-level retry mechanism, generalized from the shipped `agy`
 // adapter's own retry (7ea1e27) so every worker gets the same transient-failure recovery
 // without per-adapter duplication. Defaults mirror `agy`'s waitForAgyBackoff shape: 1 retry
-// (2 attempts total), fixed 2000ms backoff capped by the remaining process-timeout deadline
-// when — and only when — the task declared one.
+// (2 attempts total) with a fixed 2000ms backoff.
 const DEFAULT_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS = 2;
 const DEFAULT_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS = 2_000;
 
 type WorkflowExecutorFailureClass = "transient" | "terminal";
 
-// Every worker adapter throws these two message shapes verbatim for process-level timeout
-// and non-zero exit (see workflow-{codex,opencode,claude,grok,kimi,amp,hermes,devin,omp}-worker.ts).
+// Every worker adapter throws this message shape verbatim for a non-zero exit
+// (see workflow-{codex,opencode,claude,grok,kimi,amp,hermes,devin,omp}-worker.ts).
 // Anything else — WorkflowPermissionError, model-resolution errors, adapter-specific config/parse
 // errors — does not match and stays terminal by construction; no denylist needed.
-const WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_PATTERN = /\bexceeded Prism process timeout after \d+ms\b/u;
 const WORKFLOW_EXECUTOR_NONZERO_EXIT_PATTERN = /\bexited with -?\d+:/u;
 
 const classifyWorkflowExecutorFailure = (error: unknown): WorkflowExecutorFailureClass => {
-  if (error instanceof WorkflowTaskNoProgressError) return "transient";
   if (!(error instanceof Error)) return "terminal";
-  if (WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_PATTERN.test(error.message)) return "transient";
   if (WORKFLOW_EXECUTOR_NONZERO_EXIT_PATTERN.test(error.message)) return "transient";
   return "terminal";
 };
@@ -1143,11 +1017,9 @@ const executeWorkflowTask = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly mockOutput: boolean;
-  readonly taskNoProgressMs?: number;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly limiter?: TaskExecutionLimiter;
   readonly cancellation: RunCancellationBarrier;
-  readonly budget: WorkflowRunBudget;
   readonly tracing: WorkflowTraceRecorder;
   readonly parentSpanId?: string;
 }): Promise<WorkflowTaskOutcome> => {
@@ -1191,13 +1063,9 @@ const executeWorkflowTask = async (input: {
     const maxDecodeRepairs = cacheHit ? 0 : task.finish?.maxDecodeRepairs ?? DEFAULT_WORKFLOW_DECODE_REPAIRS;
     const maxFinishRepairs = cacheHit ? 0 : task.finish?.maxRepairs ?? 0;
     // WFE-009: executor-level transient-failure retry budget. `maxAttempts` counts total
-    // attempts, so the retry count is one less; the deadline anchors to this boundary's
-    // start so backoff never outruns the task's own process-timeout budget.
+    // attempts, so the retry count is one less.
     const executorRetryMaxRetries = cacheHit ? 0 : Math.max(0, resolveWorkflowExecutorRetryMaxAttempts(task) - 1);
     const executorRetryBackoffMs = resolveWorkflowExecutorRetryBackoffMs(task);
-    const executorRetryDeadlineAt = task.worker?.processTimeoutMs === undefined
-      ? Number.POSITIVE_INFINITY
-      : Date.now() + task.worker.processTimeoutMs;
     let executorRetries = 0;
     let attemptTask = task;
     let repairs = 0;
@@ -1340,13 +1208,11 @@ const executeWorkflowTask = async (input: {
       if (!cacheHit) metadata = undefined;
       input.cancellation.throwIfAborted();
       assertRunStillRunning(store, runId);
-      input.budget.assertPrompt(attemptTask);
       const executorSpan = cacheHit ? undefined : tracing.startSpan("task.executor", {
         parentSpanId: taskSpan.spanId,
         taskId: task.id,
         attributes: { "executor.attempt": repairs },
       });
-      let attemptUsageObserved = false;
       try {
         input.cancellation.throwIfAborted();
         startAttempt();
@@ -1364,7 +1230,6 @@ const executeWorkflowTask = async (input: {
               task: attemptTask,
               executeTask,
               runSignal: input.cancellation.signal,
-              taskNoProgressMs: input.taskNoProgressMs,
               onProgress: (source) => recordEvent(
                 store,
                 runId,
@@ -1374,8 +1239,6 @@ const executeWorkflowTask = async (input: {
               ),
               ...(pendingRepair !== undefined ? { repair: pendingRepair } : {}),
             }));
-            attemptUsageObserved = true;
-            input.budget.observeLiveAttempt(metadata, !mockOutput);
           }
         } finally {
           stopTracking();
@@ -1403,19 +1266,8 @@ const executeWorkflowTask = async (input: {
           executorSpan.end("ok");
         }
       } catch (caught) {
-        let error: unknown = caught;
+        const error: unknown = caught;
         metadata = normalizedAttemptMetadata(metadata, error);
-        if (!cacheHit && !attemptUsageObserved) {
-          attemptUsageObserved = true;
-          try {
-            input.budget.observeLiveAttempt(metadata, !mockOutput);
-          } catch (budgetError) {
-            error = budgetError;
-          }
-        }
-        if (isWorkflowRunBudgetError(input.cancellation.signal.reason)) {
-          error = input.cancellation.signal.reason;
-        }
         executorSpan?.end("error", error);
         const parseError = error instanceof WorkflowOutputParseError ? error : undefined;
         let parseAttemptFinished = false;
@@ -1437,8 +1289,8 @@ const executeWorkflowTask = async (input: {
           beginRepair("output-json-parse", repairPrompt);
           continue;
         }
-        // WFE-009: retry classified-transient executor failures (process/idle timeout,
-        // unclassified non-zero exit) in place, before falling through to the terminal path.
+        // WFE-009: retry classified-transient executor failures (an unclassified non-zero
+        // worker exit) in place, before falling through to the terminal path.
         // Cancellation-barrier outcomes (stopped/crashed) and config/load errors never match
         // and always fall through unchanged. The antigravity-cli adapter already retries
         // internally (waitForAgyBackoff) — exempt it here so failure classes are never
@@ -1450,21 +1302,20 @@ const executeWorkflowTask = async (input: {
           && metadata?.adapter !== "antigravity-cli"
           && classifyWorkflowExecutorFailure(error) === "transient"
         ) {
-          const remainingMs = executorRetryDeadlineAt - Date.now();
-          if (remainingMs > 0) {
-            finishFailedAttempt("executor", error);
-            repairs += 1;
-            executorRetries += 1;
-            const backoffMs = Math.min(executorRetryBackoffMs, remainingMs);
-            recordEvent(store, runId, task.id, "task.executor.retrying", {
-              attempt: repairs,
-              executorRetries,
-              backoffMs,
-              error: errorMessage(error),
-            });
-            await waitForWorkflowExecutorRetryBackoff({ delayMs: backoffMs, abortSignal: input.cancellation.signal });
-            continue;
-          }
+          finishFailedAttempt("executor", error);
+          repairs += 1;
+          executorRetries += 1;
+          recordEvent(store, runId, task.id, "task.executor.retrying", {
+            attempt: repairs,
+            executorRetries,
+            backoffMs: executorRetryBackoffMs,
+            error: errorMessage(error),
+          });
+          await waitForWorkflowExecutorRetryBackoff({
+            delayMs: executorRetryBackoffMs,
+            abortSignal: input.cancellation.signal,
+          });
+          continue;
         }
         const interrupted = parseAttemptFinished ? parseInterrupted : finishInterruptedAttempt(error);
         if (!interrupted && !parseAttemptFinished) finishFailedAttempt("executor", error);
@@ -1685,21 +1536,16 @@ const executeWorkflowTask = async (input: {
   try {
     const result = cacheHit || input.limiter === undefined
       ? await runTaskBoundary()
-      : await input.limiter.run(async () => {
-        input.budget.admitLiveTask();
-        return await runTaskBoundary();
-      });
+      : await input.limiter.run(async () => await runTaskBoundary());
     taskSpan.annotate("task.cached", result.cached);
     taskSpan.annotate("task.status", result.status);
     taskSpan.end("ok");
     return { result };
   } catch (error) {
     const result = failedTaskResult(task, cacheHit, error);
-    // External/user stop, internal run budgets, and persisted runner loss remain run-level
-    // interruptions. Task-local no-progress timeouts remain fault-isolated.
+    // External/user stop and persisted runner loss remain run-level interruptions.
     if (
-      isWorkflowRunBudgetError(error)
-      || error instanceof WorkflowRunStoppedError
+      error instanceof WorkflowRunStoppedError
       || input.cancellation.attemptInterruption() !== undefined
     ) {
       recordRunTaskIfPersisted({
@@ -1763,40 +1609,6 @@ const taskTerminalCause = (
   message: evidence.message,
 });
 
-const workflowRunBudgetTerminalCause = (
-  error: WorkflowRunTimeoutError | WorkflowFanoutExceededError | WorkflowCostExceededError | WorkflowCostUnavailableError | WorkflowPromptLimitError,
-): WorkflowRunTerminalCause => {
-  if (error instanceof WorkflowRunTimeoutError) {
-    return { kind: "workflow-timeout", limitMs: error.limitMs };
-  }
-  if (error instanceof WorkflowFanoutExceededError) {
-    return {
-      kind: "workflow-fanout-exceeded",
-      limit: error.limit,
-      observed: error.observed,
-    };
-  }
-  if (error instanceof WorkflowCostUnavailableError) {
-    return {
-      kind: "workflow-cost-unavailable",
-      limitUsd: error.limitUsd,
-    };
-  }
-  if (error instanceof WorkflowPromptLimitError) {
-    return {
-      kind: "workflow-prompt-limit-exceeded",
-      taskId: error.taskId,
-      limitBytes: error.limitBytes,
-      observedBytes: error.observedBytes,
-    };
-  }
-  return {
-    kind: "workflow-cost-exceeded",
-    limitUsd: error.limitUsd,
-    observedUsd: error.observedUsd,
-  };
-};
-
 const interruptionTerminalCause = (
   cancellation: RunCancellationBarrier,
   error: unknown,
@@ -1823,11 +1635,9 @@ const runStaticWorkflow = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly mockOutput: boolean;
-  readonly taskNoProgressMs?: number;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly cancellation: RunCancellationBarrier;
-  readonly budget: WorkflowRunBudget;
   readonly tracing: WorkflowTraceRecorder;
   readonly rootSpanId?: string;
 }): Promise<ReadonlyArray<WorkflowRunTaskResult>> => {
@@ -1844,11 +1654,9 @@ const runStaticWorkflow = async (input: {
       store: input.store,
       executeTask: input.executeTask,
       mockOutput: input.mockOutput,
-      ...(input.taskNoProgressMs !== undefined ? { taskNoProgressMs: input.taskNoProgressMs } : {}),
       runtimeOptions: input.runtimeOptions,
       limiter: input.limiter,
       cancellation: input.cancellation,
-      budget: input.budget,
       tracing: input.tracing,
       ...(input.rootSpanId !== undefined ? { parentSpanId: input.rootSpanId } : {}),
     });
@@ -1876,11 +1684,9 @@ const runDynamicWorkflow = async (input: {
   readonly store?: WorkflowStore;
   readonly executeTask: WorkflowTaskExecutor;
   readonly mockOutput: boolean;
-  readonly taskNoProgressMs?: number;
   readonly limiter: TaskExecutionLimiter;
   readonly runtimeOptions: WorkflowRuntimeOptions;
   readonly cancellation: RunCancellationBarrier;
-  readonly budget: WorkflowRunBudget;
   readonly tracing: WorkflowTraceRecorder;
   readonly rootSpanId?: string;
 }): Promise<{ readonly output: unknown; readonly tasks: ReadonlyArray<WorkflowRunTaskResult> }> => {
@@ -1914,12 +1720,10 @@ const runDynamicWorkflow = async (input: {
         store: input.store,
         executeTask: input.executeTask,
         mockOutput: input.mockOutput,
-        ...(input.taskNoProgressMs !== undefined ? { taskNoProgressMs: input.taskNoProgressMs } : {}),
-        runtimeOptions: input.runtimeOptions,
+          runtimeOptions: input.runtimeOptions,
         limiter: input.limiter,
         cancellation: input.cancellation,
-        budget: input.budget,
-        tracing: input.tracing,
+          tracing: input.tracing,
         ...(parentSpanId !== undefined ? { parentSpanId } : {}),
       }).then((outcome) => {
         tasks[taskOrdinal] = outcome.result;
@@ -1966,10 +1770,6 @@ const runDynamicWorkflow = async (input: {
     error instanceof WorkflowRunStoppedError ? "run-not-running" : "run-failed",
   );
   await Promise.allSettled(inFlightTasks);
-  if (isWorkflowRunBudgetError(terminalError)) {
-    finishRun("failed", workflowRunBudgetTerminalCause(terminalError));
-    throw terminalError;
-  }
   if (error instanceof WorkflowRunStoppedError) {
     const terminal = interruptionTerminalCause(input.cancellation, error);
     finishRun(terminal.status, terminal.cause);
@@ -2002,12 +1802,6 @@ export const runWorkflow = async (
     readonly executeTask: WorkflowTaskExecutor;
     readonly store?: WorkflowStore;
     readonly mockOutput?: boolean;
-    readonly maxConcurrentTasks?: number;
-    readonly maxWallMs?: number;
-    readonly taskNoProgressMs?: number;
-    readonly maxTasks?: number;
-    readonly maxCostUsd?: number;
-    readonly maxPromptBytes?: number;
     readonly runId?: string;
     readonly runtimeOptions?: WorkflowRuntimeOptions;
     readonly abortSignal?: AbortSignal;
@@ -2015,15 +1809,10 @@ export const runWorkflow = async (
 ): Promise<WorkflowRunResult> => {
   const mockOutput = options.mockOutput === true;
   const runtimeOptions = options.runtimeOptions ?? {};
-  const maxConcurrentTasks = options.maxConcurrentTasks ?? DEFAULT_WORKFLOW_TASK_CONCURRENCY;
-  if (!Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1) {
-    throw new RangeError("maxConcurrentTasks must be a positive integer");
-  }
-  assertWorkflowRunBudgets(options);
   if (!("run" in workflow)) {
     for (const task of workflow.tasks) assertWorkflowTaskRepairBudgets(task);
   }
-  const limiter = createTaskLimiter(maxConcurrentTasks);
+  const limiter = createTaskLimiter(WORKFLOW_TASK_CONCURRENCY);
   const runId = options.store === undefined ? null : options.runId ?? options.store.createRun(workflow.name);
   const tracing = createWorkflowTraceRecorder({
     ...(options.store !== undefined ? { store: options.store } : {}),
@@ -2033,8 +1822,7 @@ export const runWorkflow = async (
     attributes: {
       workflow: workflow.name,
       "workflow.mode": "run" in workflow ? "dynamic" : "static",
-      "workflow.max_concurrent_tasks": maxConcurrentTasks,
-      "workflow.max_prompt_bytes": options.maxPromptBytes ?? null,
+      "workflow.task_concurrency": WORKFLOW_TASK_CONCURRENCY,
     },
   });
   const rootSpanId = tracing.enabled ? rootSpan.spanId : undefined;
@@ -2050,7 +1838,6 @@ export const runWorkflow = async (
     );
   };
   const cancellation = createRunCancellationBarrier(options.store, runId, limiter, options.abortSignal);
-  const budget = createWorkflowRunBudget(options, cancellation);
   try {
     if ("run" in workflow) {
       const result = await runDynamicWorkflow({
@@ -2061,11 +1848,9 @@ export const runWorkflow = async (
         store: options.store,
         executeTask: options.executeTask,
         mockOutput,
-        ...(options.taskNoProgressMs !== undefined ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
         limiter,
         runtimeOptions,
         cancellation,
-        budget,
         tracing,
         ...(rootSpanId !== undefined ? { rootSpanId } : {}),
       });
@@ -2078,11 +1863,9 @@ export const runWorkflow = async (
       store: options.store,
       executeTask: options.executeTask,
       mockOutput,
-      ...(options.taskNoProgressMs !== undefined ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
       limiter,
       runtimeOptions,
       cancellation,
-      budget,
       tracing,
       ...(rootSpanId !== undefined ? { rootSpanId } : {}),
     }), cancellation);
@@ -2092,9 +1875,7 @@ export const runWorkflow = async (
     const interruptionBeforeCatch = cancellation.attemptInterruption();
     cancellation.abort(error, error instanceof WorkflowRunStoppedError ? "run-not-running" : "run-failed");
     if (options.store !== undefined && runId !== null && options.store.getRun(runId)?.status === "running") {
-      if (isWorkflowRunBudgetError(error)) {
-        finishRunIfRunning(options.store, runId, "failed", workflowRunBudgetTerminalCause(error));
-      } else if (interruptionBeforeCatch !== undefined || error instanceof WorkflowRunStoppedError) {
+      if (interruptionBeforeCatch !== undefined || error instanceof WorkflowRunStoppedError) {
         const terminal = interruptionTerminalCause(cancellation, error);
         finishRunIfRunning(options.store, runId, terminal.status, terminal.cause);
       } else {
@@ -2109,7 +1890,6 @@ export const runWorkflow = async (
     rootSpan.end("error", error);
     throw error;
   } finally {
-    budget.dispose();
     cancellation.dispose();
   }
 };

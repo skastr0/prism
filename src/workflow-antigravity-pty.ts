@@ -204,9 +204,8 @@ export const runAntigravityPtyProcess = async (
     throw new Error("python3 is required for the Antigravity PTY wrapper but was not found");
   }
 
-  const timeoutSeconds = options.processTimeoutMs === undefined
-    ? 0
-    : Math.max(1, options.processTimeoutMs / 1_000);
+  // 0 = the wrapper arms no watchdog of its own.
+  const timeoutSeconds = 0;
 
   const wrapperPath = await materializePtyWrapper();
   const started = Date.now();
@@ -218,7 +217,6 @@ export const runAntigravityPtyProcess = async (
     stdio: ["ignore", "pipe", "pipe"],
   });
 
-  let timedOut = false;
   let aborted = false;
   let killed = false;
 
@@ -256,12 +254,6 @@ export const runAntigravityPtyProcess = async (
     options.abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
 
-  const timeout = options.processTimeoutMs === undefined
-    ? undefined
-    : setTimeout(() => {
-      timedOut = true;
-      requestKillGroup();
-    }, options.processTimeoutMs);
 
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -289,11 +281,9 @@ export const runAntigravityPtyProcess = async (
       stdout: outputCapture.output("stdout"),
       stderr: outputCapture.output("stderr"),
       durationMs: Date.now() - started,
-      timedOut,
       aborted,
     };
   } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
     options.abortSignal?.removeEventListener("abort", onAbort);
     if (child.pid !== undefined) {
       killProcessGroup(child.pid, "SIGKILL");

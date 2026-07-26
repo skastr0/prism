@@ -14,7 +14,6 @@ export type KimiWorkflowWorkerOptions = {
   readonly model?: string;
   readonly kimiHome?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"kimi-code">;
@@ -147,8 +146,6 @@ export const runKimiWorkflowTask = async (
   const prompt = options.repair !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `You are assigned the ${roleSkill} Prism role. ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_KIMI_PROCESS_TIMEOUT_MS);
   const kimiHome = options.kimiHome ?? defaultKimiCodeHome();
 
   const args = buildKimiArgs({
@@ -159,11 +156,10 @@ export const runKimiWorkflowTask = async (
     permission: options.resolvedPermission,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, aborted, earlyExit } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
-    processTimeoutMs,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     env: { KIMI_CODE_HOME: kimiHome },
@@ -178,12 +174,6 @@ export const runKimiWorkflowTask = async (
   if (earlyExit === "kimi-oauth-login-required") {
     throw new KimiWorkflowWorkerError(
       kimiAuthErrorMessage,
-      workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
-    );
-  }
-  if (timedOut) {
-    throw new KimiWorkflowWorkerError(
-      `kimi-code exceeded Prism process timeout after ${processTimeoutMs}ms`,
       workflowWorkerFailureMetadata({ adapter: "kimi-code", stderr, sessionId: kimiSessionIdFromStream(stdout) ?? sessionId }),
     );
   }
@@ -225,7 +215,6 @@ export const runKimiWorkflowTask = async (
       },
       model: options.model,
       durationMs,
-      processTimeoutMs,
       sessionId: kimiSessionIdFromStream(stdout) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },

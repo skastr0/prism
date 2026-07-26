@@ -37,7 +37,6 @@ export type OmpWorkflowWorkerOptions = {
   readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"omp">;
@@ -232,9 +231,6 @@ export const runOmpWorkflowTask = async (
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const processTimeoutMs =
-    options.processTimeoutMs ??
-    parsePositiveInteger(process.env.PRISM_WORKFLOW_OMP_PROCESS_TIMEOUT_MS);
   const systemPromptPath = await resolveInstalledAgentPrompt(options.cwd, task.agent.name);
   const args = buildOmpArgs({
     cwd: options.cwd,
@@ -251,12 +247,11 @@ export const runOmpWorkflowTask = async (
     restrictedTools: options.restrictedTools,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } =
+  const { exitCode, stdout, stderr, durationMs, aborted } =
     await runWorkflowWorkerProcess({
       command,
       args,
       cwd: options.cwd,
-      processTimeoutMs,
       abortSignal: options.abortSignal,
       onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     });
@@ -272,12 +267,6 @@ export const runOmpWorkflowTask = async (
   if (aborted) {
     throw new OmpWorkflowWorkerError(
       "omp was aborted by Prism workflow stop",
-      failureMetadata(),
-    );
-  }
-  if (timedOut) {
-    throw new OmpWorkflowWorkerError(
-      `omp exceeded Prism process timeout after ${processTimeoutMs}ms`,
       failureMetadata(),
     );
   }
@@ -299,7 +288,6 @@ export const runOmpWorkflowTask = async (
       nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
-      processTimeoutMs,
       sessionPersistence,
       ...(resultSessionId !== undefined ? { sessionId: resultSessionId } : {}),
       ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),

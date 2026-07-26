@@ -14,7 +14,6 @@ export type AmpWorkflowWorkerOptions = {
   readonly bin?: string;
   readonly model?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"amp-code">;
@@ -174,8 +173,6 @@ export const runAmpWorkflowTask = async (
   const prompt = options.repair !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_AMP_PROCESS_TIMEOUT_MS);
   assertAmpPermission(options.resolvedPermission);
   const permissionSettings = await prepareAmpPermissionSettings(options.resolvedPermission);
   const args = buildAmpArgs({
@@ -186,23 +183,16 @@ export const runAmpWorkflowTask = async (
     settingsFile: permissionSettings.settingsFile,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
-    processTimeoutMs,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   }).finally(() => permissionSettings.cleanup());
   if (aborted) {
     throw new AmpWorkflowWorkerError(
       "amp was aborted by Prism workflow stop",
-      workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
-    );
-  }
-  if (timedOut) {
-    throw new AmpWorkflowWorkerError(
-      `amp exceeded Prism process timeout after ${processTimeoutMs}ms`,
       workflowWorkerFailureMetadata({ adapter: "amp-code", stderr, sessionId: ampSessionId(stdout, stderr) ?? sessionId }),
     );
   }
@@ -219,7 +209,6 @@ export const runAmpWorkflowTask = async (
       adapter: "amp-code",
       model: options.model,
       durationMs,
-      processTimeoutMs,
       sessionId: ampSessionId(stdout, stderr) ?? sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },

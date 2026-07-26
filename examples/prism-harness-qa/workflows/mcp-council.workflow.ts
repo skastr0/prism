@@ -220,13 +220,11 @@ const councilTask = (harness: Harness, agent: typeof agents.prismHarnessQa.qaTes
 const councilTasks: Record<Harness, ReturnType<typeof councilTask>> = {
   opencode: councilTask("opencode", agents.prismHarnessQa.qaTester, { worker: "opencode" }),
   "claude-code": councilTask("claude-code", agents.prismHarnessQa.qaTester, { worker: "claude-code" }),
-  // codex-cli reproducibly ran past the 360000ms default under the old
-  // "enumerate your MCP servers" ask (task.executor.failed "codex exceeded
-  // Prism process timeout after 360000ms", two consecutive runs) even though
-  // its single-tool-call smoke leg finishes in ~1min; the lightened
-  // SERVER_NAME_UNDISCOVERABLE_HARNESSES prompt above removes the crawl
-  // that caused it, but a wider ceiling stays as a safety margin.
-  "codex-cli": councilTask("codex-cli", agents.prismHarnessQa.qaTester, { worker: "codex-cli", processTimeoutMs: 480_000 }),
+  // codex-cli used to die here on Prism's old 360000ms default while doing real
+  // work; there is no process timeout any more, so the task simply runs to
+  // completion. The lightened SERVER_NAME_UNDISCOVERABLE_HARNESSES prompt above
+  // also removes the crawl that made it slow.
+  "codex-cli": councilTask("codex-cli", agents.prismHarnessQa.qaTester, { worker: "codex-cli" }),
   // Not "grok-build": that model fails config validation against a custom
   // --agent file with a restricted tools: list (PQ-176). grok-composer-2.5-fast
   // is grok's own CLI default, verified working against this agent shape.

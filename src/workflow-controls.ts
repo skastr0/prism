@@ -26,13 +26,6 @@ export interface WorkflowDetachedRunOptions {
   readonly worker?: string;
   readonly model?: string;
   readonly permission?: string;
-  readonly maxConcurrentTasks?: number;
-  readonly taskTimeoutMs?: number;
-  readonly maxWallMs?: number;
-  readonly taskNoProgressMs?: number;
-  readonly maxTasks?: number;
-  readonly maxCostUsd?: number;
-  readonly maxPromptBytes?: number;
 }
 
 export interface WorkflowUpdateResult {
@@ -59,12 +52,6 @@ const RUNNER_GROUP_TERM_GRACE_MS = 2_500;
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const isFinitePositiveInteger = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0;
-
-const isFiniteNonNegativeNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0;
-
 export const workflowRunOptionsSnapshot = (
   options: WorkflowDetachedRunOptions,
 ): Record<string, unknown> => ({
@@ -72,13 +59,6 @@ export const workflowRunOptionsSnapshot = (
   ...(options.model !== undefined ? { model: options.model } : {}),
   ...(options.permission !== undefined ? { permission: options.permission } : {}),
   ...(options.mockOutput !== undefined ? { mockOutput: options.mockOutput } : {}),
-  ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
-  ...(options.taskTimeoutMs !== undefined ? { taskTimeoutMs: options.taskTimeoutMs } : {}),
-  ...(options.maxWallMs !== undefined ? { maxWallMs: options.maxWallMs } : {}),
-  ...(options.taskNoProgressMs !== undefined ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
-  ...(options.maxTasks !== undefined ? { maxTasks: options.maxTasks } : {}),
-  ...(options.maxCostUsd !== undefined ? { maxCostUsd: options.maxCostUsd } : {}),
-  ...(options.maxPromptBytes !== undefined ? { maxPromptBytes: options.maxPromptBytes } : {}),
 });
 
 const workflowDetachedRunOptionsFromSnapshot = (
@@ -88,17 +68,6 @@ const workflowDetachedRunOptionsFromSnapshot = (
   ...(typeof options?.worker === "string" ? { worker: options.worker } : {}),
   ...(typeof options?.model === "string" ? { model: options.model } : {}),
   ...(typeof options?.permission === "string" ? { permission: options.permission } : {}),
-  ...(typeof options?.maxConcurrentTasks === "number" && Number.isInteger(options.maxConcurrentTasks)
-    ? { maxConcurrentTasks: options.maxConcurrentTasks }
-    : {}),
-  ...(typeof options?.taskTimeoutMs === "number" && Number.isInteger(options.taskTimeoutMs)
-    ? { taskTimeoutMs: options.taskTimeoutMs }
-    : {}),
-  ...(isFinitePositiveInteger(options?.maxWallMs) ? { maxWallMs: options.maxWallMs } : {}),
-  ...(isFinitePositiveInteger(options?.taskNoProgressMs) ? { taskNoProgressMs: options.taskNoProgressMs } : {}),
-  ...(isFinitePositiveInteger(options?.maxTasks) ? { maxTasks: options.maxTasks } : {}),
-  ...(isFiniteNonNegativeNumber(options?.maxCostUsd) ? { maxCostUsd: options.maxCostUsd } : {}),
-  ...(isFinitePositiveInteger(options?.maxPromptBytes) ? { maxPromptBytes: options.maxPromptBytes } : {}),
 });
 
 const mergeWorkflowRunOptions = (
@@ -112,13 +81,6 @@ const mergeWorkflowRunOptions = (
     ...(next.worker !== undefined ? { worker: next.worker } : {}),
     ...(next.model !== undefined ? { model: next.model } : {}),
     ...(next.permission !== undefined ? { permission: next.permission } : {}),
-    ...(next.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: next.maxConcurrentTasks } : {}),
-    ...(next.taskTimeoutMs !== undefined ? { taskTimeoutMs: next.taskTimeoutMs } : {}),
-    ...(next.maxWallMs !== undefined ? { maxWallMs: next.maxWallMs } : {}),
-    ...(next.taskNoProgressMs !== undefined ? { taskNoProgressMs: next.taskNoProgressMs } : {}),
-    ...(next.maxTasks !== undefined ? { maxTasks: next.maxTasks } : {}),
-    ...(next.maxCostUsd !== undefined ? { maxCostUsd: next.maxCostUsd } : {}),
-    ...(next.maxPromptBytes !== undefined ? { maxPromptBytes: next.maxPromptBytes } : {}),
   };
 };
 
@@ -201,13 +163,6 @@ export const workflowDetachedRunArgs = (
   ...(options.model !== undefined ? ["--model", options.model] : []),
   ...(options.permission !== undefined ? ["--permission", options.permission] : []),
   ...(options.mockOutput ? ["--mock-output", options.mockOutput] : []),
-  ...(options.maxConcurrentTasks !== undefined ? ["--max-concurrent-tasks", String(options.maxConcurrentTasks)] : []),
-  ...(options.taskTimeoutMs !== undefined ? ["--task-timeout-ms", String(options.taskTimeoutMs)] : []),
-  ...(options.maxWallMs !== undefined ? ["--max-wall-ms", String(options.maxWallMs)] : []),
-  ...(options.taskNoProgressMs !== undefined ? ["--task-no-progress-ms", String(options.taskNoProgressMs)] : []),
-  ...(options.maxTasks !== undefined ? ["--max-tasks", String(options.maxTasks)] : []),
-  ...(options.maxCostUsd !== undefined ? ["--max-cost-usd", String(options.maxCostUsd)] : []),
-  ...(options.maxPromptBytes !== undefined ? ["--max-prompt-bytes", String(options.maxPromptBytes)] : []),
 ];
 
 export const startDetachedWorkflowRun = async (

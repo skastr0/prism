@@ -24,7 +24,6 @@ export type CodexWorkflowWorkerOptions = {
   readonly variant?: string;
   readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"codex-cli">;
@@ -168,8 +167,6 @@ export const runCodexWorkflowTask = async (
   const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
   const outputSchemaPath = outputSchema === undefined ? undefined : join(tempRoot, "output-schema.json");
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CODEX_BIN ?? "codex";
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS);
   const resumeSessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
@@ -191,11 +188,10 @@ export const runCodexWorkflowTask = async (
     if (outputSchemaPath !== undefined) {
       await writeFile(outputSchemaPath, `${JSON.stringify(outputSchema, null, 2)}\n`, "utf8");
     }
-    const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+    const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
       command,
       args,
       cwd: options.cwd,
-      processTimeoutMs,
       abortSignal: options.abortSignal,
       onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     });
@@ -211,12 +207,6 @@ export const runCodexWorkflowTask = async (
     if (aborted) {
       throw new CodexWorkflowWorkerError(
         "codex was aborted by Prism workflow stop",
-        failureMetadata(),
-      );
-    }
-    if (timedOut) {
-      throw new CodexWorkflowWorkerError(
-        `codex exceeded Prism process timeout after ${processTimeoutMs}ms`,
         failureMetadata(),
       );
     }
@@ -237,7 +227,6 @@ export const runCodexWorkflowTask = async (
       model: options.model,
       modelVariant: options.variant,
       durationMs,
-      processTimeoutMs,
       sessionPersistence,
       ...(sessionId !== undefined ? { sessionId } : {}),
       codexNativeOutputSchema: outputSchemaPath !== undefined,

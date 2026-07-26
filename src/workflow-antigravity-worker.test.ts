@@ -164,32 +164,12 @@ describe("runAntigravityPtyProcess", () => {
         command: "echo",
         args: ["hello from pty"],
         cwd: root,
-        processTimeoutMs: 5_000,
-        printTimeout: "5s",
+        printTimeout: "10s",
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout.trim()).toBe("hello from pty");
       expect(result.stderr).toBe("");
-      expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("kills the process group when the outer timeout fires", async () => {
-    const root = await createTempRoot();
-    try {
-      const result = await runAntigravityPtyProcess({
-        command: "sh",
-        args: ["-c", "sleep 100 & sleep 100 & wait"],
-        cwd: root,
-        processTimeoutMs: 500,
-        printTimeout: "5s",
-      });
-      expect(result.timedOut).toBe(true);
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stdout).toBe("");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -202,7 +182,6 @@ describe("runAntigravityPtyProcess", () => {
         command: "sh",
         args: ["-c", "head -c 8192 /dev/zero | tr '\\0' 'p'"],
         cwd: root,
-        processTimeoutMs: 10_000,
         printTimeout: "10s",
       });
 
@@ -266,8 +245,6 @@ describe("runAntigravityWorkflowTask retries", () => {
         bin: fakeAgy,
         preflight: false,
         resolvedPermission: "permissive",
-        processTimeoutMs: 5_000,
-        printTimeout: "5s",
         maxAttempts: 2,
         backoffMs: 100,
       });
@@ -327,8 +304,6 @@ describe("runAntigravityWorkflowTask retries", () => {
         bin: fakeAgy,
         preflight: false,
         resolvedPermission: "permissive",
-        processTimeoutMs: 5_000,
-        printTimeout: "5s",
         maxAttempts: 1,
         backoffMs: 100,
       });
@@ -390,8 +365,6 @@ describe("runAntigravityWorkflowTask retries", () => {
         bin: fakeAgy,
         preflight: false,
         resolvedPermission: "permissive",
-        processTimeoutMs: 5_000,
-        printTimeout: "5s",
         maxAttempts: 2,
         backoffMs: 10,
       });
@@ -444,8 +417,6 @@ describe("runAntigravityWorkflowTask retries", () => {
           bin: fakeAgy,
           preflight: false,
           resolvedPermission: "permissive",
-          processTimeoutMs: 5_000,
-          printTimeout: "5s",
           maxAttempts: 2,
           backoffMs: 10,
         }),
@@ -498,8 +469,6 @@ describe("runAntigravityWorkflowTask retries", () => {
           bin: fakeAgy,
           preflight: false,
           resolvedPermission: "permissive",
-          processTimeoutMs: 5_000,
-          printTimeout: "5s",
           maxAttempts: 1,
           backoffMs: 10,
         });
@@ -581,66 +550,12 @@ describe("runAntigravityWorkflowTask retries", () => {
           bin: fakeAgy,
           preflight: false,
           resolvedPermission: "permissive",
-          processTimeoutMs: 5_000,
-          printTimeout: "5s",
           abortSignal,
           maxAttempts: 3,
           backoffMs: 1_000,
         }),
       ).rejects.toThrow("agy was aborted by Prism workflow stop");
       expect(abortListenerRegistrations).toBe(2);
-      expect(await readFile(stateFile, "utf8")).toBe("1");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("uses one total deadline across retry backoff", async () => {
-    const root = await createTempRoot();
-    try {
-      const fakeAgy = path.join(root, "fake-agy.sh");
-      const stateFile = path.join(root, "state.txt");
-      await writeFile(stateFile, "");
-      await writeFile(
-        fakeAgy,
-        [
-          "#!/bin/sh",
-          "printf '1' >> ./state.txt",
-          "printf 'I printmode.go:156] Print mode: conversation=403febcc-41a4-435b-a6ed-f6992fb1c3ff, sending message\\n' >> \"$2\"",
-          "printf 'Error: timed out waiting for response\\n'",
-          "",
-        ].join("\n"),
-      );
-      await chmod(fakeAgy, 0o755);
-
-      const task = {
-        kind: "workflow-task" as const,
-        id: "total-deadline",
-        agent: {
-          kind: "agent-ref" as const,
-          plugin: "test",
-          name: "agent",
-          description: "test agent",
-          sourceHash: "a".repeat(64),
-          manifestHash: "a".repeat(64),
-          installs: ["antigravity-cli"],
-        },
-        prompt: "Return JSON {\"ok\": true}",
-        output: Schema.Struct({ ok: Schema.Boolean }),
-      };
-
-      await expect(
-        runAntigravityWorkflowTask(task, {
-          cwd: root,
-          bin: fakeAgy,
-          preflight: false,
-          resolvedPermission: "permissive",
-          processTimeoutMs: 3_000,
-          printTimeout: "5s",
-          maxAttempts: 3,
-          backoffMs: 5_000,
-        }),
-      ).rejects.toThrow("agy exceeded Prism process timeout after 3000ms");
       expect(await readFile(stateFile, "utf8")).toBe("1");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -688,8 +603,6 @@ describe("runAntigravityWorkflowTask retries", () => {
           bin: fakeAgy,
           preflight: false,
           resolvedPermission: "permissive",
-          processTimeoutMs: 5_000,
-          printTimeout: "5s",
           maxAttempts: 2,
           backoffMs: 100,
         }),
@@ -728,8 +641,6 @@ describe("runAntigravityWorkflowTask retries", () => {
           bin: "echo",
           preflight: false,
           resolvedPermission: "permissive",
-          processTimeoutMs: 5_000,
-          printTimeout: "5s",
           maxAttempts: 2,
           backoffMs: 100,
         }),
@@ -777,8 +688,6 @@ describe("runAntigravityWorkflowTask retries", () => {
         cwd: root,
         bin: fakeAgy,
         resolvedPermission: "permissive",
-        processTimeoutMs: 5_000,
-        printTimeout: "5s",
       })).rejects.toMatchObject({
         metadata: {
           adapter: "antigravity-cli",

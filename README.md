@@ -301,20 +301,17 @@ prism workflow monitor                          # live run monitor TUI
 
 Task results are content-addressed in a durable cache: resume a crashed run and finished tasks replay instantly; change a task's semantics and only that task re-executes. Inspect with `prism workflow cache list|show`.
 
-### Budgets and guardrails
+### No runtime limits
 
-Runs are governed by what you ask for — every guard below is opt-in. Prism ships
-no default timeout, no worker-output size cap, and no prompt ceiling: workers are
-long-running agents and their verbosity is not a fault.
+A workflow task is a long-running agent. Prism imposes **no timeout, no output-size
+cap, no prompt ceiling, no wall clock, no task or cost ceiling** — and exposes no
+flag, task field, or environment variable to reintroduce one. There is nothing to
+tune and nothing to guess. Scope is set where it belongs: the prompt, the agent,
+the model, and the shape of the graph.
 
-| Guard | Flag |
-|---|---|
-| Provider spend ceiling | `--max-cost-usd` |
-| Wall-clock ceiling | `--max-wall-ms` |
-| Live dispatch ceiling | `--max-tasks` |
-| Per-task inactivity cutoff | `--task-no-progress-ms` |
-| Prompt size ceiling | `--max-prompt-bytes` |
-| Concurrency cap | `--max-concurrent-tasks` |
+Control over a live run is real, not numeric: `prism workflow runs stop <id>`
+terminates the run and its whole process group; `runs list|show|events|trace`
+shows what is happening while it happens.
 
 Transient worker failures retry with bounded attempts and backoff; config errors and cancellations never do. Each task pins one of seven permission modes, from `sandbox-read-only` to `full-access` — enforced per worker.
 
@@ -328,10 +325,10 @@ Transient worker failures retry with bounded attempts and backoff; config errors
 prism workflow scaffold my-first     # validating starter in ~/.prism/workflows
 prism workflow catalog               # discover typed agent/orbit/model refs
 prism workflow validate ~/.prism/workflows/my-first.workflow.ts   # resolved (worker, model) per task
-prism workflow run ~/.prism/workflows/my-first.workflow.ts --max-cost-usd 1
+prism workflow run ~/.prism/workflows/my-first.workflow.ts
 ```
 
-Two things to know before the first live run: workflow commands are **project-scoped** — run them from the project you compiled (`prism refresh`), or `catalog`/`refs` will tell you to compile first. And a live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, keep a budget flag on, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
+Two things to know before the first live run: workflow commands are **project-scoped** — run them from the project you compiled (`prism refresh`), or `catalog`/`refs` will tell you to compile first. And a live run **dispatches a real harness CLI with your local install and auth — it spends real tokens**; pin the scaffold's worker and model to something you mean, and rehearse with `--mock-output` (plus `typecheck`/`validate`) to exercise the whole graph without spending anything.
 
 ## Stateless tools — no daemon, no MCP
 

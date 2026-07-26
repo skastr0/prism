@@ -44,8 +44,6 @@ const DEVIN_WORKER = {
   worker: "devin" as const,
   model: "swe-1-7",
   permission: "full-access" as const,
-  // Headroom above observed ~20s healthy runs; Devin can stall under load.
-  processTimeoutMs: 300_000,
 };
 
 const reviewLowerer = defineTask({

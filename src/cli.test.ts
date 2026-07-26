@@ -101,7 +101,7 @@ test("refresh and plan help use managed backup policy instead of a per-run backu
   }
 });
 
-test("workflow run, update, and resume expose budgets but no cache bypass", async () => {
+test("workflow run, update, and resume expose no runtime-limit flags and no cache bypass", async () => {
   for (const args of [
     ["workflow", "run", "--help"],
     ["workflow", "runs", "update", "--help"],
@@ -110,51 +110,20 @@ test("workflow run, update, and resume expose budgets but no cache bypass", asyn
     const result = await runCli(args, {});
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("--max-concurrent-tasks");
-    expect(result.stdout).toContain("Maximum concurrent workflow task executions");
-    expect(result.stdout).toContain("--task-timeout-ms");
-    expect(result.stdout).toContain("Default per-task process timeout");
-    expect(result.stdout).toContain("--max-wall-ms");
-    expect(result.stdout).toContain("--task-no-progress-ms");
-    expect(result.stdout).toContain("--max-tasks");
-    expect(result.stdout).toContain("--max-cost-usd");
-    expect(result.stdout).toContain("--max-prompt-bytes");
-    expect(result.stdout).toContain("Maximum UTF-8 bytes in each prepared task");
-    expect(result.stdout).toContain("prompt context");
+    for (const removed of [
+      "--max-concurrent-tasks",
+      "--task-timeout-ms",
+      "--max-wall-ms",
+      "--task-no-progress-ms",
+      "--max-tasks",
+      "--max-cost-usd",
+      "--max-prompt-bytes",
+    ]) {
+      expect(result.stdout).not.toContain(removed);
+    }
     expect(result.stdout).not.toContain("--cache");
     expect(result.stdout).not.toContain("--no-cache");
   }
-});
-
-test("workflow budget flags reject non-positive integer limits and non-finite or negative cost", async () => {
-  for (const [flag, value, message] of [
-    ["--max-wall-ms", "0", "must be a positive integer"],
-    ["--task-no-progress-ms", "1.5", "must be a positive integer"],
-    ["--max-tasks", "Infinity", "must be a positive integer"],
-    ["--max-prompt-bytes", "0", "must be a positive integer"],
-    ["--max-cost-usd", "-0.01", "must be a finite non-negative number"],
-    ["--max-cost-usd", "Infinity", "must be a finite non-negative number"],
-    ["--max-cost-usd", "", "must be a finite non-negative number"],
-  ] as const) {
-    const result = await runCli(["workflow", "run", "unused.workflow.ts", flag, value], {});
-
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain(message);
-  }
-}, 15_000);
-
-test("workflow monitor help exposes deterministic timeout controls", async () => {
-  const help = await runCli(["workflow", "monitor", "--help"], {});
-
-  expect(help.exitCode).toBe(0);
-  expect(help.stdout).toContain("--store");
-  expect(help.stdout).toContain("--poll-ms");
-  expect(help.stdout).toContain("--fail-stale-after-ms");
-  expect(help.stdout).toContain("--timeout-ms");
-
-  const invalid = await runCli(["workflow", "monitor", "--timeout-ms", "0"], {});
-  expect(invalid.exitCode).not.toBe(0);
-  expect(invalid.stderr).toContain("must be a positive integer");
 });
 
 test("workflow scaffold writes to ~/.prism/workflows by default and never instructs git add (PQ-176)", async () => {

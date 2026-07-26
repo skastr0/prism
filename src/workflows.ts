@@ -132,7 +132,6 @@ type WorkflowTaskWorkerOptionsBase = {
   readonly modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   readonly profile?: string;
   readonly restrictedTools?: ReadonlyArray<string>;
-  readonly processTimeoutMs?: number;
   readonly retry?: WorkflowTaskWorkerRetryOptions;
 };
 

@@ -36,7 +36,6 @@ export interface WorkflowWorkerAdapterOptionsBase {
   readonly profile?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }
 
@@ -83,7 +82,6 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "amp-code", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -95,7 +93,6 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "antigravity-cli", fallbackModel: options.model }),
       resolvedPermission: resolveAntigravityPermission(options.resolvedPermission),
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -109,7 +106,6 @@ const workflowWorkerAdapters = {
       sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "claude-code"),
       resolvedPermission: options.resolvedPermission,
       restrictedTools: options.restrictedTools,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -128,7 +124,6 @@ const workflowWorkerAdapters = {
         variant: resolution?.variant,
         sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "codex-cli"),
         resolvedPermission: options.resolvedPermission,
-        processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
         reportProgress: options.context?.reportProgress,
         repair: options.context?.repair,
@@ -141,7 +136,6 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "grok", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -157,7 +151,6 @@ const workflowWorkerAdapters = {
         provider: resolution?.provider,
         profile: task.worker?.profile ?? options.profile,
         resolvedPermission: options.resolvedPermission,
-        processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
         reportProgress: options.context?.reportProgress,
         repair: options.context?.repair,
@@ -170,7 +163,6 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "kimi-code", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -182,7 +174,6 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "devin", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -194,7 +185,6 @@ const workflowWorkerAdapters = {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "opencode", fallbackModel: options.model }),
       resolvedPermission: options.resolvedPermission,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
       abortSignal: options.abortSignal,
       reportProgress: options.context?.reportProgress,
       repair: options.context?.repair,
@@ -216,7 +206,6 @@ const workflowWorkerAdapters = {
         sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "omp"),
         resolvedPermission: options.resolvedPermission,
         restrictedTools: options.restrictedTools,
-        processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
         reportProgress: options.context?.reportProgress,
         repair: options.context?.repair,
@@ -249,7 +238,6 @@ export const createWorkflowWorkerExecutor = (input: {
   readonly cwd: string;
   readonly model?: string;
   readonly fallbackPermission?: WorkflowPermissionMode;
-  readonly taskTimeoutMs?: number;
 }): WorkflowTaskExecutor => {
   if (input.worker !== undefined) {
     getWorkflowWorkerAdapter(input.worker);
@@ -265,7 +253,6 @@ export const createWorkflowWorkerExecutor = (input: {
       model: input.model,
       resolvedPermission,
       restrictedTools: task.worker?.restrictedTools,
-      processTimeoutMs: task.worker?.processTimeoutMs ?? input.taskTimeoutMs,
       abortSignal: context?.abortSignal,
     };
     if (context?.repair?.mode === "native-continuation") {

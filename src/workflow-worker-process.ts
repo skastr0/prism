@@ -10,7 +10,6 @@ export interface WorkflowWorkerProcessOptions {
   readonly args: ReadonlyArray<string>;
   readonly cwd: string;
   readonly abortSignal?: AbortSignal;
-  readonly processTimeoutMs?: number;
   readonly env?: Record<string, string>;
   readonly onOutputActivity?: (stream: WorkflowWorkerOutputStream) => void;
   readonly earlyExitPatterns?: ReadonlyArray<{
@@ -31,7 +30,6 @@ export interface WorkflowWorkerProcessResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly durationMs: number;
-  readonly timedOut: boolean;
   readonly aborted: boolean;
   readonly earlyExit?: string;
 }
@@ -92,7 +90,6 @@ export const runWorkflowWorkerProcess = async (
     stdout: "pipe",
     stderr: "pipe",
   });
-  let timedOut = false;
   let aborted = false;
   let earlyExit: string | undefined;
   let leaseClosed = false;
@@ -142,12 +139,6 @@ export const runWorkflowWorkerProcess = async (
   } else {
     options.abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
-  const timeout = options.processTimeoutMs === undefined
-    ? undefined
-    : setTimeout(() => {
-      timedOut = true;
-      closeLease();
-    }, options.processTimeoutMs);
   const exit = guard.exited;
   const stdout = readStream(guard.stdout, "stdout").catch((error: unknown) => {
     closeLease();
@@ -164,7 +155,6 @@ export const runWorkflowWorkerProcess = async (
       stdout: outputCapture.output("stdout"),
       stderr: outputCapture.output("stderr"),
       durationMs: Date.now() - started,
-      timedOut,
       aborted,
       ...(earlyExit !== undefined ? { earlyExit } : {}),
     };
@@ -174,7 +164,6 @@ export const runWorkflowWorkerProcess = async (
     throw error;
   } finally {
     closeLease();
-    clearTimeout(timeout);
     options.abortSignal?.removeEventListener("abort", onAbort);
   }
 };

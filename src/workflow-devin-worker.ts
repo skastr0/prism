@@ -14,7 +14,6 @@ export type DevinWorkflowWorkerOptions = {
   readonly bin?: string;
   readonly model?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"devin">;
@@ -176,9 +175,6 @@ export const runDevinWorkflowTask = async (
       ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
       : `You are executing a Prism workflow task (agent ${task.agent.plugin}/${task.agent.name}). ${task.prompt}${workflowWorkerJsonInstruction(task)}`;
 
-  const processTimeoutMs =
-    options.processTimeoutMs ??
-    parsePositiveInteger(process.env.PRISM_WORKFLOW_DEVIN_PROCESS_TIMEOUT_MS);
 
   const workDir = await mkdtemp(join(tmpdir(), "prism-devin-workflow-"));
   const promptFilePath = join(workDir, "prompt.md");
@@ -205,12 +201,11 @@ export const runDevinWorkflowTask = async (
       exportPath,
     });
 
-    const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } =
+    const { exitCode, stdout, stderr, durationMs, aborted, earlyExit } =
       await runWorkflowWorkerProcess({
         command,
         args,
         cwd: options.cwd,
-        processTimeoutMs,
         abortSignal: options.abortSignal,
         onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
         earlyExitPatterns: DEVIN_AUTH_PROMPT_PATTERNS,
@@ -230,16 +225,6 @@ export const runDevinWorkflowTask = async (
       throw new DevinWorkflowWorkerError(
         devinAuthErrorMessage,
         workflowWorkerFailureMetadata({ adapter: "devin", stderr, sessionId }),
-      );
-    }
-    if (timedOut) {
-      throw new DevinWorkflowWorkerError(
-        `devin exceeded Prism process timeout after ${processTimeoutMs}ms`,
-        workflowWorkerFailureMetadata({
-          adapter: "devin",
-          stderr,
-          sessionId: await bestEffortDevinSessionId(exportPath, sessionId),
-        }),
       );
     }
     if (exitCode !== 0 && isDevinAuthOutput(`${stdout}\n${stderr}`)) {
@@ -304,7 +289,6 @@ export const runDevinWorkflowTask = async (
         },
         model: options.model,
         durationMs,
-        processTimeoutMs,
         sessionId: capturedSessionId,
         ...summarizeWorkflowWorkerStderr(stderr),
       },

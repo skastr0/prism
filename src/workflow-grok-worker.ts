@@ -16,7 +16,6 @@ export type GrokWorkflowWorkerOptions = {
   readonly model?: string;
   readonly effort?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly maxAgentBytes?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
@@ -281,11 +280,6 @@ export const runGrokWorkflowTask = async (
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const command = options.bin ?? process.env.PRISM_WORKFLOW_GROK_BIN ?? "grok";
-  // No default process timeout: harness workers are long-running agents and a
-  // wall-clock kill is not a safety mechanism. A timeout applies only when a
-  // task or the CLI asks for one explicitly.
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS);
   const maxAgentBytes = options.maxAgentBytes
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_MAX_AGENT_BYTES)
     ?? DEFAULT_GROK_MAX_AGENT_BYTES;
@@ -302,11 +296,10 @@ export const runGrokWorkflowTask = async (
     permission: options.resolvedPermission,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted, earlyExit } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, aborted, earlyExit } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
-    processTimeoutMs,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     env: runtime.env,
@@ -317,12 +310,10 @@ export const runGrokWorkflowTask = async (
     nativeAgent: task.agent.name,
     model: options.model ?? "grok-4.5",
     durationMs,
-    processTimeoutMs,
     sessionId,
     agentSourceBytes: runtime.agentSourceBytes,
     maxAgentBytes,
     exitCode,
-    timedOut,
     aborted,
     ...(earlyExit !== undefined ? { earlyExit } : {}),
     ...summarizeWorkflowWorkerStderr(stderr),
@@ -338,9 +329,6 @@ export const runGrokWorkflowTask = async (
   }
   if (earlyExit === "xai-oauth-device-login") {
     throw processFailure("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
-  }
-  if (timedOut) {
-    throw processFailure(`grok exceeded Prism process timeout after ${processTimeoutMs}ms`);
   }
   if (exitCode !== 0 && isGrokAuthOutput(`${stdout}\n${stderr}`)) {
     throw processFailure("grok requires xAI OAuth login before workflow run; run `grok login` or refresh Grok credentials, then retry");
@@ -387,7 +375,6 @@ export const runGrokWorkflowTask = async (
       nativeAgent: task.agent.name,
       model: options.model ?? "grok-4.5",
       durationMs: Date.now() - startedAt,
-      processTimeoutMs,
       sessionId,
       agentSourceBytes: runtime.agentSourceBytes,
       maxAgentBytes,

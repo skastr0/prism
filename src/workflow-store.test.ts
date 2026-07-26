@@ -1633,7 +1633,6 @@ describe("workflow store", () => {
     await expect(runWorkflow(workflow, {
       store,
       runId,
-      maxConcurrentTasks: 1,
       executeTask: async (task) => {
         seen.push(task.id);
         if (task.id === "a") store.stopRun(runId);

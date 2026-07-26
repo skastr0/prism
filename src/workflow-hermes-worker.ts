@@ -12,7 +12,6 @@ export type HermesWorkflowWorkerOptions = {
   readonly provider?: string;
   readonly profile?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"hermes">;
@@ -102,8 +101,6 @@ export const runHermesWorkflowTask = async (
   const prompt = options.repair !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_HERMES_PROCESS_TIMEOUT_MS);
   const args = buildHermesArgs({
     profile: options.profile,
     model: options.model,
@@ -113,23 +110,16 @@ export const runHermesWorkflowTask = async (
     permission: options.resolvedPermission,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
-    processTimeoutMs,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
   if (aborted) {
     throw new HermesWorkflowWorkerError(
       "hermes was aborted by Prism workflow stop",
-      workflowWorkerFailureMetadata({ adapter: "hermes", stderr, sessionId: hermesSessionId(stderr) ?? resumeSessionId }),
-    );
-  }
-  if (timedOut) {
-    throw new HermesWorkflowWorkerError(
-      `hermes exceeded Prism process timeout after ${processTimeoutMs}ms`,
       workflowWorkerFailureMetadata({ adapter: "hermes", stderr, sessionId: hermesSessionId(stderr) ?? resumeSessionId }),
     );
   }
@@ -155,7 +145,6 @@ export const runHermesWorkflowTask = async (
       model: options.model,
       provider: options.provider,
       durationMs,
-      processTimeoutMs,
       sessionId: hermesSessionId(stderr) ?? resumeSessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },

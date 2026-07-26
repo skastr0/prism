@@ -8,15 +8,10 @@ import { WorkflowStore } from "./workflow-store.js";
 import { workflowTaskIdentity } from "./workflow-identity.js";
 import {
   runWorkflow,
-  WorkflowCostExceededError,
-  WorkflowCostUnavailableError,
-  WorkflowFanoutExceededError,
+  WORKFLOW_TASK_CONCURRENCY,
   WorkflowRunStoppedError,
-  WorkflowRunTimeoutError,
-  WorkflowPromptLimitError,
   WorkflowTaskDecodeError,
   WorkflowTaskEscalatedError,
-  WorkflowTaskNoProgressError,
 } from "./workflow-runner.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction, WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
 import { createWorkflowWorkerExecutor } from "./workflow-workers.js";
@@ -1099,8 +1094,8 @@ console.log(JSON.stringify(result));
     expect(workers).toEqual(["grok", "codex-cli"]);
   });
 
-  test("bounds executor concurrency below unbounded author fan-out", async () => {
-    const tasks = Array.from({ length: 5 }, (_, index) => defineTask({
+  test("paces executor concurrency below unbounded author fan-out", async () => {
+    const tasks = Array.from({ length: WORKFLOW_TASK_CONCURRENCY + 3 }, (_, index) => defineTask({
       id: `task-${index}`,
       agent: builder,
       prompt: `Run task ${index}.`,
@@ -1119,7 +1114,6 @@ console.log(JSON.stringify(result));
     let maxActive = 0;
 
     const result = await runWorkflow(workflow, {
-      maxConcurrentTasks: 2,
       executeTask: async (task) => {
         active += 1;
         maxActive = Math.max(maxActive, active);
@@ -1129,348 +1123,12 @@ console.log(JSON.stringify(result));
       },
     });
 
-    expect(maxActive).toBe(2);
-    expect(result.tasks.map((task) => task.id)).toEqual(["task-0", "task-1", "task-2", "task-3", "task-4"]);
-  });
-
-  test("validates run budget options before dispatch", async () => {
-    const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
-    const workflow = defineWorkflow({ name: "invalid-run-budgets", tasks: [task] as const });
-    const invalid = [
-      { maxWallMs: 0 },
-      { maxWallMs: 1.5 },
-      { taskNoProgressMs: Number.POSITIVE_INFINITY },
-      { maxTasks: -1 },
-      { maxPromptBytes: 0 },
-      { maxPromptBytes: 1.5 },
-      { maxCostUsd: -0.01 },
-      { maxCostUsd: Number.NaN },
-    ] as const;
-    let calls = 0;
-
-    for (const budget of invalid) {
-      await expect(runWorkflow(workflow, {
-        ...budget,
-        executeTask: async () => {
-          calls += 1;
-          return { summary: "unexpected" };
-        },
-      })).rejects.toBeInstanceOf(RangeError);
-    }
-    expect(calls).toBe(0);
-  });
-
-  test("fails a hard wall timeout with its exact cause and ignores late executor settlement", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-wall-budget-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
-      const workflow = defineWorkflow({ name: "wall-budget", tasks: [task] as const });
-      const runId = store.createRun(workflow.name);
-      const run = runWorkflow(workflow, {
-        runId,
-        store,
-        maxWallMs: 20,
-        executeTask: async () => {
-          await delay(70);
-          throw new Error("late executor rejection");
-        },
-      });
-
-      await expect(run).rejects.toEqual(new WorkflowRunTimeoutError(20));
-      expect(store.getRun(runId)).toMatchObject({
-        status: "failed",
-        terminalCause: { kind: "workflow-timeout", limitMs: 20 },
-      });
-      const settledAttempts = store.listRunTaskAttempts(runId);
-      expect(settledAttempts).toEqual([
-        expect.objectContaining({
-          status: "failed",
-          failure: { kind: "executor", message: "workflow exceeded maxWallMs of 20ms" },
-        }),
-      ]);
-      await delay(80);
-      expect(store.listRunTaskAttempts(runId)).toEqual(settledAttempts);
-    } finally {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("resets per-attempt progress and then fails on inactivity", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-progress-budget-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    let fakeNow = 10_000;
-    const dateNow = spyOn(Date, "now").mockImplementation(() => fakeNow);
-    try {
-      // WFE-009: pin to a single attempt — idle timeout is a classified-transient executor
-      // failure and would otherwise be retried once by the new default budget, doubling
-      // progressReports/elapsed time and breaking this test's attempt-count assertions.
-      const task = defineTask({
-        id: "build",
-        agent: builder,
-        prompt: "Build.",
-        output: PatchReport,
-        worker: { retry: { maxAttempts: 1 } },
-      });
-      const workflow = defineWorkflow({ name: "task-progress-budget", tasks: [task] as const });
-      const runId = store.createRun(workflow.name);
-      let progressReports = 0;
-      let reportAfterSettlement: (() => void) | undefined;
-      const startedAt = performance.now();
-      let caught: unknown;
-      try {
-        await runWorkflow(workflow, {
-          runId,
-          store,
-          taskNoProgressMs: 100,
-          executeTask: async (_task, context) => {
-            reportAfterSettlement = context?.reportProgress;
-            for (let index = 0; index < 8; index += 1) {
-              await delay(8);
-              fakeNow += 500;
-              // Runtime callers can bypass TypeScript; arbitrary strings must never enter
-              // the durable event payload as worker output or user-provided content.
-              context?.reportProgress?.(index === 0 ? "private-payload" as never : "worker-stdout");
-              progressReports += 1;
-            }
-            return await new Promise<never>(() => undefined);
-          },
-        });
-      } catch (error) {
-        caught = error;
-      }
-
-      expect(caught).toEqual(new WorkflowTaskNoProgressError("build", 100));
-      expect(progressReports).toBe(8);
-      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(150);
-      fakeNow += 6_000;
-      reportAfterSettlement?.();
-      const progressEvents = store.listRunEvents(runId)
-        .filter((event) => event.type === "task.progress");
-      expect(progressEvents).toHaveLength(1);
-      expect(progressEvents[0]).toMatchObject({
-        taskId: "build",
-        payload: { source: "executor" },
-        createdAt: expect.any(String),
-      });
-      expect(JSON.stringify(progressEvents[0]?.payload)).not.toContain("Build.");
-      expect(store.getRun(runId)).toMatchObject({
-        status: "failed",
-        terminalCause: {
-          kind: "task-failed",
-          taskId: "build",
-          ordinal: 0,
-          attempt: 1,
-          errorName: "WorkflowTaskNoProgressError",
-          message: "workflow task build made no progress for 100ms",
-        },
-      });
-    } finally {
-      dateNow.mockRestore();
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("does not spend live fanout budget on a cache hit", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-cache-fanout-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    try {
-      const cachedTask = defineTask({ id: "cached", agent: builder, prompt: "Cached.", output: PatchReport });
-      const liveTask = defineTask({ id: "live", agent: builder, prompt: "Live.", output: PatchReport });
-      const workflow = defineWorkflow({
-        name: "cache-free-fanout",
-        run: (wf) => Effect.all([wf.runTask(cachedTask), wf.runTask(liveTask)], { concurrency: "unbounded" }),
-      });
-      store.recordCompleted({
-        identity: workflowTaskIdentity(workflow.name, cachedTask, {}),
-        agent: { plugin: builder.plugin, name: builder.name },
-        output: { summary: "cached" },
-      });
-      const calls: string[] = [];
-
-      const result = await runWorkflow(workflow, {
-        store,
-        maxTasks: 1,
-        executeTask: async (task) => {
-          calls.push(task.id);
-          return { summary: "live" };
-        },
-      });
-
-      expect(calls).toEqual(["live"]);
-      expect(result.tasks.map(({ id, cached }) => ({ id, cached }))).toEqual([
-        { id: "cached", cached: true },
-        { id: "live", cached: false },
-      ]);
-    } finally {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("cuts off concurrent fanout inside the limiter with an exact run cause", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-fanout-budget-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    try {
-      const tasks = Array.from({ length: 4 }, (_, index) =>
-        defineTask({ id: `task-${index}`, agent: builder, prompt: `Run ${index}.`, output: PatchReport }));
-      const workflow = defineWorkflow({
-        name: "concurrent-fanout-budget",
-        run: (wf) => Effect.all(tasks.map((task) => wf.runTask(task)), { concurrency: "unbounded" }),
-      });
-      const runId = store.createRun(workflow.name);
-      const calls: string[] = [];
-
-      await expect(runWorkflow(workflow, {
-        runId,
-        store,
-        maxConcurrentTasks: 2,
-        maxTasks: 2,
-        executeTask: async (task, context) => {
-          calls.push(task.id);
-          if (task.id === "task-0") {
-            await delay(10);
-            return { summary: task.id };
-          }
-          const signal = context?.abortSignal;
-          return await new Promise<never>((_resolve, reject) => {
-            const onAbort = () => reject(signal?.reason);
-            if (signal?.aborted === true) onAbort();
-            else signal?.addEventListener("abort", onAbort, { once: true });
-          });
-        },
-      })).rejects.toEqual(new WorkflowFanoutExceededError(2, 3));
-
-      expect(calls).toEqual(["task-0", "task-1"]);
-      expect(store.getRun(runId)).toMatchObject({
-        status: "failed",
-        terminalCause: { kind: "workflow-fanout-exceeded", limit: 2, observed: 3 },
-      });
-    } finally {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("cuts off cost after canonical attempt metadata and persists the exact total", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-cost-budget-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    try {
-      const tasks = Array.from({ length: 3 }, (_, index) =>
-        defineTask({ id: `task-${index}`, agent: builder, prompt: `Run ${index}.`, output: PatchReport }));
-      const workflow = defineWorkflow({
-        name: "cost-budget",
-        run: (wf) => Effect.all(tasks.map((task) => wf.runTask(task)), { concurrency: "unbounded" }),
-      });
-      const runId = store.createRun(workflow.name);
-      let calls = 0;
-
-      await expect(runWorkflow(workflow, {
-        runId,
-        store,
-        maxConcurrentTasks: 1,
-        maxCostUsd: 1,
-        executeTask: async (task) => {
-          calls += 1;
-          return { output: { summary: task.id }, metadata: { usage: { costUsd: 0.6 } } };
-        },
-      })).rejects.toEqual(new WorkflowCostExceededError(1, 1.2));
-
-      expect(calls).toBe(2);
-      expect(store.getRun(runId)).toMatchObject({
-        status: "failed",
-        terminalCause: { kind: "workflow-cost-exceeded", limitUsd: 1, observedUsd: 1.2 },
-        usage: { agentRuns: 2, reused: 0, costUsd: 1.2 },
-      });
-    } finally {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  test("fails closed when maxCostUsd is set but a live attempt does not report cost", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-cost-unavailable-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    try {
-      const task = defineTask({ id: "build", agent: builder, prompt: "Build.", output: PatchReport });
-      const workflow = defineWorkflow({ name: "cost-unavailable", tasks: [task] as const });
-      const runId = store.createRun(workflow.name);
-      let calls = 0;
-
-      await expect(runWorkflow(workflow, {
-        runId,
-        store,
-        maxCostUsd: 1,
-        executeTask: async () => {
-          calls += 1;
-          return {
-            output: { summary: "built" },
-            metadata: { usage: { inputTokens: 12, outputTokens: 4 } },
-          };
-        },
-      })).rejects.toEqual(new WorkflowCostUnavailableError(1));
-
-      expect(calls).toBe(1);
-      expect(store.getRun(runId)).toMatchObject({
-        status: "failed",
-        terminalCause: { kind: "workflow-cost-unavailable", limitUsd: 1 },
-      });
-    } finally {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
+    // Queued, never failed: every task still completes, just paced.
+    expect(maxActive).toBeLessThanOrEqual(WORKFLOW_TASK_CONCURRENCY);
+    expect(result.tasks).toHaveLength(WORKFLOW_TASK_CONCURRENCY + 3);
   });
 
   const PROMPT_BUDGET_BYTES = 64 * 1024;
-
-  test("rejects an oversized prepared prompt context only when a prompt budget is requested", async () => {
-    const root = await mkdtemp(join(tmpdir(), "prism-workflow-prompt-budget-"));
-    const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-    try {
-      const task = defineTask({
-        id: "oversized",
-        agent: builder,
-        prompt: "x".repeat(PROMPT_BUDGET_BYTES),
-        output: PatchReport,
-      });
-      const workflow = defineWorkflow({ name: "prompt-budget", tasks: [task] as const });
-      const runId = store.createRun(workflow.name);
-      const observedBytes = Buffer.byteLength(
-        `${task.prompt}${workflowWorkerJsonInstruction(task)}`,
-        "utf8",
-      );
-      let calls = 0;
-
-      await expect(runWorkflow(workflow, {
-        runId,
-        store,
-        maxPromptBytes: PROMPT_BUDGET_BYTES,
-        executeTask: async () => {
-          calls += 1;
-          return { summary: "unexpected" };
-        },
-      })).rejects.toEqual(
-        new WorkflowPromptLimitError(task.id, PROMPT_BUDGET_BYTES, observedBytes),
-      );
-
-      expect(calls).toBe(0);
-      expect(store.getRun(runId)).toMatchObject({
-        status: "failed",
-        terminalCause: {
-          kind: "workflow-prompt-limit-exceeded",
-          taskId: task.id,
-          limitBytes: PROMPT_BUDGET_BYTES,
-          observedBytes,
-        },
-      });
-      expect(store.listRunTaskAttempts(runId)).toEqual([]);
-    } finally {
-      store.close();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 
   test("cancels every active fan-out executor before rejecting an unisolated task failure", async () => {
     const blockers = ["block-a", "block-b", "block-c"].map((id) => defineTask({
@@ -1660,7 +1318,6 @@ console.log(JSON.stringify(result));
     const calls: string[] = [];
 
     const result = await runWorkflow(workflow, {
-      maxConcurrentTasks: 1,
       executeTask: async (task) => {
         calls.push(task.id);
         await delay(5);
@@ -2133,52 +1790,6 @@ console.log(JSON.stringify(result));
       }
     });
 
-    test("retries a task-local idle timeout once before succeeding", async () => {
-      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-idle-"));
-      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-      try {
-        const build = defineTask({
-          id: "build",
-          agent: builder,
-          prompt: "Build.",
-          output: PatchReport,
-          worker: { retry: { backoffMs: 1 } },
-        });
-        const workflow = defineWorkflow({ name: "executor-retry-idle-success", tasks: [build] as const });
-        const runId = store.createRun(workflow.name);
-        let calls = 0;
-
-        const result = await runWorkflow(workflow, {
-          runId,
-          store,
-          taskNoProgressMs: 25,
-          executeTask: async (_task, context) => {
-            calls += 1;
-            if (calls === 1) {
-              // Never reports progress; the per-attempt idle-timeout controller aborts after 25ms.
-              return await new Promise<never>(() => undefined);
-            }
-            context?.reportProgress?.();
-            return { summary: "built" };
-          },
-        });
-
-        expect(calls).toBe(2);
-        expect(result.tasks[0]).toMatchObject({ status: "completed", output: { summary: "built" } });
-        const attempts = store.listRunTaskAttempts(runId);
-        expect(attempts).toHaveLength(2);
-        expect(attempts[0]).toMatchObject({
-          attempt: 1,
-          status: "failed",
-          failure: { kind: "executor", message: "workflow task build made no progress for 25ms" },
-        });
-        expect(attempts[1]).toMatchObject({ attempt: 2, status: "completed" });
-      } finally {
-        store.close();
-        await rm(root, { recursive: true, force: true });
-      }
-    });
-
     test("does not retry a non-retryable (config/load-shaped) executor failure — immediate terminal", async () => {
       const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-terminal-"));
       const store = await WorkflowStore.open(join(root, "runs.sqlite"));
@@ -2274,47 +1885,6 @@ console.log(JSON.stringify(result));
           status: "failed",
           terminalCause: { kind: "task-failed", taskId: "build", attempt: 3 },
         });
-      } finally {
-        store.close();
-        await rm(root, { recursive: true, force: true });
-      }
-    });
-
-    test("caps executor retry backoff by the remaining process-timeout deadline", async () => {
-      const root = await mkdtemp(join(tmpdir(), "prism-workflow-executor-retry-deadline-"));
-      const store = await WorkflowStore.open(join(root, "runs.sqlite"));
-      try {
-        const build = defineTask({
-          id: "build",
-          agent: builder,
-          prompt: "Build.",
-          output: PatchReport,
-          worker: { processTimeoutMs: 200, retry: { backoffMs: 10_000 } },
-        });
-        const workflow = defineWorkflow({ name: "executor-retry-backoff-capped", tasks: [build] as const });
-        const runId = store.createRun(workflow.name);
-        let calls = 0;
-        const startedAt = Date.now();
-
-        const result = await runWorkflow(workflow, {
-          runId,
-          store,
-          executeTask: async () => {
-            calls += 1;
-            if (calls === 1) throw new Error("codex exited with 1: transient blip");
-            return { summary: "built" };
-          },
-        });
-
-        const elapsedMs = Date.now() - startedAt;
-        expect(calls).toBe(2);
-        expect(result.tasks[0]?.status).toBe("completed");
-        // The configured 10s backoff must never be honored in full — it is capped by the
-        // task's own 200ms process-timeout deadline, not the fixed backoffMs.
-        expect(elapsedMs).toBeLessThan(3_000);
-        const retryEvent = store.listRunEvents(runId).find((event) => event.type === "task.executor.retrying");
-        expect(retryEvent).toBeDefined();
-        expect((retryEvent!.payload as { readonly backoffMs: number }).backoffMs).toBeLessThanOrEqual(200);
       } finally {
         store.close();
         await rm(root, { recursive: true, force: true });

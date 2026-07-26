@@ -159,23 +159,6 @@ describe("runWorkflowWorkerProcess process ownership", () => {
     }
   });
 
-  test("timeout kills the direct child and inherited-stdio descendant", async () => {
-    const fixture = await createProcessFixture();
-    let parentPid: number | undefined;
-    try {
-      const result = await runFixture(fixture, "wait", { processTimeoutMs: 1_000 });
-      parentPid = await readFixturePid(fixture.parentPidFile);
-      const descendantPid = await readFixturePid(fixture.descendantPidFile);
-
-      expect(result.timedOut).toBe(true);
-      expect(result.aborted).toBe(false);
-      await expectFixtureAbsent(parentPid, descendantPid);
-    } finally {
-      await cleanupFixtureGroup(parentPid);
-      await rm(fixture.root, { recursive: true, force: true });
-    }
-  });
-
   test("abort kills the direct child and inherited-stdio descendant", async () => {
     const fixture = await createProcessFixture();
     const controller = new AbortController();
@@ -186,8 +169,6 @@ describe("runWorkflowWorkerProcess process ownership", () => {
       const descendantPid = await readFixturePid(fixture.descendantPidFile);
       controller.abort();
       const result = await running;
-
-      expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(true);
       await expectFixtureAbsent(parentPid, descendantPid);
     } finally {
@@ -210,7 +191,6 @@ describe("runWorkflowWorkerProcess process ownership", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe("completed");
-      expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
       await expectFixtureAbsent(parentPid, descendantPid);
     } finally {
@@ -233,7 +213,6 @@ describe("runWorkflowWorkerProcess process ownership", () => {
       expect(result.exitCode).toBe(7);
       expect(result.stdout).toBe("stdout-unchanged");
       expect(result.stderr).toBe("stderr-unchanged");
-      expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
       await expectFixtureAbsent(parentPid, descendantPid);
     } finally {
@@ -252,7 +231,6 @@ describe("runWorkflowWorkerProcess process ownership", () => {
 
       expect(result.earlyExit).toBe("fixture-ready");
       expect(result.stdout).toBe("fixture-ready");
-      expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
       await expectFixtureAbsent(parentPid, descendantPid);
     } finally {
@@ -274,7 +252,6 @@ describe("runWorkflowWorkerProcess process ownership", () => {
 
       expect(Buffer.byteLength(result.stdout, "utf8")).toBeGreaterThanOrEqual(8192);
       expect(Buffer.byteLength(result.stderr, "utf8")).toBeGreaterThanOrEqual(8192);
-      expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
       await expectFixtureAbsent(parentPid, descendantPid);
     } finally {

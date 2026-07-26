@@ -10,7 +10,6 @@ export type OpenCodeWorkflowWorkerOptions = {
   readonly bin?: string;
   readonly model?: string;
   readonly resolvedPermission: WorkflowPermissionMode;
-  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 } & WorkflowTaskRepairLoopOption<"opencode">;
@@ -140,8 +139,6 @@ export const runOpenCodeWorkflowTask = async (
   const prompt = options.repair !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_OPENCODE_PROCESS_TIMEOUT_MS);
   const args = buildOpenCodeArgs({
     cwd: options.cwd,
     agent: task.agent.name,
@@ -151,23 +148,16 @@ export const runOpenCodeWorkflowTask = async (
     permission: options.resolvedPermission,
   });
 
-  const { exitCode, stdout, stderr, durationMs, timedOut, aborted } = await runWorkflowWorkerProcess({
+  const { exitCode, stdout, stderr, durationMs, aborted } = await runWorkflowWorkerProcess({
     command,
     args,
     cwd: options.cwd,
-    processTimeoutMs,
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
   if (aborted) {
     throw new OpenCodeWorkflowWorkerError(
       "opencode was aborted by Prism workflow stop",
-      workflowWorkerFailureMetadata({ adapter: "opencode-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
-    );
-  }
-  if (timedOut) {
-    throw new OpenCodeWorkflowWorkerError(
-      `opencode exceeded Prism process timeout after ${processTimeoutMs}ms`,
       workflowWorkerFailureMetadata({ adapter: "opencode-cli", stderr, sessionId: parseOpenCodeJsonStream(stdout).sessionId ?? sessionId }),
     );
   }
@@ -186,7 +176,6 @@ export const runOpenCodeWorkflowTask = async (
       nativeAgent: task.agent.name,
       model: options.model,
       durationMs,
-      processTimeoutMs,
       sessionId: sessionId ?? stream.sessionId,
       ...summarizeWorkflowWorkerStderr(stderr),
     },

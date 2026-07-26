@@ -216,9 +216,6 @@ const workflow = program
   .command("workflow")
   .description("Validate Prism workflow files");
 
-const WORKFLOW_PROMPT_BUDGET_DESCRIPTION =
-  "Maximum UTF-8 bytes in each prepared task prompt context (unlimited unless set)";
-
 const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum) {
@@ -229,14 +226,6 @@ const parseIntegerAtLeast = (value: string, minimum: number, message: string): n
 
 const parsePositiveInteger = (value: string): number =>
   parseIntegerAtLeast(value, 1, "must be a positive integer");
-
-const parseFiniteNonNegative = (value: string): number => {
-  const parsed = Number(value);
-  if (value.trim().length === 0 || !Number.isFinite(parsed) || parsed < 0) {
-    throw new InvalidArgumentError("must be a finite non-negative number");
-  }
-  return parsed;
-};
 
 const SINCE_RELATIVE_DURATION_PATTERN = /^(\d+)(m|h|d)$/;
 
@@ -513,13 +502,6 @@ workflow
   .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
-  .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
-  .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
-  .option("--max-wall-ms <ms>", "Maximum workflow wall time in milliseconds", parsePositiveInteger)
-  .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
-  .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
-  .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
-  .option("--max-prompt-bytes <bytes>", WORKFLOW_PROMPT_BUDGET_DESCRIPTION, parsePositiveInteger)
   .option("--store <path>", "SQLite workflow store path")
   .option("--detach", "Start the workflow in a detached background process and return its run id")
   .addOption(new CommanderOption("--run-id <id>").hideHelp())
@@ -529,13 +511,6 @@ workflow
     readonly worker?: string;
     readonly model?: string;
     readonly permission?: string;
-    readonly maxConcurrentTasks?: number;
-    readonly taskTimeoutMs?: number;
-    readonly maxWallMs?: number;
-    readonly taskNoProgressMs?: number;
-    readonly maxTasks?: number;
-    readonly maxCostUsd?: number;
-    readonly maxPromptBytes?: number;
     readonly store?: string;
     readonly detach?: boolean;
     readonly runId?: string;
@@ -643,17 +618,11 @@ workflow
         ? parseWorkflowPermissionMode(options.permission)
         : undefined;
       const workerExecutor = outputs === null
-        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission, taskTimeoutMs: options.taskTimeoutMs })
+        ? createWorkflowWorkerExecutor({ worker: options.worker, cwd: process.cwd(), model: options.model, fallbackPermission: parsedPermission })
         : null;
       const result = await runWorkflow(workflow, {
         store,
         mockOutput: outputs !== null,
-        maxConcurrentTasks: options.maxConcurrentTasks,
-        maxWallMs: options.maxWallMs,
-        taskNoProgressMs: options.taskNoProgressMs,
-        maxTasks: options.maxTasks,
-        maxCostUsd: options.maxCostUsd,
-        maxPromptBytes: options.maxPromptBytes,
         runId: executionRunId,
         abortSignal: terminationController.signal,
         runtimeOptions: {
@@ -1453,26 +1422,12 @@ workflowRuns
   .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
-  .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
-  .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
-  .option("--max-wall-ms <ms>", "Maximum workflow wall time in milliseconds", parsePositiveInteger)
-  .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
-  .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
-  .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
-  .option("--max-prompt-bytes <bytes>", WORKFLOW_PROMPT_BUDGET_DESCRIPTION, parsePositiveInteger)
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
     readonly worker?: string;
     readonly model?: string;
     readonly permission?: string;
-    readonly maxConcurrentTasks?: number;
-    readonly taskTimeoutMs?: number;
-    readonly maxWallMs?: number;
-    readonly taskNoProgressMs?: number;
-    readonly maxTasks?: number;
-    readonly maxCostUsd?: number;
-    readonly maxPromptBytes?: number;
   }) => {
     try {
       const storePath = resolveWorkflowStorePath(options.store);
@@ -1495,26 +1450,12 @@ workflowRuns
   .option("--worker <worker>", "Fallback worker for tasks without task-level worker selection")
   .option("--model <model>", "Fallback model for tasks without task-level model selection")
   .option("--permission <mode>", "Fallback permission mode for tasks without task-level permission (legacy|permissive|restricted|interactive|sandbox-read-only|sandbox-workspace-write|full-access)")
-  .option("--max-concurrent-tasks <count>", "Maximum concurrent workflow task executions", parsePositiveInteger)
-  .option("--task-timeout-ms <ms>", "Default per-task process timeout in milliseconds", parsePositiveInteger)
-  .option("--max-wall-ms <ms>", "Maximum workflow wall time in milliseconds", parsePositiveInteger)
-  .option("--task-no-progress-ms <ms>", "Maximum per-task attempt inactivity in milliseconds", parsePositiveInteger)
-  .option("--max-tasks <count>", "Maximum live cache-miss task dispatches", parsePositiveInteger)
-  .option("--max-cost-usd <usd>", "Maximum observed provider cost in USD", parseFiniteNonNegative)
-  .option("--max-prompt-bytes <bytes>", WORKFLOW_PROMPT_BUDGET_DESCRIPTION, parsePositiveInteger)
   .action(async (runId: string, file: string, options: {
     readonly store?: string;
     readonly mockOutput?: string;
     readonly worker?: string;
     readonly model?: string;
     readonly permission?: string;
-    readonly maxConcurrentTasks?: number;
-    readonly taskTimeoutMs?: number;
-    readonly maxWallMs?: number;
-    readonly taskNoProgressMs?: number;
-    readonly maxTasks?: number;
-    readonly maxCostUsd?: number;
-    readonly maxPromptBytes?: number;
   }) => {
     try {
       const storePath = resolveWorkflowStorePath(options.store);

@@ -118,6 +118,9 @@ const workflowWorkerAdapters = {
         cwd: options.cwd,
         model: resolution?.model,
         variant: resolution?.variant,
+        sessionPersistence: task.worker?.worker === "codex-cli"
+          ? task.worker.sessionPersistence ?? "persistent"
+          : "persistent",
         resolvedPermission: options.resolvedPermission,
         processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,

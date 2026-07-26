@@ -116,3 +116,46 @@ describe("runCodexWorkflowTask failure metadata (OBS-006)", () => {
     }
   });
 });
+
+describe("runCodexWorkflowTask session persistence", () => {
+  test("passes --ephemeral and never exposes the transient Codex session id", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-codex-ephemeral-"));
+    try {
+      const fakeCodex = join(root, "fake-codex-ephemeral.mjs");
+      const callsFile = join(root, "calls.jsonl");
+      await writeFile(fakeCodex, [
+        "#!/usr/bin/env node",
+        "import { appendFileSync, writeFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "const outputIndex = args.indexOf('--output-last-message');",
+        `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(args) + '\\n');`,
+        "writeFileSync(args[outputIndex + 1], JSON.stringify({ summary: 'ok' }));",
+        "console.log(JSON.stringify({ type: 'session_meta', id: 'transient-codex-session' }));",
+        "console.error('session id: transient-codex-session');",
+        "",
+      ].join("\n"));
+      await chmod(fakeCodex, 0o755);
+
+      const result = await runCodexWorkflowTask(task, {
+        cwd: root,
+        bin: fakeCodex,
+        resolvedPermission: "legacy",
+        sessionPersistence: "ephemeral",
+      });
+
+      const args = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
+      expect(args).toContain("--ephemeral");
+      expect(args).not.toContain("resume");
+      expect(result.output).toEqual({ summary: "ok" });
+      expect(result.metadata).toMatchObject({
+        adapter: "codex-cli",
+        sessionPersistence: "ephemeral",
+      });
+      expect(result.metadata).not.toHaveProperty("sessionId");
+      expect(result.metadata).not.toHaveProperty("stderrExcerpt");
+      expect(JSON.stringify(result.metadata)).not.toContain("transient-codex-session");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

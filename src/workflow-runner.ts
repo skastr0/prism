@@ -2,6 +2,7 @@ import { Cause, Effect, Either, Exit, Layer, Option } from "effect";
 import { compareCodePoint } from "@skastr0/prism-sdk/stable-json";
 import { computeContentHash } from "./content-hash.js";
 import {
+  assertWorkflowTaskSessionPersistence,
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
   decodeTaskOutput,
   type AnyWorkflowDefinition,
@@ -126,6 +127,7 @@ export type WorkflowTaskProgressReporter = (source?: WorkflowTaskProgressSource)
 
 export type WorkflowTaskRepairFallbackReason =
   | "adapter-does-not-support-continuation"
+  | "ephemeral-session"
   | "executor-does-not-advertise-continuation"
   | "missing-session-id";
 
@@ -198,6 +200,7 @@ const assertWorkflowRepairBudget = (
 };
 
 const assertWorkflowTaskRepairBudgets = (task: AnyWorkflowTask): void => {
+  assertWorkflowTaskSessionPersistence(task);
   assertWorkflowRepairBudget("maxRepairs", task.finish?.maxRepairs);
   assertWorkflowRepairBudget("maxDecodeRepairs", task.finish?.maxDecodeRepairs);
   const retryMaxAttempts = task.worker?.retry?.maxAttempts;
@@ -284,8 +287,16 @@ const hasNonContractMetadata = (metadata: Record<string, unknown> | undefined): 
 };
 
 const repairExecutionPlan = (
+  task: AnyWorkflowTask,
   metadata: Record<string, unknown> | undefined,
 ): WorkflowTaskRepairPlan => {
+  if (
+    (task.worker?.worker === "codex-cli"
+      && task.worker.sessionPersistence === "ephemeral")
+    || metadata?.sessionPersistence === "ephemeral"
+  ) {
+    return { mode: "fresh-executor-invocation", fallbackReason: "ephemeral-session" };
+  }
   const session = workflowStableSessionFromMetadata(metadata);
   if (session !== undefined) {
     return { mode: "native-continuation", continuation: session };
@@ -463,10 +474,19 @@ const executeOrReuseTask = async (input: {
   readonly executeTask: WorkflowTaskExecutor;
   readonly context?: WorkflowTaskExecutionContext;
 }): Promise<{ readonly rawOutput: unknown; readonly metadata?: Record<string, unknown> }> => {
+  const normalizeForTask = (
+    metadata: Record<string, unknown>,
+  ): Record<string, unknown> | undefined => normalizeWorkflowSessionMetadata({
+    ...metadata,
+    ...(input.task.worker?.worker === "codex-cli"
+      && input.task.worker.sessionPersistence === "ephemeral"
+      ? { sessionPersistence: "ephemeral" }
+      : {}),
+  });
   if (input.cached !== undefined && input.cached !== null) {
     return {
       rawOutput: input.cached.output,
-      metadata: normalizeWorkflowSessionMetadata({
+      metadata: normalizeForTask({
         ...workflowContractMetadata,
         ...(input.cached.metadata ?? {}),
         cachedFrom: "workflow_task_records",
@@ -477,13 +497,16 @@ const executeOrReuseTask = async (input: {
   if (!isWorkflowTaskExecution(executed)) {
     return {
       rawOutput: executed,
-      metadata: metadataWithRepairExecution(workflowContractMetadata, input.context?.repair),
+      metadata: metadataWithRepairExecution(
+        normalizeForTask(workflowContractMetadata),
+        input.context?.repair,
+      ),
     };
   }
   return {
     rawOutput: executed.output,
     metadata: metadataWithRepairExecution(
-      normalizeWorkflowSessionMetadata({ ...workflowContractMetadata, ...(executed.metadata ?? {}) }),
+      normalizeForTask({ ...workflowContractMetadata, ...(executed.metadata ?? {}) }),
       input.context?.repair,
     ),
   };
@@ -1276,7 +1299,7 @@ const executeWorkflowTask = async (input: {
     };
     const beginRepair = (criterion: string, repairPrompt: string): void => {
       assertRunStillRunning(store, runId);
-      const plan = repairExecutionPlan(metadata);
+      const plan = repairExecutionPlan(task, metadata);
       if (plan.mode === "native-continuation") {
         pendingRepair = {
           attempt: repairs,

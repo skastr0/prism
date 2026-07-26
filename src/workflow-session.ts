@@ -206,6 +206,7 @@ export const workflowAdapterFromMetadata = (
 export const workflowStableSessionFromMetadata = (
   metadata: Record<string, unknown> | undefined,
 ): WorkflowStableSession | undefined => {
+  if (metadata?.sessionPersistence === "ephemeral") return undefined;
   const adapter = workflowAdapterFromMetadata(metadata);
   if (adapter === undefined) return undefined;
   const sessionId = stableSessionIdFromUnknown(metadata?.sessionId)
@@ -215,10 +216,34 @@ export const workflowStableSessionFromMetadata = (
   return sessionId === undefined ? undefined : { adapter, sessionId };
 };
 
+const EPHEMERAL_SESSION_POINTER_KEYS = new Set([
+  "conversationId",
+  "conversation_id",
+  "externalSessionPointer",
+  "sessionId",
+  "sessionID",
+  "session_id",
+  "threadId",
+  "thread_id",
+]);
+
+const omitEphemeralSessionPointers = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(omitEphemeralSessionPointers);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !EPHEMERAL_SESSION_POINTER_KEYS.has(key))
+      .map(([key, nested]) => [key, omitEphemeralSessionPointers(nested)]),
+  );
+};
+
 export const normalizeWorkflowSessionMetadata = (
   metadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined => {
   if (metadata === undefined) return undefined;
+  if (metadata.sessionPersistence === "ephemeral") {
+    return omitEphemeralSessionPointers(metadata) as Record<string, unknown>;
+  }
   const session = workflowStableSessionFromMetadata(metadata);
   if (session === undefined) return metadata;
   const { sessionID: _sessionID, session_id: _sessionIdSnake, externalSessionPointer: _externalSessionPointer, ...rest } = metadata;

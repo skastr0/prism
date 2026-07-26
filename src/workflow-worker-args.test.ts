@@ -140,6 +140,18 @@ describe("workflow worker continuation arg mapping", () => {
     expect(args).not.toContain("--last");
   });
 
+  test("codex maps ephemeral task sessions without a continuation selector", () => {
+    const args = buildCodexArgs({
+      cwd: "/r",
+      outputPath: "/tmp/o",
+      prompt: "p",
+      sessionPersistence: "ephemeral",
+    });
+    expect(args).toContain("--ephemeral");
+    expect(args).not.toContain("resume");
+    expect(args.at(-1)).toBe("p");
+  });
+
   test("amp maps continuation to exact thread id", () => {
     const args = buildAmpArgs({ prompt: "p", permission: "legacy", sessionId: "s1" });
     expect(args.slice(args.indexOf("threads"), args.indexOf("threads") + 3)).toEqual(["threads", "continue", "s1"]);

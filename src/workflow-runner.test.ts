@@ -25,6 +25,7 @@ import {
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
   defineTask,
   defineWorkflow,
+  type AnyWorkflowTask,
   type PhaseContract,
   type WorkflowAgentRef,
 } from "./workflows.js";
@@ -459,6 +460,53 @@ console.log(JSON.stringify(result));
     );
   });
 
+  test("keeps Codex session persistence outside task cache identity", () => {
+    const base = {
+      id: "build",
+      agent: builder,
+      prompt: "Study the session.",
+      output: PatchReport,
+      cacheKey: "session-study-v1",
+    } as const;
+    const persistent = defineTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "persistent" },
+    });
+    const ephemeral = defineTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
+    });
+
+    expect(workflowTaskIdentity("session-study", ephemeral)).toEqual(
+      workflowTaskIdentity("session-study", persistent),
+    );
+  });
+
+  test("fails closed on invalid session persistence before executor dispatch", async () => {
+    const invalid = {
+      ...defineTask({
+        id: "build",
+        agent: builder,
+        prompt: "Build.",
+        output: PatchReport,
+      }),
+      worker: {
+        worker: "grok",
+        sessionPersistence: "ephemeral",
+      },
+    } as unknown as AnyWorkflowTask;
+    const workflow = defineWorkflow({ name: "invalid-session-persistence", tasks: [invalid] as const });
+    let calls = 0;
+
+    await expect(runWorkflow(workflow, {
+      executeTask: async () => {
+        calls += 1;
+        return { summary: "should not run" };
+      },
+    })).rejects.toThrow("sessionPersistence is supported only for worker 'codex-cli'");
+    expect(calls).toBe(0);
+  });
+
   test("repairs malformed worker JSON before failing the task", async () => {
     const build = defineTask({
       id: "build",
@@ -574,6 +622,84 @@ console.log(JSON.stringify(result));
     } finally {
       if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CLAUDE_BIN;
       else process.env.PRISM_WORKFLOW_CLAUDE_BIN = oldBin;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("repairs ephemeral Codex tasks with a fresh full-context invocation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-workflow-codex-ephemeral-repair-"));
+    const fakeCodex = join(root, "fake-codex.mjs");
+    const callsFile = join(root, "calls.jsonl");
+    const oldBin = process.env.PRISM_WORKFLOW_CODEX_BIN;
+    await writeFile(fakeCodex, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync, writeFileSync } from 'node:fs';",
+      "const args = process.argv.slice(2);",
+      "const outputIndex = args.indexOf('--output-last-message');",
+      "const prompt = args.at(-1);",
+      "const repaired = prompt.includes('did not satisfy the task finish requirements');",
+      `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ ephemeral: args.includes('--ephemeral'), resume: args.includes('resume'), prompt }) + '\\n');`,
+      "writeFileSync(args[outputIndex + 1], JSON.stringify({ summary: repaired ? 'ok after repair' : 'bad' }));",
+      "console.log(JSON.stringify({ type: 'session_meta', id: repaired ? 'transient-repair-session' : 'transient-initial-session' }));",
+      "",
+    ].join("\n"));
+    await chmod(fakeCodex, 0o755);
+    process.env.PRISM_WORKFLOW_CODEX_BIN = fakeCodex;
+
+    try {
+      const task = defineTask({
+        id: "study",
+        agent: builder,
+        prompt: "Study this historical session.",
+        output: PatchReport,
+        worker: {
+          worker: "codex-cli",
+          sessionPersistence: "ephemeral",
+        },
+        finish: {
+          maxRepairs: 1,
+          criteria: [{
+            name: "summary-prefix",
+            check: ({ output }) => output.summary.startsWith("ok")
+              ? Effect.void
+              : Effect.fail(new Error("summary must start with ok")),
+          }],
+        },
+      });
+      const workflow = defineWorkflow({ name: "runner-codex-ephemeral-repair", tasks: [task] as const });
+      const result = await runWorkflow(workflow, {
+        executeTask: createWorkflowWorkerExecutor({ worker: "codex-cli", cwd: root }),
+      });
+
+      const calls = (await Bun.file(callsFile).text()).trim().split("\n").map((line) =>
+        JSON.parse(line) as { ephemeral: boolean; resume: boolean; prompt: string }
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls.every((call) => call.ephemeral)).toBe(true);
+      expect(calls.every((call) => !call.resume)).toBe(true);
+      expect(calls[1]?.prompt).toContain("Study this historical session.");
+      expect(calls[1]?.prompt).toContain("summary must start with ok");
+      expect(result.tasks[0]?.output).toEqual({ summary: "ok after repair" });
+      expect(result.tasks[0]?.metadata).toMatchObject({
+        adapter: "codex-cli",
+        sessionPersistence: "ephemeral",
+        repairExecution: {
+          mode: "fresh-executor-invocation",
+          fallbackReason: "ephemeral-session",
+        },
+        finish: {
+          repairs: 1,
+          repairMode: "fresh-executor-invocation",
+          repairAttempts: [expect.objectContaining({
+            mode: "fresh-executor-invocation",
+            fallbackReason: "ephemeral-session",
+          })],
+        },
+      });
+      expect(result.tasks[0]?.metadata).not.toHaveProperty("sessionId");
+    } finally {
+      if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CODEX_BIN;
+      else process.env.PRISM_WORKFLOW_CODEX_BIN = oldBin;
       await rm(root, { recursive: true, force: true });
     }
   });

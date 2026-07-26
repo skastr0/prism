@@ -2253,6 +2253,136 @@ describe("workflow store", () => {
     store.close();
   });
 
+  test("records requested Codex session persistence while sharing completed cache results", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const base = {
+      id: "study",
+      agent: builder,
+      prompt: "Study the historical session.",
+      output: Output,
+      cacheKey: "session-study-v1",
+    } as const;
+    const persistent = defineTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "persistent" },
+    });
+    const ephemeral = defineTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
+    });
+    const persistentWorkflow = defineWorkflow({ name: "session-study", tasks: [persistent] as const });
+    const ephemeralWorkflow = defineWorkflow({ name: "session-study", tasks: [ephemeral] as const });
+
+    expect(workflowTaskIdentity("session-study", persistent)).toEqual(
+      workflowTaskIdentity("session-study", ephemeral),
+    );
+    const persistentSessionId = "persistent-session-must-not-replay";
+    const first = await runWorkflow(persistentWorkflow, {
+      store,
+      executeTask: async () => ({
+        output: { summary: "cached study" },
+        metadata: {
+          adapter: "codex-cli",
+          sessionPersistence: "persistent",
+          sessionId: persistentSessionId,
+          repairExecution: {
+            mode: "native-continuation",
+            continuation: {
+              adapter: "codex-cli",
+              sessionId: persistentSessionId,
+            },
+          },
+          finish: {
+            repairAttempts: [{
+              mode: "native-continuation",
+              continuation: {
+                adapter: "codex-cli",
+                sessionId: persistentSessionId,
+              },
+            }],
+          },
+        },
+      }),
+    });
+    const second = await runWorkflow(ephemeralWorkflow, {
+      store,
+      executeTask: async () => {
+        throw new Error("ephemeral request should reuse the completed result");
+      },
+    });
+
+    expect(second.tasks[0]?.cached).toBe(true);
+    expect(second.tasks[0]?.metadata?.sessionPersistence).toBe("ephemeral");
+    expect(JSON.stringify(second.tasks[0]?.metadata)).not.toContain(persistentSessionId);
+    expect(JSON.stringify(store.listRunTasks(second.runId!))).not.toContain(persistentSessionId);
+    expect(JSON.stringify(store.workflowMonitorState(second.runId!))).not.toContain(persistentSessionId);
+    expect(JSON.stringify(await store.exportRun(second.runId!))).not.toContain(persistentSessionId);
+    expect(store.listRunTaskSnapshots(first.runId!)[0]?.worker).toEqual({
+      worker: "codex-cli",
+      sessionPersistence: "persistent",
+    });
+    expect(store.listRunTaskSnapshots(second.runId!)[0]?.worker).toEqual({
+      worker: "codex-cli",
+      sessionPersistence: "ephemeral",
+    });
+    store.close();
+  });
+
+  test("scrubs legacy Codex session pointers from an ephemeral cache replay", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+    const base = {
+      id: "study",
+      agent: builder,
+      prompt: "Study the legacy cached session.",
+      output: Output,
+      cacheKey: "legacy-session-study-v1",
+    } as const;
+    const persistent = defineTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "persistent" },
+    });
+    const ephemeral = defineTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
+    });
+    const legacySessionId = "legacy-session-must-not-replay";
+
+    await runWorkflow(defineWorkflow({
+      name: "legacy-session-study",
+      tasks: [persistent] as const,
+    }), {
+      store,
+      executeTask: async () => ({
+        output: { summary: "legacy cached study" },
+        metadata: {
+          adapter: "codex-cli",
+          sessionId: legacySessionId,
+          repairExecution: {
+            mode: "native-continuation",
+            continuation: { adapter: "codex-cli", sessionId: legacySessionId },
+          },
+        },
+      }),
+    });
+    const replay = await runWorkflow(defineWorkflow({
+      name: "legacy-session-study",
+      tasks: [ephemeral] as const,
+    }), {
+      store,
+      executeTask: async () => {
+        throw new Error("legacy completed result should be replayed");
+      },
+    });
+
+    expect(replay.tasks[0]?.cached).toBe(true);
+    expect(replay.tasks[0]?.metadata?.sessionPersistence).toBe("ephemeral");
+    expect(JSON.stringify(replay.tasks[0]?.metadata)).not.toContain(legacySessionId);
+    expect(JSON.stringify(await store.exportRun(replay.runId!))).not.toContain(legacySessionId);
+    store.close();
+  });
+
   test("builds compact execution evidence for completed, failed, cached, repaired, and event-only tasks", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));

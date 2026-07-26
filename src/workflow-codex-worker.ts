@@ -1,9 +1,9 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
-import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
+import type { AnyWorkflowTask, CodexWorkflowSessionPersistence, WorkflowPermissionMode } from "./workflows.js";
+import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
+import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema } from "./workflow-output-schema.js";
@@ -15,6 +15,7 @@ export type CodexWorkflowWorkerOptions = {
   readonly bin?: string;
   readonly model?: string;
   readonly variant?: string;
+  readonly sessionPersistence?: CodexWorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
@@ -78,6 +79,27 @@ const codexPermissionArgs = (mode: WorkflowPermissionMode): ReadonlyArray<string
   }
 };
 
+type CodexWorkflowSessionArgs =
+  | {
+    readonly sessionPersistence?: "persistent";
+    readonly resumeSessionId?: string;
+  }
+  | {
+    readonly sessionPersistence: "ephemeral";
+    readonly resumeSessionId?: never;
+  };
+
+const codexStderrMetadata = (
+  stderr: string,
+  sessionPersistence: CodexWorkflowSessionPersistence,
+): Record<string, unknown> => {
+  const summary = summarizeWorkflowWorkerStderr(stderr);
+  if (sessionPersistence === "persistent") return { ...summary };
+  return Object.fromEntries(
+    Object.entries(summary).filter(([key]) => key !== "stderrExcerpt"),
+  );
+};
+
 export const buildCodexArgs = (input: {
   readonly cwd: string;
   readonly model?: string;
@@ -85,13 +107,13 @@ export const buildCodexArgs = (input: {
   readonly outputSchemaPath?: string;
   readonly outputPath: string;
   readonly prompt: string;
-  readonly resumeSessionId?: string;
   readonly permission?: WorkflowPermissionMode;
-}): ReadonlyArray<string> => {
+} & CodexWorkflowSessionArgs): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
   assertCodexPermission(mode);
   return [
     "exec",
+    ...(input.sessionPersistence === "ephemeral" ? ["--ephemeral"] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.variant !== undefined
       ? ["--config", `model_reasoning_effort=${JSON.stringify(input.variant)}`]
@@ -138,6 +160,13 @@ export const runCodexWorkflowTask = async (
   task: AnyWorkflowTask,
   options: CodexWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
+  const sessionPersistence = options.sessionPersistence ?? "persistent";
+  if (sessionPersistence === "ephemeral" && options.repair?.mode === "native-continuation") {
+    throw new CodexWorkflowWorkerError(
+      "ephemeral Codex workflow tasks cannot use native session continuation",
+      { adapter: "codex-cli", sessionPersistence },
+    );
+  }
   const tempRoot = await mkdtemp(join(tmpdir(), "prism-workflow-codex-"));
   const outputPath = join(tempRoot, "last-message.txt");
   const outputSchema = tryWorkflowJsonSchemaFromEffectSchema(task.output);
@@ -147,7 +176,7 @@ export const runCodexWorkflowTask = async (
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS)
     ?? 360_000;
   const resumeSessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
-  const prompt = options.repair !== undefined
+  const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const args = buildCodexArgs({
@@ -157,7 +186,9 @@ export const runCodexWorkflowTask = async (
     outputSchemaPath,
     outputPath,
     prompt,
-    resumeSessionId,
+    ...(sessionPersistence === "ephemeral"
+      ? { sessionPersistence }
+      : { sessionPersistence, ...(resumeSessionId !== undefined ? { resumeSessionId } : {}) }),
     permission: options.resolvedPermission,
   });
 
@@ -173,42 +204,62 @@ export const runCodexWorkflowTask = async (
       abortSignal: options.abortSignal,
       onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     });
+    const sessionId = sessionPersistence === "persistent"
+      ? codexSessionId(stdout, stderr) ?? resumeSessionId
+      : undefined;
+    const failureMetadata = (): Record<string, unknown> => ({
+      adapter: "codex-cli",
+      ...codexStderrMetadata(stderr, sessionPersistence),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      sessionPersistence,
+    });
     if (aborted) {
       throw new CodexWorkflowWorkerError(
         "codex was aborted by Prism workflow stop",
-        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+        failureMetadata(),
       );
     }
     if (timedOut) {
       throw new CodexWorkflowWorkerError(
         `codex exceeded Prism process timeout after ${processTimeoutMs}ms`,
-        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+        failureMetadata(),
       );
     }
     if (exitCode !== 0) {
       throw new CodexWorkflowWorkerError(
         `codex exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
-        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+        failureMetadata(),
       );
     }
     const outputText = await readFile(outputPath, "utf8").catch((cause) => {
       throw new CodexWorkflowWorkerError(
         `codex did not write --output-last-message: ${cause instanceof Error ? cause.message : String(cause)}`,
-        workflowWorkerFailureMetadata({ adapter: "codex-cli", stderr, sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId }),
+        failureMetadata(),
       );
     });
+    const metadata: Record<string, unknown> = {
+      adapter: "codex-cli",
+      model: options.model,
+      modelVariant: options.variant,
+      durationMs,
+      processTimeoutMs,
+      sessionPersistence,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      codexNativeOutputSchema: outputSchemaPath !== undefined,
+      ...codexStderrMetadata(stderr, sessionPersistence),
+    };
+    let output: unknown;
+    try {
+      output = parseWorkflowWorkerJsonOutput(outputText);
+    } catch (error) {
+      if (error instanceof WorkflowOutputParseError) {
+        throw new WorkflowOutputParseError(error.message, error.rawText, metadata);
+      }
+      throw error;
+    }
     return {
-      output: parseWorkflowWorkerJsonOutput(outputText),
-      metadata: {
-        adapter: "codex-cli",
-        model: options.model,
-        modelVariant: options.variant,
-        durationMs,
-        processTimeoutMs,
-        sessionId: codexSessionId(stdout, stderr) ?? resumeSessionId,
-        codexNativeOutputSchema: outputSchemaPath !== undefined,
-        ...summarizeWorkflowWorkerStderr(stderr),
-      },
+      output,
+      metadata,
     };
   } finally {
     await rm(tempRoot, { recursive: true, force: true });

@@ -95,6 +95,8 @@ export type WorkflowPermissionMode =
 
 export type AntigravityWorkflowPermissionMode = Extract<WorkflowPermissionMode, "legacy" | "permissive" | "full-access">;
 
+export type CodexWorkflowSessionPersistence = "persistent" | "ephemeral";
+
 /**
  * Per-task override for the executor-level transient-failure retry (WFE-009). Only
  * classified-transient executor failures (process/idle timeout, unclassified non-zero
@@ -118,12 +120,19 @@ type WorkflowTaskWorkerOptionsBase = {
 
 export type WorkflowTaskWorkerOptions =
   | (WorkflowTaskWorkerOptionsBase & {
-    readonly worker?: Exclude<WorkflowWorkerId, "antigravity-cli">;
+    readonly worker?: Exclude<WorkflowWorkerId, "antigravity-cli" | "codex-cli">;
     readonly permission?: WorkflowPermissionMode;
+    readonly sessionPersistence?: never;
+  })
+  | (WorkflowTaskWorkerOptionsBase & {
+    readonly worker: "codex-cli";
+    readonly permission?: WorkflowPermissionMode;
+    readonly sessionPersistence?: CodexWorkflowSessionPersistence;
   })
   | (WorkflowTaskWorkerOptionsBase & {
     readonly worker: "antigravity-cli";
     readonly permission?: AntigravityWorkflowPermissionMode;
+    readonly sessionPersistence?: never;
   });
 
 export type WorkflowResolvedModelEntry = Readonly<{ readonly model: string }>;
@@ -434,6 +443,31 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
+const hasValidWorkflowTaskSessionPersistence = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  const sessionPersistence = value.sessionPersistence;
+  if (sessionPersistence === undefined) return true;
+  return value.worker === "codex-cli"
+    && (sessionPersistence === "persistent" || sessionPersistence === "ephemeral");
+};
+
+export const assertWorkflowTaskSessionPersistence = (task: AnyWorkflowTask): void => {
+  const worker = task.worker as unknown;
+  if (hasValidWorkflowTaskSessionPersistence(worker)) return;
+  if (
+    isRecord(worker)
+    && worker.worker === "codex-cli"
+  ) {
+    throw new TypeError(
+      `workflow task '${task.id}' worker.sessionPersistence must be 'persistent' or 'ephemeral'`,
+    );
+  }
+  throw new TypeError(
+    `workflow task '${task.id}' worker.sessionPersistence is supported only for worker 'codex-cli'`,
+  );
+};
+
 export const isWorkflowAgentRef = (value: unknown): value is WorkflowAgentRef =>
   isRecord(value) &&
   value.kind === "agent-ref" &&
@@ -451,7 +485,8 @@ export const isWorkflowTask = (value: unknown): value is AnyWorkflowTask =>
   isWorkflowAgentRef(value.agent) &&
   typeof value.prompt === "string" &&
   Schema.isSchema(value.output) &&
-  (value.cacheKey === undefined || typeof value.cacheKey === "string");
+  (value.cacheKey === undefined || typeof value.cacheKey === "string") &&
+  hasValidWorkflowTaskSessionPersistence(value.worker);
 
 export interface WorkflowDefinition<Name extends string, Tasks extends ReadonlyArray<AnyWorkflowTask>> {
   readonly kind: "workflow";

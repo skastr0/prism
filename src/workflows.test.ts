@@ -4,6 +4,7 @@ import {
   decodeTaskOutput,
   defineTask,
   defineWorkflow,
+  isWorkflowTask,
   phase,
   resolveWorkflowTaskModel,
   resolveWorkflowTaskModelResolution,
@@ -101,6 +102,47 @@ describe("workflow authoring primitives", () => {
     // @ts-expect-error Antigravity cannot enforce restricted permissions per invocation.
     const bad: WorkflowTaskWorkerOptions = { worker: "antigravity-cli", permission: "restricted" };
     void bad;
+  });
+
+  test("Codex worker options expose session persistence only for Codex tasks", () => {
+    const ephemeral: WorkflowTaskWorkerOptions = {
+      worker: "codex-cli",
+      sessionPersistence: "ephemeral",
+    };
+    const persistent: WorkflowTaskWorkerOptions = {
+      worker: "codex-cli",
+      sessionPersistence: "persistent",
+    };
+    expect(ephemeral.sessionPersistence).toBe("ephemeral");
+    expect(persistent.sessionPersistence).toBe("persistent");
+
+    const unsupported: WorkflowTaskWorkerOptions = {
+      worker: "grok",
+      // @ts-expect-error Session persistence is a Codex execution capability.
+      sessionPersistence: "ephemeral",
+    };
+    void unsupported;
+  });
+
+  test("workflow task runtime guard rejects invalid or non-Codex session persistence", () => {
+    const base = defineTask({
+      id: "build",
+      agent: builder,
+      prompt: "Build.",
+      output: PatchReport,
+    });
+    expect(isWorkflowTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
+    })).toBe(true);
+    expect(isWorkflowTask({
+      ...base,
+      worker: { worker: "codex-cli", sessionPersistence: "temporary" },
+    })).toBe(false);
+    expect(isWorkflowTask({
+      ...base,
+      worker: { worker: "grok", sessionPersistence: "ephemeral" },
+    })).toBe(false);
   });
 
   test("preserve literal task and agent refs", () => {

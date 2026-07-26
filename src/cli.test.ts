@@ -233,7 +233,7 @@ const agent = {
   description: "Build specialist",
   sourceHash: "${"a".repeat(64)}",
   manifestHash: "${"b".repeat(64)}",
-  installs: ["grok"],
+  installs: ["codex-cli"],
 } as const satisfies WorkflowAgentRef;
 
 export const workflow = defineWorkflow({
@@ -244,6 +244,7 @@ export const workflow = defineWorkflow({
     agent,
     prompt: "Return a summary.",
     output: Schema.Struct({ summary: Schema.String }),
+    worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
   })] as const,
 });
 `);

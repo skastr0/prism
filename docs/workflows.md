@@ -123,7 +123,7 @@ worker: {
   modelResolver?: (models: WorkflowResolvedModelTarget) => string;
   profile?: string;
   permission?: WorkflowPermissionMode;
-  sessionPersistence?: "persistent" | "ephemeral"; // codex-cli only
+  sessionPersistence?: "persistent" | "ephemeral"; // claude-code | codex-cli | omp
   restrictedTools?: readonly string[];   // tool restriction list passed to the worker
   processTimeoutMs?: number;             // hard per-attempt process timeout
   retry?: { maxAttempts?: number; backoffMs?: number };
@@ -134,7 +134,15 @@ worker: {
 
 **Retry** (executor-level, WFE-009): only *classified-transient* executor failures retry — process/idle timeout, unclassified non-zero exit. Config/load errors and cancellation-barrier outcomes never retry. `maxAttempts` counts total attempts (default 2, i.e. one retry); `backoffMs` spaces them.
 
-**Codex session persistence.** A task pinned to `worker: "codex-cli"` may set `sessionPersistence: "ephemeral"`, which passes `codex exec --ephemeral` and prevents Codex from writing a resumable session to disk. The default is `"persistent"`. Ephemeral tasks use a fresh Codex invocation with the full original task context when Prism requests an output or finish-criterion repair; they never advertise native continuation metadata. The field is rejected for other workers.
+**Session persistence.** A task pinned to a worker with a native no-save mode may set `sessionPersistence: "ephemeral"`. The default is `"persistent"`.
+
+| Worker | Native ephemeral flag |
+|---|---|
+| `claude-code` | `--no-session-persistence` |
+| `codex-cli` | `codex exec --ephemeral` |
+| `omp` | `--no-session` |
+
+Ephemeral tasks use a fresh invocation with the full original task context when Prism requests an output or finish-criterion repair; they never advertise native continuation metadata. The field is rejected for workers without a native no-save mode.
 
 Tasks without a `worker` fall back to the CLI: `prism workflow run --worker <id> --model <m> --permission <mode>` supplies defaults for any task that didn't pin its own.
 
@@ -297,7 +305,7 @@ Every run persists to a per-project SQLite store (`workflows.sqlite` under `PRIS
 
 - Re-running a workflow replays completed tasks from cache instantly — resume after a crash costs nothing for finished work.
 - Changing a task's semantics changes its address — only that task re-executes.
-- Codex `sessionPersistence` does not change the address: it controls harness-side session retention, while the completed task result remains reusable across persistent and ephemeral runs.
+- `sessionPersistence` does not change the address: it controls harness-side session retention, while the completed task result remains reusable across persistent and ephemeral runs.
 - The cache is durable across runs. To force a fresh result, bump the `cacheKey` (`"…-v2"`); for full isolation, use a fresh store (`--store <path>`) — there is deliberately no cache-bypass flag.
 
 Inspect it:

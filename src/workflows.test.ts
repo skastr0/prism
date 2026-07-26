@@ -104,37 +104,44 @@ describe("workflow authoring primitives", () => {
     void bad;
   });
 
-  test("Codex worker options expose session persistence only for Codex tasks", () => {
-    const ephemeral: WorkflowTaskWorkerOptions = {
-      worker: "codex-cli",
-      sessionPersistence: "ephemeral",
-    };
+  test("native no-save workers expose session persistence at the type level", () => {
+    const ephemeralWorkers: ReadonlyArray<WorkflowTaskWorkerOptions> = [
+      { worker: "claude-code", sessionPersistence: "ephemeral" },
+      { worker: "codex-cli", sessionPersistence: "ephemeral" },
+      { worker: "omp", sessionPersistence: "ephemeral" },
+    ];
     const persistent: WorkflowTaskWorkerOptions = {
       worker: "codex-cli",
       sessionPersistence: "persistent",
     };
-    expect(ephemeral.sessionPersistence).toBe("ephemeral");
+    expect(ephemeralWorkers.map((worker) => worker.sessionPersistence)).toEqual([
+      "ephemeral",
+      "ephemeral",
+      "ephemeral",
+    ]);
     expect(persistent.sessionPersistence).toBe("persistent");
 
     const unsupported: WorkflowTaskWorkerOptions = {
       worker: "grok",
-      // @ts-expect-error Session persistence is a Codex execution capability.
+      // @ts-expect-error Grok exposes no native no-save workflow mode.
       sessionPersistence: "ephemeral",
     };
     void unsupported;
   });
 
-  test("workflow task runtime guard rejects invalid or non-Codex session persistence", () => {
+  test("workflow task runtime guard accepts native no-save workers and rejects the rest", () => {
     const base = defineTask({
       id: "build",
       agent: builder,
       prompt: "Build.",
       output: PatchReport,
     });
-    expect(isWorkflowTask({
-      ...base,
-      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
-    })).toBe(true);
+    for (const worker of ["claude-code", "codex-cli", "omp"] as const) {
+      expect(isWorkflowTask({
+        ...base,
+        worker: { worker, sessionPersistence: "ephemeral" },
+      })).toBe(true);
+    }
     expect(isWorkflowTask({
       ...base,
       worker: { worker: "codex-cli", sessionPersistence: "temporary" },

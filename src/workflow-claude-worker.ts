@@ -2,9 +2,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { generatedPluginIdForOwner } from "./compile/generated-plugin.js";
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type {
+  AnyWorkflowTask,
+  WorkflowPermissionMode,
+  WorkflowSessionPersistence,
+} from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
+import {
+  summarizeWorkflowWorkerStderrForSession,
+  workflowWorkerFailureMetadata,
+} from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema, type WorkflowJsonSchema } from "./workflow-output-schema.js";
@@ -15,6 +22,7 @@ export type ClaudeWorkflowWorkerOptions = {
   readonly cwd: string;
   readonly bin?: string;
   readonly model?: string;
+  readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
@@ -168,16 +176,25 @@ const assertClaudePermission = (
   return assertNeverWorkflowPermissionMode("claude-code", mode);
 };
 
+type ClaudeWorkflowSessionArgs =
+  | {
+    readonly sessionPersistence?: "persistent";
+    readonly resumeSessionId?: string;
+  }
+  | {
+    readonly sessionPersistence: "ephemeral";
+    readonly resumeSessionId?: never;
+  };
+
 export const buildClaudeArgs = (input: {
   readonly agent: string;
   readonly model?: string;
   readonly prompt: string;
-  readonly resumeSessionId?: string;
   readonly generatedPlugin?: ClaudeGeneratedPluginDiscovery;
   readonly outputSchema?: WorkflowJsonSchema;
   readonly permission?: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
-}): ReadonlyArray<string> => {
+} & ClaudeWorkflowSessionArgs): ReadonlyArray<string> => {
   const mode = input.permission ?? "permissive";
   assertClaudePermission(mode, input.restrictedTools);
 
@@ -196,6 +213,7 @@ export const buildClaudeArgs = (input: {
     "--output-format",
     "stream-json",
     "--verbose",
+    ...(input.sessionPersistence === "ephemeral" ? ["--no-session-persistence"] : []),
     ...(input.resumeSessionId !== undefined ? ["--resume", input.resumeSessionId] : ["--agent", input.agent]),
     ...(input.model !== undefined ? ["--model", input.model] : []),
     ...(input.generatedPlugin?.pluginDir !== undefined ? ["--plugin-dir", input.generatedPlugin.pluginDir] : []),
@@ -209,12 +227,21 @@ export const runClaudeWorkflowTask = async (
   task: AnyWorkflowTask,
   options: ClaudeWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
+  const sessionPersistence = options.sessionPersistence ?? "persistent";
+  if (sessionPersistence === "ephemeral" && options.repair?.mode === "native-continuation") {
+    throw new ClaudeWorkflowWorkerError(
+      "ephemeral Claude Code workflow tasks cannot use native session continuation",
+      { adapter: "claude-code", sessionPersistence },
+    );
+  }
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CLAUDE_BIN ?? "claude";
   const processTimeoutMs = options.processTimeoutMs
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CLAUDE_PROCESS_TIMEOUT_MS)
     ?? 360_000;
-  const resumeSessionId = options.repair?.continuation?.sessionId;
-  const prompt = options.repair !== undefined && resumeSessionId !== undefined
+  const resumeSessionId = options.repair?.mode === "native-continuation"
+    ? options.repair.continuation.sessionId
+    : undefined;
+  const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const generatedPlugin = discoverClaudeGeneratedPlugin(task);
@@ -222,10 +249,12 @@ export const runClaudeWorkflowTask = async (
   const args = buildClaudeArgs({
     agent: task.agent.name,
     model: options.model,
-    resumeSessionId,
     generatedPlugin,
     outputSchema,
     prompt,
+    ...(sessionPersistence === "ephemeral"
+      ? { sessionPersistence }
+      : { sessionPersistence, ...(resumeSessionId !== undefined ? { resumeSessionId } : {}) }),
     permission: options.resolvedPermission,
     restrictedTools: options.restrictedTools,
   });
@@ -238,22 +267,30 @@ export const runClaudeWorkflowTask = async (
     abortSignal: options.abortSignal,
     onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
   });
+  const failureMetadata = (): Record<string, unknown> => workflowWorkerFailureMetadata({
+    adapter: "claude-code",
+    stderr,
+    sessionPersistence,
+    ...(sessionPersistence === "persistent"
+      ? { sessionId: claudeFailureSessionId(stdout, resumeSessionId) }
+      : {}),
+  });
   if (aborted) {
     throw new ClaudeWorkflowWorkerError(
       "claude was aborted by Prism workflow stop",
-      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+      failureMetadata(),
     );
   }
   if (timedOut) {
     throw new ClaudeWorkflowWorkerError(
       `claude exceeded Prism process timeout after ${processTimeoutMs}ms`,
-      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+      failureMetadata(),
     );
   }
   if (exitCode !== 0) {
     throw new ClaudeWorkflowWorkerError(
       `claude exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
-      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+      failureMetadata(),
     );
   }
 
@@ -264,7 +301,7 @@ export const runClaudeWorkflowTask = async (
     if (error instanceof ClaudeWorkflowWorkerError) {
       throw new ClaudeWorkflowWorkerError(
         error.message,
-        workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: claudeFailureSessionId(stdout, resumeSessionId) }),
+        failureMetadata(),
       );
     }
     throw error;
@@ -273,9 +310,19 @@ export const runClaudeWorkflowTask = async (
   if (envelope.is_error !== undefined && envelope.is_error !== false) {
     throw new ClaudeWorkflowWorkerError(
       `claude returned an error: ${typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result)}`,
-      workflowWorkerFailureMetadata({ adapter: "claude-code", stderr, sessionId: envelope.session_id ?? resumeSessionId }),
+      workflowWorkerFailureMetadata({
+        adapter: "claude-code",
+        stderr,
+        sessionPersistence,
+        ...(sessionPersistence === "persistent"
+          ? { sessionId: envelope.session_id ?? resumeSessionId }
+          : {}),
+      }),
     );
   }
+  const sessionId = sessionPersistence === "persistent"
+    ? envelope.session_id ?? resumeSessionId
+    : undefined;
   return {
     output: claudeEnvelopeOutput(envelope),
     metadata: {
@@ -284,8 +331,9 @@ export const runClaudeWorkflowTask = async (
       model: options.model,
       durationMs,
       processTimeoutMs,
-      ...summarizeWorkflowWorkerStderr(stderr),
-      sessionId: envelope.session_id ?? resumeSessionId,
+      sessionPersistence,
+      ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
+      ...(sessionId !== undefined ? { sessionId } : {}),
       claudeDurationMs: envelope.duration_ms,
       totalCostUsd: envelope.total_cost_usd,
       numTurns: envelope.num_turns,
@@ -296,10 +344,10 @@ export const runClaudeWorkflowTask = async (
           repairExecution: {
             attempt: options.repair.attempt,
             criterion: options.repair.criterion,
-            mode: resumeSessionId !== undefined ? "native-continuation" : "fresh-executor-invocation",
-            ...(resumeSessionId !== undefined
-              ? { continuation: { adapter: "claude-code", sessionId: resumeSessionId } }
-              : { fallbackReason: "missing-session-id" }),
+            mode: options.repair.mode,
+            ...(options.repair.mode === "native-continuation"
+              ? { continuation: options.repair.continuation }
+              : { fallbackReason: options.repair.fallbackReason }),
           },
         }
         : {}),

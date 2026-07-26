@@ -2329,7 +2329,71 @@ describe("workflow store", () => {
     store.close();
   });
 
-  test("scrubs legacy Codex session pointers from an ephemeral cache replay", async () => {
+  test("records Claude and OMP session persistence while sharing completed cache results", async () => {
+    const root = await createTempRoot();
+    const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
+
+    for (const [worker, adapter] of [
+      ["claude-code", "claude-code"],
+      ["omp", "omp-cli"],
+    ] as const) {
+      const base = {
+        id: `study-${worker}`,
+        agent: builder,
+        prompt: `Study the historical session with ${worker}.`,
+        output: Output,
+        cacheKey: `session-study-${worker}-v1`,
+      } as const;
+      const persistent = defineTask({
+        ...base,
+        worker: { worker, sessionPersistence: "persistent" },
+      });
+      const ephemeral = defineTask({
+        ...base,
+        worker: { worker, sessionPersistence: "ephemeral" },
+      });
+      const workflowName = `session-study-${worker}`;
+      const sessionId = `${worker}-persistent-session-must-not-replay`;
+      const first = await runWorkflow(defineWorkflow({
+        name: workflowName,
+        tasks: [persistent] as const,
+      }), {
+        store,
+        executeTask: async () => ({
+          output: { summary: "cached study" },
+          metadata: {
+            adapter,
+            sessionPersistence: "persistent",
+            sessionId,
+          },
+        }),
+      });
+      const second = await runWorkflow(defineWorkflow({
+        name: workflowName,
+        tasks: [ephemeral] as const,
+      }), {
+        store,
+        executeTask: async () => {
+          throw new Error("ephemeral request should reuse the completed result");
+        },
+      });
+
+      expect(second.tasks[0]?.cached).toBe(true);
+      expect(second.tasks[0]?.metadata?.sessionPersistence).toBe("ephemeral");
+      expect(JSON.stringify(second.tasks[0]?.metadata)).not.toContain(sessionId);
+      expect(store.listRunTaskSnapshots(first.runId!)[0]?.worker).toEqual({
+        worker,
+        sessionPersistence: "persistent",
+      });
+      expect(store.listRunTaskSnapshots(second.runId!)[0]?.worker).toEqual({
+        worker,
+        sessionPersistence: "ephemeral",
+      });
+    }
+    store.close();
+  });
+
+  test("scrubs legacy session pointers from an ephemeral OMP cache replay", async () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     const base = {
@@ -2341,11 +2405,11 @@ describe("workflow store", () => {
     } as const;
     const persistent = defineTask({
       ...base,
-      worker: { worker: "codex-cli", sessionPersistence: "persistent" },
+      worker: { worker: "omp", sessionPersistence: "persistent" },
     });
     const ephemeral = defineTask({
       ...base,
-      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
+      worker: { worker: "omp", sessionPersistence: "ephemeral" },
     });
     const legacySessionId = "legacy-session-must-not-replay";
 
@@ -2357,11 +2421,11 @@ describe("workflow store", () => {
       executeTask: async () => ({
         output: { summary: "legacy cached study" },
         metadata: {
-          adapter: "codex-cli",
+          adapter: "omp-cli",
           sessionId: legacySessionId,
           repairExecution: {
             mode: "native-continuation",
-            continuation: { adapter: "codex-cli", sessionId: legacySessionId },
+            continuation: { adapter: "omp-cli", sessionId: legacySessionId },
           },
         },
       }),

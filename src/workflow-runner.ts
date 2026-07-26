@@ -5,6 +5,7 @@ import {
   assertWorkflowTaskSessionPersistence,
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
   decodeTaskOutput,
+  resolveWorkflowTaskSessionPersistence,
   type AnyWorkflowDefinition,
   type AnyWorkflowTask,
   type WorkflowJudgeCriterionContext,
@@ -291,8 +292,7 @@ const repairExecutionPlan = (
   metadata: Record<string, unknown> | undefined,
 ): WorkflowTaskRepairPlan => {
   if (
-    (task.worker?.worker === "codex-cli"
-      && task.worker.sessionPersistence === "ephemeral")
+    resolveWorkflowTaskSessionPersistence(task) === "ephemeral"
     || metadata?.sessionPersistence === "ephemeral"
   ) {
     return { mode: "fresh-executor-invocation", fallbackReason: "ephemeral-session" };
@@ -478,8 +478,7 @@ const executeOrReuseTask = async (input: {
     metadata: Record<string, unknown>,
   ): Record<string, unknown> | undefined => normalizeWorkflowSessionMetadata({
     ...metadata,
-    ...(input.task.worker?.worker === "codex-cli"
-      && input.task.worker.sessionPersistence === "ephemeral"
+    ...(resolveWorkflowTaskSessionPersistence(input.task) === "ephemeral"
       ? { sessionPersistence: "ephemeral" }
       : {}),
   });

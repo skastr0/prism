@@ -66,6 +66,25 @@ describe("workflowWorkerFailureMetadata (OBS-006)", () => {
     expect(metadata.stderrExcerpt).toBe("boom");
   });
 
+  test("ephemeral failures retain diagnostics without session pointers or stderr text", () => {
+    const metadata = workflowWorkerFailureMetadata({
+      adapter: "omp-cli",
+      stderr: "session id: transient-omp-session",
+      sessionId: "transient-omp-session",
+      sessionPersistence: "ephemeral",
+    });
+
+    expect(metadata).toMatchObject({
+      adapter: "omp-cli",
+      sessionPersistence: "ephemeral",
+      stderrBytes: 33,
+      stderrSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(metadata).not.toHaveProperty("sessionId");
+    expect(metadata).not.toHaveProperty("stderrExcerpt");
+    expect(JSON.stringify(metadata)).not.toContain("transient-omp-session");
+  });
+
   test("still reports the adapter when stderr is empty", () => {
     const metadata = workflowWorkerFailureMetadata({ adapter: "hermes", stderr: "   " });
 

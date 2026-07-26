@@ -233,19 +233,37 @@ const agent = {
   description: "Build specialist",
   sourceHash: "${"a".repeat(64)}",
   manifestHash: "${"b".repeat(64)}",
-  installs: ["codex-cli"],
+  installs: ["claude-code", "codex-cli", "omp"],
 } as const satisfies WorkflowAgentRef;
 
 export const workflow = defineWorkflow({
   name: "typed-smoke",
-  tasks: [defineTask({
-    id: "build",
-    phase: "implement",
-    agent,
-    prompt: "Return a summary.",
-    output: Schema.Struct({ summary: Schema.String }),
-    worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
-  })] as const,
+  tasks: [
+    defineTask({
+      id: "claude",
+      phase: "implement",
+      agent,
+      prompt: "Return a summary.",
+      output: Schema.Struct({ summary: Schema.String }),
+      worker: { worker: "claude-code", sessionPersistence: "ephemeral" },
+    }),
+    defineTask({
+      id: "codex",
+      phase: "implement",
+      agent,
+      prompt: "Return a summary.",
+      output: Schema.Struct({ summary: Schema.String }),
+      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
+    }),
+    defineTask({
+      id: "omp",
+      phase: "implement",
+      agent,
+      prompt: "Return a summary.",
+      output: Schema.Struct({ summary: Schema.String }),
+      worker: { worker: "omp", sessionPersistence: "ephemeral" },
+    }),
+  ] as const,
 });
 `);
 

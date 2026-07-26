@@ -460,7 +460,7 @@ console.log(JSON.stringify(result));
     );
   });
 
-  test("keeps Codex session persistence outside task cache identity", () => {
+  test("keeps harness session persistence outside task cache identity", () => {
     const base = {
       id: "build",
       agent: builder,
@@ -468,18 +468,20 @@ console.log(JSON.stringify(result));
       output: PatchReport,
       cacheKey: "session-study-v1",
     } as const;
-    const persistent = defineTask({
-      ...base,
-      worker: { worker: "codex-cli", sessionPersistence: "persistent" },
-    });
-    const ephemeral = defineTask({
-      ...base,
-      worker: { worker: "codex-cli", sessionPersistence: "ephemeral" },
-    });
+    for (const worker of ["claude-code", "codex-cli", "omp"] as const) {
+      const persistent = defineTask({
+        ...base,
+        worker: { worker, sessionPersistence: "persistent" },
+      });
+      const ephemeral = defineTask({
+        ...base,
+        worker: { worker, sessionPersistence: "ephemeral" },
+      });
 
-    expect(workflowTaskIdentity("session-study", ephemeral)).toEqual(
-      workflowTaskIdentity("session-study", persistent),
-    );
+      expect(workflowTaskIdentity("session-study", ephemeral)).toEqual(
+        workflowTaskIdentity("session-study", persistent),
+      );
+    }
   });
 
   test("fails closed on invalid session persistence before executor dispatch", async () => {
@@ -503,7 +505,7 @@ console.log(JSON.stringify(result));
         calls += 1;
         return { summary: "should not run" };
       },
-    })).rejects.toThrow("sessionPersistence is supported only for worker 'codex-cli'");
+    })).rejects.toThrow("sessionPersistence is supported only for workers 'claude-code', 'codex-cli', 'omp'");
     expect(calls).toBe(0);
   });
 
@@ -701,6 +703,73 @@ console.log(JSON.stringify(result));
       if (oldBin === undefined) delete process.env.PRISM_WORKFLOW_CODEX_BIN;
       else process.env.PRISM_WORKFLOW_CODEX_BIN = oldBin;
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("plans fresh full-context repairs for every native ephemeral worker", async () => {
+    const cases = [
+      { worker: "claude-code", adapter: "claude-code" },
+      { worker: "codex-cli", adapter: "codex-cli" },
+      { worker: "omp", adapter: "omp-cli" },
+    ] as const;
+
+    for (const { worker, adapter } of cases) {
+      const task = defineTask({
+        id: `study-${worker}`,
+        agent: builder,
+        prompt: "Study this historical session.",
+        output: PatchReport,
+        worker: { worker, sessionPersistence: "ephemeral" },
+        finish: {
+          maxRepairs: 1,
+          criteria: [{
+            name: "summary-prefix",
+            check: ({ output }) => output.summary.startsWith("ok")
+              ? Effect.void
+              : Effect.fail(new Error("summary must start with ok")),
+          }],
+        },
+      });
+      const repairContexts: Array<{
+        mode: string;
+        fallbackReason?: string;
+        prompt: string;
+      }> = [];
+      let calls = 0;
+      const result = await runWorkflow(defineWorkflow({
+        name: `runner-${worker}-ephemeral-repair`,
+        tasks: [task] as const,
+      }), {
+        executeTask: async (attemptTask, context) => {
+          calls += 1;
+          if (context?.repair !== undefined) {
+            repairContexts.push({
+              mode: context.repair.mode,
+              ...(context.repair.mode === "fresh-executor-invocation"
+                ? { fallbackReason: context.repair.fallbackReason }
+                : {}),
+              prompt: attemptTask.prompt,
+            });
+          }
+          return {
+            output: { summary: calls === 1 ? "bad" : "ok after repair" },
+            metadata: {
+              adapter,
+              sessionPersistence: "ephemeral",
+              sessionId: `transient-${worker}-session`,
+            },
+          };
+        },
+      });
+
+      expect(calls).toBe(2);
+      expect(repairContexts).toEqual([expect.objectContaining({
+        mode: "fresh-executor-invocation",
+        fallbackReason: "ephemeral-session",
+        prompt: expect.stringContaining("Study this historical session."),
+      })]);
+      expect(result.tasks[0]?.metadata).not.toHaveProperty("sessionId");
+      expect(JSON.stringify(result.tasks[0]?.metadata)).not.toContain(`transient-${worker}-session`);
     }
   });
 

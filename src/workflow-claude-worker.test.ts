@@ -24,6 +24,47 @@ const task = {
   output: Schema.Struct({ summary: Schema.String }),
 };
 
+describe("runClaudeWorkflowTask session persistence", () => {
+  test("passes --no-session-persistence and never exposes the transient Claude session id", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-claude-ephemeral-"));
+    try {
+      const fakeClaude = join(root, "fake-claude-ephemeral.mjs");
+      const callsFile = join(root, "calls.jsonl");
+      await writeFile(fakeClaude, [
+        "#!/usr/bin/env node",
+        "import { appendFileSync } from 'node:fs';",
+        `appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+        "console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'transient-claude-session' }));",
+        "console.log(JSON.stringify({ type: 'result', result: JSON.stringify({ summary: 'ok' }), session_id: 'transient-claude-session' }));",
+        "console.error('session id: transient-claude-session');",
+        "",
+      ].join("\n"));
+      await chmod(fakeClaude, 0o755);
+
+      const result = await runClaudeWorkflowTask(task, {
+        cwd: root,
+        bin: fakeClaude,
+        resolvedPermission: "legacy",
+        sessionPersistence: "ephemeral",
+      });
+
+      const args = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
+      expect(args).toContain("--no-session-persistence");
+      expect(args).not.toContain("--resume");
+      expect(result.output).toEqual({ summary: "ok" });
+      expect(result.metadata).toMatchObject({
+        adapter: "claude-code",
+        sessionPersistence: "ephemeral",
+      });
+      expect(result.metadata).not.toHaveProperty("sessionId");
+      expect(result.metadata).not.toHaveProperty("stderrExcerpt");
+      expect(JSON.stringify(result.metadata)).not.toContain("transient-claude-session");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runClaudeWorkflowTask failure metadata (OBS-006)", () => {
   test("non-zero exit attaches adapter + stderr excerpt to the thrown error", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-claude-fail-"));

@@ -15,6 +15,7 @@ import { isKimiAuthOutput, buildKimiArgs } from "./workflow-kimi-worker.js";
 import { buildOpenCodeArgs } from "./workflow-opencode-worker.js";
 import { buildHermesArgs } from "./workflow-hermes-worker.js";
 import { buildCodexArgs } from "./workflow-codex-worker.js";
+import { buildOmpArgs } from "./workflow-omp-worker.js";
 import { supportedWorkflowWorkers, getWorkflowWorkerAdapter, WorkflowPermissionError, type WorkflowWorkerAdapterOptionsForCapability } from "./workflow-workers.js";
 import type { WorkflowTaskRepairContext } from "./workflow-runner.js";
 
@@ -108,6 +109,20 @@ describe("workflow worker continuation arg mapping", () => {
     expect(args).not.toContain("--continue");
   });
 
+  test("claude maps ephemeral task sessions without a continuation selector", () => {
+    const args = buildClaudeArgs({
+      agent: "a",
+      prompt: "p",
+      sessionPersistence: "ephemeral",
+    });
+    expect(args).toContain("--no-session-persistence");
+    expect(args).not.toContain("--resume");
+    expect(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2)).toEqual([
+      "--agent",
+      "a",
+    ]);
+  });
+
   test("opencode uses exact session id", () => {
     const args = buildOpenCodeArgs({ cwd: "/r", agent: "a", prompt: "p", sessionId: "s1" });
     expect(args.slice(args.indexOf("-s"), args.indexOf("-s") + 2)).toEqual(["-s", "s1"]);
@@ -149,6 +164,18 @@ describe("workflow worker continuation arg mapping", () => {
     });
     expect(args).toContain("--ephemeral");
     expect(args).not.toContain("resume");
+    expect(args.at(-1)).toBe("p");
+  });
+
+  test("omp maps ephemeral task sessions without a continuation selector", () => {
+    const args = buildOmpArgs({
+      cwd: "/r",
+      systemPromptPath: "/agent.md",
+      prompt: "p",
+      sessionPersistence: "ephemeral",
+    });
+    expect(args).toContain("--no-session");
+    expect(args).not.toContain("--resume");
     expect(args.at(-1)).toBe("p");
   });
 

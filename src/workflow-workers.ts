@@ -1,4 +1,11 @@
-import { resolveWorkflowTaskModel, resolveWorkflowTaskModelResolution, type AnyWorkflowTask, type WorkflowPermissionMode, type WorkflowWorkerId } from "./workflows.js";
+import {
+  resolveWorkflowTaskModel,
+  resolveWorkflowTaskModelResolution,
+  resolveWorkflowTaskSessionPersistence,
+  type AnyWorkflowTask,
+  type WorkflowPermissionMode,
+  type WorkflowWorkerId,
+} from "./workflows.js";
 import { runAmpWorkflowTask } from "./workflow-amp-worker.js";
 import { resolveAntigravityPermission, runAntigravityWorkflowTask } from "./workflow-antigravity-worker.js";
 import { runClaudeWorkflowTask } from "./workflow-claude-worker.js";
@@ -99,6 +106,7 @@ const workflowWorkerAdapters = {
     runTask: (task, options) => runClaudeWorkflowTask(task, {
       cwd: options.cwd,
       model: resolveWorkflowTaskModel(task, { worker: "claude-code", fallbackModel: options.model }),
+      sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "claude-code"),
       resolvedPermission: options.resolvedPermission,
       restrictedTools: options.restrictedTools,
       processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
@@ -118,9 +126,7 @@ const workflowWorkerAdapters = {
         cwd: options.cwd,
         model: resolution?.model,
         variant: resolution?.variant,
-        sessionPersistence: task.worker?.worker === "codex-cli"
-          ? task.worker.sessionPersistence ?? "persistent"
-          : "persistent",
+        sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "codex-cli"),
         resolvedPermission: options.resolvedPermission,
         processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,
         abortSignal: options.abortSignal,
@@ -207,6 +213,7 @@ const workflowWorkerAdapters = {
         provider: resolution?.provider,
         profile: task.worker?.profile ?? options.profile,
         thinking: resolution?.variant,
+        sessionPersistence: resolveWorkflowTaskSessionPersistence(task, "omp"),
         resolvedPermission: options.resolvedPermission,
         restrictedTools: options.restrictedTools,
         processTimeoutMs: task.worker?.processTimeoutMs ?? options.processTimeoutMs,

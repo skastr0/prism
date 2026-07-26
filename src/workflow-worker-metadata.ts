@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { WorkflowSessionPersistence } from "./workflows.js";
 
 export const DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES = 4096;
 
@@ -41,6 +42,17 @@ export const summarizeWorkflowWorkerStderr = (
   };
 };
 
+export const summarizeWorkflowWorkerStderrForSession = (
+  stderr: string,
+  sessionPersistence: WorkflowSessionPersistence,
+  maxExcerptBytes = DEFAULT_WORKFLOW_WORKER_STDERR_EXCERPT_BYTES,
+): WorkflowWorkerStderrMetadata => {
+  const summary = summarizeWorkflowWorkerStderr(stderr, maxExcerptBytes);
+  if (sessionPersistence === "persistent") return summary;
+  const { stderrExcerpt: _stderrExcerpt, ...safeSummary } = summary;
+  return safeSummary;
+};
+
 /**
  * Forensics attached to a worker adapter's thrown error on the failure path (OBS-006).
  * On success, every adapter already returns `{ adapter, ..., sessionId, ...stderr summary }`
@@ -55,9 +67,21 @@ export const workflowWorkerFailureMetadata = (input: {
   readonly adapter: string;
   readonly stderr: string;
   readonly sessionId?: string;
+  readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly maxExcerptBytes?: number;
 }): Record<string, unknown> => ({
   adapter: input.adapter,
-  ...summarizeWorkflowWorkerStderr(input.stderr, input.maxExcerptBytes),
-  ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+  ...(input.sessionPersistence === undefined
+    ? summarizeWorkflowWorkerStderr(input.stderr, input.maxExcerptBytes)
+    : summarizeWorkflowWorkerStderrForSession(
+      input.stderr,
+      input.sessionPersistence,
+      input.maxExcerptBytes,
+    )),
+  ...(input.sessionPersistence !== undefined
+    ? { sessionPersistence: input.sessionPersistence }
+    : {}),
+  ...(input.sessionPersistence !== "ephemeral" && input.sessionId !== undefined
+    ? { sessionId: input.sessionId }
+    : {}),
 });

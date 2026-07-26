@@ -174,6 +174,42 @@ describe("OMP workflow execution", () => {
     }
   });
 
+  test("passes --no-session and never exposes the transient OMP session id", async () => {
+    const root = await mkdtemp(join(tmpdir(), "prism-omp-ephemeral-"));
+    try {
+      const projectAgent = join(root, ".omp", "agents", "builder.md");
+      await writeText(projectAgent, "project compiled agent\n");
+      const callsFile = join(root, "calls.jsonl");
+      const fakeOmp = join(root, "fake-omp-ephemeral.mjs");
+      await writeFile(fakeOmp, [
+        fakeOmpEventStream(callsFile, "transient-omp-session"),
+        "console.error('session id: transient-omp-session');",
+      ].join("\n"));
+      await chmod(fakeOmp, 0o755);
+
+      const result = await runOmpWorkflowTask(task, {
+        cwd: root,
+        bin: fakeOmp,
+        resolvedPermission: "legacy",
+        sessionPersistence: "ephemeral",
+      });
+
+      const args = JSON.parse((await Bun.file(callsFile).text()).trim()) as string[];
+      expect(args).toContain("--no-session");
+      expect(args).not.toContain("--resume");
+      expect(result.output).toEqual({ summary: "ok" });
+      expect(result.metadata).toMatchObject({
+        adapter: "omp-cli",
+        sessionPersistence: "ephemeral",
+      });
+      expect(result.metadata).not.toHaveProperty("sessionId");
+      expect(result.metadata).not.toHaveProperty("stderrExcerpt");
+      expect(JSON.stringify(result.metadata)).not.toContain("transient-omp-session");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("repairs by resuming the exact OMP session with the same compiled agent", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-omp-worker-"));
     try {

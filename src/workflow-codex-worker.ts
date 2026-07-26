@@ -1,9 +1,16 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnyWorkflowTask, CodexWorkflowSessionPersistence, WorkflowPermissionMode } from "./workflows.js";
+import type {
+  AnyWorkflowTask,
+  WorkflowPermissionMode,
+  WorkflowSessionPersistence,
+} from "./workflows.js";
 import { parseWorkflowWorkerJsonOutput, WorkflowOutputParseError, workflowWorkerJsonInstruction } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr } from "./workflow-worker-metadata.js";
+import {
+  summarizeWorkflowWorkerStderrForSession,
+  workflowWorkerFailureMetadata,
+} from "./workflow-worker-metadata.js";
 import { parsePositiveInteger, runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 import { assertNeverWorkflowPermissionMode, WorkflowPermissionError } from "./workflow-permissions.js";
 import { tryWorkflowJsonSchemaFromEffectSchema } from "./workflow-output-schema.js";
@@ -15,7 +22,7 @@ export type CodexWorkflowWorkerOptions = {
   readonly bin?: string;
   readonly model?: string;
   readonly variant?: string;
-  readonly sessionPersistence?: CodexWorkflowSessionPersistence;
+  readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
@@ -88,17 +95,6 @@ type CodexWorkflowSessionArgs =
     readonly sessionPersistence: "ephemeral";
     readonly resumeSessionId?: never;
   };
-
-const codexStderrMetadata = (
-  stderr: string,
-  sessionPersistence: CodexWorkflowSessionPersistence,
-): Record<string, unknown> => {
-  const summary = summarizeWorkflowWorkerStderr(stderr);
-  if (sessionPersistence === "persistent") return { ...summary };
-  return Object.fromEntries(
-    Object.entries(summary).filter(([key]) => key !== "stderrExcerpt"),
-  );
-};
 
 export const buildCodexArgs = (input: {
   readonly cwd: string;
@@ -207,11 +203,11 @@ export const runCodexWorkflowTask = async (
     const sessionId = sessionPersistence === "persistent"
       ? codexSessionId(stdout, stderr) ?? resumeSessionId
       : undefined;
-    const failureMetadata = (): Record<string, unknown> => ({
+    const failureMetadata = (): Record<string, unknown> => workflowWorkerFailureMetadata({
       adapter: "codex-cli",
-      ...codexStderrMetadata(stderr, sessionPersistence),
-      ...(sessionId !== undefined ? { sessionId } : {}),
+      stderr,
       sessionPersistence,
+      ...(sessionId !== undefined ? { sessionId } : {}),
     });
     if (aborted) {
       throw new CodexWorkflowWorkerError(
@@ -246,7 +242,7 @@ export const runCodexWorkflowTask = async (
       sessionPersistence,
       ...(sessionId !== undefined ? { sessionId } : {}),
       codexNativeOutputSchema: outputSchemaPath !== undefined,
-      ...codexStderrMetadata(stderr, sessionPersistence),
+      ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
     };
     let output: unknown;
     try {

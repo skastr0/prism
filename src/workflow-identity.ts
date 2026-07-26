@@ -1,9 +1,10 @@
 import { stableJsonHash, type StableJsonValue } from "@skastr0/prism-sdk/stable-json";
 import {
   DEFAULT_WORKFLOW_DECODE_REPAIRS,
+  resolveWorkflowTaskSessionPersistence,
   resolveWorkflowTaskModel,
   type AnyWorkflowTask,
-  type CodexWorkflowSessionPersistence,
+  type WorkflowSessionPersistence,
   type WorkflowRuntimeOptions,
 } from "./workflows.js";
 import { WORKFLOW_WORKER_JSON_CONTRACT_VERSION, WORKFLOW_WORKER_JSON_INSTRUCTION_SOURCE } from "./workflow-worker-contract.js";
@@ -56,7 +57,7 @@ export interface WorkflowRunTaskSnapshot {
     readonly worker?: string;
     readonly model?: string;
     readonly profile?: string;
-    readonly sessionPersistence?: CodexWorkflowSessionPersistence;
+    readonly sessionPersistence?: WorkflowSessionPersistence;
   };
   readonly outputSchema?: unknown;
   readonly finishCriteria: ReadonlyArray<string>;
@@ -107,7 +108,7 @@ export const workflowTaskIdentity = (
       workerSemantics: workflowWorkerSemanticsVersion(worker),
       model: model ?? null,
       profile: task.worker?.profile ?? null,
-      // Codex session retention changes harness persistence, not task output semantics.
+      // Harness session retention changes persistence, not task output semantics.
       // Keep it out of the content address so persistent and ephemeral executions share
       // Prism's completed-result cache.
       outputSchema: ((task.output as { readonly ast?: unknown }).ast ?? null) as StableJsonValue,
@@ -154,11 +155,7 @@ const taskWorkerSnapshot = (
   const worker = task.worker?.worker ?? runtimeOptions.fallbackWorker;
   const model = resolveWorkflowTaskModel(task, { worker, fallbackModel: runtimeOptions.fallbackModel });
   const profile = task.worker?.profile;
-  const sessionPersistence = worker === "codex-cli"
-    ? task.worker?.worker === "codex-cli"
-      ? task.worker.sessionPersistence ?? "persistent"
-      : "persistent"
-    : undefined;
+  const sessionPersistence = resolveWorkflowTaskSessionPersistence(task, worker);
   if (worker === undefined && model === undefined && profile === undefined && sessionPersistence === undefined) return undefined;
   return {
     ...(worker !== undefined ? { worker } : {}),

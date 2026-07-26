@@ -1,11 +1,18 @@
 import { join } from "node:path";
 import { exists, expandPath } from "./fs.js";
-import type { AnyWorkflowTask, WorkflowPermissionMode } from "./workflows.js";
+import type {
+  AnyWorkflowTask,
+  WorkflowPermissionMode,
+  WorkflowSessionPersistence,
+} from "./workflows.js";
 import {
   parseWorkflowWorkerJsonOutput,
   workflowWorkerJsonInstruction,
 } from "./workflow-worker-contract.js";
-import { summarizeWorkflowWorkerStderr, workflowWorkerFailureMetadata } from "./workflow-worker-metadata.js";
+import {
+  summarizeWorkflowWorkerStderrForSession,
+  workflowWorkerFailureMetadata,
+} from "./workflow-worker-metadata.js";
 import {
   parsePositiveInteger,
   runWorkflowWorkerProcess,
@@ -27,6 +34,7 @@ export type OmpWorkflowWorkerOptions = {
   readonly provider?: string;
   readonly profile?: string;
   readonly thinking?: string;
+  readonly sessionPersistence?: WorkflowSessionPersistence;
   readonly resolvedPermission: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
   readonly processTimeoutMs?: number;
@@ -73,6 +81,16 @@ const assertOmpPermission = (mode: WorkflowPermissionMode): void => {
   return assertNeverWorkflowPermissionMode("omp", mode);
 };
 
+type OmpWorkflowSessionArgs =
+  | {
+    readonly sessionPersistence?: "persistent";
+    readonly sessionId?: string;
+  }
+  | {
+    readonly sessionPersistence: "ephemeral";
+    readonly sessionId?: never;
+  };
+
 export const buildOmpArgs = (input: {
   readonly cwd: string;
   readonly systemPromptPath: string;
@@ -81,10 +99,9 @@ export const buildOmpArgs = (input: {
   readonly profile?: string;
   readonly thinking?: string;
   readonly prompt: string;
-  readonly sessionId?: string;
   readonly permission?: WorkflowPermissionMode;
   readonly restrictedTools?: readonly string[];
-}): ReadonlyArray<string> => {
+} & OmpWorkflowSessionArgs): ReadonlyArray<string> => {
   const permission = input.permission ?? "permissive";
   assertOmpPermission(permission);
   const permissionArgs =
@@ -104,6 +121,7 @@ export const buildOmpArgs = (input: {
     "--append-system-prompt",
     input.systemPromptPath,
     "--no-title",
+    ...(input.sessionPersistence === "ephemeral" ? ["--no-session"] : []),
     ...(input.profile !== undefined ? ["--profile", input.profile] : []),
     ...(input.provider !== undefined ? ["--provider", input.provider] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
@@ -199,12 +217,19 @@ export const runOmpWorkflowTask = async (
   task: AnyWorkflowTask,
   options: OmpWorkflowWorkerOptions,
 ): Promise<WorkflowTaskExecution> => {
+  const sessionPersistence = options.sessionPersistence ?? "persistent";
+  if (sessionPersistence === "ephemeral" && options.repair?.mode === "native-continuation") {
+    throw new OmpWorkflowWorkerError(
+      "ephemeral OMP workflow tasks cannot use native session continuation",
+      { adapter: "omp-cli", sessionPersistence },
+    );
+  }
   const command = options.bin ?? process.env.PRISM_WORKFLOW_OMP_BIN ?? "omp";
   const sessionId =
     options.repair?.mode === "native-continuation"
       ? options.repair.continuation.sessionId
       : undefined;
-  const prompt = options.repair !== undefined
+  const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs =
@@ -220,7 +245,9 @@ export const runOmpWorkflowTask = async (
     profile: options.profile,
     thinking: options.thinking,
     prompt,
-    sessionId,
+    ...(sessionPersistence === "ephemeral"
+      ? { sessionPersistence }
+      : { sessionPersistence, ...(sessionId !== undefined ? { sessionId } : {}) }),
     permission: options.resolvedPermission,
     restrictedTools: options.restrictedTools,
   });
@@ -234,26 +261,38 @@ export const runOmpWorkflowTask = async (
       abortSignal: options.abortSignal,
       onOutputActivity: (stream) => options.reportProgress?.(`worker-${stream}`),
     });
+  const failureSessionId = sessionPersistence === "persistent"
+    ? parseOmpJsonStream(stdout).sessionId ?? sessionId
+    : undefined;
+  const failureMetadata = (): Record<string, unknown> => workflowWorkerFailureMetadata({
+    adapter: "omp-cli",
+    stderr,
+    sessionPersistence,
+    ...(failureSessionId !== undefined ? { sessionId: failureSessionId } : {}),
+  });
   if (aborted) {
     throw new OmpWorkflowWorkerError(
       "omp was aborted by Prism workflow stop",
-      workflowWorkerFailureMetadata({ adapter: "omp-cli", stderr, sessionId: parseOmpJsonStream(stdout).sessionId ?? sessionId }),
+      failureMetadata(),
     );
   }
   if (timedOut) {
     throw new OmpWorkflowWorkerError(
       `omp exceeded Prism process timeout after ${processTimeoutMs}ms`,
-      workflowWorkerFailureMetadata({ adapter: "omp-cli", stderr, sessionId: parseOmpJsonStream(stdout).sessionId ?? sessionId }),
+      failureMetadata(),
     );
   }
   if (exitCode !== 0) {
     throw new OmpWorkflowWorkerError(
       `omp exited with ${exitCode}: ${stderr.trim() || stdout.trim()}`,
-      workflowWorkerFailureMetadata({ adapter: "omp-cli", stderr, sessionId: parseOmpJsonStream(stdout).sessionId ?? sessionId }),
+      failureMetadata(),
     );
   }
 
   const stream = parseOmpJsonStream(stdout);
+  const resultSessionId = sessionPersistence === "persistent"
+    ? sessionId ?? stream.sessionId
+    : undefined;
   return {
     output: parseWorkflowWorkerJsonOutput(stream.text),
     metadata: {
@@ -262,8 +301,9 @@ export const runOmpWorkflowTask = async (
       model: options.model,
       durationMs,
       processTimeoutMs,
-      sessionId: sessionId ?? stream.sessionId,
-      ...summarizeWorkflowWorkerStderr(stderr),
+      sessionPersistence,
+      ...(resultSessionId !== undefined ? { sessionId: resultSessionId } : {}),
+      ...summarizeWorkflowWorkerStderrForSession(stderr, sessionPersistence),
     },
   };
 };

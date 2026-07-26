@@ -187,7 +187,9 @@ export type WorkflowTaskExecutor = (
 
 export const DEFAULT_WORKFLOW_TASK_CONCURRENCY = 8;
 
-export const DEFAULT_WORKFLOW_MAX_PROMPT_BYTES = 256 * 1024;
+// No default prompt ceiling: prompt size is a property of the work, not a risk
+// to police. A limit applies only when a run asks for one via
+// `--max-prompt-bytes`.
 
 const WORKFLOW_TASK_PROGRESS_EVENT_MIN_INTERVAL_MS = 5_000;
 
@@ -1004,7 +1006,7 @@ const createWorkflowRunBudget = (
 ): WorkflowRunBudget => {
   let liveTasks = 0;
   let observedCostUsd = 0;
-  const maxPromptBytes = options.maxPromptBytes ?? DEFAULT_WORKFLOW_MAX_PROMPT_BYTES;
+  const maxPromptBytes = options.maxPromptBytes;
   const wallTimer = options.maxWallMs === undefined ? undefined : setTimeout(() => {
     const error = new WorkflowRunTimeoutError(options.maxWallMs!);
     cancellation.abort(error, "workflow-timeout");
@@ -1021,6 +1023,7 @@ const createWorkflowRunBudget = (
       liveTasks = observed;
     },
     assertPrompt: (task) => {
+      if (maxPromptBytes === undefined) return;
       const observedBytes = Buffer.byteLength(
         `${task.prompt}${workflowWorkerJsonInstruction(task)}`,
         "utf8",
@@ -1081,13 +1084,10 @@ const awaitRunScoped = async <A>(
 // WFE-009: one shared executor-level retry mechanism, generalized from the shipped `agy`
 // adapter's own retry (7ea1e27) so every worker gets the same transient-failure recovery
 // without per-adapter duplication. Defaults mirror `agy`'s waitForAgyBackoff shape: 1 retry
-// (2 attempts total), fixed 2000ms backoff capped by the remaining process-timeout deadline.
+// (2 attempts total), fixed 2000ms backoff capped by the remaining process-timeout deadline
+// when — and only when — the task declared one.
 const DEFAULT_WORKFLOW_EXECUTOR_RETRY_MAX_ATTEMPTS = 2;
 const DEFAULT_WORKFLOW_EXECUTOR_RETRY_BACKOFF_MS = 2_000;
-// Every worker adapter defaults its own processTimeoutMs to 360_000ms when unset; the runner
-// has no visibility into an adapter-specific env override, so this mirrors that shared
-// default purely to bound the retry backoff, not to enforce a timeout itself.
-const DEFAULT_WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_MS = 360_000;
 
 type WorkflowExecutorFailureClass = "transient" | "terminal";
 
@@ -1195,8 +1195,9 @@ const executeWorkflowTask = async (input: {
     // start so backoff never outruns the task's own process-timeout budget.
     const executorRetryMaxRetries = cacheHit ? 0 : Math.max(0, resolveWorkflowExecutorRetryMaxAttempts(task) - 1);
     const executorRetryBackoffMs = resolveWorkflowExecutorRetryBackoffMs(task);
-    const executorRetryDeadlineAt = Date.now()
-      + (task.worker?.processTimeoutMs ?? DEFAULT_WORKFLOW_EXECUTOR_PROCESS_TIMEOUT_MS);
+    const executorRetryDeadlineAt = task.worker?.processTimeoutMs === undefined
+      ? Number.POSITIVE_INFINITY
+      : Date.now() + task.worker.processTimeoutMs;
     let executorRetries = 0;
     let attemptTask = task;
     let repairs = 0;
@@ -2033,7 +2034,7 @@ export const runWorkflow = async (
       workflow: workflow.name,
       "workflow.mode": "run" in workflow ? "dynamic" : "static",
       "workflow.max_concurrent_tasks": maxConcurrentTasks,
-      "workflow.max_prompt_bytes": options.maxPromptBytes ?? DEFAULT_WORKFLOW_MAX_PROMPT_BYTES,
+      "workflow.max_prompt_bytes": options.maxPromptBytes ?? null,
     },
   });
   const rootSpanId = tracing.enabled ? rootSpan.spanId : undefined;

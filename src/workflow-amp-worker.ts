@@ -175,8 +175,7 @@ export const runAmpWorkflowTask = async (
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_AMP_PROCESS_TIMEOUT_MS)
-    ?? 360_000;
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_AMP_PROCESS_TIMEOUT_MS);
   assertAmpPermission(options.resolvedPermission);
   const permissionSettings = await prepareAmpPermissionSettings(options.resolvedPermission);
   const args = buildAmpArgs({

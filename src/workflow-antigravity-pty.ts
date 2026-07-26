@@ -8,7 +8,6 @@ import process from "node:process";
 import { findWorkflowExecutable } from "./workflow-runtime.js";
 import {
   WorkflowWorkerOutputCapture,
-  resolveWorkflowWorkerOutputLimit,
   type WorkflowWorkerProcessOptions,
   type WorkflowWorkerProcessResult,
 } from "./workflow-worker-process.js";
@@ -200,7 +199,6 @@ const materializePtyWrapper = async (): Promise<string> => {
 export const runAntigravityPtyProcess = async (
   options: AntigravityPtyProcessOptions,
 ): Promise<WorkflowWorkerProcessResult> => {
-  const maxOutputBytes = resolveWorkflowWorkerOutputLimit(options.maxOutputBytes);
   const python3 = resolvePython3();
   if (python3 === undefined) {
     throw new Error("python3 is required for the Antigravity PTY wrapper but was not found");
@@ -245,10 +243,7 @@ export const runAntigravityPtyProcess = async (
     killGroup().catch(recordKillGroupFailure);
   };
 
-  const outputCapture = new WorkflowWorkerOutputCapture({
-    maxBytes: maxOutputBytes,
-    onLimit: requestKillGroup,
-  });
+  const outputCapture = new WorkflowWorkerOutputCapture();
 
   const onAbort = (): void => {
     aborted = true;
@@ -289,8 +284,6 @@ export const runAntigravityPtyProcess = async (
         resolve(code);
       });
     });
-    const outputLimitError = outputCapture.limitError();
-    if (outputLimitError !== undefined) throw outputLimitError;
     return {
       exitCode,
       stdout: outputCapture.output("stdout"),

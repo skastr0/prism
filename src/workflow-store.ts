@@ -633,7 +633,6 @@ export interface WorkflowStoreSchemaNotice {
   readonly message: string;
 }
 
-const WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES = 64 * 1024;
 const WORKFLOW_STORE_FILE_MODE = 0o600;
 const WORKFLOW_STORE_DIRECTORY_MODE = 0o700;
 
@@ -736,12 +735,9 @@ const serializeAttemptMetadata = (
     };
   }
   const persisted = redactWorkflowData(normalized);
+  // Attempt metadata is persisted whole: a verbose harness attempt is evidence
+  // to keep, not a store violation to reject.
   const json = stableJsonStringify(persisted as unknown as StableJsonValue);
-  if (Buffer.byteLength(json, "utf8") > WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES) {
-    throw new Error(
-      `Workflow task attempt metadata exceeds ${WORKFLOW_TASK_ATTEMPT_METADATA_MAX_BYTES} bytes`,
-    );
-  }
   const stableSession = workflowStableSessionFromMetadata(persisted);
   return {
     metadata: persisted,

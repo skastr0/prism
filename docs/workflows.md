@@ -328,15 +328,21 @@ prism workflow run <file> \
   --detach
 ```
 
-| Guard | Meaning |
-|---|---|
-| `--max-cost-usd` | Ceiling on observed provider cost |
-| `--max-wall-ms` | Whole-workflow wall-clock ceiling |
-| `--max-tasks` | Ceiling on live cache-miss dispatches |
-| `--task-timeout-ms` | Default per-task process timeout |
-| `--task-no-progress-ms` | Per-attempt inactivity cutoff |
-| `--max-prompt-bytes` | Prompt-context size ceiling (default 262144) |
-| `--max-concurrent-tasks` | Concurrency cap |
+Every guard below is **off by default**. Workers are long-running agents: Prism
+does not cap their runtime, their output size, or their prompt size, and there
+is no environment variable that silently reintroduces a cap. A run is bounded by
+what you ask for here, plus `prism workflow runs stop` — not by a number Prism
+guessed for you.
+
+| Guard | Meaning | Default |
+|---|---|---|
+| `--max-cost-usd` | Ceiling on observed provider cost | off |
+| `--max-wall-ms` | Whole-workflow wall-clock ceiling | off |
+| `--max-tasks` | Ceiling on live cache-miss dispatches | off |
+| `--task-timeout-ms` | Per-task process timeout | off (no timeout) |
+| `--task-no-progress-ms` | Per-attempt inactivity cutoff | off |
+| `--max-prompt-bytes` | Prompt-context size ceiling | off (unlimited) |
+| `--max-concurrent-tasks` | Concurrency cap | 8 (paces the machine; never fails a task) |
 
 `--detach` starts a detached background runner and prints a run id once the run is durably registered. Recover and operate through the ledger:
 

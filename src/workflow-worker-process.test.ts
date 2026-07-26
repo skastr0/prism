@@ -5,7 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { currentCliCommand } from "./workflow-cli-command.js";
-import { runWorkflowWorkerProcess, WorkflowWorkerOutputLimitError } from "./workflow-worker-process.js";
+import { runWorkflowWorkerProcess } from "./workflow-worker-process.js";
 
 const POLL_MS = 20;
 const PROCESS_DEADLINE_MS = 4_000;
@@ -117,14 +117,13 @@ const expectFixtureAbsent = async (parentPid: number, descendantPid: number): Pr
 const runFixture = (
   fixture: ProcessFixture,
   completion: string,
-  options: { readonly abortSignal?: AbortSignal; readonly processTimeoutMs?: number; readonly maxOutputBytes?: number; readonly earlyExit?: boolean } = {},
+  options: { readonly abortSignal?: AbortSignal; readonly processTimeoutMs?: number; readonly earlyExit?: boolean } = {},
 ) => runWorkflowWorkerProcess({
   command: "sh",
   args: fixtureShellArgs(fixture, completion),
   cwd: fixture.root,
   ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
   ...(options.processTimeoutMs === undefined ? {} : { processTimeoutMs: options.processTimeoutMs }),
-  ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
   ...(options.earlyExit === true
     ? { earlyExitPatterns: [{ name: "fixture-ready", pattern: /fixture-ready/u }] }
     : {}),
@@ -262,32 +261,21 @@ describe("runWorkflowWorkerProcess process ownership", () => {
     }
   });
 
-  test("combined output overflow closes the lease, reaps descendants, and keeps only bounded excerpts", async () => {
+  test("captures large worker output in full without a byte ceiling", async () => {
     const fixture = await createProcessFixture();
     let parentPid: number | undefined;
     try {
-      let failure: unknown;
-      try {
-        await runFixture(
-          fixture,
-          "head -c 8192 /dev/zero | tr '\\0' 'o'; head -c 8192 /dev/zero | tr '\\0' 'e' >&2; wait",
-          { maxOutputBytes: 1024 },
-        );
-      } catch (error) {
-        failure = error;
-      }
+      const result = await runFixture(
+        fixture,
+        "head -c 8192 /dev/zero | tr '\\0' 'o'; head -c 8192 /dev/zero | tr '\\0' 'e' >&2",
+      );
       parentPid = await readFixturePid(fixture.parentPidFile);
       const descendantPid = await readFixturePid(fixture.descendantPidFile);
 
-      expect(failure).toBeInstanceOf(WorkflowWorkerOutputLimitError);
-      const error = failure as WorkflowWorkerOutputLimitError;
-      expect(error.limitBytes).toBe(1024);
-      expect(error.observedBytes).toBeGreaterThan(1024);
-      expect(error.metadata.outputBytes).toBe(error.observedBytes);
-      expect(error.metadata.stdoutBytes + error.metadata.stderrBytes).toBe(error.observedBytes);
-      expect(error.metadata.stdoutTruncated || error.metadata.stderrTruncated).toBe(true);
-      expect(Buffer.byteLength(error.metadata.stdoutExcerpt ?? "", "utf8")).toBeLessThanOrEqual(4096);
-      expect(Buffer.byteLength(error.metadata.stderrExcerpt ?? "", "utf8")).toBeLessThanOrEqual(4096);
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeGreaterThanOrEqual(8192);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeGreaterThanOrEqual(8192);
+      expect(result.timedOut).toBe(false);
+      expect(result.aborted).toBe(false);
       await expectFixtureAbsent(parentPid, descendantPid);
     } finally {
       await cleanupFixtureGroup(parentPid);

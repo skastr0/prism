@@ -8,7 +8,6 @@ import { WorkflowStore } from "./workflow-store.js";
 import { workflowTaskIdentity } from "./workflow-identity.js";
 import {
   runWorkflow,
-  DEFAULT_WORKFLOW_MAX_PROMPT_BYTES,
   WorkflowCostExceededError,
   WorkflowCostUnavailableError,
   WorkflowFanoutExceededError,
@@ -1424,14 +1423,16 @@ console.log(JSON.stringify(result));
     }
   });
 
-  test("rejects an oversized prepared prompt context before invoking an executor", async () => {
+  const PROMPT_BUDGET_BYTES = 64 * 1024;
+
+  test("rejects an oversized prepared prompt context only when a prompt budget is requested", async () => {
     const root = await mkdtemp(join(tmpdir(), "prism-workflow-prompt-budget-"));
     const store = await WorkflowStore.open(join(root, "runs.sqlite"));
     try {
       const task = defineTask({
         id: "oversized",
         agent: builder,
-        prompt: "x".repeat(DEFAULT_WORKFLOW_MAX_PROMPT_BYTES),
+        prompt: "x".repeat(PROMPT_BUDGET_BYTES),
         output: PatchReport,
       });
       const workflow = defineWorkflow({ name: "prompt-budget", tasks: [task] as const });
@@ -1445,12 +1446,13 @@ console.log(JSON.stringify(result));
       await expect(runWorkflow(workflow, {
         runId,
         store,
+        maxPromptBytes: PROMPT_BUDGET_BYTES,
         executeTask: async () => {
           calls += 1;
           return { summary: "unexpected" };
         },
       })).rejects.toEqual(
-        new WorkflowPromptLimitError(task.id, DEFAULT_WORKFLOW_MAX_PROMPT_BYTES, observedBytes),
+        new WorkflowPromptLimitError(task.id, PROMPT_BUDGET_BYTES, observedBytes),
       );
 
       expect(calls).toBe(0);
@@ -1459,7 +1461,7 @@ console.log(JSON.stringify(result));
         terminalCause: {
           kind: "workflow-prompt-limit-exceeded",
           taskId: task.id,
-          limitBytes: DEFAULT_WORKFLOW_MAX_PROMPT_BYTES,
+          limitBytes: PROMPT_BUDGET_BYTES,
           observedBytes,
         },
       });

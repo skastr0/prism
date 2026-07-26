@@ -65,7 +65,7 @@ import { blockedTargetErrors } from "./sync/run.js";
 import { doctorExitCode, formatDoctorReport, runDoctor } from "./doctor.js";
 import { loadWorkflowFile, paddedTableColumns, renderWorkflowModelResolutionTable, validateWorkflowFile } from "./workflow-loader.js";
 import { runWorkflowTypecheck } from "./workflow-typecheck.js";
-import { DEFAULT_WORKFLOW_MAX_PROMPT_BYTES, runWorkflow } from "./workflow-runner.js";
+import { runWorkflow } from "./workflow-runner.js";
 import { defaultWorkflowStorePath, isWorkflowRunOutcomeSuccessful, WorkflowStore, type WorkflowRunCompactSummary, type WorkflowRunRecord, type WorkflowStoreSchemaNotice } from "./workflow-store.js";
 import { DEFAULT_WORKFLOW_RETENTION_AGE, parseWorkflowRetentionAge } from "./workflow-data-governance.js";
 import { redactWorkflowRunnerLogInPlace } from "./workflow-runner-log.js";
@@ -217,7 +217,7 @@ const workflow = program
   .description("Validate Prism workflow files");
 
 const WORKFLOW_PROMPT_BUDGET_DESCRIPTION =
-  `Maximum UTF-8 bytes in each prepared task prompt context (default ${DEFAULT_WORKFLOW_MAX_PROMPT_BYTES})`;
+  "Maximum UTF-8 bytes in each prepared task prompt context (unlimited unless set)";
 
 const parseIntegerAtLeast = (value: string, minimum: number, message: string): number => {
   const parsed = Number(value);

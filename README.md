@@ -303,7 +303,9 @@ Task results are content-addressed in a durable cache: resume a crashed run and 
 
 ### Budgets and guardrails
 
-Runs are governed, not hopeful:
+Runs are governed by what you ask for — every guard below is opt-in. Prism ships
+no default timeout, no worker-output size cap, and no prompt ceiling: workers are
+long-running agents and their verbosity is not a fault.
 
 | Guard | Flag |
 |---|---|

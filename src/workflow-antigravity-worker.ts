@@ -139,7 +139,7 @@ export const assertAntigravityWorkflowCapabilities = (helpText: string): void =>
 const preflightAgyCommand = async (input: {
   readonly command: string;
   readonly cwd: string;
-  readonly processTimeoutMs: number;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
 }): Promise<void> => {
@@ -206,7 +206,7 @@ const antigravityMetadata = (input: {
   readonly model: string;
   readonly durationMs: number;
   readonly printTimeout: string;
-  readonly processTimeoutMs: number;
+  readonly processTimeoutMs?: number;
   readonly stderr: string;
   readonly stdout?: string;
   readonly sessionId?: AgyConversationId;
@@ -345,7 +345,7 @@ const runAgyOnce = async (input: {
   readonly command: string;
   readonly args: AgyPrintArgs;
   readonly cwd: string;
-  readonly processTimeoutMs: number;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly printTimeout: string;
@@ -418,7 +418,7 @@ const classifyAgyAttempt = (result: AgyAttemptResult): AgyAttemptClassification 
 const terminalErrorMessage = (input: {
   readonly result: AgyAttemptResult;
   readonly reason: string;
-  readonly processTimeoutMs: number;
+  readonly processTimeoutMs?: number;
 }): string => {
   const excerpt = workflowWorkerProcessExcerpt(input.result.stdout, input.result.stderr);
   if (input.reason === "aborted") {
@@ -433,8 +433,17 @@ const terminalErrorMessage = (input: {
   return `agy print mode failed (${input.reason})${excerpt}`;
 };
 
+/**
+ * Remaining time until an (optionally infinite) deadline, shaped for spread into
+ * a worker-process call: an infinite deadline contributes no timeout at all.
+ */
+const remainingTimeoutMs = (deadlineAt: number): { processTimeoutMs?: number } =>
+  Number.isFinite(deadlineAt)
+    ? { processTimeoutMs: Math.max(1, deadlineAt - Date.now()) }
+    : {};
+
 const agyDeadlineError = (
-  processTimeoutMs: number,
+  processTimeoutMs: number | undefined,
   metadata?: Record<string, unknown>,
 ): AntigravityWorkflowWorkerError =>
   new AntigravityWorkflowWorkerError(
@@ -445,7 +454,7 @@ const agyDeadlineError = (
 const waitForAgyBackoff = async (input: {
   readonly delayMs: number;
   readonly deadlineAt: number;
-  readonly processTimeoutMs: number;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
 }): Promise<void> => {
   if (input.abortSignal?.aborted === true) {
@@ -482,7 +491,7 @@ const waitForAgyBackoff = async (input: {
 const runAgyWithRetry = (input: {
   readonly command: string;
   readonly cwd: string;
-  readonly processTimeoutMs: number;
+  readonly processTimeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly reportProgress?: WorkflowTaskProgressReporter;
   readonly printTimeout: string;
@@ -499,14 +508,18 @@ const runAgyWithRetry = (input: {
   Effect.tryPromise({
     try: async () => {
       const startedAt = Date.now();
-      const deadlineAt = startedAt + input.processTimeoutMs;
+      // No configured timeout => an infinite deadline: every remaining-time
+      // computation below stays correct and no watchdog is armed.
+      const deadlineAt = input.processTimeoutMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : startedAt + input.processTimeoutMs;
       let conversationId = input.initialConversationId;
       let usePty = input.usePty;
       if (input.preflight) {
         await preflightAgyCommand({
           command: input.command,
           cwd: input.cwd,
-          processTimeoutMs: Math.max(1, deadlineAt - Date.now()),
+          ...remainingTimeoutMs(deadlineAt),
           abortSignal: input.abortSignal,
           reportProgress: input.reportProgress,
         });
@@ -533,7 +546,7 @@ const runAgyWithRetry = (input: {
           command: input.command,
           args,
           cwd: input.cwd,
-          processTimeoutMs: remainingMs,
+          ...remainingTimeoutMs(deadlineAt),
           abortSignal: input.abortSignal,
           reportProgress: input.reportProgress,
           printTimeout: input.printTimeout,
@@ -603,10 +616,12 @@ export const runAntigravityWorkflowTask = async (
   const prompt = options.repair !== undefined && resumeConversationId !== undefined
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
-  const printTimeout = options.printTimeout ?? process.env.PRISM_WORKFLOW_ANTIGRAVITY_PRINT_TIMEOUT ?? "5m";
+  // agy requires a value for --print-timeout; "24h" is its practical off switch.
+  const printTimeout = options.printTimeout ?? process.env.PRISM_WORKFLOW_ANTIGRAVITY_PRINT_TIMEOUT ?? "24h";
+  // No default process timeout: a wall-clock kill is not a safety mechanism for
+  // a long-running agent. It applies only when asked for explicitly.
   const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_ANTIGRAVITY_PROCESS_TIMEOUT_MS)
-    ?? 360_000;
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_ANTIGRAVITY_PROCESS_TIMEOUT_MS);
   const usePty = envBoolean(process.env.PRISM_WORKFLOW_ANTIGRAVITY_PTY) ?? false;
   const maxAttempts = options.maxAttempts
     ?? envPositiveInteger(process.env.PRISM_WORKFLOW_ANTIGRAVITY_RETRY_MAX_ATTEMPTS, 3);

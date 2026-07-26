@@ -781,14 +781,16 @@ describe("workflow store", () => {
     const root = await createTempRoot();
     const store = await WorkflowStore.open(join(root, "workflows.sqlite"));
     store.createRun("attempt-ledger", "attempt-run");
-    expect(() => store.recordTaskAttemptStarted({
-      runId: "attempt-run",
+    // Large attempt metadata is evidence, not a store violation: it persists whole.
+    store.createRun("attempt-ledger", "verbose-metadata-run");
+    store.recordTaskAttemptStarted({
+      runId: "verbose-metadata-run",
       ordinal: 0,
       attempt: 1,
-      taskId: "build",
+      taskId: "verbose",
       metadata: { oversized: "x".repeat(65 * 1024) },
-    })).toThrow("metadata exceeds");
-    expect(store.listRunTaskAttempts("attempt-run")).toEqual([]);
+    });
+    expect(store.listRunTaskAttempts("verbose-metadata-run")).toHaveLength(1);
 
 
     store.recordTaskAttemptStarted({

@@ -169,8 +169,7 @@ export const runCodexWorkflowTask = async (
   const outputSchemaPath = outputSchema === undefined ? undefined : join(tempRoot, "output-schema.json");
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CODEX_BIN ?? "codex";
   const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS)
-    ?? 360_000;
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CODEX_PROCESS_TIMEOUT_MS);
   const resumeSessionId = options.repair?.mode === "native-continuation" ? options.repair.continuation.sessionId : undefined;
   const prompt = options.repair?.mode === "native-continuation"
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`

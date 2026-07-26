@@ -236,8 +236,7 @@ export const runClaudeWorkflowTask = async (
   }
   const command = options.bin ?? process.env.PRISM_WORKFLOW_CLAUDE_BIN ?? "claude";
   const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CLAUDE_PROCESS_TIMEOUT_MS)
-    ?? 360_000;
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_CLAUDE_PROCESS_TIMEOUT_MS);
   const resumeSessionId = options.repair?.mode === "native-continuation"
     ? options.repair.continuation.sessionId
     : undefined;

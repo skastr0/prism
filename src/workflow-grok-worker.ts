@@ -281,12 +281,11 @@ export const runGrokWorkflowTask = async (
     ? `${options.repair.repairPrompt}\n\nReturn the corrected final response now.${workflowWorkerJsonInstruction(task)}`
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const command = options.bin ?? process.env.PRISM_WORKFLOW_GROK_BIN ?? "grok";
+  // No default process timeout: harness workers are long-running agents and a
+  // wall-clock kill is not a safety mechanism. A timeout applies only when a
+  // task or the CLI asks for one explicitly.
   const processTimeoutMs = options.processTimeoutMs
-    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS)
-    // Was 120_000 (PQ-176): too tight for real multi-turn tasks and the
-    // outlier among workflow workers — every other worker (claude, codex,
-    // hermes, amp, kimi, antigravity) already defaults to 360_000. Match it.
-    ?? 360_000;
+    ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_PROCESS_TIMEOUT_MS);
   const maxAgentBytes = options.maxAgentBytes
     ?? parsePositiveInteger(process.env.PRISM_WORKFLOW_GROK_MAX_AGENT_BYTES)
     ?? DEFAULT_GROK_MAX_AGENT_BYTES;

@@ -178,8 +178,7 @@ export const runDevinWorkflowTask = async (
 
   const processTimeoutMs =
     options.processTimeoutMs ??
-    parsePositiveInteger(process.env.PRISM_WORKFLOW_DEVIN_PROCESS_TIMEOUT_MS) ??
-    360_000;
+    parsePositiveInteger(process.env.PRISM_WORKFLOW_DEVIN_PROCESS_TIMEOUT_MS);
 
   const workDir = await mkdtemp(join(tmpdir(), "prism-devin-workflow-"));
   const promptFilePath = join(workDir, "prompt.md");

@@ -234,8 +234,7 @@ export const runOmpWorkflowTask = async (
     : `${task.prompt}${workflowWorkerJsonInstruction(task)}`;
   const processTimeoutMs =
     options.processTimeoutMs ??
-    parsePositiveInteger(process.env.PRISM_WORKFLOW_OMP_PROCESS_TIMEOUT_MS) ??
-    180_000;
+    parsePositiveInteger(process.env.PRISM_WORKFLOW_OMP_PROCESS_TIMEOUT_MS);
   const systemPromptPath = await resolveInstalledAgentPrompt(options.cwd, task.agent.name);
   const args = buildOmpArgs({
     cwd: options.cwd,

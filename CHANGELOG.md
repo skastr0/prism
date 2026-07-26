@@ -9,6 +9,16 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.4.4 - 2026-07-26
+
+### Added
+
+- Per-task ephemeral workflow sessions for Claude Code, Codex CLI, and OMP,
+  using each harness's native no-save mode. Persistent sessions remain the
+  default; ephemeral repairs start fresh with the full task context, while
+  completed task results remain reusable through Prism's content-addressed
+  cache.
+
 ## 0.4.3 - 2026-07-24
 
 ### Added

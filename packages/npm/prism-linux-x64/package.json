@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-linux-x64",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "type": "module",
   "description": "Prism standalone CLI binary for Linux x64.",
   "license": "MIT",
@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.15.13",
-    "@skastr0/prism-sdk": "0.4.3",
+    "@skastr0/prism-sdk": "0.4.4",
     "effect": "^3.21.1",
     "typescript": "^5.8.3",
     "zod": "4.4.3"

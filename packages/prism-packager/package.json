@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-packager",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "type": "module",
   "description": "Embeddable Prism packager: compile a plugin into harness-native package payloads (DesiredFile[]) without shipping the Prism CLI.",
   "license": "MIT",
@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.15.13",
-    "@skastr0/prism-sdk": "0.4.4",
+    "@skastr0/prism-sdk": "0.4.5",
     "effect": "^3.21.1",
     "gray-matter": "^4.0.3",
     "jsonc-parser": "^3.3.1",

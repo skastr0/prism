@@ -9,6 +9,31 @@ later, and were deleted in `55800c8` (`refactor(release): delete automatic
 version derivation`); the version was then reset to continue the `0.3.x` patch
 line. `0.4.0` was committed but never tagged or published.
 
+## 0.4.5 - 2026-07-27
+
+### Removed
+
+- **Every workflow runtime limit, and the parameters that set them.** A knob an
+  agent can see is a knob an agent will set, so the knobs are gone rather than
+  defaulted off: `--task-timeout-ms` / `worker.processTimeoutMs` /
+  `PRISM_WORKFLOW_*_PROCESS_TIMEOUT_MS` across all ten adapters (no watchdog, no
+  `timedOut`), plus `--max-wall-ms`, `--max-tasks`, `--max-cost-usd`,
+  `--task-no-progress-ms`, `--max-prompt-bytes` and the run-budget machinery
+  behind them. `--max-concurrent-tasks` is replaced by internal scheduler pacing
+  sized to the machine (`max(4, min(16, cores - 2))`) — it queues work, never
+  fails it. The agy `--print-timeout` knob is pinned at 720h. What bounds a run
+  now: `prism workflow runs stop <id>`, the run ledger, and the scope you author
+  into the graph. The store still decodes historical terminal-cause kinds so old
+  ledgers stay readable.
+
+### Added
+
+- Design spec for **worker pressure** — detecting a harness worker that has
+  stopped making progress while still running, from the worker's own event
+  stream (taxonomy, six pathology signals, ledger emission, action policy), plus
+  the absolute-threshold gate anti-pattern and the first cross-attempt signal
+  (`redundant-verification`).
+
 ## 0.4.4 - 2026-07-26
 
 ### Added

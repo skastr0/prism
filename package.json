@@ -1,6 +1,6 @@
 {
   "name": "@skastr0/prism-workspace",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Unified plugin distribution system for AI coding harnesses",
   "type": "module",
   "private": true,

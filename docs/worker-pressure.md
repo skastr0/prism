@@ -144,6 +144,12 @@ data in phase P0** — they are not the spec's commitments.
 | `inference-error-storm` | ≥3 consecutive `inference-error` | warn | later |
 | `assistant-repetition` | ≥4 consecutive `assistant-message` with identical `textHash` | critical | yes |
 | `no-forward-progress` | 15 consecutive events with no new tool signature and no successful tool result | info | no |
+| `redundant-verification` | ≥3 sibling attempts in one run whose tool-call sequence signature is identical, none producing a new failure | warn | no (report to the orchestrator) |
+
+`redundant-verification` is **cross-attempt**, unlike every signal above it. It
+exists because the most expensive observed failure of this class was not one
+worker looping — it was N workers each independently re-deriving the same facts.
+See §5b.
 
 `assistant-repetition` is the `antigravity-cli` / Gemini failure mode; exact-hash
 identity is the cheap v1, with normalized near-duplicate matching as a follow-up
@@ -152,6 +158,48 @@ only if exact matching proves too narrow against real captures.
 Every signal carries: attempt id, worker, model, the window that triggered it,
 the counts, and up to N evidence identifiers (tool names, hashes) — never raw
 message text.
+
+## 5b. The absolute-threshold gate — the anti-pattern this class comes from
+
+A worked example, from a Claude Code dynamic-workflow run on an eleven-commit
+migration (2026-07-26). Figures are that session's own measurements, reported by
+the orchestrator that ran it — not independently verified here.
+
+Its rule: *if the commit isn't green, spawn a repair agent before the next one.*
+Green was defined as **the full suite passing**. Four tests in that repo were
+already failing before the migration began, unrelated to it. So every builder
+finished its work correctly, ran the suite, saw four red, honestly reported
+"not green" — and a repair agent fired. Eight times. **False-positive rate:
+100%.**
+
+Cost, as measured in that run: 132,138 output tokens and 55.1M cache reads —
+**28% of the entire run's spend** — over roughly four hours, yielding 83 lines of
+incidental tidy-up. Each repair agent re-read the plan, re-read the code, re-ran
+`tsc`, and re-ran the 44-second suite (one of them three times) to conclude the
+commit was already fine.
+
+Two distinct defects, both in scope for this design:
+
+1. **The gate measured an absolute level, not a delta.** "Suite is green" asks
+   *is the world perfect*, which it never is; the question that matters is *did
+   this change break something new*. This is the same error as `output < 1 MiB`
+   and `task < 360s` — a constant standing in for a baseline. The correct form
+   already exists in this house: `pulsar score --ci` ratchets against a recorded
+   baseline and fails only on a **new** violation.
+2. **Nothing watched the fleet.** Eight agents ran byte-identical command
+   sequences and no signal fired, because pressure as specified above is
+   per-attempt. Hence `redundant-verification`.
+
+Two rules this spec adopts from it:
+
+- **Every gate compares against a captured baseline, never against zero.** A
+  baseline is a primary-source artifact captured once, before the sequence, and
+  passed forward — so downstream verification is a *pointer check*, not a
+  re-derivation. This is how the anti-trust-laundering rule stays cheap: a
+  received claim carrying a checkable receipt is grounded on arrival; only a
+  receiptless claim needs re-work.
+- **A guard whose false-positive rate is not measured is not a guard.** P0 exists
+  to measure exactly that per signal, before P2 lets anything act.
 
 ## 6. Emission
 
@@ -244,9 +292,12 @@ imports from `workflow-*`, and everything Prism-flavoured in
 
 - **Fixtures from real captures**, not synthesized streams: one healthy and one
   pathological capture per covered harness, stored as test fixtures.
-- **Invariant: healthy stream ⇒ zero signals.** This is the primary gate. Every
-  healthy fixture must produce an empty signal set; a regression here is what
-  "punishing real work" looks like in test form.
+- **Invariant: healthy stream ⇒ zero signals.** The primary gate — but scoped to
+  **fixtures only**, where the input is controlled. Stating it that narrowly is
+  deliberate: if this same zero-tolerance shape were ever applied to *live* runs
+  ("a healthy run emits no signals anywhere"), it would be the §5b anti-pattern
+  reappearing inside this very design. Any live gate compares signal rate against
+  a captured baseline, never against zero.
 - **Replay of the real incident**: a synthetic compaction-loop stream shaped like
   the observed 300-compaction failure must trigger `compaction-thrash` within the
   first minute of stream time.

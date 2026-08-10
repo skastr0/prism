@@ -110,6 +110,7 @@ const main = async (): Promise<void> => {
     return (
       rel === "cli.ts" ||
       rel.startsWith("plugins-tui/") ||
+      rel.startsWith("configure/") ||
       rel === "workflow-tui.tsx" ||
       rel.startsWith("workflow-tui.")
     );

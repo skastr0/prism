@@ -5,7 +5,7 @@
 
 import { basename, join, relative, resolve } from "node:path";
 import { getHarness, resolveHarnessRoot } from "../harnesses.js";
-import { exists, listDir, listDirRecursive, readFile } from "../fs.js";
+import { exists, expandPath, listDir, listDirRecursive, readFile } from "../fs.js";
 import { resolvePrismHome } from "../prism-home.js";
 import {
   decodeSnapshotManifest,
@@ -187,7 +187,9 @@ export const loadConfigureInventory = async (options: {
   const prismHome = options.prismHome ?? resolvePrismHome();
   const env = options.env ?? process.env;
   const harnessConfig = getHarness(POC_HARNESS);
-  const globalRoot = resolveHarnessRoot(harnessConfig, "global");
+  // Global scope always resolves; project scope can be null (not used in POC).
+  const globalRoot =
+    resolveHarnessRoot(harnessConfig, "global") ?? expandPath(harnessConfig.globalConfigPath);
   const rootExists = await exists(globalRoot);
   const binaryPath = resolveClaudeBinary(env);
 

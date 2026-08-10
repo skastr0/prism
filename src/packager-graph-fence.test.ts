@@ -49,6 +49,7 @@ test("packager import graph excludes CLI and TUI surfaces", () => {
     (rel) =>
       rel === "cli.ts" ||
       rel.startsWith("plugins-tui/") ||
+      rel.startsWith("configure/") ||
       rel === "workflow-tui.tsx" ||
       rel.startsWith("workflow-tui."),
   );

@@ -94,6 +94,7 @@ import {
 } from "./workflow-catalog.js";
 import { runWorkflowMonitor } from "./workflow-tui.js";
 import { runPluginsTui } from "./plugins-tui/index.js";
+import { runConfigureTui } from "./configure/index.js";
 import { createWorkflowWorkerExecutor, getWorkflowWorkerAdapter } from "./workflow-workers.js";
 import { isWorkflowPermissionMode, WORKFLOW_PERMISSION_MODES } from "./workflow-permissions.js";
 import {
@@ -491,6 +492,22 @@ program
       });
     } catch (error) {
       printCliError(error, "Plugins TUI failed");
+      exitWith(EXIT_CODES.domainFailure);
+    }
+  });
+
+// Configure TUI — harness config browser (POC: claude-code)
+program
+  .command("configure")
+  .description("Open the harness configure TUI (POC: Claude Code inventory, uninstall, delete)")
+  .option("-p, --project <path>", "Project path for project-scoped roots (reserved)")
+  .action(async (options: { readonly project?: string }) => {
+    try {
+      await runConfigureTui({
+        ...(options.project ? { projectPath: options.project } : {}),
+      });
+    } catch (error) {
+      printCliError(error, "Configure TUI failed");
       exitWith(EXIT_CODES.domainFailure);
     }
   });

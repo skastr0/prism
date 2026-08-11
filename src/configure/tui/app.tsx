@@ -275,9 +275,9 @@ const WrapWidthContext = createContext(80);
 const useWrapWidth = (): number => useContext(WrapWidthContext);
 
 /**
- * Full-width text that word-wraps inside the pane (no ellipsis).
- * Pre-wraps with wordWrap to a known column budget — OpenTUI wrapMode alone
- * often stays single-line when width is not yet measured (shows …).
+ * Full-width text that word-wraps (no ellipsis).
+ * One fixed-height row per visual line — multi-line OpenTUI <text> still
+ * clips/ellipsis under flex layout; per-row <text> is the reliable path.
  */
 function WrapText({
   content,
@@ -291,16 +291,15 @@ function WrapText({
 }) {
   const ctxW = useWrapWidth();
   const width = Math.max(12, widthOverride ?? ctxW);
-  const wrapped = wordWrap(content, width);
+  const lines = wordWrap(content, width).split("\n");
   return (
-    <text
-      content={wrapped}
-      style={{
-        width,
-        fg: fg ?? PALETTE.fg,
-        wrapMode: "none",
-      }}
-    />
+    <box style={{ flexDirection: "column", width: "100%" }}>
+      {lines.map((line, i) => (
+        <box key={i} style={{ height: 1, width: "100%", flexDirection: "row" }}>
+          <text content={line.length > 0 ? line : " "} style={{ fg: fg ?? PALETTE.fg, wrapMode: "none" }} />
+        </box>
+      ))}
+    </box>
   );
 }
 
@@ -901,8 +900,11 @@ function Footer({
           ["q", "quit"],
         ];
 
-  // Pre-wrap to terminal columns — never ellipsis. OpenTUI wrapMode is unreliable here.
-  const colBudget = Math.max(20, width - 4);
+  // Prefer measured term width; fall back to stdout so wrap always has a real budget.
+  const colBudget = Math.max(
+    20,
+    (Number.isFinite(width) && width > 0 ? width : process.stdout.columns || 80) - 4,
+  );
   const message =
     confirm !== null
       ? confirm.kind === "set-setting"
@@ -915,45 +917,16 @@ function Footer({
           : null;
   const messageFg =
     confirm !== null ? PALETTE.danger : error !== null ? PALETTE.danger : PALETTE.ok;
-  const wrappedMessage = message !== null ? wordWrap(message, colBudget) : null;
-  const messageLines = wrappedMessage ? wrappedMessage.split("\n").length : 1;
-  // Cap footer growth so a huge error can't eat the whole TUI
-  const footerBodyHeight = Math.min(6, Math.max(1, messageLines));
-
-  const content =
-    wrappedMessage !== null ? (
-      <text
-        content={wrappedMessage}
-        style={{
-          width: colBudget,
-          height: footerBodyHeight,
-          fg: messageFg,
-          wrapMode: "none",
-        }}
-      />
-    ) : (
-      <box style={{ flexDirection: "row", width: colBudget }}>
-        {hints.map(([key, desc]) => (
-          <text key={key} style={{ marginRight: 2 }}>
-            <span fg={PALETTE.accent} attributes={ATTR.bold}>
-              {key}
-            </span>
-            <span fg={PALETTE.fgDim}>{` ${desc}`}</span>
-          </text>
-        ))}
-        {busy ? (
-          <text>
-            <span fg={PALETTE.running}>{" · working"}</span>
-          </text>
-        ) : null}
-      </box>
-    );
+  // Cap lines so a megabyte error can't eat the screen
+  const messageLines =
+    message !== null ? wordWrap(message, colBudget).split("\n").slice(0, 6) : null;
 
   return (
     <box
       style={{
         width: "100%",
-        height: footerBodyHeight + 1, // +1 for top border row
+        // Let column height = sum of 1-row children + border (no fixed height clip)
+        flexDirection: "column",
         border: ["top"],
         borderColor: PALETTE.borderInactive,
         paddingLeft: 1,
@@ -961,7 +934,32 @@ function Footer({
         flexShrink: 0,
       }}
     >
-      {content}
+      {messageLines !== null ? (
+        messageLines.map((line, i) => (
+          <box key={i} style={{ height: 1, width: "100%", flexDirection: "row" }}>
+            <text
+              content={line.length > 0 ? line : " "}
+              style={{ fg: messageFg, wrapMode: "none" }}
+            />
+          </box>
+        ))
+      ) : (
+        <box style={{ height: 1, flexDirection: "row", width: "100%" }}>
+          {hints.map(([key, desc]) => (
+            <text key={key} style={{ marginRight: 2 }}>
+              <span fg={PALETTE.accent} attributes={ATTR.bold}>
+                {key}
+              </span>
+              <span fg={PALETTE.fgDim}>{` ${desc}`}</span>
+            </text>
+          ))}
+          {busy ? (
+            <text>
+              <span fg={PALETTE.running}>{" · working"}</span>
+            </text>
+          ) : null}
+        </box>
+      )}
     </box>
   );
 }

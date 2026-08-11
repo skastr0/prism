@@ -270,6 +270,29 @@ function Row({ content, fg }: { readonly content: string; readonly fg?: string }
   );
 }
 
+/**
+ * Full-width text that word-wraps inside the pane (no ellipsis truncate).
+ * Use for paths, status, descriptions — anything the operator must read in full.
+ */
+function WrapText({
+  content,
+  fg,
+}: {
+  readonly content: string;
+  readonly fg?: string;
+}) {
+  return (
+    <text
+      content={content}
+      style={{
+        width: "100%",
+        fg: fg ?? PALETTE.fg,
+        wrapMode: "word",
+      }}
+    />
+  );
+}
+
 function ConfigDetail({
   summary,
   cursor,
@@ -304,7 +327,7 @@ function ConfigDetail({
     >
       <Row content="Settings  ·  enter edit enum/bool  ·  esc back" fg={PALETTE.fgBright} />
       {cfg.settingsPath ? (
-        <Row content={`primary  ${truncate(cfg.settingsPath, 64)}`} fg={PALETTE.fgDim} />
+        <WrapText content={`primary  ${cfg.settingsPath}`} fg={PALETTE.fgDim} />
       ) : null}
       <Row content="FILES" fg={PALETTE.fgMuted} />
       {cfg.files.map((f) => {
@@ -349,7 +372,7 @@ function ConfigDetail({
         );
       })}
       {win.below > 0 ? <Row content={`  +${win.below} more below`} fg={PALETTE.fgDim} /> : null}
-      {cfg.notes[0] ? <Row content={`· ${truncate(cfg.notes[0], 72)}`} fg={PALETTE.fgDim} /> : null}
+      {cfg.notes[0] ? <WrapText content={`· ${cfg.notes[0]}`} fg={PALETTE.fgDim} /> : null}
     </box>
   );
 }
@@ -416,10 +439,10 @@ function SummaryDetail({
         fg={PALETTE.fgBright}
       />
       <Row content="" />
-      <Row content={`root    ${truncate(summary.globalRoot, 68)}`} />
+      <WrapText content={`root    ${summary.globalRoot}`} />
       <Row content={`exists  ${summary.rootExists ? "yes" : "no"}`} />
-      <Row
-        content={`bin     ${summary.binaryPath ? truncate(summary.binaryPath, 68) : "(not found)"}`}
+      <WrapText
+        content={`bin     ${summary.binaryPath ?? "(not found)"}`}
         fg={summary.binaryPath ? PALETTE.fg : PALETTE.fgDim}
       />
       <Row content={`snap    ${summary.snapshotEntryCount} entries`} />
@@ -503,7 +526,7 @@ function ProfileSummaryDetail({
     <box style={{ flexDirection: "column", width: "100%" }}>
       <Row content={`◎ Hermes profile  ${s.displayName}`} fg={PALETTE.fgBright} />
       <Row content="" />
-      <Row content={`root    ${truncate(s.root, 68)}`} />
+      <WrapText content={`root    ${s.root}`} />
       <Row
         content={
           duplicateCount > 0
@@ -660,21 +683,15 @@ function PluginRows({
 function ArtifactDetail({ artifact }: { readonly artifact: ArtifactEntry }) {
   const own = ownershipGlyph(artifact.ownership);
   return (
-    <box style={{ flexDirection: "column" }}>
+    <box style={{ flexDirection: "column", width: "100%" }}>
       <text>
         <span fg={PALETTE.fgBright} attributes={ATTR.bold}>
           {artifact.label}
         </span>
       </text>
       <box style={{ height: 1 }} />
-      <text>
-        <span fg={PALETTE.fgMuted}>{"path     "}</span>
-        <span fg={PALETTE.fg}>{truncate(artifact.targetPath, 70)}</span>
-      </text>
-      <text>
-        <span fg={PALETTE.fgMuted}>{"relative "}</span>
-        <span fg={PALETTE.fg}>{truncate(artifact.relativePath, 70)}</span>
-      </text>
+      <WrapText content={`path     ${artifact.targetPath}`} />
+      <WrapText content={`relative ${artifact.relativePath}`} />
       <text>
         <span fg={PALETTE.fgMuted}>{"own      "}</span>
         <span fg={own.color}>{`${own.glyph} ${artifact.ownership}`}</span>
@@ -751,10 +768,7 @@ function GroupDetail({
         <span fg={PALETTE.fg}>{group.ownerships.join(", ")}</span>
       </text>
       {group.plugins.length > 0 ? (
-        <text>
-          <span fg={PALETTE.fgMuted}>{"plugins  "}</span>
-          <span fg={PALETTE.fg}>{truncate(group.plugins.join(", "), 60)}</span>
-        </text>
+        <WrapText content={`plugins  ${group.plugins.join(", ")}`} />
       ) : null}
       <box style={{ height: 1 }} />
       <text>
@@ -802,32 +816,30 @@ function GroupDetail({
 
 function PlanPreview({ plan }: { readonly plan: MutationPlan }) {
   return (
-    <box style={{ flexDirection: "column", marginTop: 1 }}>
-      <text>
-        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
-          {plan.title}
-        </span>
-        <span fg={PALETTE.fgDim}>{plan.dryRun ? "  (dry-run)" : "  (apply)"}</span>
-      </text>
+    <box style={{ flexDirection: "column", marginTop: 1, width: "100%" }}>
+      <WrapText
+        content={`${plan.title}${plan.dryRun ? "  (dry-run)" : "  (apply)"}`}
+        fg={PALETTE.fgMuted}
+      />
       {plan.ops.length === 0 ? (
         <text content="  (no ops)" style={{ fg: PALETTE.fgDim }} />
       ) : (
         plan.ops.slice(0, 12).map((op, i) => (
-          <text key={`${op.kind}-${i}`}>
-            <span fg={PALETTE.yellow}>{`  ${op.kind.padEnd(18)}`}</span>
-            <span fg={PALETTE.fg}>{truncate(op.targetPath, 52)}</span>
-            {op.detail ? <span fg={PALETTE.fgDim}>{`  ${truncate(op.detail, 24)}`}</span> : null}
-          </text>
+          <WrapText
+            key={`${op.kind}-${i}`}
+            content={`  ${op.kind}  ${op.targetPath}${op.detail ? `  · ${op.detail}` : ""}`}
+            fg={PALETTE.fg}
+          />
         ))
       )}
       {plan.ops.length > 12 ? (
         <text content={`  +${plan.ops.length - 12} more ops`} style={{ fg: PALETTE.fgDim }} />
       ) : null}
       {plan.blocked.map((b, i) => (
-        <text key={`b-${i}`} content={`  ! ${truncate(b, 80)}`} style={{ fg: PALETTE.danger }} />
+        <WrapText key={`b-${i}`} content={`  ! ${b}`} fg={PALETTE.danger} />
       ))}
       {plan.notes.map((n, i) => (
-        <text key={`n-${i}`} content={`  · ${truncate(n, 80)}`} style={{ fg: PALETTE.fgDim }} />
+        <WrapText key={`n-${i}`} content={`  · ${n}`} fg={PALETTE.fgDim} />
       ))}
     </box>
   );
@@ -875,26 +887,32 @@ function Footer({
           ["q", "quit"],
         ];
 
+  // Message bars word-wrap inside the footer — no ellipsis, full text readable.
+  const message =
+    confirm !== null
+      ? confirm.kind === "set-setting"
+        ? `${confirm.message}  ·  enter apply · esc cancel`
+        : `${confirm.plan.title}  ·  ${confirm.plan.ops.length} ops · enter apply · esc cancel`
+      : error !== null
+        ? `error · ${error}`
+        : status !== null
+          ? status
+          : null;
+  const messageFg =
+    confirm !== null ? PALETTE.danger : error !== null ? PALETTE.danger : PALETTE.ok;
+
   const content =
-    confirm !== null ? (
+    message !== null ? (
       <text
-        content={(() => {
-          if (confirm.kind === "set-setting") {
-            return `${confirm.message}  ·  enter apply · esc cancel`;
-          }
-          return `${confirm.plan.title}  ·  ${confirm.plan.ops.length} ops · enter apply · esc cancel`;
-        })()}
-        style={{ width: "100%", fg: PALETTE.danger, wrapMode: "none", truncate: true }}
+        content={message}
+        style={{
+          width: "100%",
+          fg: messageFg,
+          wrapMode: "word",
+        }}
       />
-    ) : error !== null ? (
-      <text
-        content={`error · ${truncate(error, 110)}`}
-        style={{ width: "100%", fg: PALETTE.danger, wrapMode: "none", truncate: true }}
-      />
-    ) : status !== null ? (
-      <text content={truncate(status, 110)} style={{ width: "100%", fg: PALETTE.ok, wrapMode: "none", truncate: true }} />
     ) : (
-      <box style={{ flexDirection: "row" }}>
+      <box style={{ flexDirection: "row", flexWrap: "wrap", width: "100%" }}>
         {hints.map(([key, desc]) => (
           <text key={key} style={{ marginRight: 2 }}>
             <span fg={PALETTE.accent} attributes={ATTR.bold}>
@@ -912,7 +930,18 @@ function Footer({
     );
 
   return (
-    <box style={{ height: 2, width: "100%", border: ["top"], borderColor: PALETTE.borderInactive, paddingLeft: 1 }}>
+    <box
+      style={{
+        width: "100%",
+        // Grow with wrapped status/error/confirm; min 2 rows for chrome + hints
+        minHeight: 2,
+        border: ["top"],
+        borderColor: PALETTE.borderInactive,
+        paddingLeft: 1,
+        paddingRight: 1,
+        flexShrink: 0,
+      }}
+    >
       {content}
     </box>
   );
@@ -1799,12 +1828,15 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
                   <Row content={`value    ${sk?.preview ?? "—"}`} />
                   <Row content={`touch    ${field?.prismTouch ?? "?"}`} fg={PALETTE.fgDim} />
                   <Row content="" />
-                  <Row
-                    content={truncate(field?.description ?? "No description in catalogue.", 76)}
+                  <WrapText
+                    content={field?.description ?? "No description in catalogue."}
                     fg={PALETTE.fg}
                   />
                   <Row content="" />
-                  <Row content="esc back · enum/bool: enter from key list to edit" fg={PALETTE.fgDim} />
+                  <WrapText
+                    content="esc back · enum/bool: enter from key list to edit"
+                    fg={PALETTE.fgDim}
+                  />
                 </box>
               );
             })()

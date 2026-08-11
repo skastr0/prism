@@ -7,6 +7,8 @@ export {
   skillSiteKey,
 } from "./inventory.js";
 export { planUninstallPlugin, planDeleteOwnedFile, planDeleteStrayPath } from "./mutations.js";
+export { planSetSetting, setDottedPath } from "./settings-apply.js";
+export { loadArtifactMeta, loadArtifactMetas, loadTextForReader } from "./metadata.js";
 export {
   HARNESS_CATALOGS,
   getHarnessCatalog,

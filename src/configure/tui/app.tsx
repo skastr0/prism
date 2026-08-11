@@ -31,6 +31,10 @@ import {
   planDeleteStrayPath,
   planUninstallPlugin,
 } from "../mutations.js";
+import { planSetSetting } from "../settings-apply.js";
+import { loadTextForReader } from "../metadata.js";
+import { getHarnessCatalog } from "../catalogs/index.js";
+import { TextReader, clampReaderScroll } from "./text-reader.js";
 
 export interface ConfigureTuiOptions {
   readonly projectPath?: string;
@@ -43,7 +47,22 @@ type View =
   | { readonly kind: "section"; readonly section: SectionId }
   | { readonly kind: "plugin"; readonly plugin: string }
   | { readonly kind: "group"; readonly groupId: string }
-  | { readonly kind: "artifact"; readonly artifactId: string };
+  | { readonly kind: "artifact"; readonly artifactId: string }
+  | { readonly kind: "config-key"; readonly key: string }
+  | {
+      readonly kind: "config-pick";
+      readonly key: string;
+      readonly options: ReadonlyArray<string>;
+      readonly current?: string;
+    }
+  | {
+      readonly kind: "reader";
+      readonly path: string;
+      readonly title: string;
+      readonly text: string;
+      readonly truncated: boolean;
+      readonly scroll: number;
+    };
 
 type ConfirmAction =
   | {
@@ -56,6 +75,12 @@ type ConfirmAction =
       readonly targetPath: string;
       readonly ownership: OwnershipKind;
       readonly plan: MutationPlan;
+    }
+  | {
+      readonly kind: "set-setting";
+      readonly key: string;
+      readonly value: string | boolean | number;
+      readonly message: string;
     };
 
 type NavItem =
@@ -230,65 +255,128 @@ function Row({ content, fg }: { readonly content: string; readonly fg?: string }
   );
 }
 
-function ConfigDetail({ summary }: { readonly summary: HarnessSummary }) {
+function ConfigDetail({
+  summary,
+  cursor,
+  windowSize,
+  focused,
+  onSelect,
+  onScroll,
+}: {
+  readonly summary: HarnessSummary;
+  readonly cursor: number;
+  readonly windowSize: number;
+  readonly focused: boolean;
+  readonly onSelect: (index: number) => void;
+  readonly onScroll: (delta: number) => void;
+}) {
   const cfg = summary.config;
   if (!cfg) {
-    return (
-      <Row content="No catalogue config for this harness." fg={PALETTE.fgDim} />
-    );
+    return <Row content="No catalogue config for this harness." fg={PALETTE.fgDim} />;
   }
-  const keyCol = 32;
-  const shapeCol = 12;
+  const keyCol = 30;
+  const shapeCol = 10;
+  const headerLines = 4 + cfg.files.length + 2;
+  const bodyHeight = Math.max(4, windowSize - headerLines);
+  const win = windowAround(cfg.settingsKeys, cursor, bodyHeight);
   return (
-    <box style={{ flexDirection: "column", width: "100%" }}>
-      <Row content="Settings catalogue  ·  read-only" fg={PALETTE.fgBright} />
+    <box
+      onMouseScroll={(event: ScrollEvt) => {
+        const delta = scrollDelta(event);
+        if (delta !== 0) onScroll(delta);
+      }}
+      style={{ flexDirection: "column", width: "100%", height: "100%" }}
+    >
+      <Row content="Settings  ·  enter edit enum/bool  ·  esc back" fg={PALETTE.fgBright} />
       {cfg.settingsPath ? (
-        <Row content={`primary  ${truncate(cfg.settingsPath, 68)}`} fg={PALETTE.fg} />
+        <Row content={`primary  ${truncate(cfg.settingsPath, 64)}`} fg={PALETTE.fgDim} />
       ) : null}
-      <Row content="" />
       <Row content="FILES" fg={PALETTE.fgMuted} />
       {cfg.files.map((f) => {
         const mark = f.exists ? "●" : "○";
-        const size = f.sizeBytes !== undefined ? `  ${f.sizeBytes}b` : "";
-        const line = `${mark} ${truncate(f.label, 20).padEnd(20)}  ${f.kind.padEnd(10)}  ${f.prismTouch}${size}`;
+        const size = f.sizeBytes !== undefined ? ` ${f.sizeBytes}b` : "";
         return (
           <Row
             key={f.id}
-            content={line}
+            content={`${mark} ${truncate(f.label, 18).padEnd(18)} ${f.kind.padEnd(8)} ${f.prismTouch}${size}`}
             fg={f.exists ? PALETTE.fg : PALETTE.fgDim}
           />
         );
       })}
-      <Row content="" />
-      <Row content={`KEYS (${cfg.settingsKeys.length})`} fg={PALETTE.fgMuted} />
-      {cfg.settingsKeys.length === 0 ? (
-        <Row content="  (no catalogue fields)" fg={PALETTE.fgDim} />
-      ) : (
-        cfg.settingsKeys.slice(0, 36).map((k) => {
-          const key = truncate(k.key, keyCol - 2).padEnd(keyCol);
-          const shape = truncate(k.shape, shapeCol).padEnd(shapeCol);
-          const prev =
-            k.shape === "absent"
-              ? "—"
-              : k.preview
-                ? truncate(k.preview, 36)
-                : "set";
-          return (
-            <Row
-              key={k.key}
-              content={`${key}${shape}${prev}`}
-              fg={k.shape === "absent" ? PALETTE.fgDim : PALETTE.fg}
+      <Row content={`KEYS (${cfg.settingsKeys.length})  j/k select`} fg={PALETTE.fgMuted} />
+      {win.above > 0 ? <Row content={`  +${win.above} more above`} fg={PALETTE.fgDim} /> : null}
+      {win.slice.map(({ item: k, index }) => {
+        const selected = focused && index === cursor;
+        const key = truncate(k.key, keyCol - 1).padEnd(keyCol);
+        const shape = truncate(k.shape, shapeCol).padEnd(shapeCol);
+        const prev =
+          k.shape === "absent" ? "—" : k.preview ? truncate(k.preview, 28) : "set";
+        const editable = k.shape === "boolean" || k.shape === "enum";
+        const line = `${selected ? "›" : " "} ${key}${shape}${prev}${editable ? "  ✎" : ""}`;
+        return (
+          <box
+            key={k.key}
+            onMouseDown={() => onSelect(index)}
+            style={{
+              height: 1,
+              width: "100%",
+              ...(selected ? { backgroundColor: SEL_BG } : {}),
+            }}
+          >
+            <text
+              content={line}
+              style={{
+                fg: selected ? PALETTE.fgBright : k.shape === "absent" ? PALETTE.fgDim : PALETTE.fg,
+                wrapMode: "none",
+              }}
             />
-          );
-        })
-      )}
-      {cfg.settingsKeys.length > 36 ? (
-        <Row content={`  +${cfg.settingsKeys.length - 36} more keys`} fg={PALETTE.fgDim} />
-      ) : null}
+          </box>
+        );
+      })}
+      {win.below > 0 ? <Row content={`  +${win.below} more below`} fg={PALETTE.fgDim} /> : null}
+      {cfg.notes[0] ? <Row content={`· ${truncate(cfg.notes[0], 72)}`} fg={PALETTE.fgDim} /> : null}
+    </box>
+  );
+}
+
+function ConfigPickDetail({
+  keyName,
+  options,
+  current,
+  cursor,
+  onSelect,
+}: {
+  readonly keyName: string;
+  readonly options: ReadonlyArray<string>;
+  readonly current?: string;
+  readonly cursor: number;
+  readonly onSelect: (index: number) => void;
+}) {
+  return (
+    <box style={{ flexDirection: "column", width: "100%" }}>
+      <Row content={`Set ${keyName}`} fg={PALETTE.fgBright} />
+      <Row content="enter confirm · esc cancel" fg={PALETTE.fgDim} />
       <Row content="" />
-      {cfg.notes.slice(0, 4).map((n, i) => (
-        <Row key={`n-${i}`} content={`· ${truncate(n, 76)}`} fg={PALETTE.fgDim} />
-      ))}
+      {options.map((opt, index) => {
+        const selected = index === cursor;
+        const isCur = opt === current;
+        return (
+          <box
+            key={opt}
+            onMouseDown={() => onSelect(index)}
+            style={{
+              height: 1,
+              width: "100%",
+              ...(selected ? { backgroundColor: SEL_BG } : {}),
+            }}
+          >
+            <text
+              content={`${selected ? "›" : " "} ${opt}${isCur ? "  (current)" : ""}`}
+              style={{ fg: selected ? PALETTE.fgBright : PALETTE.fg, wrapMode: "none" }}
+            />
+          </box>
+        );
+      })}
     </box>
   );
 }
@@ -669,29 +757,38 @@ function Footer({
 }) {
   const hints: ReadonlyArray<readonly [string, string]> =
     focus === "detail"
-      ? view.kind === "artifact"
-        ? [["j/k", "—"], ["u", "uninstall"], ["d", "delete"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
-        : view.kind === "group"
-          ? [["j/k", "location"], ["enter", "open"], ["d", "delete"], ["u", "uninstall"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
-        : view.kind === "plugin"
-          ? [["j/k", "item"], ["enter", "open"], ["u", "uninstall"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
-          : view.kind === "section"
-            ? [["j/k", "row"], ["enter", "open"], ["esc", "nav"], ["u", "uninstall"], ["d", "delete"], ["r", "reload"], ["q", "quit"]]
-            : [["tab", "detail"], ["r", "reload"], ["q", "quit"]]
+      ? view.kind === "reader"
+        ? [["j/k", "scroll"], ["esc", "back"], ["q", "quit"]]
+        : view.kind === "config-pick"
+          ? [["j/k", "option"], ["enter", "set"], ["esc", "back"], ["q", "quit"]]
+          : view.kind === "section" && view.section === "config"
+            ? [["j/k", "key"], ["enter", "edit"], ["esc", "nav"], ["r", "reload"], ["q", "quit"]]
+            : view.kind === "artifact"
+              ? [["enter", "read"], ["d", "delete"], ["esc", "back"], ["q", "quit"]]
+              : view.kind === "group"
+                ? [["j/k", "loc"], ["enter", "read"], ["d", "delete"], ["esc", "back"], ["q", "quit"]]
+                : view.kind === "plugin"
+                  ? [["j/k", "item"], ["enter", "open"], ["u", "uninstall"], ["esc", "back"], ["q", "quit"]]
+                  : view.kind === "section"
+                    ? [["j/k", "row"], ["enter", "open"], ["esc", "nav"], ["q", "quit"]]
+                    : [["tab", "nav"], ["esc", "nav"], ["q", "quit"]]
       : [
           ["j/k", "nav"],
-          ["enter", "open"],
+          ["enter", "expand"],
+          ["esc", "collapse"],
           ["tab", "detail"],
-          ["u", "uninstall"],
-          ["d", "delete"],
-          ["r", "reload"],
           ["q", "quit"],
         ];
 
   const content =
     confirm !== null ? (
       <text
-        content={`${confirm.plan.title}  ·  ${confirm.plan.ops.length} ops · enter apply · esc cancel`}
+        content={(() => {
+          if (confirm.kind === "set-setting") {
+            return `${confirm.message}  ·  enter apply · esc cancel`;
+          }
+          return `${confirm.plan.title}  ·  ${confirm.plan.ops.length} ops · enter apply · esc cancel`;
+        })()}
         style={{ width: "100%", fg: PALETTE.danger, wrapMode: "none", truncate: true }}
       />
     ) : error !== null ? (
@@ -747,7 +844,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   const [view, setView] = useState<View>({ kind: "summary" });
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [pluginsExpanded, setPluginsExpanded] = useState(false);
+  /** Only this harness shows sections — set by Enter/→, never by j/k alone. */
+  const [expandedHarness, setExpandedHarness] = useState<string | null>(null);
+  /** Which harness detail panel shows (follows expand, or last opened). */
   const [focusedHarness, setFocusedHarness] = useState<string | null>(null);
+  const [metaByPath, setMetaByPath] = useState<ReadonlyMap<string, string>>(new Map());
 
   const [tick, setTick] = useState(0);
   const animating = loading || busy;
@@ -777,7 +878,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     load();
   }, [load, reloadKey]);
 
-  const activeHarnessId = focusedHarness ?? inventory?.focusedHarness ?? "claude-code";
+  const activeHarnessId =
+    expandedHarness ?? focusedHarness ?? inventory?.focusedHarness ?? "claude-code";
   const harnessDetail = inventory?.byHarness[activeHarnessId as keyof typeof inventory.byHarness];
   const summary = harnessDetail?.summary ?? inventory?.harnesses.find((h) => h.harness === activeHarnessId) ?? null;
   const artifacts = harnessDetail?.artifacts ?? [];
@@ -794,26 +896,29 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     const items: NavItem[] = [];
     for (const h of inventory.harnesses) {
       const mark = harnessMark(h.harness);
-      const selected = h.harness === activeHarnessId;
       const presence =
         h.presence === "present" ? "·" : h.presence === "snapshot-only" ? "◦" : " ";
+      const open = expandedHarness === h.harness;
       items.push({
         id: `harness:${h.harness}`,
         kind: "harness",
-        label: `${mark.glyph} ${truncate(h.displayName, 16)} ${presence}`,
+        label: `${open ? "▾" : "▸"} ${mark.glyph} ${truncate(h.displayName, 14)} ${presence}`,
       });
-      if (!selected || !summary || summary.harness !== h.harness) continue;
+      // Sections only for the harness the user opened with Enter/→
+      if (!open) continue;
+      const det = inventory.byHarness[h.harness as keyof typeof inventory.byHarness];
+      const sum = det?.summary ?? h;
       for (const s of SECTIONS) {
-        const count = sectionCount(summary, s.id);
+        const count = sectionCount(sum, s.id);
         items.push({
           id: `section:${h.harness}:${s.id}`,
           kind: "section",
           section: s.id,
-          label: s.id === "summary" ? s.label : `${s.label} (${count})`,
+          label: s.id === "summary" || s.id === "config" ? s.label : `${s.label} (${count})`,
           ...(s.id !== "summary" && s.id !== "config" ? { count } : {}),
         });
         if (s.id === "plugins" && pluginsExpanded) {
-          for (const p of summary.plugins) {
+          for (const p of sum.plugins) {
             items.push({
               id: `plugin:${h.harness}:${p.name}`,
               kind: "plugin",
@@ -825,25 +930,24 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       }
     }
     return items;
-  }, [inventory, activeHarnessId, summary, pluginsExpanded]);
+  }, [inventory, expandedHarness, pluginsExpanded]);
 
-  // Keep nav cursor in range when items change
+  // Keep nav cursor in range when items change — do NOT reset to 0 on expand
   useEffect(() => {
     setNavCursor((c) => clamp(c, 0, Math.max(0, navItems.length - 1)));
   }, [navItems.length]);
 
   const selectedNav = navItems[navCursor];
 
-  // Sync view + focused harness from nav when focus is nav
+  // Sync detail view when nav cursor is on a section/plugin (not on bare harness j/k).
+  // j/k across harnesses must NOT auto-expand or jump into another harness's sections.
   useEffect(() => {
     if (focus !== "nav" || !selectedNav) return;
     if (selectedNav.kind === "harness") {
-      const id = selectedNav.id.replace(/^harness:/, "");
-      setFocusedHarness(id);
-      setView({ kind: "summary" });
-      setDetailCursor(0);
-      setPluginsExpanded(false);
-    } else if (selectedNav.kind === "section" && selectedNav.section === "summary") {
+      // Preview only — do not expand, do not steal section cursor into a long list
+      return;
+    }
+    if (selectedNav.kind === "section" && selectedNav.section === "summary") {
       setView({ kind: "summary" });
       setDetailCursor(0);
     } else if (selectedNav.kind === "section") {
@@ -855,13 +959,37 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     }
   }, [focus, selectedNav?.id]);
 
+  const configKeys = summary?.config?.settingsKeys ?? [];
+
   const detailList = useMemo(() => {
+    if (view.kind === "section" && view.section === "config") {
+      return {
+        mode: "config" as const,
+        plugins: [] as PluginSummary[],
+        groups: [] as ArtifactGroup[],
+        locations: [] as ArtifactEntry[],
+        configKeys,
+        pickOptions: [] as string[],
+      };
+    }
+    if (view.kind === "config-pick") {
+      return {
+        mode: "pick" as const,
+        plugins: [] as PluginSummary[],
+        groups: [] as ArtifactGroup[],
+        locations: [] as ArtifactEntry[],
+        configKeys: [],
+        pickOptions: [...view.options],
+      };
+    }
     if (view.kind === "section" && view.section === "plugins" && summary) {
       return {
         mode: "plugins" as const,
         plugins: summary.plugins,
         groups: [] as ArtifactGroup[],
         locations: [] as ArtifactEntry[],
+        configKeys: [],
+        pickOptions: [] as string[],
       };
     }
     if (view.kind === "section") {
@@ -870,6 +998,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         plugins: [] as PluginSummary[],
         groups: groupsForSection(groups, view.section),
         locations: [] as ArtifactEntry[],
+        configKeys: [],
+        pickOptions: [] as string[],
       };
     }
     if (view.kind === "plugin") {
@@ -878,6 +1008,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         plugins: [] as PluginSummary[],
         groups: groupsForPlugin(groups, view.plugin),
         locations: [] as ArtifactEntry[],
+        configKeys: [],
+        pickOptions: [] as string[],
       };
     }
     if (view.kind === "group") {
@@ -887,6 +1019,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         plugins: [] as PluginSummary[],
         groups: [] as ArtifactGroup[],
         locations: g?.locations ?? [],
+        configKeys: [],
+        pickOptions: [] as string[],
       };
     }
     return {
@@ -894,8 +1028,10 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       plugins: [] as PluginSummary[],
       groups: [] as ArtifactGroup[],
       locations: [] as ArtifactEntry[],
+      configKeys: [],
+      pickOptions: [] as string[],
     };
-  }, [view, groups, summary]);
+  }, [view, groups, summary, configKeys]);
 
   const detailLen =
     detailList.mode === "plugins"
@@ -904,7 +1040,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         ? detailList.groups.length
         : detailList.mode === "locations"
           ? detailList.locations.length
-          : 0;
+          : detailList.mode === "config"
+            ? detailList.configKeys.length
+            : detailList.mode === "pick"
+              ? detailList.pickOptions.length
+              : 0;
 
   const viewKey =
     view.kind === "section"
@@ -1027,6 +1167,32 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     setConfirm(null);
     setBusy(true);
     setError(null);
+
+    if (action.kind === "set-setting") {
+      void planSetSetting({
+        harness: activeHarnessId,
+        root: summary?.globalRoot,
+        key: action.key,
+        value: action.value,
+        dryRun: false,
+      })
+        .then((result) => {
+          setBusy(false);
+          if (!result.ok) {
+            setError(result.blocked ?? result.message);
+          } else {
+            setStatus(result.message);
+            setView({ kind: "section", section: "config" });
+            setReloadKey((k) => k + 1);
+          }
+        })
+        .catch((cause: unknown) => {
+          setBusy(false);
+          setError(errMsg(cause));
+        });
+      return;
+    }
+
     const run =
       action.kind === "uninstall"
         ? planUninstallPlugin({ pluginName: action.plugin, harness: activeHarnessId, dryRun: false })
@@ -1052,7 +1218,6 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           setStatus(result.applied ? `applied · ${result.plan.title}` : `done · ${result.plan.title}`);
         }
         setReloadKey((k) => k + 1);
-        // After delete, pop artifact view
         if (action.kind === "delete" && view.kind === "artifact") {
           setView({ kind: "summary" });
           setFocus("nav");
@@ -1064,14 +1229,84 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       });
   };
 
+  const openReader = (path: string, title: string): void => {
+    setBusy(true);
+    void loadTextForReader(path)
+      .then((doc) => {
+        setBusy(false);
+        if (doc.error) {
+          setError(doc.error);
+          return;
+        }
+        setView({
+          kind: "reader",
+          path: doc.path,
+          title,
+          text: doc.text,
+          truncated: doc.truncated,
+          scroll: 0,
+        });
+        setFocus("detail");
+      })
+      .catch((cause: unknown) => {
+        setBusy(false);
+        setError(errMsg(cause));
+      });
+  };
+
+  const openConfigKey = (key: string): void => {
+    const cat = getHarnessCatalog(activeHarnessId as never);
+    const field = cat.fields.find((f) => f.key === key);
+    const sk = configKeys.find((k) => k.key === key);
+    if (!field) {
+      setError(`Unknown catalogue key: ${key}`);
+      return;
+    }
+    if (field.type === "boolean") {
+      const cur = sk?.preview === "true";
+      const next = !cur;
+      setConfirm({
+        kind: "set-setting",
+        key,
+        value: next,
+        message: `Set ${key} = ${next} on ${activeHarnessId}?`,
+      });
+      return;
+    }
+    if (field.type === "enum" && field.enumValues && field.enumValues.length > 0) {
+      setView({
+        kind: "config-pick",
+        key,
+        options: [...field.enumValues],
+        current: sk?.preview,
+      });
+      setDetailCursor(Math.max(0, field.enumValues.findIndex((v) => v === sk?.preview)));
+      setFocus("detail");
+      return;
+    }
+    setView({ kind: "config-key", key });
+    setFocus("detail");
+    setStatus(
+      field.description
+        ? truncate(field.description, 100)
+        : field.type === "object" || field.type === "array"
+          ? "Complex type — edit file manually (not yet supported)"
+          : "No enum options — edit file manually",
+    );
+  };
+
   const drillIn = (): void => {
     if (focus === "nav") {
       if (!selectedNav) return;
       if (selectedNav.kind === "harness") {
         const id = selectedNav.id.replace(/^harness:/, "");
+        // Expand only this harness; j/k alone never expands
+        setExpandedHarness(id);
         setFocusedHarness(id);
+        setPluginsExpanded(false);
         setView({ kind: "summary" });
         setFocus("detail");
+        // Keep cursor on the harness row (sections appear below it)
         return;
       }
       if (selectedNav.kind === "section" && selectedNav.section === "plugins") {
@@ -1107,6 +1342,21 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     }
 
     // detail focus
+    if (view.kind === "config-pick") {
+      const opt = view.options[detailCursor];
+      if (opt === undefined) return;
+      setConfirm({
+        kind: "set-setting",
+        key: view.key,
+        value: opt,
+        message: `Set ${view.key} = ${opt} on ${activeHarnessId}?`,
+      });
+      return;
+    }
+    if (detailList.mode === "config" && detailList.configKeys[detailCursor]) {
+      openConfigKey(detailList.configKeys[detailCursor]!.key);
+      return;
+    }
     if (detailList.mode === "plugins" && detailList.plugins[detailCursor]) {
       const p = detailList.plugins[detailCursor]!;
       setPluginsExpanded(true);
@@ -1116,13 +1366,36 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     }
     if (detailList.mode === "groups" && detailList.groups[detailCursor]) {
       const g = detailList.groups[detailCursor]!;
-      // Always open group so multi-site locations are visible
+      // Skill/agent/command with a single primary text file → open reader
+      const primary =
+        g.primaryLocations.find((l) => l.relativePath.endsWith("SKILL.md") || l.relativePath.endsWith(".md")) ??
+        g.primaryLocations[0];
+      if (primary && (primary.noun === "skill" || primary.noun === "agent" || primary.noun === "command" || primary.noun === "rules")) {
+        openReader(primary.targetPath, g.label);
+        return;
+      }
       setView({ kind: "group", groupId: g.id });
       setDetailCursor(0);
       return;
     }
     if (detailList.mode === "locations" && detailList.locations[detailCursor]) {
-      setView({ kind: "artifact", artifactId: detailList.locations[detailCursor]!.id });
+      const loc = detailList.locations[detailCursor]!;
+      if (
+        loc.relativePath.endsWith(".md") ||
+        loc.relativePath.endsWith(".txt") ||
+        loc.relativePath.endsWith(".json") ||
+        loc.relativePath.endsWith(".toml") ||
+        loc.relativePath.endsWith(".yaml") ||
+        loc.relativePath.endsWith(".yml")
+      ) {
+        openReader(loc.targetPath, loc.label);
+        return;
+      }
+      setView({ kind: "artifact", artifactId: loc.id });
+    }
+    if (view.kind === "artifact") {
+      const art = findArtifact(artifacts, view.artifactId);
+      if (art) openReader(art.targetPath, art.label);
     }
   };
 
@@ -1131,8 +1404,18 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setConfirm(null);
       return;
     }
+    if (view.kind === "reader") {
+      setView({ kind: "section", section: "skills" });
+      setFocus("detail");
+      return;
+    }
+    if (view.kind === "config-pick" || view.kind === "config-key") {
+      setView({ kind: "section", section: "config" });
+      setFocus("detail");
+      setDetailCursor(0);
+      return;
+    }
     if (view.kind === "artifact") {
-      // Prefer returning to group if this artifact belongs to one
       const art = findArtifact(artifacts, view.artifactId);
       const group = art?.logicalKey
         ? groups.find((g) => g.noun === art.noun && g.logicalKey === art.logicalKey)
@@ -1171,6 +1454,12 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setFocus("nav");
       return;
     }
+    // Collapse expanded harness on left from root
+    if (expandedHarness && selectedNav?.kind === "harness") {
+      setExpandedHarness(null);
+      setPluginsExpanded(false);
+      return;
+    }
     if (pluginsExpanded) setPluginsExpanded(false);
   };
 
@@ -1189,11 +1478,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setReloadKey((k) => k + 1);
       return;
     }
-    if (key.name === "u") {
+    if (key.name === "u" && view.kind !== "reader" && view.kind !== "config-pick") {
       beginUninstall();
       return;
     }
-    if (key.name === "d") {
+    if (key.name === "d" && view.kind !== "reader" && view.kind !== "config-pick") {
       beginDelete();
       return;
     }
@@ -1214,9 +1503,17 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     }
 
     if (move !== 0) {
+      if (view.kind === "reader") {
+        setView((v) =>
+          v.kind === "reader"
+            ? { ...v, scroll: Math.max(0, v.scroll + move * 3) }
+            : v,
+        );
+        return;
+      }
       if (focus === "nav") {
         setNavCursor((c) => clamp(c + move, 0, Math.max(0, navItems.length - 1)));
-      } else if (view.kind !== "summary" && view.kind !== "artifact") {
+      } else if (view.kind !== "summary" && view.kind !== "artifact" && view.kind !== "config-key") {
         setDetailCursor((c) => clamp(c + move, 0, Math.max(0, detailLen - 1)));
       }
     }
@@ -1231,7 +1528,13 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           ? `Plugin · ${view.plugin}`
           : view.kind === "group"
             ? `Group · ${findGroup(groups, view.groupId)?.label ?? "…"}`
-            : "Artifact";
+            : view.kind === "config-pick"
+              ? `Set · ${view.key}`
+              : view.kind === "config-key"
+                ? `Key · ${view.key}`
+                : view.kind === "reader"
+                  ? `Read · ${view.title}`
+                  : "Artifact";
 
   return (
     <box style={{ width: "100%", height: "100%", flexDirection: "column", backgroundColor: PALETTE.bg }}>
@@ -1267,12 +1570,73 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           ) : confirm !== null ? (
             <box style={{ flexDirection: "column" }}>
               <text content="Confirm mutation" style={{ fg: PALETTE.danger, attributes: ATTR.bold }} />
-              <PlanPreview plan={confirm.plan} />
+              {confirm.kind === "set-setting" ? (
+                <Row content={confirm.message} fg={PALETTE.fg} />
+              ) : (
+                <PlanPreview plan={confirm.plan} />
+              )}
             </box>
           ) : view.kind === "summary" ? (
             <SummaryDetail summary={summary} duplicateCount={duplicateCount} />
           ) : view.kind === "section" && view.section === "config" ? (
-            <ConfigDetail summary={summary} />
+            <ConfigDetail
+              summary={summary}
+              cursor={detailCursor}
+              windowSize={listWindow}
+              focused={focus === "detail"}
+              onSelect={(i) => {
+                setDetailCursor(i);
+                setFocus("detail");
+              }}
+              onScroll={(d) => {
+                setFocus("detail");
+                setDetailCursor((c) => clamp(c + d, 0, Math.max(0, configKeys.length - 1)));
+              }}
+            />
+          ) : view.kind === "config-pick" ? (
+            <ConfigPickDetail
+              keyName={view.key}
+              options={view.options}
+              current={view.current}
+              cursor={detailCursor}
+              onSelect={(i) => setDetailCursor(i)}
+            />
+          ) : view.kind === "reader" ? (
+            <TextReader
+              title={view.title}
+              path={view.path}
+              text={view.text}
+              truncated={view.truncated}
+              scroll={clampReaderScroll(
+                view.scroll,
+                view.text.split("\n").length,
+                listWindow,
+              )}
+              height={listWindow}
+              width={Math.max(20, termWidth - navWidth - 6)}
+              focused={focus === "detail"}
+            />
+          ) : view.kind === "config-key" ? (
+            (() => {
+              const cat = getHarnessCatalog(activeHarnessId as never);
+              const field = cat.fields.find((f) => f.key === view.key);
+              const sk = configKeys.find((k) => k.key === view.key);
+              return (
+                <box style={{ flexDirection: "column", width: "100%" }}>
+                  <Row content={view.key} fg={PALETTE.fgBright} />
+                  <Row content={`type     ${field?.type ?? "?"}`} />
+                  <Row content={`value    ${sk?.preview ?? "—"}`} />
+                  <Row content={`touch    ${field?.prismTouch ?? "?"}`} fg={PALETTE.fgDim} />
+                  <Row content="" />
+                  <Row
+                    content={truncate(field?.description ?? "No description in catalogue.", 76)}
+                    fg={PALETTE.fg}
+                  />
+                  <Row content="" />
+                  <Row content="esc back · enum/bool: enter from key list to edit" fg={PALETTE.fgDim} />
+                </box>
+              );
+            })()
           ) : view.kind === "artifact" ? (
             (() => {
               const art = findArtifact(artifacts, view.artifactId);

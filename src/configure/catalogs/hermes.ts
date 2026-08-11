@@ -17,7 +17,7 @@ export const hermesCatalog: HarnessCatalog = {
       path: "config.yaml",
       format: "yaml",
       primary: true,
-      note: "Primary settings; Prism marker-regions under hooks: only",
+      note: "Shared primary settings; Prism marker-regions under hooks: only",
     },
     {
       path: "auth.json",
@@ -27,7 +27,12 @@ export const hermesCatalog: HarnessCatalog = {
     {
       path: "SOUL.md",
       format: "md",
-      note: "Identity/personality prose; not Prism-owned",
+      note: "Shared-root soul; each profile also has profiles/<id>/SOUL.md",
+    },
+    {
+      path: "memories/MEMORY.md",
+      format: "md",
+      note: "Shared memory; profiles have their own memories/",
     },
     {
       path: ".env",
@@ -40,7 +45,9 @@ export const hermesCatalog: HarnessCatalog = {
       note: "first-use shell-hook consent cache; may be absent",
     },
   ],
-  scanDirs: ["skills", "plugins", "hooks", "profiles", "sessions"],
+  // profiles/ is NOT scanned into the shared inventory — each profile is a
+  // harness-equivalent sub-inventory under byHarness.hermes.profiles.
+  scanDirs: ["skills", "plugins", "hooks", "sessions"],
   prismNamespaceMarkers: ["prism-generated-"],
   fields: [
     {
@@ -649,7 +656,7 @@ export const hermesCatalog: HarnessCatalog = {
     "Canonical tools lower to <PRISM_HOME>/runtime/tools/<plugin>/; invoke via `prism tools invoke` (not native Hermes Python plugins).",
     "Prism patches config.yaml only for hooks: marker regions (hermes.hooks.<nativeEvent>); does not whole-file own config.yaml.",
     "Hook wrappers live under plugins/prism-generated-<plugin>/hooks/*.mjs; native Python plugins/ is a separate Hermes surface.",
-    "Profiles are alternate HERMES_HOME roots: ~/.hermes/profiles/<name>/ (own config.yaml + skills/). Use --profile or --compile-root for profile installs.",
+    "Profiles are alternate HERMES_HOME roots: ~/.hermes/profiles/<name>/ (own config.yaml, skills/, SOUL.md, memories/). Configure TUI expands each profile as a harness-equivalent sub-list under Hermes.",
     "projectRoot is null — Hermes is user/profile-scoped, not project-.hermes/.",
     "Workflow worker: hermes chat --query … -Q [--model] [--provider] [--yolo]; permission modes restricted/sandbox/interactive unsupported.",
     "custom_providers and model.api_key may hold plaintext secrets in live YAML — always redact in inventory previews.",

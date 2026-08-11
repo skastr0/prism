@@ -22,6 +22,12 @@ export type ArtifactNoun =
   | "rules"
   | "bundle"
   | "tool-runtime"
+  /** Hermes (and similar) identity prose — SOUL.md */
+  | "soul"
+  /** Hermes memories/*.md */
+  | "memory"
+  /** Hermes identity-brief / profile.yaml / vouch */
+  | "identity"
   | "other";
 
 export type OwnershipKind =
@@ -127,12 +133,37 @@ export interface HarnessSummary {
   readonly counts: Readonly<Record<ArtifactNoun, number>>;
   /** Harness-native settings/config overview (read-only). */
   readonly config?: ConfigOverview;
+  /** Hermes (etc.): count of agent profiles under the shared root. */
+  readonly profileCount?: number;
+}
+
+/**
+ * Hermes agent profile — a harness-equivalent sub-root under profiles/<id>/.
+ * Inventory is scoped to that directory only (no shared-root bleed).
+ */
+export interface ProfileSummary {
+  readonly id: string;
+  readonly displayName: string;
+  readonly root: string;
+  readonly rootExists: boolean;
+  readonly counts: Readonly<Record<ArtifactNoun, number>>;
+  readonly config?: ConfigOverview;
+  /** Quick identity surface (SOUL, MEMORY, identity-brief, …). */
+  readonly identityFiles: ReadonlyArray<ConfigFileEntry>;
+}
+
+export interface ProfileInventory {
+  readonly summary: ProfileSummary;
+  readonly artifacts: ReadonlyArray<ArtifactEntry>;
+  readonly groups: ReadonlyArray<ArtifactGroup>;
 }
 
 export interface HarnessInventory {
   readonly summary: HarnessSummary;
   readonly artifacts: ReadonlyArray<ArtifactEntry>;
   readonly groups: ReadonlyArray<ArtifactGroup>;
+  /** Present for hermes (and any future multi-profile harness). */
+  readonly profiles?: ReadonlyArray<ProfileInventory>;
 }
 
 export interface ConfigureInventory {
@@ -149,7 +180,7 @@ export interface ConfigureInventory {
   readonly focusedHarness: ConfigureHarnessId;
 }
 
-export type NavKind = "harness" | "section" | "plugin" | "artifact";
+export type NavKind = "harness" | "section" | "plugin" | "artifact" | "profile";
 
 export type SectionId =
   | "summary"
@@ -161,6 +192,8 @@ export type SectionId =
   | "hooks"
   | "rules"
   | "bundles"
+  /** Hermes: SOUL / memories / identity-brief / profile.yaml */
+  | "identity"
   | "other";
 
 export interface NavNode {
@@ -174,6 +207,8 @@ export interface NavNode {
   readonly plugin?: string;
   /** For artifact nodes. */
   readonly artifactId?: string;
+  /** Hermes profile id when nav is scoped to a profile. */
+  readonly profileId?: string;
 }
 
 export interface MutationPlanOp {

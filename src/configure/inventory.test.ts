@@ -221,6 +221,70 @@ describe("loadConfigureInventory", () => {
     expect(demo?.regions).toBe(1);
   });
 
+  test("classifies hermes SOUL/memory/identity paths", () => {
+    expect(classifyRelativePath("SOUL.md", "owned").noun).toBe("soul");
+    expect(classifyRelativePath("memories/MEMORY.md", "owned").noun).toBe("memory");
+    expect(classifyRelativePath("identity-brief.md", "owned").noun).toBe("identity");
+    expect(classifyRelativePath("profile.yaml", "owned").noun).toBe("identity");
+  });
+
+  test("hermes inventory loads profiles as sub-scopes without shared bleed", async () => {
+    const os = await import("node:os");
+    const fs = await import("node:fs/promises");
+    const root = await fs.mkdtemp(join(os.tmpdir(), "prism-configure-hermes-"));
+    const prismHome = join(root, "prism-home");
+    const hermesRoot = join(root, ".hermes");
+    await mkdir(join(hermesRoot, "skills", "shared-skill"), { recursive: true });
+    await writeFile(join(hermesRoot, "skills", "shared-skill", "SKILL.md"), "# shared\n");
+    await writeFile(join(hermesRoot, "SOUL.md"), "# shared soul\n");
+    await mkdir(join(hermesRoot, "memories"), { recursive: true });
+    await writeFile(join(hermesRoot, "memories", "MEMORY.md"), "# shared mem\n");
+
+    const prof = join(hermesRoot, "profiles", "nova");
+    await mkdir(join(prof, "skills", "profile-only"), { recursive: true });
+    await writeFile(join(prof, "skills", "profile-only", "SKILL.md"), "# profile\n");
+    await writeFile(join(prof, "SOUL.md"), "# nova soul\n");
+    await mkdir(join(prof, "memories"), { recursive: true });
+    await writeFile(join(prof, "memories", "MEMORY.md"), "# nova mem\n");
+    await writeFile(join(prof, "identity-brief.md"), "# brief\n");
+    await writeFile(join(prof, "config.yaml"), "model:\n  default: test\n");
+
+    // Shared skill that also appears under profile should NOT appear in profile as shared path
+    await mkdir(join(prof, "skills", "shared-skill"), { recursive: true });
+    await writeFile(join(prof, "skills", "shared-skill", "SKILL.md"), "# local copy\n");
+
+    const inv = await loadConfigureInventory({
+      prismHome,
+      harness: "hermes",
+      env: { ...process.env, HOME: root, PRISM_HOME: prismHome },
+    });
+    const hermes = inv.byHarness["hermes"];
+    expect(hermes).toBeDefined();
+
+    // Shared root must not include profiles/* paths
+    expect(hermes!.artifacts.some((a) => a.relativePath.startsWith("profiles/"))).toBe(false);
+    expect(hermes!.summary.counts.soul).toBeGreaterThanOrEqual(1);
+    expect(hermes!.summary.counts.skill).toBeGreaterThanOrEqual(1);
+
+    expect(hermes!.profiles?.length).toBe(1);
+    const nova = hermes!.profiles![0]!;
+    expect(nova.summary.id).toBe("nova");
+    expect(nova.summary.counts.skill).toBe(2); // profile-only + shared-skill copy
+    expect(nova.summary.counts.soul).toBe(1);
+    expect(nova.summary.counts.memory).toBeGreaterThanOrEqual(1);
+    expect(nova.summary.counts.identity).toBeGreaterThanOrEqual(1);
+    // Profile paths relative to profile root
+    expect(nova.artifacts.every((a) => !a.relativePath.startsWith("profiles/"))).toBe(true);
+    expect(nova.artifacts.some((a) => a.relativePath === "SOUL.md")).toBe(true);
+    expect(nova.artifacts.some((a) => a.relativePath === "skills/profile-only/SKILL.md")).toBe(
+      true,
+    );
+    // Shared-root skill not inventoriable under profile unless copied
+    expect(hermes!.artifacts.some((a) => a.label === "shared-skill" || a.logicalKey === "shared-skill")).toBe(
+      true,
+    );
+  });
+
   test("indexes codex root hooks.json and plugin-cache hooks", async () => {
     const os = await import("node:os");
     const fs = await import("node:fs/promises");

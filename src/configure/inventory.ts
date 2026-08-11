@@ -31,11 +31,13 @@ import type {
   HarnessSummary,
   OwnershipKind,
   PluginSummary,
+  ProfileInventory,
+  ProfileSummary,
   SectionId,
   SettingsKeySummary,
 } from "./model.js";
 
-const emptyCounts = (): Record<ArtifactNoun, number> => ({
+export const emptyCounts = (): Record<ArtifactNoun, number> => ({
   skill: 0,
   command: 0,
   agent: 0,
@@ -43,6 +45,9 @@ const emptyCounts = (): Record<ArtifactNoun, number> => ({
   rules: 0,
   bundle: 0,
   "tool-runtime": 0,
+  soul: 0,
+  memory: 0,
+  identity: 0,
   other: 0,
 });
 
@@ -88,6 +93,14 @@ const resolveHarnessBinary = (
     if (found) return found;
   }
   return undefined;
+};
+
+/** Expand ~ using a specific env (tests pass HOME without mutating process.env). */
+const expandPathEnv = (path: string, env: NodeJS.ProcessEnv = process.env): string => {
+  const home = env.HOME ?? process.env.HOME ?? expandPath("~");
+  if (path.startsWith("~/")) return join(home, path.slice(2));
+  if (path === "~") return home;
+  return resolve(path);
 };
 
 const buildConfigOverview = async (
@@ -366,6 +379,41 @@ export const classifyRelativePath = (
       role: "primary",
     };
   }
+  // Hermes identity surfaces (shared root or profile root)
+  if (/(^|\/)SOUL\.md$/iu.test(norm)) {
+    return {
+      noun: "soul",
+      label: "SOUL.md",
+      logicalKey: "soul",
+      siteKey: `path:${norm}`,
+      role: "primary",
+    };
+  }
+  if (/(^|\/)memories\//u.test(norm) && /\.md$/iu.test(norm) && !norm.endsWith(".lock")) {
+    const base = basename(norm);
+    return {
+      noun: "memory",
+      label: base,
+      logicalKey: `memory:${base}`,
+      siteKey: `path:${norm}`,
+      role: "primary",
+    };
+  }
+  if (
+    /(^|\/)identity-brief\.md$/iu.test(norm) ||
+    /(^|\/)profile\.yaml$/iu.test(norm) ||
+    /(^|\/)profile\.yml$/iu.test(norm) ||
+    /(^|\/)profile\.vouch$/iu.test(norm)
+  ) {
+    const base = basename(norm);
+    return {
+      noun: "identity",
+      label: base,
+      logicalKey: `identity:${base}`,
+      siteKey: `path:${norm}`,
+      role: "primary",
+    };
+  }
   return {
     noun: "other",
     label: basename(norm) || norm,
@@ -373,6 +421,26 @@ export const classifyRelativePath = (
     siteKey: norm,
     role: "primary",
   };
+};
+
+/** Hermes-specific identity paths to always surface when present. */
+const HERMES_IDENTITY_RELS = [
+  "SOUL.md",
+  "identity-brief.md",
+  "profile.yaml",
+  "profile.yml",
+  "profile.vouch",
+  "memories/MEMORY.md",
+  "memories/USER.md",
+] as const;
+
+const isHermesIdentityPath = (relativePath: string): boolean => {
+  const norm = relativePath.replaceAll("\\", "/");
+  if (/(^|\/)SOUL\.md$/iu.test(norm)) return true;
+  if (/(^|\/)identity-brief\.md$/iu.test(norm)) return true;
+  if (/(^|\/)profile\.(yaml|yml|vouch)$/iu.test(norm)) return true;
+  if (/(^|\/)memories\/[^/]+\.md$/iu.test(norm) && !norm.endsWith(".lock")) return true;
+  return false;
 };
 
 /**
@@ -497,8 +565,11 @@ const loadOneHarnessInventory = async (options: {
   const { catalog, prismHome, env } = options;
   const harnessId = catalog.harness as ConfigureHarnessId;
   const harnessConfig = getHarness(harnessId);
-  const globalRoot =
-    resolveHarnessRoot(harnessConfig, "global") ?? expandPath(catalog.globalRoot);
+  // Prefer env.HOME when tests/callers override it (expandPath alone uses process.env).
+  const envHome = env.HOME?.trim();
+  const globalRoot = envHome
+    ? expandPathEnv(catalog.globalRoot, env)
+    : (resolveHarnessRoot(harnessConfig, "global") ?? expandPath(catalog.globalRoot));
   const rootExists = await exists(globalRoot);
   const binaryPath = resolveHarnessBinary(catalog, env);
 
@@ -571,13 +642,24 @@ const loadOneHarnessInventory = async (options: {
   const isPrismNs = (p: string): boolean => markers.some((m) => p.includes(m));
 
   if (rootExists) {
-    for (const dir of catalog.scanDirs) {
+    // Hermes profiles are harness-equivalent sub-roots — do not bulk-scan them
+    // into the shared inventory (they load via loadHermesProfiles).
+    const scanDirs = catalog.scanDirs.filter((d) => {
+      if (harnessId === "hermes" && (d === "profiles" || d.startsWith("profiles/"))) {
+        return false;
+      }
+      return true;
+    });
+
+    for (const dir of scanDirs) {
       const base = join(globalRoot, dir);
       if (!(await exists(base))) continue;
       for (const rel of await listDirRecursive(base)) {
         const absolute = resolve(join(base, rel));
         if (snapshotPaths.has(absolute)) continue;
         const relativePath = join(dir, rel).replaceAll("\\", "/");
+        // Extra guard: never index profile trees into shared hermes inventory.
+        if (harnessId === "hermes" && relativePath.startsWith("profiles/")) continue;
         const generated = extractGeneratedPlugin(relativePath);
         const ownership: OwnershipKind =
           generated !== undefined || isPrismNs(relativePath) ? "prism-namespace" : "foreign";
@@ -594,7 +676,15 @@ const loadOneHarnessInventory = async (options: {
           rel.endsWith(".md") &&
           !rel.endsWith("SKILL.md");
         const isHook = isHookArtifactPath(relativePath);
-        if (!isSkillMd && !isAgentOrCommand && !isTopPluginDir && !isSkillSupportMd && !isHook) {
+        const isIdentity = isHermesIdentityPath(relativePath);
+        if (
+          !isSkillMd &&
+          !isAgentOrCommand &&
+          !isTopPluginDir &&
+          !isSkillSupportMd &&
+          !isHook &&
+          !isIdentity
+        ) {
           continue;
         }
         const hookPkg = isHook ? hookPackageLabel(relativePath) : undefined;
@@ -622,6 +712,18 @@ const loadOneHarnessInventory = async (options: {
       pushClassified(rel, "owned", "foreign", absolute, {
         detail: "not owned by Prism",
       });
+    }
+
+    // Hermes shared-root identity files (SOUL, memories) outside scanDirs.
+    if (harnessId === "hermes") {
+      for (const rel of HERMES_IDENTITY_RELS) {
+        const absolute = resolve(join(globalRoot, rel));
+        if (!(await exists(absolute))) continue;
+        if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
+        pushClassified(rel, "owned", "foreign", absolute, {
+          detail: "hermes shared identity",
+        });
+      }
     }
   }
 
@@ -664,6 +766,16 @@ const loadOneHarnessInventory = async (options: {
 
   const config = await buildConfigOverview(catalog, globalRoot);
 
+  let profiles: ReadonlyArray<ProfileInventory> | undefined;
+  if (harnessId === "hermes" && rootExists) {
+    profiles = await loadHermesProfiles({
+      sharedRoot: globalRoot,
+      prismHome,
+      manifests: primaryManifests,
+      markers,
+    });
+  }
+
   const summary: HarnessSummary = {
     harness: harnessId,
     displayName: catalog.displayName,
@@ -675,9 +787,232 @@ const loadOneHarnessInventory = async (options: {
     plugins,
     counts,
     config,
+    ...(profiles !== undefined ? { profileCount: profiles.length } : {}),
+  };
+
+  return {
+    summary,
+    artifacts,
+    groups,
+    ...(profiles !== undefined ? { profiles } : {}),
+  };
+};
+
+/**
+ * Scan one Hermes profile directory as a harness-equivalent sub-inventory.
+ * Paths are relative to the profile root (not the shared ~/.hermes).
+ */
+const loadOneHermesProfile = async (options: {
+  readonly profileId: string;
+  readonly profileRoot: string;
+  readonly sharedRoot: string;
+  readonly prismHome: string;
+  readonly manifests: ReadonlyArray<SnapshotManifest>;
+  readonly markers: ReadonlyArray<string>;
+}): Promise<ProfileInventory> => {
+  const { profileId, profileRoot, markers } = options;
+  const isPrismNs = (p: string): boolean => markers.some((m) => p.includes(m));
+  const artifacts: ArtifactEntry[] = [];
+
+  const push = (
+    relativePath: string,
+    ownership: OwnershipKind,
+    targetPath: string,
+    extras: {
+      readonly plugin?: string;
+      readonly regionKey?: string;
+      readonly detail?: string;
+      readonly forceNoun?: ArtifactNoun;
+      readonly forceLabel?: string;
+    } = {},
+  ): void => {
+    const classified = classifyRelativePath(relativePath, "owned", {
+      ...(extras.regionKey ? { regionKey: extras.regionKey } : {}),
+    });
+    const noun = extras.forceNoun ?? classified.noun;
+    const label = extras.forceLabel ?? classified.label;
+    artifacts.push({
+      id: artifactId({
+        targetPath,
+        ownership,
+        ...(extras.regionKey ? { regionKey: extras.regionKey } : {}),
+      }),
+      noun,
+      ownership,
+      targetPath,
+      relativePath,
+      label,
+      ...(extras.plugin !== undefined ? { plugin: extras.plugin } : {}),
+      ...(extras.regionKey !== undefined ? { regionKey: extras.regionKey } : {}),
+      ...(extras.detail !== undefined ? { detail: extras.detail } : {}),
+      ...(classified.logicalKey !== undefined ? { logicalKey: classified.logicalKey } : {}),
+      ...(classified.siteKey !== undefined ? { siteKey: classified.siteKey } : {}),
+      ...(classified.role !== undefined ? { role: classified.role } : {}),
+    });
+  };
+
+  // Snapshot entries that land under this profile root
+  for (const manifest of options.manifests) {
+    for (const entry of manifest.entries) {
+      const abs = resolve(entry.targetPath);
+      if (!abs.startsWith(resolve(profileRoot) + "/") && abs !== resolve(profileRoot)) continue;
+      let rel: string;
+      try {
+        rel = relative(profileRoot, entry.targetPath).replaceAll("\\", "/");
+      } catch {
+        continue;
+      }
+      if (rel.startsWith("..")) continue;
+      const ownership: OwnershipKind = entry.mode === "owned" ? "prism-owned" : "prism-region";
+      push(rel, ownership, entry.targetPath, {
+        plugin: barePluginName(entry.plugin),
+        ...(entry.regionKey ? { regionKey: entry.regionKey } : {}),
+        detail: entry.mode === "region" ? "region" : undefined,
+      });
+    }
+  }
+
+  const snapshotPaths = new Set(artifacts.map((a) => resolve(a.targetPath)));
+  const profileScanDirs = ["skills", "hooks", "plugins", "memories"] as const;
+
+  for (const dir of profileScanDirs) {
+    const base = join(profileRoot, dir);
+    if (!(await exists(base))) continue;
+    for (const rel of await listDirRecursive(base)) {
+      const absolute = resolve(join(base, rel));
+      if (snapshotPaths.has(absolute)) continue;
+      const relativePath = `${dir}/${rel}`.replaceAll("\\", "/");
+      const generated = extractGeneratedPlugin(relativePath);
+      const ownership: OwnershipKind =
+        generated !== undefined || isPrismNs(relativePath) ? "prism-namespace" : "foreign";
+      const isSkillMd = rel.endsWith("SKILL.md");
+      const isSkillSupportMd =
+        relativePath.startsWith("skills/") && rel.endsWith(".md") && !rel.endsWith("SKILL.md");
+      const isHook = isHookArtifactPath(relativePath);
+      const isIdentity = isHermesIdentityPath(relativePath);
+      if (!isSkillMd && !isSkillSupportMd && !isHook && !isIdentity) continue;
+      push(relativePath, ownership, absolute, {
+        ...(generated ? { plugin: generated } : {}),
+        detail: ownership === "prism-namespace" ? "unledgered" : "profile-local",
+      });
+    }
+  }
+
+  for (const rel of HERMES_IDENTITY_RELS) {
+    const absolute = resolve(join(profileRoot, rel));
+    if (!(await exists(absolute))) continue;
+    if (artifacts.some((a) => resolve(a.targetPath) === absolute)) continue;
+    push(rel, "foreign", absolute, { detail: "profile identity" });
+  }
+
+  // Profile config.yaml (settings surface; also as artifact for identity/config browse)
+  const configAbs = join(profileRoot, "config.yaml");
+  if (await exists(configAbs) && !artifacts.some((a) => resolve(a.targetPath) === resolve(configAbs))) {
+    // config is browsable via Config section; no need as skill-like artifact
+  }
+
+  artifacts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  const groups = groupArtifacts(artifacts);
+  const counts = emptyCounts();
+  for (const group of groups) counts[group.noun] += 1;
+
+  const identityFiles: ConfigFileEntry[] = [];
+  for (const rel of HERMES_IDENTITY_RELS) {
+    const abs = join(profileRoot, rel);
+    const fileExists = await exists(abs);
+    let sizeBytes: number | undefined;
+    if (fileExists) {
+      try {
+        sizeBytes = (await readFile(abs)).length;
+      } catch {
+        sizeBytes = undefined;
+      }
+    }
+    identityFiles.push({
+      id: rel,
+      kind: "other",
+      label: basename(rel),
+      path: abs,
+      exists: fileExists,
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+      prismTouch: "none",
+    });
+  }
+
+  const profileCatalog: HarnessCatalog = {
+    harness: "hermes",
+    displayName: `Hermes · ${profileId}`,
+    binaryNames: [],
+    globalRoot: profileRoot,
+    projectRoot: null,
+    settingsFiles: [
+      { path: "config.yaml", format: "yaml", primary: true, note: "Profile config" },
+      { path: "SOUL.md", format: "md", note: "Profile soul / personality" },
+      { path: "identity-brief.md", format: "md", note: "Identity brief" },
+      { path: "profile.yaml", format: "yaml", note: "Profile metadata" },
+      { path: ".env", format: "other", note: "secrets — never display" },
+    ],
+    scanDirs: [...profileScanDirs],
+    prismNamespaceMarkers: markers,
+    fields: getHarnessCatalog("hermes").fields,
+    refresh: getHarnessCatalog("hermes").refresh,
+  };
+  const config = await buildConfigOverview(profileCatalog, profileRoot);
+
+  const summary: ProfileSummary = {
+    id: profileId,
+    displayName: profileId,
+    root: profileRoot,
+    rootExists: true,
+    counts,
+    config,
+    identityFiles,
   };
 
   return { summary, artifacts, groups };
+};
+
+export const loadHermesProfiles = async (options: {
+  readonly sharedRoot: string;
+  readonly prismHome: string;
+  readonly manifests: ReadonlyArray<SnapshotManifest>;
+  readonly markers: ReadonlyArray<string>;
+}): Promise<ReadonlyArray<ProfileInventory>> => {
+  const profilesDir = join(options.sharedRoot, "profiles");
+  if (!(await exists(profilesDir))) return [];
+  const names = (await listDir(profilesDir)).filter((n) => !n.startsWith(".")).sort();
+  const out: ProfileInventory[] = [];
+  for (const name of names) {
+    const profileRoot = join(profilesDir, name);
+    // Must be a directory
+    try {
+      const listing = await listDir(profileRoot);
+      if (!Array.isArray(listing)) continue;
+    } catch {
+      continue;
+    }
+    // Require at least one profile marker so random dirs are skipped
+    const markers = ["SOUL.md", "config.yaml", "profile.yaml", "skills", "memories"];
+    let ok = false;
+    for (const m of markers) {
+      if (await exists(join(profileRoot, m))) {
+        ok = true;
+        break;
+      }
+    }
+    if (!ok) continue;
+    out.push(
+      await loadOneHermesProfile({
+        profileId: name,
+        profileRoot,
+        sharedRoot: options.sharedRoot,
+        prismHome: options.prismHome,
+        manifests: options.manifests,
+        markers: options.markers,
+      }),
+    );
+  }
+  return out;
 };
 
 /**
@@ -759,6 +1094,10 @@ export const artifactsForSection = (
       return artifacts.filter((a) => a.noun === "rules");
     case "bundles":
       return artifacts.filter((a) => a.noun === "bundle");
+    case "identity":
+      return artifacts.filter(
+        (a) => a.noun === "soul" || a.noun === "memory" || a.noun === "identity",
+      );
     case "plugins":
       return artifacts.filter((a) => a.plugin !== undefined);
     case "other":
@@ -786,6 +1125,10 @@ export const groupsForSection = (
       return groups.filter((g) => g.noun === "rules");
     case "bundles":
       return groups.filter((g) => g.noun === "bundle");
+    case "identity":
+      return groups.filter(
+        (g) => g.noun === "soul" || g.noun === "memory" || g.noun === "identity",
+      );
     case "other":
       return groups.filter((g) => g.noun === "other" || g.noun === "tool-runtime");
     case "plugins":

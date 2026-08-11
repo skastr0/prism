@@ -11,11 +11,13 @@ import { harnessMark } from "../../plugins-tui/harness-meta.js";
 import { ATTR, PALETTE, clamp, spinnerFrame, truncate } from "../../plugins-tui/theme.js";
 import {
   artifactsForPlugin,
-  artifactsForSection,
+  groupsForPlugin,
+  groupsForSection,
   loadConfigureInventory,
 } from "../inventory.js";
 import type {
   ArtifactEntry,
+  ArtifactGroup,
   ConfigureInventory,
   HarnessPresence,
   HarnessSummary,
@@ -40,6 +42,7 @@ type View =
   | { readonly kind: "summary" }
   | { readonly kind: "section"; readonly section: SectionId }
   | { readonly kind: "plugin"; readonly plugin: string }
+  | { readonly kind: "group"; readonly groupId: string }
   | { readonly kind: "artifact"; readonly artifactId: string };
 
 type ConfirmAction =
@@ -124,16 +127,28 @@ const ownershipGlyph = (o: OwnershipKind): { glyph: string; color: string } => {
   }
 };
 
-const sectionCount = (summary: HarnessSummary, section: SectionId, artifacts: ReadonlyArray<ArtifactEntry>): number => {
+const sectionCount = (summary: HarnessSummary, section: SectionId): number => {
   if (section === "summary") return 0;
   if (section === "plugins") return summary.plugins.length;
-  return artifactsForSection(artifacts, section).length;
+  if (section === "skills") return summary.counts.skill;
+  if (section === "commands") return summary.counts.command;
+  if (section === "agents") return summary.counts.agent;
+  if (section === "hooks") return summary.counts.hook;
+  if (section === "rules") return summary.counts.rules;
+  if (section === "bundles") return summary.counts.bundle;
+  if (section === "other") return summary.counts.other + summary.counts["tool-runtime"];
+  return 0;
 };
 
 const findArtifact = (
   artifacts: ReadonlyArray<ArtifactEntry>,
   id: string,
 ): ArtifactEntry | undefined => artifacts.find((a) => a.id === id);
+
+const findGroup = (
+  groups: ReadonlyArray<ArtifactGroup>,
+  id: string,
+): ArtifactGroup | undefined => groups.find((g) => g.id === id);
 
 // ── Nav (left) ────────────────────────────────────────────────────────────────
 
@@ -204,7 +219,13 @@ function NavList({
 
 // ── Detail panes ──────────────────────────────────────────────────────────────
 
-function SummaryDetail({ summary }: { readonly summary: HarnessSummary }) {
+function SummaryDetail({
+  summary,
+  duplicateCount,
+}: {
+  readonly summary: HarnessSummary;
+  readonly duplicateCount: number;
+}) {
   const mark = harnessMark(summary.harness);
   return (
     <box style={{ flexDirection: "column" }}>
@@ -239,10 +260,18 @@ function SummaryDetail({ summary }: { readonly summary: HarnessSummary }) {
         <span fg={PALETTE.fgMuted}>{"snap  "}</span>
         <span fg={PALETTE.fg}>{`${summary.snapshotEntryCount} entries`}</span>
       </text>
+      <text>
+        <span fg={PALETTE.fgMuted}>{"dedup  "}</span>
+        <span fg={duplicateCount > 0 ? PALETTE.yellow : PALETTE.fg}>
+          {duplicateCount > 0
+            ? `${duplicateCount} items in multiple install sites (⊞)`
+            : "no multi-site duplicates"}
+        </span>
+      </text>
       <box style={{ height: 1 }} />
       <text>
         <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
-          {"COUNTS"}
+          {"COUNTS (unique)"}
         </span>
       </text>
       {(
@@ -286,7 +315,7 @@ function SummaryDetail({ summary }: { readonly summary: HarnessSummary }) {
   );
 }
 
-function ArtifactRows({
+function GroupRows({
   items,
   cursor,
   windowSize,
@@ -294,7 +323,7 @@ function ArtifactRows({
   onSelect,
   onScroll,
 }: {
-  readonly items: ReadonlyArray<ArtifactEntry>;
+  readonly items: ReadonlyArray<ArtifactGroup>;
   readonly cursor: number;
   readonly windowSize: number;
   readonly focused: boolean;
@@ -316,7 +345,13 @@ function ArtifactRows({
       {win.above > 0 ? <text content={`  +${win.above} more above`} style={{ fg: PALETTE.fgDim }} /> : null}
       {win.slice.map(({ item, index }) => {
         const selected = focused && index === cursor;
-        const own = ownershipGlyph(item.ownership);
+        const own = ownershipGlyph(item.ownerships[0] ?? "foreign");
+        const sites =
+          item.isDuplicate
+            ? `  ×${item.siteCount} sites`
+            : item.locationCount > 1
+              ? `  ${item.locationCount} files`
+              : "";
         return (
           <box
             key={item.id}
@@ -325,9 +360,18 @@ function ArtifactRows({
           >
             <text>
               <span fg={selected ? PALETTE.fgBright : PALETTE.fgDim}>{selected ? "› " : "  "}</span>
-              <span fg={own.color}>{`${own.glyph} `}</span>
-              <span fg={selected ? PALETTE.fgBright : PALETTE.fg}>{truncate(item.label, 36)}</span>
-              <span fg={PALETTE.fgDim}>{item.plugin ? `  ${truncate(item.plugin, 18)}` : ""}</span>
+              <span fg={item.isDuplicate ? PALETTE.yellow : own.color}>
+                {item.isDuplicate ? "⊞ " : `${own.glyph} `}
+              </span>
+              <span fg={selected ? PALETTE.fgBright : PALETTE.fg}>{truncate(item.label, 32)}</span>
+              <span fg={item.isDuplicate ? PALETTE.yellow : PALETTE.fgDim}>{sites}</span>
+              <span fg={PALETTE.fgDim}>
+                {item.plugins.length === 1
+                  ? `  ${truncate(item.plugins[0]!, 14)}`
+                  : item.plugins.length > 1
+                    ? `  ${item.plugins.length} plugins`
+                    : ""}
+              </span>
             </text>
           </box>
         );
@@ -413,6 +457,12 @@ function ArtifactDetail({ artifact }: { readonly artifact: ArtifactEntry }) {
         <span fg={PALETTE.fgMuted}>{"noun     "}</span>
         <span fg={PALETTE.fg}>{artifact.noun}</span>
       </text>
+      {artifact.siteKey ? (
+        <text>
+          <span fg={PALETTE.fgMuted}>{"site     "}</span>
+          <span fg={PALETTE.fgDim}>{artifact.siteKey}</span>
+        </text>
+      ) : null}
       {artifact.plugin ? (
         <text>
           <span fg={PALETTE.fgMuted}>{"plugin   "}</span>
@@ -433,6 +483,93 @@ function ArtifactDetail({ artifact }: { readonly artifact: ArtifactEntry }) {
       ) : null}
       <box style={{ height: 1 }} />
       <text content="u uninstall plugin · d delete (owned/stray) · ← back" style={{ fg: PALETTE.fgDim }} />
+    </box>
+  );
+}
+
+function GroupDetail({
+  group,
+  cursor,
+  windowSize,
+  focused,
+  onSelect,
+  onScroll,
+}: {
+  readonly group: ArtifactGroup;
+  readonly cursor: number;
+  readonly windowSize: number;
+  readonly focused: boolean;
+  readonly onSelect: (index: number) => void;
+  readonly onScroll: (delta: number) => void;
+}) {
+  const win = windowAround(group.locations, cursor, Math.max(4, windowSize - 8));
+  return (
+    <box style={{ flexDirection: "column", height: "100%" }}>
+      <text>
+        <span fg={PALETTE.fgBright} attributes={ATTR.bold}>
+          {group.label}
+        </span>
+        <span fg={PALETTE.fgDim}>{`  ${group.noun}`}</span>
+        {group.isDuplicate ? (
+          <span fg={PALETTE.yellow}>{`  ⊞ ${group.siteCount} install sites`}</span>
+        ) : null}
+      </text>
+      <text>
+        <span fg={PALETTE.fgMuted}>{"key      "}</span>
+        <span fg={PALETTE.fg}>{group.logicalKey}</span>
+      </text>
+      <text>
+        <span fg={PALETTE.fgMuted}>{"files    "}</span>
+        <span fg={PALETTE.fg}>{String(group.locationCount)}</span>
+        <span fg={PALETTE.fgMuted}>{"  own "}</span>
+        <span fg={PALETTE.fg}>{group.ownerships.join(", ")}</span>
+      </text>
+      {group.plugins.length > 0 ? (
+        <text>
+          <span fg={PALETTE.fgMuted}>{"plugins  "}</span>
+          <span fg={PALETTE.fg}>{truncate(group.plugins.join(", "), 60)}</span>
+        </text>
+      ) : null}
+      <box style={{ height: 1 }} />
+      <text>
+        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
+          {"LOCATIONS"}
+        </span>
+        <span fg={PALETTE.fgDim}>{"  enter open · d delete selected"}</span>
+      </text>
+      {win.above > 0 ? <text content={`  +${win.above} more above`} style={{ fg: PALETTE.fgDim }} /> : null}
+      <box
+        onMouseScroll={(event: ScrollEvt) => {
+          const delta = scrollDelta(event);
+          if (delta !== 0) onScroll(delta);
+        }}
+        style={{ flexDirection: "column", flexGrow: 1 }}
+      >
+        {win.slice.map(({ item, index }) => {
+          const selected = focused && index === cursor;
+          const own = ownershipGlyph(item.ownership);
+          return (
+            <box
+              key={item.id}
+              onMouseDown={() => onSelect(index)}
+              style={{ height: 1, flexDirection: "row", ...(selected ? { backgroundColor: SEL_BG } : {}) }}
+            >
+              <text>
+                <span fg={selected ? PALETTE.fgBright : PALETTE.fgDim}>{selected ? "› " : "  "}</span>
+                <span fg={own.color}>{`${own.glyph} `}</span>
+                <span fg={selected ? PALETTE.fgBright : PALETTE.fg}>
+                  {truncate(item.relativePath, 56)}
+                </span>
+                <span fg={PALETTE.fgDim}>
+                  {item.siteKey ? `  ${truncate(item.siteKey, 20)}` : ""}
+                  {item.role === "support" ? "  support" : ""}
+                </span>
+              </text>
+            </box>
+          );
+        })}
+      </box>
+      {win.below > 0 ? <text content={`  +${win.below} more below`} style={{ fg: PALETTE.fgDim }} /> : null}
     </box>
   );
 }
@@ -491,8 +628,10 @@ function Footer({
     focus === "detail"
       ? view.kind === "artifact"
         ? [["j/k", "—"], ["u", "uninstall"], ["d", "delete"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
+        : view.kind === "group"
+          ? [["j/k", "location"], ["enter", "open"], ["d", "delete"], ["u", "uninstall"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
         : view.kind === "plugin"
-          ? [["j/k", "artifact"], ["enter", "open"], ["u", "uninstall"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
+          ? [["j/k", "item"], ["enter", "open"], ["u", "uninstall"], ["esc", "back"], ["r", "reload"], ["q", "quit"]]
           : view.kind === "section"
             ? [["j/k", "row"], ["enter", "open"], ["esc", "nav"], ["u", "uninstall"], ["d", "delete"], ["r", "reload"], ["q", "quit"]]
             : [["tab", "detail"], ["r", "reload"], ["q", "quit"]]
@@ -595,6 +734,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
 
   const summary = inventory?.harnesses[0] ?? null;
   const artifacts = inventory?.artifacts ?? [];
+  const groups = inventory?.groups ?? [];
+  const duplicateCount = useMemo(
+    () => groups.filter((g) => g.isDuplicate).length,
+    [groups],
+  );
 
   const navItems = useMemo<ReadonlyArray<NavItem>>(() => {
     if (!summary) {
@@ -609,7 +753,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       },
     ];
     for (const s of SECTIONS) {
-      const count = sectionCount(summary, s.id, artifacts);
+      const count = sectionCount(summary, s.id);
       items.push({
         id: `section:${s.id}`,
         kind: "section",
@@ -629,7 +773,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       }
     }
     return items;
-  }, [summary, artifacts, pluginsExpanded]);
+  }, [summary, pluginsExpanded]);
 
   // Keep nav cursor in range when items change
   useEffect(() => {
@@ -655,30 +799,65 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
 
   const detailList = useMemo(() => {
     if (view.kind === "section" && view.section === "plugins" && summary) {
-      return { mode: "plugins" as const, plugins: summary.plugins, artifacts: [] as ArtifactEntry[] };
+      return {
+        mode: "plugins" as const,
+        plugins: summary.plugins,
+        groups: [] as ArtifactGroup[],
+        locations: [] as ArtifactEntry[],
+      };
     }
     if (view.kind === "section") {
       return {
-        mode: "artifacts" as const,
+        mode: "groups" as const,
         plugins: [] as PluginSummary[],
-        artifacts: artifactsForSection(artifacts, view.section),
+        groups: groupsForSection(groups, view.section),
+        locations: [] as ArtifactEntry[],
       };
     }
     if (view.kind === "plugin") {
       return {
-        mode: "artifacts" as const,
+        mode: "groups" as const,
         plugins: [] as PluginSummary[],
-        artifacts: artifactsForPlugin(artifacts, view.plugin),
+        groups: groupsForPlugin(groups, view.plugin),
+        locations: [] as ArtifactEntry[],
       };
     }
-    return { mode: "none" as const, plugins: [] as PluginSummary[], artifacts: [] as ArtifactEntry[] };
-  }, [view, artifacts, summary]);
+    if (view.kind === "group") {
+      const g = findGroup(groups, view.groupId);
+      return {
+        mode: "locations" as const,
+        plugins: [] as PluginSummary[],
+        groups: [] as ArtifactGroup[],
+        locations: g?.locations ?? [],
+      };
+    }
+    return {
+      mode: "none" as const,
+      plugins: [] as PluginSummary[],
+      groups: [] as ArtifactGroup[],
+      locations: [] as ArtifactEntry[],
+    };
+  }, [view, groups, summary]);
 
   const detailLen =
-    detailList.mode === "plugins" ? detailList.plugins.length : detailList.mode === "artifacts" ? detailList.artifacts.length : 0;
+    detailList.mode === "plugins"
+      ? detailList.plugins.length
+      : detailList.mode === "groups"
+        ? detailList.groups.length
+        : detailList.mode === "locations"
+          ? detailList.locations.length
+          : 0;
 
   const viewKey =
-    view.kind === "section" ? view.section : view.kind === "plugin" ? view.plugin : view.kind === "artifact" ? view.artifactId : "summary";
+    view.kind === "section"
+      ? view.section
+      : view.kind === "plugin"
+        ? view.plugin
+        : view.kind === "group"
+          ? view.groupId
+          : view.kind === "artifact"
+            ? view.artifactId
+            : "summary";
 
   useEffect(() => {
     setDetailCursor((c) => clamp(c, 0, Math.max(0, detailLen - 1)));
@@ -686,8 +865,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
 
   const selectedDetailArtifact = useMemo((): ArtifactEntry | undefined => {
     if (view.kind === "artifact") return findArtifact(artifacts, view.artifactId);
-    if (detailList.mode === "artifacts" && detailList.artifacts.length > 0) {
-      return detailList.artifacts[clamp(detailCursor, 0, detailList.artifacts.length - 1)];
+    if (view.kind === "group" && detailList.mode === "locations" && detailList.locations.length > 0) {
+      return detailList.locations[clamp(detailCursor, 0, detailList.locations.length - 1)];
     }
     return undefined;
   }, [view, artifacts, detailList, detailCursor]);
@@ -695,13 +874,17 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   const selectedPluginName = useMemo((): string | undefined => {
     if (view.kind === "plugin") return view.plugin;
     if (view.kind === "artifact") return findArtifact(artifacts, view.artifactId)?.plugin;
+    if (view.kind === "group") {
+      const g = findGroup(groups, view.groupId);
+      if (g?.plugins.length === 1) return g.plugins[0];
+    }
     if (detailList.mode === "plugins" && detailList.plugins.length > 0) {
       return detailList.plugins[clamp(detailCursor, 0, detailList.plugins.length - 1)]?.name;
     }
     if (selectedDetailArtifact?.plugin) return selectedDetailArtifact.plugin;
     if (selectedNav?.kind === "plugin") return selectedNav.plugin;
     return undefined;
-  }, [view, artifacts, detailList, detailCursor, selectedDetailArtifact, selectedNav]);
+  }, [view, artifacts, groups, detailList, detailCursor, selectedDetailArtifact, selectedNav]);
 
   const beginUninstall = (): void => {
     const name = selectedPluginName;
@@ -728,9 +911,17 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   };
 
   const beginDelete = (): void => {
-    const art = selectedDetailArtifact;
+    let art = selectedDetailArtifact;
+    // On a group list row, delete the first primary/prism-owned location of that group.
+    if (!art && detailList.mode === "groups" && detailList.groups[detailCursor]) {
+      const g = detailList.groups[detailCursor]!;
+      art =
+        g.primaryLocations.find((l) => l.ownership === "prism-owned" || l.ownership === "prism-namespace") ??
+        g.primaryLocations[0] ??
+        g.locations[0];
+    }
     if (!art) {
-      setError("No artifact selected.");
+      setError("No artifact selected — open a group location, or select a group row.");
       return;
     }
     if (art.ownership === "foreign") {
@@ -848,8 +1039,15 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       setDetailCursor(0);
       return;
     }
-    if (detailList.mode === "artifacts" && detailList.artifacts[detailCursor]) {
-      setView({ kind: "artifact", artifactId: detailList.artifacts[detailCursor]!.id });
+    if (detailList.mode === "groups" && detailList.groups[detailCursor]) {
+      const g = detailList.groups[detailCursor]!;
+      // Always open group so multi-site locations are visible
+      setView({ kind: "group", groupId: g.id });
+      setDetailCursor(0);
+      return;
+    }
+    if (detailList.mode === "locations" && detailList.locations[detailCursor]) {
+      setView({ kind: "artifact", artifactId: detailList.locations[detailCursor]!.id });
     }
   };
 
@@ -859,8 +1057,14 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       return;
     }
     if (view.kind === "artifact") {
+      // Prefer returning to group if this artifact belongs to one
       const art = findArtifact(artifacts, view.artifactId);
-      if (art?.plugin) {
+      const group = art?.logicalKey
+        ? groups.find((g) => g.noun === art.noun && g.logicalKey === art.logicalKey)
+        : undefined;
+      if (group) {
+        setView({ kind: "group", groupId: group.id });
+      } else if (art?.plugin) {
         setView({ kind: "plugin", plugin: art.plugin });
       } else if (selectedNav?.kind === "section") {
         setView({ kind: "section", section: selectedNav.section });
@@ -868,6 +1072,18 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         setView({ kind: "summary" });
       }
       setFocus("detail");
+      return;
+    }
+    if (view.kind === "group") {
+      if (selectedNav?.kind === "plugin") {
+        setView({ kind: "plugin", plugin: selectedNav.plugin });
+      } else if (selectedNav?.kind === "section") {
+        setView({ kind: "section", section: selectedNav.section });
+      } else {
+        setView({ kind: "summary" });
+      }
+      setFocus("detail");
+      setDetailCursor(0);
       return;
     }
     if (view.kind === "plugin") {
@@ -938,7 +1154,9 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         ? SECTIONS.find((s) => s.id === view.section)?.label ?? view.section
         : view.kind === "plugin"
           ? `Plugin · ${view.plugin}`
-          : "Artifact";
+          : view.kind === "group"
+            ? `Group · ${findGroup(groups, view.groupId)?.label ?? "…"}`
+            : "Artifact";
 
   return (
     <box style={{ width: "100%", height: "100%", flexDirection: "column", backgroundColor: PALETTE.bg }}>
@@ -977,7 +1195,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
               <PlanPreview plan={confirm.plan} />
             </box>
           ) : view.kind === "summary" ? (
-            <SummaryDetail summary={summary} />
+            <SummaryDetail summary={summary} duplicateCount={duplicateCount} />
           ) : view.kind === "artifact" ? (
             (() => {
               const art = findArtifact(artifacts, view.artifactId);
@@ -985,6 +1203,28 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
                 <ArtifactDetail artifact={art} />
               ) : (
                 <text content="Artifact not found (reloaded?)" style={{ fg: PALETTE.fgDim }} />
+              );
+            })()
+          ) : view.kind === "group" ? (
+            (() => {
+              const g = findGroup(groups, view.groupId);
+              return g ? (
+                <GroupDetail
+                  group={g}
+                  cursor={detailCursor}
+                  windowSize={listWindow}
+                  focused={focus === "detail"}
+                  onSelect={(i) => {
+                    setDetailCursor(i);
+                    setFocus("detail");
+                  }}
+                  onScroll={(d) => {
+                    setFocus("detail");
+                    setDetailCursor((c) => clamp(c + d, 0, Math.max(0, g.locations.length - 1)));
+                  }}
+                />
+              ) : (
+                <text content="Group not found (reloaded?)" style={{ fg: PALETTE.fgDim }} />
               );
             })()
           ) : view.kind === "section" && view.section === "plugins" ? (
@@ -1003,8 +1243,8 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
               }}
             />
           ) : (
-            <ArtifactRows
-              items={detailList.artifacts}
+            <GroupRows
+              items={detailList.groups}
               cursor={detailCursor}
               windowSize={listWindow}
               focused={focus === "detail"}
@@ -1014,7 +1254,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
               }}
               onScroll={(d) => {
                 setFocus("detail");
-                setDetailCursor((c) => clamp(c + d, 0, Math.max(0, detailList.artifacts.length - 1)));
+                setDetailCursor((c) => clamp(c + d, 0, Math.max(0, detailList.groups.length - 1)));
               }}
             />
           )}

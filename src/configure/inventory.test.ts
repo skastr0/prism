@@ -7,9 +7,13 @@ import {
   barePluginName,
   classifyRelativePath,
   extractGeneratedPlugin,
+  groupArtifacts,
   loadConfigureInventory,
   pluginScopeNames,
+  skillLogicalName,
+  skillSiteKey,
 } from "./inventory.js";
+import type { ArtifactEntry } from "./model.js";
 
 const writeSnapshot = async (
   prismHome: string,
@@ -32,6 +36,8 @@ describe("configure inventory helpers", () => {
 
   test("classifyRelativePath maps claude layout", () => {
     expect(classifyRelativePath("skills/foo/SKILL.md", "owned").noun).toBe("skill");
+    expect(classifyRelativePath("skills/foo/references/a.md", "owned").noun).toBe("skill");
+    expect(classifyRelativePath("skills/foo/references/a.md", "owned").role).toBe("support");
     expect(classifyRelativePath("skills/prism-generated-tower/agents/x.md", "owned").noun).toBe(
       "agent",
     );
@@ -40,6 +46,61 @@ describe("configure inventory helpers", () => {
     );
     expect(classifyRelativePath("CLAUDE.md", "region").noun).toBe("rules");
     expect(extractGeneratedPlugin("skills/prism-generated-booth/SKILL.md")).toBe("booth");
+  });
+
+  test("skillLogicalName + siteKey distinguish direct vs bundle installs", () => {
+    expect(skillLogicalName("skills/tower/SKILL.md")).toBe("tower");
+    expect(skillLogicalName("skills/prism-generated-tower/skills/tower/SKILL.md")).toBe("tower");
+    expect(skillSiteKey("skills/tower/SKILL.md")).toBe("direct:tower");
+    expect(skillSiteKey("skills/prism-generated-tower/skills/tower/SKILL.md")).toBe(
+      "bundle:tower:tower",
+    );
+  });
+
+  test("groupArtifacts dedups same skill across install sites", () => {
+    const entries: ArtifactEntry[] = [
+      {
+        id: "1",
+        noun: "skill",
+        ownership: "foreign",
+        targetPath: "/c/skills/tower/SKILL.md",
+        relativePath: "skills/tower/SKILL.md",
+        label: "tower",
+        logicalKey: "tower",
+        siteKey: "direct:tower",
+        role: "primary",
+      },
+      {
+        id: "2",
+        noun: "skill",
+        ownership: "prism-owned",
+        targetPath: "/c/skills/prism-generated-tower/skills/tower/SKILL.md",
+        relativePath: "skills/prism-generated-tower/skills/tower/SKILL.md",
+        label: "tower",
+        plugin: "tower",
+        logicalKey: "tower",
+        siteKey: "bundle:tower:tower",
+        role: "primary",
+      },
+      {
+        id: "3",
+        noun: "skill",
+        ownership: "prism-owned",
+        targetPath: "/c/skills/prism-generated-tower/skills/tower/references/x.md",
+        relativePath: "skills/prism-generated-tower/skills/tower/references/x.md",
+        label: "tower",
+        plugin: "tower",
+        logicalKey: "tower",
+        siteKey: "bundle:tower:tower",
+        role: "support",
+      },
+    ];
+    const groups = groupArtifacts(entries);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.isDuplicate).toBe(true);
+    expect(groups[0]!.siteCount).toBe(2);
+    expect(groups[0]!.locationCount).toBe(3);
+    expect(groups[0]!.logicalKey).toBe("tower");
   });
 });
 

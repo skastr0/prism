@@ -37,6 +37,36 @@ export interface ArtifactEntry {
   readonly regionKey?: string;
   readonly label: string;
   readonly detail?: string;
+  /**
+   * Stable identity for dedup across install sites
+   * (e.g. skill name shared by `skills/foo` and `skills/prism-generated-X/skills/foo`).
+   */
+  readonly logicalKey?: string;
+  /**
+   * Install-site key for the same logical item in different places
+   * (e.g. `direct:foo` vs `bundle:tower:foo`).
+   */
+  readonly siteKey?: string;
+  /** Primary unit (SKILL.md / agent.md) vs support file under the same package. */
+  readonly role?: "primary" | "support";
+}
+
+/**
+ * Deduped list unit: one logical skill/agent/command/… with 1..n on-disk locations.
+ */
+export interface ArtifactGroup {
+  readonly id: string;
+  readonly noun: ArtifactNoun;
+  readonly logicalKey: string;
+  readonly label: string;
+  readonly locations: ReadonlyArray<ArtifactEntry>;
+  readonly locationCount: number;
+  /** True when the same logical item exists at more than one install site. */
+  readonly isDuplicate: boolean;
+  readonly siteCount: number;
+  readonly ownerships: ReadonlyArray<OwnershipKind>;
+  readonly plugins: ReadonlyArray<string>;
+  readonly primaryLocations: ReadonlyArray<ArtifactEntry>;
 }
 
 export interface PluginSummary {
@@ -66,6 +96,8 @@ export interface ConfigureInventory {
   readonly harnesses: ReadonlyArray<HarnessSummary>;
   /** Flat artifact list for the primary (claude-code) harness roots. */
   readonly artifacts: ReadonlyArray<ArtifactEntry>;
+  /** Deduped groups (same logical skill/agent/… across install sites). */
+  readonly groups: ReadonlyArray<ArtifactGroup>;
 }
 
 export type NavKind = "harness" | "section" | "plugin" | "artifact";

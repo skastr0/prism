@@ -17,6 +17,7 @@ import { prismToolsRuntimeDir } from "../tools-cli/paths.js";
 import { workflowBunRuntime } from "../workflow-bun-runtime.js";
 import type {
   ArtifactEntry,
+  ArtifactGroup,
   ArtifactNoun,
   ConfigureHarnessId,
   ConfigureInventory,
@@ -83,43 +84,194 @@ export const extractGeneratedPlugin = (relativePath: string): string | undefined
   return match?.[1];
 };
 
+/**
+ * Skill package name for dedup:
+ * - `skills/foo/…` → foo
+ * - `skills/prism-generated-X/skills/foo/…` → foo
+ * - bare `skills/prism-generated-X/…` (bundle root) → undefined (bundle, not skill)
+ */
+export const skillLogicalName = (relativePath: string): string | undefined => {
+  const norm = relativePath.replaceAll("\\", "/");
+  const nested = /(?:^|\/)prism-generated-[^/]+\/skills\/([^/]+)/.exec(norm);
+  if (nested?.[1] && !nested[1].startsWith("prism-generated-")) return nested[1];
+  const direct = /(?:^|\/)skills\/([^/]+)/.exec(norm);
+  if (direct?.[1] && !direct[1].startsWith("prism-generated-")) return direct[1];
+  return undefined;
+};
+
+/** Where this skill package is installed (direct root vs which generated plugin). */
+export const skillSiteKey = (relativePath: string): string | undefined => {
+  const name = skillLogicalName(relativePath);
+  if (!name) return undefined;
+  const norm = relativePath.replaceAll("\\", "/");
+  const gen = extractGeneratedPlugin(norm);
+  if (gen && /prism-generated-[^/]+\/skills\//.test(norm)) {
+    return `bundle:${gen}:${name}`;
+  }
+  return `direct:${name}`;
+};
+
 export const classifyRelativePath = (
   relativePath: string,
   mode: SnapshotEntry["mode"],
-): { readonly noun: ArtifactNoun; readonly label: string } => {
+): {
+  readonly noun: ArtifactNoun;
+  readonly label: string;
+  readonly logicalKey?: string;
+  readonly siteKey?: string;
+  readonly role?: "primary" | "support";
+} => {
   const norm = relativePath.replaceAll("\\", "/");
   if (mode === "region") {
-    return { noun: "rules", label: basename(norm) || "rules region" };
+    return {
+      noun: "rules",
+      label: basename(norm) || "rules region",
+      logicalKey: `region:${norm}`,
+      siteKey: `file:${norm}`,
+      role: "primary",
+    };
   }
-  if (norm.includes("/hooks/") || norm.endsWith("hooks.json") || norm.endsWith("hooks.v1.json")) {
-    return { noun: "hook", label: basename(norm) };
+  if (/(^|\/)hooks\//.test(norm) || norm.endsWith("hooks.json") || norm.endsWith("hooks.v1.json")) {
+    const base = basename(norm);
+    return {
+      noun: "hook",
+      label: base,
+      logicalKey: base,
+      siteKey: norm,
+      role: "primary",
+    };
   }
-  if (norm.includes("/commands/") || /(^|\/)commands\//.test(norm)) {
-    return { noun: "command", label: basename(norm).replace(/\.md$/u, "") };
+  // Agents / commands before skills — they often live under prism-generated bundles.
+  if (/(^|\/)commands\//.test(norm)) {
+    const base = basename(norm).replace(/\.md$/u, "");
+    const gen = extractGeneratedPlugin(norm);
+    return {
+      noun: "command",
+      label: base,
+      logicalKey: base,
+      siteKey: gen ? `bundle:${gen}:${base}` : `direct:${base}`,
+      role: "primary",
+    };
   }
-  if (norm.includes("/agents/") || /(^|\/)agents\//.test(norm)) {
-    return { noun: "agent", label: basename(norm).replace(/\.md$/u, "") };
+  if (/(^|\/)agents\//.test(norm)) {
+    const base = basename(norm).replace(/\.md$/u, "");
+    const gen = extractGeneratedPlugin(norm);
+    return {
+      noun: "agent",
+      label: base,
+      logicalKey: base,
+      siteKey: gen ? `bundle:${gen}:${base}` : `direct:${base}`,
+      role: "primary",
+    };
   }
-  if (norm.includes("SKILL.md") || norm.includes("/skills/")) {
+  // Skills: match paths starting with skills/ OR containing /skills/
+  if (/(^|\/)skills\//.test(norm) || /(^|\/)SKILL\.md$/u.test(norm)) {
+    const skillName = skillLogicalName(norm);
+    if (skillName) {
+      const isPrimary = /(^|\/)SKILL\.md$/u.test(norm);
+      return {
+        noun: "skill",
+        label: skillName,
+        logicalKey: skillName,
+        siteKey: skillSiteKey(norm),
+        role: isPrimary ? "primary" : "support",
+      };
+    }
+    // skills/prism-generated-X/… without nested skill package → bundle surface
     const generated = extractGeneratedPlugin(norm);
-    if (generated && !norm.includes("/skills/") && norm.includes(`prism-generated-${generated}`)) {
-      return { noun: "bundle", label: `prism-generated-${generated}` };
+    if (generated) {
+      return {
+        noun: "bundle",
+        label: `prism-generated-${generated}`,
+        logicalKey: generated,
+        siteKey: `bundle:${generated}`,
+        role: "primary",
+      };
     }
-    // skill dir name: skills/<name>/… or …/skills/<name>/SKILL.md
-    const skillMatch = /(?:^|\/)skills\/([^/]+)/.exec(norm);
-    const name = skillMatch?.[1] ?? basename(norm);
-    if (name.startsWith("prism-generated-")) {
-      return { noun: "bundle", label: name };
-    }
-    return { noun: "skill", label: name === "SKILL.md" ? basename(norm) : name };
   }
   if (norm.includes("prism-generated-")) {
-    return { noun: "bundle", label: extractGeneratedPlugin(norm) ?? basename(norm) };
+    const generated = extractGeneratedPlugin(norm) ?? basename(norm);
+    return {
+      noun: "bundle",
+      label: generated.startsWith("prism-generated-") ? generated : `prism-generated-${generated}`,
+      logicalKey: generated.replace(/^prism-generated-/u, ""),
+      siteKey: `bundle:${generated.replace(/^prism-generated-/u, "")}`,
+      role: "primary",
+    };
   }
   if (norm === "CLAUDE.md" || norm.endsWith("/CLAUDE.md")) {
-    return { noun: "rules", label: "CLAUDE.md" };
+    return {
+      noun: "rules",
+      label: "CLAUDE.md",
+      logicalKey: "CLAUDE.md",
+      siteKey: "file:CLAUDE.md",
+      role: "primary",
+    };
   }
-  return { noun: "other", label: basename(norm) || norm };
+  return {
+    noun: "other",
+    label: basename(norm) || norm,
+    logicalKey: norm,
+    siteKey: norm,
+    role: "primary",
+  };
+};
+
+/**
+ * Collapse flat artifacts into dedup groups (same logicalKey + noun).
+ * Skills/agents/commands that appear in multiple install sites become one row.
+ */
+export const groupArtifacts = (
+  artifacts: ReadonlyArray<ArtifactEntry>,
+): ReadonlyArray<ArtifactGroup> => {
+  const map = new Map<string, ArtifactEntry[]>();
+  for (const entry of artifacts) {
+    const key = entry.logicalKey
+      ? `${entry.noun}:${entry.logicalKey}`
+      : `path:${entry.id}`;
+    const list = map.get(key);
+    if (list) list.push(entry);
+    else map.set(key, [entry]);
+  }
+
+  const groups: ArtifactGroup[] = [];
+  for (const [id, locations] of map) {
+    const first = locations[0]!;
+    const noun = first.noun;
+    const logicalKey = first.logicalKey ?? first.relativePath;
+    const sites = new Set(
+      locations.map((l) => l.siteKey ?? l.relativePath).filter(Boolean),
+    );
+    const ownerships = [...new Set(locations.map((l) => l.ownership))];
+    const plugins = [
+      ...new Set(locations.map((l) => l.plugin).filter((p): p is string => p !== undefined)),
+    ].sort();
+    const primaryLocations = locations.filter((l) => l.role !== "support");
+    const siteCount = sites.size;
+    groups.push({
+      id,
+      noun,
+      logicalKey,
+      label: first.label,
+      locations: [...locations].sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+      locationCount: locations.length,
+      siteCount,
+      isDuplicate: siteCount > 1,
+      ownerships,
+      plugins,
+      primaryLocations:
+        primaryLocations.length > 0
+          ? primaryLocations
+          : locations,
+    });
+  }
+
+  return groups.sort((a, b) => {
+    // Duplicates first within a noun, then label
+    if (a.isDuplicate !== b.isDuplicate) return a.isDuplicate ? -1 : 1;
+    if (a.noun !== b.noun) return a.noun.localeCompare(b.noun);
+    return a.label.localeCompare(b.label);
+  });
 };
 
 const artifactId = (entry: {
@@ -207,7 +359,42 @@ export const loadConfigureInventory = async (options: {
   const toolRuntimePlugins = await listToolRuntimePlugins(prismHome);
 
   const artifacts: ArtifactEntry[] = [];
-  const counts = emptyCounts();
+
+  const pushClassified = (
+    relativePath: string,
+    mode: SnapshotEntry["mode"],
+    ownership: OwnershipKind,
+    targetPath: string,
+    extras: {
+      readonly plugin?: string;
+      readonly regionKey?: string;
+      readonly detail?: string;
+      readonly forceNoun?: ArtifactNoun;
+      readonly forceLabel?: string;
+    } = {},
+  ): void => {
+    const classified = classifyRelativePath(relativePath, mode);
+    const noun = extras.forceNoun ?? classified.noun;
+    const label = extras.forceLabel ?? classified.label;
+    artifacts.push({
+      id: artifactId({
+        targetPath,
+        ownership,
+        ...(extras.regionKey ? { regionKey: extras.regionKey } : {}),
+      }),
+      noun,
+      ownership,
+      targetPath,
+      relativePath,
+      label: extras.regionKey ? `${label} · ${extras.regionKey}` : label,
+      ...(extras.plugin !== undefined ? { plugin: extras.plugin } : {}),
+      ...(extras.regionKey !== undefined ? { regionKey: extras.regionKey } : {}),
+      ...(extras.detail !== undefined ? { detail: extras.detail } : {}),
+      ...(classified.logicalKey !== undefined ? { logicalKey: classified.logicalKey } : {}),
+      ...(classified.siteKey !== undefined ? { siteKey: classified.siteKey } : {}),
+      ...(classified.role !== undefined ? { role: classified.role } : {}),
+    });
+  };
 
   for (const entry of snapshotEntries) {
     const root = primaryManifests.find((m) =>
@@ -220,26 +407,12 @@ export const loadConfigureInventory = async (options: {
     } catch {
       rel = entry.targetPath;
     }
-    const { noun, label } = classifyRelativePath(rel, entry.mode);
     const ownership: OwnershipKind = entry.mode === "owned" ? "prism-owned" : "prism-region";
-    const plugin = barePluginName(entry.plugin);
-    const item: ArtifactEntry = {
-      id: artifactId({
-        targetPath: entry.targetPath,
-        ownership,
-        ...(entry.regionKey ? { regionKey: entry.regionKey } : {}),
-      }),
-      noun,
-      ownership,
-      targetPath: entry.targetPath,
-      relativePath: rel,
-      plugin,
-      label: entry.regionKey ? `${label} · ${entry.regionKey}` : label,
+    pushClassified(rel, entry.mode, ownership, entry.targetPath, {
+      plugin: barePluginName(entry.plugin),
       ...(entry.regionKey ? { regionKey: entry.regionKey } : {}),
       detail: entry.mode === "region" ? "region" : undefined,
-    };
-    artifacts.push(item);
-    counts[noun] += 1;
+    });
   }
 
   // Disk scan: strays + foreign under known dirs
@@ -256,34 +429,35 @@ export const loadConfigureInventory = async (options: {
           generated !== undefined || relativePath.includes("prism-generated-")
             ? "prism-namespace"
             : "foreign";
-        // Only index skill roots / leaf markdown to keep list readable
-        const isSkillMd = rel.endsWith("SKILL.md") || rel.endsWith(".md");
+        // Index SKILL.md + agent/command markdown + top-level generated plugin dirs
+        const isSkillMd = rel.endsWith("SKILL.md");
+        const isAgentOrCommand =
+          /(^|\/)agents\/[^/]+\.md$/u.test(relativePath) ||
+          /(^|\/)commands\/[^/]+\.md$/u.test(relativePath);
         const isTopPluginDir =
           dir === "skills" &&
           !rel.includes("/") &&
-          (await exists(join(base, rel))) &&
           relativePath.includes("prism-generated-");
-        if (!isSkillMd && !isTopPluginDir) continue;
-        const { noun, label } = classifyRelativePath(relativePath, "owned");
-        const item: ArtifactEntry = {
-          id: artifactId({ targetPath: absolute, ownership }),
-          noun: isTopPluginDir ? "bundle" : noun,
-          ownership,
-          targetPath: absolute,
-          relativePath,
-          label: isTopPluginDir ? rel : label,
+        // Also index skill package support files that are markdown (grouped later)
+        const isSkillSupportMd =
+          /(^|\/)skills\//.test(relativePath) &&
+          rel.endsWith(".md") &&
+          !rel.endsWith("SKILL.md");
+        if (!isSkillMd && !isAgentOrCommand && !isTopPluginDir && !isSkillSupportMd) continue;
+        pushClassified(relativePath, "owned", ownership, absolute, {
           ...(generated ? { plugin: generated } : {}),
+          ...(isTopPluginDir
+            ? { forceNoun: "bundle", forceLabel: rel }
+            : {}),
           detail: ownership === "prism-namespace" ? "unledgered" : "not owned by Prism",
-        };
-        artifacts.push(item);
-        counts[item.noun] += 1;
+        });
       }
     }
   }
 
   // Tool runtime as synthetic artifacts under plugins
   for (const name of toolRuntimePlugins) {
-    const item: ArtifactEntry = {
+    artifacts.push({
       id: `tool-runtime:${name}`,
       noun: "tool-runtime",
       ownership: "prism-owned",
@@ -292,12 +466,20 @@ export const loadConfigureInventory = async (options: {
       plugin: name,
       label: name,
       detail: "PRISM_HOME runtime/tools",
-    };
-    artifacts.push(item);
-    counts["tool-runtime"] += 1;
+      logicalKey: name,
+      siteKey: `tools:${name}`,
+      role: "primary",
+    });
   }
 
   artifacts.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  const groups = groupArtifacts(artifacts);
+
+  // Nav counts = unique logical groups (deduped), not raw file rows.
+  const counts = emptyCounts();
+  for (const group of groups) {
+    counts[group.noun] += 1;
+  }
 
   const plugins = buildPluginSummaries(
     snapshotEntries,
@@ -329,6 +511,7 @@ export const loadConfigureInventory = async (options: {
     prismHome,
     harnesses: [summary],
     artifacts,
+    groups,
   };
 };
 
@@ -358,8 +541,39 @@ export const artifactsForSection = (
   }
 };
 
+export const groupsForSection = (
+  groups: ReadonlyArray<ArtifactGroup>,
+  section: SectionId,
+): ReadonlyArray<ArtifactGroup> => {
+  switch (section) {
+    case "skills":
+      return groups.filter((g) => g.noun === "skill");
+    case "commands":
+      return groups.filter((g) => g.noun === "command");
+    case "agents":
+      return groups.filter((g) => g.noun === "agent");
+    case "hooks":
+      return groups.filter((g) => g.noun === "hook");
+    case "rules":
+      return groups.filter((g) => g.noun === "rules");
+    case "bundles":
+      return groups.filter((g) => g.noun === "bundle");
+    case "other":
+      return groups.filter((g) => g.noun === "other" || g.noun === "tool-runtime");
+    case "plugins":
+    case "summary":
+      return groups;
+  }
+};
+
 export const artifactsForPlugin = (
   artifacts: ReadonlyArray<ArtifactEntry>,
   pluginName: string,
 ): ReadonlyArray<ArtifactEntry> =>
   artifacts.filter((a) => a.plugin === pluginName);
+
+export const groupsForPlugin = (
+  groups: ReadonlyArray<ArtifactGroup>,
+  pluginName: string,
+): ReadonlyArray<ArtifactGroup> =>
+  groups.filter((g) => g.plugins.includes(pluginName));

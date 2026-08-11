@@ -36,6 +36,14 @@ import {
 import { planSetSetting } from "../settings-apply.js";
 import { loadTextForReader } from "../metadata.js";
 import { getHarnessCatalog } from "../catalogs/index.js";
+import {
+  findNavIndex,
+  navBackFromNavFocus,
+  popTrail,
+  viewFromNavItem,
+  type ConfigureNavItem,
+  type ConfigureView,
+} from "./nav.js";
 import { TextReader, clampReaderScroll } from "./text-reader.js";
 
 export interface ConfigureTuiOptions {
@@ -43,28 +51,7 @@ export interface ConfigureTuiOptions {
 }
 
 type Focus = "nav" | "detail";
-
-type View =
-  | { readonly kind: "summary" }
-  | { readonly kind: "section"; readonly section: SectionId }
-  | { readonly kind: "plugin"; readonly plugin: string }
-  | { readonly kind: "group"; readonly groupId: string }
-  | { readonly kind: "artifact"; readonly artifactId: string }
-  | { readonly kind: "config-key"; readonly key: string }
-  | {
-      readonly kind: "config-pick";
-      readonly key: string;
-      readonly options: ReadonlyArray<string>;
-      readonly current?: string;
-    }
-  | {
-      readonly kind: "reader";
-      readonly path: string;
-      readonly title: string;
-      readonly text: string;
-      readonly truncated: boolean;
-      readonly scroll: number;
-    };
+type View = ConfigureView;
 
 type ConfirmAction =
   | {
@@ -85,24 +72,7 @@ type ConfirmAction =
       readonly message: string;
     };
 
-type NavItem =
-  | { readonly id: string; readonly kind: "harness"; readonly label: string }
-  | {
-      readonly id: string;
-      readonly kind: "section";
-      readonly section: SectionId;
-      readonly label: string;
-      readonly count?: number;
-      /** When set, section is scoped to a Hermes profile. */
-      readonly profileId?: string;
-    }
-  | {
-      readonly id: string;
-      readonly kind: "profile";
-      readonly profileId: string;
-      readonly label: string;
-    }
-  | { readonly id: string; readonly kind: "plugin"; readonly plugin: string; readonly label: string };
+type NavItem = ConfigureNavItem;
 
 const SEL_BG = PALETTE.selBg;
 
@@ -883,24 +853,24 @@ function Footer({
   const hints: ReadonlyArray<readonly [string, string]> =
     focus === "detail"
       ? view.kind === "reader"
-        ? [["j/k", "scroll"], ["esc", "back"], ["q", "quit"]]
+        ? [["j/k", "scroll"], ["esc/h", "up"], ["q", "quit"]]
         : view.kind === "config-pick"
-          ? [["j/k", "option"], ["enter", "set"], ["esc", "back"], ["q", "quit"]]
+          ? [["j/k", "option"], ["enter", "set"], ["esc/h", "up"], ["q", "quit"]]
           : view.kind === "section" && view.section === "config"
-            ? [["j/k", "key"], ["enter", "edit"], ["esc", "nav"], ["r", "reload"], ["q", "quit"]]
+            ? [["j/k", "key"], ["enter", "edit"], ["esc/h", "nav"], ["r", "reload"], ["q", "quit"]]
             : view.kind === "artifact"
-              ? [["enter", "read"], ["d", "delete"], ["esc", "back"], ["q", "quit"]]
+              ? [["enter", "read"], ["d", "delete"], ["esc/h", "up"], ["q", "quit"]]
               : view.kind === "group"
-                ? [["j/k", "loc"], ["enter", "read"], ["d", "delete"], ["esc", "back"], ["q", "quit"]]
+                ? [["j/k", "loc"], ["enter", "read"], ["d", "delete"], ["esc/h", "up"], ["q", "quit"]]
                 : view.kind === "plugin"
-                  ? [["j/k", "item"], ["enter", "open"], ["u", "uninstall"], ["esc", "back"], ["q", "quit"]]
+                  ? [["j/k", "item"], ["enter", "open"], ["u", "uninstall"], ["esc/h", "up"], ["q", "quit"]]
                   : view.kind === "section"
-                    ? [["j/k", "row"], ["enter", "open"], ["esc", "nav"], ["q", "quit"]]
-                    : [["tab", "nav"], ["esc", "nav"], ["q", "quit"]]
+                    ? [["j/k", "row"], ["enter", "open"], ["esc/h", "nav"], ["q", "quit"]]
+                    : [["tab", "nav"], ["esc/h", "nav"], ["q", "quit"]]
       : [
-          ["j/k", "nav"],
-          ["enter", "expand"],
-          ["esc", "collapse"],
+          ["j/k", "move"],
+          ["enter/l", "open"],
+          ["esc/h", "up"],
           ["tab", "detail"],
           ["q", "quit"],
         ];
@@ -967,6 +937,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   const [navCursor, setNavCursor] = useState(0);
   const [detailCursor, setDetailCursor] = useState(0);
   const [view, setView] = useState<View>({ kind: "summary" });
+  /**
+   * Detail drill trail (parent views). Esc/h pops one frame.
+   * Cleared whenever the left-nav selection changes.
+   */
+  const [trail, setTrail] = useState<ReadonlyArray<View>>([]);
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null);
   const [pluginsExpanded, setPluginsExpanded] = useState(false);
   /** Only this harness shows sections — set by Enter/→, never by j/k alone. */
@@ -976,6 +951,23 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
   /** Which harness detail panel shows (follows expand, or last opened). */
   const [focusedHarness, setFocusedHarness] = useState<string | null>(null);
   const [metaByPath, setMetaByPath] = useState<ReadonlyMap<string, string>>(new Map());
+
+  /** Replace view and wipe trail (nav-driven root selection). */
+  const setRootView = useCallback((next: View): void => {
+    setTrail([]);
+    setView(next);
+    setDetailCursor(0);
+  }, []);
+
+  /** Drill one level deeper in the detail pane (pushes current onto trail). */
+  const drillTo = useCallback((next: View): void => {
+    setView((current) => {
+      setTrail((t) => [...t, current]);
+      return next;
+    });
+    setDetailCursor(0);
+    setFocus("detail");
+  }, []);
 
   const [tick, setTick] = useState(0);
   const animating = loading || busy;
@@ -1144,30 +1136,13 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     [groups],
   );
 
-  // Sync detail view when nav cursor is on a section/plugin/profile (not bare harness j/k).
+  // Left-nav selection owns the root detail view. Always clear the drill trail
+  // when the cursor moves so Esc never returns to a stale pane from another branch.
   useEffect(() => {
     if (focus !== "nav" || !selectedNav) return;
-    if (selectedNav.kind === "harness") {
-      return;
-    }
-    if (selectedNav.kind === "profile") {
-      setStatus(null);
-      setView({ kind: "summary" });
-      setDetailCursor(0);
-      return;
-    }
     setStatus(null);
-    if (selectedNav.kind === "section" && selectedNav.section === "summary") {
-      setView({ kind: "summary" });
-      setDetailCursor(0);
-    } else if (selectedNav.kind === "section") {
-      setView({ kind: "section", section: selectedNav.section });
-      setDetailCursor(0);
-    } else if (selectedNav.kind === "plugin") {
-      setView({ kind: "plugin", plugin: selectedNav.plugin });
-      setDetailCursor(0);
-    }
-  }, [focus, selectedNav?.id]);
+    setRootView(viewFromNavItem(selectedNav));
+  }, [focus, selectedNav?.id, setRootView]);
 
   // Config keys from active scope (profile or harness)
   const configKeys = summary?.config?.settingsKeys ?? [];
@@ -1449,7 +1424,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           setError(doc.error);
           return;
         }
-        setView({
+        drillTo({
           kind: "reader",
           path: doc.path,
           title,
@@ -1457,7 +1432,6 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           truncated: doc.truncated,
           scroll: 0,
         });
-        setFocus("detail");
       })
       .catch((cause: unknown) => {
         setBusy(false);
@@ -1485,79 +1459,58 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       return;
     }
     if (field.type === "enum" && field.enumValues && field.enumValues.length > 0) {
-      setView({
+      drillTo({
         kind: "config-pick",
         key,
         options: [...field.enumValues],
         current: sk?.preview,
       });
       setDetailCursor(Math.max(0, field.enumValues.findIndex((v) => v === sk?.preview)));
-      setFocus("detail");
       return;
     }
-    // Stay in config-key detail (description lives in the pane — never sticky footer)
     setStatus(null);
-    setView({ kind: "config-key", key });
-    setFocus("detail");
+    drillTo({ kind: "config-key", key });
+  };
+
+  const moveNavToId = (id: string): void => {
+    setNavCursor(findNavIndex(navItems, id));
+    setFocus("nav");
   };
 
   const drillIn = (): void => {
     if (focus === "nav") {
       if (!selectedNav) return;
       if (selectedNav.kind === "harness") {
-        const id = selectedNav.id.replace(/^harness:/, "");
-        // Expand only this harness; j/k alone never expands
+        const id = selectedNav.id.replace(/^harness:/u, "");
+        // Expand in place — stay on nav so j/k continues the tree
         setExpandedHarness(id);
         setFocusedHarness(id);
         setExpandedProfile(null);
         setPluginsExpanded(false);
-        setView({ kind: "summary" });
-        setFocus("detail");
-        // Keep cursor on the harness row (sections appear below it)
+        setRootView({ kind: "summary" });
         return;
       }
       if (selectedNav.kind === "profile") {
         const id = selectedNav.profileId;
+        // Toggle expand; stay on nav
         setExpandedProfile((prev) => (prev === id ? null : id));
         setFocusedHarness("hermes");
-        setView({ kind: "summary" });
-        setFocus("detail");
-        setDetailCursor(0);
+        setRootView({ kind: "summary" });
         return;
       }
       if (selectedNav.kind === "section" && selectedNav.section === "plugins") {
         setPluginsExpanded(true);
-        setView({ kind: "section", section: "plugins" });
+        setRootView({ kind: "section", section: "plugins" });
         setFocus("detail");
-        setDetailCursor(0);
         return;
       }
-      if (selectedNav.kind === "section" && selectedNav.section === "config") {
-        setView({ kind: "section", section: "config" });
-        setFocus("detail");
-        setDetailCursor(0);
-        return;
-      }
-      if (selectedNav.kind === "section" && selectedNav.section !== "summary") {
-        setView({ kind: "section", section: selectedNav.section });
-        setFocus("detail");
-        setDetailCursor(0);
-        return;
-      }
-      if (selectedNav.kind === "plugin") {
-        setView({ kind: "plugin", plugin: selectedNav.plugin });
-        setFocus("detail");
-        setDetailCursor(0);
-        return;
-      }
-      if (selectedNav.kind === "section" && selectedNav.section === "summary") {
-        setView({ kind: "summary" });
-        setFocus("detail");
-      }
+      // Any other section / plugin: enter detail on the already-synced root view
+      setRootView(viewFromNavItem(selectedNav));
+      setFocus("detail");
       return;
     }
 
-    // detail focus
+    // ── detail focus ────────────────────────────────────────────────────────
     if (view.kind === "config-pick") {
       const opt = view.options[detailCursor];
       if (opt === undefined) return;
@@ -1576,19 +1529,17 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     if (detailList.mode === "plugins" && detailList.plugins[detailCursor]) {
       const p = detailList.plugins[detailCursor]!;
       setPluginsExpanded(true);
-      setView({ kind: "plugin", plugin: p.name });
-      setDetailCursor(0);
+      drillTo({ kind: "plugin", plugin: p.name });
       return;
     }
-    // Skills list → group page (file list). Never skip straight to SKILL.md.
+    // List of groups → group location list (never skip to file)
     if (detailList.mode === "groups" && detailList.groups[detailCursor]) {
       const g = detailList.groups[detailCursor]!;
       setStatus(null);
-      setView({ kind: "group", groupId: g.id });
-      setDetailCursor(0);
+      drillTo({ kind: "group", groupId: g.id });
       return;
     }
-    // Group locations → open file reader for text artifacts
+    // Locations → reader or artifact meta
     if (detailList.mode === "locations" && detailList.locations[detailCursor]) {
       const loc = detailList.locations[detailCursor]!;
       if (
@@ -1603,7 +1554,7 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
         openReader(loc.targetPath, loc.label);
         return;
       }
-      setView({ kind: "artifact", artifactId: loc.id });
+      drillTo({ kind: "artifact", artifactId: loc.id });
       return;
     }
     if (view.kind === "artifact") {
@@ -1618,73 +1569,52 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
       return;
     }
     setStatus(null);
-    if (view.kind === "reader") {
-      // Prefer return to the group file list if we can recover it from path
-      setView({ kind: "section", section: "skills" });
-      setFocus("detail");
-      return;
-    }
-    if (view.kind === "config-pick" || view.kind === "config-key") {
-      setView({ kind: "section", section: "config" });
-      setFocus("detail");
-      setDetailCursor(0);
-      return;
-    }
-    if (view.kind === "artifact") {
-      const art = findArtifact(artifacts, view.artifactId);
-      const group = art?.logicalKey
-        ? groups.find((g) => g.noun === art.noun && g.logicalKey === art.logicalKey)
-        : undefined;
-      if (group) {
-        setView({ kind: "group", groupId: group.id });
-      } else if (art?.plugin) {
-        setView({ kind: "plugin", plugin: art.plugin });
-      } else if (selectedNav?.kind === "section") {
-        setView({ kind: "section", section: selectedNav.section });
-      } else {
-        setView({ kind: "summary" });
+
+    // 1) Pop detail trail first (reader → group → section, never a hard-coded section)
+    if (trail.length > 0) {
+      const { trail: nextTrail, view: prev } = popTrail(trail);
+      setTrail(nextTrail);
+      if (prev) {
+        setView(prev);
+        setDetailCursor(0);
+        setFocus("detail");
       }
-      setFocus("detail");
       return;
     }
-    if (view.kind === "group") {
-      if (selectedNav?.kind === "plugin") {
-        setView({ kind: "plugin", plugin: selectedNav.plugin });
-      } else if (selectedNav?.kind === "section") {
-        setView({ kind: "section", section: selectedNav.section });
-      } else {
-        setView({ kind: "summary" });
-      }
-      setFocus("detail");
-      setDetailCursor(0);
-      return;
-    }
-    if (view.kind === "plugin") {
-      setView({ kind: "section", section: "plugins" });
-      setFocus("detail");
-      setDetailCursor(0);
-      return;
-    }
+
+    // 2) At trail root with detail focus → return to nav (same row)
     if (focus === "detail") {
       setFocus("nav");
+      // Re-sync root view from nav so detail matches selection
+      if (selectedNav) setRootView(viewFromNavItem(selectedNav));
       return;
     }
-    // Collapse profile first, then harness
-    if (
-      expandedProfile &&
-      (selectedNav?.kind === "profile" ||
-        (selectedNav?.kind === "section" && selectedNav.profileId !== undefined))
-    ) {
-      setExpandedProfile(null);
-      return;
+
+    // 3) Nav focus: one tree level up (collapse or move to parent row)
+    const result = navBackFromNavFocus(selectedNav, {
+      expandedHarness,
+      expandedProfile,
+      pluginsExpanded,
+    });
+    switch (result.action) {
+      case "noop":
+        return;
+      case "move":
+        moveNavToId(result.navId);
+        return;
+      case "collapse-profile":
+        setExpandedProfile(null);
+        return;
+      case "collapse-plugins":
+        setPluginsExpanded(false);
+        moveNavToId(result.navId);
+        return;
+      case "collapse-harness":
+        setExpandedHarness(null);
+        setExpandedProfile(null);
+        setPluginsExpanded(false);
+        return;
     }
-    if (expandedHarness && selectedNav?.kind === "harness") {
-      setExpandedHarness(null);
-      setExpandedProfile(null);
-      setPluginsExpanded(false);
-      return;
-    }
-    if (pluginsExpanded) setPluginsExpanded(false);
   };
 
   useKeyboard((key) => {

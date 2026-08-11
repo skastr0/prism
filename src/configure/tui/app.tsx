@@ -5,10 +5,10 @@
 
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { exitWith } from "../../exit.js";
 import { harnessMark } from "../../plugins-tui/harness-meta.js";
-import { ATTR, PALETTE, clamp, spinnerFrame, truncate } from "../../plugins-tui/theme.js";
+import { ATTR, PALETTE, clamp, spinnerFrame, truncate, wordWrap } from "../../plugins-tui/theme.js";
 import {
   artifactsForPlugin,
   groupsForPlugin,
@@ -270,24 +270,35 @@ function Row({ content, fg }: { readonly content: string; readonly fg?: string }
   );
 }
 
+/** Column budget for readable (non-ellipsis) text in the detail pane + footer. */
+const WrapWidthContext = createContext(80);
+const useWrapWidth = (): number => useContext(WrapWidthContext);
+
 /**
- * Full-width text that word-wraps inside the pane (no ellipsis truncate).
- * Use for paths, status, descriptions — anything the operator must read in full.
+ * Full-width text that word-wraps inside the pane (no ellipsis).
+ * Pre-wraps with wordWrap to a known column budget — OpenTUI wrapMode alone
+ * often stays single-line when width is not yet measured (shows …).
  */
 function WrapText({
   content,
   fg,
+  width: widthOverride,
 }: {
   readonly content: string;
   readonly fg?: string;
+  /** Optional override; defaults to WrapWidthContext (detail pane budget). */
+  readonly width?: number;
 }) {
+  const ctxW = useWrapWidth();
+  const width = Math.max(12, widthOverride ?? ctxW);
+  const wrapped = wordWrap(content, width);
   return (
     <text
-      content={content}
+      content={wrapped}
       style={{
-        width: "100%",
+        width,
         fg: fg ?? PALETTE.fg,
-        wrapMode: "word",
+        wrapMode: "none",
       }}
     />
   );
@@ -854,6 +865,7 @@ function Footer({
   confirm,
   error,
   status,
+  width,
 }: {
   readonly focus: Focus;
   readonly view: View;
@@ -861,6 +873,8 @@ function Footer({
   readonly confirm: ConfirmAction | null;
   readonly error: string | null;
   readonly status: string | null;
+  /** Full terminal width — used for explicit column wrap. */
+  readonly width: number;
 }) {
   const hints: ReadonlyArray<readonly [string, string]> =
     focus === "detail"
@@ -887,7 +901,8 @@ function Footer({
           ["q", "quit"],
         ];
 
-  // Message bars word-wrap inside the footer — no ellipsis, full text readable.
+  // Pre-wrap to terminal columns — never ellipsis. OpenTUI wrapMode is unreliable here.
+  const colBudget = Math.max(20, width - 4);
   const message =
     confirm !== null
       ? confirm.kind === "set-setting"
@@ -900,19 +915,24 @@ function Footer({
           : null;
   const messageFg =
     confirm !== null ? PALETTE.danger : error !== null ? PALETTE.danger : PALETTE.ok;
+  const wrappedMessage = message !== null ? wordWrap(message, colBudget) : null;
+  const messageLines = wrappedMessage ? wrappedMessage.split("\n").length : 1;
+  // Cap footer growth so a huge error can't eat the whole TUI
+  const footerBodyHeight = Math.min(6, Math.max(1, messageLines));
 
   const content =
-    message !== null ? (
+    wrappedMessage !== null ? (
       <text
-        content={message}
+        content={wrappedMessage}
         style={{
-          width: "100%",
+          width: colBudget,
+          height: footerBodyHeight,
           fg: messageFg,
-          wrapMode: "word",
+          wrapMode: "none",
         }}
       />
     ) : (
-      <box style={{ flexDirection: "row", flexWrap: "wrap", width: "100%" }}>
+      <box style={{ flexDirection: "row", width: colBudget }}>
         {hints.map(([key, desc]) => (
           <text key={key} style={{ marginRight: 2 }}>
             <span fg={PALETTE.accent} attributes={ATTR.bold}>
@@ -933,8 +953,7 @@ function Footer({
     <box
       style={{
         width: "100%",
-        // Grow with wrapped status/error/confirm; min 2 rows for chrome + hints
-        minHeight: 2,
+        height: footerBodyHeight + 1, // +1 for top border row
         border: ["top"],
         borderColor: PALETTE.borderInactive,
         paddingLeft: 1,
@@ -1724,7 +1743,11 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
                   ? `Read · ${view.title}`
                   : "Artifact";
 
+  // Explicit column budget so status/paths always wrap (never ellipsis).
+  const detailWrapWidth = Math.max(24, termWidth - navWidth - 6);
+
   return (
+    <WrapWidthContext.Provider value={detailWrapWidth}>
     <box style={{ width: "100%", height: "100%", flexDirection: "column", backgroundColor: PALETTE.bg }}>
       <box style={{ width: "100%", flexGrow: 1, flexDirection: "row" }}>
         <NavList
@@ -1904,8 +1927,17 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
           )}
         </box>
       </box>
-      <Footer focus={focus} view={view} busy={busy || loading} confirm={confirm} error={error} status={status} />
+      <Footer
+        focus={focus}
+        view={view}
+        busy={busy || loading}
+        confirm={confirm}
+        error={error}
+        status={status}
+        width={termWidth}
+      />
     </box>
+    </WrapWidthContext.Provider>
   );
 }
 

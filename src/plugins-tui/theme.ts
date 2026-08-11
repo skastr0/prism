@@ -85,6 +85,74 @@ export const truncate = (value: string, max = 1_200): string => {
   return `${out}…`;
 };
 
+/**
+ * Word-wrap `value` to `maxWidth` columns (Bun.stringWidth-aware).
+ * Always continues on the next line — never ellipsis. Use for status bars,
+ * paths, and any text the operator must read in full inside a fixed pane.
+ */
+export const wordWrap = (value: string, maxWidth: number): string => {
+  const width = Math.max(8, Math.floor(maxWidth));
+  const paragraphs = value.split("\n");
+  const lines: string[] = [];
+
+  const flushHard = (token: string): void => {
+    let chunk = "";
+    let cw = 0;
+    for (const ch of token) {
+      const chW = Bun.stringWidth(ch);
+      if (cw + chW > width && chunk.length > 0) {
+        lines.push(chunk);
+        chunk = ch;
+        cw = chW;
+      } else {
+        chunk += ch;
+        cw += chW;
+      }
+    }
+    if (chunk.length > 0) lines.push(chunk);
+  };
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.length === 0) {
+      lines.push("");
+      continue;
+    }
+    let line = "";
+    let lineW = 0;
+    // Keep whitespace tokens so we reflow cleanly
+    const tokens = paragraph.split(/(\s+)/u);
+    for (const tok of tokens) {
+      if (tok.length === 0) continue;
+      const tw = Bun.stringWidth(tok);
+      if (lineW + tw <= width) {
+        line += tok;
+        lineW += tw;
+        continue;
+      }
+      if (lineW > 0) {
+        lines.push(line.replace(/\s+$/u, ""));
+        line = "";
+        lineW = 0;
+      }
+      // Leading whitespace after a break is droppable
+      const trimmed = tok.replace(/^\s+/u, "");
+      if (trimmed.length === 0) continue;
+      const tw2 = Bun.stringWidth(trimmed);
+      if (tw2 <= width) {
+        line = trimmed;
+        lineW = tw2;
+      } else {
+        flushHard(trimmed);
+        line = "";
+        lineW = 0;
+      }
+    }
+    if (line.length > 0) lines.push(line.replace(/\s+$/u, ""));
+  }
+
+  return lines.join("\n");
+};
+
 /** Stringify value as formatted JSON and truncate (clean ellipsis). */
 export const jsonBlock = (value: unknown, max = 1_200): string =>
   truncate(JSON.stringify(value, null, 2), max);

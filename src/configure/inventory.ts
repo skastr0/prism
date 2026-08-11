@@ -141,9 +141,12 @@ const buildConfigOverview = async (
     if (!hit || !hit.present) {
       return { key: field.key, shape: "absent" };
     }
+    // shape = type-ish status only; preview = value. Never put the value in shape
+    // (TUI concatenates columns and that looked like garbled glue).
+    const shape = hit.redacted ? "redacted" : field.type;
     return {
       key: field.key,
-      shape: hit.redacted ? "redacted" : (hit.valuePreview ?? "set"),
+      shape,
       ...(hit.valuePreview !== undefined ? { preview: hit.valuePreview } : {}),
     };
   });

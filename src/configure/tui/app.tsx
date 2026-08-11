@@ -221,64 +221,73 @@ function NavList({
 
 // ── Detail panes ──────────────────────────────────────────────────────────────
 
+/** One fixed-height row — multi-span flex without height:1 glues glyphs in OpenTUI. */
+function Row({ content, fg }: { readonly content: string; readonly fg?: string }) {
+  return (
+    <box style={{ height: 1, flexDirection: "row", width: "100%" }}>
+      <text content={content} style={{ fg: fg ?? PALETTE.fg, wrapMode: "none" }} />
+    </box>
+  );
+}
+
 function ConfigDetail({ summary }: { readonly summary: HarnessSummary }) {
   const cfg = summary.config;
   if (!cfg) {
-    return <text content="No catalogue config for this harness." style={{ fg: PALETTE.fgDim }} />;
+    return (
+      <Row content="No catalogue config for this harness." fg={PALETTE.fgDim} />
+    );
   }
+  const keyCol = 32;
+  const shapeCol = 12;
   return (
-    <box style={{ flexDirection: "column" }}>
-      <text>
-        <span fg={PALETTE.fgBright} attributes={ATTR.bold}>
-          {"Settings catalogue"}
-        </span>
-        <span fg={PALETTE.fgDim}>{"  read-only · no ConfigSpaces yet"}</span>
-      </text>
+    <box style={{ flexDirection: "column", width: "100%" }}>
+      <Row content="Settings catalogue  ·  read-only" fg={PALETTE.fgBright} />
       {cfg.settingsPath ? (
-        <text>
-          <span fg={PALETTE.fgMuted}>{"primary "}</span>
-          <span fg={PALETTE.fg}>{truncate(cfg.settingsPath, 70)}</span>
-        </text>
+        <Row content={`primary  ${truncate(cfg.settingsPath, 68)}`} fg={PALETTE.fg} />
       ) : null}
-      <box style={{ height: 1 }} />
-      <text>
-        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
-          {"FILES"}
-        </span>
-      </text>
-      {cfg.files.map((f) => (
-        <text key={f.id}>
-          <span fg={f.exists ? PALETTE.ok : PALETTE.fgDim}>{f.exists ? "● " : "○ "}</span>
-          <span fg={PALETTE.fg}>{truncate(f.label, 22)}</span>
-          <span fg={PALETTE.fgDim}>{`  ${f.kind} · ${f.prismTouch}`}</span>
-          {f.sizeBytes !== undefined ? (
-            <span fg={PALETTE.fgDim}>{`  ${f.sizeBytes}b`}</span>
-          ) : null}
-        </text>
-      ))}
-      <box style={{ height: 1 }} />
-      <text>
-        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
-          {`KEYS (${cfg.settingsKeys.length})`}
-        </span>
-      </text>
+      <Row content="" />
+      <Row content="FILES" fg={PALETTE.fgMuted} />
+      {cfg.files.map((f) => {
+        const mark = f.exists ? "●" : "○";
+        const size = f.sizeBytes !== undefined ? `  ${f.sizeBytes}b` : "";
+        const line = `${mark} ${truncate(f.label, 20).padEnd(20)}  ${f.kind.padEnd(10)}  ${f.prismTouch}${size}`;
+        return (
+          <Row
+            key={f.id}
+            content={line}
+            fg={f.exists ? PALETTE.fg : PALETTE.fgDim}
+          />
+        );
+      })}
+      <Row content="" />
+      <Row content={`KEYS (${cfg.settingsKeys.length})`} fg={PALETTE.fgMuted} />
       {cfg.settingsKeys.length === 0 ? (
-        <text content="  (no catalogue fields)" style={{ fg: PALETTE.fgDim }} />
+        <Row content="  (no catalogue fields)" fg={PALETTE.fgDim} />
       ) : (
-        cfg.settingsKeys.slice(0, 40).map((k) => (
-          <text key={k.key}>
-            <span fg={PALETTE.fg}>{`  ${truncate(k.key, 28)}`}</span>
-            <span fg={PALETTE.fgDim}>{`  ${k.shape}`}</span>
-            {k.preview ? <span fg={PALETTE.cyan}>{`  ${truncate(k.preview, 28)}`}</span> : null}
-          </text>
-        ))
+        cfg.settingsKeys.slice(0, 36).map((k) => {
+          const key = truncate(k.key, keyCol - 2).padEnd(keyCol);
+          const shape = truncate(k.shape, shapeCol).padEnd(shapeCol);
+          const prev =
+            k.shape === "absent"
+              ? "—"
+              : k.preview
+                ? truncate(k.preview, 36)
+                : "set";
+          return (
+            <Row
+              key={k.key}
+              content={`${key}${shape}${prev}`}
+              fg={k.shape === "absent" ? PALETTE.fgDim : PALETTE.fg}
+            />
+          );
+        })
       )}
-      {cfg.settingsKeys.length > 40 ? (
-        <text content={`  +${cfg.settingsKeys.length - 40} more keys`} style={{ fg: PALETTE.fgDim }} />
+      {cfg.settingsKeys.length > 36 ? (
+        <Row content={`  +${cfg.settingsKeys.length - 36} more keys`} fg={PALETTE.fgDim} />
       ) : null}
-      <box style={{ height: 1 }} />
-      {cfg.notes.slice(0, 6).map((n, i) => (
-        <text key={i} content={`· ${truncate(n, 78)}`} style={{ fg: PALETTE.fgDim }} />
+      <Row content="" />
+      {cfg.notes.slice(0, 4).map((n, i) => (
+        <Row key={`n-${i}`} content={`· ${truncate(n, 76)}`} fg={PALETTE.fgDim} />
       ))}
     </box>
   );
@@ -293,52 +302,29 @@ function SummaryDetail({
 }) {
   const mark = harnessMark(summary.harness);
   return (
-    <box style={{ flexDirection: "column" }}>
-      <text>
-        <span fg={mark.color}>{`${mark.glyph} `}</span>
-        <span fg={PALETTE.fgBright} attributes={ATTR.bold}>
-          {summary.displayName}
-        </span>
-        <span fg={presenceColor(summary.presence)}>{`  ${summary.presence}`}</span>
-      </text>
-      <box style={{ height: 1 }} />
-      <text>
-        <span fg={PALETTE.fgMuted}>{"root  "}</span>
-        <span fg={PALETTE.fg}>{truncate(summary.globalRoot, 72)}</span>
-      </text>
-      <text>
-        <span fg={PALETTE.fgMuted}>{"exists "}</span>
-        <span fg={summary.rootExists ? PALETTE.ok : PALETTE.danger}>{summary.rootExists ? "yes" : "no"}</span>
-      </text>
-      {summary.binaryPath ? (
-        <text>
-          <span fg={PALETTE.fgMuted}>{"bin   "}</span>
-          <span fg={PALETTE.fg}>{truncate(summary.binaryPath, 72)}</span>
-        </text>
-      ) : (
-        <text>
-          <span fg={PALETTE.fgMuted}>{"bin   "}</span>
-          <span fg={PALETTE.fgDim}>{"(not found)"}</span>
-        </text>
-      )}
-      <text>
-        <span fg={PALETTE.fgMuted}>{"snap  "}</span>
-        <span fg={PALETTE.fg}>{`${summary.snapshotEntryCount} entries`}</span>
-      </text>
-      <text>
-        <span fg={PALETTE.fgMuted}>{"dedup  "}</span>
-        <span fg={duplicateCount > 0 ? PALETTE.yellow : PALETTE.fg}>
-          {duplicateCount > 0
-            ? `${duplicateCount} items in multiple install sites (⊞)`
-            : "no multi-site duplicates"}
-        </span>
-      </text>
-      <box style={{ height: 1 }} />
-      <text>
-        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
-          {"COUNTS (unique)"}
-        </span>
-      </text>
+    <box style={{ flexDirection: "column", width: "100%" }}>
+      <Row
+        content={`${mark.glyph} ${summary.displayName}  [${summary.presence}]`}
+        fg={PALETTE.fgBright}
+      />
+      <Row content="" />
+      <Row content={`root    ${truncate(summary.globalRoot, 68)}`} />
+      <Row content={`exists  ${summary.rootExists ? "yes" : "no"}`} />
+      <Row
+        content={`bin     ${summary.binaryPath ? truncate(summary.binaryPath, 68) : "(not found)"}`}
+        fg={summary.binaryPath ? PALETTE.fg : PALETTE.fgDim}
+      />
+      <Row content={`snap    ${summary.snapshotEntryCount} entries`} />
+      <Row
+        content={
+          duplicateCount > 0
+            ? `dedup   ${duplicateCount} multi-site items (⊞)`
+            : "dedup   no multi-site duplicates"
+        }
+        fg={duplicateCount > 0 ? PALETTE.yellow : PALETTE.fg}
+      />
+      <Row content="" />
+      <Row content="COUNTS (unique)" fg={PALETTE.fgMuted} />
       {(
         [
           ["plugins", summary.plugins.length],
@@ -351,30 +337,22 @@ function SummaryDetail({
           ["other", summary.counts.other + summary.counts["tool-runtime"]],
         ] as const
       ).map(([label, n]) => (
-        <text key={label}>
-          <span fg={PALETTE.fgDim}>{`  ${label.padEnd(10)}`}</span>
-          <span fg={PALETTE.fg}>{String(n)}</span>
-        </text>
+        <Row key={label} content={`  ${label.padEnd(10)}${String(n)}`} />
       ))}
-      <box style={{ height: 1 }} />
-      <text>
-        <span fg={PALETTE.fgMuted} attributes={ATTR.bold}>
-          {`PLUGINS (${summary.plugins.length})`}
-        </span>
-      </text>
+      <Row content="" />
+      <Row content={`PLUGINS (${summary.plugins.length})`} fg={PALETTE.fgMuted} />
       {summary.plugins.length === 0 ? (
-        <text content="  (none)" style={{ fg: PALETTE.fgDim }} />
+        <Row content="  (none)" fg={PALETTE.fgDim} />
       ) : (
-        summary.plugins.slice(0, 20).map((p) => (
-          <text key={p.name}>
-            <span fg={PALETTE.fg}>{`  ${p.name}`}</span>
-            <span fg={PALETTE.fgDim}>{`  ${p.entryCount} entries`}</span>
-            {p.hasToolRuntime ? <span fg={PALETTE.cyan}>{"  tools"}</span> : null}
-          </text>
+        summary.plugins.slice(0, 18).map((p) => (
+          <Row
+            key={p.name}
+            content={`  ${truncate(p.name, 28).padEnd(28)}  ${p.entryCount} entries${p.hasToolRuntime ? "  tools" : ""}`}
+          />
         ))
       )}
-      {summary.plugins.length > 20 ? (
-        <text content={`  +${summary.plugins.length - 20} more`} style={{ fg: PALETTE.fgDim }} />
+      {summary.plugins.length > 18 ? (
+        <Row content={`  +${summary.plugins.length - 18} more`} fg={PALETTE.fgDim} />
       ) : null}
     </box>
   );
@@ -817,10 +795,12 @@ export function ConfigureApp({ projectPath }: { readonly projectPath?: string })
     for (const h of inventory.harnesses) {
       const mark = harnessMark(h.harness);
       const selected = h.harness === activeHarnessId;
+      const presence =
+        h.presence === "present" ? "·" : h.presence === "snapshot-only" ? "◦" : " ";
       items.push({
         id: `harness:${h.harness}`,
         kind: "harness",
-        label: `${mark.glyph} ${h.displayName}  [${h.presence}]`,
+        label: `${mark.glyph} ${truncate(h.displayName, 16)} ${presence}`,
       });
       if (!selected || !summary || summary.harness !== h.harness) continue;
       for (const s of SECTIONS) {
